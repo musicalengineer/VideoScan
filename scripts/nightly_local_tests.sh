@@ -87,10 +87,13 @@ PERSON_METRICS_JSON='{"person_eval_status":"not-configured","person_eval_reason"
 # hallie testbed"). Every row carries it, so a night where the replay never
 # ran says "not-run" in the row rather than showing nothing at all.
 HALLIE_REPLAY_JSON='{"hallie_replay_status":"not-run","hallie_strict_status":"not-run","hallie_advisory_status":"not-run"}'
-# 2026-09-11: the clean Release build of the test target takes ~27 min on the M4
-# (9/10: 1,645 s); with anything else on the CPU (Hallie replays at 02:07 on 9/11)
-# it crossed 1,800 s and the night published ZERO tests. 3,600 s leaves room; the
-# watchdog still catches a hung build.
+# 2026-09-11: the clean DEBUG build of the test target took 1,645 s on the M4 on
+# 9/10 and was killed at 1,800 s on 9/11 (M1 too, same tree) — the night published
+# ZERO tests. 3,600 s is MITIGATION so a build within normal variance cannot trip
+# the watchdog; the underlying slowdown is not yet explained (candidates: the
+# uncommitted Package.resolved bump swift-collections 1.5.1→1.6.0 / swift-jinja
+# 2.3.6→2.5.0 forcing package rebuilds; test-target growth). Evidence: codex
+# #1322/#1323. The watchdog still catches a hung build.
 NIGHTLY_BUILD_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_BUILD_TIMEOUT_SECONDS:-3600}"
 NIGHTLY_TEST_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_TEST_TIMEOUT_SECONDS:-7200}"
 NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS="${VIDEOSCAN_NIGHTLY_TERM_GRACE_SECONDS:-10}"
