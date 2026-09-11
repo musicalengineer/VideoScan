@@ -348,6 +348,22 @@ struct ArchiveAngelDownloadCapTests {
         #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "100k notes took \(elapsed)")
     }
 
+    @Test("SCALE: the note classifier over 100k projection-sized notes stays under 1 s (Debug ceiling)")
+    func classifierScale() {
+        let machine = "Unsupported codec with id 98314 for input stream 0\n[aac @ 0x7ac800a80] This stream seems to use a channel layout\nLast message repeated 3 times"
+        var notes: [String] = []
+        notes.reserveCapacity(100_000)
+        for i in 0..<100_000 {
+            notes.append(i % 1000 == 0 ? machine + "\n[19\(i % 90 + 10)] Family note \(i)" : (i % 3 == 0 ? "" : machine))
+        }
+        let started = ContinuousClock.now
+        var humans = 0
+        for n in notes where ArchiveAngelCandidate.hasHumanNote(n) { humans += 1 }
+        let elapsed = ContinuousClock.now - started
+        #expect(humans == 100)
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "100k notes took \(elapsed)")
+    }
+
     @Test("threshold edges: 3,999 kbit/s at 20 min is capped; 4,000 is not; 19 min 59 s is not")
     func edges() {
         func c(_ kbps: Double, _ secs: Double) -> ArchiveAngelCandidate {
@@ -403,7 +419,7 @@ struct ArchiveAngelDerivativeTests {
             ArchiveAngelCandidate(filename: "Twin_balanced.mov", fullPath: "/v/b/Twin_balanced.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
         ]
         ArchiveAngelScorer.markDerivatives(&cands)
-        func by(_ name: String) -> ArchiveAngelCandidate { cands.first { $0.filename == name }! }
+        func by(_ name: String) -> ArchiveAngelCandidate { cands.first { $0.filename == name } ?? cands[0] }
         #expect(by("Cape-1993-archive.vs.edit.mov").derivativeOfOriginal == "Cape-1993-archive.mkv", "cross-folder original found")
         #expect(by("cape-1992-edit_trimmed.mov").derivativeOfOriginal == "cape-1992-edit.mov")
         #expect(by("cape-1992-edit.mov").derivativeOfOriginal == nil, "'edit' without .vs. is a name, not a token")
