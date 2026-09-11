@@ -69,12 +69,17 @@ final class MonitorModel: ObservableObject {
 struct MenuBarLabel: View {
     let snapshot: ChannelSnapshot
 
+    /// Menu bar labels render monochrome, so the mark carries the state:
+    /// nothing outstanding → bare icon; "2" → two waiting (under 15 min);
+    /// "2!" → two outstanding and at least one unanswered past 15 min.
     var body: some View {
+        let outstanding = snapshot.red + snapshot.yellow
         HStack(spacing: 3) {
             Image(systemName: snapshot.red > 0 ? "bubble.left.and.exclamationmark.bubble.right.fill"
                                                 : "bubble.left.and.bubble.right")
-            if snapshot.red > 0 {
-                Text("\(snapshot.red)")
+            if outstanding > 0 {
+                Text(snapshot.red > 0 ? "\(outstanding)!" : "\(outstanding)")
+                    .monospacedDigit()
             }
         }
     }
