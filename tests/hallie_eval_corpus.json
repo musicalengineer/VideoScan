@@ -1,7 +1,7 @@
 {
  "version": 1,
  "created": "2026-08-21",
- "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 354 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+ "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 386 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
  "expect_values": {
   "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
   "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -3045,6 +3045,199 @@
     "Eileen"
    ],
    "notes": "Military-service variations (Rick 2026-09-11). Answer = the CyberBrain passage about Richard Harding Breen Sr's Marine Corps service, quoted and attributed; never the tree biography, a surname search, or 'one person at a time'. 'Grampa Breen' is a CyberBrain alias of Richard Sr; the People-tab spelling recovery used to bend it to Eileen."
+  },
+  {
+   "id": "lv260911-001",
+   "category": "live",
+   "text": "what are the names of rick's sons?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-002",
+   "category": "live",
+   "text": "tell me about rick breen",
+   "expect": "biography",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed"
+  },
+  {
+   "id": "lv260911-003",
+   "category": "live",
+   "text": "show me",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-004",
+   "category": "live",
+   "text": "show me rick's biography source",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-005",
+   "category": "live",
+   "text": "show rick playing guitar",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-006",
+   "category": "live",
+   "text": "show rick breen playing guitar video",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-007",
+   "category": "live",
+   "text": "tell me about the breen family",
+   "expect": "biography",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-008",
+   "category": "live",
+   "text": "whom did he marry?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-009",
+   "category": "live",
+   "text": "who is the spouse of  richard harding breen sr ?",
+   "expect": "biography",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-010",
+   "category": "live",
+   "text": "hi hallie, what's new?",
+   "expect": "social",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed"
+  },
+  {
+   "id": "lv260911-011",
+   "category": "live",
+   "text": "who was his wife",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed"
+  },
+  {
+   "id": "lv260911-012",
+   "category": "live",
+   "text": "who was his wife?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-013",
+   "category": "live",
+   "text": "who is the man with her in that photo?",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-014",
+   "category": "live",
+   "text": "who was eileen's spouse?",
+   "expect": "biography",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed"
+  },
+  {
+   "id": "lv260911-015",
+   "category": "live",
+   "text": "how many children did they have?",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-016",
+   "category": "live",
+   "text": "list the children of rick and donna",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-017",
+   "category": "live",
+   "text": "how many vidoes are in the archive and how many in the catalog?",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-018",
+   "category": "live",
+   "text": "where were you born, hallie?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-019",
+   "category": "live",
+   "text": "tell me about hallie mae mcgill",
+   "expect": "biography",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed"
+  },
+  {
+   "id": "lv260911-020",
+   "category": "live",
+   "text": "tell me about William Love Latta",
+   "expect": "biography",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-021",
+   "category": "live",
+   "text": "tell me about David T McGill",
+   "expect": "biography",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed"
+  },
+  {
+   "id": "lv260911-022",
+   "category": "live",
+   "text": "who was his father?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-023",
+   "category": "live",
+   "text": "show him in the family tree",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-024",
+   "category": "live",
+   "text": "when you see KY as a location in caps, it is OK, and recommended to pornounce it \"Kentucky\"",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260911-025",
+   "category": "live",
+   "text": "where was david t mcgill born?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed"
   }
  ]
 }
