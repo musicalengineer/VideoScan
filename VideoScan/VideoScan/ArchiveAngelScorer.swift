@@ -411,10 +411,25 @@ enum ArchiveAngelScorer {
         "hevc", "h265", "vp8", "vp9", "av1", "wmv3", "wmv2", "vc1", "flv1", "theora",
     ]
 
+    /// Folder components only a family's own editing leaves behind — an
+    /// iMovie library or project, the "Family Movies" tree. A low-bitrate
+    /// h264 export found there (live: EP1.m4v, 3 Mbit/s, "Ellen & Paul
+    /// 1997/Original Media") is a family export, not a download.
+    static let familyOriginPathMarkers: [String] = [
+        "imovielibrary", ".imovieproject", "imovie events", "imovie projects", "family movies",
+        "home movies", "home videos", "original media",
+    ]
+
+    static func hasFamilyOriginPath(_ fullPath: String) -> Bool {
+        let folder = (fullPath as NSString).deletingLastPathComponent.lowercased()
+        return familyOriginPathMarkers.contains { folder.contains($0) }
+    }
+
     static func looksLikeDownloadOrRip(_ c: ArchiveAngelCandidate,
                                        weights w: ArchiveAngelWeights = .standard) -> Bool {
         guard c.durationSeconds >= w.downloadMinimumDurationSeconds, c.sizeBytes > 0 else { return false }
         guard deliveryCodecs.contains(c.videoCodec.lowercased()) else { return false }
+        guard !hasFamilyOriginPath(c.fullPath) else { return false }
         let kbps = Double(c.sizeBytes) * 8 / c.durationSeconds / 1000
         return kbps < w.downloadMaxKilobitsPerSecond
     }

@@ -304,6 +304,23 @@ struct ArchiveAngelDownloadCapTests {
         #expect(result(noted).score > 59)
     }
 
+    @Test("a low-bitrate h264 export inside an iMovie library or the Family Movies tree is a family export, not a download (live: EP1.m4v)")
+    func familyOriginPathExempts() {
+        let ep1 = ArchiveAngelCandidate(filename: "EP1.m4v",
+            fullPath: "/Volumes/SanDisk/Ellen & Paul.imovielibrary/Ellen & Paul 1997/Original Media/EP1.m4v",
+            sizeBytes: 1_100_000_000, durationSeconds: 2932, videoCodec: "h264")
+        #expect(!ArchiveAngelScorer.looksLikeDownloadOrRip(ep1))
+        #expect(!result(ep1).lines.contains { $0.hasPrefix("Looks like a download") })
+        for folder in ["/v/Family Movies/Christmas1990", "/v/x.iMovieProject/Media", "/v/iMovie Events.localized/Day 3", "/v/Home Movies"] {
+            #expect(ArchiveAngelScorer.hasFamilyOriginPath(folder + "/clip.mp4"), "\(folder)")
+        }
+        // The same file in a backup's Movies folder is still a download.
+        var moved = ep1; moved.fullPath = "/Volumes/SanDisk/From_Breen_NetworkBackups/Movies/EP1.m4v"
+        #expect(ArchiveAngelScorer.looksLikeDownloadOrRip(moved))
+        // The marker is a folder component, never the filename.
+        #expect(!ArchiveAngelScorer.hasFamilyOriginPath("/v/Movies/Family Movies.mp4"))
+    }
+
     @Test("threshold edges: 3,999 kbit/s at 20 min is capped; 4,000 is not; 19 min 59 s is not")
     func edges() {
         func c(_ kbps: Double, _ secs: Double) -> ArchiveAngelCandidate {
