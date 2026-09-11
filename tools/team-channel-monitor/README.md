@@ -1,14 +1,15 @@
 # Team Channel monitor (menu bar)
 
-A menu bar app that shows today's `tools/team-channel.py` traffic, one row per
-message/recipient, with a colour per row:
+A menu bar app that shows today's OUTSTANDING `tools/team-channel.py`
+messages, one row per message/recipient (who → whom, id, time sent, state).
+Answered messages (acknowledged, or a `--reply-to` from the recipient) drop
+off the list; the header keeps a count of them.
 
-- **green** — acknowledged, or the recipient posted a `--reply-to` answer
 - **yellow** — not yet answered, under 15 minutes old ("waiting" = not yet
   delivered to the agent's turn, "in progress" = delivered, not acked)
 - **red** — not answered after 15 minutes
 
-The menu bar icon shows the red count. Click a row to read the body.
+The menu bar icon shows the red count. Click a row to read the subject and body.
 "Tell &lt;agent&gt;" posts a nudge from `rick` (`--reply-to` the stuck message);
 "Handled" acks a message addressed to `rick`. Both go through the CLI, so this
 app never writes SQLite itself.

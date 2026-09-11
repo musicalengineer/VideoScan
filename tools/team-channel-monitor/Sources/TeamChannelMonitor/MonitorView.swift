@@ -13,12 +13,12 @@ struct MonitorView: View {
             Divider()
             if let error = model.snapshot.error {
                 Text(error).foregroundStyle(.red).font(.callout)
-            } else if model.snapshot.rows.isEmpty {
-                Text("No messages today.").foregroundStyle(.secondary)
+            } else if openRows.isEmpty {
+                Text("Nothing outstanding.").foregroundStyle(.secondary)
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
-                        ForEach(model.snapshot.rows) { row in
+                        ForEach(openRows) { row in
                             RowView(row: row, model: model)
                             Divider()
                         }
@@ -30,16 +30,21 @@ struct MonitorView: View {
             footer
         }
         .padding(12)
-        .frame(width: 760)
+        .frame(width: 620)
+    }
+
+    /// Answered rows are noise; only unanswered and waiting ones are shown.
+    private var openRows: [ChannelRow] {
+        model.snapshot.rows.filter { !$0.status.isGreen }
     }
 
     private var header: some View {
         HStack(spacing: 12) {
-            Text("Team Channel — today").font(.headline)
+            Text("Team Channel — open today").font(.headline)
             Spacer()
-            Counter(color: .red, count: model.snapshot.red, label: "stuck")
+            Counter(color: .red, count: model.snapshot.red, label: "unanswered")
             Counter(color: .yellow, count: model.snapshot.yellow, label: "waiting")
-            Counter(color: .green, count: model.snapshot.green, label: "answered")
+            Text("\(model.snapshot.green) answered").font(.callout).foregroundStyle(.secondary).monospacedDigit()
         }
     }
 
@@ -79,22 +84,23 @@ private struct RowView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Circle().fill(color).frame(width: 10, height: 10)
-                Text("#\(row.messageID)").monospacedDigit().foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .leading)
-                Text(Self.clock.string(from: row.createdAt)).monospacedDigit()
-                    .frame(width: 42, alignment: .leading)
                 Text("\(row.author) → \(row.recipient)")
-                    .frame(width: 118, alignment: .leading)
-                Text(row.subject).lineLimit(1).truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(statusText).font(.caption).foregroundStyle(.secondary)
-                    .frame(width: 128, alignment: .trailing)
+                    .frame(width: 130, alignment: .leading)
+                Text("#\(row.messageID)").monospacedDigit()
+                    .frame(width: 52, alignment: .leading)
+                Text(Self.clock.string(from: row.createdAt)).monospacedDigit().foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .leading)
+                Text(statusText)
+                    .foregroundStyle(color == .red ? Color.red : Color.primary)
+                    .frame(width: 150, alignment: .leading)
+                Spacer(minLength: 8)
                 action
             }
             .font(.callout)
             .contentShape(Rectangle())
             .onTapGesture { expanded.toggle() }
             if expanded {
+                Text(row.subject).font(.caption).bold().padding(.leading, 26)
                 Text(row.body)
                     .font(.caption)
                     .textSelection(.enabled)
@@ -146,7 +152,7 @@ private struct RowView: View {
             return "\(how) \(Self.clock.string(from: when))"
         case .waiting(let age): return "waiting \(minutes(age))"
         case .inProgress(let age): return "in progress \(minutes(age))"
-        case .stuck(let age): return "unanswered \(minutes(age))"
+        case .stuck(let age): return "UNANSWERED \(minutes(age))"
         }
     }
 
