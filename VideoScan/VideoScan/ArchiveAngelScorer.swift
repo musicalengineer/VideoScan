@@ -133,6 +133,11 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     /// Cache/Cache-30.mov" scored 120 — 2 h 39 min "whole tapes" that are
     /// 5 MB thumbnail streams. Name/folder rule + a bytes-per-second sanity
     /// floor no real original can fail.
+    /// T10 H2 (night of 2026-09-10): the live top 50 carried four duplicate
+    /// pairs (the same tape under two names on two volumes) — both halves
+    /// would have been promoted. One member per catalog duplicate group per
+    /// batch: the best-ranked stays, the rest are counted here.
+    case duplicateOfPick = "Same content as another pick (duplicate group) — one copy is enough"
     case appCache = "An app's cache / render file (name or folder), not an original"
     case proxyStream = "Too small for its length — a thumbnail or proxy stream, not the original"
 }
@@ -225,8 +230,8 @@ enum ArchiveAngelScorer {
     /// "assessed under old rules" and the sweep re-scores at once (Rick
     /// 2026-09-10: "this will require updated assessments as we refine
     /// selection criteria"). 2 = flat 60 s floor + duration tiers; 3 = app-cache
-    /// and proxy-stream floors; 4 = download/rip cap (T10 H1).
-    static let rulesVersion = 4
+    /// and proxy-stream floors; 4 = download/rip cap (T10 H1); 5 = one per duplicate group (T10 H2).
+    static let rulesVersion = 5
 
     /// The verdict for one record. Pure.
     static func verdict(_ c: ArchiveAngelCandidate,
@@ -378,6 +383,16 @@ enum ArchiveAngelScorer {
             }
             if a.candidate.sizeBytes != b.candidate.sizeBytes { return a.candidate.sizeBytes > b.candidate.sizeBytes }
             return a.candidate.filename < b.candidate.filename
+        }
+        // T10 H2: one member per duplicate group. `picks` is already in rank
+        // order, so the first member seen is the best (score, date, length,
+        // size); later members are counted, never silently dropped.
+        var seenGroups: Set<UUID> = []
+        picks = picks.filter { pick in
+            guard let g = pick.candidate.duplicateGroupID else { return true }
+            if seenGroups.insert(g).inserted { return true }
+            rejected[.duplicateOfPick, default: 0] += 1
+            return false
         }
         let kept = Array(picks.prefix(max(0, count)))
         return .init(picks: kept, overflow: max(0, picks.count - kept.count), rejected: rejected)

@@ -63,6 +63,19 @@ struct ArchiveAngelEvidencePickTests {
         #expect(pick?.selection.rejected[.inAnotherBatch] == 2)
     }
 
+    @Test("T10 H2: the evidence pick keeps one member per duplicate group and counts the rest; the next head fills in")
+    @MainActor
+    func onePerGroupFromEvidence() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let a = UUID(), b = UUID(), c = UUID(), g = UUID()
+        let s = store(records: [a: rec(150, at: now), b: rec(140, at: now), c: rec(40, at: now)], now: now)
+        let pick = ArchiveAngelJob.selectFromEvidence(store: s, count: 2, now: now) { id in
+            ArchiveAngelCandidate(id: id, duplicateGroupID: id == c ? nil : g)   // a and b are the same tape
+        }
+        #expect(pick?.selection.picks.map(\.candidate.id) == [a, c])
+        #expect(pick?.selection.rejected[.duplicateOfPick] == 1)
+    }
+
     @Test("in-flight ids come from preparing/ready/promoting batches only; folder names never collide")
     func inFlightIDsAndFolderNames() throws {
         let root = FileManager.default.temporaryDirectory

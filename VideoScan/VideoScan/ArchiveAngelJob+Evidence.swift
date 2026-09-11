@@ -34,6 +34,7 @@ extension ArchiveAngelJob {
         picks.reserveCapacity(count)
         var rejected = store.rejectionCounts()
         var projections = 0
+        var seenGroups: Set<UUID> = []   // T10 H2: one member per duplicate group
         for id in store.rankedEligibleIDs() {
             if picks.count == count { break }
             if excluding.contains(id) { rejected[.inAnotherBatch, default: 0] += 1; continue }
@@ -41,6 +42,10 @@ extension ArchiveAngelJob {
             projections += 1
             if let reason = ArchiveAngelScorer.hardFloor(candidate, weights: weights) {
                 rejected[reason, default: 0] += 1
+                continue
+            }
+            if let g = candidate.duplicateGroupID, !seenGroups.insert(g).inserted {
+                rejected[.duplicateOfPick, default: 0] += 1
                 continue
             }
             picks.append(.init(candidate: candidate, score: evidence.score, evidence: evidence.lines))

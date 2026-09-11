@@ -399,6 +399,31 @@ struct ArchiveAngelSelectionTests {
                 "e is longer (same score — under 5 min earns nothing) so it beats the bigger file")
     }
 
+    @Test("T10 H2: one member per duplicate group — the best-ranked stays, the rest are counted; unknown-group rows never collapse")
+    func onePerDuplicateGroup() {
+        let g = UUID(), h = UUID()
+        let d = Date(timeIntervalSince1970: 700_000_000)
+        let cands = [
+            // Same tape under two names on two volumes (live: DVD1992_5Chapters ≡ WholeSequence1991): equal score → the longer/larger wins.
+            ArchiveAngelCandidate(filename: "DVD1992_5Chapters.mov", sizeBytes: 13_840_000_000, durationSeconds: 3651, starRating: 3, inferredRecordDate: d, inferredDateConfidence: 0.9, duplicateGroupID: g),
+            ArchiveAngelCandidate(filename: "WholeSequence1991.mov", sizeBytes: 13_830_000_000, durationSeconds: 3651, starRating: 3, inferredRecordDate: d, inferredDateConfidence: 0.9, duplicateGroupID: g),
+            // A group whose members differ in score: the higher score stays even if it is the smaller file.
+            ArchiveAngelCandidate(filename: "Cape-1993-archive.mkv", sizeBytes: 60_670_000_000, durationSeconds: 7338, starRating: 2, duplicateGroupID: h),
+            ArchiveAngelCandidate(filename: "Cape-1993-archive-copy.mkv", sizeBytes: 60_670_000_000, durationSeconds: 7338, starRating: 3, duplicateGroupID: h),
+            // Two rows with NO group and identical size/duration are NOT collapsed — only a real group counts.
+            ArchiveAngelCandidate(filename: "Part1.mov", sizeBytes: 9_000_000_000, durationSeconds: 1800, starRating: 1),
+            ArchiveAngelCandidate(filename: "Part2.mov", sizeBytes: 9_000_000_000, durationSeconds: 1800, starRating: 1),
+        ]
+        let sel = ArchiveAngelScorer.select(cands, count: 10)
+        let names = sel.picks.map(\.candidate.filename)
+        #expect(names.contains("DVD1992_5Chapters.mov") && !names.contains("WholeSequence1991.mov"), "\(names)")
+        #expect(names.contains("Cape-1993-archive-copy.mkv") && !names.contains("Cape-1993-archive.mkv"), "\(names)")
+        #expect(names.contains("Part1.mov") && names.contains("Part2.mov"))
+        #expect(sel.rejected[.duplicateOfPick] == 2)
+        #expect(sel.overflow == 0)
+        #expect(ArchiveAngelScorer.rulesVersion >= 5)
+    }
+
     @Test("count 0 and empty input are safe")
     func degenerate() {
         #expect(ArchiveAngelScorer.select([], count: 25).picks.isEmpty)
