@@ -37,6 +37,11 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     let bufferRoot: URL
     let requestedCount: Int
     let makeLossless: Bool
+    /// "Prepare with Archive Angel" from the catalog (Rick 2026-09-11):
+    /// exactly these records, no pick. The hard floor still applies —
+    /// a 40-second clip is refused with its reason, never silently — but
+    /// nothing else is ranked or dropped.
+    let explicitRecordIDs: [UUID]?
 
     /// The batch plan — rewritten (and saved) after every step.
     @Published private(set) var plan: ArchiveAngelPlan
@@ -56,20 +61,52 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     /// entry — cancelled together with this job.
     private var currentSubJob: (any MediaFileOperationJob)?
 
-    var title: String { "Archive Angel — consider \(requestedCount)" }
+    var title: String {
+        explicitRecordIDs == nil
+            ? "Archive Angel — consider \(requestedCount)"
+            : "Archive Angel — prepare \(requestedCount) selected"
+    }
     var subtitle: String { subtitleText }
     var fraction: Double { fractionValue }
     var isIndeterminate: Bool { isIndeterminateValue }
 
     init(model: VideoScanModel, center: MediaFileOperationsCenter,
-         count: Int, makeLossless: Bool, bufferRoot: URL) {
+         count: Int, makeLossless: Bool, bufferRoot: URL,
+         explicitRecordIDs: [UUID]? = nil) {
         self.model = model
         self.center = center
-        self.requestedCount = max(1, count)
+        let wanted = max(1, explicitRecordIDs?.count ?? count)
+        self.requestedCount = wanted
         self.makeLossless = makeLossless
         self.bufferRoot = bufferRoot
+        self.explicitRecordIDs = explicitRecordIDs
         let dir = ArchiveAngelPlanStore.newBatchDir(bufferRoot: bufferRoot)
-        self.plan = ArchiveAngelPlan(batchDir: dir, requestedCount: max(1, count), makeLossless: makeLossless)
+        self.plan = ArchiveAngelPlan(batchDir: dir, requestedCount: wanted, makeLossless: makeLossless)
+    }
+
+    /// The catalog's "Prepare with Archive Angel": every requested record
+    /// that clears the hard floor becomes a pick, best score first; the
+    /// rest are counted by reason so the finish line can say why. Rows
+    /// already in a prepared batch are refused as such. Pure.
+    nonisolated static func explicitSelection(
+        ids: [UUID], inFlight: Set<UUID>, now: Date = Date(),
+        project: (UUID) -> ArchiveAngelCandidate?
+    ) -> ArchiveAngelSelection {
+        var picks: [ArchiveAngelPick] = []
+        var rejected: [ArchiveAngelRejection: Int] = [:]
+        var seen = Set<UUID>()
+        for id in ids where seen.insert(id).inserted {
+            guard let candidate = project(id) else { continue }
+            if inFlight.contains(id) { rejected[.inAnotherBatch, default: 0] += 1; continue }
+            switch ArchiveAngelScorer.verdict(candidate, now: now) {
+            case .eligible(let score, let evidence):
+                picks.append(.init(candidate: candidate, score: score, evidence: evidence))
+            case .rejected(let reason):
+                rejected[reason, default: 0] += 1
+            }
+        }
+        picks.sort { $0.score > $1.score }
+        return ArchiveAngelSelection(picks: picks, overflow: 0, rejected: rejected)
     }
 
     // MARK: Lifecycle
@@ -128,7 +165,13 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             ArchiveAngelPlanStore.inFlightRecordIDs(bufferRoot: root)
         }.value
         if !inFlight.isEmpty { note("Archive Angel: \(inFlight.count) record(s) already in a prepared batch — skipping them") }
-        if let fromEvidence = Self.selectFromEvidence(
+        if let ids = explicitRecordIDs {
+            selection = Self.explicitSelection(
+                ids: ids, inFlight: inFlight,
+                project: { id in model.record(forID: id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } })
+            consideredCount = ids.count
+            note("Archive Angel: preparing \(selection.picks.count) of \(ids.count) selected record(s)")
+        } else if let fromEvidence = Self.selectFromEvidence(
             store: model.archiveAngelStore, count: requestedCount, now: Date(), excluding: inFlight,
             project: { id in model.record(forID: id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
             selection = fromEvidence.selection

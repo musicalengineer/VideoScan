@@ -81,6 +81,50 @@ struct CatalogArchivedInsideRootTests {
         #expect(m.pfNotYetArchived(stray))
     }
 
+    @Test("a VERSION of something archived is not to-do; a repair of it still is (Rick: 'or copied to Projects')")
+    func versionsOfArchivedAreHidden() {
+        let m = model()
+        let source = record("/Volumes/CrucialX10/originals/Peekaboo.dv")
+        let copy = record(Self.root + "/30_Video/1990-1999/1998/1998-xx-xx_Peekaboo.dv")
+        copy.derivedFrom = source.id; copy.derivationKind = ArchivePromotion.derivationKind
+        // Balanced audio made FROM the archive copy (the live shape on CrucialX10).
+        let balanced = record("/Volumes/CrucialX10/editable_versions/Peekaboo.vs.preserve_balanced.mkv")
+        balanced.derivedFrom = copy.id; balanced.derivationKind = BalanceAudioFix.derivationKind
+        // A trim made from the SOURCE (which has a master copy).
+        let trimmed = record("/Volumes/Projects/edits/Peekaboo_trimmed.mov")
+        trimmed.derivedFrom = source.id; trimmed.derivationKind = TrimPlan.derivationKind
+        // An older transcode with no kind stamp, two hops up to the source.
+        let transcode = record("/Volumes/Projects/edits/Peekaboo.vs.edit.mov")
+        transcode.derivedFrom = trimmed.id
+        // Repairs of the archived original stay visible.
+        let repair = record("/Volumes/Projects/repairs/Peekaboo_repaired.mov")
+        repair.derivedFrom = source.id; repair.derivationKind = ExternalRepairAdoption.derivationKind
+        let rebuilt = record("/Volumes/Projects/repairs/Peekaboo_rebuilt.mov")
+        rebuilt.derivedFrom = copy.id; rebuilt.derivationKind = RebuildAudioFix.derivationKind
+        // A version of something NOT archived is still to-do.
+        let loose = record("/Volumes/CrucialX10/originals/Loose.dv")
+        let looseBalanced = record("/Volumes/Projects/edits/Loose_balanced.mkv")
+        looseBalanced.derivedFrom = loose.id; looseBalanced.derivationKind = BalanceAudioFix.derivationKind
+        m.records = [source, copy, balanced, trimmed, transcode, repair, rebuilt, loose, looseBalanced]
+
+        #expect(!m.pfNotYetArchived(balanced), "balanced audio of an archive copy")
+        #expect(!m.pfNotYetArchived(trimmed), "trim of a source that has a master copy")
+        #expect(!m.pfNotYetArchived(transcode), "unstamped transcode, two hops up")
+        #expect(m.pfNotYetArchived(repair), "external repair is a candidate in its own right")
+        #expect(m.pfNotYetArchived(rebuilt), "rebuilt audio likewise")
+        #expect(m.pfNotYetArchived(loose) && m.pfNotYetArchived(looseBalanced), "nothing archived up that chain")
+    }
+
+    @Test("derivedFrom cycles and dangling ids never loop or crash")
+    func derivedChainSafety() {
+        let m = model()
+        let a = record("/Volumes/X/a.mov"); let b = record("/Volumes/X/b.mov")
+        a.derivedFrom = b.id; b.derivedFrom = a.id
+        let dangling = record("/Volumes/X/c.mov"); dangling.derivedFrom = UUID()
+        m.records = [a, b, dangling]
+        #expect(m.pfNotYetArchived(a) && m.pfNotYetArchived(b) && m.pfNotYetArchived(dangling))
+    }
+
     @Test("SCALE: 100k records with a designated root — the filter predicate stays under budget", .timeLimit(.minutes(1)))
     func scale() {
         let m = model()

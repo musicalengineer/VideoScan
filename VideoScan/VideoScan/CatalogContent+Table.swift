@@ -696,6 +696,7 @@ extension CatalogContent {
                     // Promote-Helper (2026-08-19): which copy is the original?
                     assessCopiesMenuItem(activeRecs: activeRecs, pureActive: pureActive)
                     promoteToArchiveMenuItem(activeRecs: activeRecs, pureActive: pureActive)
+                    prepareWithArchiveAngelMenuItem(activeRecs: activeRecs, pureActive: pureActive)
                     removeFromCatalogMenuItem(activeRecs: activeRecs, pureActive: pureActive)
 
                     // Verify Audio / Verification Results / Repair
