@@ -42,15 +42,47 @@ final class MonitorModel: ObservableObject {
     @Published var lastAction: String?
     private var timer: Timer?
 
+    /// `--demo`: walk the badge through idle → yellow 2 → red 3! (3 s each)
+    /// before showing live data, so the colours can be eyeballed at will.
+    private var demoStepsLeft = 0
+
     init() {
+        if CommandLine.arguments.contains("--demo") { demoStepsLeft = 3 }
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: demoStepsLeft > 0 ? 3 : 10, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
     }
 
     func refresh() {
+        if demoStepsLeft > 0 {
+            snapshot = Self.demoSnapshot(step: 3 - demoStepsLeft)
+            demoStepsLeft -= 1
+            if demoStepsLeft == 0 {
+                timer?.invalidate()
+                timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+                    Task { @MainActor in self?.refresh() }
+                }
+            }
+            return
+        }
         snapshot = ChannelDB.loadToday()
+    }
+
+    private static func demoSnapshot(step: Int) -> ChannelSnapshot {
+        var snap = ChannelSnapshot()
+        func row(_ id: Int, _ status: ChannelRow.Status) -> ChannelRow {
+            ChannelRow(messageID: id, author: "codex", recipient: "claude", subject: "demo #\(id)",
+                       body: "Demo row — the badge is cycling its colours.", replyTo: nil,
+                       createdAt: Date(), deliveredAt: nil, acknowledgedAt: nil, repliedAt: nil,
+                       nudgedAt: nil, status: status)
+        }
+        switch step {
+        case 0: break                                                     // grey, idle
+        case 1: snap.rows = [row(1, .waiting(60)), row(2, .waiting(120))] // yellow 2
+        default: snap.rows = [row(1, .stuck(1200)), row(2, .waiting(60)), row(3, .waiting(90))] // red 3!
+        }
+        return snap
     }
 
     func nudge(_ row: ChannelRow) {
