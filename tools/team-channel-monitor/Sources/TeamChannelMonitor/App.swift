@@ -87,8 +87,8 @@ enum StatusBadge {
         let fill: NSColor = red > 0 ? NSColor(srgbRed: 0.86, green: 0.16, blue: 0.16, alpha: 1)
             : yellow > 0 ? NSColor(srgbRed: 0.95, green: 0.72, blue: 0.10, alpha: 1)
             : NSColor(white: 0.55, alpha: 1)
-        let height: CGFloat = 16
-        let font = NSFont.systemFont(ofSize: 11, weight: .bold)
+        let height: CGFloat = 18
+        let font = NSFont.systemFont(ofSize: 12, weight: .bold)
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
         let textSize = (text as NSString).size(withAttributes: attrs)
         let width = text.isEmpty ? height : max(height, textSize.width + 10)
@@ -99,8 +99,8 @@ enum StatusBadge {
             if text.isEmpty {
                 // Idle: a small hollow bubble.
                 NSColor.white.withAlphaComponent(0.9).setStroke()
-                let inner = NSBezierPath(ovalIn: rect.insetBy(dx: 4.5, dy: 4.5))
-                inner.lineWidth = 1.5
+                let inner = NSBezierPath(ovalIn: rect.insetBy(dx: 5, dy: 5))
+                inner.lineWidth = 2
                 inner.stroke()
             } else {
                 let origin = NSPoint(x: (rect.width - textSize.width) / 2,
