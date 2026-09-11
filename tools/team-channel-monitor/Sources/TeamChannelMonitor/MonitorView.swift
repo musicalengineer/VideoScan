@@ -137,7 +137,12 @@ private struct RowView: View {
     private var statusText: String {
         switch row.status {
         case .answered(let when):
-            let how = row.repliedAt != nil && (row.acknowledgedAt == nil || row.repliedAt! <= row.acknowledgedAt!) ? "replied" : "acked"
+            let how: String
+            if let replied = row.repliedAt, replied <= (row.acknowledgedAt ?? .distantFuture) {
+                how = "replied"
+            } else {
+                how = "acked"
+            }
             return "\(how) \(Self.clock.string(from: when))"
         case .waiting(let age): return "waiting \(minutes(age))"
         case .inProgress(let age): return "in progress \(minutes(age))"
