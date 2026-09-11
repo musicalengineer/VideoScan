@@ -75,6 +75,15 @@ extension HallieTurnExecutor {
         /// instead of playing an older list's item (codex #976 item 2).
         /// Cleared by the next answer that leaves something to play.
         private(set) var lastRecordDecline: RecordDecline?
+        /// The retry Hallie herself offered when a list search found
+        /// nothing — "Want me to try without the words, or with a
+        /// different name?" — so a bare "yes" / "sure" right after takes
+        /// it (live 2026-09-11 22:01Z: "sure" and "yes" were both declined
+        /// as follow-ups Hallie "couldn't tell how" to apply). Set only by
+        /// a declined presence / cross turn whose miss offers a retry;
+        /// cleared by every other recorded turn, so the offer lives for
+        /// exactly one reply.
+        private(set) var pendingOffer: HallieOfferAcceptance.Offer?
 
         enum RecordDecline: Sendable, Equatable {
             /// A file named in the question that was not found or fit
@@ -116,6 +125,10 @@ extension HallieTurnExecutor {
                 return
             }
             recordExchange(intent: intent, result: result, question: question)
+            // An offer is good for one reply: whatever this turn was, the
+            // last one's offer is gone; a declined list search may leave
+            // a new one below.
+            pendingOffer = nil
             switch result.route {
             case .presence, .cross, .aggregate, .temporal, .graph, .telling, .record:
                 lastProvenance = HallieProvenanceFollowUp.Provenance(result: result)
@@ -190,6 +203,9 @@ extension HallieTurnExecutor {
                     if intent.refinementChain == nil { lastShownList = nil }
                     if result.refinableQuery == nil, result.route != .aggregate {
                         lastRefinable = nil
+                    }
+                    if result.route != .aggregate {
+                        pendingOffer = HallieOfferAcceptance.retry(after: intent, result: result)
                     }
                 }
             case .graph:
@@ -797,6 +813,23 @@ extension HallieTurnExecutor {
         // With nothing to repair the same words route as a fresh question.
         if let exchange = memory.lastExchange, HallieRepairTurn.isRepair(question) {
             return .answer(HallieRepairTurn.answer(question, exchange: exchange))
+        }
+        // "sure" / "yes" right after "Want me to try without the words, or
+        // with a different name?" takes the FIRST thing Hallie offered:
+        // the same search without the words (or the year). Live
+        // 2026-09-11 22:01Z: both replies were declined as follow-ups
+        // Hallie "couldn't tell how" to apply. Only a BARE affirmative and
+        // only while the offer is pending (it lives for one reply, see
+        // ConversationMemory.pendingOffer); "yes but only the 90s" keeps
+        // the follow-up road, and a "yes" with nothing offered still gets
+        // the honest decline below. The gallery offer's "yes" is a
+        // clarification the clients consume before this step runs.
+        if let offer = memory.pendingOffer, HallieOfferAcceptance.isBareAffirmative(question) {
+            return .run(Intent(
+                originalQuestion: offer.question,
+                ast: offer.ast,
+                playAfterAnswer: playAfterAnswer,
+                refinementNote: offer.note))
         }
         // "when was this filmed" / "how old is this tape" with a Catalog row
         // selected (2026-09-01): the record's own resolved date, no model.
