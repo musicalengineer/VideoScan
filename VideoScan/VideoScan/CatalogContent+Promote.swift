@@ -76,8 +76,18 @@ extension VideoScanModel {
     /// "Not Yet Archived": a live source with no master copy — and not
     /// itself an archive copy. Used by computeFiltered (event-driven,
     /// not in a view body); the memoized index makes it O(1) per record.
+    ///
+    /// Rick 2026-09-11: 18 `.vs.archive/.vs.edit/.vs.preserve` versions
+    /// written straight into the archive folders by older tooling carried
+    /// no promotion record, so they sat in the to-do view — and Promote
+    /// then refused them ("already lives inside the archive tree"). One
+    /// definition of archived now: a promoted copy, a source with a master
+    /// copy, OR anything living inside the Master Archive root, the same
+    /// test Promote, Duplicates and Verify already apply.
     func pfNotYetArchived(_ rec: VideoRecord) -> Bool {
-        !isArchiveCopy(rec) && archivedCopy(of: rec) == nil
+        !isArchiveCopy(rec)
+            && !isInsideMasterArchive(path: rec.fullPath)
+            && archivedCopy(of: rec) == nil
     }
 
     /// "Has Master Copy": a source that has been promoted.

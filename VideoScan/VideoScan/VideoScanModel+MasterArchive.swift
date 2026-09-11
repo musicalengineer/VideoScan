@@ -591,6 +591,13 @@ extension VideoScanModel {
     /// component-wise (codex QA major c), never a string prefix.
     func isInsideMasterArchive(path: String) -> Bool {
         guard let root = masterArchiveRootPath else { return false }
+        // The catalog filter asks this once per record (2026-09-11). A
+        // scanned path is already standardized, so one that does not even
+        // start with the root string can only be inside it through a "."
+        // or ".." segment; everything else skips the two URL parses.
+        if !path.hasPrefix(root), !path.contains("/./"), !path.contains("/../") {
+            return false
+        }
         return ArchivePathResolver.isInside(path: path, root: root)
     }
 

@@ -9,6 +9,7 @@
 // stored state allowed, methods share the same `self`; `private` here
 // means file-private to THIS file.)
 
+import Combine
 import SwiftUI
 
 extension CatalogContent {
@@ -146,6 +147,22 @@ extension CatalogContent {
     // onChange keys) pushed the combined type-check past Xcode's budget.
     // `catalogTableBase` isolates the columns; this var owns the chain.
     var catalogTable: some View {
+        // A finished Archive Angel sweep republishes its grade set: the
+        // "Promote me" badges and the Archive-candidates filter follow it
+        // (2026-09-11). The store is a nested ObservableObject, which the
+        // environment model does not forward — hence a publisher, not
+        // onChange. Its own stage: the onChange chain below is already at
+        // the type-checker's budget (GH #132).
+        tableWithCatalogTriggers
+            .onReceive(angelGradesPublisher) { _ in tableData = computeFiltered() }
+    }
+
+    /// Grade-set changes only — identical sweeps do not churn the table.
+    private var angelGradesPublisher: AnyPublisher<Set<UUID>, Never> {
+        model.archiveAngelStore.$candidateIDs.removeDuplicates().dropFirst().eraseToAnyPublisher()
+    }
+
+    private var tableWithCatalogTriggers: some View {
         tableWithMenus
         .onAppear { tableData = computeFiltered() }
         .onChange(of: records.count) { tableData = computeFiltered() }
@@ -1590,6 +1607,11 @@ extension CatalogContent {
                     .font(.system(size: 9))
                     .foregroundColor(rec.archiveHealth.color)
             }
+            // "Promote me" / "Worth a look" — the Archive Angel grade made
+            // visible (Rick 2026-09-11). O(1) sidecar read per row.
+            if let badge = ArchiveAngelCatalogBadge.make(for: model.archiveAngelStore.record(for: rec.id)) {
+                ArchiveAngelCatalogBadgeView(badge: badge)
+            }
         }
         .help(tagColumnHelp(for: rec))
     }
@@ -1598,6 +1620,9 @@ extension CatalogContent {
     /// then your note (machine probe notes stay in the inspector).
     private func tagColumnHelp(for rec: VideoRecord) -> String {
         var lines = [rec.mediaDisposition.rawValue]
+        if let badge = ArchiveAngelCatalogBadge.make(for: model.archiveAngelStore.record(for: rec.id)) {
+            lines.append(badge.help + " — Assess in the Archive tab to prepare it.")
+        }
         if !rec.tags.isEmpty {
             lines.append("Tags: \(rec.tags.joined(separator: ", "))")
         }
