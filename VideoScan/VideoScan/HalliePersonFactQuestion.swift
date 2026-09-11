@@ -27,13 +27,29 @@ enum HalliePersonFactQuestion {
                                           options: [.regularExpression, .caseInsensitive]) {
                 subject = String(subject[..<suffix.lowerBound])
             }
+            // GH #180 (live 2026-09-10/11): "tell me about dad" had no owner
+            // and fell to the model; the graph lane then fuzzy-matched
+            // "dad" to Dafydd ab Einion (b. ~1360). A BARE kin word is the
+            // owner's relative unless it is a known person's alias (Rick's
+            // "Ma" is Eileen, "Mom" is Donna in the kids' videos) — the
+            // alias wins, exactly as it does for any known name.
+            if !isKnownPerson(subject), Self.isBareKinWord(subject) {
+                return .init(people: ["my " + subject.lowercased()], operation: operation)
+            }
             let relative = subject.range(
-                of: #"^(?:my|our) (?:(?:maternal|paternal) )?(?:great[ -]){0,2}(?:grandmother|grandma|gramma|granny|grandfather|grandpa|grampa)$"#,
+                of: #"^(?:my|our) (?:(?:maternal|paternal) )?(?:great[ -]){0,2}(?:grandmother|grandma|gramma|granny|grandfather|grandpa|grampa|gramps|grandad|granddad|mother|mom|mum|mama|ma|father|dad|daddy|papa|pa|nana|nan)$"#,
                 options: [.regularExpression, .caseInsensitive]) != nil
             guard relative || isKnownPerson(subject) else { return nil }
             return .init(people: [subject], operation: operation)
         }
         return nil
+    }
+
+    /// One word that names an immediate relative of the speaker with no
+    /// possessive: dad, mom, ma, nana, grandpa… (a side or "great" prefix
+    /// keeps the possessive path: "maternal grandmother" is not bare).
+    static func isBareKinWord(_ subject: String) -> Bool {
+        HallieTurnExecutor.RelativeFactSubject.bareKinWords[subject.lowercased()] != nil
     }
 
     static func isTreeCorrection(_ question: String) -> Bool {

@@ -11,6 +11,13 @@ extension HallieTurnExecutor {
         guard request.selectedIdentity == nil, payload.people.count == 1,
               [.biography, .birthPlace, .deathPlace, .birth, .death].contains(payload.operation),
               let relative = RelativeFactSubject.parse(payload.people[0]),
+              // GH #180: a BARE kin word ("dad") is the owner's relative unless
+              // a CURATED name says otherwise — a People-tab alias ("Nan" for
+              // Nancy, "Ma" for Eileen) or a CyberBrain alias keeps the
+              // ordinary graph path. The 39k-person tree's token/prefix
+              // oracle does NOT count: it is what turned "dad" into Dafydd.
+              RelativeFactSubject.hasPossessive(payload.people[0])
+                || !isCuratedPerson(payload.people[0], context: context),
               let recognized = HalliePersonFactQuestion.detect(
                 request.intent.originalQuestion, isKnownPerson: { _ in false }),
               recognized.operation == payload.operation,
@@ -108,22 +115,52 @@ extension HallieTurnExecutor {
                       citations: [], catalogPersonName: nil, clarification: pending)
     }
 
+    /// People-tab profiles and CyberBrain only — Rick's own names, never
+    /// the imported tree's 39k tokens. The bare-kin rule (GH #180) yields
+    /// to these and to nothing else.
+    static func isCuratedPerson(_ name: String, context: Context) -> Bool {
+        if isPeopleTabPerson(name, context: context) { return true }
+        if let cyberBrain = context.cyberBrain {
+            if case .notFound = cyberBrain.resolve(name) {} else { return true }
+        }
+        return false
+    }
+
     struct RelativeFactSubject: Equatable {
         let relation: ArchivistQueryAST.Graph.Relation
         let side: ArchivistQueryAST.Graph.Side?
 
+        /// Kin words that stand alone for the speaker's relative (GH #180) —
+        /// the same aliases the possessive form uses, keyed by the word.
+        static let bareKinWords: [String: String] = [
+            "grandma": "grandmother", "gramma": "grandmother", "granny": "grandmother", "nana": "grandmother",
+            "nan": "grandmother", "grandmother": "grandmother",
+            "grandpa": "grandfather", "grampa": "grandfather", "gramps": "grandfather", "grandad": "grandfather",
+            "granddad": "grandfather", "grandfather": "grandfather",
+            "mom": "mother", "mum": "mother", "mama": "mother", "ma": "mother", "mother": "mother",
+            "dad": "father", "daddy": "father", "papa": "father", "pa": "father", "father": "father",
+        ]
+
+        static func hasPossessive(_ text: String) -> Bool {
+            let first = text.lowercased().split(whereSeparator: \.isWhitespace).first.map(String.init)
+            return first == "my" || first == "our"
+        }
+
         static func parse(_ text: String) -> Self? {
             var words = text.lowercased().replacingOccurrences(of: "-", with: " ")
                 .split(whereSeparator: \.isWhitespace).map(String.init)
-            guard words.first == "my" || words.first == "our" else { return nil }
-            words.removeFirst()
+            if words.first == "my" || words.first == "our" {
+                words.removeFirst()
+            } else {
+                // A bare kin word ("dad") is the speaker's relative (GH #180);
+                // anything else without a possessive is a name, not ours.
+                guard words.count == 1, let word = words.first, bareKinWords[word] != nil else { return nil }
+            }
             var side: ArchivistQueryAST.Graph.Side?
             if let first = words.first, let parsed = ArchivistQueryAST.Graph.Side(rawValue: first) {
                 side = parsed; words.removeFirst()
             }
-            let aliases = ["grandma": "grandmother", "gramma": "grandmother", "granny": "grandmother",
-                           "grandpa": "grandfather", "grampa": "grandfather", "mom": "mother", "mum": "mother", "dad": "father"]
-            words = words.map { aliases[$0] ?? $0 }
+            words = words.map { bareKinWords[$0] ?? $0 }
             guard let relation = ArchivistQueryAST.Graph.Relation(rawValue: words.joined(separator: "-")) else { return nil }
             return Self(relation: relation, side: side)
         }

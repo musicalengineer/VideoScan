@@ -66,6 +66,49 @@ struct HallieRelativeFactTests {
         return try await HallieTurnExecutor.execute(.init(intent: intent), context: context)
     }
 
+    /// GH #180: "Tell me about dad" — no possessive — is the owner's father
+    /// from the tree, never a fuzzy name match.
+    @Test func bareDadIsTheOwnersFather() async throws {
+        let response = try await ask("dad", operation: .biography, context: context())
+        #expect(response.route == .graph)
+        #expect(response.outcome == .answered)
+        #expect(response.prose.contains("Dad Example"))
+        #expect(!response.prose.contains("which"))
+    }
+
+    /// The live defect exactly: the tree happens to hold a name the token/
+    /// prefix oracle matches from "dad" (here a person named "Dadley"), and
+    /// the bare word must STILL mean the owner's father — only a People-tab
+    /// or CyberBrain alias may claim a kin word as a name.
+    @Test func aTreeTokenCoincidenceDoesNotStealABareKinWord() async throws {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @R@ INDI
+        1 NAME Rick /Example/
+        1 FAMC @P@
+        0 @D@ INDI
+        1 NAME Dad /Example/
+        1 SEX M
+        0 @X@ INDI
+        1 NAME Dadley /Stranger/
+        1 SEX M
+        1 BIRT
+        2 DATE 1360
+        0 @P@ FAM
+        1 HUSB @D@
+        1 CHIL @R@
+        0 TRLR
+        """)
+        let context = HallieTurnExecutor.Context(graph: graph, speakers: .init(ownerName: "Rick Example", archivistName: nil))
+        #expect(HallieTurnExecutor.isKnownPerson("dad", context: context), "the tree oracle DOES match — that is the trap")
+        let response = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "tell me about dad",
+                                ast: .graph(.init(people: ["dad"], operation: .biography)))),
+            context: context)
+        #expect(response.prose.contains("Dad Example"), "\(response.prose)")
+        #expect(!response.prose.contains("Dadley"))
+    }
+
     @Test func grandmotherClarificationRetainsBirthplaceAndStableIdentity() async throws {
         let snapshot = context()
         let response = try await ask("my grandmother", context: snapshot)

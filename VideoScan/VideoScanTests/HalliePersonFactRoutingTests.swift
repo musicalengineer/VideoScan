@@ -65,6 +65,35 @@ struct HalliePersonFactRoutingTests {
         #expect(payload.operation == .birthPlace)
     }
 
+    /// GH #180 (live 2026-09-10/11): "tell me about dad" answered with
+    /// Dafydd ab Einion (b. ~1360). A bare kin word is the owner's relative
+    /// unless it is a known person's alias ("Ma" → Eileen keeps winning).
+    @Test func bareKinWordsAreTheOwnersRelatives() {
+        let nobody: (String) -> Bool = { _ in false }
+        #expect(HalliePersonFactQuestion.detect("tell me about dad", isKnownPerson: nobody)
+                == .init(people: ["my dad"], operation: .biography))
+        #expect(HalliePersonFactQuestion.detect("Where was Mom born?", isKnownPerson: nobody)
+                == .init(people: ["my mom"], operation: .birthPlace))
+        #expect(HalliePersonFactQuestion.detect("who was nana", isKnownPerson: nobody)
+                == .init(people: ["my nana"], operation: .biography))
+        #expect(HalliePersonFactQuestion.detect("tell me about my dad", isKnownPerson: nobody)
+                == .init(people: ["my dad"], operation: .biography))
+        // A known alias wins over the kin reading.
+        #expect(HalliePersonFactQuestion.detect("tell me about ma", isKnownPerson: { $0.lowercased() == "ma" })
+                == .init(people: ["ma"], operation: .biography))
+        // Not a kin word and not known → still the translator's.
+        #expect(HalliePersonFactQuestion.detect("tell me about dave", isKnownPerson: nobody) == nil)
+        #expect(HalliePersonFactQuestion.detect("tell me about the dads", isKnownPerson: nobody) == nil)
+        typealias S = HallieTurnExecutor.RelativeFactSubject
+        #expect(S.parse("dad") == .init(relation: .father, side: nil))
+        #expect(S.parse("papa") == .init(relation: .father, side: nil))
+        #expect(S.parse("my ma") == .init(relation: .mother, side: nil))
+        #expect(S.parse("nana") == .init(relation: .grandmother, side: nil))
+        #expect(S.parse("my maternal grandmother") == .init(relation: .grandmother, side: .maternal))
+        #expect(S.parse("gladiator") == nil)
+        #expect(S.parse("dad breen") == nil, "two words without a possessive is a name")
+    }
+
     @Test func mediaAdviceAndMultiSubjectRequestsAreNotSwallowed() {
         for question in ["show videos of Ellen Ronan", "tell me about this video",
                          "tell me about black holes", "where was Ellen Ronan born and where did Mary die?",
