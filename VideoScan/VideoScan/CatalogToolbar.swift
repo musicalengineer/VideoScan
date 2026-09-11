@@ -38,6 +38,11 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// Semantics unchanged: hits over pfSearchBadgeBase (purge +
     /// set-aside pre-filter), pinned by CatalogSearchBudgetSensorTests.
     let searchHitCount: Int
+    /// TOTAL CATALOG · ARCHIVED · UNIQUE for the box beside the Showing
+    /// box (Rick 2026-09-11). Computed by CatalogView off the main actor
+    /// on the catalog-change triggers and handed down as a value —
+    /// this toolbar never walks `records`.
+    let sizeTotals: CatalogSizeTotals
     @Binding var showInspector: Bool
     let cacheCount: Int
     let dashboard: DashboardState
@@ -532,6 +537,20 @@ struct CatalogToolbar<Dashboard: View>: View {
                         viewFilters.insert(.notYetArchived)
                     }
                 }
+
+            // "TOTAL CATALOG 10.7 TB · ARCHIVED 2.1 TB · UNIQUE 6.3 TB" —
+            // the whole catalog's size, what the Master Archive already
+            // holds, and the distinct material once copies collapse
+            // (Rick 2026-09-11: the ~10 TB figure counts archive copies
+            // and cleaned versions too). Beside the Showing box so the
+            // two read as one row of facts: what you are looking at, and
+            // how much there is. Hidden until the catalog has records.
+            // NOTE: this widens the left-hand group, so the search
+            // capsule lands further right than `searchLeftInset` was
+            // tuned for — retune that one constant if it bothers the eye.
+            if !sizeTotals.isEmpty {
+                CatalogSizeTotalsBox(totals: sizeTotals)
+            }
 
             if !outputCSVPath.isEmpty {
                 Button(action: {

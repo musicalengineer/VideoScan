@@ -185,6 +185,10 @@ extension CatalogView {
             onlineVolumes: onlineVolumes
         )
         scheduleManuallyDeletedProbe(onlineVolumes: onlineVolumes)
+        // The Catalog's TOTAL CATALOG · ARCHIVED · UNIQUE line rides the
+        // same triggers (Rick 2026-09-11) — projected here, grouped
+        // off-main, see scheduleSizeTotals().
+        scheduleSizeTotals()
         // Content-hash backfill plan for the Catalog Options menu. Reuses
         // the SAME cached volume set rather than stat()-ing per record.
         hashBackfillPlan = VideoScanModel.planContentHashBackfill(
@@ -261,6 +265,36 @@ extension CatalogView {
             if Task.isCancelled { return }   // superseded by a newer recompute
             storageTotals.manuallyDeletedOnDiskBytes = found.bytes
             storageTotals.manuallyDeletedOnDiskFiles = found.files
+        }
+    }
+
+    /// Recompute the Catalog's size line — TOTAL CATALOG · ARCHIVED ·
+    /// UNIQUE (Rick 2026-09-11). Same shape as the manually-deleted
+    /// probe above: project the active records here on the main actor
+    /// (plain field reads plus `model.isArchived`, which is O(1) per
+    /// record after the promotion index's per-mutation rebuild — no I/O),
+    /// hand the Sendable entries to a detached task for the group-by,
+    /// and publish the answer back under a cancellation guard so a stale
+    /// pass can never overwrite a newer one.
+    ///
+    /// Not private: ContentView's toolbar stage calls it for the
+    /// triggers `recomputeVolumeAggregates()` does not see (Tidy apply,
+    /// Confirm Repair, Master Archive designation).
+    ///
+    /// Memory: one ~80-byte `Entry` per active record (hash strings are
+    /// copy-on-write shares, not copies) — ~1 MB on Rick's catalog today,
+    /// ~8 MB worst case at 100k records; freed when the task completes.
+    func scheduleSizeTotals() {
+        sizeTotalsTask?.cancel()
+        let entries = CatalogSizeTotals.project(model.records) { model.isArchived($0) }
+        sizeTotalsTask = Task {
+            // (`Task.detached` ≈ a worker thread that does NOT inherit
+            // the caller's actor; only Sendable values cross.)
+            let totals = await Task.detached(priority: .utility) {
+                CatalogSizeTotals.compute(entries)
+            }.value
+            if Task.isCancelled { return }   // superseded by a newer recompute
+            sizeTotals = totals
         }
     }
 

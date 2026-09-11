@@ -457,6 +457,15 @@ struct CatalogView: View {
     /// on disk" caption (Rick 2026-08-18). Held so a newer recompute can
     /// cancel a stale sweep before it publishes into `storageTotals`.
     @State var manuallyDeletedProbeTask: Task<Void, Never>? = nil
+    /// The Catalog's size line beside the Showing box — TOTAL CATALOG ·
+    /// ARCHIVED · UNIQUE (Rick 2026-09-11). Same discipline as
+    /// `storageTotals`: projected on the main actor inside
+    /// recomputeVolumeAggregates(), grouped OFF the main actor, published
+    /// back here under a cancellation guard. Never computed in a body.
+    @State var sizeTotals = CatalogSizeTotals()
+    /// In-flight size-line pass; a newer recompute cancels a stale one
+    /// before it can publish into `sizeTotals`.
+    @State var sizeTotalsTask: Task<Void, Never>? = nil
     /// Measured frames of the volume table's Media Size / Scanned /
     /// Phase columns, reported by the cells themselves via
     /// VolumeColumnFramesKey. The TOTAL MEDIA footer puts one figure on
@@ -533,6 +542,19 @@ struct CatalogView: View {
     }
 
     private var catalogToolbar: some View {
+        // Size-line triggers that recomputeVolumeAggregates() does not
+        // already see (it keys on records.count / purge / revision):
+        // Tidy apply and its undo (set-aside flips TOTAL without changing
+        // the count), Confirm Repair (supersede/restore), and a Master
+        // Archive designation change (flips ARCHIVED). Its own small
+        // stage rather than more modifiers on an existing chain (GH #132).
+        catalogToolbarBase
+            .onChange(of: model.lastTidyBatch) { scheduleSizeTotals() }
+            .onChange(of: model.lastConfirmBatch) { scheduleSizeTotals() }
+            .onChange(of: model.masterArchive) { scheduleSizeTotals() }
+    }
+
+    private var catalogToolbarBase: some View {
         CatalogToolbar(
             isScanning: model.isScanning,
             isCombining: model.isCombining,
@@ -552,6 +574,7 @@ struct CatalogView: View {
             searchText: $searchText,
             debouncedSearchText: debouncedSearchText,
             searchHitCount: searchHitCount,
+            sizeTotals: sizeTotals,
             showInspector: $showInspector,
             cacheCount: model.cacheCount,
             dashboard: model.dashboard,
