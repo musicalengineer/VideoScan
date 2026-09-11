@@ -1291,6 +1291,12 @@ enum HallieTurnExecutor {
         dependencies: Dependencies
     ) async throws -> Result {
         let ast = request.intent.ast
+        // A military-service question is answered from the family's own
+        // passages (+Service, 2026-09-11) — before the tree biography,
+        // which would answer a different question with birth and death.
+        if let service = ServiceAnswer.execute(payload: rawPayload, request: request, context: context) {
+            return service
+        }
         // "show ricks family tree": a possessive typed without its
         // apostrophe. When nobody knows "ricks" but someone knows "rick",
         // read it that way — visibly, in the basis line — instead of

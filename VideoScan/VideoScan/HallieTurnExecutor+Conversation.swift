@@ -937,6 +937,13 @@ extension HallieTurnExecutor {
                 originalQuestion: retried == nil ? question : (memory.lastExchange?.question ?? question),
                 ast: .graph(payload), playAfterAnswer: false))
         }
+        // "who in the family served in the marine corps?" (2026-09-11): the
+        // whole family's service passages — the translator read "marine
+        // corps" as a surname. No subject; the executor scans CyberBrain.
+        if !playAfterAnswer, HallieServiceQuestion.isFamilyWideAsk(question) {
+            return .run(Intent(originalQuestion: question,
+                               ast: .graph(.init(people: [], operation: .biography))))
+        }
         if !playAfterAnswer,
            let payload = HalliePersonFactQuestion.detect(question, isKnownPerson: isKnownPerson) {
             return .run(Intent(originalQuestion: question, ast: .graph(payload)))

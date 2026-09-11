@@ -8,7 +8,13 @@ enum HalliePersonFactQuestion {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "?.!"))
             .replacingOccurrences(of: "’", with: "'")
-        let patterns: [(String, ArchivistQueryAST.Graph.Operation)] = [
+        // Military-service shapes first (2026-09-11): "did my dad serve in
+        // the marines" is a biography ask about ONE person whose subject
+        // takes the same road as every other fact; the generic "tell me
+        // about (.+)" below would otherwise swallow "my dad's military
+        // service" whole and find nobody by that name.
+        let patterns: [(String, ArchivistQueryAST.Graph.Operation)] =
+            HallieServiceQuestion.subjectPatterns.map { ($0, .biography) } + [
             (#"^(?:where|what (?:country|town|city|place)) (?:was|were) (.+?) born(?: in)?$"#, .birthPlace),
             (#"^where (?:did|was) (.+?) (?:die|died)$"#, .deathPlace),
             (#"^when (?:was|were) (.+?) born$"#, .birth),

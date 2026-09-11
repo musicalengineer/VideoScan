@@ -469,6 +469,87 @@
    ],
    "followsPrevious": true,
    "notes": "GH #182 live 2026-09-11 session 58A6E73C: routed to aggregate/coOccurrence and dead-ended on 'I couldn't resolve the anchor'. Fixed: deterministic shapes + aggregate anchor fallback (fix/gh-182-hallie-anchor-fallback)."
+  },
+  {
+   "id": "strict-028",
+   "category": "strict",
+   "text": "did my dad serve in the marines?",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered"
+   ],
+   "mustContain": [
+    "Marine Corps"
+   ],
+   "mustNotContain": [
+    "one person at a time",
+    "Dafydd",
+    "1929"
+   ],
+   "notes": "Rick 2026-09-11: 'I'd like Hallie to mention my dad's Marine Corps service in the 1940s.' CyberBrain passage bio.richard-breen-sr-marine-corps.2026-09-11 (person.richard-harding-breen-sr.i342486893646). Live replay before the fix: 0/8 phrasings — resolved father declined 'one person at a time', bare 'dad' → Dafydd ab Einion, 'marine corps' read as a surname, named ask answered with birth/death. Fixed by HallieServiceQuestion + HallieTurnExecutor+Service."
+  },
+  {
+   "id": "strict-029",
+   "category": "strict",
+   "text": "what branch of the service was dad in?",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered"
+   ],
+   "mustContain": [
+    "Marine Corps"
+   ],
+   "mustNotContain": [
+    "Dafydd",
+    "1360"
+   ],
+   "notes": "Rick 2026-09-11: 'I'd like Hallie to mention my dad's Marine Corps service in the 1940s.' CyberBrain passage bio.richard-breen-sr-marine-corps.2026-09-11 (person.richard-harding-breen-sr.i342486893646). Live replay before the fix: 0/8 phrasings — resolved father declined 'one person at a time', bare 'dad' → Dafydd ab Einion, 'marine corps' read as a surname, named ask answered with birth/death. Fixed by HallieServiceQuestion + HallieTurnExecutor+Service."
+  },
+  {
+   "id": "strict-030",
+   "category": "strict",
+   "text": "tell me about richard breen sr's time in the marine corps",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered"
+   ],
+   "mustContain": [
+    "Marine Corps",
+    "1940s"
+   ],
+   "mustNotContain": [
+    "1929",
+    "descendants"
+   ],
+   "notes": "Rick 2026-09-11: 'I'd like Hallie to mention my dad's Marine Corps service in the 1940s.' CyberBrain passage bio.richard-breen-sr-marine-corps.2026-09-11 (person.richard-harding-breen-sr.i342486893646). Live replay before the fix: 0/8 phrasings — resolved father declined 'one person at a time', bare 'dad' → Dafydd ab Einion, 'marine corps' read as a surname, named ask answered with birth/death. Fixed by HallieServiceQuestion + HallieTurnExecutor+Service."
+  },
+  {
+   "id": "strict-031",
+   "category": "strict",
+   "text": "who in the family served in the marine corps?",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered"
+   ],
+   "mustContain": [
+    "Richard Harding Breen Sr"
+   ],
+   "mustNotContain": [
+    "surname"
+   ],
+   "notes": "Rick 2026-09-11: 'I'd like Hallie to mention my dad's Marine Corps service in the 1940s.' CyberBrain passage bio.richard-breen-sr-marine-corps.2026-09-11 (person.richard-harding-breen-sr.i342486893646). Live replay before the fix: 0/8 phrasings — resolved father declined 'one person at a time', bare 'dad' → Dafydd ab Einion, 'marine corps' read as a surname, named ask answered with birth/death. Fixed by HallieServiceQuestion + HallieTurnExecutor+Service."
   }
  ]
 }

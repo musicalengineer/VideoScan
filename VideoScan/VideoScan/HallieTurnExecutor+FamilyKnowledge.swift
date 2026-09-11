@@ -102,7 +102,7 @@ extension HallieTurnExecutor {
                 .map { ($0, $0.sourceIDs.first.flatMap { index.source(id: $0) }) }
         }
 
-        private static func attributionLead(_ source: CyberBrainSource?, item: CyberBrainItem) -> String {
+        static func attributionLead(_ source: CyberBrainSource?, item: CyberBrainItem) -> String {
             let hedge = item.confidence == .confirmed ? "" : " (not yet verified)"
             guard let source else { return "I have a note\(hedge) that says" }
             switch source.type {
