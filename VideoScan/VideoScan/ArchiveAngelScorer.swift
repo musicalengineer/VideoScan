@@ -257,8 +257,11 @@ enum ArchiveAngelScorer {
     /// and proxy-stream floors; 4 = download/rip cap (T10 H1); 6 = one per
     /// duplicate group + "most original" codec tie-break (T10 H2) and
     /// derivative exports yield to a RELATED original (T10 H3) — one bump
-    /// for the pair, 5 was never shipped.
-    static let rulesVersion = 6
+    /// for the pair, 5 was never shipped; 7 = the projection's
+    /// `archivedCopyExists` follows provenance (a version of something
+    /// archived is excluded, codex #1345) — v6 sidecars still grade such
+    /// versions A/B, so they must rescore.
+    static let rulesVersion = 7
 
     /// The verdict for one record. Pure.
     static func verdict(_ c: ArchiveAngelCandidate,

@@ -88,6 +88,16 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     /// that clears the hard floor becomes a pick, best score first; the
     /// rest are counted by reason so the finish line can say why. Rows
     /// already in a prepared batch are refused as such. Pure.
+    ///
+    /// Deliberately NOT run through `markDerivatives` (codex #1345): the
+    /// user chose these rows, so a "_balanced" export they picked on
+    /// purpose is not displaced by a same-folder original they did not
+    /// pick. The HARD floors still apply, and since the projection's
+    /// `archivedCopyExists` now follows provenance, an explicitly
+    /// selected version of something archived is refused as
+    /// `.duplicateArchived` — the same answer the to-do view gives by
+    /// hiding it (the catalog's Prepare item pre-filters on
+    /// `pfNotYetArchived`, so such a row normally never reaches here).
     nonisolated static func explicitSelection(
         ids: [UUID], inFlight: Set<UUID>, now: Date = Date(),
         project: (UUID) -> ArchiveAngelCandidate?

@@ -134,6 +134,12 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     /// Grade A + B ids — the "Archive candidates" filter set. Rebuilt on
     /// every replace so the catalog filter is a Set lookup.
     @Published private(set) var candidateIDs: Set<UUID> = []
+    /// Bumped on EVERY replace/clear, membership change or not (codex
+    /// #1345): a sweep that keeps a record in A/B but flips A↔B or
+    /// rewrites its summary leaves `candidateIDs` untouched, so the
+    /// catalog rows drawing the badge/tooltip had nothing to observe.
+    /// Rows re-render on this; the filter recomputes on `candidateIDs`.
+    @Published private(set) var revision: Int = 0
 
     init(directory: URL = ArchiveAngelEvidenceStore.defaultDirectory) {
         self.directory = directory
@@ -192,12 +198,14 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     func replace(with newFile: ArchiveAngelEvidenceFile) {
         file = newFile
         candidateIDs = Set(newFile.records.filter { $0.value.isCandidate }.map(\.key))
+        revision &+= 1
     }
 
     /// Forget everything (tests, "Rescore now" reset).
     func clear() {
         file = nil
         candidateIDs = []
+        revision &+= 1
     }
 
     /// Load from disk off-main and publish. A missing, malformed,

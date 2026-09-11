@@ -142,6 +142,52 @@ struct ArchiveAngelEvidenceStoreTests {
         #expect(await fresh.save() == false)
     }
 
+    @Test("SENSOR (codex #1345): a v6 sidecar — versions of archived media still graded A/B — is ignored; v7 loads")
+    @MainActor
+    func staleV6SidecarIgnored() async throws {
+        let dir = tempDir("v6")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = ArchiveAngelEvidenceStore(directory: dir)
+        let id = UUID()
+        store.replace(with: .init(computedAt: Date(timeIntervalSince1970: 1_700_000_000), complete: true,
+                                  considered: 1, eligible: 1, records: [id: rec(110)]))
+        #expect(await store.save())
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as! [String: Any]
+        #expect(json["rulesVersion"] as? Int == 7, "this sensor pins the bump; re-pin it on the next rules change")
+
+        json["rulesVersion"] = 6
+        try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
+        let v6 = ArchiveAngelEvidenceStore(directory: dir)
+        #expect(await v6.load() == false)
+        #expect(!v6.isLoaded && v6.candidateIDs.isEmpty, "a v6 grade must never reach a badge")
+
+        json["rulesVersion"] = 7
+        try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
+        let v7 = ArchiveAngelEvidenceStore(directory: dir)
+        #expect(await v7.load())
+        #expect(v7.candidateIDs == [id])
+    }
+
+    @Test("codex #1345: revision bumps when the same candidate set is republished with a different grade")
+    @MainActor
+    func revisionFollowsGradeNotMembership() {
+        let store = ArchiveAngelEvidenceStore(directory: tempDir("rev"))
+        let a = UUID(), b = UUID()
+        let r0 = store.revision
+        store.replace(with: .init(considered: 2, eligible: 2, records: [a: rec(120), b: rec(70)]))
+        let r1 = store.revision
+        #expect(r1 != r0)
+        #expect(store.candidateIDs == [a, b])
+        // Same A+B membership, but `a` slips from A to B and its summary changes.
+        store.replace(with: .init(considered: 2, eligible: 2, records: [a: rec(80, lines: ["★★"]), b: rec(70)]))
+        #expect(store.candidateIDs == [a, b], "membership unchanged — the filter publisher would stay silent")
+        #expect(store.revision != r1, "…so rows must have their own signal")
+        #expect(store.record(for: a)?.grade == .b)
+        let r2 = store.revision
+        store.clear()
+        #expect(store.revision != r2, "forgetting everything is a change too")
+    }
+
     @Test("SCALE: 100k records save + load under 2 s (Debug ceiling)")
     @MainActor
     func scale() async {
