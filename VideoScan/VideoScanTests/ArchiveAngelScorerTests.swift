@@ -324,8 +324,12 @@ struct ArchiveAngelDownloadCapTests {
         // The same file in a backup's Movies folder is still a download.
         var moved = ep1; moved.fullPath = "/Volumes/SanDisk/From_Breen_NetworkBackups/Movies/EP1.m4v"
         #expect(ArchiveAngelScorer.looksLikeDownloadOrRip(moved))
-        // The marker is a folder component, never the filename.
+        // The marker is a WHOLE folder component, never the filename and never a substring.
         #expect(!ArchiveAngelScorer.hasFamilyOriginPath("/v/Movies/Family Movies.mp4"))
+        #expect(!ArchiveAngelScorer.hasFamilyOriginPath("/v/NotFamily Movies Rips/x.mp4"))
+        #expect(!ArchiveAngelScorer.hasFamilyOriginPath("/v/imovielibrary_backup_rips/x.mp4"))
+        #expect(ArchiveAngelScorer.hasFamilyOriginPath("/v/Ellen.imovielibrary/x.mp4"))
+        #expect(ArchiveAngelScorer.hasFamilyOriginPath("/v/iMovie Events.localized/Day 1/x.mp4"))
     }
 
     @Test("SCALE: the note classifier over 100k projection-sized notes stays under 1 s (Debug ceiling)")

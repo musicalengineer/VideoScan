@@ -416,13 +416,22 @@ enum ArchiveAngelScorer {
     /// h264 export found there (live: EP1.m4v, 3 Mbit/s, "Ellen & Paul
     /// 1997/Original Media") is a family export, not a download.
     static let familyOriginPathMarkers: [String] = [
-        "imovielibrary", ".imovieproject", "imovie events", "imovie projects", "family movies",
+        ".imovielibrary", ".imovieproject", "imovie events", "imovie projects", "family movies",
         "home movies", "home videos", "original media",
     ]
 
+    /// Whole folder components only (codex #1306 advisory): a component
+    /// IS a marker, or ends with a package suffix (".imovielibrary",
+    /// ".imovieproject") — never a substring of an unrelated folder name.
     static func hasFamilyOriginPath(_ fullPath: String) -> Bool {
-        let folder = (fullPath as NSString).deletingLastPathComponent.lowercased()
-        return familyOriginPathMarkers.contains { folder.contains($0) }
+        let components = (fullPath as NSString).deletingLastPathComponent
+            .split(separator: "/").map { $0.lowercased() }
+        return components.contains { component in
+            familyOriginPathMarkers.contains { marker in
+                marker.hasPrefix(".") ? component.hasSuffix(marker) : component == marker
+                    || component == marker + ".localized"
+            }
+        }
     }
 
     static func looksLikeDownloadOrRip(_ c: ArchiveAngelCandidate,
