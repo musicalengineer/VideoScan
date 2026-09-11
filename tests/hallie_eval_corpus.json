@@ -1,7 +1,7 @@
 {
  "version": 1,
  "created": "2026-08-21",
- "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 351 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+ "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 354 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
  "expect_values": {
   "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
   "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -2803,9 +2803,17 @@
    "category": "live",
    "text": "where was my grandmother born?",
    "expect": "kinship",
-   "expectedRoutes": ["graph"],
-   "expectedOutcomes": ["answered", "needsClarification"],
-   "mustNotContain": ["videos where someone says", "matching catalog items"],
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered",
+    "needsClarification"
+   ],
+   "mustNotContain": [
+    "videos where someone says",
+    "matching catalog items"
+   ],
    "notes": "Reviewed client=app 2026-09-10T17:27:10Z. Ask which grandmother when ambiguous, or give grounded birthplace(s); never a transcript keyword search. No birthplace asserted by this routing sensor."
   },
   {
@@ -2814,9 +2822,17 @@
    "text": "where was mary o'connor born?",
    "followsPrevious": true,
    "expect": "kinship",
-   "expectedRoutes": ["graph"],
-   "expectedOutcomes": ["answered", "needsClarification"],
-   "mustNotContain": ["I looked for videos", "matching catalog items"],
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered",
+    "needsClarification"
+   ],
+   "mustNotContain": [
+    "I looked for videos",
+    "matching catalog items"
+   ],
    "notes": "Reviewed client=app 2026-09-10T17:27:52Z. Named-person clarification after grandmother question; graph birthplace query, allowing identity disambiguation."
   },
   {
@@ -2825,9 +2841,17 @@
    "text": "tell me about mary o'connor and where she was born",
    "followsPrevious": true,
    "expect": "kinship",
-   "expectedRoutes": ["graph"],
-   "expectedOutcomes": ["answered", "needsClarification"],
-   "mustNotContain": ["I looked for videos", "matching catalog items"],
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered",
+    "needsClarification"
+   ],
+   "mustNotContain": [
+    "I looked for videos",
+    "matching catalog items"
+   ],
    "notes": "Reviewed client=app 2026-09-10T17:29:03Z. Compound biography/birthplace request stays in family data, not video keywords. No invented vitals required."
   },
   {
@@ -2836,9 +2860,18 @@
    "text": "look in the family tree",
    "followsPrevious": true,
    "expect": "kinship",
-   "expectedRoutes": ["graph"],
-   "expectedOutcomes": ["answered", "needsClarification"],
-   "mustNotContain": ["matching catalog items", "10021", "I looked for videos"],
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered",
+    "needsClarification"
+   ],
+   "mustNotContain": [
+    "matching catalog items",
+    "10021",
+    "I looked for videos"
+   ],
    "notes": "Reviewed client=app 2026-09-10T17:29:56Z. Manually restored: harvester drops 'look' and deduplicates the immediately preceding repeated Mary birthplace question. The retained preceding turn still names Mary and requests her birthplace; preserve that subject/operation rather than search every video."
   },
   {
@@ -2846,10 +2879,52 @@
    "category": "live",
    "text": "tell me about ellen ronan",
    "expect": "biography",
-   "expectedRoutes": ["graph"],
-   "expectedOutcomes": ["answered", "needsClarification"],
-   "mustNotContain": ["I looked for videos", "matching catalog items", "searched it as a place or word"],
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered",
+    "needsClarification"
+   ],
+   "mustNotContain": [
+    "I looked for videos",
+    "matching catalog items",
+    "searched it as a place or word"
+   ],
    "notes": "Reviewed client=app 2026-09-10T17:30:55Z. A GEDCOM person absent from People tags must still resolve through the tree; ambiguity may clarify. Independent replay prevents inherited Mary identity."
+  },
+  {
+   "id": "lv260910-007",
+   "category": "live",
+   "text": "tell me about Christopher Dennis O'Connor",
+   "expect": "biography",
+   "notes": "harvested 2026-09-10 from the app transcript (2026-09-10); expectation unconfirmed; CyberBrain alias 'Christopher Dennis O'Connor' → tree 'Christopher O'Connor' @I342486919751@ (added 2026-09-10)",
+   "mustMatch": [
+    "O'Connor"
+   ]
+  },
+  {
+   "id": "lv260910-008",
+   "category": "live",
+   "text": "tell me about ellen ronan, my great grandmother.",
+   "expect": "biography",
+   "notes": "harvested 2026-09-10; live answer gave the great-grandmother LIST instead of Ellen — comma apposition ('X, my great grandmother') must resolve to X's biography (codex #1298 item 8). Expectation set by Claude from Rick's intent that day.",
+   "mustMatch": [
+    "Ellen Ronan"
+   ],
+   "mustNotContain": [
+    "Muriel"
+   ]
+  },
+  {
+   "id": "lv260910-009",
+   "category": "live",
+   "text": "tell me about mary o'connor",
+   "expect": "biography",
+   "notes": "harvested 2026-09-10 from the app transcript (2026-09-10); expectation unconfirmed; two Mary O'Connors are sisters (1904/1905) — a which-one or a clear pick, never a silent guess",
+   "mustMatch": [
+    "Mary O'Connor"
+   ]
   }
  ]
 }
