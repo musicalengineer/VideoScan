@@ -90,7 +90,20 @@ struct HallieHisWifeAfterBiographyTests {
         #expect(Q.detect("who was her husband") == .kinship(person: "Her", relation: .husband, side: nil))
         #expect(Q.detect("and who were her parents?") == .kinship(person: "Her", relation: .parents, side: nil))
         #expect(Q.detect("what are the names of his children") == .kinship(person: "His", relation: .children, side: nil))
-        #expect(Q.detect("who were their kids") == .kinship(person: "Their", relation: .children, side: nil))
+    }
+
+    /// "their" is NOT claimed by the sentence form (codex #1352): pronoun
+    /// execution reads it as plural and declines "one person at a time"
+    /// even when memory holds one referent, so claiming it would turn a
+    /// question the translator could answer into a sure decline. It keeps
+    /// the road it had; singular-they is deferred.
+    @Test func theirKeepsItsOldRoad() {
+        #expect(Q.namedKinSentenceQuestion(in: "who were their children") == nil)
+        #expect(Q.namedKinSentenceQuestion(in: "who were their kids") == nil)
+        #expect(Q.namedKinSentenceQuestion(in: "what are the names of their children") == nil)
+        #expect(Q.detect("who were their children") == nil)
+        // The bare fragment's own "their" is untouched.
+        #expect(Q.detect("their children") == .kinship(person: "Their", relation: .children, side: nil))
     }
 
     /// The typed form always worked (live 22:02Z: "who was eileen's

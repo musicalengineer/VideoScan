@@ -79,10 +79,13 @@ extension HallieTurnExecutor {
         /// nothing — "Want me to try without the words, or with a
         /// different name?" — so a bare "yes" / "sure" right after takes
         /// it (live 2026-09-11 22:01Z: "sure" and "yes" were both declined
-        /// as follow-ups Hallie "couldn't tell how" to apply). Set only by
-        /// a declined presence / cross turn whose miss offers a retry;
-        /// cleared by every other recorded turn, so the offer lives for
-        /// exactly one reply.
+        /// as follow-ups Hallie "couldn't tell how" to apply). Copied from
+        /// the recorded answer's own `retryOffer` — the typed payload the
+        /// not-found sentence carries — and replaced by every recorded
+        /// turn, so the offer lives for exactly one reply. Never inferred
+        /// from a decline (codex #1352): "Did you mean X or Y?" and an
+        /// unresolved "my dad" decline the same route with no offer, and a
+        /// "yes" after those must not silently rerun a stripped search.
         private(set) var pendingOffer: HallieOfferAcceptance.Offer?
 
         enum RecordDecline: Sendable, Equatable {
@@ -126,9 +129,9 @@ extension HallieTurnExecutor {
             }
             recordExchange(intent: intent, result: result, question: question)
             // An offer is good for one reply: whatever this turn was, the
-            // last one's offer is gone; a declined list search may leave
-            // a new one below.
-            pendingOffer = nil
+            // last one's offer is gone, and only an answer that OFFERED a
+            // retry in its own prose leaves a new one.
+            pendingOffer = result.retryOffer
             switch result.route {
             case .presence, .cross, .aggregate, .temporal, .graph, .telling, .record:
                 lastProvenance = HallieProvenanceFollowUp.Provenance(result: result)
@@ -203,9 +206,6 @@ extension HallieTurnExecutor {
                     if intent.refinementChain == nil { lastShownList = nil }
                     if result.refinableQuery == nil, result.route != .aggregate {
                         lastRefinable = nil
-                    }
-                    if result.route != .aggregate {
-                        pendingOffer = HallieOfferAcceptance.retry(after: intent, result: result)
                     }
                 }
             case .graph:
@@ -1461,6 +1461,7 @@ extension HallieTurnExecutor.Result {
             attachments: attachments,
             performsFirstOfferedAction: performsFirstOfferedAction,
             immediateOfferedAction: immediateOfferedAction,
-            refinableQuery: refinableQuery)
+            refinableQuery: refinableQuery,
+            retryOffer: retryOffer)
     }
 }

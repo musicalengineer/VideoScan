@@ -124,6 +124,14 @@ struct ArchivistFactualAnswer: Sendable, Equatable {
     let prose: String
     let basisLine: String
     let evidence: ArchivistEvidenceSet
+    /// The retry the no-evidence sentence OFFERS — "Want me to try without
+    /// the words / the year, or with a different name?" — as a typed value
+    /// the executor turns into the search a bare "yes" runs. Set by the
+    /// same code that writes the sentence, so the payload and the prose
+    /// can never disagree; nil = this answer offers no retry (codex #1352,
+    /// 2026-09-11: an offer is a payload of the answer, never inferred
+    /// from a decline).
+    var retryOffer: ArchivistPresenceAnswerComposer.RetryOffer? = nil
 }
 
 /// Immutable query value copied from QueryAST before detached execution.
@@ -1032,7 +1040,23 @@ enum ArchivistPresenceAnswerComposer {
         return facets
     }
 
+    /// What the no-evidence sentence offers to set aside on a retry.
+    enum RetryOffer: String, Sendable, Equatable {
+        case words, year
+    }
+
     static func noEvidenceAnswer(for interpretedQuery: String) -> String {
+        noEvidence(for: interpretedQuery).prose
+    }
+
+    /// The not-found sentence AND the retry it offers, decided together
+    /// from the executed query's facets: a person with words offers
+    /// "without the words", a person with a year offers "without the
+    /// year", and every other shape offers nothing (a person-only miss
+    /// suggests a spelling; a no-person miss suggests a name). The
+    /// executor carries the typed half on its Result so conversation
+    /// memory never has to read the prose or guess from a decline.
+    static func noEvidence(for interpretedQuery: String) -> (prose: String, retryOffer: RetryOffer?) {
         let parsed = parseFacets(interpretedQuery)
         let people = parsed.people
         let years = parsed.years.map { "from \($0)" }
@@ -1046,18 +1070,19 @@ enum ArchivistPresenceAnswerComposer {
             phrase += " with “" + keywords.joined(separator: "”, “") + "”"
         }
         guard !(people.isEmpty && years == nil && keywords.isEmpty && mediaKind == nil) else {
-            return "I need something to look for — a person, a year, a place, or a word. Try “show me Donna in the 90s”."
+            return ("I need something to look for — a person, a year, a place, or a word. Try “show me Donna in the 90s”.", nil)
         }
         let offer: String
         if people.isEmpty {
             offer = "I search by the people tagged in each video, by year, and by words in file names and transcripts — try a name or a year, or a different word."
+            return ("I looked for \(phrase) and found nothing in the catalog. " + offer, nil)
         } else if years == nil && keywords.isEmpty {
             // Person only: the useful sentence IS the offer.
-            return "I don't have any videos tagged with \(joinNames(people)) yet. Try another spelling or a nickname — or tell me about \(joinNames(people)) and I'll remember it."
-        } else {
-            offer = "Want me to try without the \(keywords.isEmpty ? "year" : "words"), or with a different name?"
+            return ("I don't have any videos tagged with \(joinNames(people)) yet. Try another spelling or a nickname — or tell me about \(joinNames(people)) and I'll remember it.", nil)
         }
-        return "I looked for \(phrase) and found nothing in the catalog. " + offer
+        let retry: RetryOffer = keywords.isEmpty ? .year : .words
+        offer = "Want me to try without the \(retry.rawValue), or with a different name?"
+        return ("I looked for \(phrase) and found nothing in the catalog. " + offer, retry)
     }
 
     /// The relax-and-explain sentence.
@@ -1172,10 +1197,12 @@ enum ArchivistPresenceAnswerComposer {
                     + "\(count) matching catalog items.",
                 evidence: result.evidence)
         case .noEvidence:
+            let miss = noEvidence(for: result.interpretedQuery)
             return ArchivistFactualAnswer(
-                prose: noEvidenceAnswer(for: result.interpretedQuery),
+                prose: miss.prose,
                 basisLine: "Basis: no matching catalog evidence.",
-                evidence: result.evidence)
+                evidence: result.evidence,
+                retryOffer: miss.retryOffer)
         case .insufficientConstraints:
             return ArchivistFactualAnswer(
                 prose: "I need something to look for — a person, a year, a place, or a word. Try “show me Donna in the 90s”.",
