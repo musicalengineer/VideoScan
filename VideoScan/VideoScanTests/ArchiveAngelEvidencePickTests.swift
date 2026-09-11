@@ -76,6 +76,56 @@ struct ArchiveAngelEvidencePickTests {
         #expect(pick?.selection.rejected[.duplicateOfPick] == 1)
     }
 
+    @Test("T10 H2 (codex #1306): an EQUAL-score group keeps the longer/larger AND older-codec member whichever UUID sorts first — the band is collected whole and ranked with the walk's comparator")
+    @MainActor
+    func equalScoreGroupKeepsBestMember() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let d = Date(timeIntervalSince1970: 700_000_000)
+        // Two UUID orderings of the same tape: the projection decides which id is the DV whole tape.
+        let ids = [UUID(), UUID()].sorted { $0.uuidString < $1.uuidString }
+        for dvIsFirst in [true, false] {
+            let dv = dvIsFirst ? ids[0] : ids[1], mp4 = dvIsFirst ? ids[1] : ids[0]
+            let g = UUID(), lone = UUID(), twinA = UUID(), twinB = UUID(), low = UUID()
+            let s = store(records: [dv: rec(120, at: now), mp4: rec(120, at: now), lone: rec(120, at: now),
+                                    twinA: rec(120, at: now), twinB: rec(120, at: now), low: rec(90, at: now)], now: now)
+            var projected: [UUID] = []
+            let pick = ArchiveAngelJob.selectFromEvidence(store: s, count: 4, now: now) { id in
+                projected.append(id)
+                switch id {
+                case dv: return ArchiveAngelCandidate(id: id, filename: "Cape98.dv", sizeBytes: 12_000_000_000, durationSeconds: 3600, inferredRecordDate: d, videoCodec: "dvvideo", duplicateGroupID: g)
+                case mp4: return ArchiveAngelCandidate(id: id, filename: "Cape98.mp4", sizeBytes: 20_000_000_000, durationSeconds: 3700, inferredRecordDate: d, videoCodec: "h264", duplicateGroupID: g)
+                case lone: return ArchiveAngelCandidate(id: id, filename: "Lone.mov", sizeBytes: 9_000_000_000, durationSeconds: 1800, inferredRecordDate: d)
+                // Ungrouped twins with identical facts never collapse.
+                case twinA, twinB: return ArchiveAngelCandidate(id: id, filename: "Part.mov", sizeBytes: 9_000_000_000, durationSeconds: 1800, inferredRecordDate: d)
+                default: return ArchiveAngelCandidate(id: id, filename: "Low.mov", sizeBytes: 9_000_000_000, durationSeconds: 1800, inferredRecordDate: d)
+                }
+            }
+            let names = pick?.selection.picks.map(\.candidate.filename) ?? []
+            #expect(names.first == "Cape98.dv", "dvIsFirst=\(dvIsFirst): the DV capture wins the equal-score group, not the id that sorts first: \(names)")
+            #expect(!names.contains("Cape98.mp4"))
+            #expect(names.filter { $0 == "Part.mov" }.count == 2, "ungrouped twins never collapse")
+            #expect(!names.contains("Low.mov"), "the 120 band already holds four distinct heads — the 90 band is never projected")
+            #expect(pick?.selection.rejected[.duplicateOfPick] == 1)
+            #expect(projected.count == 5, "the whole 120 band is projected, nothing below it")
+            #expect(pick?.selection.overflow == 1, "Low.mov is the overflow")
+            #expect(pick?.selection.picks.map(\.score) == [120, 120, 120, 120])
+        }
+    }
+
+    @Test("T10 H2: a duplicate-group member with the SAME score as the last pick is not a hidden drop — the band is exhausted before the cut, and overflow counts what was ranked out")
+    @MainActor
+    func bandCutCountsOverflow() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let a = UUID(), b = UUID(), c = UUID()
+        let s = store(records: [a: rec(100, at: now), b: rec(100, at: now), c: rec(100, at: now)], now: now)
+        let pick = ArchiveAngelJob.selectFromEvidence(store: s, count: 1, now: now) { id in
+            ArchiveAngelCandidate(id: id, filename: id == b ? "long.mov" : "short.mov", sizeBytes: 9_000_000_000, durationSeconds: id == b ? 3600 : 600)
+        }
+        #expect(pick?.selection.picks.map(\.candidate.filename) == ["long.mov"])
+        #expect(pick?.projections == 3)
+        #expect(pick?.selection.overflow == 2)
+    }
+
     @Test("in-flight ids come from preparing/ready/promoting batches only; folder names never collide")
     func inFlightIDsAndFolderNames() throws {
         let root = FileManager.default.temporaryDirectory

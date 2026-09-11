@@ -5,6 +5,13 @@
 // still projected NOW and re-checked against the hard floor (a file may
 // have been archived, purged or rated junk since the sweep), and the
 // preparation step re-checks identity per entry as before.
+//
+// T10 H2 (codex #1306): the sidecar ranks equal scores by UUID, so the
+// pick must NOT stop in the middle of a score band — it collects every
+// head down to the band of the last needed pick, orders them with the
+// scorer's ONE comparator (`ArchiveAngelScorer.rank`) and applies the
+// same one-per-duplicate-group filter the walk applies. Either path
+// keeps the same member of an equal-score group.
 
 import Foundation
 
@@ -30,29 +37,40 @@ extension ArchiveAngelJob {
                                    project: (UUID) -> ArchiveAngelCandidate?) -> EvidencePick? {
         guard count > 0, store.isFresh(within: freshness, now: now),
               store.eligibleCount >= count else { return nil }
-        var picks: [ArchiveAngelPick] = []
-        picks.reserveCapacity(count)
+        var collected: [ArchiveAngelPick] = []
+        collected.reserveCapacity(count)
         var rejected = store.rejectionCounts()
         var projections = 0
-        var seenGroups: Set<UUID> = []   // T10 H2: one member per duplicate group
+        // The score of the count-th distinct-group head seen so far, in
+        // arrival (descending score) order. Once the next head scores
+        // strictly below it, nothing later can enter the batch. A group's
+        // first-arrived member carries the group's best score, so this
+        // band is the same one the final `rank` order would cut at.
+        var seenGroups: Set<UUID> = []
+        var distinctSeen = 0
+        var bandScore: Int? = nil
         for id in store.rankedEligibleIDs() {
-            if picks.count == count { break }
+            guard let evidence = store.record(for: id) else { continue }
+            if let band = bandScore, evidence.score < band { break }
             if excluding.contains(id) { rejected[.inAnotherBatch, default: 0] += 1; continue }
-            guard let evidence = store.record(for: id), let candidate = project(id) else { continue }
+            guard let candidate = project(id) else { continue }
             projections += 1
             if let reason = ArchiveAngelScorer.hardFloor(candidate, weights: weights) {
                 rejected[reason, default: 0] += 1
                 continue
             }
-            if let g = candidate.duplicateGroupID, !seenGroups.insert(g).inserted {
-                rejected[.duplicateOfPick, default: 0] += 1
-                continue
+            collected.append(.init(candidate: candidate, score: evidence.score, evidence: evidence.lines))
+            if candidate.duplicateGroupID.map({ seenGroups.insert($0).inserted }) ?? true {
+                distinctSeen += 1
+                if distinctSeen == count { bandScore = evidence.score }
             }
-            picks.append(.init(candidate: candidate, score: evidence.score, evidence: evidence.lines))
         }
+        collected.sort(by: ArchiveAngelScorer.rank)
+        let ranked = ArchiveAngelScorer.onePerDuplicateGroup(collected, rejected: &rejected)
+        let picks = Array(ranked.prefix(count))
         // Evidence that no longer yields a full batch is not trusted — walk.
         guard picks.count == count else { return nil }
-        let overflow = max(0, store.eligibleCount - projections)
+        let overflow = max(0, store.eligibleCount - projections) + (ranked.count - picks.count)
         return EvidencePick(selection: .init(picks: picks, overflow: overflow, rejected: rejected),
                             computedAt: store.computedAt ?? now, projections: projections)
     }

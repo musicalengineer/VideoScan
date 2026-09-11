@@ -126,4 +126,33 @@ struct ArchiveAngelCandidateProjectionTests {
         let generic = ArchiveAngelNaming.proposedName(facts: ArchivePathResolver.facts(for: rec), people: ["Donna"], tags: ["cape cod"])
         #expect(generic.contains("Donna_CapeCod"), Comment(rawValue: generic))
     }
+
+    @Test("T10 H3 at the builder: archiveAngelSweepCandidates() marks a same-folder export with its original (the sweep's candidate producer, not just the scorer)")
+    @MainActor
+    func builderMarksDerivatives() throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("angel_builder")
+        defer { sb.cleanup() }
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        func add(_ name: String, star: Int = 0) throws -> VideoRecord {
+            let path = sb.sources.appendingPathComponent(name).path
+            try MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: path), bytes: 4096, seed: 3)
+            let rec = MasterArchiveTestSupport.makeRecord(path: path, starRating: star)
+            rec.durationSeconds = 3600
+            rec.sizeBytes = 9_000_000_000     // above the proxy-stream bitrate floor
+            rec.isPlayable = "Yes"
+            rec.videoCodec = "dvvideo"
+            model.records.append(rec)
+            return rec
+        }
+        let tape = try add("Tape.mov")
+        let export = try add("Tape_balanced.mov")
+        let lone = try add("Lonely.vs.edit.mov")
+        let out = model.archiveAngelSweepCandidates()
+        func by(_ id: UUID) -> ArchiveAngelCandidate? { out.first { $0.id == id } }
+        #expect(by(export.id)?.derivativeOfOriginal == "Tape.mov")
+        #expect(by(tape.id)?.derivativeOfOriginal == nil)
+        #expect(by(lone.id)?.derivativeOfOriginal == nil, "no original in the catalog → left alone")
+        #expect(by(export.id).map { ArchiveAngelScorer.hardFloor($0) } == .derivativeOfOriginal)
+        #expect(by(tape.id).map { ArchiveAngelScorer.hardFloor($0) } == .some(nil))
+    }
 }

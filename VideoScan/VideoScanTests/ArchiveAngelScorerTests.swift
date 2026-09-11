@@ -348,22 +348,6 @@ struct ArchiveAngelDownloadCapTests {
         #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "100k notes took \(elapsed)")
     }
 
-    @Test("SCALE: the note classifier over 100k projection-sized notes stays under 1 s (Debug ceiling)")
-    func classifierScale() {
-        let machine = "Unsupported codec with id 98314 for input stream 0\n[aac @ 0x7ac800a80] This stream seems to use a channel layout\nLast message repeated 3 times"
-        var notes: [String] = []
-        notes.reserveCapacity(100_000)
-        for i in 0..<100_000 {
-            notes.append(i % 1000 == 0 ? machine + "\n[19\(i % 90 + 10)] Family note \(i)" : (i % 3 == 0 ? "" : machine))
-        }
-        let started = ContinuousClock.now
-        var humans = 0
-        for n in notes where ArchiveAngelCandidate.hasHumanNote(n) { humans += 1 }
-        let elapsed = ContinuousClock.now - started
-        #expect(humans == 100)
-        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "100k notes took \(elapsed)")
-    }
-
     @Test("threshold edges: 3,999 kbit/s at 20 min is capped; 4,000 is not; 19 min 59 s is not")
     func edges() {
         func c(_ kbps: Double, _ secs: Double) -> ArchiveAngelCandidate {
@@ -378,7 +362,7 @@ struct ArchiveAngelDownloadCapTests {
     }
 }
 
-@Suite("Archive Angel scorer — T10 H3 derivative exports (night of 2026-09-10)")
+@Suite("Archive Angel scorer — T10 H3 derivative exports (night of 2026-09-10, related-only 2026-09-11)")
 struct ArchiveAngelDerivativeTests {
 
     @Test("base-stem rule", arguments: [
@@ -402,39 +386,125 @@ struct ArchiveAngelDerivativeTests {
         #expect(ArchiveAngelNaming.derivativeBaseStem(stem) == nil)
     }
 
-    @Test("an export is rejected only when its original is present; same-folder original preferred; a star keeps it; a lone export stays")
-    func markAndFloor() {
+    private func marked(_ cands: [ArchiveAngelCandidate]) -> [String: String?] {
+        var c = cands
+        ArchiveAngelScorer.markDerivatives(&c)
+        return Dictionary(c.map { ($0.fullPath, $0.derivativeOfOriginal) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    @Test("an export yields only to a RELATED original: same folder, same group, or same grandparent + year; a same-named file elsewhere never counts (codex #1306)")
+    func relatedOnly() {
+        let g = UUID()
+        let y1993 = Date(timeIntervalSince1970: 740_000_000)   // 1993-06
+        let m = marked([
+            // Unrelated: another tree, no group, different grandparents → NOT marked.
+            .init(filename: "Cape-1993-archive.mkv", fullPath: "/v/Converted_VHS_Tapes_2026/Cape-1993/Cape-1993-archive.mkv", sizeBytes: 60_000_000_000, durationSeconds: 7338, videoCodec: "ffv1"),
+            .init(filename: "Cape-1993-archive.vs.edit.mov", fullPath: "/v/editable_versions/Cape-1993-archive.vs.edit.mov", sizeBytes: 46_000_000_000, durationSeconds: 7338, videoCodec: "prores"),
+            // Same folder → marked.
+            .init(filename: "cape-1992-edit.mov", fullPath: "/v/editable/cape-1992-edit.mov", sizeBytes: 50_000_000_000, durationSeconds: 7400, videoCodec: "prores"),
+            .init(filename: "cape-1992-edit_trimmed.mov", fullPath: "/v/editable/cape-1992-edit_trimmed.mov", sizeBytes: 50_000_000_000, durationSeconds: 7384, videoCodec: "prores"),
+            // Same duplicate group, different trees → marked.
+            .init(filename: "Grampa.mov", fullPath: "/v/tapes/Grampa.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, duplicateGroupID: g),
+            .init(filename: "Grampa_NV12.mov", fullPath: "/w/exports/Grampa_NV12.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, duplicateGroupID: g),
+            // Same grandparent AND same year → marked; same grandparent, different year → not.
+            .init(filename: "Xmas.mov", fullPath: "/v/Family/1993/Xmas.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, inferredRecordDate: y1993, inferredDateConfidence: 0.9),
+            .init(filename: "Xmas_balanced.mov", fullPath: "/v/Family/exports/Xmas_balanced.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, userDate: "1993-12-25"),
+            .init(filename: "Bday.mov", fullPath: "/v/Family/1990/Bday.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, userDate: "1990"),
+            .init(filename: "Bday_fixed.mov", fullPath: "/v/Family/exports/Bday_fixed.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, userDate: "1991"),
+            // No original anywhere → the best copy the family has.
+            .init(filename: "Lonely_balanced.mov", fullPath: "/v/x/Lonely_balanced.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            // Ungrouped twins in two folders never collapse; the export beside /v/b's twin names it.
+            .init(filename: "Twin.mov", fullPath: "/v/a/Twin.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            .init(filename: "Twin.mov", fullPath: "/v/b/Twin.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            .init(filename: "Twin_balanced.mov", fullPath: "/v/b/Twin_balanced.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+        ])
+        #expect(m["/v/editable_versions/Cape-1993-archive.vs.edit.mov"] == .some(nil), "unrelated namesake in another tree must NOT mark")
+        #expect(m["/v/editable/cape-1992-edit_trimmed.mov"] == "cape-1992-edit.mov")
+        #expect(m["/v/editable/cape-1992-edit.mov"] == .some(nil), "'edit' without .vs. is a name, not a token")
+        #expect(m["/w/exports/Grampa_NV12.mov"] == "Grampa.mov", "same duplicate group relates across trees")
+        #expect(m["/v/Family/exports/Xmas_balanced.mov"] == "Xmas.mov", "same grandparent + same year")
+        #expect(m["/v/Family/exports/Bday_fixed.mov"] == .some(nil), "same grandparent, different year")
+        #expect(m["/v/x/Lonely_balanced.mov"] == .some(nil))
+        #expect(m["/v/b/Twin_balanced.mov"] == "Twin.mov")
+        #expect(m["/v/a/Twin.mov"] == .some(nil) && m["/v/b/Twin.mov"] == .some(nil), "originals are never marked")
+    }
+
+    @Test("an unusable original does not displace the export: offline, too short, junk, cache, unplayable, or itself a derivative")
+    func unusableOriginalKeepsExport() {
+        let m = marked([
+            .init(filename: "Off.mov", fullPath: "/v/x/Off.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, volumeOnline: false),
+            .init(filename: "Off_balanced.mov", fullPath: "/v/x/Off_balanced.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            .init(filename: "Short.mov", fullPath: "/v/x/Short.mov", sizeBytes: 100_000_000, durationSeconds: 30),
+            .init(filename: "Short_fixed.mov", fullPath: "/v/x/Short_fixed.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            .init(filename: "Junk.mov", fullPath: "/v/x/Junk.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, mediaDisposition: .confirmedJunk),
+            .init(filename: "Junk_fixed.mov", fullPath: "/v/x/Junk_fixed.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            .init(filename: "Sus.mov", fullPath: "/v/x/Sus.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, mediaDisposition: .suspectedJunk),
+            .init(filename: "Sus_trimmed.mov", fullPath: "/v/x/Sus_trimmed.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            .init(filename: "Bad.mov", fullPath: "/v/x/Bad.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, isPlayable: "No"),
+            .init(filename: "Bad_cleaned.mov", fullPath: "/v/x/Bad_cleaned.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            // The "original" is 40 min, the export 60 min → not its original.
+            .init(filename: "Half.mov", fullPath: "/v/x/Half.mov", sizeBytes: 9_000_000_000, durationSeconds: 2400),
+            .init(filename: "Half_reencoded.mov", fullPath: "/v/x/Half_reencoded.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            // 0.9 × is enough (an export loses a little at the head/tail).
+            .init(filename: "Near.mov", fullPath: "/v/x/Near.mov", sizeBytes: 9_000_000_000, durationSeconds: 3300),
+            .init(filename: "Near_converted.mov", fullPath: "/v/x/Near_converted.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            // A derivative is never anyone's original: Chain_fixed_trimmed → base "Chain_fixed" → itself an export → no mark.
+            .init(filename: "Chain_fixed.mov", fullPath: "/v/x/Chain_fixed.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            .init(filename: "Chain_fixed_trimmed.mov", fullPath: "/v/x/Chain_fixed_trimmed.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+        ])
+        for path in ["/v/x/Off_balanced.mov", "/v/x/Short_fixed.mov", "/v/x/Junk_fixed.mov", "/v/x/Sus_trimmed.mov",
+                     "/v/x/Bad_cleaned.mov", "/v/x/Half_reencoded.mov", "/v/x/Chain_fixed_trimmed.mov"] {
+            #expect(m[path] == .some(nil), "\(path) must keep its place — its original is unusable")
+        }
+        #expect(m["/v/x/Near_converted.mov"] == "Near.mov")
+    }
+
+    @Test("the floor, a star, and the selection count: a marked export is rejected unless starred")
+    func floorAndCount() {
         var cands = [
-            ArchiveAngelCandidate(filename: "Cape-1993-archive.mkv", fullPath: "/v/Converted_VHS_Tapes_2026/Cape-1993/Cape-1993-archive.mkv", sizeBytes: 60_000_000_000, durationSeconds: 7338, videoCodec: "ffv1"),
-            ArchiveAngelCandidate(filename: "Cape-1993-archive.vs.edit.mov", fullPath: "/v/editable_versions/Cape-1993-archive.vs.edit.mov", sizeBytes: 46_000_000_000, durationSeconds: 7338, videoCodec: "prores"),
-            ArchiveAngelCandidate(filename: "cape-1992-edit.mov", fullPath: "/v/editable/cape-1992-edit.mov", sizeBytes: 50_000_000_000, durationSeconds: 7400, videoCodec: "prores"),
-            ArchiveAngelCandidate(filename: "cape-1992-edit_trimmed.mov", fullPath: "/v/editable/cape-1992-edit_trimmed.mov", sizeBytes: 50_000_000_000, durationSeconds: 7384, videoCodec: "prores"),
-            ArchiveAngelCandidate(filename: "Lonely_balanced.mov", fullPath: "/v/x/Lonely_balanced.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
-            ArchiveAngelCandidate(filename: "Starred.vs.edit.mov", fullPath: "/v/x/Starred.vs.edit.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, starRating: 2),
+            ArchiveAngelCandidate(filename: "Tape.mov", fullPath: "/v/x/Tape.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            ArchiveAngelCandidate(filename: "Tape_balanced.mov", fullPath: "/v/x/Tape_balanced.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            ArchiveAngelCandidate(filename: "Tape.vs.edit.mov", fullPath: "/v/x/Tape.vs.edit.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
             ArchiveAngelCandidate(filename: "Starred.mov", fullPath: "/v/x/Starred.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
-            ArchiveAngelCandidate(filename: "Junk.mov", fullPath: "/v/x/Junk.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, mediaDisposition: .confirmedJunk),
-            ArchiveAngelCandidate(filename: "Junk_fixed.mov", fullPath: "/v/x/Junk_fixed.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
-            ArchiveAngelCandidate(filename: "Twin.mov", fullPath: "/v/a/Twin.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
-            ArchiveAngelCandidate(filename: "Twin.mov", fullPath: "/v/b/Twin.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
-            ArchiveAngelCandidate(filename: "Twin_balanced.mov", fullPath: "/v/b/Twin_balanced.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            ArchiveAngelCandidate(filename: "Starred.vs.edit.mov", fullPath: "/v/x/Starred.vs.edit.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, starRating: 2),
         ]
         ArchiveAngelScorer.markDerivatives(&cands)
         func by(_ name: String) -> ArchiveAngelCandidate { cands.first { $0.filename == name } ?? cands[0] }
-        #expect(by("Cape-1993-archive.vs.edit.mov").derivativeOfOriginal == "Cape-1993-archive.mkv", "cross-folder original found")
-        #expect(by("cape-1992-edit_trimmed.mov").derivativeOfOriginal == "cape-1992-edit.mov")
-        #expect(by("cape-1992-edit.mov").derivativeOfOriginal == nil, "'edit' without .vs. is a name, not a token")
-        #expect(by("Lonely_balanced.mov").derivativeOfOriginal == nil, "no original in the catalog → the best copy the family has")
-        #expect(by("Junk_fixed.mov").derivativeOfOriginal == nil, "a confirmed-junk original does not count")
-        #expect(by("Twin_balanced.mov").derivativeOfOriginal == "Twin.mov")
-        #expect(cands.first { $0.filename == "Twin_balanced.mov" }.map { c in cands.contains { $0.filename == "Twin.mov" && $0.fullPath.hasPrefix("/v/b/") && c.derivativeOfOriginal == $0.filename } } == true, "same-folder twin preferred")
-        #expect(ArchiveAngelScorer.hardFloor(by("Cape-1993-archive.vs.edit.mov")) == .derivativeOfOriginal)
-        #expect(ArchiveAngelScorer.hardFloor(by("Cape-1993-archive.mkv")) == nil)
+        #expect(ArchiveAngelScorer.hardFloor(by("Tape_balanced.mov")) == .derivativeOfOriginal)
+        #expect(ArchiveAngelScorer.hardFloor(by("Tape.vs.edit.mov")) == .derivativeOfOriginal)
+        #expect(ArchiveAngelScorer.hardFloor(by("Tape.mov")) == nil)
         #expect(ArchiveAngelScorer.hardFloor(by("Starred.vs.edit.mov")) == nil, "a star is the human's word")
-        #expect(ArchiveAngelScorer.hardFloor(by("Lonely_balanced.mov")) == nil)
-        // Rejection is counted in a selection.
         let sel = ArchiveAngelScorer.select(cands, count: 20)
-        #expect(sel.rejected[.derivativeOfOriginal] == 3)   // Cape .vs.edit, cape-1992 _trimmed, Twin_balanced
+        #expect(sel.rejected[.derivativeOfOriginal] == 2)
+        #expect(sel.picks.map(\.candidate.filename).sorted() == ["Starred.mov", "Starred.vs.edit.mov", "Tape.mov"])
         #expect(ArchiveAngelScorer.rulesVersion >= 6)
+    }
+
+    @Test("SCALE: markDerivatives over 100k candidates with 5k derivative names and 5k same-stem originals under 1 s (Debug ceiling)")
+    func scale() {
+        var cands: [ArchiveAngelCandidate] = []
+        cands.reserveCapacity(100_000)
+        let base = Date(timeIntervalSince1970: 700_000_000)
+        for i in 0..<100_000 {
+            // Every 20th is an export of a tape two rows on (same folder); every
+            // 20th+1 is one of 5,000 "Clip 01" originals in 5,000 folders — the
+            // quadratic trap codex #1306 named.
+            let name: String
+            switch i % 20 {
+            case 0: name = "tape\(i + 2)_balanced.mov"
+            case 1: name = "Clip 01.mov"
+            default: name = "tape\(i).mov"
+            }
+            cands.append(.init(filename: name, fullPath: "/v/f\(i / 20)/\(name)", sizeBytes: 9_000_000_000,
+                               durationSeconds: 3600, inferredRecordDate: base.addingTimeInterval(Double(i) * 3600),
+                               inferredDateConfidence: 0.9))
+        }
+        let started = ContinuousClock.now
+        ArchiveAngelScorer.markDerivatives(&cands)
+        let elapsed = ContinuousClock.now - started
+        let markedCount = cands.filter { $0.derivativeOfOriginal != nil }.count
+        #expect(markedCount == 5_000, "every export beside its tape is marked: \(markedCount)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "100k markDerivatives took \(elapsed)")
     }
 }
 
@@ -497,7 +567,44 @@ struct ArchiveAngelSelectionTests {
         #expect(names.contains("Part1.mov") && names.contains("Part2.mov"))
         #expect(sel.rejected[.duplicateOfPick] == 2)
         #expect(sel.overflow == 0)
-        #expect(ArchiveAngelScorer.rulesVersion >= 5)
+        #expect(ArchiveAngelScorer.rulesVersion >= 6)
+    }
+
+    @Test("most original wins a tie: dvvideo beats a larger, longer h264 twin; the table order is dv, mjpeg, mpeg2, hdv, prores, ffv1, mpeg1, svq3, delivery, unknown")
+    func originalityTieBreak() {
+        let g = UUID()
+        let d = Date(timeIntervalSince1970: 700_000_000)
+        let cands = [
+            ArchiveAngelCandidate(filename: "Cape98.mp4", sizeBytes: 20_000_000_000, durationSeconds: 3700, starRating: 3, inferredRecordDate: d, inferredDateConfidence: 0.9, videoCodec: "h264", duplicateGroupID: g),
+            ArchiveAngelCandidate(filename: "Cape98.dv", sizeBytes: 12_000_000_000, durationSeconds: 3600, starRating: 3, inferredRecordDate: d, inferredDateConfidence: 0.9, videoCodec: "dvvideo", duplicateGroupID: g),
+        ]
+        let sel = ArchiveAngelScorer.select(cands, count: 5)
+        #expect(sel.picks.map(\.candidate.filename) == ["Cape98.dv"], "the DV capture is the original; the bigger h264 is a re-encode")
+        #expect(sel.rejected[.duplicateOfPick] == 1)
+        let order = ["dvvideo", "mjpeg", "mpeg2video", "hdv", "prores", "ffv1", "mpeg1video", "svq3", "h264", ""]
+        #expect(order.map(ArchiveAngelScorer.originalityRank) == order.map(ArchiveAngelScorer.originalityRank).sorted())
+        #expect(ArchiveAngelScorer.originalityRank("DV") == ArchiveAngelScorer.originalityRank("dvvideo"))
+        #expect(ArchiveAngelScorer.originalityRank("hevc") == ArchiveAngelScorer.originalityRank("h264"))
+        #expect(ArchiveAngelScorer.originalityRank("wmv3") == ArchiveAngelScorer.originalityUnknown)
+        // Score still outranks originality: a starred h264 beats an unrated DV.
+        let starred = ArchiveAngelScorer.select([
+            .init(filename: "a.mp4", sizeBytes: 9_000_000_000, durationSeconds: 3600, starRating: 1, videoCodec: "h264"),
+            .init(filename: "b.dv", sizeBytes: 9_000_000_000, durationSeconds: 3600, videoCodec: "dvvideo"),
+        ], count: 2).picks.map(\.candidate.filename)
+        #expect(starred == ["a.mp4", "b.dv"])
+    }
+
+    @Test("rank is the ONE comparator: strict weak order, score → originality → date → duration → size → name")
+    func rankIsStrict() {
+        let d = Date(timeIntervalSince1970: 700_000_000)
+        func pick(_ name: String, score: Int = 10, codec: String = "", date: Date? = d, dur: Double = 60, size: Int64 = 1) -> ArchiveAngelPick {
+            .init(candidate: .init(filename: name, sizeBytes: size, durationSeconds: dur, inferredRecordDate: date, videoCodec: codec), score: score, evidence: [])
+        }
+        let a = pick("a", score: 20), b = pick("b", codec: "dvvideo"), c = pick("c", date: d.addingTimeInterval(-86_400)),
+            e = pick("e", dur: 120), f = pick("f", size: 9), h = pick("h"), i = pick("i")
+        let sorted = [i, h, f, e, c, b, a].sorted(by: ArchiveAngelScorer.rank).map(\.candidate.filename)
+        #expect(sorted == ["a", "b", "c", "e", "f", "h", "i"])
+        #expect(!ArchiveAngelScorer.rank(h, h), "irreflexive")
     }
 
     @Test("count 0 and empty input are safe")

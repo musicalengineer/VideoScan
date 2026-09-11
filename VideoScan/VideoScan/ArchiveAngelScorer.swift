@@ -78,6 +78,21 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         starRating > 0 || !confirmedPeople.isEmpty || hasUserNotes || !(userDate ?? "").isEmpty
     }
 
+    /// The year a person or the date consensus put on this file — the
+    /// user's date first ("1992-07-15", "1992-07", "1992"), else the
+    /// inferred record date (UTC). nil when neither is known. T10 H3 uses
+    /// it to relate an export to an original in a sibling folder.
+    var knownYear: Int? {
+        if let u = userDate, u.count >= 4, let y = Int(u.prefix(4)), y > 1800 { return y }
+        guard let d = inferredRecordDate else { return nil }
+        return Self.utcCalendar.component(.year, from: d)
+    }
+    static let utcCalendar: Calendar = {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = .gmt
+        return c
+    }()
+
     init(id: UUID = UUID(), filename: String = "clip.mov", fullPath: String = "/Volumes/X/clip.mov",
          sizeBytes: Int64 = 1_000_000_000, durationSeconds: Double = 60,
          streamTypeRaw: String = StreamType.videoAndAudio.rawValue, isPlayable: String = "Yes",
@@ -239,7 +254,10 @@ enum ArchiveAngelScorer {
     /// "assessed under old rules" and the sweep re-scores at once (Rick
     /// 2026-09-10: "this will require updated assessments as we refine
     /// selection criteria"). 2 = flat 60 s floor + duration tiers; 3 = app-cache
-    /// and proxy-stream floors; 4 = download/rip cap (T10 H1); 5 = one per duplicate group (T10 H2); 6 = derivative exports (T10 H3).
+    /// and proxy-stream floors; 4 = download/rip cap (T10 H1); 6 = one per
+    /// duplicate group + "most original" codec tie-break (T10 H2) and
+    /// derivative exports yield to a RELATED original (T10 H3) — one bump
+    /// for the pair, 5 was never shipped.
     static let rulesVersion = 6
 
     /// The verdict for one record. Pure.
@@ -366,9 +384,8 @@ enum ArchiveAngelScorer {
         return nil
     }
 
-    /// Score every candidate, sort, take `count`. Tie-break: older date first
-    /// (older tape is at more risk), then longer (more likely the whole
-    /// capture), then larger file (more to lose), then name.
+    /// Score every candidate, sort by `rank`, keep one member per duplicate
+    /// group, take `count`.
     static func select(_ candidates: [ArchiveAngelCandidate], count: Int,
                        weights w: ArchiveAngelWeights = .standard,
                        now: Date = Date()) -> ArchiveAngelSelection {
@@ -383,57 +400,134 @@ enum ArchiveAngelScorer {
                 rejected[reason, default: 0] += 1
             }
         }
-        picks.sort { a, b in
-            if a.score != b.score { return a.score > b.score }
-            let ad = a.candidate.inferredRecordDate ?? .distantFuture
-            let bd = b.candidate.inferredRecordDate ?? .distantFuture
-            if ad != bd { return ad < bd }
-            if a.candidate.durationSeconds != b.candidate.durationSeconds {
-                return a.candidate.durationSeconds > b.candidate.durationSeconds
-            }
-            if a.candidate.sizeBytes != b.candidate.sizeBytes { return a.candidate.sizeBytes > b.candidate.sizeBytes }
-            return a.candidate.filename < b.candidate.filename
+        picks.sort(by: rank)
+        picks = onePerDuplicateGroup(picks, rejected: &rejected)
+        let kept = Array(picks.prefix(max(0, count)))
+        return .init(picks: kept, overflow: max(0, picks.count - kept.count), rejected: rejected)
+    }
+
+    // MARK: ranking (ONE comparator — the walk and the evidence pick both use it)
+
+    /// The batch order. Score first; then Rick's "most original" preference
+    /// (2026-09-11: "pick the best format or most original … if the codec
+    /// is old, it is more original"); then older date (older tape is at
+    /// more risk), longer (more likely the whole capture), larger file
+    /// (more to lose), then name. Pure, strict weak ordering — safe for
+    /// `sort`. Both selection paths MUST rank with this so an equal-score
+    /// duplicate group keeps the same member whichever path ran.
+    static func rank(_ a: ArchiveAngelPick, _ b: ArchiveAngelPick) -> Bool {
+        if a.score != b.score { return a.score > b.score }
+        let ao = originalityRank(a.candidate.videoCodec), bo = originalityRank(b.candidate.videoCodec)
+        if ao != bo { return ao < bo }
+        let ad = a.candidate.inferredRecordDate ?? .distantFuture
+        let bd = b.candidate.inferredRecordDate ?? .distantFuture
+        if ad != bd { return ad < bd }
+        if a.candidate.durationSeconds != b.candidate.durationSeconds {
+            return a.candidate.durationSeconds > b.candidate.durationSeconds
         }
-        // T10 H2: one member per duplicate group. `picks` is already in rank
-        // order, so the first member seen is the best (score, date, length,
-        // size); later members are counted, never silently dropped.
+        if a.candidate.sizeBytes != b.candidate.sizeBytes { return a.candidate.sizeBytes > b.candidate.sizeBytes }
+        return a.candidate.filename < b.candidate.filename
+    }
+
+    /// "Most original" order of ffprobe codec names, 0 = most original. A
+    /// camera/tape codec (DV, MJPEG, MPEG-2/HDV) is the capture itself; a
+    /// preservation codec (ProRes, FFV1) is a faithful transfer; MPEG-1 and
+    /// SVQ3 are old exports; h264/hevc/mpeg4/vp9 are delivery re-encodes.
+    /// Unknown (empty, un-probed) ranks last. Only a TIE-BREAK — never
+    /// worth points — so it decides between copies of the same score.
+    static let originalityTable: [String: Int] = [
+        "dvvideo": 0, "dv": 0,
+        "mjpeg": 1,
+        "mpeg2video": 2, "hdv": 3,
+        "prores": 4,
+        "ffv1": 5,
+        "mpeg1video": 6,
+        "svq3": 7,
+        "h264": 8, "avc1": 8, "hevc": 8, "mpeg4": 8, "vp9": 8,
+    ]
+    static let originalityUnknown = 9
+
+    static func originalityRank(_ videoCodec: String) -> Int {
+        originalityTable[videoCodec.lowercased()] ?? originalityUnknown
+    }
+
+    /// T10 H2: one member per duplicate group. `picks` must already be in
+    /// `rank` order, so the first member seen is the best; later members
+    /// are counted under `.duplicateOfPick`, never silently dropped. Rows
+    /// with no group never collapse.
+    static func onePerDuplicateGroup(_ picks: [ArchiveAngelPick],
+                                     rejected: inout [ArchiveAngelRejection: Int]) -> [ArchiveAngelPick] {
         var seenGroups: Set<UUID> = []
-        picks = picks.filter { pick in
+        return picks.filter { pick in
             guard let g = pick.candidate.duplicateGroupID else { return true }
             if seenGroups.insert(g).inserted { return true }
             rejected[.duplicateOfPick, default: 0] += 1
             return false
         }
-        let kept = Array(picks.prefix(max(0, count)))
-        return .init(picks: kept, overflow: max(0, picks.count - kept.count), rejected: rejected)
     }
 
     // MARK: helpers
 
-    /// T10 H3. One pass over a candidate set: every candidate whose stem
-    /// carries a derivative token, and whose base stem names ANOTHER
-    /// candidate that is a video and not confirmed junk, is marked with that
-    /// original's filename. Same-folder originals win over a namesake
-    /// elsewhere. An export whose original is absent is left alone — it is
-    /// the best copy the family has. O(n): a dictionary of lowercased stems.
-    static func markDerivatives(_ candidates: inout [ArchiveAngelCandidate]) {
-        struct Original { let index: Int; let folder: String }
-        var byStem: [String: [Original]] = [:]
+    /// T10 H3. One pass over a candidate set: an export (a stem carrying a
+    /// derivative token, `ArchiveAngelNaming.derivativeBaseStem`) is marked
+    /// with its original's filename when a RELATED, USABLE original is in
+    /// the set. Related = same folder; else same duplicate group; else same
+    /// grandparent folder AND the same known year (inferred or user date).
+    /// Usable = passes the hard floor (online, playable, a video, not junk,
+    /// not too short, not a cache) and runs at least 0.9 × the export (an
+    /// original is not shorter than its export). Otherwise the export is
+    /// left alone — it is the best copy the family has. codex #1306: the
+    /// earlier any-folder fallback let "Clip 01" in another tree displace
+    /// an unrelated export.
+    ///
+    /// O(n): originals are indexed under exact keys (folder|stem,
+    /// group|stem, grandparent|year|stem), at most `maxOriginalsPerKey`
+    /// per key, so 5,000 same-named "Clip 01" originals cost 8 compares per
+    /// export, never n².
+    static let maxOriginalsPerKey = 8
+
+    static func markDerivatives(_ candidates: inout [ArchiveAngelCandidate],
+                                weights w: ArchiveAngelWeights = .standard) {
+        var byFolder: [String: [Int]] = [:]        // "folder|stem" → indices
+        var byGroup: [String: [Int]] = [:]         // "group|stem"  → indices
+        var byGrandparent: [String: [Int]] = [:]   // "grandparent|year|stem" → indices
+        func add(_ table: inout [String: [Int]], _ key: String, _ i: Int) {
+            var list = table[key, default: []]
+            guard list.count < maxOriginalsPerKey else { return }
+            list.append(i)
+            table[key] = list
+        }
+        // The base stem once per candidate (one regex pass, not two).
+        let bases: [String?] = candidates.map {
+            ArchiveAngelNaming.derivativeBaseStem(($0.filename as NSString).deletingPathExtension)?.lowercased()
+        }
         for (i, c) in candidates.enumerated() {
-            let stem = (c.filename as NSString).deletingPathExtension
-            guard ArchiveAngelNaming.derivativeBaseStem(stem) == nil else { continue }   // an export is never an original
-            guard c.streamTypeRaw == StreamType.videoAndAudio.rawValue || c.streamTypeRaw == StreamType.videoOnly.rawValue,
-                  c.mediaDisposition != .confirmedJunk else { continue }
-            byStem[stem.lowercased(), default: []].append(.init(index: i, folder: (c.fullPath as NSString).deletingLastPathComponent))
+            guard bases[i] == nil,                                           // an export is never an original
+                  c.derivativeOfOriginal == nil,
+                  hardFloor(c, weights: w) == nil else { continue }          // usable NOW
+            let stem = (c.filename as NSString).deletingPathExtension.lowercased()
+            let folder = (c.fullPath as NSString).deletingLastPathComponent
+            add(&byFolder, folder + "|" + stem, i)
+            if let g = c.duplicateGroupID { add(&byGroup, g.uuidString + "|" + stem, i) }
+            if let year = c.knownYear {
+                let grandparent = (folder as NSString).deletingLastPathComponent
+                add(&byGrandparent, grandparent + "|\(year)|" + stem, i)
+            }
         }
         for i in candidates.indices {
-            let stem = (candidates[i].filename as NSString).deletingPathExtension
-            guard let base = ArchiveAngelNaming.derivativeBaseStem(stem),
-                  let originals = byStem[base.lowercased()] else { continue }
-            let folder = (candidates[i].fullPath as NSString).deletingLastPathComponent
-            let pick = originals.first { $0.folder == folder } ?? originals[0]
-            guard candidates[pick.index].id != candidates[i].id else { continue }
-            candidates[i].derivativeOfOriginal = candidates[pick.index].filename
+            guard let base = bases[i] else { continue }
+            let export = candidates[i]
+            let folder = (export.fullPath as NSString).deletingLastPathComponent
+            var related: [Int] = byFolder[folder + "|" + base] ?? []
+            if related.isEmpty, let g = export.duplicateGroupID { related = byGroup[g.uuidString + "|" + base] ?? [] }
+            if related.isEmpty, let year = export.knownYear {
+                let grandparent = (folder as NSString).deletingLastPathComponent
+                related = byGrandparent[grandparent + "|\(year)|" + base] ?? []
+            }
+            guard let original = related.first(where: { j in
+                j != i && candidates[j].durationSeconds >= 0.9 * export.durationSeconds
+            }) else { continue }
+            candidates[i].derivativeOfOriginal = candidates[original].filename
         }
     }
 
@@ -507,10 +601,15 @@ enum ArchiveAngelScorer {
     /// `Cache.mov`, `Cache-30.mov`, `render-12.mov`, `proxy_007.mov`,
     /// `thumb.mov`… — a bare tool noun, optionally numbered. A real clip
     /// named by a person ("Cache Cod 1998.mov") has more than the noun.
+    /// Compiled once (a per-call `String.range(of:.regularExpression)` is a
+    /// regex compile each time — 100k of them is most of a second).
+    static let appCacheStemRegex = try! NSRegularExpression(
+        pattern: #"^(cache|render|proxy|proxies|preview|thumb|thumbnail|temp|tmp)([ _-]?\d+)?$"#,
+        options: [.caseInsensitive])
+
     static func looksLikeAppCache(filename: String, fullPath: String) -> Bool {
-        let stem = (filename as NSString).deletingPathExtension.lowercased()
-        if stem.range(of: #"^(cache|render|proxy|proxies|preview|thumb|thumbnail|temp|tmp)([ _-]?\d+)?$"#,
-                      options: .regularExpression) != nil { return true }
+        let stem = (filename as NSString).deletingPathExtension
+        if appCacheStemRegex.firstMatch(in: stem, range: NSRange(stem.startIndex..., in: stem)) != nil { return true }
         let folders = (fullPath as NSString).deletingLastPathComponent.split(separator: "/")
         return folders.contains { appCacheFolderNames.contains($0.lowercased()) }
     }

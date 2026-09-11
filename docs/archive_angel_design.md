@@ -97,6 +97,26 @@ group with an archived member). "Transitions and weird teeny bits" fall to
 the duration and junk lines; the rejected list shows the count per reason so
 Rick can see the floor working.
 
+Rules 6 (T10, 2026-09-11 — one bump for the pair):
+
+- **One member per duplicate group per batch (H2).** The live top 50 carried
+  four duplicate pairs (the same tape under two names on two volumes). After
+  ranking, the first member of each `duplicateGroupID` stays; the rest are
+  counted as "Same content as another pick". Ungrouped rows never collapse.
+  The walk and the evidence pick share ONE comparator
+  (`ArchiveAngelScorer.rank`) — the evidence pick collects the whole score
+  band of the last needed pick before cutting, so an equal-score group keeps
+  the same member whichever path ran (codex #1306).
+- **Derivative exports yield to their original (H3).** A stem carrying an
+  export token (`.vs.edit`, `_balanced`, `_NV12`, `_trimmed`, `_fixed`,
+  ` copy 2`…) is rejected as "A derivative export" ONLY when a RELATED,
+  USABLE original is in the catalog: same folder, else same duplicate group,
+  else same grandparent folder and the same known year; the original itself
+  passes this floor and runs ≥ 0.9 × the export. Otherwise the export is the
+  best copy the family has and stays. A star keeps the export, like every
+  machine floor. Lookups are keyed exactly (≤ 8 originals per key) — never
+  a folder scan.
+
 **3.4 Length is the "whole thing" signal (rev 3, Rick 2026-09-10).** "Usually
 there's a longer video of the whole scene, say down the Cape, and a 60 s or
 less clip is just a small edit I made to send to someone as 'Remember the
@@ -108,7 +128,13 @@ picked instead); short clips STAY in the catalog, they are just not Angel
 candidates for now; (b) duration is tiered, not a flat sweet band — a whole
 DV tape is 60 min and a half tape 30, so anything that long is almost
 certainly the capture, and an unrated, dated whole tape reaches grade B on
-its own (60 + 20 + 5); (c) ties break longer-first after the date.
+its own (60 + 20 + 5); (c) ties break most-original-codec first, then older date, then longer, then
+larger, then name — Rick 2026-09-11: "pick the best format or most original …
+if the codec is old, it is more original". Originality rank (0 = most):
+dvvideo/dv, mjpeg, mpeg2video, hdv, prores, ffv1, mpeg1video, svq3, then the
+delivery codecs (h264/hevc/mpeg4/vp9), unknown last. A tie-break only — never
+points — so it decides between copies of the same score (a DV capture beats
+a larger h264 re-encode of the same tape).
 Deferred heuristics if this is not enough: a short clip whose folder or tape
 name holds a much longer sibling is "an edit of X"; a name that looks like a
 share-out ("for Mom", "…clip", "…edit") is demoted. Every row in the review
@@ -135,8 +161,8 @@ Points: `min(40, 4 × log2(1 + uses))` so 1 play = 4, 7 plays = 12,
 `avidClipName`, `starRating > 0`. 5 points each, cap 40. The line lists what
 is present, not the number.
 
-**3.5 Selection.** Sort by score, tie-break oldest date first (older tape is
-at more risk), take N. Then for each, run the **preparation** steps (§4).
+**3.5 Selection.** Sort by `ArchiveAngelScorer.rank` (score, originality,
+oldest date, longest, largest, name), one per duplicate group, take N. Then for each, run the **preparation** steps (§4).
 Progress reported per candidate in the MFO row: "7 of 25 — 1993 Cape Cod:
 balancing audio (2 of 4 steps)".
 

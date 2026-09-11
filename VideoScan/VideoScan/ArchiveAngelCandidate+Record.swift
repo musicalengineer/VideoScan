@@ -139,16 +139,23 @@ enum ArchiveAngelNaming {
     /// "cape-1992-edit" is NOT a derivative — "edit" only counts after
     /// ".vs.". Pure, table-tested.
     nonisolated static func derivativeBaseStem(_ stem: String) -> String? {
-        let pattern = #"(\.vs\.(edit|preserve|archive)(_balanced)?|[_-](balanced|preserve_balanced|fixed|trimmed|reformatted|cleaned|restored|corrections|converted|reencoded|proxy|copy)|_denoise[A-Za-z0-9]*|_nv12(_\d+)?|_nyx\d*|_thm\d*| copy( \d+)?)$"#
         var current = stem
         var stripped = 0
-        while let r = current.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
-            current = String(current[..<r.lowerBound])
+        while let r = derivativeTokenRegex.firstMatch(in: current, range: NSRange(current.startIndex..., in: current)),
+              let range = Range(r.range, in: current) {
+            current = String(current[..<range.lowerBound])
             stripped += 1
         }
         let base = current.trimmingCharacters(in: .whitespaces)
         return stripped > 0 && !base.isEmpty ? base : nil
     }
+
+    /// Compiled once — `String.range(of:options:.regularExpression)` compiles
+    /// per call, which made a 100k-candidate pass cost over a second.
+    /// (≈ a C++ function-local `static const std::regex`.)
+    nonisolated static let derivativeTokenRegex = try! NSRegularExpression(
+        pattern: #"(\.vs\.(edit|preserve|archive)(_balanced)?|[_-](balanced|preserve_balanced|fixed|trimmed|reformatted|cleaned|restored|corrections|converted|reencoded|proxy|copy)|_denoise[A-Za-z0-9]*|_nv12(_\d+)?|_nyx\d*|_thm\d*| copy( \d+)?)$"#,
+        options: [.caseInsensitive])
 
     /// "1992-07-xx" → "1992-07"; "1992-xx-xx" → "1992"; "xxxx-xx-xx" → nil;
     /// "1992-07-15" → "1992-07-15".
