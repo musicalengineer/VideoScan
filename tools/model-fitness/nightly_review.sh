@@ -36,8 +36,17 @@ STATE=${REVIEW_STATE:-$HOME/Library/Logs/VideoScan/model-review}
 # and a 20 GB reviewer beside a 21 GB archivist on a 64 GB machine is a
 # memory fight nobody asked for. ricksm5 has 48 GB and already has this
 # model installed.
+#
+# Re-checked 2026-09-12 when the Hallie replay moved to the M4's own ollama
+# (127.0.0.1, GH #181): the M4 lists qwen3.6:27b-mlx, qwen3.8:27b-mlx and
+# qwen3.6:35b-a3b-nvfp4 — no code model — so the reviewer STAYS on ricksm5.
+# What changed is what happens when ricksm5 is asleep (see the preflight
+# below): one line, not forty urlopen errors.
 REVIEW_MODEL=${REVIEW_MODEL:-qwen2.5-coder:32b}
 ENDPOINT=${ENDPOINT:-http://ricksm5.local:11434}
+# Seconds to wait before the one preflight retry. Long enough for a host
+# that is merely slow to answer /api/tags; the tests set it to 1.
+REVIEW_PREFLIGHT_RETRY_SECONDS=${REVIEW_PREFLIGHT_RETRY_SECONDS:-90}
 mkdir -p "$STATE"
 cd "$REPO" || exit 1
 
@@ -94,6 +103,53 @@ That is either a genuinely quiet period or the reviewer is watching the wrong th
   exit 0
 fi
 echo 0 > "$quiet_file"
+
+# THE HOST MUST BE AWAKE BEFORE ANY COMMIT IS ASKED ABOUT (2026-09-12).
+#
+# Night of 09/11->12: ricksm5 was asleep at 04:30. Every one of 40 commits
+# went to a dead endpoint; 10 sat at the 600 s ceiling and were logged as
+# "timed out", the rest as urlopen errors, and the digest still read like a
+# review. The commits went to the retry queue, but the night's reviewing was
+# gone and the reason was buried in 40 verdict files.
+#
+# So: ask /api/tags once; if silent, wait REVIEW_PREFLIGHT_RETRY_SECONDS and
+# ask again. Still silent -> say "asleep" in ONE line (nightly.log + the
+# channel), advance NOTHING (last_sha and the retry queue are untouched, so
+# the next run picks up the same range) and exit 1. A host that answers but
+# lacks REVIEW_MODEL fails the same way with its own reason.
+#
+# No wake attempt: this repo's tooling has no wakeonlan and no ssh wake for
+# ricksm5, and adding one would be a new network dependency in a 04:30 job.
+# If the M5 keeps sleeping through 04:30, that is a pmset/schedule question
+# for Rick, not a retry loop here.
+tags_of() {
+  curl -s --max-time 15 "$ENDPOINT/api/tags" 2>/dev/null \
+    | python3 -c 'import json,sys
+try: print("\n".join(m["name"] for m in json.load(sys.stdin).get("models",[])))
+except Exception: pass' 2>/dev/null
+}
+tags=$(tags_of)
+if [[ -z $tags ]]; then
+  sleep "$REVIEW_PREFLIGHT_RETRY_SECONDS"
+  tags=$(tags_of)
+fi
+skip_reason=""
+if [[ -z $tags ]]; then
+  skip_reason="host $ENDPOINT asleep or unreachable: /api/tags did not answer twice (retry after ${REVIEW_PREFLIGHT_RETRY_SECONDS}s)"
+elif ! print -r -- "$tags" | grep -qx "$REVIEW_MODEL"; then
+  skip_reason="host $ENDPOINT is up but does not list $REVIEW_MODEL (has: $(print -r -- "$tags" | tr '\n' ' '))"
+fi
+if [[ -n $skip_reason ]]; then
+  pending=$(( count + $(print -r -- "$retry" | tr ',' '\n' | grep -c .) ))
+  echo "$stamp SKIPPED — $skip_reason; $pending commit(s) ($range${retry:+ + retry queue}) not reviewed, baseline kept" >> "$STATE/nightly.log"
+  python3 tools/team-channel.py post --from reviewer --to claude \
+    --subject "nightly review: SKIPPED — $skip_reason" \
+    --body "Nothing was reviewed tonight. $pending commit(s) in $range${retry:+ plus the retry queue} are still pending; the baseline was not advanced, so the next run reviews them.
+
+If ricksm5 keeps sleeping through 04:30 the fix is its sleep schedule, not this script." \
+    >> "$STATE/nightly.log" 2>&1
+  exit 1
+fi
 
 # UNIQUE PER RUN, not per minute (codex #1160). The stamp is
 # YYYYMMDD-HHMM and review_real_commits.py does mkdir(exist_ok=True), so two

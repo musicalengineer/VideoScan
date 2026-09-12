@@ -74,7 +74,7 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-09-08-hallie-replay-r5"
+NIGHTLY_SCRIPT_VERSION="2026-09-12-hallie-replay-r6"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -450,8 +450,17 @@ refresh_hallie_replay() {
         return 0
     fi
     rm -f "$out"
-    log "Hallie replay: strict manifest + advisory corpus, budget ${budget}s, host ${NIGHTLY_HALLIE_HOST:-http://ricksm5.local:11434}"
-    run_with_process_group_watchdog         $((budget + 180)) "$NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS"         "$LOGFILE.hallie-replay"         "$REPO/scripts/nightly_hallie_replay.sh"             --out "$out" --bin "$app"             --host "${NIGHTLY_HALLIE_HOST:-http://ricksm5.local:11434}"             ${NIGHTLY_HALLIE_MODEL:+--model "$NIGHTLY_HALLIE_MODEL"}             --budget-seconds "$budget"
+    # HOST AND MODEL ARE THE REPLAY SCRIPT'S TO DEFAULT (2026-09-12): the M4's
+    # own ollama at 127.0.0.1 and the app's selected brain (Rick's ruling,
+    # codex #1359 — Hallie tests run on the M4). This function used to pin
+    # ricksm5 here, and the night of 09/11->12 found the M5 asleep at 02:xx
+    # and published nothing. Only an explicit override is passed through:
+    # VIDEOSCAN_HALLIE_REPLAY_HOST / _MODEL (the replay script's names) or
+    # the older NIGHTLY_HALLIE_HOST / _MODEL, for a manual run against the M5.
+    local host="${VIDEOSCAN_HALLIE_REPLAY_HOST:-${NIGHTLY_HALLIE_HOST:-}}"
+    local model="${VIDEOSCAN_HALLIE_REPLAY_MODEL:-${NIGHTLY_HALLIE_MODEL:-}}"
+    log "Hallie replay: strict manifest + advisory corpus, budget ${budget}s, host ${host:-http://127.0.0.1:11434 (the M4's own ollama, replay default)}, model ${model:-the app's selected brain (replay default)}"
+    run_with_process_group_watchdog         $((budget + 180)) "$NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS"         "$LOGFILE.hallie-replay"         "$REPO/scripts/nightly_hallie_replay.sh"             --out "$out" --bin "$app"             ${host:+--host "$host"}             ${model:+--model "$model"}             --budget-seconds "$budget"
     local rc=$?
     if [ -s "$out" ] && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$out" 2>/dev/null; then
         HALLIE_REPLAY_JSON=$(cat "$out")
