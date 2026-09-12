@@ -115,3 +115,8 @@ assets/hallie/
 
 # Per-worktree DerivedData (agents build with -derivedDataPath <worktree>/.build-dd)
 .build-dd/
+
+# agent scratch (never committed)
+.trash/
+codex-worktrees/
+default.profraw
