@@ -20,6 +20,11 @@ extension HallieShellCLI {
         dependencies: Dependencies
     ) async -> AnswerOutcome? {
         if let told = HallieTellingMode.detectPronunciation(text) {
+            // Pronunciations are for people (GH #184 item 6): a word nobody
+            // carries is declined, never written or remembered.
+            guard knownSpelling(told.word, state: state, dependencies: dependencies) != nil else {
+                return await declineTeach(word: told.word, state: &state, output: output, dependencies: dependencies)
+            }
             return await teachOneOff(word: told.word, alternatives: told.alternatives, hint: nil,
                                      options: options, state: &state, output: output, dependencies: dependencies)
         }
@@ -73,7 +78,26 @@ extension HallieShellCLI {
                     state: &state, output: output, dependencies: dependencies)
             }
         }
+        // Teach-shaped, nobody named (the live KY sentence): decline —
+        // outside an interview only, as in the app.
+        if state.telling == nil, HalliePronunciationFreeform.isTeachShaped(text) {
+            return await declineTeach(word: nil, state: &state, output: output, dependencies: dependencies)
+        }
         return nil
+    }
+
+    /// Shell parity for HallieAppTurnCoordinator's declined teach: the
+    /// same sentence, nothing written, the reason in the basis and log.
+    private static func declineTeach(
+        word: String?, state: inout Session, output: (String) -> Void, dependencies: Dependencies
+    ) async -> AnswerOutcome {
+        let reason = word.map { "\u{201C}\($0)\u{201D} is not a name anyone in the archive carries" }
+            ?? "no name the archive knows was named"
+        appLog.write("[hallie-voice] declined pronunciation teach: \(reason); nothing written")
+        return await emitPronunciation(
+            HallieAppTurnCoordinator.declinedTeachProse, description: "pronunciation",
+            basis: "Basis: listening — pronunciation NOT kept (\(reason)); no model call, no catalog query.",
+            outcome: .declined, state: &state, output: output, dependencies: dependencies)
     }
 
     private static func teachOneOff(
@@ -171,33 +195,34 @@ extension HallieShellCLI {
         }) {
             return entry.written
         }
-        func spelling(in names: [String]) -> String? {
-            for name in names {
-                for part in FamilyTreePronunciationChips.nameWords(name) where FamilyIdentityText.normalized(part) == key {
-                    return part
-                }
-            }
-            return nil
-        }
+        // FamilyNameTokens: a whole alias or a name-shaped word, never a
+        // common word inside a notes-style alias (GH #184 item 6).
         for profile in state.profiles ?? [] {
-            if let found = spelling(in: [profile.name] + profile.aliases) { return found }
+            if let found = FamilyNameTokens.spelling(of: word, primaryName: profile.name, aliases: profile.aliases) {
+                return found
+            }
         }
         for person in state.graph?.people.values ?? [String: GedcomFamilyGraph.Person]().values {
-            if let found = spelling(in: [person.name] + person.alternateNames) { return found }
+            if let found = FamilyNameTokens.spelling(of: word, primaryName: person.name, aliases: person.alternateNames) {
+                return found
+            }
         }
         for person in state.cyberBrain?.archive.people ?? [] {
-            if let found = spelling(in: [person.canonicalName] + person.aliases) { return found }
+            if let found = FamilyNameTokens.spelling(of: word, primaryName: person.canonicalName, aliases: person.aliases) {
+                return found
+            }
         }
         return nil
     }
 
     private static func emitPronunciation(
         _ prose: String, description: String, basis: String,
+        outcome: HallieTurnExecutor.Outcome = .answered,
         state: inout Session, output: (String) -> Void, dependencies: Dependencies
     ) async -> AnswerOutcome {
         let result = HallieTurnExecutor.Result(
             route: .telling,
-            outcome: .answered,
+            outcome: outcome,
             prose: prose,
             basisLine: basis,
             queryDescription: description,
@@ -209,6 +234,6 @@ extension HallieShellCLI {
                state: &state, output: output)
         let event = transcriptEvent(result: result, responder: "local", state: &state)
         await dependencies.recordTranscript([event])
-        return .answered
+        return outcome == .declined ? .declined : .answered
     }
 }

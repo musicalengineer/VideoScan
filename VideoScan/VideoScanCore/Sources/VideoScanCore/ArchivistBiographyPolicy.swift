@@ -310,7 +310,10 @@ public enum ArchivistBiographyPolicy {
                                   birth: Bool,
                                   dateTextOverride: String? = nil,
                                   dateSourceName: String? = nil) -> ArchivistBiographyAnswer {
+        // Phrased, not stored: the tree's "KY" stays "KY"; the sentence
+        // says Kentucky (GH #184 item 6).
         let place = cleanPlace(birth ? person.birthPlace : person.deathPlace)
+            .map(USStateCodes.expandStateCodes(inPlace:))
         guard let place else {
             return ArchivistBiographyAnswer(
                 state: .missingFact,

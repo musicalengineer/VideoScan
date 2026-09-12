@@ -54,7 +54,7 @@ extension HallieLineageAnswer {
             var t = s.person.name
             if let y = lens.yearsText(s.person) { t += " (\(y))" }
             return t + ", " + HallieAttachmentBuilder.generationLabel(s.generation, line: .both).replacingOccurrences(of: "parents", with: "parent")
-                + " — born \(s.place)"
+                + " — born \(USStateCodes.expandStateCodes(inPlace: s.place))"
         }
         func trailCard(to targets: [GedcomFamilyGraph.Person], title: String) -> HallieLineageCard? {
             let gens = graph.ancestorPaths(from: person, to: targets, maxGenerations: maxGen)

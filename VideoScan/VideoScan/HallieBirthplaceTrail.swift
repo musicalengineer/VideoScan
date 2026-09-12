@@ -569,7 +569,7 @@ extension HallieLineageAnswer {
         // tree's own parsed year and remains the fallback, so an imprecise
         // tree date stays imprecise instead of being invented.
         let year = lens.birthYear(step.person).map(String.init) ?? "birth year not recorded"
-        let place = step.placeText ?? "birthplace not recorded"
+        let place = step.placeText.map(USStateCodes.expandStateCodes(inPlace:)) ?? "birthplace not recorded"
         let marker: String
         if step.matchesStop {
             marker = " (first \(trailBornPhrase(stop)))"
@@ -739,7 +739,7 @@ extension HallieLineageAnswer {
     static func trailBornDetail(_ step: LineageTrail.Step,
                                 lens: HallieVitalDates.Lens = .treeOnly) -> String {
         let year = lens.birthYear(step.person).map(String.init) ?? "a year not recorded"
-        let place = step.placeText ?? "a place not recorded"
+        let place = step.placeText.map(USStateCodes.expandStateCodes(inPlace:)) ?? "a place not recorded"
         return "born \(year) in \(place)"
     }
 

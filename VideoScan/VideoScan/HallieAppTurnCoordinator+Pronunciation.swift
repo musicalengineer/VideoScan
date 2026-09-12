@@ -78,6 +78,13 @@ extension HallieAppTurnCoordinator {
         dependencies: Dependencies
     ) -> Response? {
         if let told = HallieTellingMode.detectPronunciation(question) {
+            // Pronunciations are for people. A word nobody in the archive
+            // carries (lexicon, People tab, tree, CyberBrain) is declined,
+            // never written anywhere (GH #184 item 6: "pronounce KY as
+            // Kentucky" must not become a record).
+            guard isKnownName(told.word, dependencies: dependencies) else {
+                return declinedTeachResponse(word: told.word, telling: telling, referent: referent)
+            }
             return teachResponse(word: told.word, alternatives: told.alternatives, hint: nil,
                                  telling: telling, referent: referent, dependencies: dependencies)
         }
@@ -143,7 +150,31 @@ extension HallieAppTurnCoordinator {
                     description: "pronunciation hint", telling: telling, referent: referent)
             }
         }
+        // A teach-shaped sentence whose subject is nobody the archive
+        // knows ("when you see KY ... recommended to pronounce it
+        // "Kentucky"", live 2026-09-11). Declined here, outside an
+        // interview only — inside one, "Dad pronounced every word
+        // carefully" is testimony and belongs to the telling route.
+        if telling == nil, HalliePronunciationFreeform.isTeachShaped(question) {
+            return declinedTeachResponse(word: nil, telling: telling, referent: referent)
+        }
         return nil
+    }
+
+    /// "I keep pronunciations for people — who is this for?" Nothing is
+    /// written; the log says why (GH #184 item 6).
+    static let declinedTeachProse = "I keep pronunciations for people — who is this for?"
+
+    private static func declinedTeachResponse(
+        word: String?, telling: HallieTellingMode.Session?, referent: CapturedReferent
+    ) -> Response {
+        let reason = word.map { "\u{201C}\($0)\u{201D} is not a name anyone in the archive carries" }
+            ?? "no name the archive knows was named"
+        appLog.write("[hallie-voice] declined pronunciation teach: \(reason); nothing written")
+        return pronunciationReply(
+            declinedTeachProse, outcome: .declined,
+            basis: "listening — pronunciation NOT kept (\(reason))",
+            description: "pronunciation", telling: telling, referent: referent)
     }
 
     /// A hint that did not land is not an answer. In particular, viewer
@@ -253,27 +284,28 @@ extension HallieAppTurnCoordinator {
         if let entry = dependencies.loadLexicon().entries.first(where: { FamilyIdentityText.normalized($0.written) == key }) {
             return entry.written
         }
-        func spelling(in names: [String]) -> String? {
-            for name in names {
-                for part in FamilyTreePronunciationChips.nameWords(name) where FamilyIdentityText.normalized(part) == key {
-                    return part
-                }
-            }
-            return nil
-        }
+        // One rule for "is this word somebody's name" (FamilyNameTokens,
+        // GH #184 item 6): a whole alias, or a name-shaped word — never a
+        // common word inside a notes-style alias ("... and see note").
         if let profiles = dependencies.loadProfiles() {
             for profile in profiles {
-                if let found = spelling(in: [profile.canonicalName] + profile.aliases) { return found }
+                if let found = FamilyNameTokens.spelling(of: word, primaryName: profile.canonicalName, aliases: profile.aliases) {
+                    return found
+                }
             }
         }
         if let graph = dependencies.loadGraph() {
             for person in graph.people.values {
-                if let found = spelling(in: [person.name] + person.alternateNames) { return found }
+                if let found = FamilyNameTokens.spelling(of: word, primaryName: person.name, aliases: person.alternateNames) {
+                    return found
+                }
             }
         }
         if let brain = dependencies.loadCyberBrain() {
             for person in brain.archive.people {
-                if let found = spelling(in: [person.canonicalName] + person.aliases) { return found }
+                if let found = FamilyNameTokens.spelling(of: word, primaryName: person.canonicalName, aliases: person.aliases) {
+                    return found
+                }
             }
         }
         return nil
@@ -317,11 +349,13 @@ extension HallieAppTurnCoordinator {
         let token = FamilyIdentityText.normalized(word)
         guard !token.isEmpty else { return .file }
 
+        // "Carries the word" = FamilyNameTokens.matches — a whole alias or
+        // a name-shaped word, never a common word inside a notes-style
+        // alias. Live 2026-09-11: "see" matched "Llanlowell Llan Hywel and
+        // see note" and minted a person (GH #184 item 6).
         if let cyberBrain {
             let carriers = cyberBrain.archive.people.filter { person in
-                ([person.canonicalName] + person.aliases).contains {
-                    FamilyIdentityText.tokens($0).contains(token)
-                }
+                FamilyNameTokens.matches(word, primaryName: person.canonicalName, aliases: person.aliases)
             }
             if carriers.count == 1 {
                 return .cyberBrainPerson(id: carriers[0].id, name: carriers[0].canonicalName)
@@ -330,9 +364,7 @@ extension HallieAppTurnCoordinator {
         }
         if let graph {
             let carriers = graph.people.values.filter { person in
-                ([person.name] + person.alternateNames).contains {
-                    FamilyIdentityText.tokens($0).contains(token)
-                }
+                FamilyNameTokens.matches(word, primaryName: person.name, aliases: person.alternateNames)
             }
             if carriers.count == 1 {
                 let person = carriers[0]
