@@ -88,7 +88,9 @@ public enum UserPlaceEntry {
         // Trim, then split on commas so each segment is Title-Cased on
         // its own and re-joined with the one canonical ", " separator.
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        // A place has at least one letter or digit: "...", "---", "??"
+        // are not places (codex #1370 minor).
+        guard trimmed.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
         let segments = trimmed
             .split(separator: ",", omittingEmptySubsequences: true)
             .map { collapseWhitespace(String($0)) }

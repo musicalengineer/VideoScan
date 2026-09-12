@@ -84,6 +84,8 @@ extension VideoScanModel {
         let repairArchiveStage: ArchiveStage
         let repairUserDate: String?
         let repairUserDateConfidence: String?
+        let repairUserPlace: String?
+        let repairUserPlaceConfidence: String?
         let repairNotes: String
         // Original-side pre-confirm values.
         let originalNotes: String
@@ -187,6 +189,14 @@ extension VideoScanModel {
             repair.userDateConfidence = original.userDateConfidence
             carried.append("date")
         }
+        // Rick's hand-entered place rides exactly like his date (codex
+        // #1370 P0, 2026-09-12): same footage, same place; a place he
+        // already put on the repair itself wins.
+        if repair.userPlace == nil, original.userPlace != nil {
+            repair.userPlace = original.userPlace
+            repair.userPlaceConfidence = original.userPlaceConfidence
+            carried.append("place")
+        }
         return carried
     }
 
@@ -241,6 +251,8 @@ extension VideoScanModel {
                 repairArchiveStage: repair.archiveStage,
                 repairUserDate: repair.userDate,
                 repairUserDateConfidence: repair.userDateConfidence,
+                repairUserPlace: repair.userPlace,
+                repairUserPlaceConfidence: repair.userPlaceConfidence,
                 repairNotes: repair.notes,
                 originalNotes: original.notes))
 
@@ -302,6 +314,8 @@ extension VideoScanModel {
                 repair.archiveStage = snap.repairArchiveStage
                 repair.userDate = snap.repairUserDate
                 repair.userDateConfidence = snap.repairUserDateConfidence
+                repair.userPlace = snap.repairUserPlace
+                repair.userPlaceConfidence = snap.repairUserPlaceConfidence
                 repair.notes = snap.repairNotes
                 repair.repairConfirmedDate = nil
                 searchIndex.update(repair)
@@ -393,6 +407,11 @@ extension VideoScanModel {
         if adopted.userDate == nil {
             adopted.userDate = original.userDate
             adopted.userDateConfidence = original.userDateConfidence
+        }
+        // Same rule for Rick's place (codex #1370 P0).
+        if adopted.userPlace == nil {
+            adopted.userPlace = original.userPlace
+            adopted.userPlaceConfidence = original.userPlaceConfidence
         }
 
         // "Verify Audio" journey stamps both ways — the existing verb

@@ -704,6 +704,8 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
         // carries over with its confidence (GH #117 convention).
         newRec.userDate = record.userDate
         newRec.userDateConfidence = record.userDateConfidence
+        newRec.userPlace = record.userPlace
+        newRec.userPlaceConfidence = record.userPlaceConfidence
 
         let stamp = ISO8601DateFormatter().string(from: Date())
         let sourceNote = "Verify Audio \(stamp): repaired copy written to \(publishedURL.lastPathComponent)"

@@ -758,6 +758,8 @@ final class BalanceAudioJob: @MainActor MediaFileOperationJob {
         // so Rick's hand-entered date carries over with its confidence.
         newRec.userDate = record.userDate
         newRec.userDateConfidence = record.userDateConfidence
+        newRec.userPlace = record.userPlace
+        newRec.userPlaceConfidence = record.userPlaceConfidence
 
         var fixNote: String
         switch analysis.classification {
