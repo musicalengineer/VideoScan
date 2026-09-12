@@ -322,6 +322,7 @@ struct AssessCopiesDetailView: View {
         guard !ids.isEmpty else { return }
         stampFamilyUserDateIfMissing(ids)
         stampFamilyUserPlaceIfMissing(ids)
+        stampFamilyAttestationsIfMissing(ids)
         var titles: [UUID: String] = [:]
         var roles: [UUID: String] = [:]
         let a = job.assessment
@@ -396,6 +397,17 @@ struct AssessCopiesDetailView: View {
         guard let fam = familyBestUserPlace() else { return }
         let targets = ids.compactMap { model.record(forID: $0) ?? job.record(for: $0) }
         AssessCopiesFamilyStamp.announce(AssessCopiesFamilyStamp.stampPlaceIfMissing(fam, onto: targets))
+    }
+
+    /// The family's word on cloud / off-site copies rides the promote too
+    /// (2026-09-12): every record being promoted merges the family's
+    /// attestations (union by kind, latest wins, its own answers win a tie).
+    private func stampFamilyAttestationsIfMissing(_ ids: [UUID]) {
+        let family = job.familyByID.keys.compactMap { model.record(forID: $0) ?? job.record(for: $0) }
+        let fam = AssessCopiesFamilyStamp.familyAttestations(among: family)
+        guard !fam.isEmpty else { return }
+        let targets = ids.compactMap { model.record(forID: $0) ?? job.record(for: $0) }
+        AssessCopiesFamilyStamp.announce(AssessCopiesFamilyStamp.stampAttestationsIfMissing(fam, onto: targets))
     }
 
     /// The naming row's label for one instance: its representation's role,
@@ -823,6 +835,36 @@ enum AssessCopiesFamilyStamp {
             r.userPlace = family.place
             r.userPlaceConfidence = family.confidence
             stamped.append(r)
+        }
+        return stamped
+    }
+
+    /// The family's merged backup attestations (2026-09-12): union by
+    /// kind across every copy, latest answer per kind. Empty when nobody
+    /// in the family was ever asked.
+    @MainActor
+    static func familyAttestations(among records: [VideoRecord]) -> [BackupAttestation] {
+        var merged: [BackupAttestation] = []
+        for r in records where !r.backupAttestations.isEmpty {
+            merged = BackupAttestation.merged(merged, with: r.backupAttestations)
+        }
+        return merged
+    }
+
+    /// Merge `family` onto every target (a target's own, later answer
+    /// wins; a kind only the family knows is added). Returns the records
+    /// that changed (the caller announces them). Idempotent.
+    @MainActor
+    @discardableResult
+    static func stampAttestationsIfMissing(_ family: [BackupAttestation],
+                                           onto targets: [VideoRecord]) -> [VideoRecord] {
+        var stamped: [VideoRecord] = []
+        for r in targets {
+            let merged = BackupAttestation.merged(r.backupAttestations, with: family)
+            if merged != r.backupAttestations {
+                r.backupAttestations = merged
+                stamped.append(r)
+            }
         }
         return stamped
     }

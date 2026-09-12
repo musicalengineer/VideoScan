@@ -28,7 +28,7 @@ import Foundation
 //                         mediaDisposition, lifecycleStage,
 //                         archiveStage, starRating, junkScore, notes,
 //                         tags, userNotes, userDate, userDateConfidence,
-//                         userPlace, userPlaceConfidence.
+//                         userPlace, userPlaceConfidence, backupAttestations.
 //   Archive provenance  — originalFullPath, originVolume,
 //                         masterLocation. Stamped by Promote / move-
 //                         adoption / Relocate, never by a scan, so a
@@ -234,6 +234,11 @@ struct RescanPreservedFields: Sendable {
     let userPlace: String?
     let userPlaceConfidence: String?
 
+    /// The user's word on cloud / off-site copies (2026-09-12). Same
+    /// user-edit contract: answered once, must survive every rescan
+    /// (sensor: rescanNeverDropsAttestations).
+    let backupAttestations: [BackupAttestation]
+
     /// True if this snapshot carries anything worth restoring.
     /// Records that have only scan-derived data don't need to be in
     /// the snapshot map at all — caller can use this to filter and
@@ -270,6 +275,7 @@ struct RescanPreservedFields: Sendable {
             || userDateConfidence != nil
             || userPlace != nil
             || userPlaceConfidence != nil
+            || !backupAttestations.isEmpty
     }
 
     @MainActor
@@ -313,6 +319,7 @@ struct RescanPreservedFields: Sendable {
         self.userDateConfidence = rec.userDateConfidence
         self.userPlace = rec.userPlace
         self.userPlaceConfidence = rec.userPlaceConfidence
+        self.backupAttestations = rec.backupAttestations
     }
 
     // MARK: Fixity identity guard
@@ -410,6 +417,7 @@ struct RescanPreservedFields: Sendable {
         rec.userDateConfidence = self.userDateConfidence
         rec.userPlace = self.userPlace
         rec.userPlaceConfidence = self.userPlaceConfidence
+        rec.backupAttestations = self.backupAttestations
         return carry
     }
 }

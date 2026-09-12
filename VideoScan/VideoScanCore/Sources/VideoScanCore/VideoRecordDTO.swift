@@ -138,6 +138,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let userDateConfidence: String?
     public let userPlace: String?
     public let userPlaceConfidence: String?
+    public let backupAttestations: [BackupAttestation]
     public let workspaceActive: Bool
     public let drmProtected: Bool
     public let originalFullPath: String?
@@ -258,6 +259,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         userDateConfidence          = r.userDateConfidence
         userPlace                   = r.userPlace
         userPlaceConfidence         = r.userPlaceConfidence
+        backupAttestations          = r.backupAttestations
         workspaceActive             = r.workspaceActive
         drmProtected                = r.drmProtected
         originalFullPath            = r.originalFullPath
@@ -452,6 +454,11 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // discipline — zero bytes added to every unplaced record.
         try c.encodeIfPresent(userPlace, forKey: .userPlace)
         try c.encodeIfPresent(userPlaceConfidence, forKey: .userPlaceConfidence)
+        // Backup attestations (2026-09-12): written only when the user has
+        // answered — zero bytes added to every never-asked record.
+        if !backupAttestations.isEmpty {
+            try c.encode(backupAttestations, forKey: .backupAttestations)
+        }
         // Only write workspaceActive when true — keeps catalog.json deltas
         // minimal for the majority of records that are never imported into
         // the workspace. Legacy decode treats absence as false (same shape

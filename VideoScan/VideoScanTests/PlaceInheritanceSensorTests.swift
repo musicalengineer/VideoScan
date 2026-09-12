@@ -17,6 +17,13 @@
 // Media-bearing sensors run real ffmpeg on synthetic fixtures (gated on
 // tool availability, as their sibling suites are). Isolation: temp dirs
 // and isolated catalog stores only — never App Support.
+//
+// 2026-09-12 (Rick's promote-and-prune ruling): every sensor has a
+// BACKUP-ATTESTATION twin — the user's word on cloud / off-site copies
+// rides the same paths (merge rule: union by kind, latest wins, the
+// target's own answer wins a tie, a "no" / "n/a" is never dropped). The
+// media-bearing sensors carry the twin assertions inline (one ffmpeg run
+// each); the pure paths get their own twin tests at the bottom.
 
 import Foundation
 import Testing
@@ -32,6 +39,13 @@ struct PlaceInheritanceSensorTests {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
+
+    // Attestation fixtures shared by the twins (whole-second dates so
+    // the manifest's ISO-8601 round trip compares equal).
+    private let attestedAt = Date(timeIntervalSince1970: 1_757_700_000)
+    private var cloudYes: BackupAttestation { BackupAttestation(kind: .cloud, answer: .yes, label: "iCloud", attestedAt: attestedAt) }
+    private var offsiteNo: BackupAttestation { BackupAttestation(kind: .offsite, answer: .no, attestedAt: attestedAt) }
+    private var familyWord: [BackupAttestation] { [cloudYes, offsiteNo] }
 
     /// An original + an awaiting-confirmation repair copy in one model.
     private func makePair(model: VideoScanModel) -> (VideoRecord, VideoRecord) {
@@ -180,6 +194,7 @@ struct PlaceInheritanceSensorTests {
         let keeper = dup(keeperURL.path, .keep)
         let extra = dup(extraURL.path, .extraCopy)
         extra.userPlace = "Cape Cod"; extra.userPlaceConfidence = "known"   // only the extra carries it
+        extra.backupAttestations = familyWord                                // ...and the family's word
         model.records = [keeper, extra]
 
         model.searchIndex.rebuild(records: model.records)   // keeper indexed WITHOUT a place
@@ -190,6 +205,7 @@ struct PlaceInheritanceSensorTests {
         #expect(model.records.count == 1 && model.records.first === keeper)
         #expect(keeper.userPlace == "Cape Cod", "the deleted extra's place folds into the keeper")
         #expect(keeper.userPlaceConfidence == "known")
+        #expect(keeper.backupAttestations == familyWord, "twin: the deleted extra's attestations fold into the keeper")
         // codex #1380 (3): indexed-vs-canonical agreement right after the fold.
         #expect(pfCatalogTokenMatches(.substring("cape"), keeper))
         #expect(model.searchIndex.filter(records: model.records, query: "cape").map(\.id) == [keeper.id],
@@ -212,11 +228,13 @@ struct PlaceInheritanceSensorTests {
         original.streamTypeRaw = StreamType.videoAndAudio.rawValue
         original.audioVerifyStatus = "damaged"
         original.userPlace = "Framingham, MA"; original.userPlaceConfidence = "estimated"
+        original.backupAttestations = familyWord
         model.records.append(original)
 
         let adopted = try await model.adoptExternalRepair(originalID: original.id, fileURL: URL(fileURLWithPath: path))
         #expect(adopted.userPlace == "Framingham, MA", "same footage — the hand-entered place carries")
         #expect(adopted.userPlaceConfidence == "estimated")
+        #expect(adopted.backupAttestations == familyWord, "twin: the adopted repair carries the family's word")
     }
 
     // MARK: registerPromotedCopy (through a real Promote)
@@ -232,6 +250,7 @@ struct PlaceInheritanceSensorTests {
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let rec = MasterArchiveTestSupport.makeRecord(path: src, userDate: "1992-07-15", starRating: 1)
         rec.userPlace = "North Conway, NH"; rec.userPlaceConfidence = "known"
+        rec.backupAttestations = familyWord
         model.records = [rec]
 
         let job = try #require(await MasterArchiveTestSupport.promote(model, ids: [rec.id]))
@@ -240,6 +259,10 @@ struct PlaceInheritanceSensorTests {
         #expect(copy.userDate == "1992-07-15")
         #expect(copy.userPlace == "North Conway, NH", "the archive copy carries Rick's place")
         #expect(copy.userPlaceConfidence == "known")
+        #expect(copy.backupAttestations == familyWord, "twin: the archive copy carries the family's word")
+        let row = try #require(MasterArchiveTestSupport.manifestRows(sb).first)
+        #expect(row[ArchiveManifestCSV.userPlaceColumn] == "North Conway, NH")
+        #expect(BackupAttestation.fromJSONString(row[ArchiveManifestCSV.backupAttestationsColumn]) == familyWord)
     }
 
     // MARK: TrimJob
@@ -254,6 +277,7 @@ struct PlaceInheritanceSensorTests {
         let model = VideoScanModel()
         let record = makeTrimSourceRecord(path: src, durationSeconds: 6.0, videoCodec: "ffv1")
         record.userPlace = "Cape Cod"; record.userPlaceConfidence = "estimated"
+        record.backupAttestations = familyWord
         model.records = [record]
         let job = TrimJob(record: record, range: TrimRange(inSeconds: 1.0, outSeconds: 4.0), model: model)
         job.start()
@@ -263,6 +287,7 @@ struct PlaceInheritanceSensorTests {
         #expect(derived.derivationKind == TrimPlan.derivationKind)
         #expect(derived.userPlace == "Cape Cod", "a trimmed master is the same footage — the place carries")
         #expect(derived.userPlaceConfidence == "estimated")
+        #expect(derived.backupAttestations == familyWord, "twin: the trimmed master carries the family's word")
     }
 
     // MARK: BalanceAudioJob
@@ -277,6 +302,7 @@ struct PlaceInheritanceSensorTests {
         let record = makeBalanceSourceRecord(path: path, durationSeconds: analysis.shape.durationSeconds,
                                              audioCodec: analysis.shape.audioCodec)
         record.userPlace = "Westford"; record.userPlaceConfidence = "known"
+        record.backupAttestations = familyWord
         model.records = [record]
         let job = BalanceAudioJob(record: record, analysis: analysis, model: model)
         job.start()
@@ -287,6 +313,7 @@ struct PlaceInheritanceSensorTests {
         #expect(derived.derivedFrom == record.id)
         #expect(derived.userPlace == "Westford", "a balanced copy is the same footage — the place carries")
         #expect(derived.userPlaceConfidence == "known")
+        #expect(derived.backupAttestations == familyWord, "twin: the balanced copy carries the family's word")
     }
 
     // MARK: RebuildAudioJob
@@ -304,6 +331,7 @@ struct PlaceInheritanceSensorTests {
         let record = makeBalanceSourceRecord(path: path, durationSeconds: d.shape.containerDurationSeconds,
                                              audioCodec: d.shape.audioCodec)
         record.userPlace = "Montana"; record.userPlaceConfidence = "estimated"
+        record.backupAttestations = familyWord
         model.records = [record]
         let job = RebuildAudioJob(record: record, reason: "test", shape: d.shape, model: model)
         job.start()
@@ -314,5 +342,79 @@ struct PlaceInheritanceSensorTests {
         #expect(derived.derivedFrom == record.id)
         #expect(derived.userPlace == "Montana", "a rebuilt copy is the same footage — the place carries")
         #expect(derived.userPlaceConfidence == "estimated")
+        #expect(derived.backupAttestations == familyWord, "twin: the rebuilt copy carries the family's word")
+    }
+
+    // MARK: - Attestation twins for the pure paths (Rick 2026-09-12)
+
+    @Test func repairInheritanceCarriesAttestations() {
+        let model = VideoScanModel()
+        let (original, repair) = makePair(model: model)
+        original.backupAttestations = familyWord
+        let carried = model.applyHumanMetadataInheritance(from: original, to: repair)
+        #expect(repair.backupAttestations == familyWord)
+        #expect(carried.contains("backup attestations"))
+        // Idempotent: a second pass carries nothing new.
+        #expect(!model.applyHumanMetadataInheritance(from: original, to: repair).contains("backup attestations"))
+    }
+
+    @Test func repairInheritanceMergesByKindLatestWinsAndNeverDropsANo() {
+        let model = VideoScanModel()
+        let (original, repair) = makePair(model: model)
+        let later = Date(timeIntervalSince1970: 1_757_800_000)
+        original.backupAttestations = [cloudYes, offsiteNo]                                   // older cloud=yes, offsite=no
+        repair.backupAttestations = [BackupAttestation(kind: .cloud, answer: .no, attestedAt: later)]   // the repair's own, newer
+        let carried = model.applyHumanMetadataInheritance(from: original, to: repair)
+        #expect(repair.backupAttestation(for: .cloud)?.answer == .no, "the repair's newer answer wins")
+        #expect(repair.backupAttestation(for: .offsite)?.answer == .no, "the original's 'no' is added, never dropped")
+        #expect(carried.contains("backup attestations"))
+    }
+
+    @Test func confirmUndoRestoresRepairsOwnAttestations() {
+        let model = VideoScanModel()
+        let (original, repair) = makePair(model: model)
+        original.backupAttestations = familyWord
+        #expect(model.confirmRepair(repairID: repair.id))
+        #expect(repair.backupAttestations == familyWord, "confirm inherits the family's word")
+        #expect(model.undoConfirmRepair())
+        #expect(repair.backupAttestations.isEmpty, "undo restores the repair's pre-confirm (empty) list exactly")
+
+        let own = [BackupAttestation(kind: .drive, answer: .yes, label: "MyBook", attestedAt: attestedAt)]
+        repair.backupAttestations = own
+        #expect(model.confirmRepair(repairID: repair.id))
+        #expect(repair.backupAttestations == [cloudYes, offsiteNo, own[0]], "merged in kind order")
+        #expect(model.undoConfirmRepair())
+        #expect(repair.backupAttestations == own, "undo restores the repair's own list verbatim")
+    }
+
+    @Test func archiveHelperPromoteStampsFamilyAttestationsIfMissing() {
+        func rec(_ name: String, _ atts: [BackupAttestation] = []) -> VideoRecord {
+            let r = VideoRecord(); r.filename = name; r.fullPath = "/Volumes/T/\(name)"
+            r.backupAttestations = atts
+            return r
+        }
+        #expect(AssessCopiesFamilyStamp.familyAttestations(among: [rec("a.mov"), rec("b.mov")]).isEmpty)
+        let later = Date(timeIntervalSince1970: 1_757_800_000)
+        let newerCloudNo = BackupAttestation(kind: .cloud, answer: .no, attestedAt: later)
+        let family = AssessCopiesFamilyStamp.familyAttestations(among: [rec("c.mov", [cloudYes]), rec("d.mov", [newerCloudNo, offsiteNo])])
+        #expect(family == [newerCloudNo, offsiteNo], "union by kind, latest per kind")
+
+        let master = rec("master.mov")
+        let own = rec("own.mov", [BackupAttestation(kind: .cloud, answer: .yes, label: "Dropbox", attestedAt: Date(timeIntervalSince1970: 1_757_900_000))])
+        #expect(AssessCopiesFamilyStamp.stampAttestationsIfMissing(family, onto: [master, own]).map(\.filename) == ["master.mov", "own.mov"])
+        #expect(master.backupAttestations == family)
+        #expect(own.backupAttestation(for: .cloud)?.label == "Dropbox", "a record's own newer answer is never clobbered")
+        #expect(own.backupAttestation(for: .offsite)?.answer == .no, "...but the family's 'no' is added")
+        #expect(AssessCopiesFamilyStamp.stampAttestationsIfMissing(family, onto: [master, own]).isEmpty, "second pass changes nothing")
+    }
+
+    @Test func keeperPolicyScoresAttestedCopy() {
+        let bare = VideoRecord()
+        let attested = VideoRecord(); attested.backupAttestations = [offsiteNo]
+        #expect(DuplicateKeeperPolicy.humanMetadataScore(bare) == 0)
+        #expect(DuplicateKeeperPolicy.humanMetadataScore(attested) > 0, "an attested copy (even a 'no') must not tie a bare twin")
+        let placed = VideoRecord(); placed.userPlace = "Cape Cod"
+        #expect(DuplicateKeeperPolicy.humanMetadataScore(attested) == DuplicateKeeperPolicy.humanMetadataScore(placed),
+                "same weight as the place — siblings")
     }
 }

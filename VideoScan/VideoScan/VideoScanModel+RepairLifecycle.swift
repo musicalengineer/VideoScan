@@ -86,6 +86,7 @@ extension VideoScanModel {
         let repairUserDateConfidence: String?
         let repairUserPlace: String?
         let repairUserPlaceConfidence: String?
+        let repairBackupAttestations: [BackupAttestation]
         let repairNotes: String
         // Original-side pre-confirm values.
         let originalNotes: String
@@ -197,6 +198,12 @@ extension VideoScanModel {
             repair.userPlaceConfidence = original.userPlaceConfidence
             carried.append("place")
         }
+        // The family's word on cloud / off-site copies (2026-09-12):
+        // union by kind, latest answer wins, the repair's own answer wins
+        // a tie; a "no" / "n/a" is never dropped in favour of nothing.
+        if repair.inheritBackupAttestations(from: original) {
+            carried.append("backup attestations")
+        }
         return carried
     }
 
@@ -253,6 +260,7 @@ extension VideoScanModel {
                 repairUserDateConfidence: repair.userDateConfidence,
                 repairUserPlace: repair.userPlace,
                 repairUserPlaceConfidence: repair.userPlaceConfidence,
+                repairBackupAttestations: repair.backupAttestations,
                 repairNotes: repair.notes,
                 originalNotes: original.notes))
 
@@ -316,6 +324,7 @@ extension VideoScanModel {
                 repair.userDateConfidence = snap.repairUserDateConfidence
                 repair.userPlace = snap.repairUserPlace
                 repair.userPlaceConfidence = snap.repairUserPlaceConfidence
+                repair.backupAttestations = snap.repairBackupAttestations
                 repair.notes = snap.repairNotes
                 repair.repairConfirmedDate = nil
                 searchIndex.update(repair)
@@ -413,6 +422,9 @@ extension VideoScanModel {
             adopted.userPlace = original.userPlace
             adopted.userPlaceConfidence = original.userPlaceConfidence
         }
+        // And for the family's backup attestations (2026-09-12): merge,
+        // the adopted record's own answers win a tie.
+        adopted.inheritBackupAttestations(from: original)
 
         // "Verify Audio" journey stamps both ways — the existing verb
         // (already in journeyStampVerbs), no new verb needed.

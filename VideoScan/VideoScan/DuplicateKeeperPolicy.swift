@@ -329,6 +329,9 @@ struct DuplicateKeeperPolicy: Sendable, Equatable {
         // #1370 P0): a placed copy must never lose the keeper election to
         // a bare twin.
         if record.userPlace != nil { score += 15 }
+        // The user's word on cloud / off-site copies is a human mark too
+        // (2026-09-12): an attested copy never loses to a bare twin.
+        if !record.backupAttestations.isEmpty { score += 15 }
         if record.originalFullPath != nil { score += 25 }
         if let t = record.audioTranscript, !t.isEmpty { score += 8 }
         if !record.sceneCaptions.isEmpty { score += 8 }

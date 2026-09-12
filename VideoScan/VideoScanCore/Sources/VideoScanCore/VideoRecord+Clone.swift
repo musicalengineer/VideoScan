@@ -145,6 +145,7 @@ extension VideoRecord {
         c.userDateConfidence = userDateConfidence
         c.userPlace = userPlace
         c.userPlaceConfidence = userPlaceConfidence
+        c.backupAttestations = backupAttestations
         c.workspaceActive = workspaceActive
         c.audioVerifyStatus = audioVerifyStatus
         c.audioVerifyNote = audioVerifyNote

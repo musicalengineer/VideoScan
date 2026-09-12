@@ -706,6 +706,7 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
         newRec.userDateConfidence = record.userDateConfidence
         newRec.userPlace = record.userPlace
         newRec.userPlaceConfidence = record.userPlaceConfidence
+        newRec.backupAttestations = BackupAttestation.normalized(record.backupAttestations)
 
         let stamp = ISO8601DateFormatter().string(from: Date())
         let sourceNote = "Verify Audio \(stamp): repaired copy written to \(publishedURL.lastPathComponent)"

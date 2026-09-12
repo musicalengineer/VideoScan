@@ -227,6 +227,9 @@ struct RescanPreservationTests {
         original.userDateConfidence = "known"
         original.userPlace = "Franklin, MA"
         original.userPlaceConfidence = "known"
+        let attestedAt = Date(timeIntervalSince1970: 1_757_700_000)
+        original.backupAttestations = [BackupAttestation(kind: .cloud, answer: .yes, label: "iCloud", attestedAt: attestedAt),
+                                       BackupAttestation(kind: .offsite, answer: .notApplicable, attestedAt: attestedAt)]
 
         let snap = RescanPreservedFields(from: original)
 
@@ -280,6 +283,7 @@ struct RescanPreservationTests {
         #expect(fresh.userDateConfidence == "known")
         #expect(fresh.userPlace == "Franklin, MA")
         #expect(fresh.userPlaceConfidence == "known")
+        #expect(fresh.backupAttestations == original.backupAttestations)
 
         // Scan-derived field left untouched by apply().
         #expect(fresh.videoCodec == "hevc-NEW")
@@ -365,6 +369,44 @@ struct RescanPreservationTests {
         #expect(freshCleared.userPlaceStatus == .unplaced)
         // Scan-derived fields were NOT dragged along.
         #expect(freshKnown.videoCodec == "h264-NEW")
+    }
+
+    // SENSOR (Rick 2026-09-12): the user's word on cloud / off-site copies
+    // is a user-edit field — a routine rescan must never drop it, and a
+    // "no" / "n/a" answer is as precious as a "yes".
+    @Test func rescanNeverDropsAttestations() {
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/Test")
+        let at = Date(timeIntervalSince1970: 1_757_700_000)
+        let attested = VideoRecord()
+        attested.filename = "cloud.mov"; attested.fullPath = "/Volumes/Test/cloud.mov"
+        attested.backupAttestations = [BackupAttestation(kind: .cloud, answer: .yes, label: "iCloud", attestedAt: at)]
+        let saidNo = VideoRecord()
+        saidNo.filename = "no.mov"; saidNo.fullPath = "/Volumes/Test/no.mov"
+        saidNo.backupAttestations = [BackupAttestation(kind: .offsite, answer: .no, attestedAt: at),
+                                     BackupAttestation(kind: .cloud, answer: .notApplicable, attestedAt: at)]
+        let never = VideoRecord()
+        never.filename = "never.mov"; never.fullPath = "/Volumes/Test/never.mov"
+        never.userNotes = "keeps the snapshot alive"   // worth restoring, but never asked
+        model.records = [attested, saidNo, never]
+        model.scanTargets = [target]
+
+        model.snapshotPreservedFieldsForRescan(of: target)
+        model.records.removeAll()
+
+        let freshAttested = freshlyScannedRecord(path: "/Volumes/Test/cloud.mov")
+        let freshNo = freshlyScannedRecord(path: "/Volumes/Test/no.mov")
+        let freshNever = freshlyScannedRecord(path: "/Volumes/Test/never.mov")
+        freshNever.backupAttestations = [BackupAttestation(kind: .drive, answer: .yes, label: "stale", attestedAt: at)]
+        let restored = model.applyPreservedFieldsAfterRescan(of: target, onto: [freshAttested, freshNo, freshNever])
+        #expect(restored == 3)
+
+        #expect(freshAttested.backupAttestations == attested.backupAttestations)
+        #expect(freshAttested.backupAttestation(for: .cloud)?.label == "iCloud")
+        #expect(freshNo.backupAttestations == saidNo.backupAttestations, "no / n-a answers survive, restored verbatim")
+        #expect(Set(freshNo.backupAttestations.map(\.token)) == ["cloud=n/a", "offsite=no"])
+        #expect(freshNever.backupAttestations.isEmpty, "a never-asked record comes back never-asked (apply overwrites)")
+        #expect(freshAttested.videoCodec == "h264-NEW", "scan-derived fields were NOT dragged along")
     }
 
     @Test func newPathsAreLeftAsScanned_existingPathsRestore() {
@@ -816,6 +858,9 @@ struct RescanPreservationTests {
         #expect(RescanPreservedFields(from: byPlace).isWorthRestoring, "userPlace alone")
         let byPlaceConfidence = VideoRecord(); byPlaceConfidence.userPlaceConfidence = "known"
         #expect(RescanPreservedFields(from: byPlaceConfidence).isWorthRestoring, "userPlaceConfidence alone")
+        let byAttestation = VideoRecord()
+        byAttestation.backupAttestations = [BackupAttestation(kind: .offsite, answer: .no)]
+        #expect(RescanPreservedFields(from: byAttestation).isWorthRestoring, "a backup attestation alone (even a 'no')")
 
         // partialMD5 is comparison-only evidence, NOT a reason to keep a
         // record in the map (it is never restored).
