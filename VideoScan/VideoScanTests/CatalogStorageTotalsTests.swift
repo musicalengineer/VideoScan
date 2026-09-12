@@ -362,7 +362,8 @@ struct CatalogStorageDisplayTests {
         let t = CatalogStorageTotalsCalculator.compute(records: hashed)
         #expect(t.duplicateCoverage == 1.0)
         #expect(!t.uniqueCaption.contains("at most"))
-        #expect(t.uniqueCaption.contains("duplicates"))
+        // Caption shortened to "excluding dups, etc." (Rick 2026-09-12, 1a2a80bb).
+        #expect(t.uniqueCaption.contains("dups"))
     }
 
     /// Rick's requested shape: "5.6 TB", "150 GB" — one decimal for TB,
