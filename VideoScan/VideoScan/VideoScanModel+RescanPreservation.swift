@@ -133,6 +133,7 @@ struct RescanPreservedFields: Sendable {
     let ocrText: [SceneCaption]
     let inferredRecordDate: Date?
     let inferredDateConfidence: Float?
+    let inferredDateSource: String?
     let dossierProcessedAt: Date?
     let dossierProcessedBy: String?
 
@@ -244,6 +245,10 @@ struct RescanPreservedFields: Sendable {
             || !ocrDateCandidates.isEmpty
             || !ocrText.isEmpty
             || dossierProcessedAt != nil
+            // A propagated / caught-up date lives on records that never
+            // had their own dossier pass (2026-09-12) — it must survive a
+            // rescan like every other machine product.
+            || inferredRecordDate != nil
             || !detectedPeople.isEmpty
             || !suspectedPeople.isEmpty
             || !confirmedByUserPeople.isEmpty
@@ -284,6 +289,7 @@ struct RescanPreservedFields: Sendable {
         self.ocrText = rec.ocrText
         self.inferredRecordDate = rec.inferredRecordDate
         self.inferredDateConfidence = rec.inferredDateConfidence
+        self.inferredDateSource = rec.inferredDateSource
         self.dossierProcessedAt = rec.dossierProcessedAt
         self.dossierProcessedBy = rec.dossierProcessedBy
         self.detectedPeople = rec.detectedPeople
@@ -377,6 +383,7 @@ struct RescanPreservedFields: Sendable {
         rec.ocrText = self.ocrText
         rec.inferredRecordDate = self.inferredRecordDate
         rec.inferredDateConfidence = self.inferredDateConfidence
+        rec.inferredDateSource = self.inferredDateSource
         rec.dossierProcessedAt = self.dossierProcessedAt
         rec.dossierProcessedBy = self.dossierProcessedBy
         rec.detectedPeople = self.detectedPeople

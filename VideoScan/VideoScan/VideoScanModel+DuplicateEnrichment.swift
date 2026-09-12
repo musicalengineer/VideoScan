@@ -59,6 +59,7 @@ extension VideoScanModel {
         if master.inferredRecordDate == nil, extra.inferredRecordDate != nil {
             master.inferredRecordDate = extra.inferredRecordDate
             master.inferredDateConfidence = extra.inferredDateConfidence
+            master.inferredDateSource = extra.inferredDateSource
             carried.append("inferred date")
         }
         // Avid bin identity — field by field, empty-only.

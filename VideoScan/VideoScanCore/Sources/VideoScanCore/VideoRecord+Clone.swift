@@ -117,6 +117,7 @@ extension VideoRecord {
         c.ocrText = ocrText
         c.inferredRecordDate = inferredRecordDate
         c.inferredDateConfidence = inferredDateConfidence
+        c.inferredDateSource = inferredDateSource
         c.dossierProcessedAt = dossierProcessedAt
         c.dossierProcessedBy = dossierProcessedBy
         c.sceneCaptionModel = sceneCaptionModel

@@ -113,6 +113,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let ocrText: [SceneCaption]
     public let inferredRecordDate: Date?
     public let inferredDateConfidence: Float?
+    public let inferredDateSource: String?
     public let dossierProcessedAt: Date?
     public let dossierProcessedBy: String?
     public let audioTranscript: String?
@@ -233,6 +234,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         ocrText                     = r.ocrText
         inferredRecordDate          = r.inferredRecordDate
         inferredDateConfidence      = r.inferredDateConfidence
+        inferredDateSource          = r.inferredDateSource
         dossierProcessedAt          = r.dossierProcessedAt
         dossierProcessedBy          = r.dossierProcessedBy
         audioTranscript             = r.audioTranscript
@@ -392,6 +394,10 @@ public struct VideoRecordDTO: Sendable, Encodable {
         }
         try c.encodeIfPresent(inferredRecordDate, forKey: .inferredRecordDate)
         try c.encodeIfPresent(inferredDateConfidence, forKey: .inferredDateConfidence)
+        // Provenance of a non-own inferred date (2026-09-12): written only
+        // when present — every record dated by its own dossier pass
+        // round-trips byte-identical.
+        try c.encodeIfPresent(inferredDateSource, forKey: .inferredDateSource)
         try c.encodeIfPresent(dossierProcessedAt, forKey: .dossierProcessedAt)
         try c.encodeIfPresent(dossierProcessedBy, forKey: .dossierProcessedBy)
         // Audio transcript: only write when something to write. Matches the

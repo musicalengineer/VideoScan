@@ -48,6 +48,10 @@ extension VideoScanModel {
         // Propagate to MD5-identical siblings so search finds this
         // transcript via any copy of the file (Phase 0).
         propagateDossierToMD5Duplicates(of: record)
+        // A transcript can name the year (2026-09-12): derive a date from
+        // it when the record has none, and share it with the group — the
+        // single-channel road must not leave evidence without a conclusion.
+        catchUpInferredDates(scope: [record], trigger: "transcript")
         objectWillChange.send()
         saveCatalogDebounced()
 
