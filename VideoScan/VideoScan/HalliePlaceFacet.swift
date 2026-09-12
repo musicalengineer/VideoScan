@@ -86,23 +86,23 @@ enum HalliePlaceFacet {
             .joined(separator: " ")
             .lowercased()
         guard !text.isEmpty else { return nil }
-        // Content wording (codex #1370 P1): "find where someone says Cape
-        // Cod", "clips captioned Cape Cod", "titled Montana" ask about
-        // words IN the video, not where it was shot — the keyword road
-        // keeps them, whatever Rick's places are.
-        guard !hasContentWording(text) else { return nil }
-
         // Way 1 — a keyword that IS one of Rick's places, when the question
-        // gives it a LOCATION shape ("at/in/from/of <place>", "videos
-        // <place>", "<place> videos"). "of" counts here: the term is
-        // already a keyword — the presence step demoted an unresolved
-        // name, or the translator chose a word — so "videos of Franklin"
-        // is the place once Franklin is not a person.
+        // gives THAT TERM a location shape ("at/in/from/of <place>",
+        // "videos <place>", "<place> videos") and the term is not the
+        // OBJECT of content wording ("where someone says Cape Cod",
+        // "captioned Westford", "titled Montana" — codex #1370 P1 / #1374).
+        // The rule is per term, never global: "videos at Cape Cod where
+        // Donna says hello" and "audio clips from Westford" keep their
+        // place. "of" counts here: the term is already a keyword — the
+        // presence step demoted an unresolved name, or the translator
+        // chose a word — so "videos of Franklin" is the place once
+        // Franklin is not a person.
         if let keywords = payload.keywords {
             for (index, term) in keywords.enumerated() {
                 guard let canonical = UserPlaceEntry.canonicalize(term),
                       knownPlaces.contains(where: { UserPlaceEntry.matches(canonical, against: $0) }),
-                      hasLocationShape(term, in: text) || hasLocationShape(canonical, in: text)
+                      hasLocationShape(term, in: text) || hasLocationShape(canonical, in: text),
+                      !isContentObject(term, in: text), !isContentObject(canonical, in: text)
                 else { continue }
                 var kept = keywords
                 kept.remove(at: index)
@@ -119,6 +119,7 @@ enum HalliePlaceFacet {
             if town != known { candidates.append(town) }
             for candidate in candidates {
                 guard mentions(candidate, in: text),
+                      !isContentObject(candidate, in: text),
                       let canonical = UserPlaceEntry.canonicalize(candidate) else { continue }
                 let placeTokens = Set(tokens(canonical))
                 var consumed: [String] = []
@@ -152,21 +153,21 @@ enum HalliePlaceFacet {
         return regex.firstMatch(in: lowercasedText, options: [], range: whole) != nil
     }
 
-    /// The question asks about words IN the video (speech, captions, the
-    /// title or file name) — never a place question, whatever the words.
-    static func hasContentWording(_ lowercasedText: String) -> Bool {
+    /// `term` is the OBJECT of content wording — the thing said, captioned,
+    /// titled, named or mentioned ("where someone says Cape Cod", "clips
+    /// captioned Westford", "titled Montana", "talking about Westford").
+    /// Then it is a word IN the video, not where it was shot. Judged per
+    /// term: content wording elsewhere in the sentence ("audio clips from
+    /// Westford") does not make a place a word.
+    static func isContentObject(_ term: String, in lowercasedText: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: term.lowercased())
+        let pattern = #"\b(?:says?|said|saying|mentions?|mentioned|mentioning|talk(?:s|ed|ing)? about|"#
+            + #"caption(?:s|ed)?(?: with| as)?|titled?|named|called|transcripts? (?:of|for|with|containing)|"#
+            + #"hears?|heard|subtitled|reads?)\s+(?:the\s+)?(?:words?\s+)?["'“‘]?"# + escaped + #"\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
         let whole = NSRange(lowercasedText.startIndex..., in: lowercasedText)
-        return contentWording.firstMatch(in: lowercasedText, options: [], range: whole) != nil
+        return regex.firstMatch(in: lowercasedText, options: [], range: whole) != nil
     }
-
-    private static let contentWording: NSRegularExpression = {
-        // Force-unwrap is deliberate: a compile-time literal; a bad one
-        // fails the first test, not a live turn.
-        try! NSRegularExpression(pattern:
-            #"\b(?:says?|said|saying|mentions?|mentioned|mentioning|talk(?:s|ed|ing)? about|"#
-            + #"caption(?:s|ed)?|titled?|named|called|transcripts?|audio|speech|spoken|"#
-            + #"hears?|heard|file ?names?|folders?|subtitles?|on[- ]screen|text)\b"#)
-    }()
 
     /// A LOCATION shape around `term`: after a place preposition (incl.
     /// "of" — see Way 1), or beside a media noun ("videos cape cod",

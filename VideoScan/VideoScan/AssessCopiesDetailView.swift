@@ -321,6 +321,7 @@ struct AssessCopiesDetailView: View {
     private func promote(_ ids: [UUID]) {
         guard !ids.isEmpty else { return }
         stampFamilyUserDateIfMissing(ids)
+        stampFamilyUserPlaceIfMissing(ids)
         var titles: [UUID: String] = [:]
         var roles: [UUID: String] = [:]
         let a = job.assessment
@@ -374,6 +375,27 @@ struct AssessCopiesDetailView: View {
             stamped = true
         }
         if stamped {
+            NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+        }
+    }
+
+    /// The copy family's best hand-entered PLACE, from LIVE records — the
+    /// twin of `familyBestUserDate` (codex #1374): known beats estimated,
+    /// more precise ("Franklin, MA" over "Franklin") beats less, ties
+    /// resolve lexicographically. Rule lives in AssessCopiesFamilyStamp so
+    /// a sensor can pin it without a view.
+    private func familyBestUserPlace() -> (place: String, confidence: String)? {
+        let family = job.familyByID.keys.compactMap { model.record(forID: $0) ?? job.record(for: $0) }
+        return AssessCopiesFamilyStamp.bestUserPlace(among: family)
+    }
+
+    /// The recording's place rides the promote exactly like its date:
+    /// records being promoted that lack a user place inherit the family's
+    /// best one (same direct-mutation + mutated-notification write path).
+    private func stampFamilyUserPlaceIfMissing(_ ids: [UUID]) {
+        guard let fam = familyBestUserPlace() else { return }
+        let targets = ids.compactMap { model.record(forID: $0) ?? job.record(for: $0) }
+        if AssessCopiesFamilyStamp.stampPlaceIfMissing(fam, onto: targets) {
             NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
         }
     }
@@ -760,5 +782,50 @@ private struct HelperAudioVerdictLine: View {
 
     private var levels: String? {
         coordinator.diagnosis?.balanceAnalysis.map(HelperAudioOutcome.levelsLine)
+    }
+}
+
+
+// MARK: - Family place stamp (pure)
+
+/// The same-recording family's hand-entered PLACE, chosen and stamped by
+/// the same rules the family DATE uses (codex #1374, 2026-09-12). Pure so
+/// PlaceInheritanceSensorTests can pin it; the view methods above only
+/// gather the records and post the mutation.
+enum AssessCopiesFamilyStamp {
+
+    /// Known beats estimated; a longer canonical (more precise, e.g.
+    /// "Franklin, MA" over "Franklin") beats shorter; ties lexicographic.
+    @MainActor
+    static func bestUserPlace(among records: [VideoRecord]) -> (place: String, confidence: String)? {
+        var best: (place: String, confidence: String)?
+        for r in records {
+            guard let p = r.userPlace else { continue }
+            let cand = (place: p, confidence: r.userPlaceConfidence ?? UserPlaceConfidence.estimated.rawValue)
+            guard let b = best else { best = cand; continue }
+            let candKnown = cand.confidence == UserPlaceConfidence.known.rawValue
+            let bestKnown = b.confidence == UserPlaceConfidence.known.rawValue
+            if candKnown != bestKnown { if candKnown { best = cand }; continue }
+            if cand.place.count != b.place.count {
+                if cand.place.count > b.place.count { best = cand }; continue
+            }
+            if cand.place < b.place { best = cand }
+        }
+        return best
+    }
+
+    /// Stamp `family` onto every target that has no place of its own.
+    /// Returns true when anything changed (the caller posts the mutation).
+    @MainActor
+    @discardableResult
+    static func stampPlaceIfMissing(_ family: (place: String, confidence: String),
+                                    onto targets: [VideoRecord]) -> Bool {
+        var stamped = false
+        for r in targets where r.userPlace == nil {
+            r.userPlace = family.place
+            r.userPlaceConfidence = family.confidence
+            stamped = true
+        }
+        return stamped
     }
 }

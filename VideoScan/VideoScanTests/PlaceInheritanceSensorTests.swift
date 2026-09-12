@@ -94,6 +94,36 @@ struct PlaceInheritanceSensorTests {
         #expect(repair.userPlace == "Cape Cod" && repair.userPlaceConfidence == "estimated")
     }
 
+    // MARK: AssessCopiesFamilyStamp (Archive Helper promote — codex #1374)
+
+    @Test func archiveHelperPromoteStampsFamilyPlaceIfMissing() {
+        func rec(_ name: String, place: String? = nil, confidence: String? = nil) -> VideoRecord {
+            let r = VideoRecord(); r.filename = name; r.fullPath = "/Volumes/T/\(name)"
+            r.userPlace = place; r.userPlaceConfidence = confidence
+            return r
+        }
+        // Selection: known beats estimated; precise beats coarse; ties lexicographic.
+        #expect(AssessCopiesFamilyStamp.bestUserPlace(among: [rec("a.mov"), rec("b.mov")]) == nil)
+        let guessedCoarse = rec("c.mov", place: "Franklin", confidence: "estimated")
+        let guessedPrecise = rec("d.mov", place: "Franklin, MA", confidence: "estimated")
+        let knownCoarse = rec("e.mov", place: "Cape Cod", confidence: "known")
+        var best = AssessCopiesFamilyStamp.bestUserPlace(among: [guessedCoarse, guessedPrecise])
+        #expect(best?.place == "Franklin, MA" && best?.confidence == "estimated")
+        best = AssessCopiesFamilyStamp.bestUserPlace(among: [guessedPrecise, knownCoarse])
+        #expect(best?.place == "Cape Cod" && best?.confidence == "known", "known beats a more precise guess")
+        best = AssessCopiesFamilyStamp.bestUserPlace(among: [rec("f.mov", place: "Norwood"), rec("g.mov", place: "Ashland")])
+        #expect(best?.place == "Ashland", "equal length, equal confidence → lexicographic")
+
+        // Stamp: only records without a place; the family's confidence rides along.
+        let master = rec("master.mov")
+        let copy = rec("copy.mov", place: "Montana", confidence: "estimated")
+        let family = (place: "Cape Cod", confidence: "known")
+        #expect(AssessCopiesFamilyStamp.stampPlaceIfMissing(family, onto: [master, copy]))
+        #expect(master.userPlace == "Cape Cod" && master.userPlaceConfidence == "known")
+        #expect(copy.userPlace == "Montana" && copy.userPlaceConfidence == "estimated", "a record's own place is never clobbered")
+        #expect(!AssessCopiesFamilyStamp.stampPlaceIfMissing(family, onto: [master, copy]), "second pass changes nothing")
+    }
+
     // MARK: DuplicateKeeperPolicy.humanMetadataScore
 
     @Test func keeperPolicyScoresPlacedCopy() {

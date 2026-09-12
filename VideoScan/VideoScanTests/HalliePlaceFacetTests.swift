@@ -129,7 +129,50 @@ struct HalliePlaceFacetStepTests {
             #expect(payload.keywords == [term])
             #expect(payload.place == nil)
         }
-        #expect(HalliePlaceFacet.hasContentWording(question.lowercased()))
+    }
+
+    // codex #1374: the rule is per term, never global. Content wording
+    // elsewhere must not cost a real place facet; only the term that is
+    // itself the content object is a word.
+    @Test("mixed location + content: the shaped place stays a place",
+          arguments: [
+            ("videos at Cape Cod where Donna says hello", ["cape cod", "hello"], "Cape Cod", ["hello"]),
+            ("audio clips from Westford", ["westford"], "Westford", []),
+            ("videos in Cape Cod where someone says Montana", ["cape cod", "montana"], "Cape Cod", ["montana"]),
+            ("transcripts of clips from Franklin", ["franklin"], "Franklin", []),
+          ])
+    func mixedKeepsThePlace(question: String, keywords: [String], place: String, kept: [String]) {
+        var payload = ArchivistQueryAST.Presence(keywords: keywords)
+        let d = HalliePlaceFacet.apply(to: &payload, question: question, knownPlaces: known)
+        #expect(d?.place == place, "'\(question)'")
+        #expect(payload.place == place)
+        #expect((payload.keywords ?? []) == kept)
+    }
+
+    @Test("mixed location + content: the place term as the content object stays a word",
+          arguments: [
+            ("videos at cape cod where someone says Westford", ["cape cod", "westford"], "Cape Cod", ["westford"]),
+            ("where someone says Cape Cod", ["cape cod"], nil, ["cape cod"]),
+            ("clips captioned Westford", ["westford"], nil, ["westford"]),
+            ("anything titled Montana", ["montana"], nil, ["montana"]),
+            ("videos from the beach where someone mentions montana", ["montana"], nil, ["montana"]),
+          ])
+    func contentObjectStaysAWord(question: String, keywords: [String], place: String?, kept: [String]) {
+        var payload = ArchivistQueryAST.Presence(keywords: keywords)
+        let d = HalliePlaceFacet.apply(to: &payload, question: question, knownPlaces: known)
+        #expect(d?.place == place, "'\(question)'")
+        #expect((payload.keywords ?? []) == kept)
+    }
+
+    @Test("question way (no keyword): shaped place kept beside content wording; content object refused")
+    func questionWayMixed() {
+        var a = ArchivistQueryAST.Presence()
+        #expect(HalliePlaceFacet.apply(to: &a, question: "what audio do we have from Montana", knownPlaces: known)?.place == "Montana")
+        var b = ArchivistQueryAST.Presence()
+        #expect(HalliePlaceFacet.apply(to: &b, question: "who says Montana in the audio", knownPlaces: known) == nil)
+        var c = ArchivistQueryAST.Presence()
+        #expect(HalliePlaceFacet.apply(to: &c, question: "clips captioned Cape Cod", knownPlaces: known) == nil,
+                "'captioned Cape Cod' names the caption's words")
     }
 
     @Test("a keyword needs a location shape: at/in/from/of <place>, videos <place>, <place> videos",
