@@ -275,8 +275,11 @@ struct HallieLineageDetectTests {
         #expect(Q.detect("donna's brothers?") == .kinship(person: "Donna", relation: .brother, side: nil))
         #expect(Q.detect("my brother") == .kinship(person: nil, relation: .brother, side: nil))
         #expect(Q.detect("and her husband please") == .kinship(person: "Her", relation: .husband, side: nil))
-        // Not claimed: sentences, unknown nouns, family references, apposition.
-        #expect(Q.detect("who is tim's brother") == nil)
+        // Not claimed by the FRAGMENT: sentences, unknown nouns, family
+        // references, apposition. A "who is <name>'s <kin>" sentence is
+        // the sentence form's (GH #182, a1c0c1b1; assertion updated
+        // 2026-09-11, codex #1352).
+        #expect(Q.detect("who is tim's brother") == .kinship(person: "Tim", relation: .brother, side: nil))
         #expect(Q.detect("tell me about martha lamson's husband") == nil)
         #expect(Q.detect("and her guitar") == nil)
         #expect(Q.detect("the family's husband") == nil)
@@ -320,8 +323,9 @@ struct HallieLineageDetectTests {
         #expect(Q.detect("list the names of tim breen's kids") == .kinship(person: "Tim Breen", relation: .children, side: nil))
         #expect(Q.detect("name rick's parents") == .kinship(person: "Rick", relation: .parents, side: nil))
         #expect(Q.detect("who were martha lamson's daughters?") == .kinship(person: "Martha Lamson", relation: .daughter, side: nil))
-        // Kept as before: singular "who is …" keeps the translator route; pronoun/my forms are the fragment's.
-        #expect(Q.detect("who is tim's brother") == nil)
+        // Singular "who is …" is claimed too (a1c0c1b1; assertion updated
+        // 2026-09-11, codex #1352); pronoun/my forms are the fragment's.
+        #expect(Q.detect("who is tim's brother") == .kinship(person: "Tim", relation: .brother, side: nil))
         #expect(Q.detect("what are the names of my sons") == .kinship(person: nil, relation: .son, side: nil) || Q.detect("what are the names of my sons") == nil)
         #expect(Q.detect("what are the names of the boys") == nil)
         #expect(Q.detect("what are the names of rick's guitars") == nil)
@@ -332,7 +336,10 @@ struct HallieLineageDetectTests {
     @Test func aboutTheSurnameFamilyIsASurnameTree() {
         #expect(Q.detect("tell me about the breen family") == .surnameTree(surname: "breen"))
         #expect(Q.detect("What about the Latta family?") == .surnameTree(surname: "latta"))
-        #expect(Q.detect("who are the mcgills family") == nil)
+        // The surname is passed through as typed, plural and all; the
+        // answer falls through when the tree knows no such surname
+        // (assertion updated 2026-09-11, codex #1352).
+        #expect(Q.detect("who are the mcgills family") == .surnameTree(surname: "mcgills"))
         #expect(Q.detect("tell me about the family") == nil)
         #expect(Q.detect("tell me about the breen family reunion") == nil)
     }
@@ -439,7 +446,9 @@ struct HallieLineageDetectTests {
 
     @Test func notOurs() {
         #expect(Q.detect("show me Donna at the Cape in the 90s") == nil)
-        #expect(Q.detect("who was rick's father") == nil)
+        // Ours since a1c0c1b1: the named one-hop sentence form (assertion
+        // updated 2026-09-11, codex #1352).
+        #expect(Q.detect("who was rick's father") == .kinship(person: "Rick", relation: .father, side: nil))
         #expect(Q.detect("how many videos are there") == nil)
         #expect(Q.detect("tell me about David McGill") == nil)
     }
