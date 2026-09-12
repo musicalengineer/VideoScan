@@ -102,6 +102,52 @@ struct TargetRecordRemovalOutcome {
     var degradedNoSnapshot = false
 }
 
+/// THE rule for which records a target-scoped removal owns — extracted
+/// (codex #1393) so the guarded removal and the Catalog Options menu's
+/// "Delete › <volume> (N)" count call the same predicate and can never
+/// disagree. Pure value; build once per target, test many paths.
+///
+///   claims(path)      ⇔ under `root` at a component boundary (PathScope)
+///                       AND not under any OTHER registered target root.
+///   isUnderRoot(path) ⇔ the first half only — what `removeCatalogRecords`
+///                       reports as "kept, covered by other target(s)"
+///                       when `claims` is false.
+///
+/// Only the record's CURRENT `fullPath` is consulted, never its origin
+/// path: removal never touched origin paths, so the count must not either.
+struct TargetRemovalScope: Sendable {
+    let root: PathScope.Root
+    /// Every OTHER registered target root that could cover a record.
+    /// Retired targets count: retire deliberately keeps records, so
+    /// their roots still own them. A root equal to `root` (after
+    /// normalization) is not "other".
+    let otherRoots: [PathScope.Root]
+
+    init(root: String, allTargetRoots: [String]) {
+        let r = PathScope.Root(root)
+        self.root = r
+        self.otherRoots = allTargetRoots
+            .map { PathScope.Root($0) }
+            .filter { $0.normalized != r.normalized }
+    }
+
+    func isUnderRoot(_ path: String) -> Bool {
+        root.contains(path)
+    }
+
+    func claims(_ path: String) -> Bool {
+        claimsNormalized(PathScope.normalize(path))
+    }
+
+    /// `claims` for an already-normalized path (see
+    /// `PathScope.Root.containsNormalized`) — the per-target projection
+    /// normalizes each record path once for all targets.
+    func claimsNormalized(_ p: String) -> Bool {
+        guard root.containsNormalized(p) else { return false }
+        return !otherRoots.contains { $0.containsNormalized(p) }
+    }
+}
+
 extension VideoScanModel {
 
     /// Removals larger than this must land a recovery snapshot first.
@@ -114,19 +160,16 @@ extension VideoScanModel {
     @discardableResult
     func removeCatalogRecords(underTargetRoot root: String, action: String) -> TargetRecordRemovalOutcome {
         var outcome = TargetRecordRemovalOutcome()
-        let normRoot = PathScope.normalize(root)
-        // Every OTHER registered target root that could cover a record.
-        // Retired targets count: retire deliberately keeps records, so
-        // their roots still own them.
-        let otherRoots = scanTargets.map(\.searchPath)
-            .filter { PathScope.normalize($0) != normRoot }
+        // The same scope the Delete menu counts with (codex #1393).
+        let scope = TargetRemovalScope(root: root,
+                                       allTargetRoots: scanTargets.map(\.searchPath))
 
         var doomed = Set<ObjectIdentifier>()
-        for rec in records where PathScope.contains(rec.fullPath, within: root) {
-            if otherRoots.contains(where: { PathScope.contains(rec.fullPath, within: $0) }) {
-                outcome.keptCoveredByOtherTargets += 1
-            } else {
+        for rec in records where scope.isUnderRoot(rec.fullPath) {
+            if scope.claims(rec.fullPath) {
                 doomed.insert(ObjectIdentifier(rec))
+            } else {
+                outcome.keptCoveredByOtherTargets += 1
             }
         }
 

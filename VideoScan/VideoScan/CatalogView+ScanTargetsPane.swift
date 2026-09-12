@@ -201,6 +201,9 @@ extension CatalogView {
         // Catalog Options menu (codex #1368). Rides this pass so the
         // menu can never disagree with the volume table about which
         // catalog revision it describes. O(records × targets), once.
+        // The Delete count is the GUARDED removal's own count
+        // (TargetRemovalScope, codex #1393), not the raw-prefix `files`
+        // figure the Volumes table shows.
         scanTargetFacts = ScanTargetRecordFacts.project(
             model.records,
             targets: targets.map { ($0.id, $0.searchPath) }
@@ -320,21 +323,11 @@ extension CatalogView {
         panel.message = "Select a volume or folder to scan"
         panel.prompt = "Select"
         if panel.runModal() == .OK, let url = panel.url {
-            Self.applyBrowsedPath(url.path, to: target)
+            // Model op (was the static `applyBrowsedPath` here): keeps
+            // the scratch-volume screen AND publishes the change so the
+            // per-target projections follow the new path (codex #1393).
+            model.repointScanTarget(target, to: url.path)
         }
-    }
-
-    /// Apply a user-browsed path to an existing target. Extracted from
-    /// browsePath so the decision is unit-testable (NSOpenPanel isn't).
-    /// This was the ninth ingestion vector (QA 2026-07-08): re-pointing
-    /// an existing target was the one remaining path that could smuggle
-    /// a scratch entry into `scanTargets` and persisted state — the row
-    /// would vanish from every screened list while still being scanned.
-    @discardableResult
-    static func applyBrowsedPath(_ path: String, to target: CatalogScanTarget) -> Bool {
-        guard !CatalogScanTarget.isScratchVolumePath(path) else { return false }
-        target.searchPath = path
-        return true
     }
 
     /// Strict-catalog policy predicate. A target counts as "scanned" if either:
@@ -738,11 +731,12 @@ extension CatalogView {
                     }
 
                     Section("Delete") {
-                        // One row per target that has records — an O(1)
-                        // lookup per target, not a catalog walk per
-                        // target per render (codex #1368). The count is
-                        // the same current-OR-origin prefix predicate
-                        // `deleteCatalogForTarget` removes by.
+                        // One row per target the guarded removal would
+                        // actually remove something for — an O(1) lookup
+                        // per target, not a catalog walk per target per
+                        // render (codex #1368). The count IS
+                        // `deleteCatalogForTarget`'s count: same
+                        // TargetRemovalScope (codex #1393).
                         ForEach(model.scanTargets.filter { target in
                             (scanTargetFacts[target.id]?.records ?? 0) > 0
                         }) { target in
@@ -845,19 +839,64 @@ extension CatalogView {
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
         )
-        // Per-volume aggregate cache refresh triggers. Keep these here on
-        // the pane that consumes the cache so a hidden Catalog tab still
-        // refreshes its cache on tab switch via `.onAppear`. Count-based
-        // triggers cover the dominant change paths (scan completion,
-        // record import, scan-target add/remove, purge). In-place
-        // mutation paths that change `fullPath` without changing the
-        // overall count (Bucket-D adoption) call
-        // `notifyVolumeAggregatesStale()` directly — see below.
+        // Per-volume aggregate cache refresh. Kept here on the pane that
+        // consumes the caches so a hidden Catalog tab still refreshes on
+        // tab switch via `.onAppear`. ONE trigger (codex #1393): the
+        // model's `catalogMutationRevision`, bumped from the funnels every
+        // mutation passes through (records.didSet, the two save calls,
+        // notifyVolumeAggregatesStale, scanTargets.didSet). The previous
+        // four triggers (records.count / scanTargets.count /
+        // lastPurgedBatch / volumeAggregatesRevision) are all subsumed
+        // and missed Tidy apply/undo, Confirm Repair/undo, same-count
+        // scan merges and Browse… re-points.
         .onAppear { recomputeVolumeAggregates() }
-        .onChange(of: model.records.count) { recomputeVolumeAggregates() }
-        .onChange(of: model.scanTargets.count) { recomputeVolumeAggregates() }
-        .onChange(of: model.lastPurgedBatch) { recomputeVolumeAggregates() }
-        .onChange(of: model.volumeAggregatesRevision) { recomputeVolumeAggregates() }
+        .onChange(of: model.catalogMutationRevision) { scheduleAggregateRecompute() }
+    }
+
+    /// Leading+trailing coalescer over `recomputeVolumeAggregates()`.
+    /// A lone user action (Tidy apply, Confirm Repair, Browse…) is
+    /// reflected on the same turn; a per-record loop that saves per item
+    /// (dossier writeback, transcripts, a scan's batch commits) costs at
+    /// most one extra pass per window instead of one per item.
+    ///
+    /// The pass is O(records) on the main actor and not cheap at scale —
+    /// measured 2026-09-12 (Release, 100k × 20): storage totals 0.36 s,
+    /// facts 0.13 s, hash plan 0.03 s, plus the per-volume buckets. So
+    /// the window is self-sizing: at least one second, and at least four
+    /// times the pass it just paid for, which caps a burst's main-thread
+    /// duty at ~25 % on any catalog size.
+    func scheduleAggregateRecompute() {
+        if aggregateRecomputeWindow != nil {
+            aggregateRecomputeDirty = true
+            return
+        }
+        let cost = timedAggregateRecompute()
+        openAggregateRecomputeWindow(seconds: Self.aggregateRecomputeWindow(forPassCost: cost))
+    }
+
+    /// Window length for a pass that took `cost` seconds. Pure, tested.
+    static func aggregateRecomputeWindow(forPassCost cost: TimeInterval) -> TimeInterval {
+        max(1.0, cost * 4)
+    }
+
+    private func timedAggregateRecompute() -> TimeInterval {
+        let start = Date()
+        recomputeVolumeAggregates()
+        return Date().timeIntervalSince(start)
+    }
+
+    private func openAggregateRecomputeWindow(seconds: TimeInterval) {
+        aggregateRecomputeWindow = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            if Task.isCancelled { return }
+            aggregateRecomputeWindow = nil
+            guard aggregateRecomputeDirty else { return }
+            aggregateRecomputeDirty = false
+            let cost = timedAggregateRecompute()
+            // Still mid-burst: keep the cadence at one pass per window
+            // rather than letting the next bump fire a leading pass.
+            openAggregateRecomputeWindow(seconds: Self.aggregateRecomputeWindow(forPassCost: cost))
+        }
     }
 
     /// Auto-size the volume pane to fit the toolbar + visible volume rows.

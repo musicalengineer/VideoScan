@@ -190,11 +190,14 @@ struct ScratchVolumeScreeningTests {
     /// The ninth ingestion vector: Browse… on an existing target row
     /// assigns searchPath directly, bypassing every add-time screen.
     @Test func browsedPathRefusesScratchVolume() {
+        // Model op since codex #1393 (was CatalogView.applyBrowsedPath).
+        let model = VideoScanModel()
         let target = CatalogScanTarget(searchPath: "/Volumes/Old")
-        #expect(!CatalogView.applyBrowsedPath("/Volumes/VideoScan_Temp", to: target))
+        model.scanTargets = [target]
+        #expect(!model.repointScanTarget(target, to: "/Volumes/VideoScan_Temp"))
         #expect(target.searchPath == "/Volumes/Old")
 
-        #expect(CatalogView.applyBrowsedPath("/Volumes/NewDrive", to: target))
+        #expect(model.repointScanTarget(target, to: "/Volumes/NewDrive"))
         #expect(target.searchPath == "/Volumes/NewDrive")
     }
 

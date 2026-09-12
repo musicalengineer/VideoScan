@@ -303,6 +303,14 @@ struct CatalogView: View {
     /// recomputeVolumeAggregates(), read by the body as a dictionary
     /// lookup per target. `nil` = cache not built yet.
     @State var scanTargetFacts: [UUID: ScanTargetRecordFacts] = [:]
+    /// Leading+trailing coalescer for `recomputeVolumeAggregates()`
+    /// (codex #1393). The pass is driven by the model's single
+    /// `catalogMutationRevision`, which per-record loops bump once per
+    /// item; the first bump recomputes on the spot, the rest of a burst
+    /// folds into ONE trailing recompute per window. nil = no window open.
+    @State var aggregateRecomputeWindow: Task<Void, Never>? = nil
+    /// A revision arrived while the window was open — recompute at its end.
+    @State var aggregateRecomputeDirty = false
     @State private var showDashboard = false
     @State private var showInspector = true
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
