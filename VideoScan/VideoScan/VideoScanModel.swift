@@ -1015,6 +1015,13 @@ final class VideoScanModel: ObservableObject {
             // prior content is quarantined to a JSON sidecar for undo.
             cleanupSmearedDossiersOnUnreadableRecords()
             backfillDossierAcrossDuplicates()
+            // Rick 2026-09-12 (NV12): the backfill above carries OCR /
+            // transcript / captions between copies but never the DATE
+            // they imply, and nothing re-derived it — so one copy of the
+            // same bytes showed 1991 and the other 2026. Catch up every
+            // record that has evidence but no conclusion, then share
+            // dates across each content group. Bounded, one log line.
+            catchUpInferredDates(trigger: "load")
             if migrated > 0 {
                 log("Migrated \(migrated) records to lifecycleStage.")
                 catalogStore.scheduleSave(records: records)

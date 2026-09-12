@@ -66,7 +66,10 @@ Each record (see `Models.swift::VideoRecord`) holds:
   — re-derivable from the file on disk
 - **Dossier channels (expensive!):** `sceneCaptions`, `audioTranscript`,
   `ocrDateCandidates`, `ocrText`, `inferredRecordDate`,
-  `inferredDateConfidence`, `dossierProcessedAt`, `dossierProcessedBy`
+  `inferredDateConfidence`, `inferredDateSource` (provenance of a date the
+  record did not derive in its own pass — "catch-up", "propagated from
+  <id>", "folder-year"; see docs/date_inference_catchup_and_propagation.md),
+  `dossierProcessedAt`, `dossierProcessedBy`
 - **User-edit:** `detectedPeople`, `confirmedByUserPeople`,
   `mediaDisposition`, `lifecycleStage`, `starRating`, `notes`, etc.
 

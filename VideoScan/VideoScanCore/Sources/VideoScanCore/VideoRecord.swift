@@ -256,6 +256,24 @@ public class VideoRecord: Identifiable, Decodable {
     /// year only ~0.5; file mtime alone ~0.3. UI surfaces low-
     /// confidence dates with a "?" affordance.
     public var inferredDateConfidence: Float?
+    /// WHERE `inferredRecordDate` came from when it was NOT this
+    /// record's own dossier pass (Rick 2026-09-12, the NV12 case: two
+    /// byte-identical copies, one dated, one not). nil = the record's
+    /// own `applyDossier` triangulation (the legacy meaning, unchanged).
+    /// Otherwise one of:
+    ///   "catch-up"                 — re-derived later from the OCR /
+    ///                                transcript / caption evidence
+    ///                                already stored on this record
+    ///   "propagated from <uuid>"   — copied from a same-content sibling
+    ///                                (duplicate group / content hash /
+    ///                                partialMD5+size) that had one
+    ///   "folder-year"              — a bare-year directory component
+    ///                                ("/1991/"), confidence 0.30, a
+    ///                                PLACEHOLDER any real evidence may
+    ///                                replace
+    /// Additive optional: legacy catalogs decode as nil and round-trip
+    /// byte-identical (encodeIfPresent).
+    public var inferredDateSource: String?
     /// Wall-clock time the dossier pass ran. Lets the UI offer
     /// "re-run with newer model" actions and lets the catalog-wide
     /// orchestrator skip already-processed records idempotently.
@@ -663,6 +681,7 @@ public class VideoRecord: Identifiable, Decodable {
         ocrText                     = try c.decodeIfPresent([SceneCaption].self, forKey: .ocrText) ?? []
         inferredRecordDate          = try c.decodeIfPresent(Date.self, forKey: .inferredRecordDate)
         inferredDateConfidence      = try c.decodeIfPresent(Float.self, forKey: .inferredDateConfidence)
+        inferredDateSource          = try c.decodeIfPresent(String.self, forKey: .inferredDateSource)
         dossierProcessedAt          = try c.decodeIfPresent(Date.self, forKey: .dossierProcessedAt)
         dossierProcessedBy          = try c.decodeIfPresent(String.self, forKey: .dossierProcessedBy)
         // Audio transcript fields — additive optional, same migration pattern

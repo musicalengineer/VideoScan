@@ -54,7 +54,7 @@ extension VideoRecord {
         case confirmedByUserPeople, rejectedPeople
         case sceneCaptions, sceneCaptionModel, sceneCaptionDate
         case ocrDateCandidates, ocrText
-        case inferredRecordDate, inferredDateConfidence
+        case inferredRecordDate, inferredDateConfidence, inferredDateSource
         case dossierProcessedAt, dossierProcessedBy
         case audioTranscript, audioTranscriptModel, audioTranscriptDate
         case sourceHost

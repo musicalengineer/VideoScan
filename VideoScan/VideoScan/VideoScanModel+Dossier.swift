@@ -91,6 +91,9 @@ extension VideoScanModel {
         )
         record.inferredRecordDate     = inferred.date
         record.inferredDateConfidence = inferred.confidence
+        // This IS the record's own pass — whatever it inherited before
+        // (a propagated / folder-year placeholder) is superseded.
+        record.inferredDateSource     = nil
 
         // Provenance — stack id matches the Python POC shape:
         //   "qwen2.5-vl-3b-4bit+whisper-medium-mlx-q4"
@@ -109,6 +112,12 @@ extension VideoScanModel {
         // can't see this. Keep the cached chrome counts honest.
         noteCatalogChangedForDossierCounts()
         saveCatalogDebounced()
+
+        // Same bytes, same date (Rick 2026-09-12): every other active copy
+        // of this content that has no date of its own gets this one, with
+        // provenance. Never overwrites a user date or an existing
+        // inference — see VideoScanModel+DateInference.
+        propagateInferredDate(from: record)
 
         // Narrative log — one line per file. Same shape as applyCaptions
         // and applyAudioTranscript.

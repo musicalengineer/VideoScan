@@ -800,6 +800,7 @@ extension VideoScanModel {
         copy.userPlaceConfidence = source.userPlaceConfidence
         copy.inferredRecordDate = source.inferredRecordDate
         copy.inferredDateConfidence = source.inferredDateConfidence
+        copy.inferredDateSource = source.inferredDateSource
         copy.userNotes = source.userNotes
         copy.tags = source.tags
         copy.sceneCaptions = source.sceneCaptions

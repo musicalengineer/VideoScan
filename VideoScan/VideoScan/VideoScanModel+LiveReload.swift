@@ -157,6 +157,10 @@ extension VideoScanModel {
         var changed = 0
         var added = 0
         var newRecords: [VideoRecord] = []
+        // Records whose dossier fields just arrived from disk — the
+        // external merger writes ONE copy's row; its siblings get the
+        // date below (2026-09-12).
+        var merged: [VideoRecord] = []
 
         for fresh in snapshot {
             guard let mem = byID[fresh.id] ?? byPath[fresh.fullPath] else {
@@ -198,6 +202,7 @@ extension VideoScanModel {
             // Inferred date
             mem.inferredRecordDate     = fresh.inferredRecordDate
             mem.inferredDateConfidence = fresh.inferredDateConfidence
+            mem.inferredDateSource     = fresh.inferredDateSource
 
             // Provenance
             mem.dossierProcessedAt = fresh.dossierProcessedAt
@@ -210,6 +215,7 @@ extension VideoScanModel {
             searchIndex.update(mem)
 
             changed += 1
+            merged.append(mem)
         }
         if !newRecords.isEmpty {
             records.append(contentsOf: newRecords)
@@ -224,6 +230,13 @@ extension VideoScanModel {
             // (Appends are covered by didSet, but the call is debounced so
             // an extra nudge here is free.)
             noteCatalogChangedForDossierCounts()
+        }
+        // The periodic sweep is the point where an external dossier
+        // result lands on ONE copy of a file. Carry its date to the other
+        // copies now (and re-derive any copy that got evidence without a
+        // conclusion), so the same bytes never show two answers.
+        if !merged.isEmpty || !newRecords.isEmpty {
+            catchUpInferredDates(scope: merged + newRecords, trigger: "live reload")
         }
         return changed + added
     }
