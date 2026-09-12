@@ -327,6 +327,198 @@ struct HallieWebTests {
         #expect(!HallieWebBridge.isResolvedDescendant(familyRoot, of: familyRoot))
     }
 
+    // MARK: Every token is pinned to the real file it was minted for (codex #1369, 2026-09-12)
+
+    /// Fixture bridge: no passphrase, fixture dependencies, and the family
+    /// archive at `familyRoot` (a temp directory — the shared center is
+    /// never read).
+    @MainActor
+    private func archiveBridge(familyRoot: URL, thumbs: URL) -> HallieWebBridge {
+        let configuration = FamilyAssetConfiguration(
+            roots: .init(assets: familyRoot, thumbnailCache: thumbs),
+            access: .readOnly, legacyGEDCOMDirectory: nil)
+        let deps = HallieAppTurnCoordinator.Dependencies(
+            startLocalBrain: { $0 },
+            translateAST: { _, _, _ in .init(ast: .presence(.init(people: ["Donna"])), responderHost: "fixture") },
+            loadProfiles: { [] }, loadGraph: { nil }, loadCyberBrain: { nil },
+            recordTestimony: { _ in },
+            loadSpeakers: { .init(ownerName: "Rick", archivistName: "Hallie Mae") },
+            executeRequest: { _, _ in
+                HallieTurnExecutor.Result(
+                    route: .presence, outcome: .declined, prose: "fixture",
+                    basisLine: "Basis: fixture", queryDescription: nil, citations: [], catalogPersonName: nil)
+            },
+            continueTurn: { pending, id, context in
+                try await HallieTurnExecutor.continue(pending: pending, selecting: id, context: context)
+            },
+            resolveBiographyPhoto: { _ in nil })
+        return HallieWebBridge(
+            records: { [] }, record: { _ in nil },
+            configuration: {
+                .init(passphrase: "", archivistName: "Hallie Mae", archivistPersonName: nil,
+                      hosts: ["fixture.invalid"], modelName: "fixture-model", composeWithModel: false)
+            },
+            dependencies: deps,
+            familyConfiguration: { configuration })
+    }
+
+    private static let onePixelPNG = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!
+
+    /// A People-tab reference photo lives in App Support, OUTSIDE the
+    /// family archive, so the archive-root containment check does not
+    /// apply to it. Its token must still be bound to the real file it was
+    /// minted for: when an ancestor folder is later swapped for a link
+    /// pointing elsewhere, the same path names a different file and the
+    /// token is refused — and serves again once the real folder is back.
+    @Test @MainActor
+    func attachmentOutsideTheArchiveIsRefusedWhenAnAncestorIsSwappedAfterIssuance() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_HallieWebOutsideAncestorLink-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let familyRoot = base.appendingPathComponent("archive/40_Family_Tree", isDirectory: true)
+        try FileManager.default.createDirectory(at: familyRoot.appendingPathComponent("People"), withIntermediateDirectories: true)
+        // The reference photo, outside the archive.
+        let people = base.appendingPathComponent("support/people", isDirectory: true)
+        let cover = people.appendingPathComponent("donna/cover.png")
+        try FileManager.default.createDirectory(at: cover.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Self.onePixelPNG.write(to: cover)
+        // Elsewhere, a same-shaped tree with a perfectly valid image.
+        let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
+        let decoy = elsewhere.appendingPathComponent("donna/cover.png")
+        try FileManager.default.createDirectory(at: decoy.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Self.onePixelPNG.write(to: decoy)
+
+        let b = archiveBridge(familyRoot: familyRoot, thumbs: base.appendingPathComponent("thumbs", isDirectory: true))
+        let token = b.attachmentToken(for: cover)
+        #expect(b.attachmentTokens[token]?.familyRoot == nil)
+        #expect(await b.attachmentImage(token: token).status == 200)
+
+        // Swap the ANCESTOR: `support/people` becomes a link to `elsewhere`.
+        // The leaf is a regular, valid PNG — a leaf-only check passes it.
+        try FileManager.default.removeItem(at: people)
+        try FileManager.default.createSymbolicLink(at: people, withDestinationURL: elsewhere)
+        #expect(FileManager.default.fileExists(atPath: cover.path))
+        #expect(await b.attachmentImage(token: token).status == 404)
+        // De-duplicated by URL, the token stays refused rather than re-minted.
+        #expect(b.attachmentToken(for: cover) == token)
+        #expect(await b.attachmentImage(token: token).status == 404)
+
+        // The real folder restored: the path names the file it was minted
+        // for again, and the token serves.
+        try FileManager.default.removeItem(at: people)
+        try FileManager.default.createDirectory(at: cover.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Self.onePixelPNG.write(to: cover)
+        #expect(await b.attachmentImage(token: token).status == 200)
+    }
+
+    /// Three hundred documents attached in one launch: the map stays
+    /// bounded at `maxAttachmentTokens`, and only the OLDEST tokens are
+    /// evicted, one per mint past the cap — the links a page still shows
+    /// (the newest 256, five full gallery answers) keep serving. A
+    /// wholesale clear at the cap invalidated all of them at once.
+    @Test @MainActor
+    func threeHundredTokensEvictOnlyTheOldestAndKeepTheNewestServing() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_HallieWebTokenCap-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let familyRoot = base.appendingPathComponent("archive/40_Family_Tree", isDirectory: true)
+        let folder = familyRoot.appendingPathComponent("People/Mary_OConnor", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        func pdf(_ i: Int) -> URL { folder.appendingPathComponent(String(format: "letter-%03d.pdf", i)) }
+        for i in 0..<300 { try Data("%PDF-1.4\n%%EOF\n".utf8).write(to: pdf(i)) }
+
+        let cap = HallieWebBridge.maxAttachmentTokens
+        #expect(cap == 256)
+        let b = archiveBridge(familyRoot: familyRoot, thumbs: base.appendingPathComponent("thumbs", isDirectory: true))
+        var tokens: [String] = []
+        for i in 0..<300 { tokens.append(b.attachmentToken(for: pdf(i))) }
+        #expect(Set(tokens).count == 300)
+        #expect(b.attachmentTokens.count == cap)
+        // The 44 oldest are gone; the 45th (index 44) and everything newer serve.
+        let evicted = 300 - cap
+        #expect(b.attachmentTokens[tokens[evicted - 1]] == nil)
+        #expect(b.attachmentTokens[tokens[evicted]] != nil)
+        #expect(await b.attachmentImage(token: tokens[0]).status == 404)
+        #expect(await b.attachmentImage(token: tokens[evicted]).status == 200)
+        #expect(await b.attachmentImage(token: tokens[299]).status == 200)
+        // Re-attaching an evicted file mints a fresh token and evicts
+        // exactly one more — the oldest survivor — never the newest.
+        let again = b.attachmentToken(for: pdf(0))
+        #expect(again != tokens[0])
+        #expect(b.attachmentTokens.count == cap)
+        #expect(b.attachmentTokens[tokens[evicted]] == nil)
+        #expect(b.attachmentTokens[tokens[evicted + 1]] != nil)
+        #expect(await b.attachmentImage(token: again).status == 200)
+        #expect(await b.attachmentImage(token: tokens[299]).status == 200)
+        // A live token is reused, not re-minted, so it never moves in the order.
+        #expect(b.attachmentToken(for: pdf(299)) == tokens[299])
+        #expect(b.attachmentTokens.count == cap)
+    }
+
+    // MARK: Validation → read window (codex #1374, 2026-09-12)
+
+    /// The serve-time check passes, and THEN an ancestor is swapped before
+    /// the bytes are read. The reader opens the real path the token was
+    /// minted for and re-resolves it after the read, so the decoy's bytes
+    /// are never served: 404, and the body is not the decoy. Without the
+    /// hook the original bytes come back; once the real folder is
+    /// restored they do again.
+    @Test @MainActor
+    func anAncestorSwappedBetweenValidationAndReadNeverChangesTheBytesServed() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_HallieWebReadWindow-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let familyRoot = base.appendingPathComponent("archive/40_Family_Tree", isDirectory: true)
+        try FileManager.default.createDirectory(at: familyRoot.appendingPathComponent("People"), withIntermediateDirectories: true)
+        let people = base.appendingPathComponent("support/people", isDirectory: true)
+        let letter = people.appendingPathComponent("donna/letter.pdf")
+        let original = Data("%PDF-1.4\n% ORIGINAL\n%%EOF\n".utf8)
+        try FileManager.default.createDirectory(at: letter.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try original.write(to: letter)
+        let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
+        let decoyBytes = Data("%PDF-1.4\n% DECOY\n%%EOF\n".utf8)
+        let decoy = elsewhere.appendingPathComponent("donna/letter.pdf")
+        try FileManager.default.createDirectory(at: decoy.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try decoyBytes.write(to: decoy)
+
+        let b = archiveBridge(familyRoot: familyRoot, thumbs: base.appendingPathComponent("thumbs", isDirectory: true))
+        let token = b.attachmentToken(for: letter)
+        func body(_ r: HallieHTTPResponse) -> Data? {
+            if case .data(let d) = r.body { return d } else { return nil }
+        }
+        let before = await b.attachmentImage(token: token)
+        #expect(before.status == 200)
+        #expect(body(before) == original)
+
+        // The swap lands AFTER validation, BEFORE the read.
+        b.attachmentReadHook = {
+            try? FileManager.default.removeItem(at: people)
+            try? FileManager.default.createSymbolicLink(at: people, withDestinationURL: elsewhere)
+        }
+        let during = await b.attachmentImage(token: token)
+        #expect(during.status == 404)
+        #expect(body(during) != decoyBytes)
+        #expect(FileManager.default.fileExists(atPath: letter.path)) // the swap did happen
+        b.attachmentReadHook = nil
+        // Still swapped: the pre-read check refuses it outright.
+        #expect(await b.attachmentImage(token: token).status == 404)
+
+        // Real folder restored: the original bytes serve again.
+        try FileManager.default.removeItem(at: people)
+        try FileManager.default.createDirectory(at: letter.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try original.write(to: letter)
+        let after = await b.attachmentImage(token: token)
+        #expect(after.status == 200)
+        #expect(body(after) == original)
+
+        // Pure rule: bytes read through a path whose resolution has moved are dropped.
+        #expect(HallieWebBridge.bytesPinned(to: letter.path) { _ in original } == original)
+        try FileManager.default.removeItem(at: people)
+        try FileManager.default.createSymbolicLink(at: people, withDestinationURL: elsewhere)
+        #expect(HallieWebBridge.bytesPinned(to: letter.path) { _ in decoyBytes } == nil)
+    }
+
 }
 
 /// Browse: the Archive Timeline as JSON, same delivery facts as citations.

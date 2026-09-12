@@ -17,11 +17,29 @@ final class HallieWebBridge {
     /// Opaque token → image file the app attached to an answer this launch.
     struct AttachmentCapability: Sendable {
         let url: URL
+        /// The REAL file the token was minted for: `url` with every symlink
+        /// on its path resolved at issue time. At serve time the path must
+        /// still resolve to this same file, so an ancestor folder swapped
+        /// for a link after issuance — inside the archive or outside it
+        /// (a People-tab reference photo in App Support) — is refused, not
+        /// followed (codex #1369, 2026-09-12). The archive-root check
+        /// below only ever covered files under the family root.
+        let resolvedPath: String
         /// Non-nil when the file came from the authorized family source.
         /// The source must still be current and available when bytes are read.
         let familyRoot: URL?
     }
     var attachmentTokens: [String: AttachmentCapability] = [:]
+    /// Issue order of `attachmentTokens`, oldest first — the FIFO the cap
+    /// evicts from. Same keys as the map, always.
+    private var attachmentTokenOrder: [String] = []
+    /// Tokens the map holds at most; see `attachmentToken(for:)`.
+    static let maxAttachmentTokens = 256
+    /// Test seam (codex #1374): runs on the main actor AFTER a token has
+    /// passed serve-time validation and BEFORE its bytes are read, so a
+    /// test can swap an ancestor folder in exactly that window. Nil in
+    /// production; never observable by a client.
+    var attachmentReadHook: (() -> Void)?
 
     struct Session {
         var memory = HallieTurnExecutor.ConversationMemory()
@@ -711,24 +729,38 @@ extension HallieWebBridge {
     /// per in-flight request; the file is read only after its size passes.
     static let maxDocumentBytes = 48 << 20
 
+    /// One token per file per launch, bounded FIFO (codex #1369,
+    /// 2026-09-12): past `maxAttachmentTokens` the OLDEST token is evicted,
+    /// one per mint, so the newest 256 — more than five full gallery
+    /// answers of 48 attachments — keep serving. The previous wholesale
+    /// `removeAll` at the cap invalidated every link a page still showed.
+    /// A live token is reused in place and never moves in the order.
     func attachmentToken(for url: URL) -> String {
         if let existing = attachmentTokens.first(where: {
             $0.value.url == url
         })?.key { return existing }
-        if attachmentTokens.count >= 256 {
-            attachmentTokens.removeAll(keepingCapacity: true)
-        }
         let token = UUID().uuidString.lowercased()
         let configuration = familyConfiguration()
         let familyRoot = Self.isResolvedDescendant(url, of: configuration.roots.assets)
             ? configuration.roots.assets : nil
         attachmentTokens[token] = AttachmentCapability(
-            url: url, familyRoot: familyRoot)
+            url: url, resolvedPath: Self.resolvedPath(url), familyRoot: familyRoot)
+        attachmentTokenOrder.append(token)
+        while attachmentTokenOrder.count > Self.maxAttachmentTokens {
+            attachmentTokens.removeValue(forKey: attachmentTokenOrder.removeFirst())
+        }
         return token
     }
 
     func attachmentImage(token: String) async -> HallieHTTPResponse {
         guard let capability = attachmentTokens[token] else {
+            return .text(404, "no image")
+        }
+        // Every token, archive or not: the path must still name the real
+        // file it was minted for (codex #1369). A leaf check alone passes
+        // a regular file reached through a swapped ancestor.
+        guard Self.resolvedPath(capability.url) == capability.resolvedPath,
+              !Self.isSymbolicLinkLeaf(capability.url) else {
             return .text(404, "no image")
         }
         if let originalRoot = capability.familyRoot {
@@ -744,12 +776,20 @@ extension HallieWebBridge {
                 return .text(404, "no image")
             }
         }
-        let url = capability.url
+        // The readers open the REAL path the token was minted for, never
+        // the unresolved URL (codex #1374, 2026-09-12), and `bytesPinned`
+        // re-resolves it after the read: an ancestor swapped between the
+        // check above and the read redirects the read, and the bytes are
+        // dropped rather than served. (A full descriptor-anchored read is
+        // a separate follow-up.)
+        let resolvedPath = capability.resolvedPath
+        let url = URL(fileURLWithPath: resolvedPath, isDirectory: false)
+        attachmentReadHook?()
         // A document token (2026-09-10): the file bytes, typed by
         // extension, bounded. Images keep the validated JPEG thumbnail.
         if let contentType = Self.documentContentType(forExtension: url.pathExtension) {
             let data = await Task.detached(priority: .utility) {
-                Self.documentData(url)
+                Self.bytesPinned(to: resolvedPath, read: Self.documentData)
             }.value
             guard let data else { return .text(404, "no document") }
             return HallieHTTPResponse(
@@ -760,7 +800,7 @@ extension HallieWebBridge {
                 body: .data(data))
         }
         let data = await Task.detached(priority: .utility) {
-            FamilyAssetImageValidator.thumbnailJPEGData(url)
+            Self.bytesPinned(to: resolvedPath) { FamilyAssetImageValidator.thumbnailJPEGData($0) }
         }.value
         guard let data else { return .text(404, "no image") }
         return HallieHTTPResponse(
@@ -784,6 +824,36 @@ extension HallieWebBridge {
               data.count <= maxDocumentBytes
         else { return nil }
         return data
+    }
+
+    /// True when the last component of `url` is itself a symlink. The
+    /// readers open the RESOLVED path (codex #1374), which would silently
+    /// admit a link the app was handed as an attachment; the pin that a
+    /// leaf link is never served (2026-08-22) is kept by checking the
+    /// attached path's leaf here. An ancestor link that stays inside the
+    /// family root is still allowed, as before.
+    nonisolated static func isSymbolicLinkLeaf(_ url: URL) -> Bool {
+        let fresh = URL(fileURLWithPath: url.path, isDirectory: false)
+        return (try? fresh.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
+    }
+
+    /// Read the file at `resolvedPath` with `read`, then require the path
+    /// to still resolve to itself. An ancestor swapped for a link between
+    /// the serve-time check and the read makes the same path name another
+    /// file; the resolution moves, and whatever `read` returned is
+    /// dropped. Brackets the read on both sides; not a descriptor-anchored
+    /// read (follow-up).
+    nonisolated static func bytesPinned(to resolvedPath: String, read: (URL) -> Data?) -> Data? {
+        let url = URL(fileURLWithPath: resolvedPath, isDirectory: false)
+        guard let data = read(url), Self.resolvedPath(url) == resolvedPath else { return nil }
+        return data
+    }
+
+    /// `url` with every symlink on its path followed, as a path string —
+    /// the identity a token is pinned to. Both `/var` and `/private/var`
+    /// spellings of one file resolve the same.
+    nonisolated static func resolvedPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     /// True when `candidate`, with every symlink on its path resolved,

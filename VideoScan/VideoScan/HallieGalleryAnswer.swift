@@ -14,10 +14,11 @@ enum HallieGalleryAnswer {
     /// points at the folder — 24 grid cells is the Mac view's bound too.
     static let photoCap = 24
     /// Documents shown in one chat answer, the same bound. Together the
-    /// caps mean one answer mints at most 48 attachment tokens: the web
-    /// bridge's per-launch token map holds 256 and is cleared wholesale
-    /// when full (`HallieWebBridge.attachmentToken`), so an uncapped
-    /// 257-document answer would invalidate its own first 256 links
+    /// caps mean one answer mints at most 48 attachment tokens against
+    /// the web bridge's per-launch map of `HallieWebBridge.maxAttachmentTokens`
+    /// (256), which evicts only its OLDEST token past the cap (bounded
+    /// FIFO, codex #1369) — so five whole gallery answers stay live on a
+    /// page, and an uncapped answer could not invalidate its own links
     /// (codex #1298, 2026-09-11).
     static let documentCap = 24
 
