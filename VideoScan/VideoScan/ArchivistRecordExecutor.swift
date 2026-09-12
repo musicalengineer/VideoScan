@@ -44,6 +44,10 @@ struct ArchivistRecordDossierSnapshot: Sendable, Equatable {
     /// precision (ArchivistTemporalSelectionDateSnapshot.capture); nil when
     /// the record has no date signal at all.
     let resolvedDate: ArchivistTemporalSelectionDateSnapshot?
+    /// Rick's hand-entered place (2026-09-12), canonical; nil when none.
+    let userPlace: String?
+    /// Derived known / estimated / unplaced (VideoRecord.userPlaceStatus).
+    let userPlaceStatus: UserPlaceStatus
 
     var id: UUID { presence.id }
     var fullPath: String { presence.fullPath }
@@ -65,7 +69,9 @@ struct ArchivistRecordDossierSnapshot: Sendable, Equatable {
         archiveStage: ArchiveStage = .none,
         userDate: String? = nil,
         embeddedCreationDate: Date? = nil,
-        resolvedDate: ArchivistTemporalSelectionDateSnapshot? = nil
+        resolvedDate: ArchivistTemporalSelectionDateSnapshot? = nil,
+        userPlace: String? = nil,
+        userPlaceStatus: UserPlaceStatus = .unplaced
     ) {
         self.presence = presence
         self.detectedPeople = detectedPeople
@@ -81,6 +87,8 @@ struct ArchivistRecordDossierSnapshot: Sendable, Equatable {
         self.userDate = userDate
         self.embeddedCreationDate = embeddedCreationDate
         self.resolvedDate = resolvedDate
+        self.userPlace = userPlace
+        self.userPlaceStatus = userPlace == nil ? .unplaced : userPlaceStatus
     }
 
     /// One record, read on the main actor. O(1): no catalog scan.
@@ -100,7 +108,9 @@ struct ArchivistRecordDossierSnapshot: Sendable, Equatable {
             archiveStage: record.archiveStage,
             userDate: record.userDate,
             embeddedCreationDate: record.embeddedCreationDate,
-            resolvedDate: ArchivistTemporalSelectionDateSnapshot.capture(record: record))
+            resolvedDate: ArchivistTemporalSelectionDateSnapshot.capture(record: record),
+            userPlace: record.userPlace,
+            userPlaceStatus: record.userPlaceStatus)
     }
 }
 
@@ -149,6 +159,15 @@ enum ArchivistRecordExecutor {
             let date = ArchivistSelectionDateQuestion.answer(.when, selection: snapshot.resolvedDate)
             sentences.append(date.prose)
             basis.append(String(date.basisLine.dropFirst("Basis: ".count)))
+        }
+        // "where was this taken" (2026-09-12): Rick's hand-entered place
+        // and its confidence, or — when asked outright — an honest "no
+        // place recorded". The dossier (`about`) states a place only when
+        // there is one; it does not list every field that is empty.
+        if query.operations.contains(.place) || (wantsAbout && snapshot.userPlace != nil) {
+            let place = placeSentence(snapshot)
+            sentences.append(place.prose)
+            basis.append(place.basis)
         }
         if wantsAbout || query.operations.contains(.people) {
             let asked = (query.people ?? []).filter {
@@ -358,6 +377,26 @@ enum ArchivistRecordExecutor {
         return parts.joined(separator: ", ")
     }
 
+    // MARK: - Place
+
+    /// The hand-entered place, cited with Rick's own confidence. Nothing
+    /// is inferred: no place means "no place recorded", with the way to
+    /// add one.
+    static func placeSentence(_ snapshot: ArchivistRecordDossierSnapshot) -> (prose: String, basis: String) {
+        guard let place = snapshot.userPlace else {
+            return ("No place is recorded for \(snapshot.filename) yet — you can add one in the inspector (Where Was This?).",
+                    "no place recorded")
+        }
+        switch snapshot.userPlaceStatus {
+        case .known:
+            return ("\(snapshot.filename) was taken at \(place) — you marked that as certain.",
+                    "place \(place) (known)")
+        case .estimated, .unplaced:
+            return ("\(snapshot.filename) was taken at \(place), as your best guess.",
+                    "place \(place) (estimated)")
+        }
+    }
+
     // MARK: - Metadata
 
     static func metadataSentence(_ snapshot: ArchivistRecordDossierSnapshot) -> String {
@@ -447,6 +486,12 @@ enum ArchivistRecordExecutor {
         if !query.operations.contains(.date), !query.operations.contains(.about) {
             offers.append(.ask(question: "when was \(path) filmed", label: "When was it filmed"))
         }
+        // Only when there IS a place to tell (2026-09-12): a chip that
+        // leads to "no place recorded" is noise, not an offer.
+        if snapshot.userPlace != nil,
+           !query.operations.contains(.place), !query.operations.contains(.about) {
+            offers.append(.ask(question: "where was \(path) taken", label: "Where was it taken"))
+        }
         return offers
     }
 
@@ -464,6 +509,9 @@ enum ArchivistRecordExecutor {
         }
         if query.operations.contains(.date) {
             parts.append(parts.isEmpty ? "when was \(path) filmed" : "when was it filmed")
+        }
+        if query.operations.contains(.place) {
+            parts.append(parts.isEmpty ? "where was \(path) taken" : "where was it taken")
         }
         return parts.joined(separator: " and ")
     }

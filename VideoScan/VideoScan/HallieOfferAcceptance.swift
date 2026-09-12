@@ -52,6 +52,8 @@ enum HallieOfferAcceptance {
             case .year:
                 relaxed.yearStart = nil
                 relaxed.yearEnd = nil
+            case .place:
+                relaxed.place = nil
             }
             self.question = question
             self.ast = .presence(relaxed)

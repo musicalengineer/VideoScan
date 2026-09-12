@@ -25,6 +25,10 @@ enum ArchivistEvidenceBasis: Sendable, Equatable {
     case keywordTokens(field: String, queryTerm: String,
                        matchedTokens: [String], alias: String?,
                        matchedValue: String, timestamp: Double?)
+    /// Hand-entered place facet (2026-09-12): the record's `userPlace`
+    /// matched the asked place EXACTLY (whole phrase or town). `status` is
+    /// "known" / "estimated" — Rick's own confidence, cited as such.
+    case userPlace(queryTerm: String, matchedValue: String, status: String)
 
     /// One human-readable summary shared by the chat window, the shell, and
     /// the conversation log so evidence wording cannot drift between clients.
@@ -64,6 +68,8 @@ enum ArchivistEvidenceBasis: Sendable, Equatable {
                     + "'\(query)'\(at) (\(value))"
             }
             return "\(field) \(noun) \(quoted) for '\(query)'\(at) (\(value))"
+        case .userPlace(let query, let value, let status):
+            return "place \(value) (\(status)) matches \(query) exactly"
         }
     }
 }
@@ -107,6 +113,9 @@ enum RelaxedFacet: String, Sendable, Equatable, CaseIterable {
     case years
     case keywords
     case mediaKind
+    /// The hand-entered place (2026-09-12) — tried last, so "Donna in
+    /// Westford" with nothing placed there still offers Donna's videos.
+    case place
 
     // How an answer NAMES what it set aside now lives with the wording, in
     // ArchivistPresenceAnswerComposer.relaxedOfferProse: the sentence needs
@@ -172,6 +181,10 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
     /// Pre-computed once per query: normalized phrase, significant tokens,
     /// and alias token lists for each keyword.
     let keywordQueries: [ArchivistKeywordQuery]
+    /// Canonical hand-entered place (2026-09-12), matched EXACTLY against
+    /// each record's `userPlace` (UserPlaceEntry.matches) — never against
+    /// transcripts, captions or file names.
+    let place: String?
     let hasInvalidYearRange: Bool
     /// Paging: how many proven matches to skip before collecting citations
     /// ("show more" re-runs the same query with the offset advanced). The
@@ -189,17 +202,19 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
             mediaKind: facet == .mediaKind ? nil : mediaKind,
             keywords: facet == .keywords ? [] : keywords,
             keywordQueries: facet == .keywords ? [] : keywordQueries,
+            place: facet == .place ? nil : place,
             citationOffset: 0)
     }
 
     private init(people: [Identity], years: ClosedRange<Int>?, mediaKind: String?,
                  keywords: [String], keywordQueries: [ArchivistKeywordQuery],
-                 citationOffset: Int) {
+                 place: String?, citationOffset: Int) {
         self.people = people
         self.years = years
         self.mediaKind = mediaKind
         self.keywords = keywords
         self.keywordQueries = keywordQueries
+        self.place = place
         self.citationOffset = citationOffset
         self.hasInvalidYearRange = false
     }
@@ -244,10 +259,12 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
             }
         }()
         keywordQueries = keywords.map(ArchivistKeywordQuery.init)
+        // Canonical or absent: an empty / punctuation-only place is no facet.
+        place = payload.place.flatMap(UserPlaceEntry.canonicalize)
     }
 
     var isEmpty: Bool {
-        people.isEmpty && years == nil && mediaKind == nil && keywords.isEmpty
+        people.isEmpty && years == nil && mediaKind == nil && keywords.isEmpty && place == nil
     }
 
     /// How many facets this query constrains on (the relax ladder only runs
@@ -255,6 +272,7 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
     var facetCount: Int {
         (people.isEmpty ? 0 : 1) + (years == nil ? 0 : 1)
             + (mediaKind == nil ? 0 : 1) + (keywords.isEmpty ? 0 : 1)
+            + (place == nil ? 0 : 1)
     }
 
     func has(_ facet: RelaxedFacet) -> Bool {
@@ -262,6 +280,7 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
         case .years:     return years != nil
         case .keywords:  return !keywords.isEmpty
         case .mediaKind: return mediaKind != nil
+        case .place:     return place != nil
         }
     }
 
@@ -273,6 +292,7 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
                          ? "year=\(years.lowerBound)"
                          : "years=\(years.lowerBound)...\(years.upperBound)")
         }
+        if let place { parts.append("place=\(place)") }
         if let mediaKind { parts.append("mediaKind=\(mediaKind)") }
         parts.append(contentsOf: keywords.map { "keyword=\($0)" })
         return parts.joined(separator: " ")
@@ -313,6 +333,10 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
     /// filename), captured with the record; nil when it has none. What "the
     /// newest one" sorts by (2026-09-02) — never a transcode stamp.
     let resolvedDate: Date?
+    /// Rick's hand-entered place (2026-09-12), canonical; nil = unplaced.
+    let userPlace: String?
+    /// "known" / "estimated" when placed; nil when unplaced.
+    let userPlaceStatus: String?
 
     init(
         id: UUID = UUID(),
@@ -334,7 +358,9 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
         transcriptModel: String? = nil,
         ocrDateCandidates: [SceneCaption] = [],
         ocrText: [SceneCaption] = [],
-        resolvedDate: Date? = nil
+        resolvedDate: Date? = nil,
+        userPlace: String? = nil,
+        userPlaceStatus: String? = nil
     ) {
         self.id = id
         self.fullPath = fullPath
@@ -356,6 +382,8 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
         self.ocrDateCandidates = ocrDateCandidates
         self.ocrText = ocrText
         self.resolvedDate = resolvedDate
+        self.userPlace = userPlace
+        self.userPlaceStatus = userPlace == nil ? nil : (userPlaceStatus ?? UserPlaceStatus.estimated.rawValue)
     }
 
     /// The date this record sorts by for "the newest / oldest one": the
@@ -402,7 +430,9 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
             transcriptModel: record.audioTranscriptModel,
             ocrDateCandidates: record.ocrDateCandidates,
             ocrText: record.ocrText,
-            resolvedDate: ArchivistTemporalSelectionDateSnapshot.resolvedCatalogDate(record: record)?.date)
+            resolvedDate: ArchivistTemporalSelectionDateSnapshot.resolvedCatalogDate(record: record)?.date,
+            userPlace: record.userPlace,
+            userPlaceStatus: record.userPlace == nil ? nil : record.userPlaceStatus.rawValue)
     }
 
     /// Bulk bridge yields between bounded batches so snapshot refresh cannot
@@ -594,6 +624,16 @@ enum ArchivistPresenceExecutor {
         if let years = query.years {
             guard let basis = yearBasis(years, in: record) else { return nil }
             bases.append(basis)
+        }
+        // Place (2026-09-12): EXACT against the hand-entered field only.
+        // A transcript / caption / filename that says the place is not
+        // evidence the video was shot there.
+        if let place = query.place {
+            guard let recorded = record.userPlace,
+                  UserPlaceEntry.matches(place, against: recorded) else { return nil }
+            bases.append(.userPlace(
+                queryTerm: place, matchedValue: recorded,
+                status: record.userPlaceStatus ?? UserPlaceStatus.estimated.rawValue))
         }
         if let mediaKind = query.mediaKind {
             guard mediaKindMatches(mediaKind, streamTypeRaw: record.streamTypeRaw)
@@ -934,12 +974,16 @@ enum ArchivistPresenceAnswerComposer {
         case says(String)
         case captioned(String)
         case field(name: String, term: String)
+        /// The hand-entered place facet (2026-09-12) — the weakest "how",
+        /// so a keyword hit on the same item still names the keyword.
+        case placed(String)
 
         var phrase: String {
             switch self {
             case .says(let term): return "where someone says “\(term)”"
             case .captioned(let term): return "captioned with “\(term)”"
             case .field(let name, let term): return "with “\(term)” in the \(name)"
+            case .placed(let place): return "placed at “\(place)”"
             }
         }
     }
@@ -948,8 +992,11 @@ enum ArchivistPresenceAnswerComposer {
         var says: String?
         var captioned: String?
         var field: (String, String)?
+        var placed: String?
         for basis in citation.bases {
             switch basis {
+            case .userPlace(let term, _, _):
+                placed = placed ?? term
             case .transcriptMention(let term, _, _):
                 says = says ?? term
             case .keywordTokens(let f, let term, _, _, _, _):
@@ -967,6 +1014,7 @@ enum ArchivistPresenceAnswerComposer {
         if let says { return .says(says) }
         if let captioned { return .captioned(captioned) }
         if let field { return .field(name: field.0, term: field.1) }
+        if let placed { return .placed(placed) }
         return nil
     }
 
@@ -1007,13 +1055,15 @@ enum ArchivistPresenceAnswerComposer {
         var years: String?
         var mediaKind: String?
         var keywords: [String] = []
+        /// The hand-entered place facet (2026-09-12); nil when none.
+        var place: String?
     }
 
     static func parseFacets(_ interpretedQuery: String) -> ParsedFacets {
         var facets = ParsedFacets()
         // "person=Richard Harding Breen Sr year=1995": a value runs until the
         // next key, so multi-word names survive.
-        let pattern = #"(person|year|years|mediaKind|keyword)=(.*?)(?=\s+(?:person|year|years|mediaKind|keyword)=|$)"#
+        let pattern = #"(person|year|years|mediaKind|keyword|place)=(.*?)(?=\s+(?:person|year|years|mediaKind|keyword|place)=|$)"#
         let regex = try? NSRegularExpression(pattern: pattern)
         let whole = NSRange(interpretedQuery.startIndex..., in: interpretedQuery)
         for match in regex?.matches(in: interpretedQuery, range: whole) ?? [] {
@@ -1028,6 +1078,7 @@ enum ArchivistPresenceAnswerComposer {
             case "years": facets.years = value.replacingOccurrences(of: "...", with: "–")
             case "mediaKind": facets.mediaKind = value
             case "keyword": facets.keywords.append(value)
+            case "place": facets.place = value
             default: break
             }
         }
@@ -1043,6 +1094,8 @@ enum ArchivistPresenceAnswerComposer {
     /// What the no-evidence sentence offers to set aside on a retry.
     enum RetryOffer: String, Sendable, Equatable {
         case words, year
+        /// "Want me to try without the place…" (2026-09-12).
+        case place
     }
 
     static func noEvidenceAnswer(for interpretedQuery: String) -> String {
@@ -1062,25 +1115,33 @@ enum ArchivistPresenceAnswerComposer {
         let years = parsed.years.map { "from \($0)" }
         let mediaKind = parsed.mediaKind
         let keywords = parsed.keywords
+        let place = parsed.place
         var phrase = people.isEmpty
             ? (mediaKind.map { "\($0)s" } ?? "videos")
             : (mediaKind.map { "\($0)s" } ?? "videos") + " of " + joinNames(people)
+        if let place { phrase += " at \(place)" }
         if let years { phrase += " " + years }
         if !keywords.isEmpty {
             phrase += " with “" + keywords.joined(separator: "”, “") + "”"
         }
-        guard !(people.isEmpty && years == nil && keywords.isEmpty && mediaKind == nil) else {
+        guard !(people.isEmpty && years == nil && keywords.isEmpty && mediaKind == nil && place == nil) else {
             return ("I need something to look for — a person, a year, a place, or a word. Try “show me Donna in the 90s”.", nil)
         }
         let offer: String
+        if people.isEmpty, place != nil, years == nil, keywords.isEmpty {
+            // Place only (2026-09-12): the field is exact and hand-entered,
+            // so the honest next step is to enter places, not to respell.
+            offer = "No video carries that place yet — I match the Place field exactly. Add places in the inspector (Where Was This?) and I'll find them."
+            return ("I looked for \(phrase) and found nothing in the catalog. " + offer, nil)
+        }
         if people.isEmpty {
             offer = "I search by the people tagged in each video, by year, and by words in file names and transcripts — try a name or a year, or a different word."
             return ("I looked for \(phrase) and found nothing in the catalog. " + offer, nil)
-        } else if years == nil && keywords.isEmpty {
+        } else if years == nil && keywords.isEmpty && place == nil {
             // Person only: the useful sentence IS the offer.
             return ("I don't have any videos tagged with \(joinNames(people)) yet. Try another spelling or a nickname — or tell me about \(joinNames(people)) and I'll remember it.", nil)
         }
-        let retry: RetryOffer = keywords.isEmpty ? .year : .words
+        let retry: RetryOffer = !keywords.isEmpty ? .words : (years != nil ? .year : .place)
         offer = "Want me to try without the \(retry.rawValue), or with a different name?"
         return ("I looked for \(phrase) and found nothing in the catalog. " + offer, retry)
     }
@@ -1121,11 +1182,14 @@ enum ArchivistPresenceAnswerComposer {
             miss = "I don't see anything from " + (facets.years ?? "those years")
         case .mediaKind:
             miss = "I don't see any " + pluralMediaKind(facets.mediaKind)
+        case .place:
+            miss = "I don't see anything placed at " + (facets.place ?? "there")
         }
         // What she DOES have, described by the facets she kept — never by
         // the one she dropped.
         var kept = ""
         if !facets.people.isEmpty { kept += " of " + joinNames(facets.people) }
+        if dropped != .place, let place = facets.place { kept += " at " + place }
         if dropped != .years, let years = facets.years { kept += " from " + years }
         if dropped != .keywords, !facets.keywords.isEmpty {
             kept += " with " + facets.keywords.map { "“\($0)”" }
