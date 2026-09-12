@@ -480,7 +480,7 @@ struct HallieShellCLITests {
                 ":quit",
             ],
             graph: graph,
-            translations: [biography, biography])
+            translations: [biography])
 
         let code = await HallieShellCLI.run(
             options: .init(), input: harness.nextInput,
@@ -488,8 +488,11 @@ struct HallieShellCLITests {
             dependencies: harness.dependencies())
 
         #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        // The opening biography of a tree name is answered locally by the
+        // person-fact lane (e7d71578); only the pronoun follow-up, rewritten
+        // to the remembered subject, still needs the translator (assertion
+        // updated 2026-09-12).
         #expect(harness.translatedQuestions == [
-            "tell me about thankful pratt",
             "tell me about Thankful Pratt again",
         ])
         #expect(harness.output.contains("I don’t have a photo of Thankful Pratt yet."))
@@ -2435,13 +2438,18 @@ struct HallieShellCLITests {
             profile("Matt", sex: .male), profile("Timmy", sex: .male),
             profile("Anna", sex: .female), profile("Libby", sex: .female),
         ]
-        // The two kinship fragments are detected locally (asserted below);
-        // only the biography sentence needs the translator.
+        // The two kinship fragments are detected locally (asserted below),
+        // and so is the biography of a known People-tab name since
+        // e7d71578 (person-fact lane; GH #180 1d5fa30b for the bare kin
+        // word) — only the two-parent sentence needs the translator
+        // (fixture updated 2026-09-12).
         #expect(HallieLineageQuestion.detect("eileen's children")
                 == .kinship(person: "Eileen", relation: .children, side: nil))
         #expect(HallieLineageQuestion.detect("tim's parents")
                 == .kinship(person: "Tim", relation: .parents, side: nil))
         #expect(HallieLineageQuestion.detect("tell me about ma") == nil)
+        #expect(HalliePersonFactQuestion.detect("tell me about ma", isKnownPerson: { _ in true })
+                == .init(people: ["ma"], operation: .biography))
         let harness = Harness(
             // Natural fragments through the real detector (codex #984) plus
             // the one sentence that needs a translation for the two-parent
@@ -2453,7 +2461,6 @@ struct HallieShellCLITests {
             profiles: profiles,
             graph: GedcomFamilyGraph(gedcomText: tree),
             translations: [
-                .graph(.init(people: ["Ma"], operation: .biography)),
                 .graph(.init(people: ["Rick"], operation: .kinship, relation: .parents)),
             ])
         // Feed valid claim-for-claim prose except for the two-parent plans:
@@ -2480,10 +2487,10 @@ struct HallieShellCLITests {
 
         #expect(code == HallieShellCLI.ExitCode.success.rawValue)
         let transcript = harness.output.joined(separator: "\n")
-        // The real detectors carried the two kinship fragments; the
-        // translator saw exactly the two sentences that need it (the
-        // biography, and the two-parent fallback check from codex #973).
-        #expect(harness.translatedQuestions == ["tell me about ma", "tell me about rick's parents"], Comment(rawValue: transcript))
+        // The real detectors carried the two kinship fragments and the
+        // biography; the translator saw exactly the one sentence that needs
+        // it (the two-parent fallback check from codex #973).
+        #expect(harness.translatedQuestions == ["tell me about rick's parents"], Comment(rawValue: transcript))
         let answers = harness.transcriptEvents.filter { $0.kind == .assistant }
         #expect(answers.count == 4, Comment(rawValue: transcript))
         let rule = "derived from Rick's rows: full siblings share parents"
@@ -2726,7 +2733,7 @@ struct HallieShellCLITests {
             inputs: ["eileen's children", "tell me about ma", ":quit"],
             profiles: profiles,
             graph: GedcomFamilyGraph(gedcomText: tree),
-            translations: [.graph(.init(people: ["Ma"], operation: .biography))])
+            translations: [])
         let options = try HallieShellCLI.parse(arguments: ["--hallie", "--diagnostics"])
 
         let code = await HallieShellCLI.run(
@@ -2736,7 +2743,11 @@ struct HallieShellCLITests {
 
         #expect(code == HallieShellCLI.ExitCode.success.rawValue)
         let transcript = harness.output.joined(separator: "\n")
-        #expect(harness.translatedQuestions == ["tell me about ma"], Comment(rawValue: transcript))
+        // "tell me about ma" is a known People-tab name, so the person-fact
+        // lane answers it locally (e7d71578; GH #180 1d5fa30b for the bare
+        // kin word) — nothing reaches the translator (assertion updated
+        // 2026-09-12).
+        #expect(harness.translatedQuestions == [], Comment(rawValue: transcript))
         let answers = harness.transcriptEvents.filter { $0.kind == .assistant }
         #expect(answers.count == 2, Comment(rawValue: transcript))
         let warning = "Relationship warning: Sibling rows on Ellen, Rick and Tim imply more than two parents (Dad, Ma, Other) — nothing derived until one is corrected."
