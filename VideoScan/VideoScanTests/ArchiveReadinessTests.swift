@@ -172,7 +172,7 @@ struct ArchiveReadinessManifestTests {
         try ArchiveManifestCSV.append(row("30_Video/Undated/a.mov", readiness: "playable;audio=verified;format=at-risk:DV;date=undated"),
                                       rootPath: sb.archiveRoot.path)
         let newRows = MasterArchiveTestSupport.manifestRows(sb)
-        #expect(newRows.count == 1 && newRows[0].count == 13)
+        #expect(newRows.count == 1 && newRows[0].count == ArchiveManifestCSV.columnCount)
         #expect(newRows[0][ArchiveManifestCSV.readinessColumn] == "playable;audio=verified;format=at-risk:DV;date=undated")
         #expect(throws: Never.self) { try ArchiveManifestCSV.validate(rootPath: sb.archiveRoot.path) }
 
@@ -186,7 +186,11 @@ struct ArchiveReadinessManifestTests {
         #expect(text.hasPrefix(MasterArchiveLayout.manifestHeaderLegacy + "\n"), "header NOT rewritten")
         let legacyRows = MasterArchiveTestSupport.manifestRows(sb)
         #expect(legacyRows.count == 2)
-        #expect(legacyRows.allSatisfy { $0.count == 12 }, "rows appended to a legacy manifest keep 12 columns")
+        // Rick's ruling 2026-09-12: the old row is untouched (12 columns); a
+        // row APPENDED to a legacy manifest carries the full v3 columns —
+        // trailing columns are additive and old readers ignore them.
+        #expect(legacyRows[0].count == ArchiveManifestCSV.columnCountLegacy, "the legacy row is untouched")
+        #expect(legacyRows[1].count == ArchiveManifestCSV.columnCount, "an appended row carries the v3 trailing columns")
         #expect(ArchiveManifestCSV.rowsBySource(rootPath: sb.archiveRoot.path).count == 2, "parsers read both shapes")
 
         // A header that is neither is still refused; a header with trailing junk on the same line too.
@@ -221,7 +225,7 @@ struct ArchiveReadinessPromoteTests {
         let job = try #require(await MasterArchiveTestSupport.promote(model, ids: [rec.id]))
         guard case .finished = job.state else { Issue.record("\(job.state)"); return }
         let rows = MasterArchiveTestSupport.manifestRows(sb)
-        #expect(rows.count == 1 && rows[0].count == 13)
+        #expect(rows.count == 1 && rows[0].count == ArchiveManifestCSV.columnCount)
         #expect(rows[0][ArchiveManifestCSV.readinessColumn] == "playable;audio=verified;format=at-risk:DV;date=known")
         let copy = try #require(model.masterArchiveCopy(of: rec))
         #expect(copy.notes.contains("readiness: audio verified, codec DV at-risk"), "\(copy.notes)")

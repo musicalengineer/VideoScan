@@ -677,6 +677,7 @@ final class TrimJob: @MainActor MediaFileOperationJob {
         newRec.userDateConfidence = record.userDateConfidence
         newRec.userPlace = record.userPlace
         newRec.userPlaceConfidence = record.userPlaceConfidence
+        newRec.backupAttestations = BackupAttestation.normalized(record.backupAttestations)
 
         let stamp = ISO8601DateFormatter().string(from: Date())
         let rangeText = "\(TrimTimecode.format(range.inSeconds))–\(TrimTimecode.format(range.outSeconds))"

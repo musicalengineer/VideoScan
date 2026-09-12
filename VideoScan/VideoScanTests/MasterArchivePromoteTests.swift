@@ -58,6 +58,14 @@ struct MasterArchivePromoteMediaMatrixTests {
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let rec = MasterArchiveTestSupport.makeRecord(path: src, userDate: "1992-07-15", starRating: 1)
         rec.detectedPeople = ["Donna"]
+        // v3 trailing columns (Rick 2026-09-12): place, confidence, attestations
+        // must round-trip through the manifest for every container.
+        rec.userPlace = "Franklin, MA"; rec.userPlaceConfidence = "known"
+        let attested = Date(timeIntervalSince1970: 1_757_700_000)
+        rec.backupAttestations = [
+            BackupAttestation(kind: .cloud, answer: .yes, label: "iCloud, \"family\"", attestedAt: attested),
+            BackupAttestation(kind: .offsite, answer: .no, attestedAt: attested),
+        ]
         model.records = [rec]
 
         let job = try #require(await MasterArchiveTestSupport.promote(model, ids: [rec.id]))
@@ -80,6 +88,13 @@ struct MasterArchivePromoteMediaMatrixTests {
         #expect(rows.first?[ArchiveManifestCSV.sha256Column] == expected)
         #expect(rows.first?[ArchiveManifestCSV.sourceRecordIDColumn] == rec.id.uuidString)
         #expect(rows.first?[10] == "Donna")
+        #expect(rows.first?.count == ArchiveManifestCSV.columnCount)
+        #expect(rows.first?[ArchiveManifestCSV.userPlaceColumn] == "Franklin, MA")
+        #expect(rows.first?[ArchiveManifestCSV.userPlaceConfidenceColumn] == "known")
+        let manifestAttestations = BackupAttestation.fromJSONString(rows.first?[ArchiveManifestCSV.backupAttestationsColumn] ?? "")
+        #expect(manifestAttestations == rec.backupAttestations, "JSON survives the CSV quoting: \(rows.first?.last ?? "")")
+        let manifestText = try String(contentsOf: sb.manifestURL, encoding: .utf8)
+        #expect(manifestText.split(separator: "\n").count == 2, "header + one physical line despite the JSON quotes")
 
         // Linked record + source stamp.
         #expect(model.records.count == 2)
@@ -96,6 +111,8 @@ struct MasterArchivePromoteMediaMatrixTests {
         #expect(copy.originalFullPath == src)
         #expect(copy.userDate == "1992-07-15")
         #expect(copy.detectedPeople == ["Donna"])
+        #expect(copy.userPlace == "Franklin, MA" && copy.userPlaceConfidence == "known")
+        #expect(copy.backupAttestations == rec.backupAttestations, "the archive copy carries the family's word")
         #expect(copy.notes.contains("Promote "))
         #expect(model.promotionSource(of: copy) === rec)
         #expect(rec.archiveStage == .masterAssigned)

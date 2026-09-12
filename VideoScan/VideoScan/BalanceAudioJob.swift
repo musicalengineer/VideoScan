@@ -760,6 +760,7 @@ final class BalanceAudioJob: @MainActor MediaFileOperationJob {
         newRec.userDateConfidence = record.userDateConfidence
         newRec.userPlace = record.userPlace
         newRec.userPlaceConfidence = record.userPlaceConfidence
+        newRec.backupAttestations = BackupAttestation.normalized(record.backupAttestations)
 
         var fixNote: String
         switch analysis.classification {

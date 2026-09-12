@@ -798,6 +798,9 @@ extension VideoScanModel {
         copy.userDateConfidence = source.userDateConfidence
         copy.userPlace = source.userPlace
         copy.userPlaceConfidence = source.userPlaceConfidence
+        // The family's word on cloud / off-site copies rides the promote
+        // like the date and place (Rick 2026-09-12): same footage.
+        copy.backupAttestations = BackupAttestation.normalized(source.backupAttestations)
         copy.inferredRecordDate = source.inferredRecordDate
         copy.inferredDateConfidence = source.inferredDateConfidence
         copy.inferredDateSource = source.inferredDateSource
@@ -906,6 +909,15 @@ extension VideoScanModel {
             let people = row[10].split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             if !people.isEmpty { copy.detectedPeople = people }
             if let stars = Int(row[11]) { copy.starRating = max(3, stars) }
+            // v3 trailing columns (Rick 2026-09-12): place, its confidence
+            // and the backup attestations come back from the manifest —
+            // a 12- or 13-column row simply yields none of them.
+            let extra = ArchiveManifestCSV.placeAndAttestations(fromFields: row)
+            if let place = extra.place {
+                copy.userPlace = place
+                copy.userPlaceConfidence = extra.confidence
+            }
+            copy.backupAttestations = extra.attestations
         }
         let stamp = ISO8601DateFormatter().string(from: promotedAt)
         let note = "Promote \(stamp): promoted from \(sourcePath) (source record \(sourceID.uuidString) no longer in the catalog) · sha256 \(sha256)"

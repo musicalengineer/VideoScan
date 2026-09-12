@@ -63,9 +63,10 @@ enum CatalogCSVWriter {
         "Scan Type", "Audio Codec", "Audio Channels", "Audio Sample Rate", "Timecode",
         "Tape Name", "Is Playable", "Partial MD5", "Duplicate Group", "Duplicate Confidence",
         "Duplicate Disposition", "Duplicate Match", "Duplicate Reasons", "Full Path", "Directory",
-        // Hand-entered place (2026-09-12). Placed BEFORE Notes so the
+        // Backup attestations (2026-09-12): "cloud=yes 'iCloud'; offsite=no",
+        // then the hand-entered place. All placed BEFORE Notes so the
         // multi-line Notes column stays last (existing CSV golden).
-        "Place", "Place Confidence", "Notes"
+        "Backup Attestations", "Place", "Place Confidence", "Notes"
     ]
 
     static func csvText(records: [VideoRecord]) -> String {
@@ -86,6 +87,7 @@ enum CatalogCSVWriter {
             record.tapeName, record.isPlayable, record.partialMD5, record.duplicateGroupID?.uuidString ?? "",
             record.duplicateConfidence?.rawValue ?? "", record.duplicateDisposition.rawValue,
             record.duplicateBestMatchFilename, record.duplicateReasons, record.fullPath, record.directory,
+            BackupAttestation.summary(record.backupAttestations),
             record.userPlace ?? "", record.userPlace == nil ? "" : record.userPlaceStatus.rawValue,
             record.notes
         ].map { Formatting.csvEscape($0) }.joined(separator: ",")

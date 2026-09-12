@@ -18,6 +18,37 @@
 //     escaping, appended with ONE O_APPEND write (the write-journal
 //     lesson: seek+write is two syscalls and interleaves).
 //
+// Manifest columns (format v3, Rick's ruling 2026-09-12 — trailing
+// columns are ADDITIVE; the header of an existing manifest is never
+// rewritten; old readers ignore what they do not know):
+//
+//   idx  column                 v1  v2  v3  contents
+//   ---  ---------------------  --  --  --  --------------------------------
+//    0   promoted_at            ✓   ✓   ✓   ISO-8601 (internet date-time)
+//    1   archive_relpath        ✓   ✓   ✓   path under the archive root
+//    2   sha256                 ✓   ✓   ✓   whole-file digest, read back
+//    3   size_bytes             ✓   ✓   ✓
+//    4   original_path          ✓   ✓   ✓   the source file's full path
+//    5   original_volume        ✓   ✓   ✓
+//    6   record_id              ✓   ✓   ✓   the archive COPY's catalog id
+//    7   source_record_id       ✓   ✓   ✓   the promoted source's id
+//    8   record_date            ✓   ✓   ✓   1992-07-15 / 1992-07-xx / …
+//    9   date_confidence        ✓   ✓   ✓   user-known / user-estimated / …
+//   10   people                 ✓   ✓   ✓   "Donna; Rick"
+//   11   star_rating            ✓   ✓   ✓
+//   12   readiness                  ✓   ✓   ArchiveReadiness token (2026-08-16)
+//   13   user_place                     ✓   Rick's canonical place ("Franklin, MA")
+//   14   user_place_confidence          ✓   "known" / "estimated" / "" (no place)
+//   15   backup_attestations            ✓   JSON array (BackupAttestation.jsonString),
+//                                           "" when never attested
+//
+//   v1 = 12 columns (Initialize before 2026-08-16), v2 = 13 (+readiness),
+//   v3 = 16 (+place, place confidence, attestations; 2026-09-12). The
+//   WRITER always emits all 16 columns whatever header the file carries;
+//   READERS accept 12, 13 or 16+ columns and read 13–15 only when present.
+//   Every field is always double-quoted (see `escape`), so the JSON in
+//   column 15 — with its quotes doubled — stays one CSV cell.
+//
 // Nothing here touches the catalog, the model, or MFO — those live in
 // VideoScanModel+MasterArchive.swift and PromoteToArchiveJob.swift.
 //
@@ -173,7 +204,9 @@ enum MasterArchiveLayout {
     ------
       00_Index/   Archive_Inventory_Manifest.csv — one line per file ever
                   promoted here (when, where it came from, its SHA-256
-                  fingerprint, who is in it, its rating). Append-only.
+                  fingerprint, who is in it, its rating, where it was
+                  shot, and the family's word on cloud / off-site
+                  copies). Append-only.
                   README_Naming_and_Layout.txt — this file.
       10_Photos/  Loose photo scans (Apple Photos owns the photo library;
                   this bucket exists for stray scans).
@@ -222,12 +255,22 @@ enum MasterArchiveLayout {
     static let manifestHeaderLegacy =
         "promoted_at,archive_relpath,sha256,size_bytes,original_path,original_volume,record_id,source_record_id,record_date,date_confidence,people,star_rating"
 
-    /// Current manifest header — spec §2 columns + the ADDITIVE trailing
-    /// `readiness` token column (ArchiveReadiness, 2026-08-16).
-    static let manifestHeader = manifestHeaderLegacy + ",readiness"
+    /// Format v2 header (Initialize between 2026-08-16 and 2026-09-12):
+    /// spec §2 columns + the ADDITIVE trailing `readiness` token column
+    /// (ArchiveReadiness). Existing archives keep it; never rewritten.
+    static let manifestHeaderV2 = manifestHeaderLegacy + ",readiness"
 
-    /// Every header a manifest may carry; validation accepts either.
-    static let acceptedManifestHeaders: [String] = [manifestHeader, manifestHeaderLegacy]
+    /// Current (v3) manifest header — v2 + Rick's place, its confidence
+    /// and the backup attestations as three trailing columns (Rick's
+    /// ruling 2026-09-12; column table in this file's header comment).
+    static let manifestHeader = manifestHeaderV2 + ",user_place,user_place_confidence,backup_attestations"
+
+    /// The manifest format version `manifestHeader` describes. Bumped
+    /// whenever a trailing column is added; readers never require it.
+    static let manifestFormatVersion = 3
+
+    /// Every header a manifest may carry; validation accepts any of them.
+    static let acceptedManifestHeaders: [String] = [manifestHeader, manifestHeaderV2, manifestHeaderLegacy]
 }
 
 // MARK: - Date hint
@@ -566,9 +609,15 @@ enum ArchiveManifestCSV {
         let people: [String]
         let starRating: Int
         /// ArchiveReadiness token ("playable;audio=verified;format=safe;
-        /// date=known"). Written only when the manifest carries the
-        /// current 13-column header.
+        /// date=known"). Column 12 (v2+).
         var readiness: String = ""
+        /// Rick's canonical hand-entered place, "" when unplaced. Column 13 (v3).
+        var userPlace: String = ""
+        /// "known" / "estimated"; "" when there is no place. Column 14 (v3).
+        var userPlaceConfidence: String = ""
+        /// `BackupAttestation.jsonString` of the source's attestations, ""
+        /// when never attested. Column 15 (v3).
+        var backupAttestations: String = ""
     }
 
     /// One CSV field — ALWAYS quoted (codex QA round 2, blocker 3: no
@@ -602,7 +651,9 @@ enum ArchiveManifestCSV {
     static let formulaLeaders: Set<Unicode.Scalar> = ["=", "+", "-", "@", "\t", "\r"]
 
     /// The row as one line, WITH its trailing newline (so a single write
-    /// is a complete record).
+    /// is a complete record). `legacy: true` renders the 12-column v1
+    /// shape (tests build legacy fixtures with it); the writer itself
+    /// always emits the full v3 row.
     static func line(for row: Row, legacy: Bool = false) -> String {
         var fields: [String] = [
             iso8601.string(from: row.promotedAt),
@@ -618,12 +669,40 @@ enum ArchiveManifestCSV {
             row.people.joined(separator: "; "),
             String(row.starRating)
         ]
-        if !legacy { fields.append(row.readiness) }
+        if !legacy {
+            fields.append(row.readiness)
+            fields.append(row.userPlace)
+            fields.append(row.userPlaceConfidence)
+            fields.append(row.backupAttestations)
+        }
         return fields.map(escape).joined(separator: ",") + "\n"
     }
 
-    /// Column index of `readiness` (13-column manifests only).
+    /// Column index of `readiness` (v2+ rows).
     static let readinessColumn = 12
+    /// Column indices of the v3 trailing columns (Rick 2026-09-12).
+    static let userPlaceColumn = 13
+    static let userPlaceConfidenceColumn = 14
+    static let backupAttestationsColumn = 15
+    /// Column counts per format version.
+    static let columnCountLegacy = 12
+    static let columnCountV2 = 13
+    static let columnCount = 16
+
+    /// The v3 trailing columns of a parsed row, or empty values when the
+    /// row predates them (12 / 13 columns). Pure; never throws — a
+    /// rebuild from an old manifest simply has no place and no
+    /// attestations. The stored place is already canonical and is NEVER
+    /// re-canonicalized (GH #184 item 6).
+    static func placeAndAttestations(fromFields fields: [String])
+        -> (place: String?, confidence: String?, attestations: [BackupAttestation]) {
+        guard fields.count >= columnCount else { return (nil, nil, []) }
+        let place = fields[userPlaceColumn].isEmpty ? nil : fields[userPlaceColumn]
+        let confidence = place == nil ? nil
+            : (fields[userPlaceConfidenceColumn].isEmpty ? UserPlaceConfidence.estimated.rawValue
+                                                          : fields[userPlaceConfidenceColumn])
+        return (place, confidence, BackupAttestation.fromJSONString(fields[backupAttestationsColumn]))
+    }
 
     /// Append one row with a single O_APPEND write + F_FULLFSYNC (codex R3
     /// blockers 3+4). The manifest is opened DESCRIPTOR-RELATIVE from the
@@ -639,10 +718,10 @@ enum ArchiveManifestCSV {
             root: rootPath, name: MasterArchiveLayout.manifestFilename,
             mustExist: true, expectedHeaders: MasterArchiveLayout.acceptedManifestHeaders)
         defer { close(fd) }
-        // Rows match the file's OWN header: a legacy 12-column manifest keeps
-        // 12 columns (never rewritten); a current one gets the readiness token.
-        let legacy = ArchivePromoteEngine.firstLine(fd: fd) == MasterArchiveLayout.manifestHeaderLegacy
-        let data = Data(line(for: row, legacy: legacy).utf8)
+        // The full v3 row is appended whatever header the file carries
+        // (Rick's ruling 2026-09-12: trailing columns are additive, the
+        // header is never rewritten, old readers ignore the extra cells).
+        let data = Data(line(for: row).utf8)
         try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: true, label: "manifest append")
     }
 

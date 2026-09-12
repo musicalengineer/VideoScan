@@ -386,7 +386,13 @@ extension PromoteToArchiveJob {
                 dateConfidence: dateConfidence,
                 people: people,
                 starRating: max(source?.starRating ?? 0, 3),
-                readiness: (readiness ?? source.map { ArchiveReadiness.assess(record: $0) })?.token ?? "")
+                readiness: (readiness ?? source.map { ArchiveReadiness.assess(record: $0) })?.token ?? "",
+                // v3 trailing columns (Rick 2026-09-12): the source's place,
+                // its confidence and the family's backup attestations.
+                userPlace: source?.userPlace ?? "",
+                userPlaceConfidence: source?.userPlace == nil ? ""
+                    : (source?.userPlaceConfidence ?? UserPlaceConfidence.estimated.rawValue),
+                backupAttestations: BackupAttestation.jsonString(source?.backupAttestations ?? []))
             // Manifest row + F_FULLFSYNC — a barrier failure throws and the
             // file is reported failed (it stays in place; the journal's
             // `renamed` entry converges it next run).

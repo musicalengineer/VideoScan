@@ -487,6 +487,15 @@ public class VideoRecord: Identifiable, Decodable {
     /// never stored. Same additive-optional migration as `userPlace`.
     public var userPlaceConfidence: String?
 
+    /// The user's word about copies the app cannot see — cloud / off-site
+    /// / a named drive, each yes / no / n-a (Rick 2026-09-12, promote-and-
+    /// prune stage 1; BackupAttestation.swift). Default empty; additive
+    /// optional — legacy catalogs decode as [], the DTO encodes the key
+    /// only when non-empty. Rides every same-footage inheritance path the
+    /// date and place ride (merge rule: union by kind, latest wins) and
+    /// survives rescan. The app never verifies these.
+    public var backupAttestations: [BackupAttestation] = []
+
     /// True when this record represents a file currently being actively
     /// worked on with external tools (transcode in another app, Topaz,
     /// FCP edit in progress). Independent of `lifecycleStage` — a file
@@ -724,6 +733,9 @@ public class VideoRecord: Identifiable, Decodable {
         // migration: legacy catalogs (no keys) decode as nil = unplaced.
         userPlace                   = try c.decodeIfPresent(String.self, forKey: .userPlace)
         userPlaceConfidence         = try c.decodeIfPresent(String.self, forKey: .userPlaceConfidence)
+        // Backup attestations (2026-09-12) — same additive-optional
+        // migration: legacy catalogs (no key) decode as [] = never asked.
+        backupAttestations          = try c.decodeIfPresent([BackupAttestation].self, forKey: .backupAttestations) ?? []
         // Workspace-active flag. decodeIfPresent so legacy catalogs (no key)
         // come back as false — i.e. "not in workspace." Import-to-workspace
         // (Pass B) is the only writer that sets this true.

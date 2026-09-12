@@ -219,7 +219,8 @@ struct ArchiveManifestCSVTests {
         #expect(line.hasSuffix("\n"))
         #expect(line.filter { $0 == "\n" }.count == 1, "one physical line")
         let fields = ArchiveManifestCSV.fields(ofLine: line)
-        #expect(fields.count == 13, "12 spec columns + readiness")
+        #expect(fields.count == ArchiveManifestCSV.columnCount,
+                "12 spec columns + readiness + user_place, user_place_confidence, backup_attestations (v3)")
         #expect(fields[ArchiveManifestCSV.relPathColumn] == r.archiveRelPath)
         #expect(fields[4] == r.originalPath)
         #expect(fields[10] == "Donna; Rick")
