@@ -28,6 +28,9 @@ struct ChannelRow: Identifiable, Hashable {
     let status: Status
 
     var id: String { "\(messageID):\(recipient)" }
+
+    /// One of Rick's own "Please respond to #N" reminders.
+    var isNudge: Bool { author == "rick" && subject.hasPrefix(ChannelDB.nudgeSubjectPrefix) }
 }
 
 struct ChannelSnapshot {

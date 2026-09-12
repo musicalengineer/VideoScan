@@ -146,7 +146,13 @@ private struct RowView: View {
         case .answered:
             Color.clear.frame(width: 96, height: 1)
         case .waiting, .inProgress, .stuck:
-            if row.recipient == "rick" {
+            if row.isNudge {
+                // A nudge from Rick is the reminder itself; nudging it
+                // would only nudge the same recipient again (Rick 9/12:
+                // a nudge grew a Tell button, then a nudge of the nudge).
+                Text("your nudge")
+                    .font(.caption).foregroundStyle(.secondary).frame(width: 96)
+            } else if row.recipient == "rick" {
                 Button("Handled") { model.markHandled(row) }
                     .frame(width: 96)
             } else if let nudged = row.nudgedAt {
