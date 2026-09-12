@@ -118,10 +118,28 @@ struct PlaceInheritanceSensorTests {
         let master = rec("master.mov")
         let copy = rec("copy.mov", place: "Montana", confidence: "estimated")
         let family = (place: "Cape Cod", confidence: "known")
-        #expect(AssessCopiesFamilyStamp.stampPlaceIfMissing(family, onto: [master, copy]))
+        #expect(AssessCopiesFamilyStamp.stampPlaceIfMissing(family, onto: [master, copy]).map(\.filename) == ["master.mov"])
         #expect(master.userPlace == "Cape Cod" && master.userPlaceConfidence == "known")
         #expect(copy.userPlace == "Montana" && copy.userPlaceConfidence == "estimated", "a record's own place is never clobbered")
-        #expect(!AssessCopiesFamilyStamp.stampPlaceIfMissing(family, onto: [master, copy]), "second pass changes nothing")
+        #expect(AssessCopiesFamilyStamp.stampPlaceIfMissing(family, onto: [master, copy]).isEmpty, "second pass changes nothing")
+    }
+
+    // codex #1380 (3): indexed-vs-canonical agreement — the search index
+    // answers the inherited place IMMEDIATELY after the Archive Helper stamp.
+    @Test func archiveHelperStampReindexesInheritedPlace() {
+        let model = VideoScanModel()
+        let master = VideoRecord(); master.filename = "master.mov"; master.fullPath = "/Volumes/T/master.mov"
+        let other = VideoRecord(); other.filename = "other.mov"; other.fullPath = "/Volumes/T/other.mov"
+        model.records = [master, other]
+        model.searchIndex.rebuild(records: model.records)   // stale-able entries exist
+        #expect(model.searchIndex.filter(records: model.records, query: "cape").isEmpty)
+
+        let changed = AssessCopiesFamilyStamp.stampPlaceIfMissing((place: "Cape Cod", confidence: "known"), onto: [master])
+        AssessCopiesFamilyStamp.announce(changed)   // record-scoped posts → model re-indexes each
+
+        #expect(pfCatalogTokenMatches(.substring("cape"), master), "canonical matcher sees the place")
+        #expect(model.searchIndex.filter(records: model.records, query: "cape").map(\.id) == [master.id],
+                "the index must agree with the canonical matcher at once")
     }
 
     // MARK: DuplicateKeeperPolicy.humanMetadataScore
@@ -164,11 +182,18 @@ struct PlaceInheritanceSensorTests {
         extra.userPlace = "Cape Cod"; extra.userPlaceConfidence = "known"   // only the extra carries it
         model.records = [keeper, extra]
 
+        model.searchIndex.rebuild(records: model.records)   // keeper indexed WITHOUT a place
+        #expect(model.searchIndex.filter(records: [keeper], query: "cape").isEmpty)
+
         let result = await model.deleteDuplicates(onVolume: dir.path)
         #expect(result.deleted == 1)
         #expect(model.records.count == 1 && model.records.first === keeper)
         #expect(keeper.userPlace == "Cape Cod", "the deleted extra's place folds into the keeper")
         #expect(keeper.userPlaceConfidence == "known")
+        // codex #1380 (3): indexed-vs-canonical agreement right after the fold.
+        #expect(pfCatalogTokenMatches(.substring("cape"), keeper))
+        #expect(model.searchIndex.filter(records: model.records, query: "cape").map(\.id) == [keeper.id],
+                "the keeper's inherited place is searchable immediately")
     }
 
     // MARK: adoptExternalRepair

@@ -468,6 +468,11 @@ extension VideoScanModel {
                         log("  Enrichment carried to master \(liveMaster.filename): "
                             + enriched.joined(separator: ", "))
                     }
+                    // The keeper's haystack changed (place, tags, notes,
+                    // people…): re-index it NOW, not on the next rebuild —
+                    // the checkpoint notification below is record-less
+                    // (codex #1380).
+                    searchIndex.update(liveMaster)
                     catalogMutated = true
                 } else {
                     log("  master row gone — carry-over skipped for \(record.filename) (file already verified and removed)")

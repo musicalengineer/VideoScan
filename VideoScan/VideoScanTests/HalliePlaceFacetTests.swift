@@ -164,6 +164,49 @@ struct HalliePlaceFacetStepTests {
         #expect((payload.keywords ?? []) == kept)
     }
 
+    // codex #1380 (1): Way 2 must not drop a subset keyword that is the
+    // object of content wording.
+    @Test func questionWayKeepsASubsetKeywordSomeoneSays() {
+        var payload = ArchivistQueryAST.Presence(keywords: ["cape", "cod"])
+        let d = HalliePlaceFacet.apply(to: &payload, question: "videos at Cape Cod where someone says cod", knownPlaces: known)
+        #expect(d == HalliePlaceFacet.Detection(place: "Cape Cod", consumed: ["cape"], fromQuestion: true))
+        #expect(payload.place == "Cape Cod")
+        #expect(payload.keywords == ["cod"], "the word someone SAYS stays a transcript keyword")
+        // Without the content occurrence both halves are consumed, as before.
+        var plain = ArchivistQueryAST.Presence(keywords: ["cape", "cod"])
+        _ = HalliePlaceFacet.apply(to: &plain, question: "videos at cape cod", knownPlaces: known)
+        #expect(plain.keywords == nil)
+    }
+
+    // codex #1380 (2): occurrence-aware — a location occurrence yields the
+    // place, a content occurrence of the SAME term keeps the keyword.
+    @Test func sameTermAsPlaceAndAsSpokenWordKeepsBoth() {
+        var payload = ArchivistQueryAST.Presence(keywords: ["cape cod"])
+        let d = HalliePlaceFacet.apply(to: &payload, question: "videos at Cape Cod where Donna says Cape Cod", knownPlaces: known)
+        #expect(d == HalliePlaceFacet.Detection(place: "Cape Cod", consumed: [], fromQuestion: false))
+        #expect(payload.place == "Cape Cod")
+        #expect(payload.keywords == ["cape cod"], "the spoken occurrence keeps the keyword")
+        // Reversed order, same answer.
+        var reversed = ArchivistQueryAST.Presence(keywords: ["cape cod"])
+        _ = HalliePlaceFacet.apply(to: &reversed, question: "where Donna says Cape Cod in videos from Cape Cod", knownPlaces: known)
+        #expect(reversed.place == "Cape Cod" && reversed.keywords == ["cape cod"])
+        // Only a content occurrence → no place at all.
+        var only = ArchivistQueryAST.Presence(keywords: ["cape cod"])
+        #expect(HalliePlaceFacet.apply(to: &only, question: "videos where Donna says Cape Cod", knownPlaces: known) == nil)
+        #expect(only.keywords == ["cape cod"])
+    }
+
+    @Test("occurrences are classified locally")
+    func occurrenceClassification() {
+        let o = HalliePlaceFacet.occurrences(of: "cape cod", in: "videos at cape cod where donna says cape cod, cape cod videos")
+        #expect(o.count == 3)
+        #expect(o[0].isLocation && o[0].isStrictPreposition && !o[0].isContentObject)
+        #expect(!o[1].isLocation && o[1].isContentObject)
+        #expect(o[2].isMediaNoun && o[2].isLocation && !o[2].isContentObject)
+        #expect(HalliePlaceFacet.occurrences(of: "montana", in: "videos of montana").first?.isStrictPreposition == false)
+        #expect(HalliePlaceFacet.occurrences(of: "montana", in: "videos of montana").first?.isPreposition == true)
+    }
+
     @Test("question way (no keyword): shaped place kept beside content wording; content object refused")
     func questionWayMixed() {
         var a = ArchivistQueryAST.Presence()

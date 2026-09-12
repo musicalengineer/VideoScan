@@ -395,9 +395,7 @@ struct AssessCopiesDetailView: View {
     private func stampFamilyUserPlaceIfMissing(_ ids: [UUID]) {
         guard let fam = familyBestUserPlace() else { return }
         let targets = ids.compactMap { model.record(forID: $0) ?? job.record(for: $0) }
-        if AssessCopiesFamilyStamp.stampPlaceIfMissing(fam, onto: targets) {
-            NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
-        }
+        AssessCopiesFamilyStamp.announce(AssessCopiesFamilyStamp.stampPlaceIfMissing(fam, onto: targets))
     }
 
     /// The naming row's label for one instance: its representation's role,
@@ -815,17 +813,27 @@ enum AssessCopiesFamilyStamp {
     }
 
     /// Stamp `family` onto every target that has no place of its own.
-    /// Returns true when anything changed (the caller posts the mutation).
+    /// Returns the records that changed (the caller announces them).
     @MainActor
     @discardableResult
     static func stampPlaceIfMissing(_ family: (place: String, confidence: String),
-                                    onto targets: [VideoRecord]) -> Bool {
-        var stamped = false
+                                    onto targets: [VideoRecord]) -> [VideoRecord] {
+        var stamped: [VideoRecord] = []
         for r in targets where r.userPlace == nil {
             r.userPlace = family.place
             r.userPlaceConfidence = family.confidence
-            stamped = true
+            stamped.append(r)
         }
         return stamped
+    }
+
+    /// One RECORD-SCOPED mutation post per changed record — the same shape
+    /// InspectorPlaceView uses — so VideoScanModel re-indexes each one at
+    /// once (a record-less post only schedules the save; codex #1380).
+    @MainActor
+    static func announce(_ changed: [VideoRecord]) {
+        for r in changed {
+            NotificationCenter.default.post(name: .videoScanCatalogMutated, object: r)
+        }
     }
 }
