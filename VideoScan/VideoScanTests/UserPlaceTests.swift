@@ -58,7 +58,7 @@ import Foundation
     // MARK: Logic — rejection table
 
     @Test("empty and punctuation-only input is rejected",
-          arguments: ["", "   ", "\n\t", ",", " , ", ",,,"])
+          arguments: ["", "   ", "\n\t", ",", " , ", ",,,", "...", "---", "??", "- , -", "— —"])
     func rejectedForms(input: String) {
         #expect(UserPlaceEntry.canonicalize(input) == nil,
                 "'\(input)' should have been rejected")

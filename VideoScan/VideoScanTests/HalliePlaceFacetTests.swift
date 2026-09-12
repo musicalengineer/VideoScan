@@ -111,6 +111,40 @@ struct HalliePlaceFacetStepTests {
         #expect(c.people == ["Montana"])
     }
 
+    // codex #1370 P1: content wording is never a place question.
+    @Test("content wording keeps the keyword road: says / mentions / captioned / titled / transcript",
+          arguments: [
+            "find where someone says Cape Cod",
+            "clips where someone mentions cape cod",
+            "videos captioned Cape Cod",
+            "anything titled Montana",
+            "search the transcripts for cape cod",
+            "who is talking about Westford in the audio",
+            "files named cape cod",
+          ])
+    func contentWordingIsNotAPlace(question: String) {
+        for term in ["cape cod", "Cape Cod", "montana", "westford"] {
+            var payload = ArchivistQueryAST.Presence(keywords: [term])
+            #expect(HalliePlaceFacet.apply(to: &payload, question: question, knownPlaces: known) == nil, "'\(question)' / \(term)")
+            #expect(payload.keywords == [term])
+            #expect(payload.place == nil)
+        }
+        #expect(HalliePlaceFacet.hasContentWording(question.lowercased()))
+    }
+
+    @Test("a keyword needs a location shape: at/in/from/of <place>, videos <place>, <place> videos",
+          arguments: [
+            ("videos at cape cod", true), ("show me cape cod videos", true), ("videos cape cod", true),
+            ("anything from Cape Cod", true), ("videos of cape cod", true),   // the demoted-name case
+            ("who is cape cod", false), ("is cape cod a place", false), ("cape cod", false),
+          ])
+    func keywordNeedsLocationShape(question: String, expected: Bool) {
+        var payload = ArchivistQueryAST.Presence(keywords: ["cape cod"])
+        let d = HalliePlaceFacet.apply(to: &payload, question: question, knownPlaces: known)
+        #expect((d != nil) == expected, "'\(question)'")
+        #expect((payload.place == "Cape Cod") == expected)
+    }
+
     @Test("an existing place is only canonicalized")
     func existingPlace() {
         var p = ArchivistQueryAST.Presence(keywords: ["cape cod"], place: "franklin, ma")

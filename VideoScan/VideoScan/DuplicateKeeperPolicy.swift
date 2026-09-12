@@ -325,6 +325,10 @@ struct DuplicateKeeperPolicy: Sendable, Equatable {
         if !record.userNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { score += 30 }
         if !record.tags.isEmpty { score += 20 }
         if record.userDate != nil { score += 15 }
+        // Rick's hand-entered place is a human mark like his date (codex
+        // #1370 P0): a placed copy must never lose the keeper election to
+        // a bare twin.
+        if record.userPlace != nil { score += 15 }
         if record.originalFullPath != nil { score += 25 }
         if let t = record.audioTranscript, !t.isEmpty { score += 8 }
         if !record.sceneCaptions.isEmpty { score += 8 }

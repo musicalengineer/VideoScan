@@ -796,6 +796,8 @@ extension VideoScanModel {
         copy.rejectedPeople = source.rejectedPeople
         copy.userDate = source.userDate
         copy.userDateConfidence = source.userDateConfidence
+        copy.userPlace = source.userPlace
+        copy.userPlaceConfidence = source.userPlaceConfidence
         copy.inferredRecordDate = source.inferredRecordDate
         copy.inferredDateConfidence = source.inferredDateConfidence
         copy.userNotes = source.userNotes

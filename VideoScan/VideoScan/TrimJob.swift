@@ -675,6 +675,8 @@ final class TrimJob: @MainActor MediaFileOperationJob {
         // so Rick's hand-entered date carries over with its confidence.
         newRec.userDate = record.userDate
         newRec.userDateConfidence = record.userDateConfidence
+        newRec.userPlace = record.userPlace
+        newRec.userPlaceConfidence = record.userPlaceConfidence
 
         let stamp = ISO8601DateFormatter().string(from: Date())
         let rangeText = "\(TrimTimecode.format(range.inSeconds))–\(TrimTimecode.format(range.outSeconds))"
