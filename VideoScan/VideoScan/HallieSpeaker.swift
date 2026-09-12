@@ -150,6 +150,10 @@ final class HallieSpeaker: NSObject, ObservableObject {
         // never land inside a numeral (2026-09-06). Display text is
         // untouched — this whole function exists to diverge from it.
         spoken = HallieSpokenNumbers.spoken(spoken)
+        // A state code standing alone in a place position is spoken as
+        // the state's name ("born in KY, 1843" → Kentucky; GH #184 item
+        // 6). Display text is untouched; the composers do their own.
+        spoken = USStateCodes.expandStateCodes(inProse: spoken)
         return lexicon.apply(to: spoken, style: phonemeLinks ? .kokoro : .respelling).spoken
     }
 

@@ -156,6 +156,11 @@ public enum CyberBrainWriter {
         case ambiguousSubject([String])
         case unsafeRoot(String)
         case ioFailure(String)
+        /// A pronunciation key that is not a word of the person's name
+        /// (whole alias or name word, FamilyNameTokens). Live 2026-09-11:
+        /// "see" was written onto Adam FitzHerbert of Llanllowell through
+        /// his notes-style alias (GH #184 item 6). (word, person)
+        case unresolvedWord(String, String)
 
         public var errorDescription: String? {
             switch self {
@@ -165,6 +170,8 @@ public enum CyberBrainWriter {
                 return "more than one person is called that: \(names.joined(separator: ", "))"
             case .unsafeRoot(let path): return "unsafe CyberBrain location: \(path)"
             case .ioFailure(let detail): return "could not save: \(detail)"
+            case .unresolvedWord(let word, let person):
+                return "\"\(word)\" is not a word of \(person)'s name"
             }
         }
     }
@@ -656,7 +663,8 @@ public enum CyberBrainWriter {
         personID: String,
         word: String,
         saidAs: String?,
-        in archive: CyberBrainArchive
+        in archive: CyberBrainArchive,
+        acceptedNames: [String] = []
     ) throws -> PronunciationReceipt {
         let key = word.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw WriteError.emptySubject }
@@ -669,6 +677,20 @@ public enum CyberBrainWriter {
             throw WriteError.emptySubject
         }
         let person = people[at]
+        // The store's own line (GH #184 item 6): a key is SET only when it
+        // is a word of this person's name — their canonical name and
+        // aliases, or the tree name and alternate names the caller
+        // resolved them through (`acceptedNames`, the by-name variant).
+        // "see" inside "Llanlowell Llan Hywel and see note" is neither.
+        // Removal (empty `saidAs`) is always allowed, so junk can be
+        // cleaned out through the same door.
+        if !spoken.isEmpty {
+            let named = FamilyNameTokens.matches(key, primaryName: person.canonicalName, aliases: person.aliases)
+                || (acceptedNames.first.map {
+                    FamilyNameTokens.matches(key, primaryName: $0, aliases: Array(acceptedNames.dropFirst()))
+                } ?? false)
+            guard named else { throw WriteError.unresolvedWord(key, person.canonicalName) }
+        }
         var table = (person.pronunciations ?? [:]).filter {
             FamilyIdentityText.normalized($0.key) != FamilyIdentityText.normalized(key)
         }
@@ -717,8 +739,11 @@ public enum CyberBrainWriter {
             displayName: archive.displayName,
             people: people,
             sources: archive.sources)
+        // The guard inside runs BEFORE anything is saved, so a refused
+        // word never leaves a freshly minted person behind.
         let receipt = try settingPronunciation(
-            personID: id, word: word, saidAs: saidAs, in: withPerson)
+            personID: id, word: word, saidAs: saidAs, in: withPerson,
+            acceptedNames: [subject] + aliases)
         return PronunciationReceipt(
             archive: receipt.archive, personID: receipt.personID,
             canonicalName: receipt.canonicalName, word: receipt.word,

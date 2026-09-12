@@ -196,6 +196,21 @@ enum HalliePronunciationFreeform {
 
     // MARK: Detection
 
+    /// A statement carrying a pronounce-word (typo-tolerant) that is not a
+    /// question: a teach whose subject `detect` could not find in the
+    /// archive. Live 2026-09-11 ("... recommended to pornounce it
+    /// "Kentucky""): the coordinator declines these outright rather than
+    /// letting them fall to a search, a model reply — or, as happened, a
+    /// common word inside a tree alias (GH #184 item 6).
+    static func isTeachShaped(_ text: String) -> Bool {
+        let cleaned = HalliePronounceWords.normalize(text).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, !cleaned.hasSuffix("?") else { return false }
+        let tokens = cleaned.split(separator: " ")
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?\"'()[]")) }
+        guard tokens.contains(where: HalliePronounceWords.isPronounceWord) else { return false }
+        return !questionOpeners.contains(tokens.first?.lowercased() ?? "")
+    }
+
     /// Read a free-form sentence about how a name is said. Nil when it has
     /// no pronounce-word, no name `isKnownName` accepts, or is a plain
     /// respelling/hint the strict detectors already handle (callers run

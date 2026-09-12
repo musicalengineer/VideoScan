@@ -383,7 +383,9 @@ enum ArchivistRecordExecutor {
     /// is inferred: no place means "no place recorded", with the way to
     /// add one.
     static func placeSentence(_ snapshot: ArchivistRecordDossierSnapshot) -> (prose: String, basis: String) {
-        guard let place = snapshot.userPlace else {
+        // Phrased only: "Cape Cod, MA" is said as Massachusetts; the
+        // stored userPlace is never rewritten (GH #184 item 6).
+        guard let place = snapshot.userPlace.map(USStateCodes.expandStateCodes(inPlace:)) else {
             return ("No place is recorded for \(snapshot.filename) yet — you can add one in the inspector (Where Was This?).",
                     "no place recorded")
         }

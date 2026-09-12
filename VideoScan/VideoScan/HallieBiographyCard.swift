@@ -625,7 +625,9 @@ enum HallieBiographyCard {
                 ArchivistTemporalExecutor.canonicalDay($0) ?? $0,
                 calendar: HallieVitalDates.utcCalendar)
         } ?? spokenDate(date)
-        let trimmedPlace = place?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // "KY" is phrased as Kentucky; the record keeps "KY" (GH #184 item 6).
+        let trimmedPlace = USStateCodes.expandStateCodes(
+            inPlace: place?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
         guard spoken != nil || !trimmedPlace.isEmpty else { return nil }
         var text = verb
         if let spoken { text += " " + spoken }
