@@ -151,11 +151,14 @@ struct HallieKinshipSidePhrasingTests {
                 == .kinship(person: "Rick", relation: .grandfather, side: nil))
         #expect(Q.detect("what about donna's great-grandmother on her mother's side")
                 == .kinship(person: "Donna", relation: .greatGrandmother, side: .maternal))
-        // Not ours: a plain biography, a single-hop relation (translator
-        // vocabulary), a descendant word the walk cannot name, and the
-        // unchanged line shape.
+        // Not ours: a plain biography, a descendant word the walk cannot
+        // name, and the unchanged line shape. The named one-hop sentence
+        // ("who was rick's father") is the sentence rule's since a1c0c1b1
+        // (GH #182) — kinship, never a name (assertion updated 2026-09-12,
+        // same class as codex #1352 / 576edc12).
         #expect(Q.detect("tell me about Edith Lucy Parker") == nil)
-        #expect(Q.detect("who was rick's father") == nil)
+        #expect(Q.detect("who was rick's father")
+                == .kinship(person: "Rick", relation: .father, side: nil))
         #expect(Q.detect("tell me about rick's grandson") == nil)
         #expect(Q.detect("rick's maternal line back 5 generations")
                 == .ancestorLine(person: "Rick", line: .maternal, generations: 5))

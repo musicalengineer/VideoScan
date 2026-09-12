@@ -666,8 +666,13 @@ struct HallieAppV2IntegrationTests {
                 canonical == "Mary Smith" ? photo : nil
             })
 
+        // "Who was Nan?" is answered locally since e7d71578 (person-fact
+        // lane: "Nan" is a People-tab alias) and GH #180 (1d5fa30b), so it
+        // no longer exercises the translator. A phrasing outside that lane
+        // keeps this test's point — ONE translation carried through both
+        // continuations (fixture updated 2026-09-12).
         let first = try await HallieAppTurnCoordinator.execute(
-            question: "Who was Nan?", records: [],
+            question: "What do you know about Nan?", records: [],
             referent: .init(recordID: nil, temporalDate: nil),
             hosts: ["fixture.invalid"], modelName: "fixture-model",
             dependencies: dependencies)
@@ -684,7 +689,7 @@ struct HallieAppV2IntegrationTests {
         let answer = try await HallieAppTurnCoordinator.continue(
             pending: gedcomPending, selecting: .gedcomPersonID("@I2@"),
             dependencies: dependencies)
-        #expect(translations.values == ["Who was Nan?"])
+        #expect(translations.values == ["What do you know about Nan?"])
         #expect(answer.result.outcome == .answered)
         #expect(answer.result.prose.contains("2 February 1920"))
         #expect(answer.biographyPhoto == photo)
@@ -863,7 +868,14 @@ struct HallieAppV2IntegrationTests {
         #expect(ask.contains("case .unmatched(let discriminator):"))
         #expect(ask.contains("HallieTurnExecutor.unmatchedClarificationPreface(discriminator)"))
         #expect(ask.contains("I need the name so I don't guess."))
-        #expect(ask.contains("Okay — I won't guess which person you meant."))
+        // cf69d271 (2026-09-11): the typed decline moved to the shared
+        // per-stage HallieClarificationDecline table; the window routes
+        // through it instead of carrying the line (assertion updated
+        // 2026-09-12).
+        #expect(ask.contains("HallieClarificationDecline.matches(text)"))
+        #expect(ask.contains("HallieClarificationDecline.reply(for: pending.clarification.stage)"))
+        let decline = try productionSource("HallieClarificationDecline.swift")
+        #expect(decline.contains("Okay — I won't guess which person you meant."))
     }
 
     /// codex #663 sensors on the photo-request card: the import is tracked

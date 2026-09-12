@@ -8,6 +8,13 @@ enum HalliePersonFactQuestion {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "?.!"))
             .replacingOccurrences(of: "’", with: "'")
+        // The person card wins (nightly 2026-09-12): "tell me about rick's
+        // family tree, his brothers, sisters, parents, and grandparents" is
+        // a person-tree ask (HallieLineageQuestion.personTree), never a
+        // biography of the whole clause. This lane runs before the lineage
+        // detector (e7d71578), so an identity oracle that accepts the
+        // clause as a name used to hand the card to the graph biography.
+        if case .personTree? = HallieLineageQuestion.detect(question) { return nil }
         // Military-service shapes first (2026-09-11): "did my dad serve in
         // the marines" is a biography ask about ONE person whose subject
         // takes the same road as every other fact; the generic "tell me
