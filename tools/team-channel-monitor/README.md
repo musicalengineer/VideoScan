@@ -21,3 +21,5 @@ tools/team-channel-monitor/run.sh     # build release + (re)launch
 ```
 
 Honors `VIDEOSCAN_TEAM_CHANNEL_DB` and `VIDEOSCAN_REPO` (default `~/dev/VideoScan`).
+
+Install as a login item (auto-relaunch): `tools/team-channel-monitor/install.sh`
