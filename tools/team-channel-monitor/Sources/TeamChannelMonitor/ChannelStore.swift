@@ -31,6 +31,14 @@ struct ChannelRow: Identifiable, Hashable {
 
     /// One of Rick's own "Please respond to #N" reminders.
     var isNudge: Bool { author == "rick" && subject.hasPrefix(ChannelDB.nudgeSubjectPrefix) }
+
+    /// Whether the monitor may post a nudge for this row: open, owed by
+    /// an agent (Rick acks his own rows with Handled), not already
+    /// nudged, and never a nudge itself — a reminder must not breed a
+    /// reminder (codex #1388).
+    var canNudge: Bool {
+        !status.isGreen && recipient != "rick" && nudgedAt == nil && !isNudge
+    }
 }
 
 struct ChannelSnapshot {

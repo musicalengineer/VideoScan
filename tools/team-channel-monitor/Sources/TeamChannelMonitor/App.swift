@@ -87,6 +87,7 @@ final class MonitorModel: ObservableObject {
     }
 
     func nudge(_ row: ChannelRow, codexThreadTarget: String) {
+        guard row.canNudge else { lastAction = "#\(row.messageID) is not nudgeable"; return }
         let result = ChannelCLI.nudge(row)
         guard result.ok else {
             lastAction = "Nudge failed: \(result.output)"
