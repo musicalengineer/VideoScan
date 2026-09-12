@@ -587,6 +587,16 @@ enum HallieTurnExecutor {
         /// for "and the newest?" — conversation memory keeps it. Nil = the
         /// memory derives it (list answers) or forgets it (2026-09-02).
         let refinableQuery: RefinableQuery?
+        /// The retry Hallie OFFERED in this answer's own prose — "Want me
+        /// to try without the words, or with a different name?" — as the
+        /// search a bare "yes" runs next turn (HallieOfferAcceptance). Set
+        /// only by the presence path that composes that sentence, from the
+        /// query it actually executed; conversation memory keeps it for
+        /// exactly one reply. Nil = nothing offered. Codex #1352: an offer
+        /// is a typed payload of the answer, never inferred from a decline
+        /// — "Did you mean X or Y?" and an unresolved "my dad" are declines
+        /// too, and they offer no retry.
+        let retryOffer: HallieOfferAcceptance.Offer?
 
         init(
             route: Route,
@@ -608,7 +618,8 @@ enum HallieTurnExecutor {
             performsFirstOfferedAction: Bool = false,
             immediateOfferedAction: OfferedAction? = nil,
             subjectLifeStatus: LifeStatus? = nil,
-            refinableQuery: RefinableQuery? = nil
+            refinableQuery: RefinableQuery? = nil,
+            retryOffer: HallieOfferAcceptance.Offer? = nil
         ) {
             self.route = route
             self.outcome = outcome
@@ -632,6 +643,7 @@ enum HallieTurnExecutor {
             self.performsFirstOfferedAction = immediate != nil
             self.subjectLifeStatus = subjectLifeStatus
             self.refinableQuery = refinableQuery
+            self.retryOffer = retryOffer
         }
 
         /// The same answer with extra things to look at. Facts untouched.
@@ -647,7 +659,8 @@ enum HallieTurnExecutor {
                 performsFirstOfferedAction: performsFirstOfferedAction,
                 immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
-                refinableQuery: refinableQuery)
+                refinableQuery: refinableQuery,
+                retryOffer: retryOffer)
         }
 
         /// The same answer with an OFFER appended (2026-09-10, the gallery
@@ -677,7 +690,8 @@ enum HallieTurnExecutor {
                 performsFirstOfferedAction: performsFirstOfferedAction,
                 immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
-                refinableQuery: refinableQuery)
+                refinableQuery: refinableQuery,
+                retryOffer: retryOffer)
         }
 
         /// The same answer carrying a PROVENANCE note — how Hallie read the
@@ -713,7 +727,8 @@ enum HallieTurnExecutor {
                 performsFirstOfferedAction: performsFirstOfferedAction,
                 immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
-                refinableQuery: refinableQuery)
+                refinableQuery: refinableQuery,
+                retryOffer: retryOffer)
         }
 
         /// The same answer with its prose replaced by a verified composition.
@@ -741,7 +756,8 @@ enum HallieTurnExecutor {
                 performsFirstOfferedAction: performsFirstOfferedAction,
                 immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
-                refinableQuery: refinableQuery)
+                refinableQuery: refinableQuery,
+                retryOffer: retryOffer)
         }
     }
 

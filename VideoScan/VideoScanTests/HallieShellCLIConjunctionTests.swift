@@ -162,8 +162,12 @@ struct HallieShellCLIConjunctionTests {
                 "\(harness.assistantTurns.first?.text ?? "")")
         #expect(state.pendingClarification != nil)
         #expect(state.pendingClarification?.value.candidates.count == 2)
-        // Clause 2 was NOT run as a reply to the which-one.
-        #expect(harness.translatedQuestions == ["who is Tim's brother"])
+        // Clause 2 was NOT run as a reply to the which-one — and clause 1
+        // never reached the model either: "who is Tim's brother" is claimed
+        // by the deterministic kinship sentence lane (GH #182), whose
+        // which-one is what the reader is looking at. Updated 2026-09-11
+        // (codex #1352): the fixture translation for clause 1 is now dead.
+        #expect(harness.translatedQuestions == [], "\(harness.translatedQuestions)")
         #expect(!harness.output.contains { $0.contains("I need one of the listed names") })
         // The transcript still pairs the assistant turn with the FULL line.
         #expect(harness.transcriptEvents.first?.kind == .user)
@@ -212,10 +216,14 @@ struct HallieShellCLIConjunctionTests {
         #expect(husband.queryDescription?.lowercased().contains("person=martha lamson") == true,
                 "\(husband.queryDescription ?? "nil")")
         #expect(state.pendingClarification == nil)
-        // Deterministic: the model was never asked about the husband.
-        #expect(harness.translatedQuestions == [
-            "where was Martha Lamson born", "when was Martha Lamson born", "did Martha Lamson have kids",
-        ], "\(harness.translatedQuestions)")
+        // Deterministic: the model was never asked about the husband — nor
+        // about where or when Martha was born, which the person-fact lane
+        // answers from the tree itself (updated 2026-09-11, codex #1352).
+        // The kids question is the only one the fixture translator saw.
+        #expect(harness.translatedQuestions == ["did Martha Lamson have kids"],
+                "\(harness.translatedQuestions)")
+        #expect(harness.assistantTurns[0].text.contains("Ridgewell"), "\(harness.assistantTurns[0].text)")
+        #expect(harness.assistantTurns[1].text.contains("1633"), "\(harness.assistantTurns[1].text)")
 
         // And "her" keeps pointing at Martha for the next turn too.
         #expect(state.memory.pronounReferents == ["Martha Lamson"])

@@ -5,14 +5,23 @@
 // answered with "I couldn't tell how “sure” narrows down my last
 // answer…" — Hallie asked a question and did not recognise its answer).
 //
-// Two pure pieces. `retry(after:)` is the offer itself: the declined
-// presence / cross search with its words dropped (or, with no words, its
-// year), mirroring the sentence ArchivistPresenceExecutor.noEvidenceAnswer
-// builds — a person-only miss offers nothing, so nil. Conversation
-// memory keeps the result as `pendingOffer`; the pre-translation step
-// runs it when the next turn is a bare affirmative. Nothing here calls a
-// model, and a qualified reply ("yes but only the 90s") is not an
-// acceptance — it keeps the follow-up road.
+// Two pure pieces. `Offer` is the offer itself: the search that was
+// EXECUTED and found nothing, with its words dropped (or, with no words,
+// its year). It is built by HallieTurnExecutor.executePresenceLike from
+// the typed `retryOffer` the not-found sentence carries
+// (ArchivistPresenceAnswerComposer.noEvidence), travels on the Result,
+// and conversation memory keeps it as `pendingOffer` for one reply; the
+// pre-translation step runs it when the next turn is a bare affirmative.
+//
+// Codex #1352 (2026-09-11): the first version INFERRED the offer from
+// "outcome == .declined + a presence AST with a person and words". But the
+// presence path also declines BEFORE querying — "Did you mean X or Y?"
+// for an ambiguous spelling, and an unresolved "my dad" — with no offer
+// in the prose, so "videos of <ambiguous name> with guitar" → "Did you
+// mean…" → "yes" silently dropped "guitar" and reran the unresolved name.
+// Nothing here infers any more: an Offer exists only where the sentence
+// was written. Nothing here calls a model, and a qualified reply ("yes
+// but only the 90s") is not an acceptance — it keeps the follow-up road.
 
 import Foundation
 import VideoScanCore
@@ -23,50 +32,31 @@ enum HallieOfferAcceptance {
     struct Offer: Sendable, Equatable {
         let question: String
         let ast: ArchivistQueryAST
-        let dropped: String
+        let dropped: ArchivistPresenceAnswerComposer.RetryOffer
 
-        var note: String { "taking my offer: without the \(dropped)" }
-    }
+        var note: String { "taking my offer: without the \(dropped.rawValue)" }
 
-    /// The offer a declined list search left open, or nil when the miss
-    /// offered no retry. Only a fresh search (not a page of one) with a
-    /// person AND words or a year: exactly the case whose not-found
-    /// sentence ends "Want me to try without the words / the year …".
-    static func retry(after intent: HallieTurnExecutor.Intent,
-                      result: HallieTurnExecutor.Result) -> Offer? {
-        guard result.outcome == .declined, intent.citationOffset == 0,
-              intent.dateOrder == nil else { return nil }
-        let people: [String]
-        let yearStart: Int?, yearEnd: Int?
-        let mediaKind: ArchivistQueryAST.MediaKind?
-        let words: [String]
-        switch intent.ast {
-        case .presence(let p):
-            people = p.people ?? []
-            (yearStart, yearEnd, mediaKind) = (p.yearStart, p.yearEnd, p.mediaKind)
-            words = p.keywords ?? []
-        case .cross(let c):
-            people = c.people ?? []
-            (yearStart, yearEnd, mediaKind) = (c.yearStart, c.yearEnd, c.mediaKind)
-            words = (c.keywords ?? []) + (c.transcript ?? [])
-        default:
-            return nil
+        /// The offer for the presence query that was EXECUTED and found
+        /// nothing — names already recovered, "my dad" already bound, a
+        /// demoted name already a word — minus what the sentence offered
+        /// to set aside. Built from the executed payload rather than the
+        /// translator's AST so the retry is exactly "the same search
+        /// without the words / the year", which is what Hallie said.
+        init(question: String,
+             executed: ArchivistQueryAST.Presence,
+             dropping: ArchivistPresenceAnswerComposer.RetryOffer) {
+            var relaxed = executed
+            switch dropping {
+            case .words:
+                relaxed.keywords = nil
+            case .year:
+                relaxed.yearStart = nil
+                relaxed.yearEnd = nil
+            }
+            self.question = question
+            self.ast = .presence(relaxed)
+            self.dropped = dropping
         }
-        guard !people.isEmpty else { return nil }
-        if !words.isEmpty {
-            return Offer(
-                question: intent.originalQuestion,
-                ast: .presence(.init(people: people, yearStart: yearStart, yearEnd: yearEnd,
-                                     mediaKind: mediaKind)),
-                dropped: "words")
-        }
-        if yearStart != nil || yearEnd != nil {
-            return Offer(
-                question: intent.originalQuestion,
-                ast: .presence(.init(people: people, mediaKind: mediaKind)),
-                dropped: "year")
-        }
-        return nil
     }
 
     /// Whole replies that mean "yes, do that" and nothing more. Normalised:

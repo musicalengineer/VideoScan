@@ -898,9 +898,13 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// the question to the model translator — which read the kin word as
     /// a search keyword ("shape=presence … keyword=wife"). The pronoun is
     /// handed on as the person, exactly like the fragment does, and the
-    /// executor's pre-translation step resolves it from memory.
+    /// executor's pre-translation step resolves it from memory. Only
+    /// "his" and "her": pronoun execution reads "their" as plural and
+    /// declines "one person at a time" even when memory holds one
+    /// referent, so "who were their children" keeps the road it had
+    /// (codex #1352; singular-they deferred).
     static func namedKinSentenceQuestion(in lower: String) -> HallieLineageQuestion? {
-        let pattern = /^(?:(?:and|also|then|so|ok|okay|hallie|please),?\s+)*(?:(?:who|what)\s+(?:are|were|is|was)\s+(?:all\s+(?:of\s+)?)?(?:the\s+)?(?:names?\s+of\s+)?|(?:list|name|identify|give\s+me|show\s+me|tell\s+me)\s+(?:all\s+(?:of\s+)?)?(?:the\s+)?(?:names?\s+of\s+)?)(?:all\s+(?:of\s+)?)?(?:(his|her|their)|([a-z][a-z .'-]*?)'s?)\s+([a-z]+)\s*\??\s*$/
+        let pattern = /^(?:(?:and|also|then|so|ok|okay|hallie|please),?\s+)*(?:(?:who|what)\s+(?:are|were|is|was)\s+(?:all\s+(?:of\s+)?)?(?:the\s+)?(?:names?\s+of\s+)?|(?:list|name|identify|give\s+me|show\s+me|tell\s+me)\s+(?:all\s+(?:of\s+)?)?(?:the\s+)?(?:names?\s+of\s+)?)(?:all\s+(?:of\s+)?)?(?:(his|her)|([a-z][a-z .'-]*?)'s?)\s+([a-z]+)\s*\??\s*$/
         guard let m = lower.firstMatch(of: pattern),
               let relation = kinFragmentNouns[String(m.3)] else { return nil }
         if let pronoun = m.1 {

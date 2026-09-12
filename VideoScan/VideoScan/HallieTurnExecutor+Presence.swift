@@ -253,6 +253,18 @@ extension HallieTurnExecutor {
                 shownCount: shown,
                 citations: citations)
             : nil
+        // The retry the not-found sentence just offered, as the search a
+        // bare "yes" runs: the query that was EXECUTED (names recovered,
+        // "my dad" bound, a demoted name already a word) minus what the
+        // sentence named. Only when that sentence is what the reply says —
+        // a refinement's "nothing matched" replaces it above and offers
+        // nothing. Codex #1352: never from the AST and a decline.
+        let retryOffer = request.intent.refinementChange == nil
+            ? answer.retryOffer.map {
+                HallieOfferAcceptance.Offer(
+                    question: request.intent.originalQuestion, executed: effective, dropping: $0)
+            }
+            : nil
         return Result(
             route: route,
             outcome: result.conclusion == .present ? .answered : .declined,
@@ -262,7 +274,8 @@ extension HallieTurnExecutor {
             citations: citations,
             catalogPersonName: nil,
             matchCount: result.conclusion == .present ? total : 0,
-            answerPlan: plan)
+            answerPlan: plan,
+            retryOffer: retryOffer)
     }
 
     /// First- and second-person words that must never reach the catalog

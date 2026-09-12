@@ -115,7 +115,9 @@ struct HallieOfferAcceptanceTests {
             Issue.record("\"sure\" should take the offer; got \(taken.pre)")
             return
         }
-        #expect(intent.ast == .presence(.init(people: ["richard harding breen sr"])))
+        // The executed search minus its words: the name as the executor
+        // canonicalised it, not as the translator typed it.
+        #expect(intent.ast == .presence(.init(people: ["Richard Harding Breen Sr"])))
         #expect(taken.result.route == .presence)
         #expect(taken.result.queryDescription == "shape=presence person=Richard Harding Breen Sr")
         #expect(!taken.result.prose.contains("narrows down"))
@@ -225,24 +227,131 @@ struct HallieOfferAcceptanceTests {
         }
     }
 
-    @Test func onlyAPersonWithWordsOrAYearLeavesAnOffer() {
-        func offer(_ ast: ArchivistQueryAST, outcome: Exec.Outcome = .declined) -> HallieOfferAcceptance.Offer? {
-            let intent = Exec.Intent(originalQuestion: "q", ast: ast)
-            let result = Exec.Result(
-                route: .presence, outcome: outcome, prose: "", basisLine: "",
-                queryDescription: nil, citations: [], catalogPersonName: nil)
-            return HallieOfferAcceptance.retry(after: intent, result: result)
+    /// The sentence and its offer are decided together, from the executed
+    /// query's facets: only a person with words or a year offers a retry.
+    @Test func theNotFoundSentenceAndItsOfferAreDecidedTogether() {
+        typealias Composer = ArchivistPresenceAnswerComposer
+        let words = Composer.noEvidence(for: "shape=presence person=Dad keyword=wife")
+        #expect(words.retryOffer == .words)
+        #expect(words.prose.hasSuffix("Want me to try without the words, or with a different name?"))
+        let year = Composer.noEvidence(for: "shape=presence person=Dad year=1985")
+        #expect(year.retryOffer == .year)
+        #expect(year.prose.hasSuffix("Want me to try without the year, or with a different name?"))
+        // Words win over a year: the sentence names the words, so does the offer.
+        #expect(Composer.noEvidence(for: "shape=presence person=Dad years=1990...1995 keyword=wife").retryOffer == .words)
+        for query in ["shape=presence person=Dad", "shape=presence keyword=wife",
+                      "shape=presence year=1985 keyword=wife", "shape=presence mediaKind=video", ""] {
+            let miss = Composer.noEvidence(for: query)
+            #expect(miss.retryOffer == nil, Comment(rawValue: query))
+            #expect(!miss.prose.contains("Want me to try"), Comment(rawValue: miss.prose))
         }
-        #expect(offer(.presence(.init(people: ["Dad"], keywords: ["wife"])))?.ast
-                == .presence(.init(people: ["Dad"])))
-        #expect(offer(.presence(.init(people: ["Dad"], keywords: ["wife"])))?.dropped == "words")
-        #expect(offer(.cross(.init(people: ["Dad"], yearStart: 1990, yearEnd: 1995, mediaKind: .video, transcript: ["wife"])))?.ast
-                == .presence(.init(people: ["Dad"], yearStart: 1990, yearEnd: 1995, mediaKind: .video)))
-        #expect(offer(.presence(.init(people: ["Dad"], yearStart: 1985)))?.dropped == "year")
-        #expect(offer(.presence(.init(people: ["Dad"]))) == nil)
-        #expect(offer(.presence(.init(keywords: ["wife"]))) == nil)
-        #expect(offer(.presence(.init(people: ["Dad"], keywords: ["wife"])), outcome: .answered) == nil)
-        #expect(offer(.graph(.init(people: ["Dad"], operation: .biography))) == nil)
+    }
+
+    /// The offer is the EXECUTED search minus what the sentence named.
+    @Test func theOfferIsTheExecutedSearchMinusWhatWasNamed() {
+        typealias Offer = HallieOfferAcceptance.Offer
+        let executed = ArchivistQueryAST.Presence(
+            people: ["Richard Harding Breen Sr"], yearStart: 1990, yearEnd: 1995, mediaKind: .video, keywords: ["wife"])
+        let words = Offer(question: "videos of my dad with wife in the early 90s", executed: executed, dropping: .words)
+        #expect(words.ast == .presence(.init(people: ["Richard Harding Breen Sr"], yearStart: 1990, yearEnd: 1995, mediaKind: .video)))
+        #expect(words.note == "taking my offer: without the words")
+        #expect(words.question == "videos of my dad with wife in the early 90s")
+        let year = Offer(question: "q", executed: .init(people: ["Donna"], yearStart: 1985, yearEnd: 1985), dropping: .year)
+        #expect(year.ast == .presence(.init(people: ["Donna"])))
+        #expect(year.note == "taking my offer: without the year")
+    }
+
+    /// Memory copies the answer's own payload and nothing else: a decline
+    /// with no offer — whatever its route, AST or prose — leaves none.
+    @Test func memoryKeepsOnlyWhatTheAnswerOffered() {
+        let intent = Exec.Intent(
+            originalQuestion: "videos of dad with wife",
+            ast: .presence(.init(people: ["Dad"], keywords: ["wife"])))
+        func declined(retryOffer: HallieOfferAcceptance.Offer?, prose: String) -> Exec.Result {
+            Exec.Result(
+                route: .presence, outcome: .declined, prose: prose, basisLine: "Basis: fixture.",
+                queryDescription: "shape=presence person=Dad keyword=wife", citations: [],
+                catalogPersonName: nil, retryOffer: retryOffer)
+        }
+        let offer = HallieOfferAcceptance.Offer(
+            question: intent.originalQuestion, executed: .init(people: ["Dad"], keywords: ["wife"]), dropping: .words)
+
+        var memory = Exec.ConversationMemory()
+        memory.record(intent: intent, result: declined(retryOffer: offer, prose: "… Want me to try without the words, or with a different name?"))
+        #expect(memory.pendingOffer == offer)
+
+        // The same decline, same AST, even the same prose — no payload, no offer.
+        memory = Exec.ConversationMemory()
+        memory.record(intent: intent, result: declined(retryOffer: nil, prose: "… Want me to try without the words, or with a different name?"))
+        #expect(memory.pendingOffer == nil)
+
+        // One reply: any recorded turn replaces it.
+        memory = Exec.ConversationMemory()
+        memory.record(intent: intent, result: declined(retryOffer: offer, prose: "miss"))
+        memory.record(intent: nil, result: Exec.Result(
+            route: .smalltalk, outcome: .answered, prose: "Hello.", basisLine: "",
+            queryDescription: nil, citations: [], catalogPersonName: nil))
+        #expect(memory.pendingOffer == nil)
+    }
+
+    // MARK: Declines that offered nothing leave nothing (codex #1352)
+
+    /// Two People-tab profiles both answer to "Timmy": the presence path
+    /// asks "Did you mean Tim Breen or Timothy Breen Jr?" BEFORE any
+    /// catalog query — a decline with no retry in it. A "yes" must not
+    /// drop "guitar" and rerun the unresolved name.
+    @Test func yesAfterADidYouMeanDoesNotRunAStrippedSearch() async throws {
+        let profiles = [
+            Exec.ProfileSnapshot(stableID: "tim", canonicalName: "Tim Breen", aliases: ["Timmy"]),
+            Exec.ProfileSnapshot(stableID: "timothy", canonicalName: "Timothy Breen Jr", aliases: ["Timmy"]),
+        ]
+        let context = Exec.Context(presenceRecords: donnaOnly(), profiles: profiles)
+        var memory = Exec.ConversationMemory()
+        let asked = try await run(
+            "videos of timmy with guitar", memory: &memory, context: context,
+            translated: .presence(.init(people: ["timmy"], keywords: ["guitar"])))
+        #expect(asked.result.outcome == .declined)
+        #expect(asked.result.prose == "I found more than one close family name. Did you mean Tim Breen or Timothy Breen Jr?",
+                Comment(rawValue: asked.result.prose))
+        #expect(asked.result.basisLine.contains("no catalog query was performed"))
+        #expect(asked.result.retryOffer == nil)
+        #expect(memory.pendingOffer == nil)
+        // "guitar" is still part of what memory holds.
+        #expect(memory.lastExchange?.ast == .presence(.init(people: ["timmy"], keywords: ["guitar"])))
+
+        let after = try await run("yes", memory: &memory, context: context)
+        if case .run(let intent) = after.pre {
+            Issue.record("\"yes\" must not run a search after a which-one; ran \(intent.ast)")
+        }
+        #expect(after.result.route == .followUp)
+        #expect(after.result.prose.hasPrefix("I couldn't tell how “yes” narrows down my last answer."),
+                Comment(rawValue: after.result.prose))
+        #expect(!after.result.basisLine.contains("taking my offer"))
+        // Nothing was dropped: the last search memory knows still has the word.
+        #expect(memory.lastExchange?.ast == .presence(.init(people: ["timmy"], keywords: ["guitar"])))
+    }
+
+    /// "my dad" with no owner set declines before querying ("I don't know
+    /// who “my dad” is because no one has told me who is using the
+    /// archive…"). Same route, same AST shape as the live miss; no offer.
+    @Test func yesAfterAnUnresolvedSpeakerKinshipLeavesNoOffer() async throws {
+        let context = Exec.Context(presenceRecords: donnaOnly(), speakers: .none)
+        var memory = Exec.ConversationMemory()
+        let asked = try await run(
+            "videos of my dad with guitar", memory: &memory, context: context,
+            translated: .presence(.init(people: ["my dad"], keywords: ["guitar"])))
+        #expect(asked.result.outcome == .declined)
+        #expect(asked.result.prose.hasPrefix("I don't know who “my dad” is"), Comment(rawValue: asked.result.prose))
+        #expect(asked.result.basisLine.contains("no catalog query was performed"))
+        #expect(asked.result.retryOffer == nil)
+        #expect(memory.pendingOffer == nil)
+
+        let after = try await run("yes", memory: &memory, context: context)
+        if case .run(let intent) = after.pre {
+            Issue.record("\"yes\" must not run a search after an unresolved relative; ran \(intent.ast)")
+        }
+        #expect(after.result.route == .followUp)
+        #expect(!after.result.basisLine.contains("taking my offer"))
     }
 
     /// A refinement of the offer, not an acceptance of it, keeps its own
