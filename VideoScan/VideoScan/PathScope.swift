@@ -35,22 +35,55 @@ enum PathScope {
     /// paths that share the same canonical form (the previous hasPrefix
     /// checks had the same assumption).
     nonisolated static func contains(_ path: String, within root: String) -> Bool {
-        let r = normalize(root)
-        // Reject "" and "/" — matching everything under the filesystem
-        // root is exactly the catalog-wide data-loss footgun we remove.
-        guard !r.isEmpty, r != "/" else { return false }
-        let p = normalize(path)
-        if p == r { return true }
-        return p.hasPrefix(r + "/")
+        Root(root).contains(path)
     }
 
     /// Strip trailing slashes, preserving a lone "/" and the empty string.
     /// "/Volumes/Drive/" -> "/Volumes/Drive"; "/" -> "/"; "" -> "".
     nonisolated static func normalize(_ path: String) -> String {
         var s = path
-        while s.count > 1 && s.hasSuffix("/") {
+        // `hasSuffix` first: it is O(1) on the last byte, while
+        // `String.count` is O(n) — this runs per record per target in
+        // the catalog-wide projections (codex #1393).
+        while s.hasSuffix("/") && s.count > 1 {
             s.removeLast()
         }
         return s
+    }
+
+    /// A root prepared ONCE for many `contains` tests — the normalized
+    /// root and its "root/" form, so a loop over 100k records does not
+    /// re-normalize and re-concatenate the root per record. This IS the
+    /// `contains(_:within:)` rule (that function delegates here), so a
+    /// caller holding a `Root` gets byte-identical semantics.
+    struct Root: Sendable, Equatable {
+        /// `normalize(root)`.
+        let normalized: String
+        /// `normalized + "/"`; only meaningful when `isValid`.
+        let withSlash: String
+        /// False for "" and "/" — a scope that would match everything.
+        let isValid: Bool
+
+        init(_ root: String) {
+            let r = PathScope.normalize(root)
+            normalized = r
+            isValid = !r.isEmpty && r != "/"
+            withSlash = r + "/"
+        }
+
+        /// Same rule as `PathScope.contains(path, within: root)`.
+        func contains(_ path: String) -> Bool {
+            containsNormalized(PathScope.normalize(path))
+        }
+
+        /// `contains` for a path the caller has ALREADY passed through
+        /// `PathScope.normalize` — lets a records × targets loop
+        /// normalize each path once, not once per target. `normalize`
+        /// is idempotent, so the result is identical to `contains`.
+        func containsNormalized(_ p: String) -> Bool {
+            guard isValid else { return false }
+            if p == normalized { return true }
+            return p.hasPrefix(withSlash)
+        }
     }
 }

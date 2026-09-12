@@ -16,6 +16,7 @@ final class VideoScanModel: ObservableObject {
         // touch the array (dossier writeback, provenance stamping) call
         // noteCatalogChangedForDossierCounts() at their own sites.
         didSet {
+            noteCatalogMutated()
             noteCatalogChangedForDossierCounts()
             noteVolumeStatusesStale()
             noteVolumeRenameCandidatesStale()
@@ -119,7 +120,11 @@ final class VideoScanModel: ObservableObject {
     @Published var correlateStatus: String = ""
     @Published var duplicateStatus: String = ""
     @Published var avidBinResults: [AvbBinResult] = []
-    @Published var scanTargets: [CatalogScanTarget] = []
+    @Published var scanTargets: [CatalogScanTarget] = [] {
+        // Add / remove / `notifyTargetsChanged()` republish — every
+        // per-target projection keys off the target list (codex #1393).
+        didSet { noteCatalogMutated() }
+    }
     /// Set by other views to ask the Volumes window to open with a specific
     /// volume pre-selected. The window consumes and clears this on appear /
     /// change. Lets the Archive sidebar (and future badges elsewhere) deep-
@@ -197,6 +202,7 @@ final class VideoScanModel: ObservableObject {
     /// mutation of `records` that doesn't change overall count.
     func notifyVolumeAggregatesStale() {
         volumeAggregatesRevision &+= 1
+        noteCatalogMutated()
         // In-place fullPath/archiveStage rewrites (Bucket-D adoption,
         // Relocate disposal) shift records between volumes without an
         // array-level mutation — the retire-status cache must follow.
@@ -1239,6 +1245,7 @@ final class VideoScanModel: ObservableObject {
     /// Persist the current records array. Debounced; bursts of mutations
     /// (e.g. mid-scan) collapse into one disk write.
     func saveCatalogDebounced() {
+        noteCatalogMutated()
         catalogStore.scheduleSave(records: records)
     }
 
@@ -1247,7 +1254,39 @@ final class VideoScanModel: ObservableObject {
     /// snapshot durably reached disk (see CatalogStore.saveNow).
     @discardableResult
     func saveCatalogNow() -> Bool {
-        catalogStore.saveNow(records: records)
+        noteCatalogMutated()
+        return catalogStore.saveNow(records: records)
+    }
+
+    // MARK: - Catalog mutation revision (codex #1393)
+
+    /// THE authoritative "something about the catalog changed" counter
+    /// for cached per-target projections (`scanTargetFacts`,
+    /// `volumeAggregateCache`, `storageTotals`, `hashBackfillPlan`, …).
+    ///
+    /// Bumped from the funnels every mutation already passes through —
+    /// not from each mutation site, which is how the previous trigger set
+    /// (records.count / lastPurgedBatch / volumeAggregatesRevision)
+    /// missed Tidy apply/undo, Confirm Repair/undo, same-count scan
+    /// merges and in-place target re-points:
+    ///   • `records.didSet`            — every array-level mutation,
+    ///                                   including same-count swaps
+    ///   • `saveCatalogDebounced()` /
+    ///     `saveCatalogNow()`          — every persisted in-place field
+    ///                                   write (a mutation that is not
+    ///                                   saved does not survive relaunch,
+    ///                                   so it is not catalog state)
+    ///   • `notifyVolumeAggregatesStale()` — the legacy in-place signal
+    ///   • `scanTargets.didSet`        — add / remove / republish, which
+    ///                                   `repointScanTarget` also drives
+    ///
+    /// Cheap: an integer bump. Observers coalesce bursts themselves
+    /// (CatalogView's aggregate recompute is leading+trailing debounced),
+    /// so per-record loops that save per item stay bounded.
+    @Published private(set) var catalogMutationRevision: UInt64 = 0
+
+    func noteCatalogMutated() {
+        catalogMutationRevision &+= 1
     }
 
     // MARK: - Soft-delete state (logic in VideoScanModel+SoftDelete.swift)

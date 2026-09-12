@@ -1,6 +1,6 @@
 // ScanTargetRecordFacts.swift
 // Per-scan-target facts the Catalog Options menu reads in O(1)
-// (codex #1368, 2026-09-12).
+// (codex #1368, 2026-09-12; count semantics fixed codex #1393).
 //
 // The menu's "Delete › <volume> (N)" rows and the "File Signatures ›
 // One Volume… › <volume> — N files" rows used to compute their counts
@@ -10,29 +10,32 @@
 // exact class the project rule forbids ("NO O(records) work in view
 // bodies"; fix template = VolumeStatusCache, GH #104).
 //
-// This projection is computed ONCE per records-change trigger inside
-// `recomputeVolumeAggregates()` — the same event-driven pass that
-// publishes `volumeAggregateCache`, `storageTotals` and
-// `hashBackfillPlan` — and published as a `[UUID: Facts]` dictionary
-// held in `@State`. The body does a dictionary lookup per target.
+// This projection is computed ONCE per catalog mutation (the model's
+// `catalogMutationRevision`) inside `recomputeVolumeAggregates()` — the
+// same event-driven pass that publishes `volumeAggregateCache`,
+// `storageTotals` and `hashBackfillPlan` — and published as a
+// `[UUID: Facts]` dictionary held in `@State`. The body does a
+// dictionary lookup per target.
 //
-// Semantics are pinned to the expressions they replace
-// (ScanTargetRecordFactsTests.parityWithLegacyBodyExpressions):
-//   • `records`  — plain `hasPrefix(searchPath)` against the current
-//     path OR the origin path. Deliberately NOT the normalised
-//     `isUnder` test: the Delete count has always matched what
-//     `deleteCatalogForTarget` removes, and "/Volumes/X" has always
-//     counted "/Volumes/X2". Same predicate as `VolumeAggregate.files`.
+// Semantics (ScanTargetRecordFactsTests):
+//   • `records`  — EXACTLY what `deleteCatalogForTarget` would remove:
+//     `TargetRemovalScope` (component-bounded PathScope on the CURRENT
+//     path only, minus rows covered by another registered target). The
+//     first cut used the raw current-or-origin `hasPrefix` count the old
+//     body showed, which counted "/Volumes/X2" rows under "/Volumes/X",
+//     origin-only rows, and nested-target rows that the guarded removal
+//     never removes (codex #1393). The Volumes table's Files column
+//     keeps the raw figure on purpose — it answers a different question.
 //   • `signaturePlan` — `VideoScanModel.planContentHashBackfill(
 //     records:isReachable:{ _ in true }pathPrefix:)` for this target,
-//     i.e. the `isUnder` scope with every record treated as reachable
-//     (the menu only lists reachable targets).
+//     i.e. the `isUnder` scope (current OR origin path) with every
+//     record treated as reachable (the menu only lists reachable targets).
 
 import Foundation
 
 struct ScanTargetRecordFacts: Equatable, Sendable {
-    /// Catalog records under this target (current OR origin path,
-    /// plain prefix). The Delete menu's count.
+    /// Records a guarded removal under this target would remove — the
+    /// Delete menu's count and the Delete confirmation's count.
     var records: Int = 0
     /// File-signature backfill plan scoped to this target, reachability
     /// assumed. The "One Volume…" menu's count.
@@ -45,8 +48,8 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
 
     /// One pass over the catalog. Work is O(records × targets) — the
     /// same shape as the volume-aggregate bucketing it runs beside —
-    /// and allocation-free per record: the per-target "dir/" prefix is
-    /// computed once up front, not once per record as `isUnder` would.
+    /// and allocation-free per record: every per-target root form is
+    /// prepared once up front (`PathScope.Root`, the `isUnder` "dir/").
     ///
     /// Empty `targets` → empty dictionary; a target with no records
     /// still gets an entry (zeroed), so a body lookup distinguishes
@@ -57,8 +60,12 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
     ) -> [UUID: ScanTargetRecordFacts] {
         guard !targets.isEmpty else { return [:] }
         let prefixes = targets.map(\.searchPath)
-        // `isUnder` normalisation: "/Volumes/X" must not scope
-        // "/Volumes/X2"; an empty prefix scopes everything.
+        // Delete count: the guarded removal's own scope per target.
+        let removalScopes = prefixes.map {
+            TargetRemovalScope(root: $0, allTargetRoots: prefixes)
+        }
+        // Signature plan: `isUnder` normalisation — "/Volumes/X" must not
+        // scope "/Volumes/X2"; an empty prefix scopes everything.
         let dirs = prefixes.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
         var counts = [Int](repeating: 0, count: targets.count)
         var plans = [VideoScanModel.ContentHashBackfillPlan](
@@ -73,16 +80,13 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
                 && !rec.isSetAside && !rec.isSuperseded
                 && rec.sizeBytes > 0 && !path.isEmpty
             let hasSignature = !rec.contentHash.isEmpty
+            // Normalize once per record, not once per target.
+            let normPath = PathScope.normalize(path)
 
             for i in prefixes.indices {
-                let p = prefixes[i]
-                let rawMatch = path.hasPrefix(p) || (origin?.hasPrefix(p) ?? false)
-                if rawMatch { counts[i] += 1 }
+                if removalScopes[i].claimsNormalized(normPath) { counts[i] += 1 }
                 guard planEligible else { continue }
-                // Fast reject: `isUnder` implies the raw prefix match
-                // (both of its forms start with `p`), so only a raw hit
-                // can be in scope. Empty prefix: rawMatch is true too.
-                guard rawMatch else { continue }
+                let p = prefixes[i]
                 let d = dirs[i]
                 let under = p.isEmpty
                     || path == p || path.hasPrefix(d)

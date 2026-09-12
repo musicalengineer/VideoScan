@@ -126,6 +126,23 @@ extension VideoScanModel {
     /// genuinely-destructive "remove AND purge records" action is ever
     /// wanted it must be a separate, clearly-labeled, confirmation-gated
     /// action — never the default "Remove from List".
+    /// Re-point an existing target at a user-browsed path (Browse… on a
+    /// volume row). Was `CatalogView.applyBrowsedPath` — a static on the
+    /// view that assigned `searchPath` and published NOTHING, so every
+    /// cached per-target projection kept describing the old path
+    /// (codex #1393). Now a model operation: same scratch-volume screen
+    /// (the ninth ingestion vector, QA 2026-07-08), then persist and
+    /// republish so `catalogMutationRevision` moves.
+    @discardableResult
+    func repointScanTarget(_ target: CatalogScanTarget, to path: String) -> Bool {
+        guard !CatalogScanTarget.isScratchVolumePath(path) else { return false }
+        guard target.searchPath != path else { return true }
+        target.searchPath = path
+        persistScanTargets()
+        notifyTargetsChanged()
+        return true
+    }
+
     func removeScanTarget(_ target: CatalogScanTarget) {
         // Record-independent cleanup — always safe to run.
         target.scanTask?.cancel()
