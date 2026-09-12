@@ -850,7 +850,10 @@ struct FamilyAssetStore {
     /// `groupFolderMatches` for the matching rule. Presentation only, like
     /// every asset here; never evidence.
     func groupPhotoURLs(for person: FamilyAssetPerson) -> [URL] {
-        guard access != .unavailable else { return [] }
+        // The same fail-closed rule as every other read path (codex #1369):
+        // a malformed pointer is not a name-only person, and a directory
+        // that cannot key it must not hand the lookup to the name rule.
+        guard access != .unavailable, !Self.hasMalformedGEDCOMID(person) else { return [] }
         return safePersonFolders()
             .filter { groupFolderMatches($0.lastPathComponent, person: person) }
             .flatMap(verifiedImages(in:))

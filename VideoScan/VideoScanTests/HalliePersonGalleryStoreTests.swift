@@ -251,4 +251,112 @@ struct HalliePersonGalleryStoreTests {
         #expect(store.photoURLs(for: FamilyAssetPerson(name: "Mary O'Connor"))
                     .map(\.lastPathComponent) == ["portrait.png"])
     }
+
+    // MARK: Two same-name folders, neither this record's (codex #1369, 2026-09-12)
+
+    /// The reviewer's fixture: TWO `Mary_OConnor…` folders on disk, one
+    /// pinned to another record (`_I2`), one dated to a different year
+    /// (`_b1904`). For @I1@ born 1905 neither is hers, on every read
+    /// path — the resolver's "sole name match" must never enter the
+    /// gallery ahead of the identity rule, and an alias spelling cannot
+    /// rescue a folder that rule refuses.
+    @Test func twoSameNameFoldersWithAConflictingPointerAndYearNeverEnterTheGallery() throws {
+        let (base, plain) = try temporaryStore()
+        defer { try? fileManager.removeItem(at: base) }
+        var store = plain
+        let people = store.peopleDirectory
+        try writeImage(to: people.appendingPathComponent("Mary_OConnor_I2/portrait.png"), type: .png)
+        try writeText("%PDF-1.4\n%%EOF\n", to: people.appendingPathComponent("Mary_OConnor_I2/certificate.pdf"))
+        try writeImage(to: people.appendingPathComponent("Mary_OConnor_b1904/baptism.png"), type: .png)
+        try writeText("%PDF-1.4\n%%EOF\n", to: people.appendingPathComponent("Mary_OConnor_b1904/baptism.pdf"))
+
+        let born1905 = FamilyAssetPerson(gedcomID: "@I1@", name: "Mary O'Connor", birthYear: 1905)
+        #expect(store.personFolders(for: born1905).isEmpty)
+        #expect(store.photoURLs(for: born1905).isEmpty)
+        #expect(store.documentURLs(for: born1905).isEmpty)
+        #expect(store.chosenPhotoFolder(for: born1905) == nil)
+        #expect(store.cardPhotoURL(for: born1905) == nil)
+        #expect(store.originalPhotoURL(for: born1905) == nil)
+
+        // An identity directory that spells her name as an alias changes nothing.
+        store.identity = FamilyAssetIdentityDirectory(
+            members: [.init(gedcomID: "@I1@", givenTokens: ["mary"], surnameTokens: ["oconnor"],
+                            suffix: nil, aliasTokens: [], aliasNames: ["Mary O'Connor", "Mary OConnor"])],
+            ownerGedcomID: nil)
+        #expect(store.personFolders(for: born1905).isEmpty)
+        #expect(store.photoURLs(for: born1905).isEmpty)
+        #expect(store.documentURLs(for: born1905).isEmpty)
+
+        // No year on the record: the dated folder is readable (nothing to
+        // disagree with); the other record's folder still never is.
+        let undated = FamilyAssetPerson(gedcomID: "@I1@", name: "Mary O'Connor")
+        #expect(store.personFolders(for: undated).map(\.lastPathComponent) == ["Mary_OConnor_b1904"])
+        #expect(store.photoURLs(for: undated).map(\.lastPathComponent) == ["baptism.png"])
+        #expect(store.documentURLs(for: undated).map(\.lastPathComponent) == ["baptism.pdf"])
+
+        // Each folder's own record reads exactly its own — the pointer
+        // wins over a year that would otherwise disagree.
+        let i2 = FamilyAssetPerson(gedcomID: "@I2@", name: "Mary O'Connor", birthYear: 1905)
+        #expect(store.personFolders(for: i2).map(\.lastPathComponent) == ["Mary_OConnor_I2"])
+        #expect(store.photoURLs(for: i2).map(\.lastPathComponent) == ["portrait.png"])
+        #expect(store.documentURLs(for: i2).map(\.lastPathComponent) == ["certificate.pdf"])
+
+        // Write side: b.1905 is filed into neither.
+        let requested = try store.folderForPhotoRequest(person: born1905)
+        #expect(!["Mary_OConnor_I2", "Mary_OConnor_b1904"].contains(requested.lastPathComponent))
+    }
+
+    /// An unsafe NON-EMPTY pointer rejects outright — it never degrades to
+    /// the name, an alias folder, the FamilySearch-ID folder, or a group
+    /// folder, however well those match (codex #1369 finding 2).
+    @Test func anUnsafePointerRejectsAndNeverDegradesToNameAliasOrGroupFolders() throws {
+        let (base, plain) = try temporaryStore()
+        defer { try? fileManager.removeItem(at: base) }
+        var store = plain
+        let people = store.peopleDirectory
+        try writeImage(to: people.appendingPathComponent("Christopher_OConnor/portrait.png"), type: .png)
+        try writeImage(to: people.appendingPathComponent("Christopher_Dennis_OConnor/army.png"), type: .png)
+        try writeText("notes", to: people.appendingPathComponent("Christopher_Dennis_OConnor/notes.txt"))
+        // `Oconnor`, one CamelCase hump: `groupFolderTokens` would split
+        // `OConnor` into `o` + `connor` and match no one.
+        try writeImage(to: people.appendingPathComponent("Christopher_and_Mary_Oconnor/wedding.png"), type: .png)
+        try writeImage(to: people.appendingPathComponent("KWC1-ABC/chosen.png"), type: .png)
+        // The fixture does match this name by the group rule.
+        #expect(store.groupPhotoURLs(for: FamilyAssetPerson(name: "Christopher O'Connor"))
+                    .map(\.lastPathComponent) == ["wedding.png"])
+
+        for bad in ["@I 1@", "@I1@/..", "I1\u{0}", "../I1"] {
+          for withDirectory in [false, true] {
+            let person = FamilyAssetPerson(gedcomID: bad, name: "Christopher O'Connor",
+                                           birthYear: nil, familySearchID: "KWC1-ABC")
+            store.identity = withDirectory ? FamilyAssetIdentityDirectory(
+                members: [.init(gedcomID: bad, givenTokens: ["christopher"], surnameTokens: ["oconnor"],
+                                suffix: nil, aliasTokens: ["dennis"], aliasNames: ["Christopher Dennis O'Connor"])],
+                ownerGedcomID: nil) : nil
+            let why = Comment(rawValue: "id \(bad.debugDescription) (directory: \(withDirectory)) must reject, not degrade")
+            #expect(FamilyAssetStore.hasMalformedGEDCOMID(person), why)
+            #expect(store.personFolders(for: person).isEmpty, why)
+            #expect(store.photoURLs(for: person).isEmpty, why)
+            #expect(store.documentURLs(for: person).isEmpty, why)
+            #expect(store.groupPhotoURLs(for: person).isEmpty, why)
+            #expect(store.chosenPhotoFolder(for: person) == nil, why)
+            #expect(store.cardPhotoURL(for: person) == nil, why)
+            #expect(store.originalPhotoURL(for: person) == nil, why)
+            #expect(throws: FamilyAssetStore.StoreError.invalidPerson, why) {
+                try store.folderForPhotoRequest(person: person)
+            }
+          }
+        }
+        // The same record with a sound pointer reads all of it.
+        let sound = FamilyAssetPerson(gedcomID: "@I1@", name: "Christopher O'Connor",
+                                      birthYear: nil, familySearchID: "KWC1-ABC")
+        store.identity = FamilyAssetIdentityDirectory(
+            members: [.init(gedcomID: "@I1@", givenTokens: ["christopher"], surnameTokens: ["oconnor"],
+                            suffix: nil, aliasTokens: ["dennis"], aliasNames: ["Christopher Dennis O'Connor"])],
+            ownerGedcomID: nil)
+        #expect(store.personFolders(for: sound).map(\.lastPathComponent)
+                == ["KWC1-ABC", "Christopher_OConnor", "Christopher_Dennis_OConnor"])
+        #expect(Array(store.photoURLs(for: sound).map(\.lastPathComponent).prefix(3))
+                == ["chosen.png", "portrait.png", "army.png"])
+    }
 }
