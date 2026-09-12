@@ -159,7 +159,13 @@ struct IgnoredContentIndex: Sendable {
 @MainActor
 final class IgnoredContentStore: ObservableObject {
 
-    static let filename = "ignored-content.json"
+    /// The sidecar's file name. `nonisolated` because `fileURL` (below) and
+    /// the off-main load/save helpers read it from outside the main actor;
+    /// a `static let` on a `@MainActor` class is otherwise main-actor-
+    /// isolated, which Swift 6 makes an error. (For Rick: think of it as a
+    /// `constexpr` — an immutable `String` is `Sendable`, so nothing can
+    /// race on it and it needs no actor at all.)
+    nonisolated static let filename = "ignored-content.json"
 
     /// App Support/VideoScan/ — the production home. Under a unit-test
     /// host this is a per-process scratch folder instead: ~200 tests
