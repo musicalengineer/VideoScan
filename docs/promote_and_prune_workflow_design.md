@@ -47,8 +47,8 @@ Protection now:  archive ✓ · 34 other copies on LaCie, Projects · cloud — 
 RAID from taking everything. Nothing here deletes the archive copy.
 
 I also have these files…
-  [ ] in the cloud   (which: ____________)          ← attestation, remembered
-  [ ] off-site       (where: ____________)          ← attestation, remembered
+  cloud:    ( ) yes, in: ____________  ( ) no   ( ) n/a for these   ← attestation, remembered
+  off-site: ( ) yes, at: ____________  ( ) no   ( ) n/a for these   ← attestation, remembered
   Applies to: (•) this batch  ( ) only the ★★★ ones
 
 What to do with the 34 extra copies (58.1 GB):
@@ -81,6 +81,31 @@ Rules the sheet enforces (all pure, all tested):
   They are the user's word; the app never verifies cloud or off-site.
 - The bar is checked per file, so a batch that mixes ★ and ★★★ files
   gets two different outcomes in one sheet, shown as the "not covered" line.
+
+## Rick's amendments (2026-09-12 evening)
+
+- **Cloud and off-site are the user's call, three ways.** Each attestation is
+  yes / no / n-a, never just a checkbox: "the user knows what is best, we can
+  only suggest." *No* and *n-a* are answers, remembered, and they simply mean
+  the bar for that file is whatever the remaining copies satisfy. The 3-2-1
+  tip stays a tip.
+- **Audit-grade memory of what happened to every file.** "You deleted
+  MyFavoriteVideo.mov on Sep 12 2026", "Archived XYZ 16-Sep-2026", "You approved
+  N copies be deleted: file1, file2 … <date>". The goal: ask the app or Hallie
+  "what happened to MyFavoriteVideo.mov?" and get the answer, with dates.
+  → **Media Ledger**: one append-only JSONL under App Support
+  (`ledger/media-ledger.jsonl`), mirrored into the archive's `00_Index/` on every
+  promote so it travels with the archive (GH #170). One line per event:
+  `{at, event, recordID, contentKey, filename, fullPath, by: "rick"|"tidy"|"promote"|"angel",
+    batchID?, detail}`; events: cataloged, set-aside, put-back, archived (with
+  fixity), copy-trashed, copy-deleted, restored, place-set, date-set,
+  attestation, approval ("Rick approved N copies to Trash", listing them).
+  Existing journals (archive journal, Find-and-Tag journal, catalog.log) keep
+  writing; the ledger is the one place a human question is answered from.
+  Hallie record route: "what happened to <file>?" / "have you ever seen <file>?"
+  → the ledger lines for that filename or content key, phrased as dated
+  sentences, template-composed (no model). The catalog inspector gets a
+  "History" section reading the same lines.
 
 ## Where the attestations must also live
 
