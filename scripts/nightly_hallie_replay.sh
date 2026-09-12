@@ -24,8 +24,14 @@
 # On demand:  scripts/nightly_hallie_replay.sh --out /tmp/hallie.json
 # Options:    --bin <VideoScan binary>  --host <ollama url>  --model <tag>
 #             --budget-seconds <N>  --strict-only  --advisory-only  --dry-run
-# Preflight: the model must exist on the host (/api/tags) or the row is
-# `failed` with the reason in seconds; with no --model the host's tags choose.
+# Defaults:   host  http://127.0.0.1:11434 — the M4's OWN ollama (GH #181:
+#                   it binds loopback only, so never RicksM4.local)
+#             model the app's SELECTED Hallie brain (Settings > Archivist
+#                   Brain, read-only from UserDefaults), else qwen3.8:27b-mlx
+# Overrides:  VIDEOSCAN_HALLIE_REPLAY_HOST / VIDEOSCAN_HALLIE_REPLAY_MODEL for
+#             a manual run against the M5; --host / --model outrank them.
+# Preflight: /api/tags must answer AND list that exact tag, or the row is
+# `failed` in seconds with a one-line reason naming host + tag.
 set -u
 REPO=${REPO:-$HOME/dev/VideoScan}
 PY=${PY:-$REPO/venv/bin/python}
@@ -50,43 +56,72 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$OUT" ] || { echo "--out is required" >&2; exit 64; }
 
-# PREFLIGHT: THE MODEL MUST EXIST ON THE HOST, OR SAY SO IN SECONDS.
-# First nightly run, 2026-09-08 02:37: no --model was passed, the harness
-# defaulted to the M4's tag (qwen3.8:27b-mlx), ricksm5 has qwen3.8:27b, and
-# the strict lane sat for its whole 900 s share pairing zero turns. The row
-# said "incomplete" — honest, but an hour of the night for a name.
-# With no --model the host's own tags choose: the shipped brain's plain tag
-# first, then its -mlx twin. A model the host does not have, or a host that
-# does not answer, is `failed` with the reason — never a 900 s wait.
-HOST=${HOST:-http://ricksm5.local:11434}
+# WHICH HOST, WHICH MODEL (2026-09-12). Rick's standing ruling (codex #1359):
+# Hallie tests run on the M4, against the M4's own brain. This script used to
+# default to ricksm5, and on the night of 09/11->12 the M5 was asleep at
+# 02:xx: "host http://ricksm5.local:11434 did not answer /api/tags" and the
+# night produced nothing. The M4's ollama binds 127.0.0.1 only (GH #181), so
+# the default is the loopback address — never RicksM4.local, which resolves
+# to IPv6 link-local and times out from the M4 itself.
+#
+# The model is the one Rick actually uses: the app's SELECTED brain, read
+# (read-only) from the same UserDefaults key the Settings pane writes
+# (archivist.ollamaModel in Rick-Breen.VideoScan; `defaults` follows the
+# sandbox container). Unset -> the documented brain, qwen3.8:27b-mlx. The
+# host's tag list no longer chooses: a replay against whichever model
+# happens to be installed measures a different brain than the one Rick
+# talks to, and that is how the 09/08 night paired zero turns.
+#
+# Env overrides exist so a hand run can point at the M5:
+#   VIDEOSCAN_HALLIE_REPLAY_HOST / VIDEOSCAN_HALLIE_REPLAY_MODEL
+# (--host / --model outrank them). VIDEOSCAN_HALLIE_REPLAY_APP_DEFAULTS is
+# for the tests only: a plist path standing in for the app's domain.
+HOST=${HOST:-${VIDEOSCAN_HALLIE_REPLAY_HOST:-http://127.0.0.1:11434}}
+APP_DEFAULTS=${VIDEOSCAN_HALLIE_REPLAY_APP_DEFAULTS:-Rick-Breen.VideoScan}
+DOCUMENTED_BRAIN="qwen3.8:27b-mlx"
+MODEL_SOURCE="--model"
+if [ -z "$MODEL" ]; then
+    if [ -n "${VIDEOSCAN_HALLIE_REPLAY_MODEL:-}" ]; then
+        MODEL=$VIDEOSCAN_HALLIE_REPLAY_MODEL; MODEL_SOURCE="VIDEOSCAN_HALLIE_REPLAY_MODEL"
+    else
+        MODEL=$(defaults read "$APP_DEFAULTS" archivist.ollamaModel 2>/dev/null | tr -d '[:space:]')
+        if [ -n "$MODEL" ]; then
+            MODEL_SOURCE="app setting archivist.ollamaModel"
+        else
+            MODEL=$DOCUMENTED_BRAIN; MODEL_SOURCE="documented brain (app setting unset)"
+        fi
+    fi
+fi
+
+# PREFLIGHT: THE HOST MUST ANSWER AND LIST THAT EXACT TAG, OR SAY SO IN
+# SECONDS. First nightly run, 2026-09-08 02:37: the wrong tag sat for its
+# whole 900 s share pairing zero turns. The row said "incomplete" — honest,
+# but an hour of the night for a name. A host that does not answer, or a
+# model the host does not have, is `failed` with host + tag in the reason —
+# never a 900 s wait.
 PREFLIGHT_REASON=""
 TAGS=$(curl -s --max-time 15 "$HOST/api/tags" 2>/dev/null \
     | python3 -c 'import json,sys
 try: print("\n".join(m["name"] for m in json.load(sys.stdin).get("models",[])))
 except Exception: pass' 2>/dev/null)
 if [ -z "$TAGS" ]; then
-    PREFLIGHT_REASON="host $HOST did not answer /api/tags (or lists no models)"
-elif [ -z "$MODEL" ]; then
-    for candidate in qwen3.8:27b qwen3.8:27b-mlx; do
-        if printf '%s\n' "$TAGS" | grep -qx "$candidate"; then MODEL="$candidate"; break; fi
-    done
-    [ -n "$MODEL" ] || PREFLIGHT_REASON="no --model given and neither qwen3.8:27b nor qwen3.8:27b-mlx is on $HOST"
+    PREFLIGHT_REASON="host $HOST did not answer /api/tags (or lists no models); wanted model $MODEL ($MODEL_SOURCE)"
 elif ! printf '%s\n' "$TAGS" | grep -qx "$MODEL"; then
-    PREFLIGHT_REASON="model $MODEL is not on $HOST (has: $(printf '%s' "$TAGS" | tr '\n' ' '))"
+    PREFLIGHT_REASON="model $MODEL ($MODEL_SOURCE) is not on $HOST (has: $(printf '%s' "$TAGS" | tr '\n' ' '))"
 fi
 if [ "$DRY_RUN" = 1 ]; then
-    echo "dry-run: host=$HOST model=${MODEL:-?} ${PREFLIGHT_REASON:+reason=$PREFLIGHT_REASON}"
+    echo "dry-run: host=$HOST model=$MODEL source=\"$MODEL_SOURCE\" ${PREFLIGHT_REASON:+reason=$PREFLIGHT_REASON}"
     [ -z "$PREFLIGHT_REASON" ]; exit $?
 fi
 if [ -n "$PREFLIGHT_REASON" ]; then
-    python3 - "$OUT" "$PREFLIGHT_REASON" "$HOST" "$MODEL" "$(date +%Y%m%dT%H%M%S)" \
+    python3 - "$OUT" "$PREFLIGHT_REASON" "$HOST" "$MODEL" "$MODEL_SOURCE" "$(date +%Y%m%dT%H%M%S)" \
         "$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)" <<'PYEOF'
 import json, sys
-out, reason, host, model, stamp, sha = sys.argv[1:7]
+out, reason, host, model, source, stamp, sha = sys.argv[1:8]
 row = {"hallie_replay_status": "failed", "hallie_replay_reason": reason,
        "hallie_replay_elapsed_s": 0, "hallie_replay_stamp": stamp,
        "hallie_replay_git_sha": sha, "hallie_replay_host": host,
-       "hallie_replay_model": model or None}
+       "hallie_replay_model": model or None, "hallie_replay_model_source": source}
 for lane in ("strict", "advisory"):
     row.update({f"hallie_{lane}_status": "not-run", f"hallie_{lane}_expected": 0,
                 f"hallie_{lane}_completed": 0, f"hallie_{lane}_pass": 0,
@@ -177,9 +212,9 @@ PYEOF
 )
 
 python3 - "$OUT" "$STATUS" "$STRICT_JSON" "$ADVISORY_JSON" "$ELAPSED" "$SHA" "$BIN" "$HOST" "$MODEL" "$TREE_GEN" \
-        "$(sha256 "$STRICT_CORPUS")" "$(sha256 "$ADVISORY_CORPUS")" "$STAMP" <<'PYEOF'
+        "$(sha256 "$STRICT_CORPUS")" "$(sha256 "$ADVISORY_CORPUS")" "$STAMP" "$MODEL_SOURCE" <<'PYEOF'
 import json, os, sys, time
-out, status, strict, advisory, elapsed, sha, binary, host, model, tree, msha, csha, stamp = sys.argv[1:14]
+out, status, strict, advisory, elapsed, sha, binary, host, model, tree, msha, csha, stamp, source = sys.argv[1:15]
 def incomplete_count(s):
     # The harness summary says incomplete: true/false; the row wants how many.
     v = s.get("incomplete", 0)
@@ -205,6 +240,7 @@ row = {"hallie_replay_status": status,
        "hallie_replay_binary_mtime": (time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(os.path.getmtime(binary))) if binary and os.path.exists(binary) else None),
        "hallie_replay_host": host or None,
        "hallie_replay_model": model or None,
+       "hallie_replay_model_source": source,
        "hallie_replay_tree_generation": tree,
        "hallie_replay_manifest_sha256": msha,
        "hallie_replay_corpus_sha256": csha}

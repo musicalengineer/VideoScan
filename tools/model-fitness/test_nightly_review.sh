@@ -9,6 +9,10 @@
 #      122 commits;
 #   3. both of the above reported in one quiet log line nobody reads.
 #
+# Plus, since 2026-09-12, the night ricksm5 slept through 04:30 and forty
+# commits went to a dead endpoint (cases 7-8): the reviewer preflights
+# /api/tags, retries once, and skips loudly with the baseline kept.
+#
 # Runs entirely in a sandbox: a throwaway repo, a stub reviewer, a stub team
 # channel, and HOME pointed at the sandbox so STATE lands there.
 #
@@ -66,11 +70,32 @@ with open(os.environ["POSTS_FILE"], "a") as fh:
 STUB
 POSTS="$SANDBOX/posts.txt"; : > "$POSTS"
 
+# Stub ollama: a /api/tags server listing stub-model, so the preflight sees an
+# awake host that has the reviewer's model. Cases 7-8 point ENDPOINT elsewhere.
+python3 - "$SANDBOX/port" > "$SANDBOX/stub-ollama.log" 2>&1 <<'STUB' &
+import http.server, json, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        body = json.dumps({"models": [{"name": "stub-model"}]}).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1], "w").write(str(srv.server_address[1]))
+srv.serve_forever()
+STUB
+STUB_PID=$!
+# The `wait` swallows bash's "Terminated" notice for the reaped stub.
+trap 'kill "$STUB_PID" 2>/dev/null; wait "$STUB_PID" 2>/dev/null; rm -rf "$SANDBOX"' EXIT
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$SANDBOX/port" ] && break; sleep 0.2; done
+STUB_ENDPOINT="http://127.0.0.1:$(cat "$SANDBOX/port")"
+
 run_reviewer() {
     ( cd "$WORK"
       REVIEW_STATE="$STATE" REPO="$WORK" POSTS_FILE="$POSTS" \
       STUB_ERRORS="${1:-}" MAX_RETRIES="${MAX_RETRIES:-3}" \
-      ENDPOINT=http://stub REVIEW_MODEL=stub-model \
+      ENDPOINT="${ENDPOINT:-$STUB_ENDPOINT}" REVIEW_MODEL="${REVIEW_MODEL:-stub-model}" \
+      REVIEW_PREFLIGHT_RETRY_SECONDS=1 \
       zsh "$REAL_SCRIPT" ) > "$SANDBOX/run.out" 2>&1
 }
 
@@ -160,6 +185,60 @@ if grep -hoE 'quiet -[0-9]+' "$STATE"/*.digest.md 2>/dev/null | head -1 | grep -
     fail "a digest reported a negative quiet count"
 else
     pass "no digest reports a negative quiet count"
+fi
+
+echo "== 7: an asleep host is ONE skip line, the baseline is kept, nothing is asked per commit =="
+# The 2026-09-11->12 night: ricksm5 asleep at 04:30, forty commits each
+# timing out or erroring on urlopen, digest posted as if reviewed.
+: > "$POSTS"
+echo seven > "$WORK/g.txt"; git -C "$WORK" add -A; git -C "$WORK" commit -q -m "lands while the M5 sleeps"
+BEFORE_SHA=$(cat "$STATE/last_sha"); BEFORE_DIRS=$(ls -d "$STATE"/2*/ 2>/dev/null | wc -l | tr -d ' ')
+start=$(date +%s)
+ENDPOINT=http://127.0.0.1:1 run_reviewer ""; rc=$?
+took=$(( $(date +%s) - start ))
+AFTER_DIRS=$(ls -d "$STATE"/2*/ 2>/dev/null | wc -l | tr -d ' ')
+if [ "$rc" -ne 0 ] && tail -1 "$STATE/nightly.log" | grep -q "SKIPPED — host http://127.0.0.1:1 asleep or unreachable"; then
+    pass "the skip is one line in nightly.log with the host named (rc=$rc, ${took}s)"
+else
+    fail "no skip line (rc=$rc): $(tail -1 "$STATE/nightly.log")"
+fi
+if [ "$(cat "$STATE/last_sha")" = "$BEFORE_SHA" ]; then
+    pass "the baseline did not advance past the unreviewed commit"
+else
+    fail "baseline moved while the host was asleep"
+fi
+if [ "$AFTER_DIRS" = "$BEFORE_DIRS" ]; then
+    pass "no per-commit review was attempted against the dead endpoint"
+else
+    fail "a review directory was created for a dead endpoint ($BEFORE_DIRS -> $AFTER_DIRS)"
+fi
+if grep -q "SUBJECT: nightly review: SKIPPED — host http://127.0.0.1:1 asleep" "$POSTS"; then
+    pass "the channel hears 'asleep', not a digest"
+else
+    fail "channel subject missing or wrong: $(grep 'SUBJECT:' "$POSTS" | tr '\n' '|')"
+fi
+if grep -q "1 commit(s) (.*) not reviewed, baseline kept" "$STATE/nightly.log"; then
+    pass "the skip line counts what was left unreviewed"
+else
+    fail "skip line does not count the pending commits: $(tail -1 "$STATE/nightly.log")"
+fi
+
+echo "== 8: an awake host WITHOUT the reviewer's model also skips, with its own reason =="
+: > "$POSTS"
+REVIEW_MODEL=absent-model run_reviewer ""; rc=$?
+if [ "$rc" -ne 0 ] && tail -1 "$STATE/nightly.log" | grep -q "SKIPPED — host $STUB_ENDPOINT is up but does not list absent-model (has: stub-model"; then
+    pass "a missing model is named, with what the host has"
+else
+    fail "missing-model skip not reported (rc=$rc): $(tail -1 "$STATE/nightly.log")"
+fi
+
+echo "== 9: once the host answers, the pending commit is reviewed on the next run =="
+: > "$POSTS"
+run_reviewer ""
+if grep -q "reviewed 1 " <(tail -1 "$STATE/nightly.log"); then
+    pass "the commit skipped in case 7 is reviewed as soon as the host is back"
+else
+    fail "pending commit was not reviewed after the host returned: $(tail -1 "$STATE/nightly.log")"
 fi
 
 echo
