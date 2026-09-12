@@ -16,10 +16,19 @@ unanswered past 15 minutes. Click a row to read the subject and body.
 "Handled" acks a message addressed to `rick`. Both go through the CLI, so this
 app never writes SQLite itself.
 
+Set **Codex session** to the UUID or exact name of the running Codex session.
+**Wake Codex** queues a prompt to that session with the installed `codex queue`
+command. **Tell codex** continues to post its normal Team Channel nudge and then
+also queues a wake prompt; failures of either operation are shown in the footer.
+The target is saved in macOS user defaults. The app invokes Codex directly,
+without a shell. Wake requests run off the UI thread, continuously drain bounded
+command output, and terminate after five seconds if the CLI does not return.
+
 ```sh
 tools/team-channel-monitor/run.sh     # build release + (re)launch
 ```
 
-Honors `VIDEOSCAN_TEAM_CHANNEL_DB` and `VIDEOSCAN_REPO` (default `~/dev/VideoScan`).
+Honors `VIDEOSCAN_TEAM_CHANNEL_DB`, `VIDEOSCAN_REPO` (default `~/dev/VideoScan`),
+and `VIDEOSCAN_CODEX_BIN` (optional direct path to the Codex executable).
 
 Install as a login item (auto-relaunch): `tools/team-channel-monitor/install.sh`

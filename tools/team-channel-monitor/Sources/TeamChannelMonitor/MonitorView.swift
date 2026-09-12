@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MonitorView: View {
     @ObservedObject var model: MonitorModel
+    @AppStorage("codexThreadTarget") private var codexThreadTarget = ""
 
     private static let clock: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
@@ -31,6 +32,8 @@ struct MonitorView: View {
                 .frame(minHeight: 5 * 34, maxHeight: 560)
                 .frame(height: min(CGFloat(max(openRows.count, 5)) * 34 + 8, 560))
             }
+            Divider()
+            codexWakeControls
             Divider()
             footer
         }
@@ -64,6 +67,24 @@ struct MonitorView: View {
             Button("Quit") { NSApp.terminate(nil) }
         }
     }
+
+    private var codexWakeControls: some View {
+        HStack(spacing: 8) {
+            Text("Codex session")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("UUID or exact session name", text: $codexThreadTarget)
+                .textFieldStyle(.roundedBorder)
+            Button("Wake Codex") {
+                model.wakeCodex(threadTarget: codexThreadTarget)
+            }
+            .disabled(
+                codexThreadTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || model.isCodexWakeInFlight
+            )
+            .help("Queue a message to this running Codex session")
+        }
+    }
 }
 
 private struct Counter: View {
@@ -80,6 +101,7 @@ private struct RowView: View {
     let row: ChannelRow
     @ObservedObject var model: MonitorModel
     @State private var expanded = false
+    @AppStorage("codexThreadTarget") private var codexThreadTarget = ""
 
     private static let clock: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
@@ -131,7 +153,10 @@ private struct RowView: View {
                 Text("nudged \(Self.clock.string(from: nudged))")
                     .font(.caption).foregroundStyle(.secondary).frame(width: 96)
             } else {
-                Button("Tell \(row.recipient)") { model.nudge(row) }
+                Button("Tell \(row.recipient)") {
+                    model.nudge(row, codexThreadTarget: codexThreadTarget)
+                }
+                    .disabled(row.recipient == "codex" && model.isCodexWakeInFlight)
                     .frame(width: 96)
             }
         }

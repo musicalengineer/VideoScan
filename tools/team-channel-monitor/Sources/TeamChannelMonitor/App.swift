@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 final class MonitorModel: ObservableObject {
     @Published var snapshot = ChannelSnapshot()
     @Published var lastAction: String?
+    @Published private(set) var isCodexWakeInFlight = false
     private var timer: Timer?
 
     /// `--demo`: walk the badge through idle → yellow 2 → red 3! (3 s each)
@@ -85,10 +86,53 @@ final class MonitorModel: ObservableObject {
         return snap
     }
 
-    func nudge(_ row: ChannelRow) {
+    func nudge(_ row: ChannelRow, codexThreadTarget: String) {
         let result = ChannelCLI.nudge(row)
-        lastAction = result.ok ? "Nudged \(row.recipient) about #\(row.messageID)" : "Nudge failed: \(result.output)"
+        guard result.ok else {
+            lastAction = "Nudge failed: \(result.output)"
+            refresh()
+            return
+        }
+
+        if row.recipient == "codex" {
+            startCodexWake(
+                threadTarget: codexThreadTarget,
+                message: "Team Channel has a new nudge about message #\(row.messageID). Please read and respond to your pending messages.",
+                successPrefix: "Nudged Codex about #\(row.messageID) and queued a wake request",
+                failurePrefix: "Nudge posted, but Codex wake failed"
+            )
+        } else {
+            lastAction = "Nudged \(row.recipient) about #\(row.messageID)"
+        }
         refresh()
+    }
+
+    func wakeCodex(threadTarget: String) {
+        startCodexWake(
+            threadTarget: threadTarget,
+            message: CodexWake.defaultMessage,
+            successPrefix: "Codex wake queued",
+            failurePrefix: "Codex wake failed"
+        )
+    }
+
+    private func startCodexWake(
+        threadTarget: String,
+        message: String,
+        successPrefix: String,
+        failurePrefix: String
+    ) {
+        guard !isCodexWakeInFlight else {
+            lastAction = "A Codex wake request is already in progress."
+            return
+        }
+        isCodexWakeInFlight = true
+        lastAction = "Contacting Codex…"
+        Task {
+            let result = await CodexWake.wake(threadTarget: threadTarget, message: message)
+            lastAction = result.ok ? "\(successPrefix): \(result.output)" : "\(failurePrefix): \(result.output)"
+            isCodexWakeInFlight = false
+        }
     }
 
     func markHandled(_ row: ChannelRow) {

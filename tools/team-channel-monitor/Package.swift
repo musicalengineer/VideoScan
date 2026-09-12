@@ -9,6 +9,11 @@ let package = Package(
             name: "TeamChannelMonitor",
             path: "Sources/TeamChannelMonitor",
             linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
+        .testTarget(
+            name: "TeamChannelMonitorTests",
+            dependencies: ["TeamChannelMonitor"],
+            path: "Tests/TeamChannelMonitorTests"
         )
     ]
 )
