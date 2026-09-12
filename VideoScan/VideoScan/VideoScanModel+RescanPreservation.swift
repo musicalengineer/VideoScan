@@ -27,7 +27,8 @@ import Foundation
 //                         confirmedByUserPeople, rejectedPeople,
 //                         mediaDisposition, lifecycleStage,
 //                         archiveStage, starRating, junkScore, notes,
-//                         tags, userNotes, userDate, userDateConfidence.
+//                         tags, userNotes, userDate, userDateConfidence,
+//                         userPlace, userPlaceConfidence.
 //   Archive provenance  — originalFullPath, originVolume,
 //                         masterLocation. Stamped by Promote / move-
 //                         adoption / Relocate, never by a scan, so a
@@ -227,6 +228,12 @@ struct RescanPreservedFields: Sendable {
     let userDate: String?
     let userDateConfidence: String?
 
+    /// Rick's hand-entered Place + its confidence (2026-09-12). Same
+    /// user-edit contract as userDate: typed once, must survive every
+    /// rescan (sensor: rescanNeverDropsRicksPlace).
+    let userPlace: String?
+    let userPlaceConfidence: String?
+
     /// True if this snapshot carries anything worth restoring.
     /// Records that have only scan-derived data don't need to be in
     /// the snapshot map at all — caller can use this to filter and
@@ -261,6 +268,8 @@ struct RescanPreservedFields: Sendable {
             || !masterLocation.isEmpty
             || userDate != nil
             || userDateConfidence != nil
+            || userPlace != nil
+            || userPlaceConfidence != nil
     }
 
     @MainActor
@@ -302,6 +311,8 @@ struct RescanPreservedFields: Sendable {
         self.masterLocation = rec.masterLocation
         self.userDate = rec.userDate
         self.userDateConfidence = rec.userDateConfidence
+        self.userPlace = rec.userPlace
+        self.userPlaceConfidence = rec.userPlaceConfidence
     }
 
     // MARK: Fixity identity guard
@@ -397,6 +408,8 @@ struct RescanPreservedFields: Sendable {
         rec.masterLocation = self.masterLocation
         rec.userDate = self.userDate
         rec.userDateConfidence = self.userDateConfidence
+        rec.userPlace = self.userPlace
+        rec.userPlaceConfidence = self.userPlaceConfidence
         return carry
     }
 }

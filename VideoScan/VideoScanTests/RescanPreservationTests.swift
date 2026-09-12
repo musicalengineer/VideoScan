@@ -225,6 +225,8 @@ struct RescanPreservationTests {
         original.masterLocation = "/Volumes/FamilyArchive"
         original.userDate = "1985-08"
         original.userDateConfidence = "known"
+        original.userPlace = "Franklin, MA"
+        original.userPlaceConfidence = "known"
 
         let snap = RescanPreservedFields(from: original)
 
@@ -276,6 +278,8 @@ struct RescanPreservationTests {
         #expect(fresh.masterLocation == "/Volumes/FamilyArchive")
         #expect(fresh.userDate == "1985-08")
         #expect(fresh.userDateConfidence == "known")
+        #expect(fresh.userPlace == "Franklin, MA")
+        #expect(fresh.userPlaceConfidence == "known")
 
         // Scan-derived field left untouched by apply().
         #expect(fresh.videoCodec == "hevc-NEW")
@@ -318,6 +322,49 @@ struct RescanPreservationTests {
         #expect(fresh.sceneCaptions.count == 1)
         #expect(fresh.detectedPeople == ["Matt"])
         #expect(fresh.notes == "Matt's 4th birthday")
+    }
+
+    // SENSOR (2026-09-12): Rick's hand-entered Place is user-authored and
+    // the Update Catalog sheet promises it "stays with the file". A
+    // record that carries NOTHING but a place must still be snapshotted
+    // and restored across a same-path rescan — both confidences, and a
+    // clear (nil) must not resurrect an older value.
+    @Test func rescanNeverDropsRicksPlace() {
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/Test")
+        let known = VideoRecord()
+        known.filename = "cape.mov"; known.fullPath = "/Volumes/Test/cape.mov"
+        known.userPlace = "Cape Cod"; known.userPlaceConfidence = "known"
+        let guessed = VideoRecord()
+        guessed.filename = "franklin.mov"; guessed.fullPath = "/Volumes/Test/franklin.mov"
+        guessed.userPlace = "Franklin, MA"; guessed.userPlaceConfidence = "estimated"
+        let cleared = VideoRecord()
+        cleared.filename = "nowhere.mov"; cleared.fullPath = "/Volumes/Test/nowhere.mov"
+        cleared.userNotes = "keeps the snapshot alive"   // worth restoring, but no place
+        model.records = [known, guessed, cleared]
+        model.scanTargets = [target]
+
+        model.snapshotPreservedFieldsForRescan(of: target)
+        model.records.removeAll()
+
+        let freshKnown = freshlyScannedRecord(path: "/Volumes/Test/cape.mov")
+        let freshGuessed = freshlyScannedRecord(path: "/Volumes/Test/franklin.mov")
+        let freshCleared = freshlyScannedRecord(path: "/Volumes/Test/nowhere.mov")
+        freshCleared.userPlace = "Stale"   // a fresh probe never carries one; prove apply overwrites anyway
+        let restored = model.applyPreservedFieldsAfterRescan(
+            of: target, onto: [freshKnown, freshGuessed, freshCleared])
+        #expect(restored == 3)
+
+        #expect(freshKnown.userPlace == "Cape Cod")
+        #expect(freshKnown.userPlaceConfidence == "known")
+        #expect(freshKnown.userPlaceStatus == .known)
+        #expect(freshGuessed.userPlace == "Franklin, MA")
+        #expect(freshGuessed.userPlaceConfidence == "estimated")
+        #expect(freshGuessed.userPlaceStatus == .estimated)
+        #expect(freshCleared.userPlace == nil, "a record with no place stays unplaced after the merge")
+        #expect(freshCleared.userPlaceStatus == .unplaced)
+        // Scan-derived fields were NOT dragged along.
+        #expect(freshKnown.videoCodec == "h264-NEW")
     }
 
     @Test func newPathsAreLeftAsScanned_existingPathsRestore() {
@@ -512,6 +559,8 @@ struct RescanPreservationTests {
         r.starRating = 3
         r.userDate = "1985-08"
         r.userDateConfidence = "known"
+        r.userPlace = "Cape Cod"
+        r.userPlaceConfidence = "estimated"
         return r
     }
 
@@ -524,6 +573,8 @@ struct RescanPreservationTests {
         #expect(rec.masterLocation == "/Volumes/FamilyArchive", comment)
         #expect(rec.userDate == "1985-08", comment)
         #expect(rec.userDateConfidence == "known", comment)
+        #expect(rec.userPlace == "Cape Cod", comment)
+        #expect(rec.userPlaceConfidence == "estimated", comment)
     }
 
     // (a) LOGIC — CARRY: same size, no fingerprint evidence → the whole
@@ -761,6 +812,10 @@ struct RescanPreservationTests {
         #expect(RescanPreservedFields(from: byDate).isWorthRestoring, "userDate alone")
         let byConfidence = VideoRecord(); byConfidence.userDateConfidence = "estimated"
         #expect(RescanPreservedFields(from: byConfidence).isWorthRestoring, "userDateConfidence alone")
+        let byPlace = VideoRecord(); byPlace.userPlace = "Cape Cod"
+        #expect(RescanPreservedFields(from: byPlace).isWorthRestoring, "userPlace alone")
+        let byPlaceConfidence = VideoRecord(); byPlaceConfidence.userPlaceConfidence = "known"
+        #expect(RescanPreservedFields(from: byPlaceConfidence).isWorthRestoring, "userPlaceConfidence alone")
 
         // partialMD5 is comparison-only evidence, NOT a reason to keep a
         // record in the map (it is never restored).

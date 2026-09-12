@@ -460,8 +460,9 @@ final class CatalogSearchIndex {
     /// persisted so the person index (archivist perf pass) survives
     /// relaunch without a record walk.
     /// NOT a semantic layout change; the bump exists
-    /// purely to force that one refresh.
-    nonisolated static let persistedVersion: Int = 4
+    /// purely to force that one refresh. v5 (2026-09-12): userPlace
+    /// joined the haystack field set — v4 haystacks predate it.
+    nonisolated static let persistedVersion: Int = 5
 
     /// Default location next to the catalog:
     /// `~/Library/Application Support/VideoScan/catalog.search-index.v1.plist`
@@ -744,6 +745,9 @@ final class CatalogSearchIndex {
         // contract.
         parts.append(contentsOf: rec.tags)
         if !rec.userNotes.isEmpty { parts.append(rec.userNotes) }
+        // Hand-entered place (2026-09-12) — aligned with the substring
+        // branch of pfCatalogTokenMatches.
+        if let p = rec.userPlace { parts.append(p) }
         for cap in rec.sceneCaptions { parts.append(cap.text) }
         if let t = rec.audioTranscript { parts.append(t) }
         for hit in rec.ocrDateCandidates { parts.append(hit.text) }

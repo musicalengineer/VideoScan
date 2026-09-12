@@ -399,6 +399,21 @@ extension CatalogContent {
             // on with .untaggedOnly. Sortable via peopleSortKey: confirmed
             // alphabetical first, suspected after (~ prefix), untagged last.
             Group {
+                // Hand-entered place (Rick 2026-09-12) — beside the Date
+                // column (there is no per-user column hiding on this
+                // table). Same shape as Date: estimated entries carry an
+                // " (est.)" suffix, unplaced rows show "—" and sort
+                // first ascending (the review queue). O(1) per record.
+                TableColumn("Place", value: \VideoRecord.resolvedPlaceSortKey) { rec in
+                    let display = rec.resolvedPlaceDisplay
+                    Text(display.isEmpty ? "—" : display)
+                        .foregroundColor(display.isEmpty ? .secondary : .primary)
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                        .help(rec.resolvedPlaceHelp)
+                }
+                .width(min: 80, ideal: 110)
+
                 TableColumn("People", value: \.peopleSortKey) { rec in
                     peopleColumnCell(for: rec)
                 }

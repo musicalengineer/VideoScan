@@ -595,6 +595,10 @@ struct CatalogContent: View {
             let ids = model.archiveAngelStore.candidateIDs
             out = out.filter { ids.contains($0.id) }
         }
+        // "No place yet" (2026-09-12): the place review queue. nil check.
+        if viewFilters.contains(.noPlaceYet) {
+            out = out.filter(pfRecordHasNoPlace)
+        }
         return out
     }
 

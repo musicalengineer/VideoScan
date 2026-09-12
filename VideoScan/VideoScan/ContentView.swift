@@ -227,6 +227,10 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
     /// sweep rates as archive candidates. O(1) per record — a Set lookup
     /// in the evidence sidecar (ArchiveAngelEvidenceStore.candidateIDs).
     case archiveCandidates = "Archive Candidates"
+    /// Hand-entered place review queue (Rick 2026-09-12): records with no
+    /// `userPlace` yet — the "where was this?" to-do list, the sibling of
+    /// the undated queue. O(1) per record (a nil check).
+    case noPlaceYet = "No Place Yet"
 
     var icon: String {
         switch self {
@@ -240,6 +244,7 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
         case .notYetArchived:       return "archivebox"
         case .hasMasterCopy:        return "archivebox.fill"
         case .archiveCandidates:    return "sparkles"
+        case .noPlaceYet:           return "mappin.slash"
         }
     }
 }
