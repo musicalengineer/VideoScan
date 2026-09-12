@@ -367,9 +367,14 @@ struct HallieAppV2IntegrationTests {
                 return nil
             })
 
+        // "please" makes this lexically not a name: a two-word utterance
+        // with no sentence word is a legitimate lazy identity ask for the
+        // bare-name road (GH #184 item 4), the same rule every other
+        // pre-translation lane already follows. This sensor is about
+        // evidence and execution after a FAILED translation.
         do {
             _ = try await HallieAppTurnCoordinator.execute(
-                question: "fixture question", records: [],
+                question: "fixture question, please", records: [],
                 referent: .init(recordID: nil, temporalDate: nil),
                 hosts: ["fixture.invalid"], modelName: "fixture-model",
                 dependencies: dependencies)
@@ -731,7 +736,7 @@ struct HallieAppV2IntegrationTests {
 
         let task = Task { @MainActor in
             try await HallieAppTurnCoordinator.execute(
-                question: "fixture question", records: [],
+                question: "fixture question, please", records: [],
                 referent: .init(recordID: nil, temporalDate: nil),
                 hosts: ["fixture.invalid"], modelName: "fixture-model",
                 dependencies: dependencies)
