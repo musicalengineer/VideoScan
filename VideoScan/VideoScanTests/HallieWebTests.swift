@@ -415,7 +415,7 @@ struct HallieWebTests {
     /// Three hundred documents attached in one launch: the map stays
     /// bounded at `maxAttachmentTokens`, and only the OLDEST tokens are
     /// evicted, one per mint past the cap — the links a page still shows
-    /// (the newest 255, five full gallery answers) keep serving. A
+    /// (the newest 256, five full gallery answers) keep serving. A
     /// wholesale clear at the cap invalidated all of them at once.
     @Test @MainActor
     func threeHundredTokensEvictOnlyTheOldestAndKeepTheNewestServing() async throws {
@@ -454,6 +454,69 @@ struct HallieWebTests {
         // A live token is reused, not re-minted, so it never moves in the order.
         #expect(b.attachmentToken(for: pdf(299)) == tokens[299])
         #expect(b.attachmentTokens.count == cap)
+    }
+
+    // MARK: Validation → read window (codex #1374, 2026-09-12)
+
+    /// The serve-time check passes, and THEN an ancestor is swapped before
+    /// the bytes are read. The reader opens the real path the token was
+    /// minted for and re-resolves it after the read, so the decoy's bytes
+    /// are never served: 404, and the body is not the decoy. Without the
+    /// hook the original bytes come back; once the real folder is
+    /// restored they do again.
+    @Test @MainActor
+    func anAncestorSwappedBetweenValidationAndReadNeverChangesTheBytesServed() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_HallieWebReadWindow-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let familyRoot = base.appendingPathComponent("archive/40_Family_Tree", isDirectory: true)
+        try FileManager.default.createDirectory(at: familyRoot.appendingPathComponent("People"), withIntermediateDirectories: true)
+        let people = base.appendingPathComponent("support/people", isDirectory: true)
+        let letter = people.appendingPathComponent("donna/letter.pdf")
+        let original = Data("%PDF-1.4\n% ORIGINAL\n%%EOF\n".utf8)
+        try FileManager.default.createDirectory(at: letter.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try original.write(to: letter)
+        let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
+        let decoyBytes = Data("%PDF-1.4\n% DECOY\n%%EOF\n".utf8)
+        let decoy = elsewhere.appendingPathComponent("donna/letter.pdf")
+        try FileManager.default.createDirectory(at: decoy.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try decoyBytes.write(to: decoy)
+
+        let b = archiveBridge(familyRoot: familyRoot, thumbs: base.appendingPathComponent("thumbs", isDirectory: true))
+        let token = b.attachmentToken(for: letter)
+        func body(_ r: HallieHTTPResponse) -> Data? {
+            if case .data(let d) = r.body { return d } else { return nil }
+        }
+        let before = await b.attachmentImage(token: token)
+        #expect(before.status == 200)
+        #expect(body(before) == original)
+
+        // The swap lands AFTER validation, BEFORE the read.
+        b.attachmentReadHook = {
+            try? FileManager.default.removeItem(at: people)
+            try? FileManager.default.createSymbolicLink(at: people, withDestinationURL: elsewhere)
+        }
+        let during = await b.attachmentImage(token: token)
+        #expect(during.status == 404)
+        #expect(body(during) != decoyBytes)
+        #expect(FileManager.default.fileExists(atPath: letter.path)) // the swap did happen
+        b.attachmentReadHook = nil
+        // Still swapped: the pre-read check refuses it outright.
+        #expect(await b.attachmentImage(token: token).status == 404)
+
+        // Real folder restored: the original bytes serve again.
+        try FileManager.default.removeItem(at: people)
+        try FileManager.default.createDirectory(at: letter.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try original.write(to: letter)
+        let after = await b.attachmentImage(token: token)
+        #expect(after.status == 200)
+        #expect(body(after) == original)
+
+        // Pure rule: bytes read through a path whose resolution has moved are dropped.
+        #expect(HallieWebBridge.bytesPinned(to: letter.path) { _ in original } == original)
+        try FileManager.default.removeItem(at: people)
+        try FileManager.default.createSymbolicLink(at: people, withDestinationURL: elsewhere)
+        #expect(HallieWebBridge.bytesPinned(to: letter.path) { _ in decoyBytes } == nil)
     }
 
 }
