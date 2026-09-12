@@ -9,6 +9,13 @@ import UniformTypeIdentifiers
 // jargon ("set aside", "put back", never "purge"/"migrate"). Nothing is
 // ever deleted: set-aside rows are hidden until "Show set-aside files"
 // reveals them, and Undo restores the whole batch.
+//
+// 2026-09-11: two more rows. "Junk that came back" is a real category
+// (set aside on confirm, with the original reason). "Copies of archived
+// media" is a NUMBER ONLY — count + GB, "(review coming)" — nothing is
+// set aside and nothing is touched; the deletion policy is a separate
+// design. Every tally is computed once in buildTidyPlan (no O(records)
+// work in this body).
 
 struct TidyCatalogSheet: View {
     @ObservedObject var model: VideoScanModel
@@ -41,8 +48,10 @@ struct TidyCatalogSheet: View {
                         .font(.callout)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                }
 
-                    Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                    if !plan.rows.isEmpty {
                         countRow("photo.stack", .orange,
                                  "Photos and camera images", plan.stillCount)
                         countRow("music.note", .pink,
@@ -51,14 +60,23 @@ struct TidyCatalogSheet: View {
                                  "Audio with no matching video", plan.unlinkedAudioCount)
                         countRow("livephoto", .teal,
                                  "Live Photo movie halves (Photos owns them)", plan.livePhotoComplementCount)
+                        countRow("arrow.uturn.backward", .orange,
+                                 "Junk that came back (set aside before, found again elsewhere)", plan.junkCameBackCount)
                         Divider().padding(.vertical, 4)
                         countRow("checkmark.circle", .green,
                                  "Audio kept — belongs to a video", plan.keptLinkedAudio)
                         countRow("link.circle", .blue,
                                  "Kept — part of a recovered A/V pair", plan.keptPairProtected)
+                        Divider().padding(.vertical, 4)
                     }
-                    .font(.system(size: 14))
+                    // Dry-run number only — never set aside by this sheet.
+                    countRow("archivebox", .indigo,
+                             "Copies of archived media — \(Formatting.humanSize(plan.archivedCopyBytes)) outside the Master Archive (review coming)",
+                             plan.archivedCopyCount)
+                }
+                .font(.system(size: 14))
 
+                if !plan.rows.isEmpty {
                     HStack(spacing: 8) {
                         Button {
                             exportCSV(plan)
@@ -74,9 +92,10 @@ struct TidyCatalogSheet: View {
                         }
                     }
 
-                    Text("Nothing is deleted — you can undo right after, or put files back one by one with “Show set-aside files.”")
+                    Text("Nothing is deleted — you can undo right after, or put files back one by one with “Show set-aside files.” Set-aside files are remembered, so a rescan won't bring another copy back; “Ignored content…” under Catalog Options is the override.")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     // One-way-ratchet disclosure (QA MINOR 7, 2026-07-15):
                     // set-aside audio is invisible to future Correlates by
@@ -131,6 +150,7 @@ struct TidyCatalogSheet: View {
                 .foregroundColor(color)
                 .frame(width: 18)
             Text(label)
+                .fixedSize(horizontal: false, vertical: true)
             Text("\(count)")
                 .monospacedDigit()
                 .fontWeight(.medium)

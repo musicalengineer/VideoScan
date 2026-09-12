@@ -285,6 +285,9 @@ struct CatalogView: View {
     /// Tidy Catalog dry-run sheet. Moved here from CatalogToolbar on
     /// 2026-08-11 when the button moved up to the Volume Scanner row.
     @State var showTidySheet = false
+    /// "Ignored content…" override sheet (2026-09-11) — opened from the
+    /// Catalog Options menu beside Tidy.
+    @State var showIgnoredContentSheet = false
     /// Cached content-hash backfill plan for the Catalog Options menu.
     /// Same discipline as `storageTotals`: the computation is O(records)
     /// and must never run from a view body.
@@ -853,6 +856,10 @@ struct CatalogView: View {
         // Tidy Catalog — dry-run summary first, applies on confirm.
         .sheet(isPresented: $showTidySheet) {
             TidyCatalogSheet(model: model)
+        }
+        // Ignored content — the override for the content-keyed ignore list.
+        .sheet(isPresented: $showIgnoredContentSheet) {
+            IgnoredContentSheet(model: model, store: model.ignoredContentStore)
         }
         .sheet(isPresented: $showRelocateSheet) {
             RelocateSheet()

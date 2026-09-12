@@ -1186,6 +1186,79 @@ struct RescanPreservationTests {
                 "console: \(console)")
         #expect(console.contains("Verify copies…"), "the line tells Rick the way back")
     }
+
+    // (g) SENSOR — the 2026-09-11 finding through the REAL pipeline
+    // (startTarget → walker → probe → scope gate → IGNORE GATE →
+    // preservation → commitScanResults). Same-path preservation already
+    // keeps a set-aside record set aside on a rescan; the junk came back
+    // as ANOTHER COPY under a NEW path (2,030 of them, none at the
+    // original path). A copy of removed content in a fresh folder must
+    // NOT be cataloged; the original path must still rescan normally;
+    // and the override ("Put back" on the ignore list) must let the copy
+    // in on the next scan.
+    @Test func sensor_setAsideContentAtNewPathIsNotReingested_2026_09_11() async throws {
+        let dirA = try makeArchiveTempDir("ignoreA")
+        let dirB = try makeArchiveTempDir("ignoreB")
+        defer {
+            try? FileManager.default.removeItem(at: dirA)
+            try? FileManager.default.removeItem(at: dirB)
+        }
+        let bytes = Data((0..<64).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ 3) })
+        let pathA = dirA.appendingPathComponent("jpegvideocomplement_1.mov").path
+        try bytes.write(to: URL(fileURLWithPath: pathA))
+        let model = makeArchivePipelineModel(hashing: true)
+        model.ignoredContentStore = IgnoredContentStore(
+            directory: dirA.appendingPathComponent("store", isDirectory: true))
+
+        // First scan catalogs the file; Remove from Catalog sets it aside
+        // and remembers its content.
+        let tA = CatalogScanTarget(searchPath: dirA.path)
+        model.scanTargets = [tA]
+        model.startTarget(tA)
+        _ = await tA.scanTask?.value
+        let original = try #require(model.records.first { $0.fullPath == pathA })
+        #expect(!original.partialMD5.isEmpty, "precondition: the rescan hashes")
+        #expect(model.removeFromCatalog(recordIDs: [original.id]) == 1)
+        #expect(model.ignoredContentStore.count == 1)
+
+        // The same bytes appear under a new name in another folder.
+        let pathB = dirB.appendingPathComponent("IMG_0001 (1).mov").path
+        try bytes.write(to: URL(fileURLWithPath: pathB))
+        let tB = CatalogScanTarget(searchPath: dirB.path)
+        model.scanTargets = [tA, tB]
+        model.startTarget(tB)
+        _ = await tB.scanTask?.value
+        #expect(!model.records.contains { $0.fullPath == pathB },
+                "the copy must NOT be cataloged (RED before the ignore gate)")
+        #expect(model.records.count == 1)
+        // Console etiquette: ONE summary line for this scan. Read it NOW —
+        // a later scan start clears the console.
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        let console = model.dashboard.consoleLines.joined(separator: "\n")
+        #expect(console.contains("IGNORED 1 file previously set aside (Tidy → Ignored content to put back)"),
+                "console: \(console.suffix(800))")
+        #expect(console.components(separatedBy: "IGNORED 1 file").count == 2, "exactly one line, once")
+
+        // The ORIGINAL path rescans normally: still one record, still set
+        // aside (rescan preservation), never dropped by the gate.
+        let tA2 = CatalogScanTarget(searchPath: dirA.path)
+        model.scanTargets = [tA2, tB]
+        model.startTarget(tA2)
+        _ = await tA2.scanTask?.value
+        let stillThere = try #require(model.records.first { $0.fullPath == pathA })
+        #expect(stillThere.setAsideReason == "removed-by-user")
+        #expect(model.records.count == 1)
+
+        // The override: forget the content → the copy is cataloged.
+        let entry = try #require(model.ignoredContentStore.entries.first)
+        #expect(model.putBackIgnoredContent(id: entry.id))
+        let tB2 = CatalogScanTarget(searchPath: dirB.path)
+        model.scanTargets = [tA2, tB2]
+        model.startTarget(tB2)
+        _ = await tB2.scanTask?.value
+        #expect(model.records.contains { $0.fullPath == pathB }, "after Put back the copy is ingested")
+        #expect(model.records.count == 2)
+    }
 }
 
 // MARK: - Pipeline helpers for the end-to-end sensor (ScanMergeScopeTests style)

@@ -267,7 +267,12 @@ extension VideoScanModel {
         // untouched (hard invariant; see VideoScanModel+CatalogScope).
         let scopeOutcome = await applyCatalogScopeGate(
             targetRecords: targetRecords, volName: volName, audit: audit)
-        let scopedRecords = scopeOutcome.admitted
+        // Ignore gate (2026-09-11): content that was set aside or removed
+        // is not cataloged again at a NEW path (files at known paths are
+        // always admitted — the merge + preservation own those rows).
+        // See VideoScanModel+IgnoredContent.swift.
+        let scopedRecords = applyIgnoredContentGate(
+            targetRecords: scopeOutcome.admitted, volName: volName).admitted
 
         // Restore dossier + user-edit fields snapshotted in startTarget.
         // Without this, every rescan would silently destroy hours of

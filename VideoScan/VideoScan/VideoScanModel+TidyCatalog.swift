@@ -21,6 +21,21 @@ import os
 // points. The pair-protection invariant is enforced twice: at plan time
 // (protected records never enter the plan) and again at APPLY time (a
 // correlate that ran between dry-run and confirm must win).
+//
+// 2026-09-11 (Rick: "once an item is marked remove/delete/ignore,
+// remember not to ingest it again"): two more categories.
+//   * "Junk that came back" — active records whose CONTENT matches
+//     something already set aside or removed (the ignore list, plus the
+//     catalog's own set-aside / purged rows so the category is
+//     retroactive). Set aside with the ORIGINAL reason. Measured 2,030
+//     such copies on 2026-09-11, none at the original path.
+//   * "Copies of archived media" — DRY-RUN ONLY: active records outside
+//     the Master Archive whose content has a copy inside it. Count + GB
+//     for the sheet; no rows, nothing set aside, nothing touched. The
+//     deletion policy is a separate design.
+// Every record Tidy sets aside (and every Remove from Catalog) is
+// written to the ignore list; Put Back / Undo removes it — the override.
+// See IgnoredContentStore.swift and VideoScanModel+IgnoredContent.swift.
 
 let tidyCatalogLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "tidyCatalog")
 
@@ -38,6 +53,9 @@ extension VideoScanModel {
             let fullPath: String
             let sizeBytes: Int64
             let reason: CatalogScopePolicy.SetAsideReason
+            /// True when this row is "Junk that came back": the reason is
+            /// the ORIGINAL entry's reason, not a fresh classification.
+            var cameBack: Bool = false
         }
         var rows: [Row] = []
         /// Ambiguous audio KEPT — video-linked per the correlator bar.
@@ -56,6 +74,13 @@ extension VideoScanModel {
         var musicCount = 0
         var unlinkedAudioCount = 0
         var livePhotoComplementCount = 0
+        /// Rows whose content matches the ignore list / a set-aside or
+        /// purged record (2026-09-11). Included in `rows`.
+        var junkCameBackCount = 0
+        /// DRY-RUN ONLY (2026-09-11): active records outside the Master
+        /// Archive whose content has a copy inside it. NOT in `rows`.
+        var archivedCopyCount = 0
+        var archivedCopyBytes: Int64 = 0
     }
 
     /// Compute the dry-run plan. Snapshot on the main actor (cheap value
@@ -67,14 +92,27 @@ extension VideoScanModel {
         var candidates: [TidyCandidate] = []
         candidates.reserveCapacity(records.count)
         var videoSnaps: [CorrelationScorer.Snap] = []
+        // Archive evidence for "Copies of archived media": the promote /
+        // content-hash / dup-group index (archivedCopy(of:), O(1) per
+        // record after one rebuild) plus the archive copies' partialMD5 +
+        // size fingerprints for records that never got a content hash.
+        var archiveFingerprints = Set<ScanMergeFingerprint>()
         for rec in records where !rec.isPurged && !rec.isSetAside {
+            let archiveSelf = isArchiveCopy(rec) || isInsideMasterArchive(path: rec.fullPath)
+            if archiveSelf {
+                let fp = ScanMergeFingerprint(of: rec)
+                if fp.isViable { archiveFingerprints.insert(fp) }
+            }
             candidates.append(TidyCandidate(
                 snap: CorrelationScorer.snap(rec),
                 fullPath: rec.fullPath,
                 sizeBytes: rec.sizeBytes,
                 ext: rec.ext,
                 streamTypeRaw: rec.streamTypeRaw,
-                pairProtected: CatalogScopePolicy.isPairProtected(rec)))
+                pairProtected: CatalogScopePolicy.isPairProtected(rec),
+                partialMD5: rec.partialMD5,
+                isArchiveSelf: archiveSelf,
+                hasArchivedCopy: !archiveSelf && archivedCopy(of: rec) != nil))
         }
         // Evidence pool: ALL active video-only records — deliberately
         // INCLUDING pair members. The evidence question is "does this
@@ -85,9 +123,11 @@ extension VideoScanModel {
         for c in candidates where c.streamTypeRaw == StreamType.videoOnly.rawValue {
             videoSnaps.append(c.snap)
         }
+        let ignored = retroactiveIgnoredContentIndex()
 
-        let plan = await Self.buildTidyPlan(candidates: candidates, videoSnaps: videoSnaps)
-        tidyCatalogLog.info("Tidy dry run: examined=\(plan.examined) stills=\(plan.stillCount) music=\(plan.musicCount) unlinkedAudio=\(plan.unlinkedAudioCount) livePhoto=\(plan.livePhotoComplementCount) keptLinked=\(plan.keptLinkedAudio) pairProtected=\(plan.keptPairProtected)")
+        let plan = await Self.buildTidyPlan(candidates: candidates, videoSnaps: videoSnaps,
+                                            ignored: ignored, archiveFingerprints: archiveFingerprints)
+        tidyCatalogLog.info("Tidy dry run: examined=\(plan.examined) stills=\(plan.stillCount) music=\(plan.musicCount) unlinkedAudio=\(plan.unlinkedAudioCount) livePhoto=\(plan.livePhotoComplementCount) junkCameBack=\(plan.junkCameBackCount) archivedCopies=\(plan.archivedCopyCount) (\(plan.archivedCopyBytes) bytes) keptLinked=\(plan.keptLinkedAudio) pairProtected=\(plan.keptPairProtected)")
         return plan
     }
 
@@ -99,6 +139,15 @@ extension VideoScanModel {
         let ext: String
         let streamTypeRaw: String
         let pairProtected: Bool
+        /// Ignore-list key half (with sizeBytes); "" = never hashed.
+        var partialMD5: String = ""
+        /// A promoted archive copy or anything under the Master Archive
+        /// root — app-managed: never "junk that came back", never a
+        /// "copy of archived media" (it IS the archived media).
+        var isArchiveSelf: Bool = false
+        /// archivedCopy(of:) found a master copy (promote link, content
+        /// hash, or high-confidence hash-backed dup group).
+        var hasArchivedCopy: Bool = false
     }
 
     /// Pure off-main plan builder: classification + indexed evidence.
@@ -108,7 +157,9 @@ extension VideoScanModel {
     #endif
     nonisolated static func buildTidyPlan(
         candidates: [TidyCandidate],
-        videoSnaps: [CorrelationScorer.Snap]
+        videoSnaps: [CorrelationScorer.Snap],
+        ignored: IgnoredContentIndex = IgnoredContentIndex(),
+        archiveFingerprints: Set<ScanMergeFingerprint> = []
     ) async -> TidyCatalogPlan {
         var plan = TidyCatalogPlan()
         plan.examined = candidates.count
@@ -117,6 +168,28 @@ extension VideoScanModel {
             // HARD INVARIANT: pair members exit before classification.
             if c.pairProtected {
                 plan.keptPairProtected += 1
+                continue
+            }
+            // Copies of archived media — a TALLY, never a row (dry run;
+            // the deletion policy is a separate design).
+            if !c.isArchiveSelf {
+                let fp = ScanMergeFingerprint(partialMD5: c.partialMD5, sizeBytes: c.sizeBytes)
+                if c.hasArchivedCopy || (fp.isViable && archiveFingerprints.contains(fp)) {
+                    plan.archivedCopyCount += 1
+                    plan.archivedCopyBytes += c.sizeBytes
+                }
+            }
+            // Junk that came back — checked BEFORE classification so the
+            // row carries the ORIGINAL reason. Archive-managed rows are
+            // never set aside by Tidy.
+            if !c.isArchiveSelf,
+               let original = ignored.reason(partialMD5: c.partialMD5, sizeBytes: c.sizeBytes,
+                                             filename: c.snap.filename) {
+                plan.rows.append(.init(id: c.snap.id, filename: c.snap.filename,
+                                       fullPath: c.fullPath, sizeBytes: c.sizeBytes,
+                                       reason: CatalogScopePolicy.SetAsideReason(rawValue: original) ?? .removedByUser,
+                                       cameBack: true))
+                plan.junkCameBackCount += 1
                 continue
             }
             // Live Photo movie halves are VIDEO by format but Photos
@@ -167,7 +240,10 @@ extension VideoScanModel {
         }
         var out = "Category,Filename,Path,SizeBytes\n"
         for row in plan.rows {
-            out += "\(esc(row.reason.friendlyLabel)),\(esc(row.filename)),\(esc(row.fullPath)),\(row.sizeBytes)\n"
+            let category = row.cameBack
+                ? "Junk that came back — " + row.reason.friendlyLabel
+                : row.reason.friendlyLabel
+            out += "\(esc(category)),\(esc(row.filename)),\(esc(row.fullPath)),\(row.sizeBytes)\n"
         }
         return out
     }
@@ -184,12 +260,15 @@ extension VideoScanModel {
     /// record. Mutates ONLY that field — never removes records, never
     /// touches files on disk. The pair-protection invariant is re-checked
     /// HERE too: a Correlate that paired a record between dry-run and
-    /// confirm wins, and the record is skipped. Returns the count set
-    /// aside.
+    /// confirm wins, and the record is skipped. Every record set aside is
+    /// also written to the ignore list (content-keyed) so a rescan never
+    /// catalogs another copy of it. Returns the count set aside.
     @discardableResult
     func applyTidyCatalog(_ plan: TidyCatalogPlan) -> Int {
         let countBefore = records.count
         var changed: [UUID] = []
+        var remembered = 0
+        let now = Date()
         for row in plan.rows {
             guard let rec = record(forID: row.id),
                   !rec.isPurged,
@@ -198,21 +277,25 @@ extension VideoScanModel {
             else { continue }
             rec.setAsideReason = row.reason.rawValue
             changed.append(rec.id)
+            if noteIgnoredContent(rec, reason: row.reason.rawValue, now: now) { remembered += 1 }
         }
         assert(records.count == countBefore, "Tidy must never add/remove records")
         guard !changed.isEmpty else { return 0 }
         saveCatalogDebounced()
+        if remembered > 0 { scheduleIgnoredContentSave() }
         lastTidyBatch = LastTidyBatch(ids: changed)
-        log("Tidy Catalog: set aside \(changed.count) file(s) — \(plan.stillCount) photos, \(plan.musicCount) music, \(plan.unlinkedAudioCount) audio with no matching video. Nothing was deleted; flip “Show set-aside files” to browse or put any of them back.")
-        appLog.write("Tidy Catalog applied: \(changed.count) record(s) set aside (stills \(plan.stillCount), music \(plan.musicCount), unlinked audio \(plan.unlinkedAudioCount)); records untouched on disk")
-        tidyCatalogLog.info("Tidy applied: setAside=\(changed.count) of planned \(plan.rows.count)")
+        log("Tidy Catalog: set aside \(changed.count) file(s) — \(plan.stillCount) photos, \(plan.musicCount) music, \(plan.unlinkedAudioCount) audio with no matching video, \(plan.livePhotoComplementCount) Live Photo halves, \(plan.junkCameBackCount) that came back after being set aside. Nothing was deleted; flip “Show set-aside files” to browse or put any of them back. A rescan will not bring them back (Tidy → Ignored content to put back).")
+        appLog.write("Tidy Catalog applied: \(changed.count) record(s) set aside (stills \(plan.stillCount), music \(plan.musicCount), unlinked audio \(plan.unlinkedAudioCount), live photo \(plan.livePhotoComplementCount), came back \(plan.junkCameBackCount)); \(remembered) new ignore-list entr\(remembered == 1 ? "y" : "ies"); records untouched on disk")
+        tidyCatalogLog.info("Tidy applied: setAside=\(changed.count) of planned \(plan.rows.count) remembered=\(remembered)")
         return changed.count
     }
 
     /// "Remove from Catalog" for an explicit selection: set aside with
     /// reason `.removedByUser`. Files are never touched; reversible via the
     /// same Put Back / Undo as Tidy. Pair-protected records are skipped
-    /// (Combine's raw material). Returns the count set aside.
+    /// (Combine's raw material). The content is written to the ignore
+    /// list so a rescan never catalogs another copy. Returns the count
+    /// set aside.
     @discardableResult
     func removeFromCatalog(recordIDs ids: [UUID]) -> Int {
         guard !isReadOnly else {
@@ -220,6 +303,8 @@ extension VideoScanModel {
             return 0
         }
         var changed: [UUID] = []
+        var remembered = 0
+        let now = Date()
         let allowed = Set(excludingMasterArchiveFiles(ids.compactMap { record(forID: $0) },
                                                       verb: "Remove from Catalog").map(\.id))
         for id in ids where allowed.contains(id) {
@@ -227,32 +312,40 @@ extension VideoScanModel {
                   !CatalogScopePolicy.isPairProtected(rec) else { continue }
             rec.setAsideReason = CatalogScopePolicy.SetAsideReason.removedByUser.rawValue
             changed.append(rec.id)
+            if noteIgnoredContent(rec, reason: CatalogScopePolicy.SetAsideReason.removedByUser.rawValue, now: now) {
+                remembered += 1
+            }
         }
         guard !changed.isEmpty else { return 0 }
         saveCatalogDebounced()
+        if remembered > 0 { scheduleIgnoredContentSave() }
         lastTidyBatch = LastTidyBatch(ids: changed)
         noteCatalogRecordsMutated()
-        log("Removed \(changed.count) file(s) from the catalog (files untouched). Flip “Show set-aside files” to browse or put any of them back.")
+        log("Removed \(changed.count) file(s) from the catalog (files untouched). Flip “Show set-aside files” to browse or put any of them back. A rescan will not bring them back (Tidy → Ignored content to put back).")
         return changed.count
     }
 
     /// Undo the most recent Tidy apply — clears `setAsideReason` on the
-    /// whole batch. Returns true when at least one record was restored.
+    /// whole batch and forgets their content on the ignore list (the
+    /// override). Returns true when at least one record was restored.
     @discardableResult
     func undoLastTidyCatalog() -> Bool {
         guard let batch = lastTidyBatch else { return false }
         var restored = 0
+        var forgotten = 0
         for id in batch.ids {
             if let rec = record(forID: id), rec.setAsideReason != nil {
                 rec.setAsideReason = nil
                 restored += 1
+                forgotten += forgetIgnoredContent(for: rec)
             }
         }
         lastTidyBatch = nil
         guard restored > 0 else { return false }
         saveCatalogDebounced()
+        if forgotten > 0 { scheduleIgnoredContentSave() }
         log("Tidy Catalog: undo — put \(restored) file(s) back in the catalog.")
-        appLog.write("Tidy Catalog undo: restored \(restored) set-aside record(s)")
+        appLog.write("Tidy Catalog undo: restored \(restored) set-aside record(s); \(forgotten) ignore-list entr\(forgotten == 1 ? "y" : "ies") removed")
         return true
     }
 
@@ -262,8 +355,10 @@ extension VideoScanModel {
     }
 
     /// Restore individual/bulk set-aside records (the "Show set-aside
-    /// files" browse flow — right-click → Put Back in Catalog). Returns
-    /// the count restored.
+    /// files" browse flow — right-click → Put Back in Catalog). Also
+    /// forgets their content on the ignore list — THE OVERRIDE, so a
+    /// put-back file's other copies can be cataloged again. Returns the
+    /// count restored.
     ///
     /// PUBLISH discipline (QA fix, 2026-07-15 — restoreRecord template):
     /// `setAsideReason` lives on a plain class, so mutating it alone
@@ -276,14 +371,17 @@ extension VideoScanModel {
     @discardableResult
     func restoreSetAsideRecords(ids: Set<UUID>) -> Int {
         var restored = 0
+        var forgotten = 0
         for id in ids {
             if let rec = record(forID: id), rec.setAsideReason != nil {
                 rec.setAsideReason = nil
                 restored += 1
+                forgotten += forgetIgnoredContent(for: rec)
             }
         }
         guard restored > 0 else { return 0 }
         saveCatalogDebounced()
+        if forgotten > 0 { scheduleIgnoredContentSave() }
         if let batch = lastTidyBatch {
             let remaining = batch.ids.filter { !ids.contains($0) }
             lastTidyBatch = remaining.isEmpty ? nil : LastTidyBatch(ids: remaining)
@@ -294,7 +392,7 @@ extension VideoScanModel {
             // so the table still refreshes the restored rows.
             lastTidyBatch = nil
         }
-        appLog.write("Put back in catalog: \(restored) set-aside record(s) restored")
+        appLog.write("Put back in catalog: \(restored) set-aside record(s) restored; \(forgotten) ignore-list entr\(forgotten == 1 ? "y" : "ies") removed")
         return restored
     }
 }
