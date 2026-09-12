@@ -82,7 +82,7 @@ struct TidyCatalogSheet: View {
                     // set-aside audio is invisible to future Correlates by
                     // design — say so up front, in family language, and
                     // name the rescue path (GH #111).
-                    Text("One thing to know: audio that's set aside won't pair up on its own if its video turns up in a later scan. A “Find Missing Audio” helper (coming later) will be the way to reunite them.")
+                    Text("One thing to know: audio that's set aside won't pair up on its own if its video turns up in a later scan. Right-click the video and choose “Find Missing Audio…” to hunt for it and reunite them.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

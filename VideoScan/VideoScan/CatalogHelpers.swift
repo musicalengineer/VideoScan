@@ -211,6 +211,11 @@ struct CatalogContent: View {
     /// the candidate IDs taken at click time (.sheet(item:) discipline —
     /// never chained isPresented).
     @State private var musicTriagePayload: MusicTriagePayload?
+    /// "Find Missing Audio…" target (GH #111). Non-nil presents the
+    /// three-tier search sheet for that video-only record. Internal (not
+    /// private) because the context-menu entry lives in
+    /// CatalogContent+Table.swift.
+    @State var missingAudioTarget: VideoRecord?
     /// The candidate count the user last dismissed the banner at.
     /// @SceneStorage so the dismissal survives tab switches (CatalogView
     /// is torn down per switch) but NOT app relaunch — nag semantics:
@@ -831,6 +836,11 @@ struct CatalogContent: View {
         // Music-triage review list (GH #124). Same .sheet(item:) shape.
         .sheet(item: $musicTriagePayload) { payload in
             MusicTriageSheet(candidateIDs: payload.candidateIDs)
+                .environmentObject(model)
+        }
+        // "Find Missing Audio…" (GH #111). Same .sheet(item:) shape.
+        .sheet(item: $missingAudioTarget) { rec in
+            MissingAudioSheet(videoID: rec.id)
                 .environmentObject(model)
         }
         .alert(
