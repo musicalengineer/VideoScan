@@ -3179,12 +3179,25 @@
    "followsPrevious": true
   },
   {
+   "id": "lv260911-016b",
+   "category": "live",
+   "text": "hallie mae mcgill",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "notes": "GH #184 item 4 — a bare utterance that is exactly a tree person's full name opens the biography (HallieBareNameQuestion); the translator had read it as a presence search"
+  },
+  {
    "id": "lv260911-018",
    "category": "live",
    "text": "where were you born, hallie?",
-   "expect": "kinship",
-   "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed",
-   "followsPrevious": true
+   "expect": "social",
+   "notes": "harvested 2026-09-11 from the app transcript; GH #184 item 5 — a second-person life fact is answered on the persona road (HalliePersonaQuestion), with the namesake biography offered as a chip; the model had read it as an age-in-video ask",
+   "followsPrevious": true,
+   "expectedRoutes": [
+    "conversation"
+   ]
   },
   {
    "id": "lv260911-019",

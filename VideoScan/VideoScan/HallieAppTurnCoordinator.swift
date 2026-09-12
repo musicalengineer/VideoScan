@@ -758,7 +758,10 @@ enum HallieAppTurnCoordinator {
                 lineageAnswer: { HallieLineageAnswer.answer($0, context: sources()) },
                 relationshipsOverview: { HallieRelationshipsOverview.answer($0, context: sources()) },
                 researchAnswer: { HallieResearchQuestion.answer($0, context: sources()) },
-                selectedRecord: selectedRecord)
+                selectedRecord: selectedRecord,
+                // Exact-name and persona oracles (GH #184 items 4–5); same
+                // lazy sources, so nothing is read unless a step asks.
+                identity: HallieTurnExecutor.nameIdentity { sources() })
         }
         return try await withTaskCancellationHandler {
             try await worker.value

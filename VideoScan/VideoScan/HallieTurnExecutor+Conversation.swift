@@ -454,7 +454,8 @@ extension HallieTurnExecutor {
         lineageAnswer: ((HallieLineageQuestion) -> Result?)? = nil,
         relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil,
         researchAnswer: ((HallieResearchQuestion) -> Result)? = nil,
-        selectedRecord: SelectedRecord? = nil
+        selectedRecord: SelectedRecord? = nil,
+        identity: NameIdentity? = nil
     ) -> PreTranslation {
         if let (first, second) = splitTwoQuestions(question),
            case .answer(let a) = preTranslationSingle(
@@ -463,7 +464,8 @@ extension HallieTurnExecutor {
                catalogStats: catalogStats,
                rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
                relationshipsOverview: relationshipsOverview,
-               researchAnswer: researchAnswer, selectedRecord: selectedRecord),
+               researchAnswer: researchAnswer, selectedRecord: selectedRecord,
+               identity: identity),
            a.route != .reset, a.clarification == nil {
             let secondTurn = preTranslationSingle(
                 question: second, playAfterAnswer: playAfterAnswer, memory: memory,
@@ -471,7 +473,8 @@ extension HallieTurnExecutor {
                 catalogStats: catalogStats,
                 rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
                 relationshipsOverview: relationshipsOverview,
-                researchAnswer: researchAnswer, selectedRecord: selectedRecord)
+                researchAnswer: researchAnswer, selectedRecord: selectedRecord,
+                identity: identity)
             if case .answer(let b) = secondTurn, b.route != .reset {
                 return .answer(joinedTwoQuestionAnswer(a, b))
             }
@@ -495,7 +498,8 @@ extension HallieTurnExecutor {
             catalogStats: catalogStats,
             rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
             relationshipsOverview: relationshipsOverview,
-            researchAnswer: researchAnswer, selectedRecord: selectedRecord)
+            researchAnswer: researchAnswer, selectedRecord: selectedRecord,
+            identity: identity)
     }
 
     /// Both answers' facts survive the join (codex #707 item 5: only b's
@@ -805,7 +809,8 @@ extension HallieTurnExecutor {
         lineageAnswer: ((HallieLineageQuestion) -> Result?)?,
         relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil,
         researchAnswer: ((HallieResearchQuestion) -> Result)? = nil,
-        selectedRecord: SelectedRecord? = nil
+        selectedRecord: SelectedRecord? = nil,
+        identity: NameIdentity? = nil
     ) -> PreTranslation {
         // A turn ABOUT the previous answer ("that's wrong", "you presented
         // me a list of people born hundreds of years ago") is repaired from
@@ -848,6 +853,21 @@ extension HallieTurnExecutor {
         if let command = ArchivistConversationCommand.detect(question) {
             return .answer(commandResult(command))
         }
+        // "where were you born, hallie?" (GH #184 item 5): a life fact
+        // asked of Hallie HERSELF, in the second person with no third
+        // party in it, is answered from her role — she is the archivist,
+        // not a person — with her namesake's biography offered as the next
+        // tap. Deterministic and BEFORE the translator, which read this
+        // one as an age-in-video ask with nobody to bind "you" to. After
+        // capability ("what can you do") and the commands ("who are you")
+        // so neither loses a question; before the record recogniser and
+        // every family lane. See HalliePersonaQuestion for what stays out.
+        if let identity, let isInnerCircleName,
+           let ask = HalliePersonaQuestion.detect(question, isInnerCircleName: isInnerCircleName) {
+            return .answer(HalliePersonaQuestion.answer(
+                ask, archivistName: identity.archivistName(),
+                namesake: identity.archivistNamesake()))
+        }
         // "who is in New Hampshire.mov" / "does it have my name in it" /
         // "tell me about this video" (2026-09-02): ONE record, answered
         // from its own fields by the record route — never a catalog-wide
@@ -862,6 +882,23 @@ extension HallieTurnExecutor {
                 originalQuestion: question,
                 ast: .record(record),
                 playAfterAnswer: playAfterAnswer))
+        }
+        // "hallie mae mcgill" (GH #184 item 4): a bare utterance that is
+        // EXACTLY a known person's name — a People-tab name or alias, or
+        // the whole of a family-tree NAME record — opens the biography,
+        // the same road "tell me about hallie mae mcgill" takes (namesakes
+        // get that road's which-one chips). The translator read a lone
+        // name as a presence search. Exactness is the guard: a name with
+        // any other word in it ("rick's family tree", "tim's brother",
+        // "videos of donna", "mae mcgill") is not this shape, so the
+        // lineage and family-card detectors below cannot be robbed. Not
+        // with a play verb peeled off the front — that is a media ask.
+        if !playAfterAnswer, let identity,
+           let name = HallieBareNameQuestion.detect(
+               question, isExactPersonName: identity.isExactPersonName) {
+            return .run(Intent(
+                originalQuestion: question,
+                ast: .graph(.init(people: [name], operation: .biography))))
         }
         // An advice / creative / definition request that carries no hard
         // archive cue skips the FAMILY lanes and goes on to be answered as
@@ -1461,6 +1498,11 @@ extension HallieTurnExecutor.Result {
             attachments: attachments,
             performsFirstOfferedAction: performsFirstOfferedAction,
             immediateOfferedAction: immediateOfferedAction,
+            // Every field rides along (2026-09-12): the life status used to
+            // be dropped here, so a template kinship answer with an owner
+            // or roster note in its basis lost its tense for the composer.
+            // HallieResultCopyRoundTripTests walks every copy helper.
+            subjectLifeStatus: subjectLifeStatus,
             refinableQuery: refinableQuery,
             retryOffer: retryOffer)
     }

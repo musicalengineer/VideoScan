@@ -1015,7 +1015,9 @@ enum HallieShellCLI {
                 researchAnswer: { HallieResearchQuestion.answer($0, context: identity) },
                 selectedRecord: selectedRecord.map {
                     HallieTurnExecutor.SelectedRecord(recordID: $0.id, date: selectedDate)
-                })
+                },
+                // Exact-name and persona oracles (GH #184 items 4–5).
+                identity: HallieTurnExecutor.nameIdentity { identity })
             let intent: HallieTurnExecutor.Intent
             switch pre {
             case .answer(let result):
