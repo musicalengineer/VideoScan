@@ -477,7 +477,9 @@ extension CatalogStorageTotals {
     /// records with no partial MD5 can only ever have scored as unique,
     /// so the figure is then an upper bound, not a measurement.
     var uniqueCaption: String {
-        let categories = "ignoring duplicates, junk, photos & music"
+        // Short on purpose (Rick 2026-09-12): the footer row is tight
+        // and the tooltip carries the full list.
+        let categories = "excluding dups, etc."
         if duplicateCoverage < 0.5 && fileCount > 0 {
             return "at most — \(categories)"
         }

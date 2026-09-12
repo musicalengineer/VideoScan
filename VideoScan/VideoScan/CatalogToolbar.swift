@@ -538,19 +538,11 @@ struct CatalogToolbar<Dashboard: View>: View {
                     }
                 }
 
-            // "TOTAL CATALOG 10.7 TB · ARCHIVED 2.1 TB · UNIQUE 6.3 TB" —
-            // the whole catalog's size, what the Master Archive already
-            // holds, and the distinct material once copies collapse
-            // (Rick 2026-09-11: the ~10 TB figure counts archive copies
-            // and cleaned versions too). Beside the Showing box so the
-            // two read as one row of facts: what you are looking at, and
-            // how much there is. Hidden until the catalog has records.
-            // NOTE: this widens the left-hand group, so the search
-            // capsule lands further right than `searchLeftInset` was
-            // tuned for — retune that one constant if it bothers the eye.
-            if !sizeTotals.isEmpty {
-                CatalogSizeTotalsBox(totals: sizeTotals)
-            }
+            // The TOTAL CATALOG · ARCHIVED · UNIQUE figures live on the
+            // volume-table footer line above (Rick 2026-09-12: a second
+            // totals box in this row was squished and truncated). The
+            // `sizeTotals` value still arrives here so a future use has
+            // it without re-plumbing.
 
             if !outputCSVPath.isEmpty {
                 Button(action: {

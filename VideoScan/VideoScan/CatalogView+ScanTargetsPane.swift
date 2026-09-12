@@ -802,7 +802,9 @@ extension CatalogView {
             // catalog, not the filtered view, so hiding them behind a
             // volume filter would be misleading.
             VolumeTableTotalsFooter(totals: storageTotals,
-                                    columnFrames: volumeColumnFrames)
+                                    columnFrames: volumeColumnFrames,
+                                    archivedBytes: sizeTotals.isEmpty ? nil : sizeTotals.archivedBytes,
+                                    archivedHelp: sizeTotals.archivedTooltip)
         }
         // Shared coordinate space: the Media Size cell measures itself
         // in it, the footer positions itself in it. Both must name the

@@ -67,6 +67,14 @@ struct VolumeTableTotalsFooter: View {
     /// confidently displaying a figure that is about to change.
     var isStale: Bool = false
 
+    /// ARCHIVED — bytes the Master Archive already holds (a promoted
+    /// copy, inside the archive root, or content with a master copy),
+    /// from CatalogSizeTotals. Nil until the first off-main pass lands.
+    /// Rick 2026-09-12: lives on THIS line, to the right of UNIQUE,
+    /// instead of a second squished totals box in the toolbar row.
+    var archivedBytes: Int64? = nil
+    var archivedHelp: String = ""
+
     // MARK: Derived geometry
 
     /// Content origin of a measured column, falling back to the
@@ -191,6 +199,26 @@ struct VolumeTableTotalsFooter: View {
         .layoutPriority(1)
     }
 
+    /// ARCHIVED — after UNIQUE with a clear gap, same register as the
+    /// other figures. Never truncates.
+    @ViewBuilder private var archivedFigure: some View {
+        if let bytes = archivedBytes {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text("ARCHIVED")
+                    .font(Self.labelFont)
+                    .foregroundColor(.secondary)
+                    .fixedSize()
+                Text(CatalogSizeTotals.displaySize(bytes))
+                    .font(Self.figureFont)
+                    .foregroundColor(.primary)
+                    .fixedSize()
+            }
+            .padding(.leading, 36)
+            .layoutPriority(2)
+            .help(archivedHelp)
+        }
+    }
+
     @ViewBuilder private var stalePill: some View {
         if isStale {
             Text("updating…")
@@ -204,6 +232,7 @@ struct VolumeTableTotalsFooter: View {
         "Total media in catalog \(totals.grossDisplay). "
             + "Online now \(totals.onlineDisplay). "
             + "\(totals.uniqueDisplay) unique media, \(totals.uniqueCaption)."
+            + (archivedBytes.map { " Archived \(CatalogSizeTotals.displaySize($0))." } ?? "")
             + (totals.manuallyDeletedCaption.map { " \($0)." } ?? "")
     }
 
@@ -216,6 +245,7 @@ struct VolumeTableTotalsFooter: View {
                 grossFigure
                 onlineFigure
                 uniqueFigure
+                archivedFigure
                 Spacer(minLength: 8)
                 stalePill
             }
