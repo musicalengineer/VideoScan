@@ -138,8 +138,9 @@ extension CatalogView {
     ///
     /// Computed on demand from a CONTEXT MENU, which only builds when
     /// the user right-clicks — so this O(records) pass runs on an
-    /// explicit gesture, not on every render. That is the same reason
-    /// the Delete section next to it can afford its own scan.
+    /// explicit gesture, not on every render. (The Catalog Options
+    /// menu's per-volume counts used to make the same bet inside the
+    /// view builder; they now read `scanTargetFacts` — codex #1368.)
     func signatureCoverage(for target: CatalogScanTarget)
         -> (signed: Int, missing: Int, total: Int) {
         var signed = 0, missing = 0
@@ -196,6 +197,14 @@ extension CatalogView {
             isReachable: { onlineVolumes.contains(VolumeReachability.volumeName(forPath: $0)) }
         )
         let targets = model.scanTargets
+        // Per-target Delete counts + per-volume signature plans for the
+        // Catalog Options menu (codex #1368). Rides this pass so the
+        // menu can never disagree with the volume table about which
+        // catalog revision it describes. O(records × targets), once.
+        scanTargetFacts = ScanTargetRecordFacts.project(
+            model.records,
+            targets: targets.map { ($0.id, $0.searchPath) }
+        )
         guard !targets.isEmpty else {
             volumeAggregateCache = [:]
             return
@@ -660,10 +669,12 @@ extension CatalogView {
                             ForEach(model.scanTargets.filter {
                                 $0.isReachable && !$0.searchPath.isEmpty
                             }) { target in
-                                let scoped = VideoScanModel.planContentHashBackfill(
-                                    records: model.records,
-                                    isReachable: { _ in true },
-                                    pathPrefix: target.searchPath)
+                                // O(1) read of the cached projection
+                                // (codex #1368). A miss (cold cache)
+                                // renders as an empty, disabled row
+                                // until the next recompute fills it.
+                                let scoped = scanTargetFacts[target.id]?.signaturePlan
+                                    ?? VideoScanModel.ContentHashBackfillPlan()
                                 Button {
                                     Task {
                                         await model.runContentHashBackfill(
@@ -727,10 +738,15 @@ extension CatalogView {
                     }
 
                     Section("Delete") {
+                        // One row per target that has records — an O(1)
+                        // lookup per target, not a catalog walk per
+                        // target per render (codex #1368). The count is
+                        // the same current-OR-origin prefix predicate
+                        // `deleteCatalogForTarget` removes by.
                         ForEach(model.scanTargets.filter { target in
-                            model.records.contains { $0.fullPath.hasPrefix(target.searchPath) || ($0.originalFullPath?.hasPrefix(target.searchPath) ?? false) }
+                            (scanTargetFacts[target.id]?.records ?? 0) > 0
                         }) { target in
-                            let count = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) || ($0.originalFullPath?.hasPrefix(target.searchPath) ?? false) }.count
+                            let count = scanTargetFacts[target.id]?.records ?? 0
                             Button(role: .destructive, action: {
                                 deleteVolumeCatalogTarget = target
                                 showDeleteVolumeCatalogConfirm = true

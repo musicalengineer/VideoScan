@@ -319,6 +319,11 @@ extension VideoScanModel {
         // Persist once at the end — the catalog writer is single-writer,
         // and 18k records is one save, not one save per batch.
         _ = saveCatalogNow()
+        // The Catalog Options menu's signature counts (`hashBackfillPlan`,
+        // `scanTargetFacts`) are cached projections keyed off the
+        // aggregate triggers; a signature run changes `contentHash`
+        // without changing `records.count`, so tell them (codex #1368).
+        if applied > 0 { notifyVolumeAggregatesStale() }
 
         log("File signatures: computed \(result.hashed), failed \(result.failed)"
             + (result.cancelled ? ", CANCELLED" : "")

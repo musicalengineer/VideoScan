@@ -297,6 +297,12 @@ struct CatalogView: View {
     /// Same discipline as `storageTotals`: the computation is O(records)
     /// and must never run from a view body.
     @State var hashBackfillPlan = VideoScanModel.ContentHashBackfillPlan()
+    /// Per-scan-target record facts for the Catalog Options menu —
+    /// Delete counts and per-volume signature plans (codex #1368).
+    /// Same discipline as `hashBackfillPlan`: projected once inside
+    /// recomputeVolumeAggregates(), read by the body as a dictionary
+    /// lookup per target. `nil` = cache not built yet.
+    @State var scanTargetFacts: [UUID: ScanTargetRecordFacts] = [:]
     @State private var showDashboard = false
     @State private var showInspector = true
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
@@ -1032,7 +1038,8 @@ struct CatalogView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             if let target = deleteVolumeCatalogTarget {
-                let count = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) || ($0.originalFullPath?.hasPrefix(target.searchPath) ?? false) }.count
+                // O(1): same projection the Delete menu row read.
+                let count = scanTargetFacts[target.id]?.records ?? 0
                 Text("Delete \(count) catalog record(s) for \(VolumeReachability.displayLabel(forPath: target.searchPath))?\n\nThe probe cache is unaffected — a re-scan will replay quickly from cache.")
             } else {
                 Text("Delete catalog records for this volume?")
