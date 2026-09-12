@@ -143,6 +143,8 @@ extension VideoRecord {
         c.trimOutSeconds = trimOutSeconds
         c.userDate = userDate
         c.userDateConfidence = userDateConfidence
+        c.userPlace = userPlace
+        c.userPlaceConfidence = userPlaceConfidence
         c.workspaceActive = workspaceActive
         c.audioVerifyStatus = audioVerifyStatus
         c.audioVerifyNote = audioVerifyNote

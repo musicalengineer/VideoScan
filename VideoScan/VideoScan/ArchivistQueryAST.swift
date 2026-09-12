@@ -49,19 +49,26 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
         var yearEnd: Int?
         var mediaKind: MediaKind?
         var keywords: [String]?
+        /// Hand-entered place facet (2026-09-12): an EXACT match on Rick's
+        /// `userPlace` field — whole phrase or town alone — never a word
+        /// search. Set deterministically by HalliePlaceFacet from Rick's
+        /// own places; the translator is not asked for it (not in
+        /// knownFieldNames, so a model that emits it is benignly dropped).
+        var place: String?
 
         init(people: [String]? = nil, yearStart: Int? = nil,
              yearEnd: Int? = nil, mediaKind: MediaKind? = nil,
-             keywords: [String]? = nil) {
+             keywords: [String]? = nil, place: String? = nil) {
             self.people = people
             self.yearStart = yearStart
             self.yearEnd = yearEnd
             self.mediaKind = mediaKind
             self.keywords = keywords
+            self.place = place
         }
 
         private enum CodingKeys: String, CodingKey, CaseIterable {
-            case people, yearStart, yearEnd, mediaKind, keywords
+            case people, yearStart, yearEnd, mediaKind, keywords, place
         }
 
         init(from decoder: Decoder) throws {
@@ -75,6 +82,7 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
                 start: yearStart, end: yearEnd, in: c)
             mediaKind = try c.decodeNonNullIfPresent(MediaKind.self, forKey: .mediaKind)
             keywords = try c.decodeBoundedListIfPresent(.keywords)
+            place = try c.decodeNonNullIfPresent(String.self, forKey: .place)
         }
     }
 
@@ -441,6 +449,10 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
         /// people) and therefore stands alone; `people` and `date` combine.
         enum Operation: String, Codable, Equatable, Sendable, CaseIterable {
             case people, date, about
+            /// "where was this taken" (2026-09-12): the hand-entered place
+            /// and its confidence, or "no place recorded" — `about` covers
+            /// it too.
+            case place
         }
 
         enum Reference: Codable, Equatable, Sendable {

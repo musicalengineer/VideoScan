@@ -449,6 +449,26 @@ public class VideoRecord: Identifiable, Decodable {
     /// migration as `userDate`.
     public var userDateConfidence: String?
 
+    /// Rick's hand-entered PLACE for the footage (2026-09-12) — a near-
+    /// clone of `userDate`: FREE TEXT in canonical display form
+    /// ("Franklin, MA", "Cape Cod", "Montana", "NH"), only ever written
+    /// with `UserPlaceEntry.canonicalize` output. No geocoding, no
+    /// coordinates: the precision is whatever Rick typed, like the
+    /// partial date. nil = never placed by hand (the "No place yet"
+    /// review queue). Additive optional — legacy catalogs decode as nil,
+    /// the DTO encodes the key only when present, old catalog.json
+    /// files round-trip byte-identical. Derivatives inherit it from
+    /// their source record via snapshotClone — same footage, same place.
+    public var userPlace: String?
+
+    /// Confidence in `userPlace`: "estimated" (Rick's best guess, the
+    /// entry UI's default) or "known" — AT THE PRECISION ENTERED ("Cape
+    /// Cod" + known means it was the Cape, not a particular beach).
+    /// Meaningless (nil) when `userPlace` is nil. The known / estimated /
+    /// unplaced status shown in the UI is DERIVED (`userPlaceStatus`),
+    /// never stored. Same additive-optional migration as `userPlace`.
+    public var userPlaceConfidence: String?
+
     /// True when this record represents a file currently being actively
     /// worked on with external tools (transcode in another app, Topaz,
     /// FCP edit in progress). Independent of `lifecycleStage` — a file
@@ -681,6 +701,10 @@ public class VideoRecord: Identifiable, Decodable {
         // pattern: legacy catalogs (no keys) decode as nil = unconfirmed.
         userDate                    = try c.decodeIfPresent(String.self, forKey: .userDate)
         userDateConfidence          = try c.decodeIfPresent(String.self, forKey: .userDateConfidence)
+        // Hand-entered place (2026-09-12) — same additive-optional
+        // migration: legacy catalogs (no keys) decode as nil = unplaced.
+        userPlace                   = try c.decodeIfPresent(String.self, forKey: .userPlace)
+        userPlaceConfidence         = try c.decodeIfPresent(String.self, forKey: .userPlaceConfidence)
         // Workspace-active flag. decodeIfPresent so legacy catalogs (no key)
         // come back as false — i.e. "not in workspace." Import-to-workspace
         // (Pass B) is the only writer that sets this true.

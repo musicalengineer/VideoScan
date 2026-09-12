@@ -79,6 +79,7 @@ enum CatalogShowingSummary {
         case .notYetArchived:       return "Not yet archived"
         case .hasMasterCopy:        return "Already archived"
         case .archiveCandidates:    return "Archive Angel candidates"
+        case .noPlaceYet:           return "No place yet"
         }
     }
 

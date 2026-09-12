@@ -197,6 +197,14 @@ struct InspectorPanel: View {
                             .id(rec.id)
                     }
 
+                    // "Where" sits right under "When" (Rick 2026-09-12):
+                    // the hand-entered place, a near-clone of the date
+                    // entry with the same best-guess / I'm-sure control.
+                    inspectorSection("Where Was This?", systemImage: "mappin.and.ellipse") {
+                        InspectorPlaceView(record: rec)
+                            .id(rec.id)
+                    }
+
                     // Dossier — captions, transcript, OCR text, OCR dates,
                     // inferred date. Only shown when the record has been
                     // processed by the dossier pipeline so empty rows don't

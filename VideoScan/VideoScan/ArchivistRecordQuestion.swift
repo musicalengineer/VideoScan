@@ -63,6 +63,8 @@ enum ArchivistRecordQuestion {
         // (the generic "does it have …" form is otherwise people).
         let people = matches(peopleVerb, masked) && !matches(hasOnlyADate, masked)
         let examine = matches(examineVerb, masked)
+        // "where was this taken" / "what town is this" (2026-09-12).
+        let place = matches(placeAsk, masked)
         let aboutStrong: Bool
         let date: Bool
         if file != nil {
@@ -94,6 +96,7 @@ enum ArchivistRecordQuestion {
         } else {
             if people || (file != nil && !peopleList.isEmpty) { operations.append(.people) }
             if date { operations.append(.date) }
+            if place { operations.append(.place) }
             if operations.isEmpty {
                 // A bare file name, or "examine it": the whole dossier.
                 if file != nil || examine { operations = [.about] } else { return nil }
@@ -477,6 +480,16 @@ enum ArchivistRecordQuestion {
         + #"|\bits dates?\b"#
         + #"|\b(?:is|was) \#(referent) dated\b"#
         + #"|\#(referent) (?:is |was )?dated\b"#)
+    /// "where was this taken" / "where's it from" / "what town is this" /
+    /// "the location of it" (2026-09-12): the hand-entered place. The
+    /// referent must follow the verb directly and the sentence must end
+    /// there (or in a taking verb), so "where was Eileen born" (family
+    /// tree) and "where is it in the tree" never land here.
+    private static let placeAsk = rx(
+        #"\bwhere(?: (?:was|were|is|did)|'s) \#(referent)(?: (?:taken|filmed|shot|recorded|made|captured|from|at))?\s*[?.!]*$"#
+        + #"|\b(?:what|which) (?:place|location|town|city|state)(?: (?:is|was|were))? \#(referent)\b"#
+        + #"|\b(?:the |its )?(?:place|location) (?:of|for|on|behind) \#(referent)\b"#
+        + #"|\#(referent)(?:'s)? (?:place|location)\b"#)
     private static let myName = rx(#"\bmy (?:own )?name\b|\b(?:has|have|is|am) (?:i|me|myself) in\b"#)
     private static let listAfterCue = rx(
         #"\b(?:like|such as|named|names?:|for example|e\.g\.,?)\s+(.+?)(?:\s+and\s+(?:a |the )?dates?\b|[?.!]|$)"#)
@@ -530,7 +543,8 @@ enum ArchivistRecordQuestion {
         // "can" open no record pattern and are legal name words ("Will
         // and Grace.mov" as the whole question).
         rx(#"\#(clauseStart)(?:what |so )?(?:does|did|do|is|was|are|were|has|have|had|isn't|doesn't|wasn't)\b"#),
-        rx(#"\b(?:when|what year|which year|what date|how old) (?:was|is|were|did|does|do)\b"#),
+        // "where was" joined 2026-09-12 for "where was New Hampshire.mov taken".
+        rx(#"\b(?:when|where|what year|which year|what date|how old) (?:was|is|were|did|does|do)\b"#),
     ]
     /// Words a path scan (looking backwards for the "/" head from OUTSIDE
     /// a path) will not cross: a sentence verb between the core and a "/"

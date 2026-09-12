@@ -150,6 +150,19 @@ extension HallieTurnExecutor {
             }
         }
 
+        // Hand-entered place (Rick 2026-09-12): "videos at Cape Cod", "Donna
+        // in Westford", "what do we have from Montana". A term that is one
+        // of Rick's OWN places — the distinct userPlace values in the
+        // catalog, nothing seeded — becomes the EXACT place facet instead
+        // of a word search, so a transcript that says "cape cod" no longer
+        // answers for a video shot there. Runs after every keyword rewrite
+        // above so nothing re-inserts the consumed term (HalliePlaceFacet).
+        let knownPlaces = HalliePlaceFacet.knownPlaces(in: context.presenceRecords)
+        if let detection = HalliePlaceFacet.apply(
+            to: &effective, question: request.intent.originalQuestion, knownPlaces: knownPlaces) {
+            notes.append(detection.note)
+        }
+
         // "and the newest?": the same question, every match, in date
         // order (+DateOrdered). Names have been recovered and rebound
         // above, so the ordered run sees the canonical people.
@@ -197,6 +210,12 @@ extension HallieTurnExecutor {
                 var asWords = effective
                 asWords.people = nil
                 asWords.keywords = people
+                // The same place step for the demoted name (2026-09-12):
+                // "videos of Franklin" with a record placed at Franklin, MA.
+                if let detection = HalliePlaceFacet.apply(
+                    to: &asWords, question: request.intent.originalQuestion, knownPlaces: knownPlaces) {
+                    notes.append(detection.note)
+                }
                 let wordQuery = ArchivistPresenceQuery(asWords, citationOffset: 0)
                 let wordResult = try await detached {
                     execute(wordQuery, records)

@@ -254,6 +254,15 @@ final class VideoScanModel: ObservableObject {
     /// volumeRoot() string work, per body evaluation (2026-07-05 arc).
     @Published private(set) var deletableDupVolumes: [(path: String, count: Int)] = []
 
+    /// Rick's own places, by frequency then name — the inspector's Place
+    /// picker (2026-09-12). Rides the same debounced catalog-change pass
+    /// as dossierCounts (records didSet + the mutation notification), so
+    /// the picker never touches `records` itself. Logic in
+    /// VideoScanModel+UserPlaces.swift; the storage lives here because
+    /// extensions cannot add stored properties.
+    @Published var userPlaceRoster = UserPlaceRoster()
+    var userPlaceRosterTask: Task<Void, Never>?
+
     /// Immediate recompute — the ONLY place the O(records) count runs.
     /// Piggybacked (2026-07-05): the pair flag and the deletable-dups
     /// menu payload ride the same debounced catalog-change pass, so
@@ -284,6 +293,8 @@ final class VideoScanModel: ObservableObject {
         if changed {
             deletableDupVolumes = freshDeletable
         }
+        // Place picker roster (2026-09-12) — projected here, counted off-main.
+        scheduleUserPlaceRosterRefresh()
     }
 
     // MARK: - Cached per-volume retire statuses (2026-07-05 beachball fix)

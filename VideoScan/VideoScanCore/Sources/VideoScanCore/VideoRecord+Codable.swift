@@ -71,6 +71,8 @@ extension VideoRecord {
         case trimOutSeconds
         case userDate
         case userDateConfidence
+        case userPlace
+        case userPlaceConfidence
         case workspaceActive
         case userNotes
         case tags

@@ -31,6 +31,7 @@ enum SearchField: String, Equatable {
     case streamType   // structural filter on rec.streamType (audio/video/both/failed/none)
     case mediaKind    // GH #124: facet-family spelling (type:video / type:audio / type:video-only)
     case codec        // GH #124 layer 4: videoCodec OR audioCodec substring (codec:mp3, codec:prores)
+    case place        // hand-entered userPlace (2026-09-12) — EXACT whole-phrase or town-only match, never substring, never transcript
 
     static func parse(_ raw: String) -> SearchField? {
         switch raw.lowercased() {
@@ -44,6 +45,7 @@ enum SearchField: String, Equatable {
         case "stream", "streamtype":        return .streamType
         case "type", "kind":                return .mediaKind
         case "codec", "codecs":             return .codec
+        case "place", "where", "location":  return .place
         default:                            return nil
         }
     }
@@ -313,7 +315,29 @@ nonisolated func pfFieldTokenMatches(_ field: SearchField, _ value: String, _ re
         return pfMediaKindAliasMatches(value: n, recordType: rec.streamType)
     case .codec:
         return pfCodecFieldMatches(value: n, rec: rec)
+    case .place:
+        // `place:franklin` matches "Franklin, MA" (town-only) and
+        // `place:"franklin, ma"` matches whole-phrase; "cod" does NOT
+        // match "Cape Cod", and a transcript saying "cape cod" is never
+        // consulted — the exact rule is the whole point of the field
+        // (UserPlaceEntry.matches). `value` arrives lowercased; the
+        // matcher canonicalizes both sides so case is irrelevant.
+        return pfPlaceFieldMatches(value: value, rec: rec)
     }
+}
+
+/// `place:` field match — exact (whole-phrase or town-only) against the
+/// record's canonical `userPlace` only. Pure, nonisolated, O(1).
+nonisolated func pfPlaceFieldMatches(value: String, rec: VideoRecord) -> Bool {
+    guard let place = rec.userPlace else { return false }
+    return UserPlaceEntry.matches(value, against: place)
+}
+
+/// "No place yet" review-queue predicate (CatalogViewFilter.noPlaceYet):
+/// true when Rick has not entered a place. Derived from `userPlaceStatus`
+/// so it can never disagree with the inspector's status line.
+nonisolated func pfRecordHasNoPlace(_ rec: VideoRecord) -> Bool {
+    rec.userPlaceStatus == .unplaced
 }
 
 /// `notes:` field match — the union across the userNotes split
@@ -431,6 +455,10 @@ nonisolated func pfTokenMatches(_ token: SearchToken, _ rec: VideoRecord) -> Boo
         // unfindable. Workflow tags join too (human signal).
         if rec.userNotes.lowercased().contains(n) { return true }
         if rec.tags.contains(where: { $0.lowercased().contains(n) }) { return true }
+        // Hand-entered place (2026-09-12) — human signal, plain-searchable
+        // like tags/userNotes. Substring HERE (typing "cape" should find
+        // "Cape Cod" rows); the exact rule lives behind the `place:` prefix.
+        if let p = rec.userPlace, p.lowercased().contains(n) { return true }
         return false
     case .yearRange(let range):
         return pfYearsFromRecord(rec).contains(where: { range.contains($0) })
@@ -524,6 +552,10 @@ nonisolated func pfCatalogTokenMatches(_ token: SearchToken, _ rec: VideoRecord)
         // contract pinned by CatalogSearchIndexTests.
         if rec.tags.contains(where: { $0.lowercased().contains(n) }) { return true }
         if rec.userNotes.lowercased().contains(n) { return true }
+        // Hand-entered place (2026-09-12): typing "cape" finds every row
+        // Rick placed at "Cape Cod". MUST stay aligned with
+        // CatalogSearchIndex.buildHaystack — correctness contract.
+        if let p = rec.userPlace, p.lowercased().contains(n) { return true }
         return false
     case .yearRange(let range):
         // Year shorthand fires on filename-embedded years (e.g. "Cape
