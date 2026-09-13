@@ -217,3 +217,36 @@ Consumers (codex #1422/#1423/#1426):
    (`rebaseInternalLinks`, tolerant of `/private` path aliases), records it
    in `linksRebased`, finishes it on a rerun after a crash, and undoes it on
    rollback. Pinned by dereferencing the link.
+
+## Post-merge review amendments (codex, 2026-09-13)
+
+Supersedes the corresponding sentences above where they differ.
+
+1. **A refused missing profile STAYS refused.** Item 2 of the final codex
+   pass said quick-save and rejection sync "clear the stale selection". They
+   no longer do: clearing `activeProfileUUID` left `personName` alone, so
+   the very next operation resolved the retained name through the
+   unique-name fallback and wrote a namesake. `resolveActiveProfile` keeps
+   answering `.missing(uuid)` until `applyProfile` (a card click) or Clear
+   replaces the uuid; only `referencePath` is dropped. Deleting the ACTIVE
+   person binds the deleted uuid the same way (undo restores it live).
+   Sensor: `repeatedOperationsAfterAMissingProfileRefusalStayRefused`.
+2. **Catalog tag writeback is checked at the write sink, by uuid.**
+   `startJob`'s shared-name refusal still stands, but a namesake created
+   mid-scan, a person deleted mid-scan, or a job restored from cache never
+   passed it. `onScanComplete` now carries `PersonTagIdentity` (name +
+   uuid, from `ScanJob.tagIdentity`) and
+   `VideoScanModel.applyDetectedPeople(confirmed:suspected:identity:)`
+   resolves it against the gallery AT THE WRITE: the bound uuid must still
+   resolve and its current canonical name must be unique (the name written
+   is that current name); a uuid that is gone, or a shared name, is refused
+   and logged and nothing is tagged. `uuid` is nil only for a never-persisted
+   uuid (quarantined legacy folder), which is identified by name while unique.
+3. **Link rebase is crash-safe and never records partial work.** A link is
+   replaced by preparing the new link BESIDE it and `rename(2)`-ing over it
+   (a link exists under the old name at every instant), then read back.
+   `rebaseInternalLinks` throws when any link failed; `linksRebased` is
+   appended only on success, the run is marked incomplete otherwise, and the
+   next run retries. Rollback retains an entry whose links could not be
+   rebased back and finishes them on the next rollback before moving the
+   audit aside.
