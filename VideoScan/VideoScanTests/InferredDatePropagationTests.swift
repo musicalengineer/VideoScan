@@ -550,6 +550,103 @@ struct InferredDatePropagationTests {
         #expect(both.userDate == "1991-06" && both.inferredRecordDate == Self.june21_1991)
     }
 
+    /// codex #1439 (1): validate against the ORIGIN of the chain. A (aaaa,
+    /// own) → B (bbbb, from A) → C (bbbb, from B): C's immediate donor B
+    /// matches C's hash, but the date is A's and A/C conflict — both go.
+    /// A verified chain A → B → C (all aaaa) stays.
+    @Test func unwindClearsDependentDescendants_originDonorDecides() throws {
+        let dir = try scratchDir("unwind-chain")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let a = makeRecord(path: "/V/a.mxf", md5: "m", size: 100, contentHash: "v1:aaaa",
+                           inferred: Self.june21_1991, confidence: 0.95)
+        let b = makeRecord(path: "/W/a.mxf", md5: "m", size: 100, contentHash: "v1:bbbb",
+                           inferred: Self.june21_1991, confidence: 0.95, source: "propagated from \(a.id.uuidString)")
+        let c = makeRecord(path: "/X/a.mxf", md5: "m", size: 100, contentHash: "v1:bbbb",
+                           inferred: Self.june21_1991, confidence: 0.95, source: "propagated from \(b.id.uuidString)")
+        let d = makeRecord(path: "/Y/a.mxf", md5: "m", size: 100, contentHash: "v1:bbbb",
+                           inferred: Self.june21_1991, confidence: 0.95, source: "propagated from \(c.id.uuidString)")
+        // A verified chain: E (aaaa, from A) → F (aaaa, from E).
+        let e = makeRecord(path: "/V/e.mxf", md5: "m", size: 100, contentHash: "v1:aaaa",
+                           inferred: Self.june21_1991, confidence: 0.95, source: "propagated from \(a.id.uuidString)")
+        let f = makeRecord(path: "/W/e.mxf", md5: "m", size: 100, contentHash: "v1:aaaa",
+                           inferred: Self.june21_1991, confidence: 0.95, source: "propagated from \(e.id.uuidString)")
+        model.records = [a, b, c, d, e, f]
+        let byID = Dictionary(uniqueKeysWithValues: model.records.map { ($0.id, $0) })
+        #expect(VideoScanModel.originDonor(of: d, byID: byID) === a, "the chain resolves to A")
+        #expect(VideoScanModel.originDonor(of: a, byID: byID) === a, "an own date is its own origin")
+
+        let r = model.unwindUnverifiedPropagatedDates(trigger: "test")
+        #expect(r.unwound == 3 && r.conflictingHashes == 3, "B, C and D — the whole dependent subtree")
+        #expect(b.inferredRecordDate == nil && c.inferredRecordDate == nil && d.inferredRecordDate == nil)
+        #expect(a.inferredRecordDate == Self.june21_1991 && a.inferredDateSource == nil)
+        #expect(e.inferredRecordDate == Self.june21_1991 && f.inferredRecordDate == Self.june21_1991,
+                "a chain whose origin is verified same bytes is kept")
+        #expect(model.unwindUnverifiedPropagatedDates(trigger: "test").unwound == 0)
+    }
+
+    /// codex #1439 (1): a chain with a missing link, or a cycle, has no
+    /// traceable origin — unverified by definition, cleared.
+    @Test func unwindClearsCyclesAndMissingDonorChains() throws {
+        let dir = try scratchDir("unwind-cycle")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        // Cycle: X from Y, Y from X — same bytes, nobody earned the date.
+        let x = makeRecord(path: "/V/x.mov", md5: "m", size: 1, inferred: Self.june21_1991, confidence: 0.95)
+        let y = makeRecord(path: "/W/x.mov", md5: "m", size: 1, inferred: Self.june21_1991, confidence: 0.95,
+                           source: "propagated from \(x.id.uuidString)")
+        x.inferredDateSource = "propagated from \(y.id.uuidString)"
+        // Missing middle link: Q from a donor not in the catalog, P from Q — same bytes.
+        let q = makeRecord(path: "/V/q.mov", md5: "n", size: 1, inferred: Self.june21_1991, confidence: 0.95,
+                           source: "propagated from \(UUID().uuidString)")
+        let pRec = makeRecord(path: "/W/q.mov", md5: "n", size: 1, inferred: Self.june21_1991, confidence: 0.95,
+                              source: "propagated from \(q.id.uuidString)")
+        // Unparseable provenance id.
+        let junk = makeRecord(path: "/V/j.mov", md5: "j", size: 1, inferred: Self.june21_1991, confidence: 0.95,
+                              source: "propagated from not-a-uuid")
+        // Origin present but itself undated (its own date was cleared later).
+        let hollow = makeRecord(path: "/V/h.mov", md5: "h", size: 1)
+        let leaf = makeRecord(path: "/W/h.mov", md5: "h", size: 1, inferred: Self.june21_1991, confidence: 0.95,
+                              source: "propagated from \(hollow.id.uuidString)")
+        model.records = [x, y, q, pRec, junk, hollow, leaf]
+        let byID = Dictionary(uniqueKeysWithValues: model.records.map { ($0.id, $0) })
+        #expect(VideoScanModel.originDonor(of: x, byID: byID) == nil, "cycle")
+        #expect(VideoScanModel.originDonor(of: pRec, byID: byID) == nil, "missing link")
+        #expect(VideoScanModel.originDonor(of: leaf, byID: byID) == nil, "origin has no date")
+
+        let r = model.unwindUnverifiedPropagatedDates(trigger: "test")
+        #expect(r.unwound == 6 && r.conflictingHashes == 0)
+        #expect([x, y, q, pRec, junk, leaf].allSatisfy { $0.inferredRecordDate == nil && $0.inferredDateSource == nil })
+        #expect(model.unwindUnverifiedPropagatedDates(trigger: "test").unwound == 0, "terminates and is idempotent")
+    }
+
+    /// codex #1439 (2): an undo file is never replaced — two unwinds in
+    /// the same second produce two sidecars.
+    @Test func unwindNeverClobbersAnEarlierSidecar_sameSecond() throws {
+        let dir = try scratchDir("unwind-clobber")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let stamp = Date(timeIntervalSince1970: 1_789_000_000)
+        let f = unwindFixture(model)
+        let first = model.unwindUnverifiedPropagatedDates(now: stamp, trigger: "test")
+        // Re-poison one row and unwind again inside the same second.
+        f.heuristic.inferredRecordDate = Self.june21_1991
+        f.heuristic.inferredDateConfidence = 0.95
+        f.heuristic.inferredDateSource = "propagated from \(f.donor.id.uuidString)"
+        let second = model.unwindUnverifiedPropagatedDates(now: stamp, trigger: "test")
+        let u1 = try #require(first.sidecar), u2 = try #require(second.sidecar)
+        #expect(u1 != u2 && u1.lastPathComponent.hasPrefix("unwound-20260910") && u2.lastPathComponent.hasPrefix("unwound-20260910"))
+        let files = try FileManager.default.contentsOfDirectory(atPath: model.dateInferenceSidecarDirectory.path)
+        #expect(files.count == 2, "two undo files, both kept")
+        let p1 = try VideoScanModel.unwoundSidecarDecoder().decode(VideoScanModel.UnwoundDateSidecar.self, from: Data(contentsOf: u1))
+        let p2 = try VideoScanModel.unwoundSidecarDecoder().decode(VideoScanModel.UnwoundDateSidecar.self, from: Data(contentsOf: u2))
+        #expect(p1.entries.count == 3 && p2.entries.count == 1, "the first undo file is intact")
+        // The writer itself refuses to overwrite an existing name.
+        let existing = dir.appendingPathComponent("date-inference/taken.json")
+        try Data("x".utf8).write(to: existing)
+        #expect(throws: (any Error).self) { try Data("y".utf8).write(to: existing, options: .withoutOverwriting) }
+    }
+
     /// Isolation: a model on the SHARED store (the real App Support path)
     /// under a test host must refuse — no sidecar there, and because the
     /// sidecar is the undo record, no clearing either.

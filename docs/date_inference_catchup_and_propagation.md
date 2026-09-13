@@ -126,10 +126,16 @@ content hashes.
 **Unwind (one-shot, at load, before the pass).** `unwindUnverifiedPropagatedDates`
 clears every "propagated from <id>" date whose donor is not verified same
 content (or is gone). Reversible: the prior state is written FIRST to
-`App Support/VideoScan/date-inference/unwound-<yyyyMMdd-HHmmss>.json`
+`App Support/VideoScan/date-inference/unwound-<yyyyMMdd-HHmmss>-<8 hex>.json`
 (`{recordID, fullPath, inferredRecordDate, inferredDateConfidence,
-inferredDateSource}` per row); no sidecar, no repair. Idempotent: a second
-load finds nothing, writes nothing, logs nothing. Audit line in catalog.log
+inferredDateSource}` per row), opened create-exclusive so an undo file is
+never replaced (#1439); no sidecar, no repair. Idempotent: a second load
+finds nothing, writes nothing, logs nothing. Validation follows the
+provenance chain ("propagated from <id>") to the row that EARNED the date
+and checks verified-same-content against that ORIGIN, so a dependent
+subtree (A → B → C with A/C conflicting) is cleared whole; a missing link,
+an unparseable id, an undated origin or a cycle is unverified by definition
+and cleared (#1439). Audit line in catalog.log
 and the app log. `reapplyUnwoundDates(from:to:)` restores a sidecar onto rows
 that still have no settled date and no userDate. userDate, own-evidence,
 folder-year and verified propagated rows are never touched.

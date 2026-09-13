@@ -593,10 +593,13 @@ extension VideoScanModel {
             guard Self.isPropagatedInferredDate(rec),
                   let source = rec.inferredDateSource,
                   let date = rec.inferredRecordDate else { continue }
-            let donorID = UUID(uuidString: String(source.dropFirst(InferredDateSource.propagatedPrefix.count)))
-            if let donorID, let donor = byID[donorID], Self.haveVerifiedSameContent(donor, rec) { continue }
-            if let donorID, let donor = byID[donorID],
-               !donor.contentHash.isEmpty, !rec.contentHash.isEmpty, donor.contentHash != rec.contentHash {
+            // codex #1439: validate against the ORIGIN of the provenance
+            // chain, not the immediate donor — B (from A) may be verified
+            // for C while B's own date is A's, and A/C conflict. A missing
+            // link or a cycle is unverified by definition.
+            let origin = Self.originDonor(of: rec, byID: byID)
+            if let origin, Self.haveVerifiedSameContent(origin, rec) { continue }
+            if let origin, !origin.contentHash.isEmpty, !rec.contentHash.isEmpty, origin.contentHash != rec.contentHash {
                 result.conflictingHashes += 1
             }
             victims.append(rec)
@@ -613,19 +616,16 @@ extension VideoScanModel {
             log("date inference: unwind skipped — \(victims.count) candidate(s) but the sidecar would land in the real App Support from a test host (\(trigger))")
             return UnwindResult()
         }
-        let stampFmt = DateFormatter()
-        stampFmt.dateFormat = "yyyyMMdd-HHmmss"
-        stampFmt.timeZone = TimeZone(secondsFromGMT: 0)
-        let url = dir.appendingPathComponent("unwound-\(stampFmt.string(from: now)).json")
         let payload = UnwoundDateSidecar(savedAt: now,
-                                         reason: "propagated date whose donor is not verified same content (codex #1413)",
+                                         reason: "propagated date whose origin donor is not verified same content (codex #1413/#1439)",
                                          conflictingHashes: result.conflictingHashes,
                                          entries: entries)
+        let url: URL
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try Self.unwoundSidecarEncoder().encode(payload).write(to: url, options: .atomic)
+            url = try Self.writeUnwoundSidecar(payload, in: dir, now: now)
         } catch {
-            log("date inference: unwind ABORTED — could not write sidecar \(url.path): \(error.localizedDescription) (\(trigger))")
+            log("date inference: unwind ABORTED — could not write sidecar under \(dir.path): \(error.localizedDescription) (\(trigger))")
             return UnwindResult()
         }
         result.sidecar = url
@@ -642,6 +642,48 @@ extension VideoScanModel {
         log(line)
         appLog.write(line)
         return result
+    }
+
+    /// Follow "propagated from <id>" links to the row that EARNED the
+    /// date (own dossier pass or catch-up). nil when any link is missing
+    /// from the catalog, unparseable, or the chain loops — a date with no
+    /// traceable origin cannot be verified and is unwound.
+    @MainActor
+    static func originDonor(of rec: VideoRecord, byID: [UUID: VideoRecord]) -> VideoRecord? {
+        var visited: Set<UUID> = [rec.id]
+        var current = rec
+        while isPropagatedInferredDate(current) {
+            guard let source = current.inferredDateSource,
+                  let donorID = UUID(uuidString: String(source.dropFirst(InferredDateSource.propagatedPrefix.count))),
+                  let donor = byID[donorID],
+                  visited.insert(donorID).inserted else { return nil }
+            current = donor
+        }
+        return current.inferredRecordDate == nil ? nil : current
+    }
+
+    /// `unwound-<yyyyMMdd-HHmmss>-<8 hex>.json`, opened create-exclusive
+    /// (`.withoutOverwriting`): an undo file is never replaced. Two
+    /// unwinds in the same second get two files; a name collision picks
+    /// another suffix (codex #1439).
+    static func writeUnwoundSidecar(_ payload: UnwoundDateSidecar, in dir: URL, now: Date) throws -> URL {
+        let stampFmt = DateFormatter()
+        stampFmt.dateFormat = "yyyyMMdd-HHmmss"
+        stampFmt.timeZone = TimeZone(secondsFromGMT: 0)
+        let data = try unwoundSidecarEncoder().encode(payload)
+        var lastError: Error?
+        for _ in 0..<8 {
+            let suffix = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)).lowercased()
+            let url = dir.appendingPathComponent("unwound-\(stampFmt.string(from: now))-\(suffix).json")
+            do {
+                try data.write(to: url, options: .withoutOverwriting)
+                return url
+            } catch {
+                lastError = error
+                if (error as NSError).code != NSFileWriteFileExistsError { throw error }
+            }
+        }
+        throw lastError ?? CocoaError(.fileWriteFileExists)
     }
 
     static func unwoundSidecarEncoder() -> JSONEncoder {
