@@ -181,12 +181,44 @@ extension VideoScanModel {
         }
     }
 
-    /// Delete all catalog records for a specific scan target's volume.
+    /// Delete all catalog records for a specific scan target's volume —
+    /// the UNCONFIRMED entry (multi-select context menu, retired-volume
+    /// cleanup prompt). Plans against the live catalog and removes on the
+    /// spot; there is no dialog whose count could have gone stale.
     func deleteCatalogForTarget(_ target: CatalogScanTarget) {
         let path = target.searchPath
         let volName = VolumeReachability.volumeName(forPath: path)
         // Reset target state BEFORE touching records so the UI picks up
         // the phase change on the same objectWillChange cycle.
+        resetTargetStateForDeletedCatalog(target)
+        // Guarded removal (2026-07-03): coverage check + >50-record
+        // snapshot tripwire + fail-safe degrade — same helper as
+        // resetTarget. "Delete Catalog" is explicit, but the multi-select
+        // path bypasses the confirmation dialog, and records nested under
+        // ANOTHER registered target's root are not this target's to delete.
+        let outcome = removeCatalogRecords(underTargetRoot: path, action: "delete catalog")
+        finishDeleteCatalog(for: target, volName: volName, removed: outcome.removed)
+    }
+
+    /// The CONFIRMED entry (codex #1417): the Delete Volume Catalog alert
+    /// planned at the gesture, showed `plan.count`, and hands the plan
+    /// back here. Removes exactly the plan — or refuses and returns a
+    /// fresh plan for the caller to re-confirm if the catalog moved
+    /// underneath the dialog (see `applyTargetRemoval(plan:target:action:)`).
+    /// Target state is reset ONLY when something was actually applied;
+    /// a refusal leaves the target exactly as it was.
+    @discardableResult
+    func deleteCatalogForTarget(_ target: CatalogScanTarget,
+                                plan: TargetRemovalPlan) -> TargetRemovalPlanApplyResult {
+        let volName = VolumeReachability.volumeName(forPath: target.searchPath)
+        let result = applyTargetRemoval(plan: plan, target: target, action: "delete catalog")
+        guard case .applied(let removed, _) = result else { return result }
+        resetTargetStateForDeletedCatalog(target)
+        finishDeleteCatalog(for: target, volName: volName, removed: removed)
+        return result
+    }
+
+    private func resetTargetStateForDeletedCatalog(_ target: CatalogScanTarget) {
         target.phase = .noCatalog
         target.lastScannedDate = nil
         target.filesFound = 0
@@ -194,12 +226,9 @@ extension VideoScanModel {
         if target.status == .complete || target.status == .stopped || target.status == .error {
             target.status = .idle
         }
-        // Guarded removal (2026-07-03): coverage check + >50-record
-        // snapshot tripwire + fail-safe degrade — same helper as
-        // resetTarget. "Delete Catalog" is explicit, but the multi-select
-        // path bypasses the confirmation dialog, and records nested under
-        // ANOTHER registered target's root are not this target's to delete.
-        let outcome = removeCatalogRecords(underTargetRoot: path, action: "delete catalog")
+    }
+
+    private func finishDeleteCatalog(for target: CatalogScanTarget, volName: String, removed: Int) {
         // If any of the banner-tracked rows lived on this volume, the
         // banner's Undo would now skip them — drop the banner to avoid the
         // partial-restore confusion.
@@ -208,7 +237,7 @@ extension VideoScanModel {
         persistScanDates()
         saveCatalogNow()
         notifyTargetsChanged()
-        log("Deleted \(outcome.removed) catalog record(s) for \(volName).")
+        log("Deleted \(removed) catalog record(s) for \(volName).")
     }
 
     /// Export volume info as CSV via a save panel.

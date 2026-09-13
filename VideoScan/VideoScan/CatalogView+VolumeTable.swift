@@ -558,8 +558,7 @@ extension CatalogView {
             }
             Button(role: .destructive, action: {
                 if single {
-                    deleteVolumeCatalogTarget = first
-                    showDeleteVolumeCatalogConfirm = true
+                    presentDeleteVolumeCatalog(for: first)
                 } else {
                     for t in targets { model.deleteCatalogForTarget(t) }
                 }
