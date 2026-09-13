@@ -913,6 +913,16 @@ final class VideoScanModel: ObservableObject {
     /// re-merge what we just loaded) and on every successful merge.
     var lastLiveReloadMtime: Date?
 
+    /// Date-inference pass memory (VideoScanModel+DateInference, codex
+    /// #1415): record id → fingerprint of the stored evidence that a
+    /// bounded pass already examined and found to name NO date. The
+    /// next pass skips those rows without spending budget, so a limited
+    /// pass ADVANCES instead of re-reading the same noise prefix. In-
+    /// memory only; a changed transcript / OCR / caption set changes the
+    /// fingerprint and the row is examined again. (For Rick: a
+    /// memo table, `std::unordered_map<uuid, size_t>`, keyed by row.)
+    var inferredDateNoDateEvidence: [UUID: Int] = [:]
+
     /// Per-volume snapshot of dossier + user-edit fields, captured by
     /// `snapshotPreservedFieldsForRescan` before the scan's removeAll
     /// destroys them, applied by `applyPreservedFieldsAfterRescan`

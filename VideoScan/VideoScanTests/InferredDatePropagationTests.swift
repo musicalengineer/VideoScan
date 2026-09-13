@@ -259,20 +259,285 @@ struct InferredDatePropagationTests {
 
     // MARK: - Rule 2: propagation across a content group
 
-    @Test func propagation_byDuplicateGroupID_evenWhenHashesDiffer() throws {
-        let dir = try scratchDir("groupid")
+    // MARK: - Identity (codex #1413): heuristic groups are not content identity
+
+    /// A DuplicateDetector heuristic group (timecode / stem / duration)
+    /// can hold rows whose FULL hashes conflict. A strong OCR date must
+    /// never cross that line in either direction — each row keeps (or
+    /// derives) its own.
+    @Test func identity_heuristicGroupWithConflictingHashes_neverPropagatesEitherWay() throws {
+        let dir = try scratchDir("heuristic-group")
         defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
         let g = UUID()
-        let donor = makeRecord(path: "/V/a.mov", md5: "one", size: 1, groupID: g,
-                               inferred: Self.june21_1991, confidence: 0.95)
-        let twin = makeRecord(path: "/W/a.mov", md5: "two", size: 2, groupID: g)
-        model.records = [donor, twin]
+        // Same heuristic group, different bytes, different burn-ins.
+        let strong = makeRecord(path: "/V/tape.mov", md5: "one", size: 1, contentHash: "v1:aaaa",
+                                groupID: g, ocr: [Self.nv12OCR, Self.nv12OCR, Self.nv12OCR],
+                                inferred: Self.june21_1991, confidence: 0.95)
+        strong.duplicateConfidence = .medium
+        let other = makeRecord(path: "/W/tape.mov", md5: "two", size: 2, contentHash: "v1:bbbb",
+                               groupID: g, ocr: [SceneCaption(timestamp: 0, text: "DEC 25 1997")])
+        other.duplicateConfidence = .medium
+        let bare = makeRecord(path: "/X/tape.mov", md5: "three", size: 3, contentHash: "v1:cccc", groupID: g)
+        bare.duplicateConfidence = .high
+        model.records = [strong, other, bare]
+
         let result = model.catchUpInferredDates(trigger: "test")
+        #expect(result.propagated == 0, "a duplicateGroupID is never identity")
+        #expect(year(other.inferredRecordDate) == 1997, "its OWN burn-in dates it")
+        #expect(other.inferredDateSource == VideoScanModel.InferredDateSource.catchUp)
+        #expect(bare.inferredRecordDate == nil, "different bytes, no evidence → stays undated")
+        #expect(strong.inferredRecordDate == Self.june21_1991 && strong.inferredDateConfidence == 0.95)
+
+        // Reverse direction: make the 1997 row the only donor.
+        let strong2 = makeRecord(path: "/V/t2.mov", md5: "one", size: 1, contentHash: "v1:aaaa", groupID: g)
+        let other2 = makeRecord(path: "/W/t2.mov", md5: "two", size: 2, contentHash: "v1:bbbb", groupID: g,
+                                inferred: Date(timeIntervalSince1970: 883_000_000), confidence: 0.95)
+        model.records = [strong2, other2]
+        #expect(model.catchUpInferredDates(trigger: "test").propagated == 0)
+        #expect(strong2.inferredRecordDate == nil)
+        #expect(VideoScanModel.contentGroupKey(strong2) != VideoScanModel.contentGroupKey(other2))
+        #expect(!VideoScanModel.haveVerifiedSameContent(strong2, other2))
+    }
+
+    /// Same partialMD5 + size (same head, tail and length) but the
+    /// segmented hashes CONFLICT: the pair shares a bucket and is still
+    /// rejected — a conflicting full hash outranks a matching partial.
+    @Test func identity_conflictingContentHashRejectsEvenAPartialMD5Twin() throws {
+        let dir = try scratchDir("hash-conflict")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let g = UUID()
+        let donor = makeRecord(path: "/V/a.mxf", md5: "m", size: 100, contentHash: "v1:aaaa", groupID: g,
+                               inferred: Self.june21_1991, confidence: 0.95)
+        let padded = makeRecord(path: "/W/a.mxf", md5: "m", size: 100, contentHash: "v1:bbbb", groupID: g)
+        let unhashed = makeRecord(path: "/X/a.mxf", md5: "m", size: 100, groupID: g)
+        model.records = [donor, padded, unhashed]
+        let result = model.catchUpInferredDates(trigger: "test")
+        #expect(VideoScanModel.contentGroupKey(donor) == VideoScanModel.contentGroupKey(padded), "same bucket …")
+        #expect(!VideoScanModel.haveVerifiedSameContent(donor, padded), "… but not the same bytes")
+        #expect(padded.inferredRecordDate == nil, "conflicting full hashes never exchange a date")
+        #expect(unhashed.inferredRecordDate == Self.june21_1991,
+                "no content hash to conflict: partialMD5 + size is the verified identity")
         #expect(result.propagated == 1)
+        #expect(!VideoScanModel.propagateInferredDate(from: donor, to: padded), "the single-write guard agrees")
+    }
+
+    /// Within one bucket, a recipient takes the best donor whose bytes
+    /// are VERIFIED its own, not the best donor overall.
+    @Test func identity_recipientTakesTheBestVERIFIEDDonorInABucket() throws {
+        let dir = try scratchDir("best-verified")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let stronger = makeRecord(path: "/V/a.mov", md5: "m", size: 100, contentHash: "v1:other",
+                                  inferred: Date(timeIntervalSince1970: 883_000_000), confidence: 0.95)
+        let weaker = makeRecord(path: "/W/a.mov", md5: "m", size: 100, contentHash: "v1:same",
+                                inferred: Self.june21_1991, confidence: 0.75)
+        let twin = makeRecord(path: "/X/a.mov", md5: "m", size: 100, contentHash: "v1:same")
+        model.records = [stronger, weaker, twin]
+        #expect(model.catchUpInferredDates(trigger: "test").propagated == 1)
         #expect(twin.inferredRecordDate == Self.june21_1991)
+        #expect(twin.inferredDateSource == "propagated from \(weaker.id.uuidString)")
+    }
+
+    /// The duplicate group is irrelevant in BOTH directions: a verified
+    /// byte-twin pair propagates whether or not the detector grouped it,
+    /// and a group ID adds nothing to an unverified pair.
+    @Test func identity_duplicateGroupIDIsNeitherNecessaryNorSufficient() throws {
+        let dir = try scratchDir("groupid-irrelevant")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let g = UUID()
+        let donor = makeRecord(path: "/V/a.mov", md5: "m", size: 1, groupID: g,
+                               inferred: Self.june21_1991, confidence: 0.95)
+        let grouped = makeRecord(path: "/W/a.mov", md5: "m", size: 1, groupID: g)
+        let ungrouped = makeRecord(path: "/X/a.mov", md5: "m", size: 1)
+        let groupedOnly = makeRecord(path: "/Y/a.mov", md5: "n", size: 1, groupID: g)
+        model.records = [donor, grouped, ungrouped, groupedOnly]
+        #expect(model.catchUpInferredDates(trigger: "test").propagated == 2)
+        #expect(grouped.inferredRecordDate == Self.june21_1991)
+        #expect(ungrouped.inferredRecordDate == Self.june21_1991, "verified twins share without a group")
+        #expect(groupedOnly.inferredRecordDate == nil, "a group alone is not identity")
+        // The key is never the group.
+        if case .duplicateGroup = VideoScanModel.contentGroupKey(donor) {
+            Issue.record("contentGroupKey must never be a duplicateGroup")
+        }
+    }
+
+    /// Repair for what the old rule already persisted: a "propagated
+    /// from <id>" date whose donor is not verified the same bytes (or is
+    /// gone) is cleared; a verified one is kept; nothing else is touched.
+    /// The unwound row is not re-dated by the next pass unless a VERIFIED
+    /// donor (or its own evidence) says so.
+    @Test func identity_unwindClearsOnlyUnverifiedPropagatedDates() throws {
+        let dir = try scratchDir("unwind")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let g = UUID()
+        let donor = makeRecord(path: "/V/a.mov", md5: "m", size: 1, groupID: g,
+                               inferred: Self.june21_1991, confidence: 0.95)
+        let verified = makeRecord(path: "/W/a.mov", md5: "m", size: 1, groupID: g,
+                                  inferred: Self.june21_1991, confidence: 0.95,
+                                  source: "propagated from \(donor.id.uuidString)")
+        let heuristic = makeRecord(path: "/X/a.mkv", md5: "x", size: 30, contentHash: "v1:xxxx", groupID: g,
+                                   inferred: Self.june21_1991, confidence: 0.95,
+                                   source: "propagated from \(donor.id.uuidString)")
+        heuristic.duplicateConfidence = .high
+        let orphan = makeRecord(path: "/Y/a.mov", md5: "y", size: 2,
+                                inferred: Self.june21_1991, confidence: 0.85,
+                                source: "propagated from \(UUID().uuidString)")
+        let own = makeRecord(path: "/Z/a.mov", md5: "z", size: 3,
+                             inferred: Self.june21_1991, confidence: 0.75, source: "catch-up")
+        let userDated = makeRecord(path: "/U/a.mov", md5: "x", size: 30, groupID: g,
+                                   inferred: Self.june21_1991, confidence: 0.95,
+                                   source: "propagated from \(donor.id.uuidString)", userDate: "1992")
+        model.records = [donor, verified, heuristic, orphan, own, userDated]
+
+        #expect(model.unwindUnverifiedPropagatedDates(trigger: "test") == 3)
+        #expect(verified.inferredRecordDate == Self.june21_1991, "verified twin keeps its date")
+        #expect(heuristic.inferredRecordDate == nil && heuristic.inferredDateConfidence == nil
+                && heuristic.inferredDateSource == nil, "heuristic-group date is cleared")
+        #expect(orphan.inferredRecordDate == nil, "no donor to verify against → cleared")
+        #expect(own.inferredRecordDate == Self.june21_1991 && own.inferredDateSource == "catch-up")
+        #expect(userDated.inferredRecordDate == nil && userDated.userDate == "1992",
+                "the machine date goes, Rick's date stays")
+        #expect(model.unwindUnverifiedPropagatedDates(trigger: "test") == 0, "idempotent")
+
+        // The next pass does not put the bad date back.
+        let after = model.catchUpInferredDates(trigger: "test")
+        #expect(after.propagated == 0 && heuristic.inferredRecordDate == nil)
+    }
+
+    // MARK: - Budget (codex #1415): a bounded pass never starves own evidence
+
+    /// The exact reported sequence, limit = 1: an unparseable row spends
+    /// the budget; the recipient's own DEC 25 1991 is deferred; the
+    /// sibling's JUN 21 1991 @0.95 must NOT settle it. Next pass, the
+    /// noise costs nothing and the recipient reads its own burn-in.
+    @Test func budget_deferredRecipientIsNeverDatedByASibling_andTheNextPassAdvances() throws {
+        let dir = try scratchDir("limit1")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let noise = makeRecord(path: "/V/0.mov", md5: "z", size: 1,
+                               ocr: [SceneCaption(timestamp: 1, text: "PM 11:30")])
+        let recipient = makeRecord(path: "/V/1.mov", md5: "m", size: 1,
+                                   ocr: [SceneCaption(timestamp: 1, text: "DEC 25 1991")])
+        let sibling = makeRecord(path: "/W/1.mov", md5: "m", size: 1,
+                                 inferred: Self.june21_1991, confidence: 0.95)
+        model.records = [noise, recipient, sibling]
+
+        let first = model.catchUpInferredDates(limit: 1, trigger: "test")
+        #expect(first.examined == 1 && first.truncated && first.deferred == 1)
+        #expect(first.propagated == 0, "a row whose evidence was not read this pass never receives")
+        #expect(recipient.inferredRecordDate == nil)
+
+        let second = model.catchUpInferredDates(limit: 1, trigger: "test")
+        #expect(second.alreadyClassified == 1, "the noise row is remembered and costs nothing")
+        #expect(second.examined == 1 && !second.truncated && second.deferred == 0, "the pass advanced")
+        #expect(second.inferredFromEvidence == 1 && second.propagated == 0)
+        #expect(recipient.inferredDateSource == VideoScanModel.InferredDateSource.catchUp)
+        let cal: Calendar = { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "UTC")!; return c }()  // swiftlint:disable:this force_unwrapping
+        let dc = cal.dateComponents([.year, .month, .day], from: recipient.inferredRecordDate ?? .distantPast)
+        #expect(dc.year == 1991 && dc.month == 12 && dc.day == 25, "its own burn-in, not the sibling's")
+        #expect(recipient.inferredDateConfidence == 0.75)
+
+        #expect(model.catchUpInferredDates(limit: 1, trigger: "test").total == 0, "idempotent")
+    }
+
+    /// (b)+(d): repeated bounded passes walk PAST classified noise
+    /// instead of re-reading the same prefix, and a changed transcript
+    /// re-opens a classified row.
+    @Test func budget_classifiedNoiseIsSkippedForFree_untilItsEvidenceChanges() throws {
+        let dir = try scratchDir("cursor")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let noise = (0..<3).map { i in
+            makeRecord(path: "/V/n\(i).mov", md5: "n\(i)", size: 1,
+                       ocr: [SceneCaption(timestamp: 1, text: "NONE")])
+        }
+        let dated = makeRecord(path: "/V/d.mov", md5: "d", size: 1, ocr: [Self.nv12OCR])
+        model.records = noise + [dated]
+
+        let first = model.catchUpInferredDates(limit: 2, trigger: "test")
+        #expect(first.examined == 2 && first.truncated && first.deferred == 2 && first.total == 0)
+        let second = model.catchUpInferredDates(limit: 2, trigger: "test")
+        #expect(second.alreadyClassified == 2 && second.examined == 2 && !second.truncated)
+        #expect(second.inferredFromEvidence == 1 && dated.inferredRecordDate == Self.june21_1991)
+        let third = model.catchUpInferredDates(limit: 2, trigger: "test")
+        #expect(third.examined == 0 && third.alreadyClassified == 3 && third.total == 0)
+
+        // New evidence on a classified row: the fingerprint changes, the
+        // row is examined again, and this time it dates.
+        noise[0].audioTranscript = "Merry Christmas 1997!"
+        let fourth = model.catchUpInferredDates(limit: 2, trigger: "test")
+        #expect(fourth.examined == 1 && fourth.alreadyClassified == 2)
+        #expect(year(noise[0].inferredRecordDate) == 1997)
+    }
+
+    /// (a) the other way round: a deferred row does not DONATE either,
+    /// and a classified-no-date row (evidence read, nothing found) may
+    /// still receive.
+    @Test func budget_classifiedNoDateRowsStillReceive_deferredRowsNeverDonate() throws {
+        let dir = try scratchDir("classified-receives")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let noisy = makeRecord(path: "/V/a.mov", md5: "m", size: 1,
+                               ocr: [SceneCaption(timestamp: 1, text: "PM 11:30")])
+        let donor = makeRecord(path: "/W/a.mov", md5: "m", size: 1,
+                               inferred: Self.june21_1991, confidence: 0.95)
+        model.records = [noisy, donor]
+        let first = model.catchUpInferredDates(limit: 10, trigger: "test")
+        #expect(first.examined == 1 && first.propagated == 1, "read, nothing found → may borrow")
+        #expect(noisy.inferredDateSource == "propagated from \(donor.id.uuidString)")
+
+        // A row whose own OCR would make it a donor, deferred by limit 0,
+        // gives nothing to its twin this pass.
+        let wouldDonate = makeRecord(path: "/V/b.mov", md5: "n", size: 1, ocr: [Self.nv12OCR, Self.nv12OCR, Self.nv12OCR])
+        let twin = makeRecord(path: "/W/b.mov", md5: "n", size: 1)
+        model.records = [wouldDonate, twin]
+        let zero = model.catchUpInferredDates(limit: 0, trigger: "test")
+        #expect(zero.deferred == 1 && zero.total == 0)
+        #expect(wouldDonate.inferredRecordDate == nil && twin.inferredRecordDate == nil)
+        let next = model.catchUpInferredDates(limit: 10, trigger: "test")
+        #expect(next.inferredFromEvidence == 1 && next.propagated == 1)
         #expect(twin.inferredDateConfidence == 0.95)
-        #expect(twin.inferredDateSource == "propagated from \(donor.id.uuidString)")
+    }
+
+    /// (c) conflict detection reads the evidence at ITS precision: a
+    /// burn-in day disagrees with a different day in the same year; a
+    /// spoken year does not disagree with a burn-in in that year.
+    @Test func budget_recipientConflictIsJudgedAtTheEvidencesPrecision() throws {
+        let donorDay = makeRecord(path: "/V/a.mov", md5: "m", size: 1,
+                                  inferred: Self.june21_1991, confidence: 0.95)
+        let sameYearDifferentDay = makeRecord(path: "/W/a.mov", md5: "m", size: 1,
+                                              ocr: [SceneCaption(timestamp: 0, text: "DEC 25 1991")])
+        #expect(!VideoScanModel.canReceivePropagatedDate(sameYearDifferentDay, from: donorDay),
+                "DEC 25 1991 is not JUN 21 1991 — year-only comparison was the bug")
+        let sameDay = makeRecord(path: "/W/b.mov", md5: "m", size: 1, ocr: [Self.nv12OCR])
+        #expect(VideoScanModel.canReceivePropagatedDate(sameDay, from: donorDay))
+        let spokenYear = makeRecord(path: "/W/c.mov", md5: "m", size: 1,
+                                    transcript: "Merry Christmas 1991 everybody")
+        #expect(VideoScanModel.canReceivePropagatedDate(spokenYear, from: donorDay),
+                "a year-precision claim cannot disagree with a day inside that year")
+        let spokenOtherYear = makeRecord(path: "/W/d.mov", md5: "m", size: 1,
+                                         transcript: "Merry Christmas 1992 everybody")
+        #expect(!VideoScanModel.canReceivePropagatedDate(spokenOtherYear, from: donorDay))
+
+        // A year-precision donor (0.55 placeholder) vs a burn-in day: the
+        // recipient's own evidence is FINER — it must derive its own.
+        let donorYear = makeRecord(path: "/V/e.mov", md5: "m", size: 1,
+                                   inferred: pfJanuaryFirst(of: 1991), confidence: 0.55)
+        #expect(!VideoScanModel.canReceivePropagatedDate(sameDay, from: donorYear))
+        #expect(VideoScanModel.canReceivePropagatedDate(spokenYear, from: donorYear))
+
+        #expect(pfInferredDatePrecision(confidence: 0.95) == .day)
+        #expect(pfInferredDatePrecision(confidence: 0.75) == .day)
+        #expect(pfInferredDatePrecision(confidence: 0.58) == .year)
+        #expect(pfInferredDatePrecision(confidence: 0.55) == .year)
+        #expect(pfInferredDatePrecision(confidence: 0.50) == .year)
+        #expect(pfInferredDatePrecision(confidence: 0.30) == .day)
+        #expect(pfDatesAgree(Self.june21_1991, pfJanuaryFirst(of: 1991) ?? .distantPast, at: .year))
+        #expect(!pfDatesAgree(Self.june21_1991, pfJanuaryFirst(of: 1991) ?? .distantPast, at: .month))
     }
 
     @Test func propagation_byContentHash() throws {
@@ -878,10 +1143,30 @@ struct InferredDatePropagationRealCatalogReport {
         var byKey: [CatalogSizeTotals.GroupKey: [VideoRecord]] = [:]
         for rec in active { if let k = VideoScanModel.contentGroupKey(rec) { byKey[k, default: []].append(rec) } }
         var leftBehind = 0
+        var unverifiedInBucket = 0
         for (_, members) in byKey where members.count >= 2 {
-            guard members.contains(where: { VideoScanModel.canDonateInferredDate($0) }) else { continue }
-            leftBehind += members.filter { $0.inferredRecordDate == nil && $0.userDate == nil }.count
+            let donors = members.filter { VideoScanModel.canDonateInferredDate($0) }
+            guard !donors.isEmpty else { continue }
+            for rec in members where rec.inferredRecordDate == nil && rec.userDate == nil {
+                if donors.contains(where: { VideoScanModel.haveVerifiedSameContent($0, rec) }) {
+                    leftBehind += 1
+                } else {
+                    unverifiedInBucket += 1
+                }
+            }
         }
-        #expect(leftBehind == 0, "\(leftBehind) undated copies remain in groups that have a content-backed date")
+        print("  undated rows sharing a bucket with a dated row but NOT verified same bytes (conflicting content hash): \(unverifiedInBucket)")
+        #expect(leftBehind == 0, "\(leftBehind) undated verified copies remain in groups that have a content-backed date")
+
+        // codex #1413 repair preview (scratch store — nothing real is written):
+        // how many persisted propagated dates rest on unverified identity,
+        // and how many of those a VERIFIED pass would date again.
+        let unwound = model.unwindUnverifiedPropagatedDates(trigger: "report")
+        let redated = model.catchUpInferredDates(trigger: "report-after-unwind")
+        print("""
+          persisted propagated dates whose donor is NOT verified same bytes (unwind would clear): \(unwound)
+          after unwinding, one verified pass re-dates: \(redated.total) — \(redated.inferredFromEvidence) own, \
+        \(redated.propagated) propagated, \(redated.folderYear) folder-year
+        """)
     }
 }
