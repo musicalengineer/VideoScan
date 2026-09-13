@@ -310,6 +310,41 @@ extension CatalogView {
         }
     }
 
+    // MARK: - Delete Volume Catalog: plan at the gesture (codex #1417)
+
+    /// Open the Delete Volume Catalog confirmation for `target`. Plans the
+    /// EXACT removal set now — one O(records) pass, on an explicit
+    /// destructive gesture, never from a view body — and shows THAT
+    /// count. The cached `scanTargetFacts` count on the menu row may be
+    /// up to one coalescer window stale (an append under the root, a
+    /// Browse… re-point); the confirmation must not be.
+    func presentDeleteVolumeCatalog(for target: CatalogScanTarget) {
+        let plan = model.planTargetRemoval(for: target)
+        deleteVolumeCatalogPrompt = DeleteVolumeCatalogPrompt(target: target, plan: plan, replacedStalePlan: nil)
+    }
+
+    /// The alert's Delete button. Applies exactly the carried plan; if the
+    /// model refuses because the catalog moved since the alert was shown,
+    /// re-present with the fresh plan on the next turn (the dismissing
+    /// alert's binding clears the prompt synchronously — setting it again
+    /// inside the button action would be overwritten).
+    func confirmDeleteVolumeCatalog(_ prompt: DeleteVolumeCatalogPrompt) {
+        let result = model.deleteCatalogForTarget(prompt.target, plan: prompt.plan)
+        switch result {
+        case .applied, .refusedNoSnapshot, .cancelledTargetGone:
+            // Applied: done. No-snapshot: the model already logged the
+            // fail-safe degrade prominently; nothing was removed.
+            // Target gone (codex #1431): the model logged the one-line
+            // reason; the prompt is over — never re-present a plan for a
+            // target that is no longer registered.
+            break
+        case .refusedStale(let current):
+            let replacement = DeleteVolumeCatalogPrompt(
+                target: prompt.target, plan: current, replacedStalePlan: prompt.plan)
+            DispatchQueue.main.async { deleteVolumeCatalogPrompt = replacement }
+        }
+    }
+
     /// Look up the CatalogScanTarget for a VolumeRow ID.
     func target(for id: UUID) -> CatalogScanTarget? {
         model.scanTargets.first { $0.id == id }
@@ -741,9 +776,12 @@ extension CatalogView {
                             (scanTargetFacts[target.id]?.records ?? 0) > 0
                         }) { target in
                             let count = scanTargetFacts[target.id]?.records ?? 0
+                            // The label's count is the cached projection
+                            // (may be a window stale); the GESTURE plans
+                            // exactly and the alert shows the plan's count
+                            // (codex #1417).
                             Button(role: .destructive, action: {
-                                deleteVolumeCatalogTarget = target
-                                showDeleteVolumeCatalogConfirm = true
+                                presentDeleteVolumeCatalog(for: target)
                             }) {
                                 Label("\(VolumeReachability.displayLabel(forPath: target.searchPath)) (\(count))",
                                       systemImage: "trash")
