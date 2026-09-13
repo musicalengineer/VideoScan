@@ -111,3 +111,53 @@ catalog.json, 13,824 records / 9,271 eligible): **448** active records carried
 147 from their own stored evidence, **1,305 by propagation**, 21 folder-year
 priors — 2,226 records examined in 160 ms. (An independent Python pre-check
 on the same copy agreed within its cruder eligibility model: 448 / 1,314 / 29.)
+
+## Hardening after codex review, 2026-09-12 evening (#1413, #1415, #1433, #1434)
+
+**Identity.** A date travels only between rows VERIFIED to hold the same
+bytes: equal `contentHash` when both have one (a conflict rejects the pair
+outright), else equal `partialMD5` AND equal non-zero `sizeBytes`.
+`duplicateGroupID` is never a key — `DuplicateDetector` hands those to
+heuristic groups that score High while the full hashes conflict. Audit of
+the live catalog after the 20:18 load pass: **558 of 1,305** persisted
+"propagated from" dates rested on unverified identity, 531 with conflicting
+content hashes.
+
+**Unwind (one-shot, at load, before the pass).** `unwindUnverifiedPropagatedDates`
+clears every "propagated from <id>" date whose donor is not verified same
+content (or is gone). Reversible: the prior state is written FIRST to
+`App Support/VideoScan/date-inference/unwound-<yyyyMMdd-HHmmss>.json`
+(`{recordID, fullPath, inferredRecordDate, inferredDateConfidence,
+inferredDateSource}` per row); no sidecar, no repair. Idempotent: a second
+load finds nothing, writes nothing, logs nothing. Audit line in catalog.log
+and the app log. `reapplyUnwoundDates(from:to:)` restores a sidecar onto rows
+that still have no settled date and no userDate. userDate, own-evidence,
+folder-year and verified propagated rows are never touched.
+
+**Budget.** Rows the `limit` leaves unexamined are deferred — never a rule-2
+recipient or donor that pass. Evidence classified "names no date" is memoised
+on the model (`inferredDateNoDateEvidence`, fingerprint-validated) so later
+bounded passes skip it for free and advance. Recipient conflict detection
+compares at the coarser of the evidence's and the donor's precision (OCR =
+day, year mention = year); own evidence finer than the donor's refuses to
+borrow.
+
+**Donors.** Only rows that EARNED their date (own dossier pass or catch-up)
+donate. A propagated date never donates again — otherwise an unhashed
+intermediary B could carry A's date to C on a second pass across a known
+A/C hash conflict (#1433).
+
+**Perf.** Per-recipient eligibility is settled once before the donor loop
+(#1434: an all-dated bucket is N reads, not N² guard calls). A scoped pass
+buckets only the scope's groups; the O(records) key walk remains — a
+maintained index is the real fix.
+
+### Known follow-up (not fixed): dossier EVIDENCE propagation identity
+
+`backfillDossierAcrossDuplicates` / `propagateBestDossier`
+(`VideoScanModel+DossierPropagation.swift`) group by `partialMD5` **alone** —
+no `sizeBytes`, no `contentHash` conflict check — when carrying OCR date
+candidates, transcripts and captions between rows. Rule 1 then dates the
+recipient from that evidence at catch-up confidence. Same identity class as
+#1413 one layer down; it should adopt `haveVerifiedSameContent`. Filed as a
+follow-up on 2026-09-12; not changed tonight (one bug per dispatch).

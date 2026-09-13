@@ -364,17 +364,70 @@ struct InferredDatePropagationTests {
         }
     }
 
-    /// Repair for what the old rule already persisted: a "propagated
-    /// from <id>" date whose donor is not verified the same bytes (or is
-    /// gone) is cleared; a verified one is kept; nothing else is touched.
-    /// The unwound row is not re-dated by the next pass unless a VERIFIED
-    /// donor (or its own evidence) says so.
-    @Test func identity_unwindClearsOnlyUnverifiedPropagatedDates() throws {
-        let dir = try scratchDir("unwind")
+    // MARK: - codex #1433: a propagated date never donates again
+
+    /// A/B/C share partialMD5 + size; A (hash aaaa) has its own .95 date,
+    /// B is unhashed, C (hash bbbb) conflicts with A. Pass 1: A→B, A↛C.
+    /// Pass 2 must NOT reach C through B: B's date is borrowed, and
+    /// borrowed dates never donate.
+    @Test func identity_propagatedIntermediaryNeverDonatesAcrossAConflict_secondPass() throws {
+        let dir = try scratchDir("intermediary")
         defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
+        let a = makeRecord(path: "/V/a.mxf", md5: "m", size: 100, contentHash: "v1:aaaa",
+                           inferred: Self.june21_1991, confidence: 0.95)
+        let b = makeRecord(path: "/W/a.mxf", md5: "m", size: 100)
+        let c = makeRecord(path: "/X/a.mxf", md5: "m", size: 100, contentHash: "v1:bbbb")
+        model.records = [a, b, c]
+
+        let first = model.catchUpInferredDates(trigger: "test")
+        #expect(first.propagated == 1 && b.inferredRecordDate == Self.june21_1991 && c.inferredRecordDate == nil)
+        #expect(!VideoScanModel.canDonateInferredDate(b), "a borrowed date is not a donor")
+
+        let second = model.catchUpInferredDates(trigger: "test")
+        #expect(second.propagated == 0, "second pass: B must not carry A's date to C")
+        #expect(c.inferredRecordDate == nil)
+        // Nor via the direct single-write guard.
+        #expect(!VideoScanModel.propagateInferredDate(from: b, to: c))
+        // A catch-up date IS a donor (own evidence), a folder-year is not.
+        let own = makeRecord(path: "/Y/a.mov", md5: "n", size: 1, inferred: Self.june21_1991, confidence: 0.75,
+                             source: VideoScanModel.InferredDateSource.catchUp)
+        #expect(VideoScanModel.canDonateInferredDate(own))
+    }
+
+    // MARK: - codex #1434: an idempotent bucket is linear, not quadratic
+
+    @Test("perf: a bucket of 4,000 already-dated copies costs N predicate reads, not N² guard calls",
+          .timeLimit(.minutes(1)))
+    func perf_allAlreadyDatedBucketIsLinear() throws {
+        let dir = try scratchDir("n2")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let n = 4_000
+        model.records = (0..<n).map { i in
+            let r = makeRecord(path: "/V/\(i).mov", md5: "same", size: 1,
+                               ocr: [Self.nv12OCR], inferred: Self.june21_1991, confidence: 0.95)
+            if i % 2 == 1 { r.userDate = "1991" }
+            return r
+        }
+        let clock = SuspendingClock()
+        var result = VideoScanModel.InferredDateCatchUpResult()
+        let elapsed = clock.measure { result = model.catchUpInferredDates(trigger: "test") }
+        #expect(result.total == 0 && result.examined == 0)
+        // 4,000 donors × 4,000 recipients × an evidence regex per guard call
+        // is tens of seconds; the prefiltered pass is milliseconds.
+        #expect(elapsed < .seconds(1), "all-dated bucket took \(elapsed)")
+    }
+
+    // MARK: - Unwind (codex #1413 repair): reversible, idempotent, exact
+
+    /// The shape the 20:18 load pass left behind, plus the rows the unwind
+    /// must NOT touch. Shared by the unwind sensors.
+    private func unwindFixture(_ model: VideoScanModel) -> (donor: VideoRecord, verified: VideoRecord, heuristic: VideoRecord,
+                                                            orphan: VideoRecord, own: VideoRecord, folder: VideoRecord,
+                                                            userDated: VideoRecord) {
         let g = UUID()
-        let donor = makeRecord(path: "/V/a.mov", md5: "m", size: 1, groupID: g,
+        let donor = makeRecord(path: "/V/a.mov", md5: "m", size: 1, contentHash: "v1:dddd", groupID: g,
                                inferred: Self.june21_1991, confidence: 0.95)
         let verified = makeRecord(path: "/W/a.mov", md5: "m", size: 1, groupID: g,
                                   inferred: Self.june21_1991, confidence: 0.95,
@@ -388,24 +441,129 @@ struct InferredDatePropagationTests {
                                 source: "propagated from \(UUID().uuidString)")
         let own = makeRecord(path: "/Z/a.mov", md5: "z", size: 3,
                              inferred: Self.june21_1991, confidence: 0.75, source: "catch-up")
-        let userDated = makeRecord(path: "/U/a.mov", md5: "x", size: 30, groupID: g,
+        let folder = makeRecord(path: "/F/1991/a.mov", md5: "f", size: 4,
+                                inferred: pfJanuaryFirst(of: 1991), confidence: 0.30,
+                                source: VideoScanModel.InferredDateSource.folderYear)
+        let userDated = makeRecord(path: "/U/a.mov", md5: "u", size: 30, groupID: g,
                                    inferred: Self.june21_1991, confidence: 0.95,
                                    source: "propagated from \(donor.id.uuidString)", userDate: "1992")
-        model.records = [donor, verified, heuristic, orphan, own, userDated]
+        model.records = [donor, verified, heuristic, orphan, own, folder, userDated]
+        return (donor, verified, heuristic, orphan, own, folder, userDated)
+    }
 
-        #expect(model.unwindUnverifiedPropagatedDates(trigger: "test") == 3)
-        #expect(verified.inferredRecordDate == Self.june21_1991, "verified twin keeps its date")
-        #expect(heuristic.inferredRecordDate == nil && heuristic.inferredDateConfidence == nil
-                && heuristic.inferredDateSource == nil, "heuristic-group date is cleared")
-        #expect(orphan.inferredRecordDate == nil, "no donor to verify against → cleared")
-        #expect(own.inferredRecordDate == Self.june21_1991 && own.inferredDateSource == "catch-up")
-        #expect(userDated.inferredRecordDate == nil && userDated.userDate == "1992",
-                "the machine date goes, Rick's date stays")
-        #expect(model.unwindUnverifiedPropagatedDates(trigger: "test") == 0, "idempotent")
+    @Test func unwindClearsOnlyUnverifiedPropagated() throws {
+        let dir = try scratchDir("unwind")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let f = unwindFixture(model)
 
-        // The next pass does not put the bad date back.
+        let r = model.unwindUnverifiedPropagatedDates(trigger: "test")
+        #expect(r.unwound == 3, "heuristic + orphan + the user-dated row's MACHINE date")
+        #expect(r.conflictingHashes == 1, "only the heuristic row has a hash that conflicts with its donor")
+        #expect(f.verified.inferredRecordDate == Self.june21_1991, "verified twin keeps its date")
+        #expect(f.heuristic.inferredRecordDate == nil && f.heuristic.inferredDateConfidence == nil
+                && f.heuristic.inferredDateSource == nil, "heuristic-group date is cleared")
+        #expect(f.orphan.inferredRecordDate == nil, "no donor to verify against → cleared")
+        #expect(f.own.inferredRecordDate == Self.june21_1991 && f.own.inferredDateSource == "catch-up", "own evidence untouched")
+        #expect(f.donor.inferredRecordDate == Self.june21_1991 && f.donor.inferredDateSource == nil, "own dossier pass untouched")
+        #expect(f.folder.inferredDateSource == VideoScanModel.InferredDateSource.folderYear, "folder-year untouched")
+
+        // The next verified pass does not put the bad date back.
         let after = model.catchUpInferredDates(trigger: "test")
-        #expect(after.propagated == 0 && heuristic.inferredRecordDate == nil)
+        #expect(after.propagated == 0 && f.heuristic.inferredRecordDate == nil)
+        #expect(r.sidecar?.path.hasPrefix(dir.path) == true, "sidecar lands in the injected catalog directory")
+    }
+
+    @Test func unwindIsIdempotent() throws {
+        let dir = try scratchDir("unwind-idem")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        _ = unwindFixture(model)
+        let first = model.unwindUnverifiedPropagatedDates(trigger: "test")
+        #expect(first.unwound == 3 && first.sidecar != nil)
+        let sidecarsAfterFirst = try FileManager.default.contentsOfDirectory(atPath: model.dateInferenceSidecarDirectory.path)
+        func unwoundLines() -> Int {
+            let text = (try? String(contentsOf: model.dashboard.catalogLog.url, encoding: .utf8)) ?? ""
+            return text.components(separatedBy: "\n").filter { $0.contains("date inference: unwound") }.count
+        }
+        let linesAfterFirst = unwoundLines()
+        #expect(linesAfterFirst >= 1, "the audit line reached catalog.log (synchronous write)")
+        let second = model.unwindUnverifiedPropagatedDates(trigger: "test")
+        #expect(second == VideoScanModel.UnwindResult(), "nothing to unwind, no sidecar")
+        let sidecarsAfterSecond = try FileManager.default.contentsOfDirectory(atPath: model.dateInferenceSidecarDirectory.path)
+        #expect(sidecarsAfterFirst.count == 1 && sidecarsAfterSecond == sidecarsAfterFirst, "a second load writes no second sidecar")
+        #expect(unwoundLines() == linesAfterFirst, "a no-op unwind logs nothing")
+    }
+
+    @Test func unwindWritesReversibleSidecar() throws {
+        let dir = try scratchDir("unwind-sidecar")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let f = unwindFixture(model)
+        let stamp = Date(timeIntervalSince1970: 1_789_000_000)
+        let r = model.unwindUnverifiedPropagatedDates(now: stamp, trigger: "test")
+        let url = try #require(r.sidecar)
+        #expect(url.lastPathComponent.hasPrefix("unwound-") && url.pathExtension == "json")
+        #expect(url.deletingLastPathComponent().lastPathComponent == "date-inference")
+
+        let payload = try VideoScanModel.unwoundSidecarDecoder()
+            .decode(VideoScanModel.UnwoundDateSidecar.self, from: Data(contentsOf: url))
+        #expect(payload.entries.count == 3 && payload.conflictingHashes == 1)
+        let heuristicEntry = try #require(payload.entries.first { $0.recordID == f.heuristic.id })
+        #expect(heuristicEntry.fullPath == "/X/a.mkv")
+        #expect(heuristicEntry.inferredRecordDate == Self.june21_1991)
+        #expect(heuristicEntry.inferredDateConfidence == 0.95)
+        #expect(heuristicEntry.inferredDateSource == "propagated from \(f.donor.id.uuidString)")
+
+        // Restore: the cleared rows come back exactly; the user-dated row
+        // stays clear; a row a verified pass has since re-dated is kept.
+        f.orphan.inferredRecordDate = Date(timeIntervalSince1970: 700_000_000)
+        f.orphan.inferredDateConfidence = 0.75
+        f.orphan.inferredDateSource = VideoScanModel.InferredDateSource.catchUp
+        let restored = try VideoScanModel.reapplyUnwoundDates(from: url, to: model.records)
+        #expect(restored.map(\.id) == [f.heuristic.id])
+        #expect(f.heuristic.inferredRecordDate == Self.june21_1991 && f.heuristic.inferredDateConfidence == 0.95
+                && f.heuristic.inferredDateSource == heuristicEntry.inferredDateSource)
+        #expect(f.userDated.inferredRecordDate == nil, "never onto a user-dated row")
+        #expect(f.orphan.inferredDateSource == VideoScanModel.InferredDateSource.catchUp, "a better-founded date since is kept")
+        // Pure over entries: unknown ids are ignored.
+        let stray = VideoScanModel.UnwoundDateEntry(recordID: UUID(), fullPath: "/nowhere", inferredRecordDate: Self.june21_1991,
+                                                    inferredDateConfidence: 0.9, inferredDateSource: "propagated from x")
+        #expect(VideoScanModel.reapplyUnwoundDates([stray], to: model.records).isEmpty)
+    }
+
+    @Test func unwindNeverTouchesUserDates() throws {
+        let dir = try scratchDir("unwind-user")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let f = unwindFixture(model)
+        _ = model.unwindUnverifiedPropagatedDates(trigger: "test")
+        #expect(f.userDated.userDate == "1992", "Rick's date is never touched")
+        #expect(f.userDated.inferredRecordDate == nil, "only the machine date under it goes")
+        // A user-dated row whose propagated date IS verified keeps everything.
+        let g = UUID()
+        let donor = makeRecord(path: "/V/b.mov", md5: "q", size: 1, groupID: g, inferred: Self.june21_1991, confidence: 0.95)
+        let both = makeRecord(path: "/W/b.mov", md5: "q", size: 1, groupID: g, inferred: Self.june21_1991, confidence: 0.95,
+                              source: "propagated from \(donor.id.uuidString)", userDate: "1991-06")
+        model.records = [donor, both]
+        #expect(model.unwindUnverifiedPropagatedDates(trigger: "test").unwound == 0)
+        #expect(both.userDate == "1991-06" && both.inferredRecordDate == Self.june21_1991)
+    }
+
+    /// Isolation: a model on the SHARED store (the real App Support path)
+    /// under a test host must refuse — no sidecar there, and because the
+    /// sidecar is the undo record, no clearing either.
+    @Test func unwindRefusesTheRealAppSupportUnderATestHost() throws {
+        let model = VideoScanModel()   // catalogStore = .shared
+        let f = unwindFixture(model)
+        #expect(VideoScanModel.sidecarDirectoryIsRealAppSupportUnderTests(model.dateInferenceSidecarDirectory))
+        let r = model.unwindUnverifiedPropagatedDates(trigger: "test")
+        #expect(r.unwound == 0 && r.sidecar == nil)
+        #expect(f.heuristic.inferredRecordDate == Self.june21_1991, "nothing cleared without a sidecar")
+        // An injected directory elsewhere is fine even on the shared store.
+        let dir = try scratchDir("unwind-injected")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(model.unwindUnverifiedPropagatedDates(sidecarDirectory: dir, trigger: "test").unwound == 3)
     }
 
     // MARK: - Budget (codex #1415): a bounded pass never starves own evidence
@@ -1163,10 +1321,13 @@ struct InferredDatePropagationRealCatalogReport {
         // and how many of those a VERIFIED pass would date again.
         let unwound = model.unwindUnverifiedPropagatedDates(trigger: "report")
         let redated = model.catchUpInferredDates(trigger: "report-after-unwind")
+        let again = model.unwindUnverifiedPropagatedDates(trigger: "report-2").unwound
         print("""
-          persisted propagated dates whose donor is NOT verified same bytes (unwind would clear): \(unwound)
-          after unwinding, one verified pass re-dates: \(redated.total) — \(redated.inferredFromEvidence) own, \
-        \(redated.propagated) propagated, \(redated.folderYear) folder-year
+          LOAD PREVIEW — unwind clears: \(unwound.unwound) unverified propagated dates (\(unwound.conflictingHashes) with conflicting hashes)
+          LOAD PREVIEW — then one verified pass re-dates: \(redated.total) — \(redated.inferredFromEvidence) own, \
+        \(redated.propagated) propagated, \(redated.folderYear) folder-year (\(redated.examined) examined)
+          LOAD PREVIEW — a second unwind finds: \(again)
         """)
+        #expect(unwound.sidecar?.path.hasPrefix(dst.path) == true, "the report's sidecar lands in scratch, never App Support")
     }
 }

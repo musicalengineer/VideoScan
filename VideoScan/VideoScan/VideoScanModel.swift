@@ -1031,6 +1031,14 @@ final class VideoScanModel: ObservableObject {
             // same bytes showed 1991 and the other 2026. Catch up every
             // record that has evidence but no conclusion, then share
             // dates across each content group. Bounded, one log line.
+            //
+            // codex #1413 (2026-09-12 evening): the first version of that
+            // pass keyed groups on duplicateGroupID and persisted 558
+            // dates onto heuristic siblings whose bytes differ. Unwind
+            // them first — reversible (sidecar under App Support/VideoScan/
+            // date-inference/), idempotent, machine data only — so the
+            // verified pass below re-dates only what it can prove.
+            unwindUnverifiedPropagatedDates(trigger: "load")
             catchUpInferredDates(trigger: "load")
             if migrated > 0 {
                 log("Migrated \(migrated) records to lifecycleStage.")

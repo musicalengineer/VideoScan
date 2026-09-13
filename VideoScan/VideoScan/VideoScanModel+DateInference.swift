@@ -271,12 +271,24 @@ extension VideoScanModel {
     }
 
     /// Rule 2 donor test: a settled, content-backed date on a readable,
-    /// live row.
+    /// live row that the row EARNED from its own evidence (own dossier
+    /// pass, source nil, or catch-up). A propagated date never donates
+    /// again (codex #1433): A→B may be verified while A and C carry
+    /// conflicting content hashes; if B (unhashed) could donate, a second
+    /// pass would carry A's date to C through B, past the known conflict.
+    /// Own-evidence rows are the only donors — the simpler, safer rule.
     @MainActor
     static func canDonateInferredDate(_ rec: VideoRecord) -> Bool {
         isEligibleForDateInference(rec)
             && hasSettledInferredDate(rec)
+            && !isPropagatedInferredDate(rec)
             && (rec.inferredDateConfidence ?? 0) >= inferredDatePropagationFloor
+    }
+
+    /// True when the row's date came from a sibling (rule 2 provenance).
+    @MainActor
+    static func isPropagatedInferredDate(_ rec: VideoRecord) -> Bool {
+        rec.inferredDateSource?.hasPrefix(InferredDateSource.propagatedPrefix) == true
     }
 
     /// Rule 3 guard: nothing else says anything about the date.
@@ -415,7 +427,17 @@ extension VideoScanModel {
                 .filter { Self.canDonateInferredDate($0) && !deferred.contains($0.id) }
                 .sorted { ($0.inferredDateConfidence ?? 0) > ($1.inferredDateConfidence ?? 0) }
             guard !donors.isEmpty else { continue }
-            for rec in members where !deferred.contains(rec.id) {
+            // codex #1434: settle the cheap per-recipient tests ONCE, before
+            // the donor loop — an idempotent bucket of N dated copies must
+            // cost N predicate reads, not N² guard calls (each of which
+            // re-scans the recipient's evidence).
+            let recipients = members.filter {
+                !deferred.contains($0.id)
+                    && $0.userDate == nil
+                    && !Self.hasSettledInferredDate($0)
+                    && Self.isEligibleForDateInference($0)
+            }
+            for rec in recipients {
                 for donor in donors where Self.propagateInferredDate(from: donor, to: rec) {
                     result.propagated += 1
                     touched.append(rec)
@@ -490,39 +512,180 @@ extension VideoScanModel {
         return catchUpInferredDates(scope: [donor], trigger: "dossier").propagated
     }
 
-    // MARK: - Repair (codex #1413) — NOT wired into load; a Rick decision
+    // MARK: - Repair (codex #1413) — one-shot, reversible, runs at load
+
+    /// One row of the unwind sidecar: everything needed to put the date
+    /// back exactly as it was. (For Rick: a POD struct, JSON-serialised.)
+    struct UnwoundDateEntry: Codable, Equatable, Sendable {
+        var recordID: UUID
+        var fullPath: String
+        var inferredRecordDate: Date
+        var inferredDateConfidence: Float?
+        var inferredDateSource: String
+    }
+
+    /// The sidecar file. Written BEFORE any row is cleared; if it cannot
+    /// be written, nothing is cleared.
+    struct UnwoundDateSidecar: Codable, Equatable, Sendable {
+        var savedAt: Date
+        var reason: String
+        var conflictingHashes: Int
+        var entries: [UnwoundDateEntry]
+    }
+
+    struct UnwindResult: Equatable, Sendable {
+        var unwound = 0
+        var conflictingHashes = 0
+        var sidecar: URL?
+    }
+
+    /// Where the sidecars go: `<catalog directory>/date-inference/`. In
+    /// production the catalog lives in App Support/VideoScan; a test that
+    /// injects `CatalogStore(directory:)` gets its own scratch folder.
+    @MainActor
+    var dateInferenceSidecarDirectory: URL {
+        URL(fileURLWithPath: catalogStore.fileLocation)
+            .deletingLastPathComponent()
+            .appendingPathComponent("date-inference", isDirectory: true)
+    }
+
+    /// True when writing there would touch Rick's real App Support from a
+    /// test host — the shared CatalogStore still points at the real path
+    /// under tests (it merely refuses to save).
+    @MainActor
+    static func sidecarDirectoryIsRealAppSupportUnderTests(_ dir: URL) -> Bool {
+        guard TestEnvironment.isTestHost else { return false }
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?.standardizedFileURL.path ?? "/nonexistent"
+        return dir.standardizedFileURL.path.hasPrefix(appSupport)
+    }
 
     /// Clears every persisted "propagated from <id>" date whose donor is
     /// not VERIFIED the same bytes (or is gone from the catalog), so the
-    /// row is honestly undated again and rule 1 / a dossier pass can
-    /// re-derive it. Exact, because the provenance string names the
-    /// donor. The 2026-09-12 load pass persisted 558 such dates on
-    /// Rick's catalog (531 with conflicting content hashes) before the
-    /// identity rule was tightened; calling this at load once would undo
-    /// them. Returns the number cleared. userDate is never touched
-    /// (propagation never set one).
+    /// row is honestly undated again and rule 1 / a dossier pass / a
+    /// verified sibling can re-derive it. Exact, because the provenance
+    /// string names the donor. Touches nothing else: userDate never
+    /// (propagation never set one), own-evidence and folder-year rows
+    /// never, verified propagated rows never.
+    ///
+    /// REVERSIBLE: before the first row is cleared the full prior state is
+    /// written to `<dir>/unwound-<yyyyMMdd-HHmmss>.json`; a failed write
+    /// aborts the unwind (an irreversible repair is worse than the bug).
+    /// `reapplyUnwoundDates(from:to:)` restores it. IDEMPOTENT: a second
+    /// call finds nothing, writes nothing, logs nothing.
+    ///
+    /// Why it exists: the 2026-09-12 20:18 load pass persisted 558 such
+    /// dates on Rick's catalog (531 with conflicting content hashes)
+    /// before the identity rule was tightened (codex #1413).
     @MainActor
     @discardableResult
-    func unwindUnverifiedPropagatedDates(trigger: String = "manual") -> Int {
+    func unwindUnverifiedPropagatedDates(sidecarDirectory: URL? = nil,
+                                         now: Date = Date(),
+                                         trigger: String = "manual") -> UnwindResult {
+        var result = UnwindResult()
         var byID: [UUID: VideoRecord] = [:]
         byID.reserveCapacity(records.count)
         for rec in records { byID[rec.id] = rec }
-        var touched: [VideoRecord] = []
+
+        var victims: [VideoRecord] = []
+        var entries: [UnwoundDateEntry] = []
         for rec in records {
-            guard let source = rec.inferredDateSource,
-                  source.hasPrefix(InferredDateSource.propagatedPrefix) else { continue }
+            guard Self.isPropagatedInferredDate(rec),
+                  let source = rec.inferredDateSource,
+                  let date = rec.inferredRecordDate else { continue }
             let donorID = UUID(uuidString: String(source.dropFirst(InferredDateSource.propagatedPrefix.count)))
             if let donorID, let donor = byID[donorID], Self.haveVerifiedSameContent(donor, rec) { continue }
+            if let donorID, let donor = byID[donorID],
+               !donor.contentHash.isEmpty, !rec.contentHash.isEmpty, donor.contentHash != rec.contentHash {
+                result.conflictingHashes += 1
+            }
+            victims.append(rec)
+            entries.append(UnwoundDateEntry(recordID: rec.id, fullPath: rec.fullPath,
+                                            inferredRecordDate: date,
+                                            inferredDateConfidence: rec.inferredDateConfidence,
+                                            inferredDateSource: source))
+        }
+        guard !victims.isEmpty else { return result }
+
+        // Sidecar first. No sidecar, no repair.
+        let dir = sidecarDirectory ?? dateInferenceSidecarDirectory
+        if Self.sidecarDirectoryIsRealAppSupportUnderTests(dir) {
+            log("date inference: unwind skipped — \(victims.count) candidate(s) but the sidecar would land in the real App Support from a test host (\(trigger))")
+            return UnwindResult()
+        }
+        let stampFmt = DateFormatter()
+        stampFmt.dateFormat = "yyyyMMdd-HHmmss"
+        stampFmt.timeZone = TimeZone(secondsFromGMT: 0)
+        let url = dir.appendingPathComponent("unwound-\(stampFmt.string(from: now)).json")
+        let payload = UnwoundDateSidecar(savedAt: now,
+                                         reason: "propagated date whose donor is not verified same content (codex #1413)",
+                                         conflictingHashes: result.conflictingHashes,
+                                         entries: entries)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Self.unwoundSidecarEncoder().encode(payload).write(to: url, options: .atomic)
+        } catch {
+            log("date inference: unwind ABORTED — could not write sidecar \(url.path): \(error.localizedDescription) (\(trigger))")
+            return UnwindResult()
+        }
+        result.sidecar = url
+
+        for rec in victims {
             rec.inferredRecordDate = nil
             rec.inferredDateConfidence = nil
             rec.inferredDateSource = nil
-            touched.append(rec)
         }
-        if !touched.isEmpty {
-            announceInferredDateChanges(touched)
-            log("date inference: unwound \(touched.count) propagated date(s) whose donor is not verified same content (\(trigger))")
+        result.unwound = victims.count
+        announceInferredDateChanges(victims)
+        let line = "date inference: unwound \(result.unwound) unverified propagated dates "
+            + "(\(result.conflictingHashes) with conflicting hashes) — sidecar \(url.path)"
+        log(line)
+        appLog.write(line)
+        return result
+    }
+
+    static func unwoundSidecarEncoder() -> JSONEncoder {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return enc
+    }
+
+    static func unwoundSidecarDecoder() -> JSONDecoder {
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        return dec
+    }
+
+    /// Rick's undo: put the unwound dates back from a sidecar. Restores a
+    /// row only when it currently holds NO settled inferred date (nil or
+    /// the folder-year placeholder) and no userDate — a date a verified
+    /// pass or a dossier run derived since is better-founded than the one
+    /// unwound and is kept. Pure over its inputs (no model, no disk
+    /// beyond reading the sidecar); returns the rows restored.
+    @MainActor
+    @discardableResult
+    static func reapplyUnwoundDates(from sidecar: URL, to records: [VideoRecord]) throws -> [VideoRecord] {
+        let payload = try unwoundSidecarDecoder().decode(UnwoundDateSidecar.self, from: Data(contentsOf: sidecar))
+        return reapplyUnwoundDates(payload.entries, to: records)
+    }
+
+    @MainActor
+    @discardableResult
+    static func reapplyUnwoundDates(_ entries: [UnwoundDateEntry], to records: [VideoRecord]) -> [VideoRecord] {
+        var byID: [UUID: VideoRecord] = [:]
+        for rec in records { byID[rec.id] = rec }
+        var restored: [VideoRecord] = []
+        for e in entries {
+            guard let rec = byID[e.recordID],
+                  rec.userDate == nil,
+                  !hasSettledInferredDate(rec) else { continue }
+            rec.inferredRecordDate = e.inferredRecordDate
+            rec.inferredDateConfidence = e.inferredDateConfidence
+            rec.inferredDateSource = e.inferredDateSource
+            restored.append(rec)
         }
-        return touched.count
+        return restored
     }
 
     // MARK: - Publish
