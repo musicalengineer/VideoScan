@@ -113,7 +113,9 @@ extension PersonFinderView {
     /// change wherever Rick wants it after spot-test.
     @ViewBuilder
     func holdoutReviewBadge(for profile: POIProfile) -> some View {
-        if let queue = holdoutReview.pendingQueue(for: profile.name) {
+        // Queues are keyed by short name; a shared name gets no badge (the
+        // context menu explains why).
+        if !model.nameIsShared(profile), let queue = holdoutReview.pendingQueue(for: profile.name) {
             Button {
                 confirmTarget = ConfirmSheetTarget(profile: profile, holdoutQueue: queue)
             } label: {
@@ -132,7 +134,7 @@ extension PersonFinderView {
             }
             .buttonStyle(.plain)
             .help("\(queue.pendingCount) holdout video\(queue.pendingCount == 1 ? "" : "s") awaiting your blind yes/no review — click to start")
-            .accessibilityIdentifier("pf.holdout.review.\(profile.name)")
+            .accessibilityIdentifier("pf.holdout.review.\(profile.name).\(profile.id)")
         }
     }
 
@@ -307,13 +309,15 @@ extension PersonFinderView {
                                                           personName: profile.name) {
                                             showInFamilyTree(profile)
                                         }
-                                        .accessibilityIdentifier("pf.treelink.\(profile.name)")
+                                        .accessibilityIdentifier("pf.treelink.\(profile.name).\(profile.id)")
                                     }
                                 }
                                 .opacity(isBeingScanned ? 0.7 : 1.0)
                                 // Gauntlet flow 1 right-clicks the card to
                                 // reach "Search for <name>…". Test-only.
-                                .accessibilityIdentifier("pf.person.\(profile.name)")
+                                // Name for the Gauntlet's eyes, uuid so two
+                                // Richards are two identifiers (2026-09-12).
+                                .accessibilityIdentifier("pf.person.\(profile.name).\(profile.id)")
                                 .onTapGesture {
                                     if isBeingScanned {
                                         scanLockMessage = "Cannot edit \(profile.displayName) while scanning for \(profile.displayName)."
@@ -368,17 +372,29 @@ extension PersonFinderView {
                                     // when a blind queue is pending for this
                                     // person, straight to candidates
                                     // otherwise — same verb as the badge.
+                                    // Holdout queues and validation labels are
+                                    // keyed by the short name: a shared name is
+                                    // refused here, not guessed (2026-09-12).
+                                    let sharedName = model.nameIsShared(profile)
                                     Button("Review \(profile.displayName)\u{2026}") {
                                         confirmTarget = ConfirmSheetTarget(
                                             profile: profile,
                                             holdoutQueue: holdoutReview.pendingQueue(for: profile.name))
                                     }
-                                    .help("Blind holdout review first (when one is pending), then rate catalog-flagged candidates Definitely / Likely / No. Builds the labeled set the classifier trains on.")
+                                    .disabled(sharedName)
+                                    .help(sharedName
+                                          ? PersonFinderModel.sharedNameRefusal(profile, operation: "review")
+                                          : "Blind holdout review first (when one is pending), then rate catalog-flagged candidates Definitely / Likely / No. Builds the labeled set the classifier trains on.")
                                     Button("View Confirmations\u{2026}") {
                                         confirmationsTarget = ConfirmationsTarget(profile: profile)
                                     }
-                                    .help("Cumulative progress: outcomes, signal precision, rounds, what remains.")
-                                    if !model.referenceFaces.isEmpty && model.settings.personName.lowercased() == profile.name.lowercased() {
+                                    .disabled(sharedName)
+                                    .help(sharedName
+                                          ? PersonFinderModel.sharedNameRefusal(profile, operation: "confirmations")
+                                          : "Cumulative progress: outcomes, signal precision, rounds, what remains.")
+                                    if !model.referenceFaces.isEmpty
+                                        && (model.settings.activeProfileUUID.map { $0 == profile.uuid }
+                                            ?? (model.settings.personName.lowercased() == profile.name.lowercased())) {
                                         Divider()
                                         Menu("Remove Low-Confidence Photos") {
                                             let poorCount = model.referenceFaces.filter { $0.confidence < 0.60 }.count

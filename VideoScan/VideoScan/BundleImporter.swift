@@ -219,6 +219,11 @@ enum BundleImporter {
             // by uuid; a bundle may still carry the old name-keyed layout).
             let placement = resolvePlacement(bundleFolder: src, storeDir: storeDir)
             let folderName = placement.label
+            if let refusal = placement.refusal {
+                failed.append((folderName, refusal))
+                auditLines.append("[import] POI \(folderName): REFUSED — \(refusal)")
+                continue
+            }
             let dest = placement.destination
             let localExists = placement.localExists
 
@@ -323,6 +328,11 @@ enum BundleImporter {
         /// Set when the bundle JSON has no uuid: what the installed
         /// profile.json must be given after the copy.
         let adoptUUID: UUID?
+        /// Non-nil when the bundle person cannot be placed safely — a
+        /// name-identified bundle folder matches MORE THAN ONE local person
+        /// (Richard Jr and Richard Sr). The import records it as failed
+        /// with this sentence; nothing is copied or displaced.
+        var refusal: String? = nil
     }
 
     static func resolvePlacement(bundleFolder src: URL, storeDir: URL) -> Placement {
@@ -370,15 +380,26 @@ enum BundleImporter {
         }
         // 3. name identity (legacy bundle layout, or no uuid at all): match
         //    a local person by canonical name, whatever folder they are in.
+        //    Two local namesakes make the bundle person unplaceable: refuse
+        //    rather than pick one (codex review 2026-09-12).
         if bundleIsLegacyLayout || bundleUUID == nil, let bundleName {
             let key = PersonResolver.normalize(bundleName)
+            var matches: [(folder: URL, uuid: UUID?)] = []
             for folder in POIStorage.poiFolders(in: storeDir) {
                 guard let json = rawProfileJSON(at: folder),
                       let name = json["name"] as? String,
                       PersonResolver.normalize(name) == key else { continue }
-                let localUUID = (json["uuid"] as? String).flatMap(UUID.init(uuidString:))
-                return Placement(destination: folder, localExists: true, label: label,
-                                 adoptUUID: bundleUUID == nil ? localUUID : nil)
+                matches.append((folder, (json["uuid"] as? String).flatMap(UUID.init(uuidString:))))
+            }
+            if matches.count > 1 {
+                let where_ = matches.map(\.folder.lastPathComponent).sorted().joined(separator: ", ")
+                var refused = Placement(destination: src, localExists: false, label: label, adoptUUID: nil)
+                refused.refusal = "'\(bundleName)' is \(matches.count) people here (\(where_)) and the bundle identifies them by name only — export the bundle again from a uuid-keyed store, or give one of them a distinct short name first. Nothing was copied."
+                return refused
+            }
+            if let match = matches.first {
+                return Placement(destination: match.folder, localExists: true, label: label,
+                                 adoptUUID: bundleUUID == nil ? match.uuid : nil)
             }
         }
         // 4. fresh uuid folder.

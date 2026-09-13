@@ -440,6 +440,18 @@ extension PersonFinderModel {
     func startJob(_ job: ScanJob) {
         guard !job.status.isActive else { return }
 
+        // Catalog writeback and the known-catalog prefilter are keyed by the
+        // canonical short name (see ScanJob.personLabel). Two people with one
+        // short name would write each other's history, so the scan is
+        // refused with the fix spelled out (codex review 2026-09-12).
+        if let profile = job.assignedProfile, nameIsShared(profile) {
+            let msg = "⚠ " + Self.sharedNameRefusal(profile, operation: "searching")
+            job.appendLog(msg)
+            osLog.error("startJob refused: shared short name \(profile.name, privacy: .public)")
+            job.status = .failed("Two people are called \(profile.name)")
+            return
+        }
+
         // Volume reachability — fail fast BEFORE the async loadFacesForJob
         // Task hop. Otherwise the user sees spinning/face-loading activity
         // and an eventual confusing error instead of an immediate "offline"

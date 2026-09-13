@@ -72,7 +72,14 @@ final class ScanJob: ObservableObject, Identifiable {
     /// per video, which hit the MLE5BindEmptyMemoryObjectToPort race
     /// even with per-call MLModel instances.
     var assignedRefEmbeddings: [String: [[Float]]] = [:]
-    var personLabel: String { assignedProfile?.displayName ?? "" }
+    /// OPERATIONAL identity of the job's person: the canonical short name,
+    /// which is what the catalog's detectedPeople / suspectedPeople rows and
+    /// the known-catalog prefilter are keyed by (an explicit compatibility
+    /// bridge — never the display alias, which is editable and can be
+    /// shared). UI labels use `personDisplayLabel`.
+    var personLabel: String { assignedProfile?.name ?? "" }
+    /// What the row shows: the first alias (Rick's ruling 2026-09-12).
+    var personDisplayLabel: String { assignedProfile?.displayName ?? "" }
 
     /// Per-job engine override — nil means use profile's engine or global default.
     @Published var assignedEngine: RecognitionEngine?
@@ -443,10 +450,7 @@ final class PersonFinderModel: ObservableObject {
     func healSettingsReferencePath() {
         let path = settings.referencePath
         guard !path.isEmpty, !FileManager.default.fileExists(atPath: path) else { return }
-        let target = settings.personName.lowercased()
-        guard !target.isEmpty,
-              let profile = savedProfiles.first(where: { $0.name.lowercased() == target })
-        else { return }
+        guard case .one(let profile) = resolveActiveProfile() else { return }
         settings.referencePath = profile.referencePath
         settings.save()
         appLog.write("[people] healed reference path for '\(profile.name)': \(path) → \(profile.referencePath)")
@@ -549,15 +553,21 @@ final class PersonFinderModel: ObservableObject {
         syncRejectionsToProfile()
     }
 
-    /// Sync the current rejection list back to the active POI profile on disk.
-    private func syncRejectionsToProfile() {
-        let name = settings.personName
-        guard !name.isEmpty,
-              var profile = savedProfiles.first(where: { $0.name.lowercased() == name.lowercased() })
-        else { return }
-        profile.rejectedFiles = settings.rejectedReferenceFiles
-        try? profile.save()
-        savedProfiles = POIProfile.listAll()
+    /// Sync the current rejection list back to the active POI profile on
+    /// disk. Resolved by uuid; a shared name with no uuid is refused (logged)
+    /// rather than written to the first namesake.
+    func syncRejectionsToProfile() {
+        switch resolveActiveProfile() {
+        case .none:
+            return
+        case .ambiguous(let owners):
+            referenceLoadError = Self.sharedNameRefusal(owners[0], operation: "rejecting reference photos")
+            appLog.write("[people] rejection sync refused: \(referenceLoadError ?? "")")
+        case .one(var profile):
+            profile.rejectedFiles = settings.rejectedReferenceFiles
+            try? profile.save()
+            savedProfiles = POIProfile.listAll()
+        }
     }
 
     func clearReference() {
@@ -566,6 +576,7 @@ final class PersonFinderModel: ObservableObject {
         referenceLoadError = nil
         referenceLoadFailures = []
         settings.referencePath = ""
+        settings.activeProfileUUID = nil
         settings.rejectedReferenceFiles = []
         settings.save()
     }
@@ -580,11 +591,55 @@ final class PersonFinderModel: ObservableObject {
     /// per-person classifier. Rick 2026-06-16.
     let validationLabels = ValidationLabelStore()
 
+    /// Which saved profile the active settings (`personName` +
+    /// `activeProfileUUID`) mean. Two people may share a short name since
+    /// 2026-09-12, so a name alone is honoured only when it is unique.
+    enum ActiveProfileResolution: Equatable {
+        case none
+        case one(POIProfile)
+        case ambiguous([POIProfile])
+    }
+
+    func resolveActiveProfile() -> ActiveProfileResolution {
+        if let id = settings.activeProfileUUID,
+           let profile = savedProfiles.first(where: { $0.uuid == id }) {
+            return .one(profile)
+        }
+        let target = settings.personName.lowercased()
+        guard !target.isEmpty else { return .none }
+        let byName = savedProfiles.filter { $0.name.lowercased() == target }
+        switch byName.count {
+        case 0: return .none
+        case 1: return .one(byName[0])
+        default: return .ambiguous(byName)
+        }
+    }
+
+    /// True when another saved profile has the same canonical short name —
+    /// Richard Jr and Richard Sr. Name-keyed legacy operations (holdout
+    /// review queues, validation labels, catalog writeback, quick-save by
+    /// name) refuse such a profile with an actionable message rather than
+    /// guessing (codex review 2026-09-12).
+    func nameIsShared(_ profile: POIProfile) -> Bool {
+        let key = profile.name.lowercased()
+        return savedProfiles.filter { $0.name.lowercased() == key && $0.uuid != profile.uuid }.isEmpty == false
+    }
+
+    /// The sentence a refused name-keyed operation shows.
+    static func sharedNameRefusal(_ profile: POIProfile, operation: String) -> String {
+        "Two people are called \(profile.name) — \(operation) is keyed by the short name. Give one of them a distinct short name first (aliases are what the cards show)."
+    }
+
     func saveCurrentPOI() {
         let cover = POIProfile.bestCoverFilename(from: referenceFaces)
         var profile = settings.toProfile(coverImageFilename: cover)
         guard !profile.name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        if var existing = savedProfiles.first(where: { $0.name.lowercased() == profile.name.lowercased() }) {
+        let resolution = resolveActiveProfile()
+        if case .ambiguous(let owners) = resolution {
+            referenceLoadError = Self.sharedNameRefusal(owners[0], operation: "quick-save")
+            return
+        }
+        if case .one(var existing) = resolution {
             // Recognition quick-save must preserve the existing identity and biography.
             existing.rejectedFiles = profile.rejectedFiles
             existing.engine = profile.engine
@@ -601,6 +656,9 @@ final class PersonFinderModel: ObservableObject {
             referenceLoadError = "Profile not saved: \(error.localizedDescription)"
             return
         }
+        // The active person is now this uuid, whatever the name says.
+        settings.activeProfileUUID = profile.uuid
+        settings.save()
         savedProfiles = POIProfile.listAll()
         referenceLoadError = nil   // clear stale info messages
     }
@@ -673,8 +731,12 @@ final class PersonFinderModel: ObservableObject {
         // Editor snapshots may carry a stale photo path. Refresh every consumer.
         let updated = savedProfiles.first(where: { $0.uuid == updated.uuid }) ?? updated
 
-        // If the edited person is the currently active one, sync settings
-        if settings.personName.lowercased() == (oldName ?? updated.name).lowercased() {
+        // If the edited person is the currently active one, sync settings —
+        // by uuid; by (pre-edit) name only for settings written before the
+        // uuid key existed.
+        let isActive = settings.activeProfileUUID.map { $0 == updated.uuid }
+            ?? (settings.personName.lowercased() == (oldName ?? updated.name).lowercased())
+        if isActive {
             settings.applyProfile(updated)
             settings.save()
         }
@@ -781,11 +843,14 @@ final class PersonFinderModel: ObservableObject {
         //    reference faces if this was the person being inspected, so the
         //    UI doesn't keep showing photos for a person who's now gone.
         savedProfiles = POIProfile.listAll()
-        if settings.personName.lowercased() == target {
+        let wasActive = settings.activeProfileUUID.map { $0 == profile.uuid }
+            ?? (settings.personName.lowercased() == target)
+        if wasActive {
             referenceFaces = []
             referenceSources = []
             referenceLoadFailures = []
             settings.referencePath = ""
+            settings.activeProfileUUID = nil
             settings.rejectedReferenceFiles = []
             settings.save()
         }
@@ -807,8 +872,14 @@ final class PersonFinderModel: ObservableObject {
     /// a short name — the People tab passes the profile instead.
     @discardableResult
     func deletePOI(named name: String) async -> Bool {
-        guard let profile = savedProfiles.first(where: { $0.name.lowercased() == name.lowercased() })
-        else { return false }
+        let owners = savedProfiles.filter { $0.name.lowercased() == name.lowercased() }
+        guard owners.count == 1, let profile = owners.first else {
+            if owners.count > 1 {
+                lastUndoError = Self.sharedNameRefusal(owners[0], operation: "deleting by name")
+                appLog.write("[people] delete by name refused: \(lastUndoError ?? "")")
+            }
+            return false
+        }
         return await deletePOI(profile)
     }
 
