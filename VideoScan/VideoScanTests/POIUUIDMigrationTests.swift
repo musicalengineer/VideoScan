@@ -597,3 +597,122 @@ struct POIUUIDMigrationTests {
         #expect(try Data(contentsOf: dad.appendingPathComponent("relative.jpg")) == original)
     }
 }
+
+// MARK: - Link replacement is crash-safe (codex post-merge review 2026-09-13, People #3)
+
+extension POIUUIDMigrationTests {
+
+    /// A legacy folder with one photo and one internal ABSOLUTE link to it.
+    private func legacyWithLink(_ root: Root, uuid: UUID) throws -> (folder: URL, bytes: Data, legacyTarget: String) {
+        let dad = try writeLegacy(root, folder: "dad", name: "Dad", uuid: uuid, photos: 1)
+        let original = Data((0..<64).map { _ in UInt8.random(in: 0...255) })
+        try original.write(to: dad.appendingPathComponent("original.jpg"))
+        let target = dad.appendingPathComponent("original.jpg").path
+        try FileManager.default.createSymbolicLink(atPath: dad.appendingPathComponent("cover.jpg").path,
+                                                   withDestinationPath: target)
+        return (dad, original, target)
+    }
+
+    /// A link replacement that FAILS leaves the original link in place
+    /// (the replacement is prepared beside it and renamed over it — never
+    /// remove-then-create), the error propagates so the folder is NOT
+    /// recorded in `linksRebased`, the run is marked incomplete, and the
+    /// next run finishes the job. The failure is injected for real: the
+    /// folder is read-only, so nothing in it can be created or removed.
+    @Test func failedLinkRebaseKeepsTheOriginalLinkAndIsRetriedOnTheNextRun() throws {
+        let root = try makeRoot()
+        defer { root.cleanup() }
+        let fm = FileManager.default
+        let id = UUID()
+        let legacy = try legacyWithLink(root, uuid: id)
+        let moved = root.folder(POIStorage.folderName(for: id))
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: legacy.folder.path)
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: moved.path)
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: legacy.folder.path)
+        }
+
+        guard case .ran(let report) = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) else {
+            Issue.record("should run"); return
+        }
+        #expect(report.mapping["dad"] == moved.lastPathComponent, "the folder itself moved")
+        #expect(report.linksRebased.isEmpty, "a failed rebase is never recorded as done")
+        #expect(report.complete == false, "unfinished work is not 'complete'")
+        #expect(POIStorage.readUUIDMigrationReport(root: root.url)?.linksRebased == [])
+        // The original link is still there, untouched (dangling: it names the legacy path).
+        #expect(try fm.destinationOfSymbolicLink(atPath: moved.appendingPathComponent("cover.jpg").path) == legacy.legacyTarget)
+        let entries = try fm.contentsOfDirectory(atPath: moved.path)
+        #expect(!entries.contains { $0.contains(".rebase") }, "no half-made replacement left beside it: \(entries)")
+
+        // Repair the cause; the next run finishes the rebase and only then records it.
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: moved.path)
+        guard case .ran(let rerun) = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) else {
+            Issue.record("rerun should finish the rebase"); return
+        }
+        #expect(rerun.linksRebased == ["dad"] && rerun.complete)
+        #expect(rerun.backupPath == nil, "nothing moved, no second backup")
+        #expect(try Data(contentsOf: moved.appendingPathComponent("cover.jpg")) == legacy.bytes, "dereferences")
+        #expect(POIStorage.readUUIDMigrationReport(root: root.url)?.linksRebased == ["dad"])
+        #expect(POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) == .notNeeded)
+    }
+
+    /// The primitive itself: prepare-beside + rename-over. On failure the
+    /// link still names its old target and the error is thrown; on success
+    /// no temp entry lingers and the link dereferences.
+    @Test func rebaseInternalLinksIsAtomicPerLinkAndThrowsOnFailure() throws {
+        let root = try makeRoot()
+        defer { root.cleanup() }
+        let fm = FileManager.default
+        let legacy = try legacyWithLink(root, uuid: UUID())
+        let new = root.folder("new")
+        try fm.moveItem(at: legacy.folder, to: new)
+        let link = new.appendingPathComponent("cover.jpg")
+
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: new.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: new.path) }
+        #expect(throws: (any Error).self) {
+            try POIStorage.rebaseInternalLinks(in: new, from: legacy.folder.path, to: new.path)
+        }
+        #expect(try fm.destinationOfSymbolicLink(atPath: link.path) == legacy.legacyTarget, "untouched on failure")
+
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: new.path)
+        #expect(try POIStorage.rebaseInternalLinks(in: new, from: legacy.folder.path, to: new.path) == 1)
+        #expect(try Data(contentsOf: link) == legacy.bytes)
+        #expect(try fm.contentsOfDirectory(atPath: new.path).sorted() == ["cover.jpg", "original.jpg", "photo_0.jpg", "profile.json"])
+        #expect(try POIStorage.rebaseInternalLinks(in: new, from: legacy.folder.path, to: new.path) == 0, "idempotent")
+    }
+
+    /// Rollback keeps its retry information too: a folder renamed back
+    /// whose links could not be rebased stays in the audit file, and the
+    /// next rollback finishes the links and only then moves the audit aside.
+    @Test func rollbackRetainsAFolderWhoseLinksCouldNotBeRebasedBackAndRetriesIt() throws {
+        let root = try makeRoot()
+        defer { root.cleanup() }
+        let fm = FileManager.default
+        let id = UUID()
+        let legacy = try legacyWithLink(root, uuid: id)
+        guard case .ran(let report) = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) else {
+            Issue.record("should run"); return
+        }
+        #expect(report.linksRebased == ["dad"])
+        let moved = root.folder(POIStorage.folderName(for: id))
+        let audit = root.url.appendingPathComponent(POIStorage.uuidMigrationFileName)
+
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: moved.path)
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: moved.path)
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: legacy.folder.path)
+        }
+        #expect(try POIStorage.rollbackUUIDMigration(root: root.url) == 1, "the folder was renamed back")
+        #expect(fm.fileExists(atPath: legacy.folder.path))
+        #expect(fm.fileExists(atPath: audit.path), "audit retained: the links are not back yet")
+        #expect(POIStorage.readUUIDMigrationReport(root: root.url)?.mapping["dad"] == moved.lastPathComponent)
+        #expect(try fm.destinationOfSymbolicLink(atPath: legacy.folder.appendingPathComponent("cover.jpg").path)
+                == moved.appendingPathComponent("original.jpg").path, "still names the uuid path")
+
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: legacy.folder.path)
+        #expect(try POIStorage.rollbackUUIDMigration(root: root.url) == 0, "nothing left to rename")
+        #expect(!fm.fileExists(atPath: audit.path), "audit moved aside once everything is back")
+        #expect(try Data(contentsOf: legacy.folder.appendingPathComponent("cover.jpg")) == legacy.bytes, "dereferences again")
+    }
+}

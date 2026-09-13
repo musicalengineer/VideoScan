@@ -642,6 +642,10 @@ enum POIStorage {
         let started = clock.now
         var report = UUIDMigrationReport(startedAt: now)
         report.foldersBefore = folders.count
+        // A link rebase that failed is NOT recorded in linksRebased and
+        // makes the run incomplete; the next run retries it (codex
+        // post-merge review 2026-09-13, People #3).
+        var rebaseFailed = false
         var lines: [String] = []
         func log(_ line: String) {
             lines.append(line)
@@ -678,22 +682,32 @@ enum POIStorage {
             report.mapping[planned.old] = planned.new
             report.reconciled.append(planned.old)
             log("reconciled '\(planned.old)' → \(planned.new) (renamed by an earlier run that stopped before recording it)")
-            let n = rebaseInternalLinks(in: new, from: old.path, to: new.path)
-            report.linksRebased.append(planned.old)
-            if n > 0 { log("rebased \(n) internal link(s) in \(planned.new)") }
+            do {
+                let n = try rebaseInternalLinks(in: new, from: old.path, to: new.path)
+                report.linksRebased.append(planned.old)
+                if n > 0 { log("rebased \(n) internal link(s) in \(planned.new)") }
+            } catch {
+                rebaseFailed = true
+                log("links in \(planned.new) not rebased — \(error.localizedDescription); retried on the next run")
+            }
         }
         // Moves an earlier run recorded but never finished rebasing.
         for (old, new) in pendingRebase where !report.linksRebased.contains(old) {
             let folder = root.appendingPathComponent(new, isDirectory: true)
             guard fm.fileExists(atPath: folder.path) else { continue }
-            let n = rebaseInternalLinks(in: folder, from: root.appendingPathComponent(old, isDirectory: true).path, to: folder.path)
-            report.linksRebased.append(old)
-            if n > 0 { log("rebased \(n) internal link(s) in \(new) (left over from an earlier run)") }
+            do {
+                let n = try rebaseInternalLinks(in: folder, from: root.appendingPathComponent(old, isDirectory: true).path, to: folder.path)
+                report.linksRebased.append(old)
+                if n > 0 { log("rebased \(n) internal link(s) in \(new) (left over from an earlier run)") }
+            } catch {
+                rebaseFailed = true
+                log("links in \(new) not rebased — \(error.localizedDescription); retried on the next run")
+            }
         }
         if candidates.isEmpty {
             // Only reconciliation / link rebasing was owed. Record it and stop.
             try? writeUUIDMigrationReport(merged(previousReport, with: report), root: root)
-            report.complete = true
+            report.complete = !rebaseFailed
             return finish(.clean)
         }
 
@@ -837,9 +851,16 @@ enum POIStorage {
                 log("moved '\(move.source.lastPathComponent)' → \(destination.lastPathComponent) but could not rewrite profile.json: \(error.localizedDescription)")
             }
             // Internal absolute symlinks (dad/cover.jpg → …/dad/original.jpg)
-            // follow the folder; recorded so a crash here is finished later.
-            let rebased = rebaseInternalLinks(in: destination, from: move.source.path, to: destination.path)
-            report.linksRebased.append(move.source.lastPathComponent)
+            // follow the folder; recorded ONLY once every link is verifiably
+            // rewritten, so a crash or a failure here is finished later.
+            var rebased = 0
+            do {
+                rebased = try rebaseInternalLinks(in: destination, from: move.source.path, to: destination.path)
+                report.linksRebased.append(move.source.lastPathComponent)
+            } catch {
+                rebaseFailed = true
+                log("links in \(destination.lastPathComponent) not rebased — \(error.localizedDescription); retried on the next run")
+            }
             try? writeUUIDMigrationReport(merged(previousReport, with: report), root: root)
             let name = (move.json["name"] as? String) ?? "?"
             log("'\(move.source.lastPathComponent)' → \(destination.lastPathComponent) (\(name))\(move.mintedUUID ? " [uuid minted]" : "")\(rebased > 0 ? " [\(rebased) link(s) rebased]" : "")")
@@ -847,7 +868,7 @@ enum POIStorage {
         report.renameSeconds = seconds(clock.now - renameStart)
 
         // Final record + summary.
-        report.complete = report.skipped.isEmpty
+        report.complete = report.skipped.isEmpty && !rebaseFailed
         let outcome = finish(.backedUp(backup.path))
         do { try writeUUIDMigrationReport(merged(previousReport, with: report), root: root) } catch {
             log("could not write \(uuidMigrationFileName): \(error.localizedDescription)")
@@ -887,8 +908,20 @@ enum POIStorage {
             let destination = root.appendingPathComponent(old, isDirectory: true)
             guard fm.fileExists(atPath: source.path) else {
                 // Nothing to move back (already rolled back, or trashed by
-                // the user) — keep the audit honest but do not retry forever.
-                appLog.write("[people] rollback: \(new) is gone; '\(old)' not restored")
+                // the user). If the legacy folder is back, finish any links
+                // an earlier rollback could not rebase (the entry was
+                // retained for exactly this); otherwise keep the audit
+                // honest but do not retry forever.
+                if fm.fileExists(atPath: destination.path) {
+                    do {
+                        _ = try rebaseInternalLinks(in: destination, from: source.path, to: destination.path)
+                    } catch {
+                        appLog.write("[people] rollback: '\(old)' is back but its links are not — \(error.localizedDescription); entry retained")
+                        remaining[old] = new
+                    }
+                } else {
+                    appLog.write("[people] rollback: \(new) is gone; '\(old)' not restored")
+                }
                 continue
             }
             let rc = renamex_np(source.path, destination.path, UInt32(RENAME_EXCL))
@@ -902,8 +935,17 @@ enum POIStorage {
                 json["referencePath"] = destination.path
                 try? writeJSON(json, to: profileURL)
             }
-            _ = rebaseInternalLinks(in: destination, from: source.path, to: destination.path)
             restored += 1
+            do {
+                _ = try rebaseInternalLinks(in: destination, from: source.path, to: destination.path)
+            } catch {
+                // The folder is back; its links still name the uuid path.
+                // Retained so the next rollback finishes them (codex
+                // post-merge review 2026-09-13, People #3).
+                appLog.write("[people] rollback: \(new) → '\(old)' but its links could not be rebased — \(error.localizedDescription); entry retained")
+                remaining[old] = new
+                continue
+            }
             appLog.write("[people] rollback: \(new) → '\(old)'")
         }
         report.linksRebased = report.linksRebased.filter { remaining[$0] != nil }
@@ -952,16 +994,33 @@ enum POIStorage {
         return out
     }
 
+    /// Thrown by `rebaseInternalLinks`: every link that could not be
+    /// replaced, with why. The links named here still point where they
+    /// did — nothing is half-done.
+    struct LinkRebaseFailure: LocalizedError {
+        let folder: String
+        let failures: [(link: String, error: String)]
+        var errorDescription: String? {
+            "could not rebase \(failures.count) link(s) in \(folder): "
+                + failures.map { "\($0.link): \($0.error)" }.joined(separator: "; ")
+        }
+    }
+
     /// Rewrite every symlink directly inside `folder` (and its
     /// subfolders) whose ABSOLUTE target starts with `oldPath/` so it points
     /// at the same file under `newPath/`. Relative links and links pointing
     /// elsewhere are untouched. Idempotent: a link already under `newPath`
     /// is skipped, so this can run again after a crash. The same rule the
     /// 2026-09-12 rename fix applies (POIProfileFileStore.save). Returns
-    /// the number of links rewritten; a link that cannot be rewritten is
-    /// left as it was (logged).
+    /// the number of links rewritten.
+    ///
+    /// Each link is replaced ATOMICALLY (`replaceSymbolicLink`) and a link
+    /// that cannot be replaced is left exactly as it was; when any link
+    /// fails the error is THROWN after the rest were attempted, so a
+    /// caller never records the folder as rebased on partial work (codex
+    /// post-merge review 2026-09-13, People #3).
     @discardableResult
-    static func rebaseInternalLinks(in folder: URL, from oldPath: String, to newPath: String) -> Int {
+    static func rebaseInternalLinks(in folder: URL, from oldPath: String, to newPath: String) throws -> Int {
         let fm = FileManager.default
         // macOS spells temp/var paths two ways (/var/… and /private/var/…);
         // a link written with one spelling must still be recognised when the
@@ -969,23 +1028,62 @@ enum POIStorage {
         let oldPrefixes = pathSpellings(oldPath).map { $0.hasSuffix("/") ? $0 : $0 + "/" }
         let newPrefix = newPath.hasSuffix("/") ? newPath : newPath + "/"
         guard let entries = fm.enumerator(at: folder, includingPropertiesForKeys: [.isSymbolicLinkKey]) else { return 0 }
-        var count = 0
+        // Collect first: each replacement is prepared BESIDE its link, and a
+        // still-running enumeration must not see the temporary entry.
+        var links: [(link: URL, rebased: String)] = []
         for case let link as URL in entries {
             guard (try? link.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true,
                   let target = try? fm.destinationOfSymbolicLink(atPath: link.path),
                   let oldPrefix = oldPrefixes.first(where: { target.hasPrefix($0) })
             else { continue }
-            let rebased = newPrefix + target.dropFirst(oldPrefix.count)
+            links.append((link, newPrefix + target.dropFirst(oldPrefix.count)))
+        }
+        var count = 0
+        var failures: [(link: String, error: String)] = []
+        for (link, rebased) in links {
             do {
-                try fm.removeItem(at: link)
-                try fm.createSymbolicLink(atPath: link.path, withDestinationPath: rebased)
+                try replaceSymbolicLink(at: link, withDestinationPath: rebased)
                 count += 1
             } catch {
+                failures.append((link.lastPathComponent, error.localizedDescription))
                 appLog.write("[people] migration: could not rebase link \(link.lastPathComponent) in \(folder.lastPathComponent): \(error.localizedDescription)")
                 storageLog.error("migration: could not rebase link \(link.path, privacy: .public): \(String(describing: error), privacy: .public)")
             }
         }
+        if !failures.isEmpty {
+            throw LinkRebaseFailure(folder: folder.lastPathComponent, failures: failures)
+        }
         return count
+    }
+
+    /// Replace the symlink at `link` so it names `destination`, atomically:
+    /// the new link is created beside it under a temporary name and
+    /// `rename(2)`d over it, so at every instant a link exists under the
+    /// old name (before: the old target; after: the new one). The result
+    /// is read back and must name `destination`. A target that does not
+    /// exist is logged, not failed: it was dangling before the folder
+    /// moved too, and failing it would be retried forever. (Remove-then-
+    /// create lost the link to a crash between the two — codex post-merge
+    /// review 2026-09-13, People #3.)
+    static func replaceSymbolicLink(at link: URL, withDestinationPath destination: String) throws {
+        let fm = FileManager.default
+        let temp = link.deletingLastPathComponent()
+            .appendingPathComponent(".\(link.lastPathComponent).rebase-\(UUID().uuidString.prefix(8))")
+        try fm.createSymbolicLink(atPath: temp.path, withDestinationPath: destination)
+        guard rename(temp.path, link.path) == 0 else {
+            let code = errno
+            try? fm.removeItem(at: temp)
+            throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+        }
+        let readBack = try fm.destinationOfSymbolicLink(atPath: link.path)
+        guard readBack == destination else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [
+                NSLocalizedDescriptionKey: "\(link.lastPathComponent) reads back as \(readBack), not \(destination)",
+            ])
+        }
+        if !fm.fileExists(atPath: link.path) {
+            appLog.write("[people] migration: \(link.lastPathComponent) now names \(destination), which does not exist (it was dangling before the move too)")
+        }
     }
 
     /// `/private/var/x` and `/var/x` (also /tmp, /etc) name the same place on
