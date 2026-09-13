@@ -213,6 +213,29 @@ struct ConfirmPersonSheet: View {
     /// records), never in the view body. Media facts only — no
     /// detection/scoring data crosses into the blind pane.
     @State private var mediaMetaByPath: [String: HoldoutMediaMeta] = [:]
+    // MARK: Filmstrip review (feature/holdout-review-explain-clear)
+    //
+    // AVFoundation cannot decode FFV1/Matroska, so those rows used to be
+    // hidden from the review entirely. They are now REVIEWED AS FRAMES:
+    // ~16 ffmpeg-ripped stills auto-playing at ~1.5 fps (the same
+    // FilmstripPreviewView the catalog preview pane uses), and Rick
+    // answers yes/no exactly as he would from a played video.
+    //
+    // Memory: ONE strip at a time — ≤16 CGImages at ≤480 px wide ≈ 8 MB —
+    // released on every navigation (the task is cancelled and the state
+    // reset in holdoutGo). The rip itself is bounded by
+    // renderPreviewFilmstrip's own concurrency window.
+
+    /// Current row's filmstrip: idle / loading(progress) / ready(frames).
+    /// Carries the path so a late-landing task can never paint another
+    /// row's frames.
+    @State private var holdoutFilmstrip: PreviewFilmstripState = .idle
+    /// The in-flight rip, cancelled on navigation and on disappear.
+    @State private var holdoutFilmstripTask: Task<Void, Never>?
+    /// Set when the rip produced nothing — the pane says so plainly and
+    /// offers the way out instead of spinning forever.
+    @State private var holdoutFilmstripError: String?
+
     /// Read-ahead: warms the next files (head+tail bytes) and
     /// pre-generates the next thumbnail, one file at a time. Serves BOTH
     /// phases. Created lazily (not at property init) so its render
@@ -236,11 +259,24 @@ struct ConfirmPersonSheet: View {
     /// file missing on a mounted volume (sweep stage 2), or vanished
     /// after the sweep (per-row backstop). Rebuilt by each sweep.
     @State private var offlineExcludedPaths: Set<String> = []
-    /// Rows QuickTime can't play, decided ZERO-I/O from catalog facts
-    /// (PreviewFrameRouter .ffmpegDirect — QT's boundary IS AVF's).
-    /// Rows with no catalog record are presented: unknown ≠ unplayable.
-    /// Computed once per open; catalog facts don't change mid-session.
+    /// Rows NOTHING can draw a frame from, decided ZERO-I/O from catalog
+    /// facts (HoldoutNavigation.unrenderablePaths — today: the catalog
+    /// names a container but no video stream). Rows with no catalog
+    /// record are presented: unknown ≠ unplayable. Computed once per
+    /// open; catalog facts don't change mid-session.
+    ///
+    /// NARROWED 2026-09-13: this used to hold every PreviewFrameRouter
+    /// `.ffmpegDirect` row — which hid Donna's FFV1 Matroska master from
+    /// the sheet while the badge still counted it pending. Those rows are
+    /// now reviewed through the filmstrip (see `holdoutFilmstrip`), so
+    /// only the truly unrenderable stay excluded.
     @State private var unplayableExcludedPaths: Set<String> = []
+    /// reviewIds Rick set aside for this queue (HoldoutClearStore). Not
+    /// an answer and NEVER written to the CSV — just out of the pending
+    /// counts and out of navigation until an undo brings it back.
+    /// Snapshotted from the store at open and after each clear, so the
+    /// pure navigation helpers get a plain Set.
+    @State private var clearedReviewIds: Set<String> = []
     /// Derived hidden-pending counts, stored (not computed per render —
     /// the 100k-row scale test says no O(rows) work in view bodies).
     /// Recomputed via recomputeHiddenCounts() whenever the sets or the
@@ -293,12 +329,27 @@ struct ConfirmPersonSheet: View {
     /// Pending/answered counts adjusted for in-flight background writes,
     /// so the header and status banner tick immediately on an answer (the
     /// authoritative queue state follows when the write commits).
+    /// Cleared rows are subtracted through HoldoutNavigation's ONE
+    /// pending definition, not by a local `- clearedCount` — the badge,
+    /// the popover, and this header must not be able to disagree.
     private var holdoutEffectivePending: Int {
-        max(0, (holdout?.pendingCount ?? 0) - inFlightAnswerIds.count)
+        guard let q = holdout else { return 0 }
+        let pending = HoldoutNavigation.pendingCount(rows: q.rows, cleared: clearedReviewIds)
+        return max(0, pending - inFlightAnswerIds.count)
+    }
+    /// Rows Rick set aside in THIS queue. Stored count would be O(rows)
+    /// per render, so it reads the snapshot Set's size — O(1).
+    private var clearedThisQueue: Int { clearedReviewIds.count }
+    /// Rows this session is still accountable for — the denominator Rick
+    /// sees. A set-aside row leaves the denominator rather than being
+    /// counted as answered; claiming an answer that isn't in the CSV
+    /// would be a lie in both directions.
+    private var holdoutAccountableTotal: Int {
+        guard let q = holdout else { return 0 }
+        return max(0, q.rows.count - clearedThisQueue)
     }
     private var holdoutEffectiveAnswered: Int {
-        guard let q = holdout else { return 0 }
-        return q.rows.count - holdoutEffectivePending
+        max(0, holdoutAccountableTotal - holdoutEffectivePending)
     }
     /// Pending rows the user can actually be shown right now.
     private var holdoutActionablePending: Int {
@@ -315,7 +366,8 @@ struct ConfirmPersonSheet: View {
     private var holdoutHiddenSuffix: String {
         var parts: [String] = []
         if offlineHiddenPending > 0 { parts.append("\(offlineHiddenPending) offline") }
-        if unplayableHiddenPending > 0 { parts.append("\(unplayableHiddenPending) unplayable") }
+        if unplayableHiddenPending > 0 { parts.append("\(unplayableHiddenPending) with no frames to show") }
+        if clearedThisQueue > 0 { parts.append("\(clearedThisQueue) set aside") }
         guard !parts.isEmpty else { return "" }
         return " \u{00B7} " + parts.joined(separator: ", ") + " hidden"
     }
@@ -366,6 +418,7 @@ struct ConfirmPersonSheet: View {
             thumbnailLoadTask?.cancel()
             reachabilityTask?.cancel()
             offlineSweepTask?.cancel()
+            holdoutFilmstripTask?.cancel()
             prefetcher?.cancelAll()
             keepalive.stop()
             // holdoutWriteChain is NOT cancelled: any queued answers
@@ -390,7 +443,7 @@ struct ConfirmPersonSheet: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            if phase == .holdout, let q = holdout {
+            if phase == .holdout, holdout != nil {
                 // Effective counts: an optimistically advanced answer
                 // ticks the header immediately even while its serialized
                 // background write is still in flight. Hidden rows are
@@ -398,7 +451,7 @@ struct ConfirmPersonSheet: View {
                 // COUNT is deliberately absent — knowing it would require
                 // running the scorer during the blind phase (design note
                 // D3), so the header only promises "candidates next".
-                Text("Holdout: \(holdoutEffectiveAnswered) of \(q.rows.count) answered\(holdoutHiddenSuffix)\(candidatePhaseFollows ? " \u{00B7} candidates next" : "")")
+                Text("Holdout: \(holdoutEffectiveAnswered) of \(holdoutAccountableTotal) answered\(holdoutHiddenSuffix)\(candidatePhaseFollows ? " \u{00B7} candidates next" : "")")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
             } else if phase == .labeling && !candidates.isEmpty {
@@ -696,8 +749,13 @@ struct ConfirmPersonSheet: View {
                         // resolved live copy when the original is offline;
                         // the answer write-back still keys on row.fullPath
                         // (Rick 2026-07-30).
-                        thumbnailView(path: previewPath(for: row.fullPath),
-                                      filename: row.filename)
+                        if HoldoutNavigation.playback(
+                            meta: mediaMetaByPath[row.fullPath]) == .filmstrip {
+                            holdoutFilmstripView(row: row)
+                        } else {
+                            thumbnailView(path: previewPath(for: row.fullPath),
+                                          filename: row.filename)
+                        }
                         holdoutCopyNote(for: row.fullPath)
                     }
                     .frame(width: 320)
@@ -745,6 +803,90 @@ struct ConfirmPersonSheet: View {
             .foregroundColor(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// The frames-instead-of-playback surface for a row AVFoundation
+    /// can't decode (Rick's live case: FFV1 + pcm_s32le in Matroska).
+    /// Says plainly why, then behaves like any other row — the yes/no
+    /// buttons beside it are untouched.
+    @ViewBuilder
+    private func holdoutFilmstripView(row: HoldoutReviewRow) -> some View {
+        let meta = mediaMetaByPath[row.fullPath]
+        VStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.black.opacity(0.05))
+                    .aspectRatio(16.0/9.0, contentMode: .fit)
+                switch holdoutFilmstrip {
+                case .ready(_, let frames):
+                    FilmstripPreviewView(frames: frames,
+                                         videoCodec: meta?.videoCodec ?? "",
+                                         container: meta?.container ?? "",
+                                         explanation: filmstripExplanation(meta: meta))
+                        .accessibilityIdentifier("pf.holdout.filmstrip")
+                case .loading(_, let done, let total):
+                    VStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(done > 0
+                             ? "Reading frame \(done) of \(total)\u{2026}"
+                             : "Reading frames\u{2026}")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                case .idle:
+                    if let err = holdoutFilmstripError {
+                        VStack(spacing: 6) {
+                            Image(systemName: "film")
+                                .font(.system(size: 28))
+                            Text(err)
+                                .font(.caption)
+                                .multilineTextAlignment(.center)
+                        }
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 8)
+                        .accessibilityIdentifier("pf.holdout.filmstrip.failed")
+                    } else {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            }
+            if case .ready = holdoutFilmstrip {} else {
+                Text(filmstripExplanation(meta: meta))
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            Text(row.filename)
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                // No "Open in QuickTime" here on purpose — QuickTime shows
+                // the crossed-out play glyph for these files, and a dead
+                // button is worse than no button.
+                Button {
+                    revealInFinder(previewPath(for: row.fullPath))
+                } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Show this file in Finder")
+                Spacer()
+            }
+        }
+    }
+
+    /// "QuickTime can't play FFV1 — showing frames instead." Names the
+    /// actual codec when the catalog knows it.
+    private func filmstripExplanation(meta: HoldoutMediaMeta?) -> String {
+        let codec = (meta?.videoCodec ?? "").trimmingCharacters(in: .whitespaces)
+        let label = codec.isEmpty ? "this format" : codec.uppercased()
+        return "QuickTime can't play \(label) \u{2014} showing frames instead."
     }
 
     private func holdoutAnswerView(for row: HoldoutReviewRow) -> some View {
@@ -811,6 +953,14 @@ struct ConfirmPersonSheet: View {
                     .disabled(!ReviewSessionPolicy.canGoBack(in: .holdout, index: holdoutIndex))
                     .help("Revisit the previous video (answered ones can be re-answered)")
                 Spacer()
+                // The way out for a row Rick looks at and decides not to
+                // judge. App-side and reversible — the CSV still reads
+                // pending; the Review badge's popover has the undo.
+                Button("Set Aside") { holdoutClearCurrentRow() }
+                    .buttonStyle(.borderless)
+                    .disabled(!row.isPending)
+                    .help("Take this one off the Review badge without answering. Nothing is written to the review file, and you can bring it back from the badge.")
+                    .accessibilityIdentifier("pf.holdout.setAside")
                 Button("Skip") { holdoutSkip() }
                     .buttonStyle(.borderless)
                     .help("Leave this one unanswered for now and move on")
@@ -838,9 +988,9 @@ struct ConfirmPersonSheet: View {
                     .font(.system(size: 18))
                     .foregroundColor(fullyCommitted ? .green : .orange)
                 VStack(alignment: .leading, spacing: 3) {
-                    if let q = holdout {
+                    if holdout != nil {
                         if fullyCommitted {
-                            Text("Holdout review done \u{2014} all \(q.rows.count) answered and saved to the review file.")
+                            Text("Holdout review done \u{2014} all \(holdoutAccountableTotal) answered and saved to the review file.")
                                 .font(.system(size: 12).weight(.medium))
                             Text("Continuing with new candidates below. Your blind answers never touch the model from this app.")
                                 .font(.system(size: 11))
@@ -897,17 +1047,17 @@ struct ConfirmPersonSheet: View {
     }
 
     /// Banner copy for the all-hidden state, naming BOTH reasons with
-    /// their remedies — offline is recoverable by reconnecting; unplayable
-    /// needs conversion first.
+    /// their remedies — offline is recoverable by reconnecting; a row with
+    /// no frames at all can be set aside from the badge's popover.
     private var allHiddenExplanation: String {
         var parts: [String] = []
         if offlineHiddenPending > 0 {
             parts.append("\(offlineHiddenPending) pending row\(offlineHiddenPending == 1 ? " is" : "s are") on offline volumes \u{2014} reconnect those drives and reopen the review to finish them.")
         }
         if unplayableHiddenPending > 0 {
-            parts.append("\(unplayableHiddenPending) pending row\(unplayableHiddenPending == 1 ? "" : "s") can't be played by QuickTime (legacy/archival formats) \u{2014} they need conversion before they can be reviewed.")
+            parts.append("\(unplayableHiddenPending) pending row\(unplayableHiddenPending == 1 ? " has" : "s have") no video frames to show \u{2014} you can set \(unplayableHiddenPending == 1 ? "it" : "them") aside from the Review badge.")
         }
-        parts.append("The Review badge stays up until every row has an answer.")
+        parts.append("The Review badge stays up until every row has an answer or is set aside.")
         return parts.joined(separator: " ")
     }
 
@@ -953,7 +1103,15 @@ struct ConfirmPersonSheet: View {
             // table) — so the very first landing already skips rows on
             // disconnected drives; the honest per-file sweep then runs in
             // the background and refines the set.
-            unplayableExcludedPaths = HoldoutNavigation.unplayablePaths(
+            // Rick's set-aside rows, narrowed to reviewIds THIS CSV still
+            // has (a regenerated queue or a hand-edited sidecar must not
+            // shrink the accountable total).
+            clearedReviewIds = HoldoutNavigation.clearedReviewIds(
+                rows: fresh.rows,
+                storeCleared: holdoutCenter.clearedReviewIds(for: fresh))
+            // Only rows nothing can render are excluded now — an
+            // AVF-hostile row is reviewed as a filmstrip instead.
+            unplayableExcludedPaths = HoldoutNavigation.unrenderablePaths(
                 rows: fresh.rows, meta: mediaMetaByPath)
             // Offline-copy preview resolution (Rick 2026-07-30): DEFER the
             // synchronous volume-level offline verdict for any pending row
@@ -964,7 +1122,13 @@ struct ConfirmPersonSheet: View {
             // sweep could resolve their live LaCieWorkspace copies. Deferred
             // rows stay actionable (shown optimistically); the sweep then
             // either resolves a live copy (→ preview) or confirms offline.
-            let pending = fresh.rows.filter(\.isPending)
+            // Set-aside rows go through the ONE pending definition here
+            // too, so the sweep and the copy resolver never spend a stat
+            // on a row Rick already excused.
+            let clearedNow = clearedReviewIds
+            let pending = fresh.rows.filter {
+                HoldoutNavigation.isPending($0, cleared: clearedNow)
+            }
             // Build the strong-identity copy-candidate map ONCE (one O(records)
             // OnlineCopyFinder index pass) and reuse it for both the deferral
             // set here and the sweep launched below — no double build.
@@ -1012,6 +1176,14 @@ struct ConfirmPersonSheet: View {
     /// presentable blind rows; the ~1–2 s re-score on the next
     /// transition is the price of the hard guarantee.
     private func resumeHoldout() {
+        // Re-read the set-aside rows: the store is the authority and may
+        // have changed (an undo from the badge popover) while the
+        // transition pane sat open.
+        if let q = holdout {
+            clearedReviewIds = HoldoutNavigation.clearedReviewIds(
+                rows: q.rows, storeCleared: holdoutCenter.clearedReviewIds(for: q))
+            recomputeHiddenCounts()
+        }
         // Fresh sweep per Continue click (a drive may have been
         // reconnected while the pane sat open).
         startOfflineSweep()
@@ -1051,19 +1223,13 @@ struct ConfirmPersonSheet: View {
     /// table — never disk I/O on the caller's thread), one lookup per
     /// distinct volume. Internal (non-/Volumes) paths pass — the per-file
     /// sweep and the per-row backstop cover those.
+    /// Now a thin adapter over HoldoutNavigation.volumeLevelOfflinePaths
+    /// — the badge popover needs the SAME verdict, so the logic lives in
+    /// the pure layer and this only supplies the production predicate.
     private nonisolated static func volumeLevelOfflinePaths(rows: [HoldoutReviewRow]) -> Set<String> {
-        var verdictByVolume: [String: Bool] = [:]
-        var offline = Set<String>()
-        for row in rows {
-            guard let key = HoldoutNavigation.volumeKey(forPath: row.fullPath) else { continue }
-            let reachable = verdictByVolume[key] ?? {
-                let v = VolumeReachability.isReachable(path: key)
-                verdictByVolume[key] = v
-                return v
-            }()
-            if !reachable { offline.insert(row.fullPath) }
-        }
-        return offline
+        HoldoutNavigation.volumeLevelOfflinePaths(
+            paths: rows.map(\.fullPath),
+            isVolumeReachable: { VolumeReachability.isReachable(path: $0) })
     }
 
     /// Build the strong-identity copy-candidate map for a set of pending
@@ -1098,7 +1264,10 @@ struct ConfirmPersonSheet: View {
         guard let q = holdout else { return }
         offlineSweepTask?.cancel()
         backstopInsertsSinceSweep = []
-        let pendingRows = q.rows.filter(\.isPending).map(\.fullPath)
+        let clearedNow = clearedReviewIds
+        let pendingRows = q.rows
+            .filter { HoldoutNavigation.isPending($0, cleared: clearedNow) }
+            .map(\.fullPath)
         // Offline-copy preview resolution (Rick 2026-07-30): the strong-
         // identity copy candidates are precomputed on the main actor, where
         // the catalog lives — one O(records) index build off the view body.
@@ -1238,7 +1407,8 @@ struct ConfirmPersonSheet: View {
             rows: q.rows,
             inFlight: inFlightAnswerIds,
             offlineExcluded: offlineExcludedPaths,
-            unplayableExcluded: unplayableExcludedPaths)
+            unplayableExcluded: unplayableExcludedPaths,
+            cleared: clearedReviewIds)
         offlineHiddenPending = counts.offline
         unplayableHiddenPending = counts.unplayable
     }
@@ -1252,6 +1422,11 @@ struct ConfirmPersonSheet: View {
         guard let q = holdout, q.rows.indices.contains(idx) else { return }
         thumbnailLoadTask?.cancel()
         reachabilityTask?.cancel()
+        // Drop the previous row's strip AND its in-flight rip — this is
+        // the ~8 MB release that keeps one strip in memory at a time.
+        holdoutFilmstripTask?.cancel()
+        holdoutFilmstrip = .idle
+        holdoutFilmstripError = nil
         thumbnail = nil
         thumbnailFailed = false
         holdoutIndex = idx
@@ -1293,7 +1468,71 @@ struct ConfirmPersonSheet: View {
                 }
             }
         }
-        loadThumbnail(path: path)
+        // ONE preview surface per row, chosen from the same catalog facts
+        // the badge popover classifies with: a filmstrip when
+        // AVFoundation can't decode the file, the routed single-frame
+        // thumbnail otherwise. Meta stays keyed on the ORIGINAL — a
+        // resolved live copy is byte-identical, so the catalog's routing
+        // metadata still fits.
+        let meta = mediaMetaByPath[original]
+        if HoldoutNavigation.playback(meta: meta) == .filmstrip {
+            loadHoldoutFilmstrip(path: path, meta: meta, index: idx)
+        } else {
+            loadThumbnail(path: path)
+        }
+    }
+
+    /// Rip the current row's filmstrip, off the main actor, progress
+    /// reported honestly. Frames land only while the sheet is still on
+    /// `index` — a slow rip for a row Rick navigated away from is
+    /// cancelled AND its result discarded.
+    ///
+    /// Failure is NOT recorded in the model's shared thumbnail negative
+    /// cache: a filmstrip rip failing says nothing about the fast
+    /// single-frame path, and poisoning that cache would blank the file's
+    /// preview everywhere (the 2026-07-26 poison class).
+    private func loadHoldoutFilmstrip(path: String, meta: HoldoutMediaMeta?, index: Int) {
+        holdoutFilmstripError = nil
+        let planned = max(1, PreviewFilmstripPlan.offsets(
+            durationSeconds: meta?.durationSeconds ?? 0).count)
+        holdoutFilmstrip = .loading(path: path, done: 0, total: planned)
+        let filename = (path as NSString).lastPathComponent
+        holdoutFilmstripTask = Task { @MainActor in
+            // Progress hops back to the main actor from the rendering
+            // executor; the guards make a stale row's report a no-op.
+            let onProgress: @Sendable (Int, Int) -> Void = { done, total in
+                Task { @MainActor in
+                    guard holdoutIndex == index else { return }
+                    if case .loading = holdoutFilmstrip {
+                        holdoutFilmstrip = .loading(path: path, done: done,
+                                                    total: max(total, 1))
+                    }
+                }
+            }
+            do {
+                let strip = try await VideoScanModel.renderPreviewFilmstrip(
+                    path: path,
+                    container: meta?.container ?? "",
+                    videoCodec: meta?.videoCodec ?? "",
+                    likelyUnanalyzable: meta?.likelyUnanalyzable ?? false,
+                    durationSeconds: meta?.durationSeconds ?? 0,
+                    onFrameProgress: onProgress)
+                guard !Task.isCancelled, holdoutIndex == index else { return }
+                guard !strip.frames.isEmpty else {
+                    holdoutFilmstrip = .idle
+                    holdoutFilmstripError = "No frames could be read from this file."
+                    return
+                }
+                holdoutFilmstrip = .ready(path: path, frames: strip.frames)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled, holdoutIndex == index else { return }
+                holdoutSheetLog.error("holdout filmstrip FAILED — file: \(filename, privacy: .public), error: \(error.localizedDescription, privacy: .public)")
+                holdoutFilmstrip = .idle
+                holdoutFilmstripError = "No frames could be read from this file (\(error.localizedDescription))."
+            }
+        }
     }
 
     /// stat() off the main actor (house convention: @concurrent so the
@@ -1409,7 +1648,8 @@ struct ConfirmPersonSheet: View {
             after: idx, rows: q.rows,
             inFlight: inFlightAnswerIds,
             offlineExcluded: offlineExcludedPaths,
-            unplayableExcluded: unplayableExcludedPaths)
+            unplayableExcluded: unplayableExcludedPaths,
+            cleared: clearedReviewIds)
     }
 
     private func firstActionableIndex() -> Int? {
@@ -1418,7 +1658,8 @@ struct ConfirmPersonSheet: View {
             rows: q.rows,
             inFlight: inFlightAnswerIds,
             offlineExcluded: offlineExcludedPaths,
-            unplayableExcluded: unplayableExcludedPaths)
+            unplayableExcluded: unplayableExcludedPaths,
+            cleared: clearedReviewIds)
     }
 
     /// Called right after an answer is enqueued (or a Skip) — the current
@@ -1432,6 +1673,25 @@ struct ConfirmPersonSheet: View {
         } else {
             transitionToCandidates()
         }
+    }
+
+    /// Set the current row aside: record it in the clear sidecar, drop it
+    /// out of every pending count and out of navigation, and move on.
+    ///
+    /// NOTHING is written to the CSV here — a clear is not an answer, and
+    /// the sealed artifact may only ever receive an exact "yes"/"no"
+    /// through recordAnswer's merge-on-write path.
+    private func holdoutClearCurrentRow() {
+        guard let q = holdout, q.rows.indices.contains(holdoutIndex) else { return }
+        let row = q.rows[holdoutIndex]
+        guard row.isPending else { return }
+        let store = holdoutCenter.clears
+        guard store.clear(queueKey: q.queueKey, reviewId: row.reviewId,
+                          filename: row.filename, reason: .userChoice) else { return }
+        clearedReviewIds.insert(row.reviewId)
+        recomputeHiddenCounts()
+        Task { await store.save() }
+        holdoutAdvance()
     }
 
     private func holdoutSkip() {
@@ -1454,16 +1714,12 @@ struct ConfirmPersonSheet: View {
     private func buildMediaMeta(for paths: Set<String>, merge: Bool = false) {
         if !merge { mediaMetaByPath = [:] }
         guard !paths.isEmpty else { return }
-        var map: [String: HoldoutMediaMeta] = mediaMetaByPath
-        map.reserveCapacity(map.count + paths.count)
-        for rec in catalogModel.records where paths.contains(rec.fullPath) {
-            map[rec.fullPath] = HoldoutMediaMeta(
-                container: rec.container,
-                videoCodec: rec.videoCodec,
-                durationSeconds: rec.durationSeconds,
-                likelyUnanalyzable: rec.isLikelyUnanalyzable)
-        }
-        mediaMetaByPath = map
+        // ONE extraction, shared with the badge popover
+        // (HoldoutNavigation.mediaMetaMap) so the two surfaces can never
+        // form different opinions about a row's format.
+        let fresh = HoldoutNavigation.mediaMetaMap(paths: paths,
+                                                   records: catalogModel.records)
+        mediaMetaByPath.merge(fresh) { _, new in new }
     }
 
     /// Create the shared read-ahead worker (both phases) if it doesn't
@@ -1503,7 +1759,8 @@ struct ConfirmPersonSheet: View {
                 guard HoldoutNavigation.isActionable(
                     r, inFlight: inFlightAnswerIds,
                     offlineExcluded: offlineExcludedPaths,
-                    unplayableExcluded: unplayableExcludedPaths) else { continue }
+                    unplayableExcluded: unplayableExcludedPaths,
+                    cleared: clearedReviewIds) else { continue }
                 entries.append(HoldoutReviewPrefetcher.Entry(
                     // Warm the PREVIEW path — a resolved offline-with-copy
                     // row must prefetch the live copy, not the offline
