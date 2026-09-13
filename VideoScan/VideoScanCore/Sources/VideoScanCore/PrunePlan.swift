@@ -373,12 +373,13 @@ public struct PrunePlan: Equatable, Sendable {
         for fam in families {
             var seen = Set<String>()
             for c in fam where isCandidate(c) && c.volumeIsConnectedWorking && !c.volumeName.isEmpty {
+                let have: Int64? = volumeFree[c.volumeName].flatMap { $0 }
                 if volumeFree[c.volumeName] == nil { volumeFree[c.volumeName] = c.volumeFreeBytes }
-                else if let f = c.volumeFreeBytes, (volumeFree[c.volumeName] ?? nil) ?? -1 < f { volumeFree[c.volumeName] = f }
+                else if let f = c.volumeFreeBytes, (have ?? -1) < f { volumeFree[c.volumeName] = f }
                 if seen.insert(c.volumeName).inserted { volumeFamilies[c.volumeName, default: 0] += 1 }
             }
         }
-        let choices = volumeFree.keys.map { VolumeChoice(name: $0, freeBytes: volumeFree[$0] ?? nil,
+        let choices = volumeFree.keys.map { VolumeChoice(name: $0, freeBytes: volumeFree[$0].flatMap { $0 },
                                                           familyCount: volumeFamilies[$0] ?? 0) }
             .sorted { a, b in
                 let fa = a.freeBytes ?? -1, fb = b.freeBytes ?? -1

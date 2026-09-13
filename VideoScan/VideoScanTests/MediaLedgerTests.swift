@@ -211,7 +211,7 @@ struct MediaLedgerTests {
         let mirrorURL = MediaLedger.mirrorURL(rootPath: sb.archiveRoot.path)
         let source = try Data(contentsOf: ledger.fileURL)
         #expect(try Data(contentsOf: mirrorURL) == source)
-        #expect(source.count > 0)
+        #expect(!source.isEmpty)
         let partial = sb.archiveRoot.appendingPathComponent(MasterArchiveLayout.indexFolder).appendingPathComponent(MediaLedger.mirrorPartialName)
         #expect(!FileManager.default.fileExists(atPath: partial.path), "no .partial left behind")
         // A second mirror after more lines replaces the whole file.

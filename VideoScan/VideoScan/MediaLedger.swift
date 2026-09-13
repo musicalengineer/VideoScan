@@ -204,17 +204,7 @@ final class MediaLedger: @unchecked Sendable {
         guard fd >= 0 else { throw Failure.io("open \(mirrorPartialName)", errno: errno) }
         var closed = false
         defer { if !closed { close(fd) } }
-        try data.withUnsafeBytes { buf in
-            var offset = 0
-            while offset < buf.count {
-                let n = write(fd, buf.baseAddress! + offset, buf.count - offset)
-                if n < 0 {
-                    if errno == EINTR { continue }
-                    throw Failure.io("write \(mirrorPartialName)", errno: errno)
-                }
-                offset += n
-            }
-        }
+        try writeAll(data, to: fd, label: mirrorPartialName)
         guard fsync(fd) == 0 else { throw Failure.io("fsync \(mirrorPartialName)", errno: errno) }
         close(fd); closed = true
         guard renameat(indexFD, mirrorPartialName, indexFD, mirrorFilename) == 0 else {
@@ -321,17 +311,24 @@ final class MediaLedger: @unchecked Sendable {
         let fd = open(url.path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o644)
         guard fd >= 0 else { throw Failure.io("open \(url.lastPathComponent)", errno: errno) }
         defer { close(fd) }
+        try writeAll(data, to: fd, label: url.lastPathComponent)
+        guard fsync(fd) == 0 else { throw Failure.io("fsync \(url.lastPathComponent)", errno: errno) }
+    }
+
+    /// One write loop (EINTR-tolerant, short writes continued). An empty
+    /// buffer is a no-op.
+    nonisolated static func writeAll(_ data: Data, to fd: Int32, label: String) throws {
         try data.withUnsafeBytes { buf in
+            guard let base = buf.baseAddress else { return }
             var offset = 0
             while offset < buf.count {
-                let n = write(fd, buf.baseAddress! + offset, buf.count - offset)
+                let n = write(fd, base + offset, buf.count - offset)
                 if n < 0 {
                     if errno == EINTR { continue }
-                    throw Failure.io("write \(url.lastPathComponent)", errno: errno)
+                    throw Failure.io("write \(label)", errno: errno)
                 }
                 offset += n
             }
         }
-        guard fsync(fd) == 0 else { throw Failure.io("fsync \(url.lastPathComponent)", errno: errno) }
     }
 }
