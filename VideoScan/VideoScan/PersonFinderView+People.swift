@@ -318,17 +318,17 @@ extension PersonFinderView {
                                 // Name for the Gauntlet's eyes, uuid so two
                                 // Richards are two identifiers (2026-09-12).
                                 .accessibilityIdentifier("pf.person.\(profile.name).\(profile.id)")
+                                // Double-click opens the editor (same
+                                // request as the context menu's Edit —
+                                // PeopleGalleryNavigation.swift). Declared
+                                // BEFORE the single tap: SwiftUI still
+                                // fires the single on the first click, so
+                                // the card is selected, then edited.
+                                .onTapGesture(count: 2) {
+                                    performCardClick(.double, on: profile, isBeingScanned: isBeingScanned)
+                                }
                                 .onTapGesture {
-                                    if isBeingScanned {
-                                        scanLockMessage = "Cannot edit \(profile.displayName) while scanning for \(profile.displayName)."
-                                        return
-                                    }
-                                    // Load this person's reference faces into the strip for inspection
-                                    model.settings.applyProfile(profile)
-                                    model.settings.save()
-                                    model.referenceFaces.removeAll()
-                                    model.referenceLoadFailures.removeAll()
-                                    Task { await model.loadReference() }
+                                    performCardClick(.single, on: profile, isBeingScanned: isBeingScanned)
                                 }
                                 .draggable(profile.id) {
                                     PersonCard(profile: profile,
@@ -362,8 +362,7 @@ extension PersonFinderView {
                                     }
                                     Divider()
                                     Button("Edit \(profile.displayName)\u{2026}") {
-                                        editingOriginalName = profile.name
-                                        editingProfile = profile
+                                        openEditor(PersonEditRequest(profile))
                                     }
                                     Divider()
                                     // ONE review entry point (unified-review
@@ -604,6 +603,42 @@ extension PersonFinderView {
     }
 }
 
+// MARK: - Card gestures (single click selects, double click edits)
+
+extension PersonFinderView {
+
+    /// One resolver for both clicks so the double-click can never drift
+    /// from the menu's Edit (PeopleCardAction is the tested value).
+    func performCardClick(_ click: PeopleCardAction.Click, on profile: POIProfile, isBeingScanned: Bool) {
+        switch PeopleCardAction.resolve(click, on: profile, isBeingScanned: isBeingScanned) {
+        case .refuseWhileScanning:
+            scanLockMessage = "Cannot edit \(profile.displayName) while scanning for \(profile.displayName)."
+        case .select:
+            selectGalleryCard(profile)
+        case .edit(let request):
+            openEditor(request)
+        }
+    }
+
+    /// The single-click behaviour: make this person the active profile
+    /// and load their reference faces into the strip for inspection.
+    func selectGalleryCard(_ profile: POIProfile) {
+        model.settings.applyProfile(profile)
+        model.settings.save()
+        model.referenceFaces.removeAll()
+        model.referenceLoadFailures.removeAll()
+        Task { await model.loadReference() }
+    }
+
+    /// Open the editor for the person the request names. The profile is
+    /// looked up by uuid in the live gallery — never by name — so a
+    /// request for one Richard can't open the other Richard's editor.
+    func openEditor(_ request: PersonEditRequest) {
+        guard let profile = model.savedProfiles.first(where: { $0.uuid == request.profileUUID }) else { return }
+        editingOriginalName = request.originalName
+        editingProfile = profile
+    }
+}
 
 /// A profile write that did not fully succeed, pinned to the card it
 /// belongs to. Carries the profile id so a later edit of a DIFFERENT
