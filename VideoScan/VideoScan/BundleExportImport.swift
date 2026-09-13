@@ -22,7 +22,7 @@
 //     ├── volumes.json      // per-volume metadata (role, trust, media, …)
 //     ├── settings.json     // machine-portable PersonFinderSettings only
 //     └── people/
-//         └── <sanitized-name>/
+//         └── <UUID>/            // uuid-keyed since 2026-09-12; <sanitized-name>/ in older bundles
 //             ├── profile.json
 //             └── reference photos (jpg/heic/…)
 //

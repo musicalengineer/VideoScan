@@ -72,7 +72,7 @@ final class ScanJob: ObservableObject, Identifiable {
     /// per video, which hit the MLE5BindEmptyMemoryObjectToPort race
     /// even with per-call MLModel instances.
     var assignedRefEmbeddings: [String: [[Float]]] = [:]
-    var personLabel: String { assignedProfile?.name ?? "" }
+    var personLabel: String { assignedProfile?.displayName ?? "" }
 
     /// Per-job engine override — nil means use profile's engine or global default.
     @Published var assignedEngine: RecognitionEngine?
@@ -425,6 +425,7 @@ final class PersonFinderModel: ObservableObject {
         // stray jobs. Tests that specifically need to verify the restore
         // flow can call `restoreSessionFromDisk()` explicitly.
         if !Self.isRunningTests {
+            healSettingsReferencePath()
             restoreSessionFromDisk()
         } else {
             // Gauntlet UI tests inject a saved POI profile here (transient
@@ -432,6 +433,23 @@ final class PersonFinderModel: ObservableObject {
             // seam args; unit-test hosts are unaffected.
             installGauntletPOIIfRequested()
         }
+    }
+
+    /// The persisted `settings.referencePath` (UserDefaults) can point at a
+    /// pre-2026-09-12 name folder that the uuid migration has since moved.
+    /// If the path no longer exists and the active person is still in the
+    /// gallery, follow them to their folder. Pure repair: nothing is written
+    /// unless the path actually changed.
+    func healSettingsReferencePath() {
+        let path = settings.referencePath
+        guard !path.isEmpty, !FileManager.default.fileExists(atPath: path) else { return }
+        let target = settings.personName.lowercased()
+        guard !target.isEmpty,
+              let profile = savedProfiles.first(where: { $0.name.lowercased() == target })
+        else { return }
+        settings.referencePath = profile.referencePath
+        settings.save()
+        appLog.write("[people] healed reference path for '\(profile.name)': \(path) → \(profile.referencePath)")
     }
 
     /// True when this process is a unit-test host. Mirrors the multi-signal
@@ -639,11 +657,12 @@ final class PersonFinderModel: ObservableObject {
 
     @discardableResult
     func updateProfile(_ updated: POIProfile, oldName: String? = nil) -> ProfileSaveOutcome {
-        var outcome = ProfileSaveOutcome.saved
+        let outcome = ProfileSaveOutcome.saved
         do {
-            if let warning = try updated.saveRenaming(from: oldName) {
-                outcome = .savedOldNameRemains(warning)
-            }
+            // Folders are keyed by uuid (2026-09-12): a rename is this one
+            // JSON write. `oldName` only tells us which settings / jobs to
+            // refresh below.
+            try updated.save()
         } catch {
             // Nothing was deleted and nothing was written: the profile on
             // disk is exactly what it was before this call.
@@ -651,8 +670,8 @@ final class PersonFinderModel: ObservableObject {
         }
         savedProfiles = POIProfile.listAll()
 
-        // Editor snapshots still carry the old photo path. Refresh every consumer.
-        let updated = savedProfiles.first(where: { $0.uuid == updated.uuid && $0.name == updated.name }) ?? updated
+        // Editor snapshots may carry a stale photo path. Refresh every consumer.
+        let updated = savedProfiles.first(where: { $0.uuid == updated.uuid }) ?? updated
 
         // If the edited person is the currently active one, sync settings
         if settings.personName.lowercased() == (oldName ?? updated.name).lowercased() {
@@ -678,17 +697,23 @@ final class PersonFinderModel: ObservableObject {
     /// real ~/Library/Application Support POI store (see the App-Support
     /// pollution note at the bottom of PersonFinderLifecycleTests).
     func refreshJobsForUpdatedProfile(_ updated: POIProfile, oldName: String? = nil) {
-        // Match on the PRE-edit name: if the edit renamed the person, the
-        // jobs' snapshots still carry the old name.
+        // Match on the durable uuid (2026-09-12) — a rename leaves it alone,
+        // and two people with one short name are two uuids. The pre-edit
+        // name is still honoured for snapshots that predate uuids.
         let target = (oldName ?? updated.name).lowercased()
-        for job in jobs where job.assignedProfile?.name.lowercased() == target {
+        func matches(_ profile: POIProfile?) -> Bool {
+            guard let profile else { return false }
+            return profile.uuid == updated.uuid
+                || (!profile.uuidPersisted && profile.name.lowercased() == target)
+        }
+        for job in jobs where matches(job.assignedProfile) {
             job.assignedProfile = updated
             annotateIdentityPlausibility(for: job)
         }
         // Same value-snapshot staleness, different holder: the person
         // picker for NEW jobs. Without this, jobs created after the edit
         // are assigned the pre-edit priors until the person is re-picked.
-        if selectedPersonForNewJobs?.name.lowercased() == target {
+        if matches(selectedPersonForNewJobs) {
             selectedPersonForNewJobs = updated
         }
     }
@@ -704,7 +729,8 @@ final class PersonFinderModel: ObservableObject {
     /// `"Deleted '<name>'. Undo"`; undo moves trashURL back into storeDir.
     /// Swift's `struct` ≈ C `struct` — value type, cheap to copy.
     struct LastDeletedPOI: Equatable {
-        let name: String        // original (unsanitized) name for display
+        let name: String        // display name, for the banner
+        let uuid: UUID          // the folder key — what undo restores to
         let trashURL: URL       // exact destination returned by trashPOIFolder
         let timestamp: Date     // when the delete happened, for diagnostics
     }
@@ -728,14 +754,15 @@ final class PersonFinderModel: ObservableObject {
     /// either via the inline undo banner (session-scope) or by moving the
     /// folder back into `storeDir` manually.
     @discardableResult
-    func deletePOI(named name: String) async -> Bool {
+    func deletePOI(_ profile: POIProfile) async -> Bool {
         // Swift's `lowercased()` ≈ C's tolower() on the whole string.
+        let name = profile.name
         let target = name.lowercased()
 
         // 1. Cancel any in-flight scan job targeting this person, so its
         //    background Task can't observe a half-vanished folder. We only
         //    stop active jobs; idle/done ones are left untouched.
-        for job in jobs where job.assignedProfile?.name.lowercased() == target {
+        for job in jobs where job.assignedProfile?.uuid == profile.uuid {
             if job.status.isActive {
                 stopJob(job)
             }
@@ -743,11 +770,12 @@ final class PersonFinderModel: ObservableObject {
 
         // 2. Move folder to .trash/. Logs to osLog on failure so the agent
         //    watching the remote stream can see why.
-        guard let dest = POIStorage.trashPOIFolder(named: name) else {
-            osLog.error("deletePOI: failed to move POI \(name, privacy: .public) to .trash/")
+        guard let dest = POIStorage.trashPOIFolder(uuid: profile.uuid, displayName: profile.displayName) else {
+            osLog.error("deletePOI: failed to move POI \(name, privacy: .public) (\(profile.id, privacy: .public)) to .trash/")
             return false
         }
-        osLog.info("deletePOI: moved \(name, privacy: .public) → \(dest.path, privacy: .public)")
+        osLog.info("deletePOI: moved \(name, privacy: .public) (\(profile.id, privacy: .public)) → \(dest.path, privacy: .public)")
+        appLog.write("[people] deleted '\(name)' \(profile.id) → \(dest.path)")
 
         // 3. Refresh in-memory gallery. Clear active selection / loaded
         //    reference faces if this was the person being inspected, so the
@@ -761,7 +789,7 @@ final class PersonFinderModel: ObservableObject {
             settings.rejectedReferenceFiles = []
             settings.save()
         }
-        if selectedPersonForNewJobs?.name.lowercased() == target {
+        if selectedPersonForNewJobs?.uuid == profile.uuid {
             selectedPersonForNewJobs = nil
         }
 
@@ -769,9 +797,19 @@ final class PersonFinderModel: ObservableObject {
         //    by design — only one undo target at a time. The previous
         //    target's folder stays in .trash/ but is no longer one-tap
         //    recoverable (matches the spec; manual recovery still works).
-        lastDeletedPOI = LastDeletedPOI(name: name, trashURL: dest, timestamp: Date())
+        lastDeletedPOI = LastDeletedPOI(name: profile.displayName, uuid: profile.uuid,
+                                        trashURL: dest, timestamp: Date())
         lastUndoError = nil
         return true
+    }
+
+    /// COMPATIBILITY: delete by short name. Ambiguous once two people share
+    /// a short name — the People tab passes the profile instead.
+    @discardableResult
+    func deletePOI(named name: String) async -> Bool {
+        guard let profile = savedProfiles.first(where: { $0.name.lowercased() == name.lowercased() })
+        else { return false }
+        return await deletePOI(profile)
     }
 
     /// Restore the most recently deleted POI. Returns true on success.
@@ -782,7 +820,7 @@ final class PersonFinderModel: ObservableObject {
     @discardableResult
     func undoLastDelete() async -> Bool {
         guard let snap = lastDeletedPOI else { return false }
-        let result = POIStorage.restorePOIFolder(from: snap.trashURL, named: snap.name)
+        let result = POIStorage.restorePOIFolder(from: snap.trashURL, uuid: snap.uuid)
         switch result {
         case .restored(let dest):
             osLog.info("undoLastDelete: restored \(snap.name, privacy: .public) ← \(dest.path, privacy: .public)")
@@ -822,12 +860,6 @@ final class PersonFinderModel: ObservableObject {
     /// Legacy synchronous shim. Existing call sites use the profile form;
     /// keep them working while the async form is the canonical API. Fire-
     /// and-forget Task — UI updates flow through @Published savedProfiles.
-    func deletePOI(_ profile: POIProfile) {
-        Task { @MainActor in
-            _ = await deletePOI(named: profile.name)
-        }
-    }
-
     func reorderProfiles(fromID: String, toID: String) {
         guard fromID != toID,
               let fromIdx = savedProfiles.firstIndex(where: { $0.id == fromID }),

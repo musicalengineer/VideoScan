@@ -456,9 +456,20 @@ final class IdentifyFamilyModel: ObservableObject {
     /// Inspect named clusters and decide what would happen if the user
     /// confirmed promotion — without touching any files. The returned list
     /// drives the confirmation sheet.
+    /// The existing People-tab profiles that answer to a cluster name by
+    /// CANONICAL name (folders are keyed by uuid since 2026-09-12, so the
+    /// name is looked up, never used as a path). Two profiles with one
+    /// short name — Richard Jr and Richard Sr — make the name ambiguous
+    /// and the cluster is skipped rather than merged into the wrong person.
+    private static func existingProfiles(named name: String,
+                                         in profiles: [POIProfile]) -> [POIProfile] {
+        let key = PersonResolver.normalize(name)
+        return profiles.filter { PersonResolver.normalize($0.name) == key }
+    }
+
     func planPromotion() -> [PromotionAction] {
         log.info("Plan promotion: clusters=\(self.clusters.count, privacy: .public), runName=\(self.runName, privacy: .public)")
-        let existing = Set(POIProfile.listAll().map { POIStorage.sanitize($0.name) })
+        let profiles = POIProfile.listAll()
         var plan: [PromotionAction] = []
         for c in clusters where c.id != -1 {
             let trimmed = c.name.trimmingCharacters(in: .whitespaces)
@@ -466,10 +477,15 @@ final class IdentifyFamilyModel: ObservableObject {
                 plan.append(.skip(clusterID: c.id, reason: "no name"))
                 continue
             }
-            let key = POIStorage.sanitize(trimmed)
-            if existing.contains(key) {
+            let owners = Self.existingProfiles(named: trimmed, in: profiles)
+            if owners.count > 1 {
+                plan.append(.skip(clusterID: c.id,
+                                  reason: "\(owners.count) people are called \(trimmed) — merge by hand"))
+                continue
+            }
+            if let owner = owners.first {
                 let existingFaces = (try? FileManager.default.contentsOfDirectory(
-                    at: POIStorage.folder(for: trimmed),
+                    at: POIStorage.folder(for: owner),
                     includingPropertiesForKeys: nil
                 ))?.filter { isImageFile($0) }.count ?? 0
                 plan.append(.merge(
@@ -502,6 +518,7 @@ final class IdentifyFamilyModel: ObservableObject {
         var breadcrumb: [String: [String: String]] = [:]
         let isoFormatter = ISO8601DateFormatter()
         let timestamp = isoFormatter.string(from: Date())
+        let profiles = POIProfile.listAll()
 
         for action in plan {
             switch action {
@@ -512,23 +529,32 @@ final class IdentifyFamilyModel: ObservableObject {
                     log.error("Cluster \(cid) not found in clusters array — skipping")
                     continue
                 }
-                let copied = copyClusterFacesToPOI(cluster: cluster, poiName: name)
+                // Resolve the destination folder by uuid: an existing
+                // person's folder for a merge, a fresh uuid folder for a
+                // create. The plan and this pass agree on the name rule.
+                let owners = Self.existingProfiles(named: name, in: profiles)
+                guard owners.count <= 1 else {
+                    log.error("Cluster \(cid): \(owners.count) people are called \(name, privacy: .public) — skipping")
+                    continue
+                }
+                var profile = owners.first ?? POIProfile(name: name, referencePath: "")
+                if owners.isEmpty {
+                    profile.referencePath = POIStorage.folder(for: profile).path
+                }
+                let dest = POIStorage.folder(for: profile)
+                let copied = copyClusterFacesToPOI(cluster: cluster, into: dest)
                 copiedFaces += copied
 
-                if case .create = action {
-                    var profile = POIProfile(
-                        name: name,
-                        referencePath: POIStorage.folder(for: name).path
-                    )
-                    if let coverFile = pickCoverFilename(in: POIStorage.folder(for: name)) {
+                if owners.isEmpty {
+                    if let coverFile = pickCoverFilename(in: dest) {
                         profile.coverImageFilename = coverFile
                     }
                     try? profile.save()
                     created += 1
-                    log.info("Created POI \(name, privacy: .public) from cluster \(cid) — \(copied) faces copied")
+                    log.info("Created POI \(name, privacy: .public) (\(profile.id, privacy: .public)) from cluster \(cid) — \(copied) faces copied")
                 } else {
                     merged += 1
-                    log.info("Merged cluster \(cid) into existing POI \(name, privacy: .public) — \(copied) faces copied")
+                    log.info("Merged cluster \(cid) into existing POI \(name, privacy: .public) (\(profile.id, privacy: .public)) — \(copied) faces copied")
                 }
 
                 let key = String(format: "cluster_%03d", cid)
@@ -557,12 +583,11 @@ final class IdentifyFamilyModel: ObservableObject {
         return summary
     }
 
-    /// Copy every image file in a cluster directory into the named POI's
-    /// reference folder. Filenames are prefixed with the run + cluster id
-    /// so re-promoting the same cluster overwrites cleanly (idempotent).
-    /// Returns the number of files copied.
-    private func copyClusterFacesToPOI(cluster: FaceCluster, poiName: String) -> Int {
-        let dest = POIStorage.folder(for: poiName)
+    /// Copy every image file in a cluster directory into a POI's reference
+    /// folder (`dest`, the uuid folder). Filenames are prefixed with the run
+    /// + cluster id so re-promoting the same cluster overwrites cleanly
+    /// (idempotent). Returns the number of files copied.
+    private func copyClusterFacesToPOI(cluster: FaceCluster, into dest: URL) -> Int {
         try? FileManager.default.createDirectory(
             at: dest, withIntermediateDirectories: true)
         let runTag = POIStorage.sanitize(runName)

@@ -26,7 +26,7 @@ extension ScanJobRow {
                         job.assignedEngine = eng
                     }
                 } label: {
-                    Label(profile.name, systemImage: job.assignedProfile?.id == profile.id ? "checkmark.circle.fill" : "person.circle")
+                    Label(profile.displayName, systemImage: job.assignedProfile?.id == profile.id ? "checkmark.circle.fill" : "person.circle")
                 }
             }
             if savedProfiles.isEmpty {
@@ -36,7 +36,7 @@ extension ScanJobRow {
             HStack(spacing: 4) {
                 Image(systemName: "person.fill")
                     .foregroundColor(job.assignedProfile != nil ? .accentColor : .secondary)
-                Text(job.assignedProfile?.name ?? "Person…")
+                Text(job.assignedProfile?.displayName ?? "Person…")
                     .fontWeight(job.assignedProfile != nil ? .medium : .regular)
                     .foregroundColor(job.assignedProfile != nil ? .primary : .secondary)
             }

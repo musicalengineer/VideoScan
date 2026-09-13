@@ -80,7 +80,7 @@ extension PersonFinderModel {
         do {
             let profile = POIProfile(name: name, referencePath: refPath)
             try profile.save()
-            let destDir = POIStorage.folder(for: name)
+            let destDir = POIStorage.folder(for: profile)
             for item in (try? fm.contentsOfDirectory(atPath: refPath)) ?? [] {
                 let src = (refPath as NSString).appendingPathComponent(item)
                 let dst = destDir.appendingPathComponent(item).path

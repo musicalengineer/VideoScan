@@ -1388,7 +1388,9 @@ extension PersonFinderModel {
     ) -> PersistedJobDescriptor {
         let personName = job.assignedProfile?.name
             ?? (settings.personName.isEmpty ? "(global)" : settings.personName)
-        let folderName = job.assignedProfile.map { POIStorage.sanitize($0.name) }
+        // The uuid folder name (2026-09-12). Descriptors written before carry
+        // the sanitized short name; `POIProfile.load(name:)` accepts both.
+        let folderName = job.assignedProfile.map { POIStorage.folderName(for: $0.uuid) }
         // Resolve against the GLOBAL engine, not the hard-coded `.vision`
         // fallback: a job whose engine came from the app-wide setting (no
         // per-job override, profile token unset/legacy) ran that engine live,
@@ -1462,7 +1464,9 @@ extension PersonFinderModel {
             // open in the editor. This is the one I/O step that lives outside
             // makeJob so the pure constructor stays testable.
             if let folderName = descriptor.profileFolderName,
-               let profile = try? POIProfile.load(name: folderName) {
+               let profile = (POIStorage.uuid(fromFolderName: folderName)
+                                .flatMap { try? POIProfile.load(uuid: $0) })
+                            ?? (try? POIProfile.load(name: folderName)) {
                 job.assignedProfile = profile
             }
 
