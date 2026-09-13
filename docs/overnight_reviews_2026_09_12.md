@@ -144,3 +144,20 @@ the implementation. Remaining HOLD items (#1440–1442):
 These are source/test inspections, not independently executed app tests. Claude
 reports 693 tests / 53 suites for UUID, 154 / 18 for dates, and 23 core plus 80 app
 tests for attestations. Passing counts do not cover the missing sequences above.
+
+## 23:00 assessment handoff
+
+At 23:00:43 Eastern, main remained `01d94091`; the three follow-up branches were
+still `cd801d16`, `7514bb56`, and `c56bd2bc`. No newer inbox messages had arrived.
+Receipt/status requested in #1443. The ranked assessment is in
+[refactoring_assessment_2026_09_13.md](refactoring_assessment_2026_09_13.md).
+
+Assessment cross-check correction: the original target-projection complexity
+observation above describes the early implementation. Main now has
+O(targets² + records × targets), with a 100k/20-target nested-case sensor. Existing
+same-count and target-replacement/removal tests are credited in the assessment.
+
+Independent headless harness check for this assessment: 52 tests passed via
+`python3 -B -m unittest discover -s tests -p 'test_hallie_*.py'` (0.249 seconds).
+No app/model test was launched, and no live data or production code was modified
+by this assessment.
