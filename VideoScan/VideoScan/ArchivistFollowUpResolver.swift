@@ -168,6 +168,9 @@ enum ArchivistFollowUpResolver {
         case declineOutOfRange(requested: Int, available: Int)
         case declineNoMatchingItem(String)
         case declineNothingMore(total: Int)
+        /// "search the family tree for <phrase>" with a phrase that names
+        /// nobody the oracle knows (design §3.4 C).
+        case declineNotAKnownPerson(String)
         case declineNotRefinable(reason: String)
         /// A short fragment while a list answer is active that could not be
         /// read as any refinement ("hmm?", "and then"). The client offers the
@@ -194,7 +197,7 @@ enum ArchivistFollowUpResolver {
         if let paging = pagingResolution(words, snapshot: snapshot) {
             return paging
         }
-        if let tree = familyTreeResolution(words) {
+        if let tree = familyTreeResolution(words, isKnownPerson: isKnownPerson) {
             return tree
         }
         if let ordered = dateOrderResolution(words) {
@@ -396,7 +399,9 @@ enum ArchivistFollowUpResolver {
     /// "show donna's family tree" / "get me the family tree for the breens" /
     /// "show family tree" → a `graph familyTree` AST built locally. Any extra
     /// content word ("videos", "who is in") means it is not this shape.
-    private static func familyTreeResolution(_ rawWords: [String]) -> Resolution? {
+    private static func familyTreeResolution(
+        _ rawWords: [String], isKnownPerson: (String) -> Bool
+    ) -> Resolution? {
         let words = dropLead(rawWords)
         let joined = words.joined(separator: " ")
         let treePhrases = ["family tree", "ancestry", "lineage", "pedigree",
@@ -445,7 +450,14 @@ enum ArchivistFollowUpResolver {
                 if let last = name.last, last.hasSuffix("'s") {
                     name[name.count - 1] = String(last.dropLast(2))
                 }
-                people = [name.joined(separator: " ")]
+                let phrase = name.joined(separator: " ")
+                // "search the family tree for a title like king" (live
+                // 2026-09-07, design §3.4 C): the slot after "for" is a
+                // PERSON slot and is filled only for someone the oracle
+                // knows; anything else is declined by name, never looked
+                // up as "title like king" and offered "remember it?".
+                guard isKnownPerson(phrase) else { return .declineNotAKnownPerson(phrase) }
+                people = [phrase]
             }
         } else if !rest.isEmpty {
             // Trailing content ("family tree videos") is a different question.

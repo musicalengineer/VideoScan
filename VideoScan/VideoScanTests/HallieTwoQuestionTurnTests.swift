@@ -25,8 +25,12 @@ struct HallieTwoQuestionTurnTests {
               speakers: .init(ownerName: "Rick Breen", archivistName: nil))
     }
     private func pre(_ q: String) -> Exec.PreTranslation {
+        // The fixture's own oracle: Thankful Pratt IS in this tree. (A stub
+        // that knew nobody made the tree-mode "not in the tree" decline
+        // fire for her once the mode gate landed, 2026-09-13.)
         Exec.preTranslation(
-            question: q, playAfterAnswer: false, memory: .init(), isKnownPerson: { _ in false },
+            question: q, playAfterAnswer: false, memory: .init(),
+            isKnownPerson: { Exec.isKnownPerson($0, context: context) },
             rosterAnswer: { scope in Exec.PeopleTab.rosterAnswer(context: context, scope: scope) },
             lineageAnswer: { HallieLineageAnswer.answer($0, context: context) })
     }

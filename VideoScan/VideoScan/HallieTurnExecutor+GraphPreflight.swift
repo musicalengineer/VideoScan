@@ -132,6 +132,18 @@ extension HallieTurnExecutor {
         // person question; leave it to the tree.
         guard !isKnownPerson(name, context: context, acceptSurname: true),
               !isKnownPerson(typed, context: context, acceptSurname: true) else { return nil }
+        // Tree mode (design §3.4 C): the tree does not turn into a catalog
+        // search on its own; say what was not found and how to switch.
+        if context.mode == .tree {
+            return Result(
+                route: .graph, outcome: .declined,
+                prose: "“\(typed)” is a place or a thing, not a person I know in the family tree. "
+                    + "Name the person, or say “in the catalog” and I'll search the videos for “\(name)”.",
+                basisLine: "Basis: tree mode; “\(typed)” matched no one in the family tree, and no catalog search was run.",
+                queryDescription: graphQueryDescription(payload),
+                citations: [], catalogPersonName: nil,
+                mode: .tree)
+        }
         let cross = ArchivistQueryAST.cross(.init(people: [], keywords: [name]))
         let result = try await execute(
             Request(intent: request.intent.replacing(ast: cross)),

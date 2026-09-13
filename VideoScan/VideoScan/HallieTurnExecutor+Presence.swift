@@ -233,9 +233,23 @@ extension HallieTurnExecutor {
 
         var prose = answer.prose
         let offset = request.intent.citationOffset
-        let shown = result.evidence.citations.count
+        // A COUNT re-run (design §3.5, Intent.countOnly) cites at most a
+        // handful; the number is the answer.
+        let countExamples = 5
+        let evidenceCitations = request.intent.countOnly
+            ? Array(result.evidence.citations.prefix(countExamples))
+            : result.evidence.citations
+        let shown = evidenceCitations.count
         let total = result.evidence.totalMatchCount
-        if result.conclusion == .present, offset > 0 {
+        if request.intent.countOnly {
+            // The same noun the list answers use ("N catalog items"), so a
+            // golden count reads the same whether the scope named a kind.
+            let noun = "catalog item"
+            let scope = request.intent.refinementChange.map { " " + $0 } ?? ""
+            prose = result.conclusion == .present
+                ? "\(total) \(noun)\(total == 1 ? "" : "s")\(scope)."
+                : "Nothing\(scope)."
+        } else if result.conclusion == .present, offset > 0 {
             prose = shown == 0
                 ? "That's all of them — I've already shown all \(total)."
                 : "Here are \(shown) more (items \(offset + 1)–\(offset + shown) of \(total))."
@@ -259,7 +273,7 @@ extension HallieTurnExecutor {
                 + basis.dropFirst("Basis: ".count)
         }
 
-        let citations = normalize(result.evidence.citations)
+        let citations = normalize(evidenceCitations)
         // The typed plan behind the list answer: the count sentence plus
         // each cited item and why it matched. A model may rephrase these
         // and nothing else (HallieGroundedComposer); the basis line stays
