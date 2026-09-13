@@ -148,14 +148,26 @@ struct HallieTwoModeReplayTests {
 
     // MARK: 1. strict-005 residue — an "about X" whose X the tree rejects
 
-    /// TODAY: no lane claims "tell me all about <unknown>", so the sentence
-    /// goes to the translator and becomes a catalog search for "all about".
-    /// AFTER: the explicit tree cue ("tell me all about") puts the turn in
+    /// STEP 0 (today): no lane claimed "tell me all about <unknown>", so
+    /// the sentence went to the translator and became a catalog search for
+    /// "all about".
+    /// STEP 3: the explicit tree cue ("tell me all about") puts the turn in
     /// tree mode, where an unresolved biography subject is an honest "not
     /// in the tree" decline — never a search.
-    @Test func tellMeAllAboutSomebodyNotInTheTreeGoesToTheTranslator() {
+    @Test func tellMeAllAboutSomebodyNotInTheTreeDeclinesInTreeMode() {
         let q = "tell me all about Zebulon Nobody"
-        #expect(pre(q) == .translate(question: q, playAfterAnswer: false))
+        guard case .answer(let result) = pre(q) else {
+            Issue.record("expected the tree-mode decline, got \(pre(q))")
+            return
+        }
+        #expect(result.route == .graph)
+        #expect(result.outcome == .declined)
+        #expect(result.mode == .tree)
+        #expect(result.prose.hasPrefix("I don't find Zebulon Nobody in the family tree."), Comment(rawValue: result.prose))
+        #expect(result.queryDescription?.contains("keyword=") != true)
+        // A media noun in the remainder keeps the catalog road (conflict → unknown).
+        #expect(pre("tell me all about the wedding video")
+                == .translate(question: "tell me all about the wedding video", playAfterAnswer: false))
     }
 
     // MARK: 2. strict-004 / -015 residue — the pronoun rewrite is mode-blind
@@ -205,7 +217,7 @@ struct HallieTwoModeReplayTests {
     /// is "and how many from the 80s".
     /// AFTER: a sticky count scope answers both locally, and the 80s
     /// REPLACES the 90s rather than intersecting with it.
-    @Test func countChainReTranslatesEveryTurn() async throws {
+    @Test func countChainStaysACountAndReplacesTheDecade() async throws {
         var memory = Exec.ConversationMemory()
         let first = try await run("how many videos do we have?", memory: &memory, catalogStats: stats)
         #expect(first.route == .aggregate)
@@ -218,23 +230,38 @@ struct HallieTwoModeReplayTests {
         #expect(memory.catalog.countScope == .wholeCatalog)
         #expect(memory.mode == .catalog)
 
+        // STEP 3: both follow-ups are counts of the remembered scope, run
+        // locally; the 80s REPLACE the 90s.
         let second = "How many of those are from the 90s?"
-        #expect(pre(second, memory: memory) == .translate(question: second, playAfterAnswer: false))
-        let nineties = try await run(second, memory: &memory,
-                                     translated: .presence(.init(yearStart: 1990, yearEnd: 1999)))
+        guard case .run(let secondIntent) = pre(second, memory: memory) else {
+            Issue.record("expected a local count, got \(pre(second, memory: memory))")
+            return
+        }
+        #expect(secondIntent.countOnly)
+        #expect(secondIntent.ast == .presence(.init(yearStart: 1990, yearEnd: 1999)))
+        let nineties = try await run(second, memory: &memory)
         #expect(nineties.matchCount == 8, Comment(rawValue: nineties.prose))
+        #expect(nineties.prose == "8 catalog items from the 1990s.", Comment(rawValue: nineties.prose))
+        #expect(memory.catalog.countScope == .query(.presence(.init(yearStart: 1990, yearEnd: 1999))))
 
         let third = "and how many from the 80s"
-        #expect(pre(third, memory: memory) == .translate(question: third, playAfterAnswer: false))
+        guard case .run(let thirdIntent) = pre(third, memory: memory) else {
+            Issue.record("expected a local count, got \(pre(third, memory: memory))")
+            return
+        }
+        #expect(thirdIntent.ast == .presence(.init(yearStart: 1980, yearEnd: 1989)), "replaced, not intersected")
+        let eighties = try await run(third, memory: &memory)
+        #expect(eighties.matchCount == 6, Comment(rawValue: eighties.prose))
+        #expect(eighties.prose == "6 catalog items from the 1980s.", Comment(rawValue: eighties.prose))
     }
 
     // MARK: 5. lv260911-003 — "show me" after a biography
 
-    /// TODAY: the biography's "Open in Family Tree" offer is not
-    /// remembered, so the elliptical "show me" has nothing to act on: the
-    /// refinement path declines it as an uninterpretable fragment.
-    /// AFTER: tree mode + one remembered offer → that offer is performed.
-    @Test func showMeAfterABiographyIsAnUninterpretableFragment() {
+    /// STEP 0 (today): the biography's "Open in Family Tree" offer was not
+    /// remembered, so the elliptical "show me" had nothing to act on and
+    /// the refinement path declined it as an uninterpretable fragment.
+    /// STEP 3: tree mode + one remembered offer → that offer is performed.
+    @Test func showMeAfterABiographyPerformsTheRememberedOffer() {
         var memory = Exec.ConversationMemory()
         let intent = Exec.Intent(
             originalQuestion: "tell me about rick",
@@ -246,15 +273,15 @@ struct HallieTwoModeReplayTests {
             citations: [], catalogPersonName: "Richard Harding Breen Jr",
             offeredActions: [.openFamilyTreePerson(personID: "@I7@", personName: "Richard Harding Breen Jr")]))
         #expect(memory.lastSubject == "Richard Harding Breen Jr")
+        #expect(memory.mode == .tree)
         guard case .answer(let result) = pre("show me", memory: memory) else {
-            Issue.record("expected the follow-up decline, got \(pre("show me", memory: memory))")
+            Issue.record("expected the tree follow-up, got \(pre("show me", memory: memory))")
             return
         }
-        #expect(result.route == .followUp)
-        #expect(result.outcome == .declined)
-        #expect(result.prose.hasPrefix("I couldn't tell how “show me” narrows down my last answer"),
-                Comment(rawValue: result.prose))
-        #expect(result.immediateOfferedAction == nil)
+        #expect(result.route == .graph)
+        #expect(result.outcome == .answered)
+        #expect(result.immediateOfferedAction == .openFamilyTreePerson(personID: "@I7@", personName: "Richard Harding Breen Jr"))
+        #expect(result.mode == .tree)
     }
 
     // MARK: 6. lv260907-002 — highest royalty / title

@@ -628,6 +628,73 @@ extension HallieTurnExecutor {
         selectedRecord: SelectedRecord? = nil,
         identity: NameIdentity? = nil
     ) -> PreTranslation {
+        preTranslationClassified(
+            question: question, playAfterAnswer: playAfterAnswer, memory: memory,
+            isKnownPerson: isKnownPerson, isInnerCircleName: isInnerCircleName,
+            catalogStats: catalogStats, rosterAnswer: rosterAnswer,
+            lineageAnswer: lineageAnswer, relationshipsOverview: relationshipsOverview,
+            researchAnswer: researchAnswer, selectedRecord: selectedRecord,
+            identity: identity).decision
+    }
+
+    /// The pre-translation decision together with the MODE verdict that
+    /// gated it (docs/hallie_two_mode_design.md §3.4). The clients read the
+    /// verdict for the `[hallie-mode]` log line, the executor context and
+    /// the post-translation gate. The verdict is computed lazily — after
+    /// the mode-independent steps (repair, offer, selection date,
+    /// capability, commands, persona, record recogniser, bare name) — so a
+    /// turn one of those claims never loads the identity sources for it;
+    /// such a turn reports `.unknown` / `.none`.
+    struct Classified {
+        let decision: PreTranslation
+        let verdict: HallieModeClassifier.Verdict
+    }
+
+    /// C++ analogy: a memoised thunk — an `std::optional` cache in front of
+    /// a `std::function`. A class, so the two-question path shares one.
+    final class LazyModeVerdict {
+        private let compute: () -> HallieModeClassifier.Verdict
+        private(set) var cached: HallieModeClassifier.Verdict?
+        init(_ compute: @escaping () -> HallieModeClassifier.Verdict) { self.compute = compute }
+        var value: HallieModeClassifier.Verdict {
+            if let cached { return cached }
+            let verdict = compute()
+            cached = verdict
+            return verdict
+        }
+    }
+
+    static func preTranslationClassified(
+        question: String,
+        playAfterAnswer: Bool,
+        memory: ConversationMemory,
+        isKnownPerson: (String) -> Bool,
+        isInnerCircleName: ((String) -> Bool)? = nil,
+        catalogStats: HallieCatalogStats? = nil,
+        rosterAnswer: ((PeopleTab.RosterScope) -> Result)? = nil,
+        lineageAnswer: ((HallieLineageQuestion) -> Result?)? = nil,
+        relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil,
+        researchAnswer: ((HallieResearchQuestion) -> Result)? = nil,
+        selectedRecord: SelectedRecord? = nil,
+        identity: NameIdentity? = nil,
+        isNamedFile: ((String) -> Bool)? = nil,
+        isTreePersonID: ((String) -> Bool)? = nil
+    ) -> Classified {
+        // The classifier asks the EXACT oracles only (design §3.3: at most
+        // two calls per turn); the loose `isKnownPerson` is not consulted.
+        let exact = identity?.isExactPersonName
+        let namedFile = isNamedFile ?? { text in
+            if case .file? = ArchivistRecordQuestion.detect(text)?.reference { return true }
+            return false
+        }
+        let verdict = LazyModeVerdict {
+            HallieModeClassifier.classify(
+                question, memory: memory,
+                oracle: .init(isExactPersonName: exact ?? { _ in false },
+                              isKnownPerson: { _ in false },
+                              isNamedFile: namedFile))
+        }
+        let decision: PreTranslation
         if let (first, second) = splitTwoQuestions(question),
            case .answer(let a) = preTranslationSingle(
                question: first, playAfterAnswer: playAfterAnswer, memory: memory,
@@ -636,7 +703,7 @@ extension HallieTurnExecutor {
                rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
                relationshipsOverview: relationshipsOverview,
                researchAnswer: researchAnswer, selectedRecord: selectedRecord,
-               identity: identity),
+               identity: identity, modeVerdict: verdict, isTreePersonID: isTreePersonID),
            a.route != .reset, a.clarification == nil {
             let secondTurn = preTranslationSingle(
                 question: second, playAfterAnswer: playAfterAnswer, memory: memory,
@@ -645,33 +712,36 @@ extension HallieTurnExecutor {
                 rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
                 relationshipsOverview: relationshipsOverview,
                 researchAnswer: researchAnswer, selectedRecord: selectedRecord,
-                identity: identity)
+                identity: identity, modeVerdict: verdict, isTreePersonID: isTreePersonID)
             if case .answer(let b) = secondTurn, b.route != .reset {
-                return .answer(joinedTwoQuestionAnswer(a, b))
+                decision = .answer(joinedTwoQuestionAnswer(a, b))
+            } else {
+                let label = second.prefix(1).uppercased() + second.dropFirst()
+                decision = .answer(Result(
+                    route: a.route, outcome: a.outcome,
+                    prose: a.prose + "\n\nYou also asked “\(second)” — tap it and I’ll answer that next.",
+                    basisLine: a.basisLine,
+                    queryDescription: "two questions: \(a.queryDescription ?? "?") + deferred",
+                    citations: a.citations, knowledgeCitations: a.knowledgeCitations,
+                    catalogPersonName: a.catalogPersonName, clarification: nil,
+                    matchCount: a.matchCount, mediaAction: a.mediaAction,
+                    offeredActions: a.offeredActions + [.ask(question: second, label: String(label))],
+                    attachments: a.attachments,
+                    performsFirstOfferedAction: a.immediateOfferedAction != nil,
+                    immediateOfferedAction: a.immediateOfferedAction,
+                    mode: a.mode))
             }
-            let label = second.prefix(1).uppercased() + second.dropFirst()
-            return .answer(Result(
-                route: a.route, outcome: a.outcome,
-                prose: a.prose + "\n\nYou also asked “\(second)” — tap it and I’ll answer that next.",
-                basisLine: a.basisLine,
-                queryDescription: "two questions: \(a.queryDescription ?? "?") + deferred",
-                citations: a.citations, knowledgeCitations: a.knowledgeCitations,
-                catalogPersonName: a.catalogPersonName, clarification: nil,
-                matchCount: a.matchCount, mediaAction: a.mediaAction,
-                offeredActions: a.offeredActions + [.ask(question: second, label: String(label))],
-                attachments: a.attachments,
-                performsFirstOfferedAction: a.immediateOfferedAction != nil,
-                immediateOfferedAction: a.immediateOfferedAction,
-                mode: a.mode))
+        } else {
+            decision = preTranslationSingle(
+                question: question, playAfterAnswer: playAfterAnswer, memory: memory,
+                isKnownPerson: isKnownPerson, isInnerCircleName: isInnerCircleName,
+                catalogStats: catalogStats,
+                rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
+                relationshipsOverview: relationshipsOverview,
+                researchAnswer: researchAnswer, selectedRecord: selectedRecord,
+                identity: identity, modeVerdict: verdict, isTreePersonID: isTreePersonID)
         }
-        return preTranslationSingle(
-            question: question, playAfterAnswer: playAfterAnswer, memory: memory,
-            isKnownPerson: isKnownPerson, isInnerCircleName: isInnerCircleName,
-            catalogStats: catalogStats,
-            rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
-            relationshipsOverview: relationshipsOverview,
-            researchAnswer: researchAnswer, selectedRecord: selectedRecord,
-            identity: identity)
+        return Classified(decision: decision, verdict: verdict.cached ?? .unknown)
     }
 
     /// Both answers' facts survive the join (codex #707 item 5: only b's
@@ -983,7 +1053,9 @@ extension HallieTurnExecutor {
         relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil,
         researchAnswer: ((HallieResearchQuestion) -> Result)? = nil,
         selectedRecord: SelectedRecord? = nil,
-        identity: NameIdentity? = nil
+        identity: NameIdentity? = nil,
+        modeVerdict: LazyModeVerdict,
+        isTreePersonID: ((String) -> Bool)? = nil
     ) -> PreTranslation {
         // A turn ABOUT the previous answer ("that's wrong", "you presented
         // me a list of people born hundreds of years ago") is repaired from
@@ -1119,10 +1191,58 @@ extension HallieTurnExecutor {
         if generalAdvice {
             return .translate(question: question, playAfterAnswer: playAfterAnswer)
         }
+        // THE MODE GATE (design §3.4 A). Computed here, after every step
+        // that must keep its precedence whatever the mode; the verdict
+        // decides which lane runs first and which fallback is allowed.
+        return modeGatedTurn(
+            verdict: modeVerdict.value,
+            question: question, playAfterAnswer: playAfterAnswer, memory: memory,
+            isKnownPerson: isKnownPerson, isTreePersonID: isTreePersonID,
+            catalogStats: catalogStats, rosterAnswer: rosterAnswer,
+            lineageAnswer: lineageAnswer, relationshipsOverview: relationshipsOverview,
+            researchAnswer: researchAnswer)
+    }
+
+    /// The lane order for the turn's mode. `.unknown` = today's order,
+    /// unchanged. `.catalog` = the sticky count handler first, then today's
+    /// order (the design's reordering of the follow-up lane ahead of the
+    /// knowledge lanes was NOT adopted: it would have handed "play rick
+    /// playing guitar" (GH #182, HallieMediaActivityAsk) to the translator
+    /// as a search-then-play). `.tree` = "show me" on the remembered offer,
+    /// the knowledge lanes, an honest "not in the tree" for an unresolved
+    /// biography subject, the mode-neutral catalog lanes, and a follow-up
+    /// lane that refuses the catalog's media / paging / refinement shapes.
+    private static func modeGatedTurn(
+        verdict: HallieModeClassifier.Verdict,
+        question: String,
+        playAfterAnswer: Bool,
+        memory: ConversationMemory,
+        isKnownPerson: (String) -> Bool,
+        isTreePersonID: ((String) -> Bool)?,
+        catalogStats: HallieCatalogStats?,
+        rosterAnswer: ((PeopleTab.RosterScope) -> Result)?,
+        lineageAnswer: ((HallieLineageQuestion) -> Result?)?,
+        relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)?,
+        researchAnswer: ((HallieResearchQuestion) -> Result)?
+    ) -> PreTranslation {
+        if verdict.mode == .tree,
+           let shown = HallieTreeFollowUp.turn(
+               question: question, memory: memory, isTreePersonID: isTreePersonID) {
+            return .answer(shown)
+        }
+        if verdict.mode == .catalog,
+           let count = HallieCatalogCountFollowUp.detect(question, memory: memory) {
+            return .run(count)
+        }
         if let turn = knowledgeLaneTurn(
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
             isKnownPerson: isKnownPerson, lineageAnswer: lineageAnswer) {
             return turn
+        }
+        if verdict.mode == .tree,
+           let subject = HalliePersonFactQuestion.unresolvedBiographySubject(
+               question, isKnownPerson: isKnownPerson) {
+            return .answer(treeModeNotFound(subject))
         }
         if let turn = catalogLaneTurn(
             question: question, memory: memory, catalogStats: catalogStats,
@@ -1130,9 +1250,72 @@ extension HallieTurnExecutor {
             researchAnswer: researchAnswer) {
             return turn
         }
+        if verdict.mode == .tree {
+            return treeModeFollowUpTurn(
+                question: question, playAfterAnswer: playAfterAnswer,
+                memory: memory, isKnownPerson: isKnownPerson)
+        }
         return followUpTurn(
             question: question, playAfterAnswer: playAfterAnswer,
             memory: memory, isKnownPerson: isKnownPerson)
+    }
+
+    /// Tree mode's follow-up lane (design §3.4 A): the tree shapes keep
+    /// their road — a graph attribute, a local family-tree query, a graph
+    /// refinement ("what about donna?" after a biography) — and a
+    /// search-then-play whose words asked for media is honoured; the
+    /// catalog's own shapes (a media action on a list, paging, a list
+    /// refinement, newest/oldest) are refused with a way out instead of
+    /// acting on a stale list or guessing through the translator.
+    private static func treeModeFollowUpTurn(
+        question: String,
+        playAfterAnswer: Bool,
+        memory: ConversationMemory,
+        isKnownPerson: (String) -> Bool
+    ) -> PreTranslation {
+        let resolution = ArchivistFollowUpResolver.resolve(
+            question, snapshot: memory.followUpSnapshot, isKnownPerson: isKnownPerson)
+        let keep: Bool
+        switch resolution {
+        case .localQuery, .none, .declineNotRefinable, .declineUninterpretable:
+            keep = true
+        case .refine(let ast, _, _):
+            if case .graph = ast { keep = true } else { keep = false }
+        case .searchThenPlay:
+            keep = HallieMediaVocabulary.containsMediaWord(question)
+        case .mediaAction, .nextPage, .dateOrdered, .declineNoPriorResult,
+             .declineOutOfRange, .declineNoMatchingItem, .declineNothingMore:
+            keep = false
+        }
+        if keep {
+            return followUpTurn(
+                question: question, playAfterAnswer: playAfterAnswer,
+                memory: memory, isKnownPerson: isKnownPerson)
+        }
+        return .answer(Result(
+            route: .followUp, outcome: .declined,
+            prose: "That reads like a request about a list of videos, but we're in the family tree right now. "
+                + "Ask for the videos first (“videos of Rick”), or say “in the catalog” and I'll switch.",
+            basisLine: "Basis: tree mode; a catalog media action, page or list refinement was not applied to an older list. Nothing was looked up.",
+            queryDescription: "tree mode: catalog follow-up refused",
+            citations: [], catalogPersonName: nil,
+            mode: .tree))
+    }
+
+    /// Tree mode, "tell me all about X" with an X the tree, the People tab
+    /// and the told knowledge all reject (design §3.4 C, strict-005
+    /// residue): an honest decline — never a catalog search for "all
+    /// about". The CyberBrain "tell me about X" offer is the next step.
+    private static func treeModeNotFound(_ subject: String) -> Result {
+        let name = subject.prefix(1).uppercased() + subject.dropFirst()
+        return Result(
+            route: .graph, outcome: .declined,
+            prose: "I don't find \(name) in the family tree. Check the spelling, or tell me about them — "
+                + "“let me tell you about \(name)” — and I'll remember it.",
+            basisLine: "Basis: tree mode; \"\(subject)\" matched no one in the family tree, the People tab or what I've been told. No catalog search was run.",
+            queryDescription: "tree mode: unresolved biography subject \(subject)",
+            citations: [], catalogPersonName: nil,
+            mode: .tree)
     }
 
     /// The model-free lanes that read the family knowledge: surname

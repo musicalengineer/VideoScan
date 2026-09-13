@@ -75,6 +75,47 @@ enum HalliePersonFactQuestion {
         return nil
     }
 
+    private static let biographyOpener = try! NSRegularExpression(
+        pattern: #"^(?:tell (?:me|us) (?:(?:all|more|everything) )?about|who is|who was) (.+?)$"#,
+        options: .caseInsensitive)
+    private static let notANameLead: Set<String> = [
+        "the", "a", "an", "my", "our", "your", "his", "her", "their", "this",
+        "that", "these", "those", "some", "any", "all", "every", "each",
+    ]
+
+    /// TREE MODE ONLY (docs/hallie_two_mode_design.md §3.4 C): the
+    /// biography opener matched, the remainder reads as a proper name —
+    /// one to five capitalisable words, no article or possessive lead, no
+    /// kin word, media noun or pronoun — and the identity oracle knows no
+    /// such person. Nil for everything else, including everything
+    /// `detect` would have claimed. The caller turns it into an honest
+    /// "not in the tree" instead of letting the translator make a catalog
+    /// search of "all about".
+    static func unresolvedBiographySubject(_ question: String, isKnownPerson: (String) -> Bool) -> String? {
+        guard question.count <= 512 else { return nil }
+        let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "?.!"))
+            .replacingOccurrences(of: "’", with: "'")
+        guard let match = biographyOpener.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        let subject = String(text[range]).trimmingCharacters(in: .whitespaces)
+        let tokens = subject.lowercased().split(separator: " ").map(String.init)
+        guard (1...5).contains(tokens.count), let lead = tokens.first,
+              !notANameLead.contains(lead) else { return nil }
+        guard tokens.allSatisfy({ token in
+            token.allSatisfy { $0.isLetter || $0 == "'" || $0 == "-" || $0 == "." }
+        }) else { return nil }
+        guard !tokens.contains(where: { token in
+            HallieMediaVocabulary.all.contains(token)
+                || HalliePronounContinuity.kinNouns.contains(token)
+                || HalliePronounContinuity.isThirdPersonPronoun(token)
+                || HallieTurnExecutor.isSpeakerPronoun(token)
+                || isBareKinWord(token)
+        }) else { return nil }
+        guard !isKnownPerson(subject) else { return nil }
+        return subject
+    }
+
     /// One word that names an immediate relative of the speaker with no
     /// possessive: dad, mom, ma, nana, grandpa… (a side or "great" prefix
     /// keeps the possessive path: "maternal grandmother" is not bare).

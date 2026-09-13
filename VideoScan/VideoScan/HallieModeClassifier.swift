@@ -153,6 +153,11 @@ enum HallieModeClassifier {
 
     private static let pronouns: Set<String> = HalliePronounContinuity.singular
         .union(HalliePronounContinuity.plural)
+    /// "of those", "of them", "of it": never a name, never worth an
+    /// oracle call.
+    private static let demonstratives: Set<String> = [
+        "those", "these", "them", "it", "that", "this", "one", "ones", "which",
+    ]
 
     // MARK: - Entry
 
@@ -272,8 +277,10 @@ enum HallieModeClassifier {
             phrase = String(phrase[..<cut.lowerBound])
         }
         phrase = phrase.trimmingCharacters(in: .whitespaces)
+        let lead = phrase.lowercased().split(separator: " ").first.map(String.init) ?? ""
         guard !phrase.isEmpty, phrase.split(separator: " ").count <= 6,
-              !pronouns.contains(phrase.lowercased()) else { return nil }
+              !pronouns.contains(phrase.lowercased()),
+              !demonstratives.contains(lead) else { return nil }
         return phrase
     }
 
@@ -284,6 +291,9 @@ enum HallieModeClassifier {
         let padded = " " + words.joined(separator: " ") + " "
         if leads.contains(where: { padded.hasPrefix(" " + $0 + " ") }) { return true }
         if words.contains(where: { pronouns.contains($0) }) { return true }
+        // "how many of those are from the 90s": a count of "those" is a
+        // continuation by construction (design §3.5), verb or no verb.
+        if HallieCountAsk.isCountAsk(words.joined(separator: " ")) { return true }
         if words.contains(where: { sentenceVerbs.contains($0) }) { return false }
         return words.filter { !filler.contains($0) }.count <= 4
     }
