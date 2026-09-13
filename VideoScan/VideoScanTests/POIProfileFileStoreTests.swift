@@ -242,15 +242,17 @@ struct POIProfileFileStoreTests {
         }
     }
 
-    @Test func symlinkFolderCannotRedirectWritesToAnotherPerson() throws {
+    @Test(arguments: [false, true])
+    func symlinkFolderCannotRedirectWrites(identityMatches: Bool) throws {
         try withRoot { root in
-            let foreign = try profile(root, "junior", id: UUID())
+            let existingID = UUID()
+            let foreign = try profile(root, "junior", id: existingID)
             try Data([42, 7]).write(to: foreign.appendingPathComponent("portrait.jpg"))
             let before = try snapshot(foreign)
             let alias = root.appendingPathComponent("senior")
             try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: foreign)
             #expect(throws: POIProfileFileStore.Failure.self) {
-                try POIProfileFileStore.save(id: UUID(), destination: alias, retire: { _ in Issue.record("Must not retire") }, write: { _, _ in Issue.record("Must not write") })
+                try POIProfileFileStore.save(id: identityMatches ? existingID : UUID(), destination: alias, retire: { _ in Issue.record("Must not retire") }, write: { _, _ in Issue.record("Must not write") })
             }
             #expect(try snapshot(foreign) == before)
             #expect(try FileManager.default.destinationOfSymbolicLink(atPath: alias.path) == foreign.path)
