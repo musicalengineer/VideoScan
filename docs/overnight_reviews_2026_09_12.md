@@ -114,3 +114,33 @@ second pass can still transfer A's date through unhashed B to conflicting-hash C
 in one partial-hash bucket. Pin the second pass and refuse ambiguous bridges.
 Already-dated recipients also need skipping before the nested donor loop to avoid
 quadratic idempotent work on MainActor.
+
+## 22:36–22:45 final-delta reviews
+
+Delete-plan fix merged as `01d94091`. Attestation `cd801d16` APPROVED (#1439):
+both console and journal batches now execute off-main in call order, including
+without an archive. Conservative equal-time answer precedence is deterministic.
+
+Date `7514bb56`: the two preceding propagation findings are fixed. New automatic
+on-load cleanup remains HOLD (#1439): validating only the immediate donor keeps
+downstream dates from a bad A→B→C chain; second-resolution recovery filenames can
+overwrite an earlier undo sidecar. Cleanup needs provenance closure and unique,
+non-overwriting recovery files. Prior tests do not exercise these sequences.
+
+UUID `c56bd2bc`/`6628679c`: backup-failure read protection, pre-move plans, retryable
+rollback, explicit-root test isolation, and save quarantine materially improve
+the implementation. Remaining HOLD items (#1440–1442):
+
+- Legacy bundle layout must not override a present conflicting UUID.
+- Present-but-unresolved active UUID must not fall back to a namesake.
+- Holdout/validation write entry points need ambiguity guards, including sheets
+  already open when a second namesake appears; helper-only tests are insufficient.
+- Legacy kinship name→UUID upgrades must refuse ambiguous names, not choose first.
+- Deleting a quarantined legacy profile must not target another folder sharing
+  its UUID; guard before job cancellation or storage mutation.
+- Bare migration renames break internal absolute photo symlinks; rebase safely or
+  quarantine these folders. Test dereferencing the photo after migration.
+
+These are source/test inspections, not independently executed app tests. Claude
+reports 693 tests / 53 suites for UUID, 154 / 18 for dates, and 23 core plus 80 app
+tests for attestations. Passing counts do not cover the missing sequences above.
