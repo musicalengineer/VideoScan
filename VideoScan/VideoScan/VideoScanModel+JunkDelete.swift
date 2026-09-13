@@ -302,6 +302,7 @@ extension VideoScanModel {
         var alreadyMissing = 0
         var skippedOffline = 0
         var failed: [(record: VideoRecord, error: Error)] = []
+        var removedFromDisk: [VideoRecord] = []
 
         for (i, rec) in records.enumerated() {
             switch outcomes[i] {
@@ -340,6 +341,7 @@ extension VideoScanModel {
                     rec.lifecycleStage = .deletedPermanently
                 }
                 rec.purgedAt = now
+                removedFromDisk.append(rec)
 
             case .failed(let error):
                 failed.append((record: rec, error: error))
@@ -358,6 +360,11 @@ extension VideoScanModel {
         // no undo banner — so the table's cache would never recompute and
         // the deleted rows stayed visible with Show Removed off.
         noteCatalogRecordsMutated()
+        // Media Ledger (stage 2): one copyTrashed / copyDeleted line per
+        // file that actually left the disk (missing / offline / failed
+        // rows are not "what happened to the file").
+        ledgerCopyRemoved(removedFromDisk, permanent: mode == .permanent, by: .rick, at: now,
+                          batchID: "junk-\(UUID().uuidString.prefix(8))")
 
         log("Delete Confirmed Junk: attempted=\(records.count) succeeded=\(succeeded) missing=\(alreadyMissing) offline=\(skippedOffline) failed=\(failed.count) mode=\(mode == .toTrash ? "trash" : "permanent")")
 

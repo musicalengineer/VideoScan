@@ -596,6 +596,20 @@ struct MediaFileOperationRow: View {
                     finishedChip(summary)
                     revealButton(published)
                     showInCatalogButton(published)
+                } else if let promote = job as? PromoteToArchiveJob,
+                          let line = promote.protectionLine {
+                    // Promote (stage 2): when every copy landed verified
+                    // the row carries the batch's protection line —
+                    // "Archive ✓verified · N working copies (…) · cloud: … ·
+                    // off-site: …" — computed off-main by the job.
+                    finishedChip(summary)
+                    Text(line)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(line)
+                        .accessibilityIdentifier("mfo.row.protectionLine")
                 } else {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)

@@ -184,5 +184,8 @@ struct InspectorPlaceView: View {
     private func save() {
         refreshTick &+= 1
         NotificationCenter.default.post(name: .videoScanCatalogMutated, object: record)
+        // Media Ledger (stage 2): "You set the place to … on …" — one
+        // line, off-main, after the catalog path above.
+        model.noteUserPlaceEdited(record)
     }
 }

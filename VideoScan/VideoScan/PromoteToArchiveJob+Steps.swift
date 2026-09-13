@@ -401,20 +401,35 @@ extension PromoteToArchiveJob {
         journal = journal.with(state: .published, sha256: sha, copyRecordID: copyProbe.id)
         try ArchivePromoteJournal.append(journal, rootPath: ctx.root)
 
+        let archiveRecord: VideoRecord
         if let source {
-            model.registerPromotedCopy(source: source, destinationURL: destURL,
-                                       relativePath: relPath, sha256: sha,
-                                       probed: copyProbe, promotedAt: now,
-                                       readiness: readiness ?? ArchiveReadiness.assess(record: source))
+            archiveRecord = model.registerPromotedCopy(source: source, destinationURL: destURL,
+                                                       relativePath: relPath, sha256: sha,
+                                                       probed: copyProbe, promotedAt: now,
+                                                       readiness: readiness ?? ArchiveReadiness.assess(record: source))
         } else {
-            model.registerOrphanPromotedCopy(sourceID: sourceID, sourcePath: sourcePath,
-                                             destinationURL: destURL, relativePath: relPath,
-                                             sha256: sha, probed: copyProbe,
-                                             manifestRow: ctx.manifestFields[sourceID],
-                                             promotedAt: now)
+            archiveRecord = model.registerOrphanPromotedCopy(sourceID: sourceID, sourcePath: sourcePath,
+                                                             destinationURL: destURL, relativePath: relPath,
+                                                             sha256: sha, probed: copyProbe,
+                                                             manifestRow: ctx.manifestFields[sourceID],
+                                                             promotedAt: now)
             appLog.write("promote: \(relPath) cataloged as a self-contained archive copy — its source record (\(sourceID.uuidString.prefix(8))…) is no longer in the catalog")
         }
         publishedThisBatch.append(journal)
+        // Media Ledger (stage 2): one `archived` line per file, on the
+        // SOURCE record when it exists (that is the file Rick asks about)
+        // else on the archive copy; fixity + verified travel in `detail`.
+        // Collected here, appended once at batch end with the batch id.
+        let subject = source ?? archiveRecord
+        landedIDs.append(subject.id)
+        ledgerEvents.append(model.ledgerEvent(.archived, for: subject, by: ledgerActor, at: now,
+                                              batchID: id.uuidString, detail: [
+            MediaLedgerEvent.Detail.fixity: sha,
+            MediaLedgerEvent.Detail.verified: "true",
+            MediaLedgerEvent.Detail.archive: MasterArchiveLayout.displayName(forRootPath: ctx.root),
+            MediaLedgerEvent.Detail.relPath: relPath,
+            MediaLedgerEvent.Detail.sizeBytes: String(copyProbe.sizeBytes),
+        ]))
     }
 
     /// Batch end (codex R3 blocker 5): ONE synchronous, durable catalog

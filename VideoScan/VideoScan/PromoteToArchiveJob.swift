@@ -32,9 +32,19 @@ import os
 // (they are verified, journaled, indexed and recorded). Source files are
 // NEVER modified — the pipeline only reads them.
 //
+// Promote-and-prune stage 2 (Rick 2026-09-12): at batch end the job
+//   - appends one Media Ledger `archived` line per landed file (batch id
+//     = the job id) and MIRRORS the ledger into the archive's 00_Index/
+//     (GH #170) — both on the ledger's ordered off-main worker;
+//   - when EVERY file landed verified (no failure, not cancelled),
+//     computes the batch's protection line off-main, shows it on the
+//     finished row (`protectionLine`) and offers the "Archived — what
+//     next?" sheet ONCE (`model.offerArchivedWhatNext`). A failed file or
+//     a cancel never offers the sheet.
+//
 // Memory: constant per file (ArchivePromoteEngine's chunk buffers); the
-// plan/result/journal maps are O(selection + journal entries) — a few
-// hundred bytes each. Worst case for a 500-file batch < 4 MB in-process.
+// plan/result/journal/ledger maps are O(selection + journal entries) — a
+// few hundred bytes each. Worst case for a 500-file batch < 4 MB in-process.
 
 let promoteLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "promote")
 
@@ -78,6 +88,23 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
     /// the batch-end `saveCatalogNow()` returns true (codex R3 blocker 5).
     var publishedThisBatch: [ArchivePromoteJournal.Entry] = []
 
+    /// Media Ledger (stage 2): who this promotion is attributed to —
+    /// `.promote` for the sheet / menu, `.angel` when Archive Angel ran it.
+    var ledgerActor: MediaLedgerEvent.Actor = .promote
+    /// The `archived` ledger lines collected per landed file, appended
+    /// once at batch end (one worker hop, one fsync).
+    var ledgerEvents: [MediaLedgerEvent] = []
+    /// The records that landed verified this run (promoted or adopted) —
+    /// the batch the protection line and the sheet describe.
+    var landedIDs: [UUID] = []
+
+    /// Stage 2: the batch's protection line, set only when every copy
+    /// landed verified. Shown on the finished row.
+    @Published private(set) var protectionLine: String?
+    /// True once the "what next?" sheet was offered for this batch (a
+    /// batch offers at most once).
+    private(set) var offeredWhatNext = false
+
     @Published private(set) var state: MediaFileOperationState = .running {
         didSet {
             if !state.isActive, finishedAt == nil { finishedAt = Date() }
@@ -91,6 +118,9 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
 
     /// The run Task — internal so tests can `await job.task?.value`.
     private(set) var task: Task<Void, Never>?
+    /// The stage-2 tail (ledger append + mirror + protection + offer) —
+    /// tests await it after `task`.
+    private(set) var completionTask: Task<Void, Never>?
 
     var title: String {
         plan.entries.count == 1
@@ -241,15 +271,24 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         // journal entries marked done. Runs on cancel too — whatever was
         // published stays published and must be persisted.
         let saved = finalizeBatch(model: model, ctx: ctx)
-        finishRun(tally: tally, saved: saved, model: model)
+        finishRun(tally: tally, saved: saved, model: model, ctx: ctx)
     }
 
-    private func finishRun(tally: Tally, saved: Bool, model: VideoScanModel) {
-        if Task.isCancelled || state == .cancelling {
+    private func finishRun(tally: Tally, saved: Bool, model: VideoScanModel, ctx: RunContext) {
+        // Stage 2, part 1 — the ledger lines for whatever landed, even on
+        // cancel (those copies are verified and in the archive). The mirror
+        // into 00_Index/ is part 2: only a batch that finished cleanly
+        // copies the ledger into the archive (a cancel must leave no
+        // in-flight file behind — the cancel sensor enumerates the tree).
+        let landedCancelled = Task.isCancelled || state == .cancelling
+        let ledgerFlush = flushLedger(model: model, root: ctx.root, mirror: !landedCancelled)
+
+        if landedCancelled {
             let kept = tally.promoted + tally.adopted
             let done = kept > 0 ? " (\(kept) already promoted stay in the archive)" : ""
             model.log("Promote: cancelled\(done).")
             finishCancelled()
+            completionTask = ledgerFlush
             return
         }
         var parts = ["Promoted \(tally.promoted)"]
@@ -263,9 +302,40 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         model.log("Promote: \(summary).")
         if tally.promoted + tally.adopted == 0 && tally.failed > 0 {
             finish(failed: summary)
-        } else {
-            finish(success: summary)
+            completionTask = ledgerFlush
+            return
         }
+        finish(success: summary)
+
+        // Stage 2, part 2 — protection line + the sheet, ONLY when every
+        // copy landed verified: no failed file, something landed.
+        let landed = landedIDs
+        guard tally.failed == 0, !landed.isEmpty else { completionTask = ledgerFlush; return }
+        let bytes = plan.entries.filter { landed.contains($0.recordID) }.reduce(Int64(0)) { $0 + $1.sizeBytes }
+        let batchID = id.uuidString
+        completionTask = Task { [weak self, weak model] in
+            await ledgerFlush?.value
+            guard let self, let model else { return }
+            let protection = await model.batchProtection(for: landed)
+            self.protectionLine = protection.displayLine
+            model.log("Promote: protection now — \(protection.displayLine)")
+            guard !self.offeredWhatNext else { return }
+            self.offeredWhatNext = true
+            model.offerArchivedWhatNext(batchID: batchID, recordIDs: landed, totalBytes: bytes,
+                                        protection: protection, source: .promoteBatch)
+        }
+    }
+
+    /// Append this run's `archived` lines and (for a clean finish) mirror
+    /// the ledger into the archive — both on the ledger's ordered worker.
+    /// nil when nothing landed (no lines, no mirror).
+    private func flushLedger(model: VideoScanModel, root: String, mirror: Bool) -> Task<Void, Never>? {
+        guard !ledgerEvents.isEmpty else { return nil }
+        let events = ledgerEvents
+        ledgerEvents.removeAll()
+        let append = model.ledgerAppend(events)
+        guard mirror else { return append }
+        return model.mediaLedger.mirror(intoArchiveRoot: root)
     }
 
     func record(_ kind: FileOutcome.Kind, _ filename: String, _ detail: String) {

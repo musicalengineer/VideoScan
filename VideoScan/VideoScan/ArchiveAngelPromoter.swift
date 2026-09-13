@@ -181,6 +181,7 @@ final class ArchiveAngelPromoter: ObservableObject {
         try? ArchiveAngelPlanStore.save(plan)
 
         let job = center.startPromote(plan: promotePlan, model: model)
+        job.ledgerActor = .angel   // Media Ledger: "archived … (Archive Angel)"
         self.job = job
         var snapshot = plan
         watch(job) { [weak self] in
