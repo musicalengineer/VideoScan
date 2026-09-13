@@ -97,7 +97,8 @@ final class BackupAttestationTests: XCTestCase {
         let list = [a(.cloud, .yes, "O'Neil, \"Cloud\""), a(.offsite, .no, at: 1_757_700_100)]
         let text = BackupAttestation.jsonString(list)
         XCTAssertTrue(text.hasPrefix("[{"), text)
-        XCTAssertTrue(text.contains("\"attestedAt\":\"2025-09-12T18:00:00Z\""), "ISO-8601 dates (epoch 1_757_700_000): \(text)")
+        XCTAssertTrue(text.contains("\"attestedAt\":\"2025-09-12T18:00:00.000Z\""),
+                      "millisecond ISO-8601 dates, the Timestamp rule (epoch 1_757_700_000): \(text)")
         XCTAssertEqual(BackupAttestation.fromJSONString(text), list)
         XCTAssertEqual(BackupAttestation.jsonString(text == "" ? [] : []), "", "empty list → empty cell, never []")
         XCTAssertEqual(BackupAttestation.fromJSONString(""), [])

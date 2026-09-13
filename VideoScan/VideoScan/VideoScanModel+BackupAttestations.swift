@@ -4,13 +4,13 @@
 // VideoScanCore):
 //
 //   - `recordAttestation(kind:answer:label:by:at:for:)` — the ONE write
-//     path. Replaces the same-kind answer on each record, journals one
-//     line per record in the archive's attestation journal
-//     ("attestation cloud=yes 'iCloud' by rick"), logs it, and posts a
-//     RECORD-SCOPED catalog-mutation notification per record (the same
-//     shape InspectorPlaceView uses) so the search index, the debounced
-//     save and the chrome caches refresh. No UI calls it yet — the
-//     "Archived — what next?" sheet is stage 2.
+//     path. Replaces the same-kind answer on each record, posts a
+//     RECORD-SCOPED catalog-mutation notification per record AS IT IS
+//     UPDATED (the same shape InspectorPlaceView uses) so the search
+//     index, the debounced save and the chrome caches refresh, writes the
+//     console lines in ONE batch, and hands the archive-journal lines to
+//     ONE off-main append. No UI calls it yet — the "Archived — what
+//     next?" sheet is stage 2.
 //   - `ArchiveAttestationJournal` — `00_Index/.attestation_journal.jsonl`
 //     beside the promote journal: append-only JSONL, one entry per record
 //     per answer, written through the same descriptor-relative durable
@@ -23,9 +23,29 @@
 //     the catalog (one pass over `records`), builds `CopyFacts` and hands
 //     them to the pure `ProtectionSummary`. Never called per table row.
 //
+// MAIN-ACTOR RULE (codex #1416, 2026-09-12): `recordAttestation` does NO
+// file I/O on the main actor. The first cut opened/wrote/fsynced one
+// journal line per record inline — on a slow archive volume or a 5,000-
+// record batch that is a beachball, and every notification waited for
+// the loop to end. Now: the loop only mutates records and posts; the
+// journal batch is encoded once and appended by a single O_APPEND write
+// + one fsync on the cooperative pool (`@concurrent`), batches from
+// successive calls are chained so the file stays in call order, and
+// `appLog` lines go through `writeBatch` (one lock / one write / one
+// fsync — GH #162) instead of one fsync per record. A failed append logs
+// the REAL error with the journal path; the records are already updated
+// and announced by then.
+//
 // Isolation: the journal root is the model's designated archive root —
 // tests inject a sandbox designation; nothing here ever names a real
-// volume path.
+// volume path. The journal writer is injectable (`journalWriter:`) so a
+// test can count appends without a file system.
+//
+// (For Rick: `Task { … }` from a `@MainActor` method is like posting a
+// closure to a worker queue that inherits the caller's task-locals;
+// `@concurrent` is what actually moves the body OFF the main thread — a
+// bare `nonisolated async` would run on the caller's actor, the trap this
+// repo has hit three times.)
 
 import Foundation
 
@@ -47,7 +67,7 @@ enum ArchiveAttestationJournal {
         let line: String
 
         init(at: Date, record: (id: UUID, filename: String, fullPath: String), attestation a: BackupAttestation) {
-            self.at = at
+            self.at = BackupAttestation.Timestamp.quantized(at)
             self.recordID = record.id
             self.filename = record.filename
             self.fullPath = record.fullPath
@@ -57,7 +77,45 @@ enum ArchiveAttestationJournal {
             self.by = a.by
             self.line = a.journalLine
         }
+
+        // `at` uses the attestation's own Timestamp representation
+        // (millisecond ISO-8601) — the journal and the catalog never
+        // disagree about when. Tolerant of the whole-second lines the
+        // first writer produced.
+        private enum CodingKeys: String, CodingKey { case at, recordID, filename, fullPath, kind, answer, label, by, line }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            at = try BackupAttestation.Timestamp.decode(from: c, forKey: .at)
+            recordID = try c.decode(UUID.self, forKey: .recordID)
+            filename = try c.decode(String.self, forKey: .filename)
+            fullPath = try c.decode(String.self, forKey: .fullPath)
+            kind = try c.decode(String.self, forKey: .kind)
+            answer = try c.decode(String.self, forKey: .answer)
+            label = try c.decodeIfPresent(String.self, forKey: .label)
+            by = try c.decode(String.self, forKey: .by)
+            line = try c.decode(String.self, forKey: .line)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(BackupAttestation.Timestamp.string(at), forKey: .at)
+            try c.encode(recordID, forKey: .recordID)
+            try c.encode(filename, forKey: .filename)
+            try c.encode(fullPath, forKey: .fullPath)
+            try c.encode(kind, forKey: .kind)
+            try c.encode(answer, forKey: .answer)
+            try c.encodeIfPresent(label, forKey: .label)
+            try c.encode(by, forKey: .by)
+            try c.encode(line, forKey: .line)
+        }
     }
+
+    /// The append seam: production is `append(_:rootPath:)`; a test can
+    /// count calls or refuse. Must be `@Sendable` — it is carried into
+    /// the off-main task.
+    typealias Writer = @Sendable ([Entry], String) throws -> Void
+    static let liveWriter: Writer = { entries, root in try append(entries, rootPath: root) }
 
     static func url(rootPath: String) -> URL {
         URL(fileURLWithPath: rootPath, isDirectory: true)
@@ -65,20 +123,25 @@ enum ArchiveAttestationJournal {
             .appendingPathComponent(filename)
     }
 
-    /// Append one entry: descriptor-relative open under `00_Index/`
-    /// (O_NOFOLLOW, regular file, created on first use), one O_APPEND
-    /// write + fsync. Throws when the root is unreachable — the caller
-    /// logs and moves on.
+    /// Append a BATCH: every entry encoded up front, then one descriptor-
+    /// relative open under `00_Index/` (O_NOFOLLOW, regular file, created
+    /// on first use), ONE O_APPEND write + ONE fsync. Throws when the root
+    /// is unreachable or the barrier fails — the caller logs and moves
+    /// on. An empty batch is a no-op (no open, no fsync).
     /// (`nonisolated` ≈ a free function: safe off the main actor.)
-    nonisolated static func append(_ entry: Entry, rootPath: String) throws {
+    nonisolated static func append(_ entries: [Entry], rootPath: String) throws {
+        guard !entries.isEmpty else { return }
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        var data = try encoder.encode(entry)
-        data.append(0x0A)
+        var data = Data()
+        for e in entries {
+            data.append(try encoder.encode(e))
+            data.append(0x0A)
+        }
         let fd = try ArchivePromoteEngine.openIndexFile(root: rootPath, name: filename, mustExist: false)
         defer { close(fd) }
-        try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: false, label: "attestation journal append")
+        try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: false,
+                                               label: "attestation journal append (\(entries.count) line(s))")
     }
 
     /// Every entry, in file order. Unparseable lines are skipped; a
@@ -94,23 +157,46 @@ enum ArchiveAttestationJournal {
         guard let data = try? ArchivePromoteEngine.readAll(fd: fd),
               let text = String(data: data, encoding: .utf8) else { return [] }
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
         return text.split(separator: "\n").compactMap { line in
             guard let d = line.data(using: .utf8) else { return nil }
             return try? decoder.decode(Entry.self, from: d)
         }
     }
+
+    /// The error text the log carries: the engine's own description for
+    /// its failures (errno included), `localizedDescription` otherwise.
+    nonisolated static func describe(_ error: Error) -> String {
+        if let f = error as? ArchivePromoteEngine.Failure { return f.description }
+        return error.localizedDescription
+    }
 }
 
 // MARK: - Model
 
+/// What `recordAttestation` did: the records it wrote (synchronously,
+/// announced before return) and the off-main journal append, awaitable
+/// (`await write.journal?.value`) when a caller or test needs the audit
+/// line on disk. nil journal = no designated archive or nothing to write.
+struct BackupAttestationWrite {
+    let records: [VideoRecord]
+    let journal: Task<Void, Never>?
+}
+
 extension VideoScanModel {
+
+    /// The tail of the journal-append chain: each batch waits for the
+    /// previous one, so `.attestation_journal.jsonl` stays in call order
+    /// even though the appends run off-main. (A static stored property is
+    /// allowed in an extension; an instance one is not.)
+    @MainActor private static var attestationJournalTail: Task<Void, Never>?
 
     /// Record the user's word for `recordIDs`: `kind` = `answer`, with an
     /// optional label ("iCloud", "Tim's house"). Replaces the same-kind
-    /// answer on each record (history is the journal's job), journals one
-    /// line per record, and posts one record-scoped mutation per record.
-    /// Unknown ids are skipped. Returns the records that were written.
+    /// answer on each record (history is the journal's job), posts one
+    /// record-scoped mutation per record as it is written, writes the
+    /// console lines in one batch, and appends one journal line per
+    /// record in ONE off-main durable write. Unknown ids are skipped.
+    /// Never touches a file on the main actor.
     @MainActor
     @discardableResult
     func recordAttestation(kind: BackupAttestation.Kind,
@@ -118,34 +204,64 @@ extension VideoScanModel {
                            label: String? = nil,
                            by: String = "rick",
                            at: Date = Date(),
-                           for recordIDs: [UUID]) -> [VideoRecord] {
-        var changed: [VideoRecord] = []
-        var journalFailures = 0
+                           for recordIDs: [UUID],
+                           journalWriter: @escaping ArchiveAttestationJournal.Writer = ArchiveAttestationJournal.liveWriter)
+    -> BackupAttestationWrite {
+        // One attestation value for the whole batch (same kind / answer /
+        // label / when / who) — quantized once by the initializer.
+        let attestation = BackupAttestation(kind: kind, answer: answer, label: label, attestedAt: at, by: by)
         let root = masterArchiveRootPath
+        var changed: [VideoRecord] = []
+        var entries: [ArchiveAttestationJournal.Entry] = []
+        var lines: [String] = []
+        changed.reserveCapacity(recordIDs.count)
+        lines.reserveCapacity(recordIDs.count)
+        if root != nil { entries.reserveCapacity(recordIDs.count) }
         for id in recordIDs {
             guard let rec = record(forID: id) else { continue }
-            let attestation = BackupAttestation(kind: kind, answer: answer, label: label, attestedAt: at, by: by)
             rec.backupAttestations = BackupAttestation.replacing(rec.backupAttestations, with: attestation)
             changed.append(rec)
-            if let root {
-                do {
-                    try ArchiveAttestationJournal.append(
-                        ArchiveAttestationJournal.Entry(at: at, record: (rec.id, rec.filename, rec.fullPath),
-                                                        attestation: attestation),
-                        rootPath: root)
-                } catch {
-                    journalFailures += 1
-                }
+            if root != nil {
+                entries.append(ArchiveAttestationJournal.Entry(at: attestation.attestedAt,
+                                                              record: (rec.id, rec.filename, rec.fullPath),
+                                                              attestation: attestation))
             }
-            appLog.write("attestation: \(rec.filename) — \(attestation.journalLine)")
-        }
-        if journalFailures > 0 {
-            appLog.write("attestation: \(journalFailures) journal line(s) not written (archive root unreachable); catalog records updated")
-        }
-        for rec in changed {
+            lines.append("attestation: \(rec.filename) — \(attestation.journalLine)")
+            // Announced NOW — the save/index/chrome refresh never waits
+            // for the journal.
             NotificationCenter.default.post(name: .videoScanCatalogMutated, object: rec)
         }
-        return changed
+        if !lines.isEmpty { appLog.writeBatch(lines) }
+
+        guard let root, !entries.isEmpty else {
+            return BackupAttestationWrite(records: changed, journal: nil)
+        }
+        let batch = entries
+        let previous = Self.attestationJournalTail
+        let task = Task(priority: .utility) {
+            await previous?.value
+            await Self.appendAttestationJournalOffMain(batch, rootPath: root, writer: journalWriter)
+        }
+        Self.attestationJournalTail = task
+        return BackupAttestationWrite(records: changed, journal: task)
+    }
+
+    /// The off-main hop: one durable append for the batch; on failure the
+    /// REAL error and the journal path go to the log (the records are
+    /// already updated and announced — best effort, by design).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func appendAttestationJournalOffMain(_ entries: [ArchiveAttestationJournal.Entry],
+                                                            rootPath: String,
+                                                            writer: ArchiveAttestationJournal.Writer) async {
+        do {
+            try writer(entries, rootPath)
+        } catch {
+            let path = ArchiveAttestationJournal.url(rootPath: rootPath).path
+            appLog.write("attestation: \(entries.count) journal line(s) not written to \(path) — "
+                         + "\(ArchiveAttestationJournal.describe(error)); catalog records were updated")
+        }
     }
 
     // MARK: Protection summary (per batch)

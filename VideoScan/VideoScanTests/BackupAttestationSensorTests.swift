@@ -11,6 +11,8 @@
 //   LOGIC     recordAttestation (replace-by-kind, journal line, record-
 //             scoped notifications, label trimming, unknown ids); the CSV
 //             export column; CSV escaping of the JSON manifest cell.
+//             (The journal's batching / off-main / failure contract lives
+//             in BackupAttestationJournalTests — codex #1416.)
 //   ISOLATION manifest + journal only ever under a temp sandbox; a
 //             poisoned "real-looking" archive tree is byte-identical after
 //             the whole flow, and the flow's root is the INJECTED one.
@@ -213,7 +215,7 @@ struct BackupAttestationModelTests {
     }
 
     @Test("replaces the same kind, keeps the others, trims the label, skips unknown ids, posts one record-scoped mutation per record, journals one line per record")
-    func recordAttestationWritesJournalsAndAnnounces() throws {
+    func recordAttestationWritesJournalsAndAnnounces() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("attmodel")
         defer { sb.cleanup() }
         let model = MasterArchiveTestSupport.makeModel(sb)
@@ -225,10 +227,11 @@ struct BackupAttestationModelTests {
         model.records = [a, b]
         let at = Date(timeIntervalSince1970: 1_757_700_000)
 
-        var written: [VideoRecord] = []
+        var write: BackupAttestationWrite?
         let posted = capturingMutations {
-            written = model.recordAttestation(kind: .cloud, answer: .yes, label: "  iCloud ", at: at, for: [a.id, UUID(), b.id])
+            write = model.recordAttestation(kind: .cloud, answer: .yes, label: "  iCloud ", at: at, for: [a.id, UUID(), b.id])
         }
+        let written = write?.records ?? []
         #expect(written.map(\.filename) == ["a.mov", "b.mov"], "unknown id skipped")
         #expect(posted.map(\.filename) == ["a.mov", "b.mov"], "one RECORD-SCOPED post per written record")
         #expect(a.backupAttestations.map(\.token) == ["cloud=yes 'iCloud'", "drive=yes 'MyBook'"], "cloud replaced, drive kept, kind order")
@@ -236,7 +239,9 @@ struct BackupAttestationModelTests {
         #expect(a.backupAttestation(for: .cloud)?.attestedAt == at)
         #expect(a.backupAttestation(for: .cloud)?.by == "rick")
 
-        // The archive journal: one line per record, the human line inside.
+        // The archive journal (written off-main; awaited here): one line
+        // per record, the human line inside.
+        await write?.journal?.value
         let entries = ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path)
         #expect(entries.count == 2)
         #expect(entries.map(\.line) == ["attestation cloud=yes 'iCloud' by rick", "attestation cloud=yes 'iCloud' by rick"])
@@ -248,9 +253,11 @@ struct BackupAttestationModelTests {
         #expect(raw.contains("\"line\":\"attestation cloud=yes 'iCloud' by rick\""))
 
         // A "no" and an "n/a" are answers: recorded, journaled, and they replace a "yes".
-        model.recordAttestation(kind: .cloud, answer: .notApplicable, at: at.addingTimeInterval(60), for: [b.id])
-        model.recordAttestation(kind: .offsite, answer: .no, label: "", at: at.addingTimeInterval(60), for: [b.id])
+        let w2 = model.recordAttestation(kind: .cloud, answer: .notApplicable, at: at.addingTimeInterval(60), for: [b.id])
+        let w3 = model.recordAttestation(kind: .offsite, answer: .no, label: "", at: at.addingTimeInterval(60), for: [b.id])
         #expect(b.backupAttestations.map(\.token) == ["cloud=n/a", "offsite=no"], "empty label → none")
+        await w2.journal?.value
+        await w3.journal?.value
         #expect(ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path).map(\.line).suffix(2)
                 == ["attestation cloud=n/a by rick", "attestation offsite=no by rick"])
         // The promote journal is untouched by attestation lines.
@@ -263,15 +270,17 @@ struct BackupAttestationModelTests {
         let a = rec("a.mov")
         model.records = [a]
         #expect(model.masterArchiveRootPath == nil)
+        var write: BackupAttestationWrite?
         let posted = capturingMutations {
-            model.recordAttestation(kind: .offsite, answer: .yes, label: "Tim's", for: [a.id])
+            write = model.recordAttestation(kind: .offsite, answer: .yes, label: "Tim's", for: [a.id])
         }
         #expect(posted.count == 1)
         #expect(a.backupAttestations.map(\.token) == ["offsite=yes 'Tim's'"])
+        #expect(write?.journal == nil, "nothing to journal — no task is even spawned")
     }
 
     @Test("ISOLATION (poisoned-state): a real-looking archive tree is byte-identical after the whole flow — every write lands under the INJECTED root")
-    func poisonedRealLookingArchiveIsNeverTouched() throws {
+    func poisonedRealLookingArchiveIsNeverTouched() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("attpoison")
         defer { sb.cleanup() }
         // The decoy: shaped like Rick's archive (Volumes/FamilyArchive/Breen_Family_Archive/00_Index),
@@ -305,7 +314,8 @@ struct BackupAttestationModelTests {
         let src = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent("test_p.mov"), bytes: 4096, seed: 3)
         let r = MasterArchiveTestSupport.makeRecord(path: src.path, userDate: "1991")
         model.records = [r]
-        model.recordAttestation(kind: .cloud, answer: .yes, label: "iCloud", for: [r.id])
+        let write = model.recordAttestation(kind: .cloud, answer: .yes, label: "iCloud", for: [r.id])
+        await write.journal?.value
         #expect(ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path).count == 1, "the line landed under the injected root")
 
         #expect(fingerprint(decoyVolume) == before, "the real-looking tree is byte-for-byte unchanged")

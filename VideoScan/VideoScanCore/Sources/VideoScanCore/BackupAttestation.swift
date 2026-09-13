@@ -32,6 +32,20 @@
 // beside VideoRecordUserPlace.swift. The app never verifies cloud or
 // off-site copies: an attestation is remembered, never checked.
 //
+// TIMESTAMP RULE (codex #1414, 2026-09-12): `attestedAt` is the ORDERING
+// key for latest-per-kind and the inheritance merge, so its in-memory
+// value must equal its own round trip through every store — catalog
+// JSON, the manifest column, the archive journal. The type therefore
+// owns its representation: millisecond precision, quantized at `init`,
+// and encoded/decoded by `BackupAttestation.Timestamp` as an ISO-8601
+// string WITH fractional seconds ("2026-09-12T20:00:00.123Z") no matter
+// which `dateEncodingStrategy` the surrounding encoder uses. Before this
+// rule the manifest/journal wrote whole seconds while the catalog held a
+// full-precision `Date()`, so a newer "no" that had been through the
+// manifest (t) lost to an older "yes" still in memory (t + 0.2 s). The
+// decoder is tolerant of the whole-second strings written before the
+// rule, so no attestation is lost on upgrade.
+//
 // (For Rick: `BackupAttestation` is a small immutable POD; the helpers are
 // free functions in a namespace — `static func` on the struct — with no
 // globals, so every rule is table-testable.)
@@ -93,13 +107,17 @@ public struct BackupAttestation: Codable, Equatable, Hashable, Sendable {
         self.answer = answer
         let trimmed = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         self.label = trimmed.isEmpty ? nil : trimmed
-        self.attestedAt = attestedAt
+        // Quantized so the value equals its own round trip (see the
+        // TIMESTAMP RULE in the header).
+        self.attestedAt = Timestamp.quantized(attestedAt)
         self.by = by
     }
 
     // Explicit Codable so `label` is written only when present and a
     // future additive key never breaks an old reader (same discipline as
-    // VideoRecord's own keys).
+    // VideoRecord's own keys). `attestedAt` is written as the Timestamp
+    // string — NOT through the encoder's date strategy — so catalog.json,
+    // the manifest column and the journal all carry the same bytes.
     private enum CodingKeys: String, CodingKey { case kind, answer, label, attestedAt, by }
 
     public init(from decoder: Decoder) throws {
@@ -107,7 +125,7 @@ public struct BackupAttestation: Codable, Equatable, Hashable, Sendable {
         kind = try c.decode(Kind.self, forKey: .kind)
         answer = try c.decode(Answer.self, forKey: .answer)
         label = try c.decodeIfPresent(String.self, forKey: .label)
-        attestedAt = try c.decode(Date.self, forKey: .attestedAt)
+        attestedAt = try Timestamp.decode(from: c, forKey: .attestedAt)
         by = try c.decodeIfPresent(String.self, forKey: .by) ?? "rick"
     }
 
@@ -116,7 +134,7 @@ public struct BackupAttestation: Codable, Equatable, Hashable, Sendable {
         try c.encode(kind, forKey: .kind)
         try c.encode(answer, forKey: .answer)
         try c.encodeIfPresent(label, forKey: .label)
-        try c.encode(attestedAt, forKey: .attestedAt)
+        try c.encode(Timestamp.string(attestedAt), forKey: .attestedAt)
         try c.encode(by, forKey: .by)
     }
 
@@ -130,6 +148,126 @@ public struct BackupAttestation: Codable, Equatable, Hashable, Sendable {
 
     /// The archive-journal line: "attestation cloud=yes 'iCloud' by rick".
     public var journalLine: String { "attestation \(token) by \(by)" }
+}
+
+// MARK: - Timestamp representation (millisecond ISO-8601, everywhere)
+
+extension BackupAttestation {
+
+    /// The ONE representation of `attestedAt` (header: TIMESTAMP RULE).
+    ///
+    /// Precision is whole milliseconds: `quantized` rounds a `Date` to
+    /// the nearest ms, `string` writes "YYYY-MM-DDTHH:MM:SS.mmmZ" (always
+    /// three fractional digits, always UTC, byte-stable), and `date`
+    /// reads that back — or, tolerantly, a whole-second "…SS Z" string
+    /// from a pre-rule writer, 1–2 fractional digits, or 4+ digits
+    /// (rounded to ms). Both directions compute the same integer
+    /// millisecond count and build the `Date` from it the same way, so
+    /// `date(string(d)) == quantized(d)` holds bit-for-bit — no
+    /// floating-point drift between what the catalog holds and what the
+    /// manifest gives back.
+    ///
+    /// (For Rick: think of the stored value as an int64 of epoch
+    /// milliseconds that happens to be carried in a `Date`; the string is
+    /// its printf/scanf pair.)
+    public enum Timestamp {
+
+        /// Epoch milliseconds, rounded to nearest.
+        public static func milliseconds(_ d: Date) -> Int64 {
+            Int64((d.timeIntervalSince1970 * 1000).rounded())
+        }
+
+        /// The `Date` for an epoch-millisecond count — the single
+        /// construction path both `quantized` and `date(_:)` use.
+        public static func date(milliseconds ms: Int64) -> Date {
+            Date(timeIntervalSince1970: Double(ms) / 1000)
+        }
+
+        /// `d` rounded to whole milliseconds. Idempotent.
+        public static func quantized(_ d: Date) -> Date {
+            date(milliseconds: milliseconds(d))
+        }
+
+        /// "2026-09-12T20:00:00.123Z" — always three fractional digits.
+        public static func string(_ d: Date) -> String {
+            let ms = milliseconds(d)
+            // Floor division so a (theoretical) pre-1970 value still
+            // splits into a whole second plus 0…999 ms.
+            let secs = ms >= 0 ? ms / 1000 : (ms - 999) / 1000
+            let frac = Int(ms - secs * 1000)
+            let base = Date(timeIntervalSince1970: Double(secs)).formatted(wholeSecondStyle)
+            var digits = String(frac)
+            while digits.count < 3 { digits = "0" + digits }
+            guard base.hasSuffix("Z") else { return base + "." + digits }
+            return String(base.dropLast()) + "." + digits + "Z"
+        }
+
+        /// Inverse of `string`, tolerant (see the type note). nil when
+        /// the text is not an ISO-8601 instant at all.
+        public static func date(_ text: String) -> Date? {
+            let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !s.isEmpty else { return nil }
+            // Split the fractional digits out of the time part; whatever
+            // follows them (the zone designator) is re-attached to the
+            // whole-second text so the base parser sees a plain instant.
+            var base = s
+            var fracDigits = ""
+            if let t = s.firstIndex(of: "T"), let dot = s[t...].firstIndex(of: ".") {
+                let after = s[s.index(after: dot)...]
+                let digits = after.prefix(while: { $0.isASCII && $0.isNumber })
+                fracDigits = String(digits)
+                base = String(s[..<dot]) + String(after.dropFirst(digits.count))
+            }
+            guard let whole = parseWholeSecond(base) else { return nil }
+            var ms = Int64(whole.timeIntervalSince1970.rounded()) * 1000
+            if !fracDigits.isEmpty {
+                // First three digits are the milliseconds (right-padded
+                // with zeros: ".5" is 500 ms); a fourth digit ≥ 5 rounds up.
+                var three = String(fracDigits.prefix(3))
+                while three.count < 3 { three += "0" }
+                ms += Int64(three) ?? 0
+                if fracDigits.count > 3, let fourth = fracDigits.dropFirst(3).first, fourth >= "5" { ms += 1 }
+            }
+            return date(milliseconds: ms)
+        }
+
+        /// Decode `attestedAt` from a keyed container: the Timestamp
+        /// string (fractional or whole-second), or — should any writer
+        /// ever have used Foundation's default `.deferredToDate` strategy
+        /// — a number of seconds since the reference date. Throws only
+        /// when the value is neither.
+        public static func decode<K: CodingKey>(from c: KeyedDecodingContainer<K>, forKey key: K) throws -> Date {
+            if let s = try? c.decode(String.self, forKey: key) {
+                guard let d = date(s) else {
+                    throw DecodingError.dataCorruptedError(forKey: key, in: c,
+                                                           debugDescription: "attestedAt is not an ISO-8601 instant: \(s)")
+                }
+                return d
+            }
+            if let n = try? c.decode(Double.self, forKey: key) {
+                return quantized(Date(timeIntervalSinceReferenceDate: n))
+            }
+            throw DecodingError.dataCorruptedError(forKey: key, in: c,
+                                                   debugDescription: "attestedAt is neither a string nor a number")
+        }
+
+        // MARK: Base (whole-second) parse/format
+
+        /// "2026-09-12T20:00:00Z" — Foundation's Sendable, allocation-
+        /// free format style (macOS 12+); never a shared DateFormatter.
+        static var wholeSecondStyle: Date.ISO8601FormatStyle { Date.ISO8601FormatStyle() }
+
+        static func parseWholeSecond(_ s: String) -> Date? {
+            if let d = try? Date(s, strategy: wholeSecondStyle) { return d }
+            // Tolerance for a zone offset ("+00:00") or a space separator
+            // that a hand edit or another tool might have written.
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime]
+            if let d = f.date(from: s) { return d }
+            f.formatOptions = [.withInternetDateTime, .withSpaceBetweenDateAndTime]
+            return f.date(from: s)
+        }
+    }
 }
 
 // MARK: - Pure helpers (latest per kind, merge, codec, summary)
@@ -190,15 +328,16 @@ extension BackupAttestation {
     // MARK: Manifest JSON column
 
     /// The manifest's `backup_attestations` column: a compact JSON array
-    /// with ISO-8601 dates and sorted keys (byte-stable for a given
-    /// list), or "" for an empty list — never "[]", so an unattested row
-    /// reads as an empty cell. The CSV layer quotes and doubles the
-    /// embedded quotes; `fromJSONString` sees the original text back.
+    /// with Timestamp dates (millisecond ISO-8601 — the type's own
+    /// Codable, so no date strategy is set here) and sorted keys (byte-
+    /// stable for a given list), or "" for an empty list — never "[]", so
+    /// an unattested row reads as an empty cell. The CSV layer quotes and
+    /// doubles the embedded quotes; `fromJSONString` sees the original
+    /// text back.
     public static func jsonString(_ list: [BackupAttestation]) -> String {
         let normalized = normalized(list)
         guard !normalized.isEmpty else { return "" }
         let enc = JSONEncoder()
-        enc.dateEncodingStrategy = .iso8601
         enc.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         guard let data = try? enc.encode(normalized),
               let s = String(data: data, encoding: .utf8) else { return "" }
@@ -206,13 +345,12 @@ extension BackupAttestation {
     }
 
     /// Inverse of `jsonString`: "" / whitespace / malformed → [] (a
-    /// manifest column is never allowed to fail a rebuild).
+    /// manifest column is never allowed to fail a rebuild). Whole-second
+    /// dates from a pre-rule manifest decode too (Timestamp tolerance).
     public static func fromJSONString(_ text: String) -> [BackupAttestation] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return [] }
-        let dec = JSONDecoder()
-        dec.dateDecodingStrategy = .iso8601
-        guard let list = try? dec.decode([BackupAttestation].self, from: data) else { return [] }
+        guard let list = try? JSONDecoder().decode([BackupAttestation].self, from: data) else { return [] }
         return normalized(list)
     }
 }
