@@ -209,4 +209,54 @@ enum ChannelCLI {
     static func ackAsRick(_ row: ChannelRow) -> (ok: Bool, output: String) {
         run(["ack", "--agent", "rick", "\(row.messageID)"])
     }
+
+    /// One message from Rick to every agent at once ("--to all").
+    static func broadcast(_ text: String) -> (ok: Bool, output: String) {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return (false, "empty message") }
+        return run(["post", "--from", "rick", "--to", "all",
+                    "--subject", Broadcast.subject(for: body), "--body", body])
+    }
+}
+
+/// Pure rules for the compose box and the Flush button.
+enum Broadcast {
+    /// The subject is the first line, cut at a word boundary to fit the
+    /// channel's 160-character limit; a one-liner is its own subject.
+    static func subject(for body: String, limit: Int = 120) -> String {
+        let first = body.split(whereSeparator: \.isNewline).first.map(String.init) ?? body
+        let line = first.trimmingCharacters(in: .whitespaces)
+        guard line.count > limit else { return line.isEmpty ? "(message)" : line }
+        let cut = String(line.prefix(limit))
+        let atWord = cut.lastIndex(of: " ").map { String(cut[..<$0]) } ?? cut
+        return atWord + "…"
+    }
+}
+
+/// Rows Rick has flushed from the MONITOR. The database is untouched —
+/// an agent still gets the message at its next turn and acks it itself;
+/// Flush only stops the row from cluttering this window.
+enum DismissedRows {
+    static var fileURL: URL {
+        URL(fileURLWithPath: ChannelDB.path).deletingLastPathComponent()
+            .appendingPathComponent("monitor-dismissed.json")
+    }
+
+    static func load(from url: URL = fileURL) -> Set<String> {
+        guard let data = try? Data(contentsOf: url),
+              let ids = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return Set(ids)
+    }
+
+    static func save(_ ids: Set<String>, to url: URL = fileURL) {
+        if let data = try? JSONEncoder().encode(ids.sorted()) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    /// Keep only ids that are still open today; answered or aged-out rows
+    /// leave the set so the file never grows without bound.
+    static func pruned(_ ids: Set<String>, keeping open: [ChannelRow]) -> Set<String> {
+        ids.intersection(open.map(\.id))
+    }
 }

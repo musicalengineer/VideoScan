@@ -3,6 +3,7 @@ import SwiftUI
 struct MonitorView: View {
     @ObservedObject var model: MonitorModel
     @AppStorage("codexThreadTarget") private var codexThreadTarget = ""
+    @State private var composeText = ""
 
     private static let clock: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
@@ -33,6 +34,8 @@ struct MonitorView: View {
                 .frame(height: min(CGFloat(max(openRows.count, 5)) * 34 + 8, 560))
             }
             Divider()
+            composeControls
+            Divider()
             codexWakeControls
             Divider()
             footer
@@ -41,9 +44,29 @@ struct MonitorView: View {
         .frame(width: 680)
     }
 
-    /// Answered rows are noise; only unanswered and waiting ones are shown.
+    /// Answered rows are noise; only unanswered and waiting ones are shown,
+    /// minus whatever Rick flushed (unless he asks to see them).
     private var openRows: [ChannelRow] {
-        model.snapshot.rows.filter { !$0.status.isGreen }
+        model.snapshot.rows.filter { !$0.status.isGreen && (model.showDismissed || !model.dismissed.contains($0.id)) }
+    }
+
+    private var flushedCount: Int {
+        model.snapshot.rows.filter { !$0.status.isGreen && model.dismissed.contains($0.id) }.count
+    }
+
+    /// One box, one button: a message from Rick to every agent at once.
+    private var composeControls: some View {
+        HStack(alignment: .top, spacing: 8) {
+            TextField("Message to all agents (first line becomes the subject)", text: $composeText, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...4)
+            Button("Send to all") {
+                if model.broadcast(composeText) { composeText = "" }
+            }
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .help("Posts from rick to every agent (⌘↩)")
+        }
     }
 
     private var header: some View {
@@ -53,6 +76,13 @@ struct MonitorView: View {
             Counter(color: .red, count: model.snapshot.red, label: "unanswered")
             Counter(color: .yellow, count: model.snapshot.yellow, label: "waiting")
             Text("\(model.snapshot.green) answered").font(.callout).foregroundStyle(.secondary).monospacedDigit()
+            if flushedCount > 0 {
+                Toggle("show \(flushedCount) flushed", isOn: $model.showDismissed)
+                    .toggleStyle(.checkbox).font(.caption)
+            }
+            Button("Flush") { model.flush(openRows) }
+                .disabled(openRows.isEmpty)
+                .help("Hide every open row from this window. Nothing is acknowledged; agents still receive their messages.")
         }
     }
 
@@ -102,6 +132,7 @@ private struct RowView: View {
     @ObservedObject var model: MonitorModel
     @State private var expanded = false
     @AppStorage("codexThreadTarget") private var codexThreadTarget = ""
+    @State private var composeText = ""
 
     private static let clock: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f

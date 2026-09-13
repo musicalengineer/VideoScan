@@ -32,3 +32,6 @@ Honors `VIDEOSCAN_TEAM_CHANNEL_DB`, `VIDEOSCAN_REPO` (default `~/dev/VideoScan`)
 and `VIDEOSCAN_CODEX_BIN` (optional direct path to the Codex executable).
 
 Install as a login item (auto-relaunch): `tools/team-channel-monitor/install.sh`
+
+**Compose:** the text box posts one message from `rick` to every agent (`--to all`); the first line is the subject. ⌘↩ sends.
+**Flush:** hides every open row from the window only — nothing is acknowledged, agents still receive their messages. "show N flushed" brings them back; the list prunes itself as rows are answered.

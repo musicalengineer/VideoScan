@@ -41,7 +41,30 @@ final class MonitorModel: ObservableObject {
     @Published var snapshot = ChannelSnapshot()
     @Published var lastAction: String?
     @Published private(set) var isCodexWakeInFlight = false
+    /// Rows flushed from the window (monitor-only; see DismissedRows).
+    @Published private(set) var dismissed: Set<String> = DismissedRows.load()
+    @Published var showDismissed = false
     private var timer: Timer?
+
+    /// Flush: hide every open row now. Nothing is acknowledged.
+    func flush(_ rows: [ChannelRow]) {
+        dismissed.formUnion(rows.map(\.id))
+        DismissedRows.save(dismissed)
+        lastAction = "Flushed \(rows.count) row(s) from view — nothing was acknowledged"
+    }
+
+    func unflushAll() {
+        dismissed = []
+        DismissedRows.save(dismissed)
+    }
+
+    /// Post one message from Rick to every agent.
+    func broadcast(_ text: String) -> Bool {
+        let result = ChannelCLI.broadcast(text)
+        lastAction = result.ok ? "Sent to all agents" : "Send failed: \(result.output)"
+        refresh()
+        return result.ok
+    }
 
     /// `--demo`: walk the badge through idle → yellow 2 → red 3! (3 s each)
     /// before showing live data, so the colours can be eyeballed at will.
@@ -68,6 +91,9 @@ final class MonitorModel: ObservableObject {
             return
         }
         snapshot = ChannelDB.loadToday()
+        let open = snapshot.rows.filter { !$0.status.isGreen }
+        let pruned = DismissedRows.pruned(dismissed, keeping: open)
+        if pruned != dismissed { dismissed = pruned; DismissedRows.save(pruned) }
     }
 
     private static func demoSnapshot(step: Int) -> ChannelSnapshot {
