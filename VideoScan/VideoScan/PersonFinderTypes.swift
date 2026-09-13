@@ -472,7 +472,13 @@ enum EyeColor: String, Codable, CaseIterable, Sendable {
 // MARK: - POI Profile (Person of Interest)
 
 struct POIProfile: Codable, Identifiable, Equatable {
-    var id: String { name.lowercased() }
+    /// The durable identity, as a String because every `ForEach`, drag id,
+    /// dictionary and badge cache keyed on `id` when it was the lowercased
+    /// name (before 2026-09-12). Equal to the storage folder name.
+    var id: String { POIStorage.folderName(for: uuid) }
+    /// The SHORT canonical name — what links to the family tree together
+    /// with the family-name fields, and what every matcher resolves
+    /// against. Not necessarily what the card shows: see `displayName`.
     var name: String
     var referencePath: String
     var rejectedFiles: [String] = []
@@ -488,7 +494,14 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// Maiden names used to live here for want of a field — see `maidenName`.
     var notes: String = ""
     /// Alternate names / spellings that might appear in video filenames or metadata.
+    /// The FIRST one is what the People tab shows (`displayName`, Rick's
+    /// ruling 2026-09-12: "the first alias listed is usually the nickname
+    /// most people use in the family").
     var aliases: [String] = []
+    /// The folder this profile lived in before the uuid migration
+    /// (2026-09-12) — audit only, so "what happened to X and when" can be
+    /// answered from the JSON alone. nil for profiles created after.
+    var legacyFolderName: String?
     // MARK: Family-name fields (2026-09-04, Rick: "should be easy to add last
     // names, maiden names etc, this will help the bios")
     //
@@ -562,10 +575,10 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// JSON). Kept verbatim and written back on save so nothing is silently
     /// lost (codex #778). Never shown as facts.
     var kinshipsQuarantined: [JSONValue] = []
-    /// Durable identity (2026-08-28). `id` (name.lowercased()) is the UI /
-    /// storage-folder identity and changes on rename; `uuid` never does, so
-    /// other profiles' kinship rows anchor on it. Assigned on first load of
-    /// an older profile.json and persisted by `load(name:)`.
+    /// Durable identity (2026-08-28). Since 2026-09-12 it is ALSO the
+    /// storage-folder name and `id`; a rename changes neither. Other
+    /// profiles' kinship rows anchor on it. Assigned on first load of an
+    /// older profile.json and persisted by `load` / the uuid migration.
     var uuid: UUID = UUID()
     /// Whether `uuid` is known to be on disk (codex #799/#800). False only
     /// when a legacy profile's minted uuid could NOT be written (read-only
@@ -603,6 +616,27 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// mint a `.profile(id:)` anchor from a profile.
     var kinshipAnchor: KinshipAnchor {
         uuidPersisted ? .profile(id: uuid) : .profileName(name)
+    }
+
+    // MARK: Display name (2026-09-12)
+
+    /// What the People tab, its menus and the Person Finder job title show:
+    /// the first alias that is not blank, else the canonical name. Display
+    /// ONLY — matching, resolution, logs, accessibility ids and file names
+    /// keep using `name`, so "tell me about dad" and "rick" resolve exactly
+    /// as they did before this existed.
+    var displayName: String {
+        Self.displayName(name: name, aliases: aliases)
+    }
+
+    /// The pure rule behind `displayName`, testable without a profile.
+    static func displayName(name: String, aliases: [String]) -> String {
+        for alias in aliases {
+            let trimmed = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedName.isEmpty ? name : trimmedName
     }
 
     // MARK: Family-name derivations (2026-09-04)
@@ -655,6 +689,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         case kinships, kinshipsQuarantined, uuid, treeIdentity, treeIdentityQuarantined
         case treeIdentityAttestation, notInFamilyTree
         case photoChosenAt
+        case legacyFolderName
     }
 
     init(name: String, referencePath: String, rejectedFiles: [String] = [],
@@ -777,6 +812,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         }
         treeIdentityAttestation = try c.decodeIfPresent(String.self, forKey: .treeIdentityAttestation)
         notInFamilyTree = Self.decodeIdentityField(Bool.self, forKey: .notInFamilyTree, from: c) ?? false
+        legacyFolderName = try c.decodeIfPresent(String.self, forKey: .legacyFolderName)
     }
 
     /// Lenient per-field decode for the identity enums. Replaces bare
@@ -801,39 +837,45 @@ struct POIProfile: Codable, Identifiable, Equatable {
     // MARK: File-based persistence
     //
     // Storage layout lives in POIStorage — each POI gets its own folder
-    // under ~/Library/Application Support/VideoScan/POI/<name>/ holding
+    // under ~/Library/Application Support/VideoScan/POI/<UUID>/ holding
     // profile.json plus its reference photos. See POIStorage.swift.
     //
     // referencePath in the JSON is kept for backwards compatibility but
     // is ALWAYS rewritten on save to point at the POI's own folder, so
     // moving the user's home directory can't break things.
 
+    /// Write profile.json into this profile's uuid folder. A rename is just
+    /// this: the folder is named by `uuid`, so changing `name` changes
+    /// nothing on disk but the JSON (Rick's ruling 2026-09-12). The file
+    /// store still refuses a destination folder owned by another uuid.
     func save() throws {
-        _ = try saveRenaming(from: nil)
-    }
-
-    /// A non-nil result means saved, but the old folder could not be retired.
-    func saveRenaming(from oldName: String?) throws -> String? {
         // Remote viewer (Phase 1): POI/ is synced FROM the master; never
         // written here (the kinship attestations ride in profile.json).
         try ViewerWriteGuard.check("POIProfile.save")
-        let folder = try POIProfileFileStore.folder(component: POIStorage.sanitize(name), in: POIStorage.storeDir)
-        let previous = try oldName.map {
-            try POIProfileFileStore.folder(component: POIStorage.sanitize($0), in: POIStorage.storeDir)
-        }
-        return try POIProfileFileStore.save(id: uuid, destination: folder, previous: previous,
-            retire: { _ in
-                if let oldName { try Self.delete(name: oldName) }
-            }, write: { url, finalFolder in
+        let folder = POIStorage.folder(for: self)
+        _ = try POIProfileFileStore.save(id: uuid, destination: folder, previous: nil,
+            retire: { _ in }, write: { url, finalFolder in
                 try self.write(profileJSONAt: url, folder: finalFolder)
             })
     }
 
+    /// COMPATIBILITY. Before 2026-09-12 a rename copied the folder to the
+    /// new name and retired the old one; folders are keyed by uuid now, so
+    /// this is `save()` and `oldName` is ignored. Always returns nil (there
+    /// is no old folder left to fail to retire). Kept so call sites and
+    /// tests that spell the rename this way keep compiling.
+    @discardableResult
+    func saveRenaming(from oldName: String?) throws -> String? {
+        try save()
+        return nil
+    }
+
     /// The ONE writer for profile.json (atomic replace). `save()` and the
-    /// uuid migration in `listAll` both go through here so a profile is
-    /// never written two different ways. `folder` becomes the healed
-    /// referencePath — the folder the JSON actually lives in, which for a
-    /// legacy folder name can differ from `POIStorage.folder(for: name)`.
+    /// uuid persistence in `load` / `listAll` all go through here so a
+    /// profile is never written two different ways. `folder` becomes the
+    /// healed referencePath — the folder the JSON actually lives in, which
+    /// for a not-yet-migrated legacy folder can differ from
+    /// `POIStorage.folder(for:)`.
     private func write(profileJSONAt url: URL, folder: URL) throws {
         // Keep referencePath in sync with actual location.
         var copy = self
@@ -845,25 +887,58 @@ struct POIProfile: Codable, Identifiable, Equatable {
         try data.write(to: url, options: .atomic)
     }
 
-    static func load(name: String) throws -> POIProfile {
-        let data = try Data(contentsOf: POIStorage.profileURL(for: name))
+    /// Load the profile stored in `folder` (its profile.json). The folder is
+    /// authoritative for referencePath. A pre-uuid profile.json gets its
+    /// minted uuid persisted right here; failure is logged, not thrown.
+    static func load(at folder: URL) throws -> POIProfile {
+        let profileURL = folder.appendingPathComponent("profile.json")
+        let data = try Data(contentsOf: profileURL)
         var profile = try JSONDecoder().decode(POIProfile.self, from: data)
         // Heal referencePath — its folder is implicit, always the POI's own folder.
-        profile.referencePath = POIStorage.folder(for: name).path
+        profile.referencePath = folder.path
         // First load of a pre-uuid profile.json: persist the freshly minted
         // uuid so kinship anchors written later stay durable across renames.
-        // Failure is logged, not thrown — the load itself still succeeds.
         if !Self.hasUUIDKey(data) {
             do {
                 try ViewerWriteGuard.check("POIProfile.save")
-                try profile.write(profileJSONAt: POIStorage.profileURL(for: name),
-                                  folder: POIStorage.folder(for: name))
+                try profile.write(profileJSONAt: profileURL, folder: folder)
             } catch {
                 profile.uuidPersisted = false
                 identityLog.error("POIProfile load: could not persist the minted uuid for '\(profile.name, privacy: .public)' — anchors to it stay name-based. \(String(describing: error), privacy: .public)")
             }
         }
         return profile
+    }
+
+    /// Load by durable identity — the normal way since 2026-09-12.
+    static func load(uuid: UUID) throws -> POIProfile {
+        try load(at: POIStorage.folder(forUUID: uuid))
+    }
+
+    /// COMPATIBILITY lookup by short name: the uuid folder whose canonical
+    /// name is `name` (case-insensitive), or — for a folder the migration
+    /// has not moved yet, and for pre-2026-09-12 job descriptors that
+    /// recorded the sanitized folder name — the legacy folder. Throws
+    /// `CocoaError.fileNoSuchFile` when nobody has that name. Two people
+    /// with one short name: the first found wins; prefer `load(uuid:)`.
+    static func load(name: String) throws -> POIProfile {
+        let wanted = PersonResolver.normalize(name)
+        let wantedFolder = POIStorage.sanitize(name)
+        for folder in POIStorage.poiFolders(in: POIStorage.storeDir) {
+            if folder.lastPathComponent == wantedFolder {
+                return try load(at: folder)
+            }
+            guard let data = try? Data(contentsOf: folder.appendingPathComponent("profile.json")),
+                  let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let stored = object["name"] as? String
+            else { continue }
+            if PersonResolver.normalize(stored) == wanted || POIStorage.sanitize(stored) == wantedFolder {
+                return try load(at: folder)
+            }
+        }
+        throw CocoaError(.fileNoSuchFile, userInfo: [
+            NSLocalizedDescriptionKey: "No People profile named '\(name)'.",
+        ])
     }
 
     private static func hasUUIDKey(_ data: Data) -> Bool {
@@ -906,10 +981,10 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// Returns silently when the folder doesn't exist (idempotent). Throws
     /// only when the folder exists but the move-to-trash fails (e.g.
     /// permission denied on .trash/).
-    static func delete(name: String) throws {
-        let folder = POIStorage.folder(for: name)
+    static func delete(uuid: UUID, displayName: String) throws {
+        let folder = POIStorage.folder(forUUID: uuid)
         guard FileManager.default.fileExists(atPath: folder.path) else { return }
-        if POIStorage.trashPOIFolder(named: name) == nil {
+        if POIStorage.trashPOIFolder(uuid: uuid, displayName: displayName) == nil {
             throw NSError(
                 domain: "POIProfile",
                 code: 1,
@@ -919,9 +994,20 @@ struct POIProfile: Codable, Identifiable, Equatable {
         }
     }
 
+    /// Soft-delete THIS profile's folder.
+    func delete() throws {
+        try Self.delete(uuid: uuid, displayName: displayName)
+    }
+
+    /// COMPATIBILITY: delete by short name (first profile with that name).
+    /// Silent when nobody has the name, like the old folder-missing case.
+    static func delete(name: String) throws {
+        guard let profile = try? load(name: name) else { return }
+        try profile.delete()
+    }
+
     static func listAll() -> [POIProfile] {
-        // Trigger lazy migration on first read.
-        _ = POIStorage.migrateLegacyIfNeeded()
+        // Trigger both lazy migrations on first read (allPOIFolders does).
         let decoded = decodeProfilesTrackingLegacyUUIDs(in: POIStorage.allPOIFolders())
         // uuid migration (codex #791): a profile.json written before `uuid`
         // existed gets a fresh uuid on decode. Persist it NOW, through the
@@ -972,7 +1058,12 @@ struct POIProfile: Codable, Identifiable, Equatable {
             if !hasUUIDKey(data) { legacy.append((p, folder)) }
             return p
         }.sorted {
+            // Manual drag order first, then what the card actually shows
+            // (the display name, 2026-09-12), then the canonical name as a
+            // stable tie-break for two people with one nickname.
             if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
+            let byDisplay = $0.displayName.localizedCaseInsensitiveCompare($1.displayName)
+            if byDisplay != .orderedSame { return byDisplay == .orderedAscending }
             return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
         return (profiles, legacy)

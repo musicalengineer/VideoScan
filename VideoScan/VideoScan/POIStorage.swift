@@ -1,20 +1,19 @@
 // POIStorage.swift
 // Single source of truth for where Person-of-Interest (POI) data lives.
 //
-// Layout (issue #35):
+// Layout (issue #35, re-keyed by uuid 2026-09-12 — docs/people_uuid_folders_design.md):
 //
 //     ~/Library/Application Support/VideoScan/
 //     ├── catalog.json
 //     ├── metadata_cache.sqlite
-//     └── POI/
-//         ├── donna/
-//         │   ├── profile.json
-//         │   ├── apple_1234_0.heic
-//         │   └── apple_1234_1.jpeg
-//         ├── rick/
-//         │   ├── profile.json
-//         │   └── apple_5678_0.jpeg
-//         └── ...
+//     ├── POI/
+//     │   ├── .uuid-migration.json                  ← audit of the name→uuid move
+//     │   ├── 2E6B1D2C-9F8A-4C61-8B7A-0C1D3E4F5A6B/ ← one folder per profile (uppercase uuid)
+//     │   │   ├── profile.json
+//     │   │   ├── apple_1234_0.heic
+//     │   │   └── apple_1234_1.jpeg
+//     │   └── FF6C5474-EBB4-4D32-A9EF-B2D38647A146/
+//     └── POI-backup-20260913-021500/               ← APFS clone taken before the migration
 //
 // Why this layout:
 //   * Apple File System Programming Guide puts user-generated app-specific
@@ -28,13 +27,22 @@
 //     even if the user moves their home directory or the app bundle, the
 //     POI auto-heals because its folder is always the folder containing
 //     its profile.json.
+//   * The folder is named by the profile's durable uuid, never by the name
+//     (Rick's ruling 2026-09-12): two Richards — Jr is Rick, Sr is Dad —
+//     used to collide on `richard/`; a rename is now a JSON write and never
+//     moves a photo.
 //
 // Before this file existed, POI data lived in the git repo at
 // ~/dev/VideoScan/poi_profiles/ + ~/dev/VideoScan/poi_photos/, which
 // cluttered git status and embedded absolute paths in JSON. migrateLegacyIfNeeded()
-// handles the one-shot move.
+// handles that one-shot move; migrateToUUIDFoldersIfNeeded() handles the
+// name-folder → uuid-folder move that followed.
 
 import Foundation
+import Darwin
+import os
+
+private let storageLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "POIStorage")
 
 enum POIStorage {
 
@@ -64,20 +72,44 @@ enum POIStorage {
         return dir
     }
 
-    /// Folder holding one POI's profile.json + photos. Name is normalized:
-    /// lowercased, spaces → underscores. Matches the pre-migration convention.
-    static func folder(for name: String) -> URL {
-        let folderName = sanitize(name)
-        return storeDir.appendingPathComponent(folderName, isDirectory: true)
+    /// The on-disk folder name for a profile: its uuid, uppercase, exactly
+    /// as `UUID.uuidString` prints it. One spelling everywhere so a folder
+    /// can be matched to its profile by string compare alone.
+    static func folderName(for uuid: UUID) -> String {
+        uuid.uuidString.uppercased()
+    }
+
+    /// Folder holding one POI's profile.json + photos, keyed by uuid.
+    static func folder(forUUID uuid: UUID) -> URL {
+        storeDir.appendingPathComponent(folderName(for: uuid), isDirectory: true)
+    }
+
+    /// Folder for a profile — the ONLY resolver production code should use.
+    static func folder(for profile: POIProfile) -> URL {
+        folder(forUUID: profile.uuid)
     }
 
     /// Full path to a POI's profile.json file.
-    static func profileURL(for name: String) -> URL {
-        folder(for: name).appendingPathComponent("profile.json")
+    static func profileURL(forUUID uuid: UUID) -> URL {
+        folder(forUUID: uuid).appendingPathComponent("profile.json")
     }
 
-    /// Canonical folder-name sanitization — used for both lookup and the
-    /// on-disk folder that was created when the POI was imported.
+    static func profileURL(for profile: POIProfile) -> URL {
+        profileURL(forUUID: profile.uuid)
+    }
+
+    /// COMPATIBILITY ONLY. The pre-2026-09-12 folder for a short name
+    /// (lowercased, spaces → underscores). Kept so the uuid migration can
+    /// read legacy folders and so a legacy job descriptor / bundle can be
+    /// matched; never a place to WRITE a profile. New code wants
+    /// `folder(for:)`.
+    static func legacyFolder(forName name: String) -> URL {
+        storeDir.appendingPathComponent(sanitize(name), isDirectory: true)
+    }
+
+    /// Canonical short-name sanitization. Still the spelling used for the
+    /// human-readable trash folder (`POI-<name>-<UTC>`), cluster run tags
+    /// and legacy folder lookups.
     static func sanitize(_ name: String) -> String {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
             .lowercased()
@@ -85,15 +117,29 @@ enum POIStorage {
         return trimmed.isEmpty ? "reference" : trimmed
     }
 
+    /// Whether a folder name is already a uuid spelling (either case — APFS
+    /// is case-insensitive by default, so `2e6b…` and `2E6B…` are one folder).
+    static func uuid(fromFolderName name: String) -> UUID? {
+        UUID(uuidString: name)
+    }
+
     // MARK: - Enumeration
 
     /// Returns the list of POI folders directly under storeDir (subfolders
-    /// only; ignores stray files). Ensures migration has run first.
+    /// only; ignores stray files). Ensures both migrations have run first.
     static func allPOIFolders() -> [URL] {
         _ = migrateLegacyIfNeeded()
+        _ = migrateToUUIDFoldersIfNeeded()
+        return poiFolders(in: storeDir)
+    }
+
+    /// Raw listing of POI-shaped folders under `root` — no migration, no
+    /// writes. The `.poi-rename-*` staging dirs of the 2026-09-12 rename fix
+    /// are excluded so a crashed rename never shows up as a person.
+    static func poiFolders(in root: URL) -> [URL] {
         let fm = FileManager.default
         let contents = (try? fm.contentsOfDirectory(
-            at: storeDir,
+            at: root,
             includingPropertiesForKeys: [.isDirectoryKey]
         )) ?? []
         return contents.filter { url in
@@ -127,6 +173,10 @@ enum POIStorage {
     /// they have disk space, and an explicit `rm -rf ~/dev/VideoScan/.trash`
     /// is the only way data ever physically goes away.
     ///
+    /// The source is the uuid folder; the trash folder is named after the
+    /// person (`POI-<sanitized name>-<UTC>`) so Rick can find it by eye. The
+    /// uuid travels inside profile.json.
+    ///
     /// Returns the destination URL inside .trash on success, or nil if the
     /// source didn't exist or the move failed. The caller is responsible for
     /// logging / surfacing the failure to the user.
@@ -135,20 +185,21 @@ enum POIStorage {
     /// both ends to a sandbox. Production callers pass nil for both.
     @discardableResult
     static func trashPOIFolder(
-        named name: String,
+        uuid: UUID,
+        displayName: String,
         now: Date = Date(),
         storeOverride: URL? = nil,
         trashOverride: URL? = nil
     ) -> URL? {
         let fm = FileManager.default
-        let folderName = sanitize(name)
+        let label = sanitize(displayName)
         let src = (storeOverride ?? storeDir)
-            .appendingPathComponent(folderName, isDirectory: true)
+            .appendingPathComponent(folderName(for: uuid), isDirectory: true)
         guard fm.fileExists(atPath: src.path) else { return nil }
 
         let trashRoot = trashOverride ?? trashDir
         let stamp = trashTimestamp(now)
-        let dest = trashRoot.appendingPathComponent("POI-\(folderName)-\(stamp)",
+        let dest = trashRoot.appendingPathComponent("POI-\(label)-\(stamp)",
                                                     isDirectory: true)
 
         // Ensure trash root exists (creates intermediate `dev/VideoScan/.trash`).
@@ -159,11 +210,12 @@ enum POIStorage {
         }
 
         // If the destination already exists (sub-second collision in a test
-        // loop), append a uniquifier rather than overwrite.
+        // loop, or two people with one display name), append a uniquifier
+        // rather than overwrite.
         var finalDest = dest
         if fm.fileExists(atPath: finalDest.path) {
             finalDest = trashRoot.appendingPathComponent(
-                "POI-\(folderName)-\(stamp)-\(UUID().uuidString.prefix(8))",
+                "POI-\(label)-\(stamp)-\(UUID().uuidString.prefix(8))",
                 isDirectory: true
             )
         }
@@ -185,33 +237,32 @@ enum POIStorage {
     enum RestoreResult: Equatable {
         case restored(URL)              // success — folder now lives at this URL
         case sourceMissing              // trash folder no longer exists
-        case destinationExists          // a POI with this name was re-created
+        case destinationExists          // a POI with this uuid was re-created
         case ioError                    // moveItem threw for some other reason
     }
 
     /// Inverse of `trashPOIFolder`: moves a trashed POI folder back into
-    /// `storeDir/<sanitized-name>/`. Refuses to overwrite an existing POI
-    /// folder — if the user re-created the person between delete and undo,
-    /// the caller must surface that to the user (non-destructive abort).
+    /// `storeDir/<UUID>/`. Refuses to overwrite an existing POI folder — if
+    /// the uuid folder reappeared between delete and undo (a bundle import,
+    /// say), the caller must surface that to the user (non-destructive abort).
     ///
     /// Test override: pass `storeOverride` to redirect the destination
     /// into a sandbox. Production callers pass nil.
     ///
     /// Why this lives in POIStorage (not PersonFinderModel): the same
     /// safety rules apply (project policy forbids `rm` on POI data, and
-    /// the sanitize() convention has to match deletePOI). Keeping the
-    /// inverse next to the forward op makes both easier to audit.
+    /// the folder naming has to match trashPOIFolder). Keeping the inverse
+    /// next to the forward op makes both easier to audit.
     static func restorePOIFolder(
         from trashURL: URL,
-        named name: String,
+        uuid: UUID,
         storeOverride: URL? = nil
     ) -> RestoreResult {
         let fm = FileManager.default
         guard fm.fileExists(atPath: trashURL.path) else { return .sourceMissing }
 
-        let folderName = sanitize(name)
         let dest = (storeOverride ?? storeDir)
-            .appendingPathComponent(folderName, isDirectory: true)
+            .appendingPathComponent(folderName(for: uuid), isDirectory: true)
 
         // Refuse to clobber. The user may have re-created the person while
         // the undo banner was still up — overwriting would silently destroy
@@ -233,7 +284,7 @@ enum POIStorage {
         }
     }
 
-    // MARK: - Migration
+    // MARK: - Migration 1: repo-local layout → Application Support (issue #35)
 
     /// Legacy locations the app created before issue #35. Both under the
     /// working-tree repo, which is why they cluttered git.
@@ -262,6 +313,9 @@ enum POIStorage {
     /// Leaves legacy files in place on purpose — the user can delete them
     /// manually after verifying everything looks right in the app. Safer
     /// than silently removing files during migration.
+    ///
+    /// Writes into the uuid layout directly (the profile JSON carries a
+    /// freshly minted uuid) so the second migration has nothing to do for it.
     @discardableResult
     static func migrateLegacyIfNeeded() -> MigrationResult {
         let fm = FileManager.default
@@ -308,7 +362,9 @@ enum POIStorage {
             return false
         }
 
-        let newFolder = folder(for: name)
+        let uuid = (json["uuid"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID()
+        json["uuid"] = uuid.uuidString
+        let newFolder = folder(forUUID: uuid)
         try? fm.createDirectory(at: newFolder, withIntermediateDirectories: true)
 
         // Copy photos from legacy referencePath (or legacy_photos/<name>/)
@@ -342,4 +398,407 @@ enum POIStorage {
         }
         return false
     }
+
+    // MARK: - Migration 2: name-keyed folders → uuid-keyed folders (2026-09-12)
+
+    /// Audit record for the name→uuid move, written to `POI/.uuid-migration.json`.
+    /// `mapping` is old folder name → new folder name (the uuid); a later
+    /// run merges into it, so the file always lists everything that ever
+    /// moved and can drive `rollbackUUIDMigration`.
+    struct UUIDMigrationReport: Codable, Equatable {
+        struct Skipped: Codable, Equatable {
+            let folder: String
+            let reason: String
+            let detail: String
+        }
+        var startedAt: Date
+        var finishedAt: Date?
+        var mapping: [String: String] = [:]
+        var skipped: [Skipped] = []
+        var backupPath: String?
+        var backupMethod: String?
+        var backupSeconds: Double = 0
+        var renameSeconds: Double = 0
+        var elapsedSeconds: Double = 0
+        /// False when any folder had to be skipped — Rick has something to
+        /// look at, and the file says what.
+        var complete: Bool = false
+        /// Sensor for the settings-pollution and ordering tests: the number
+        /// of POI-shaped folders seen before and after this run. Never
+        /// smaller after (nothing is deleted).
+        var foldersBefore: Int = 0
+        var foldersAfter: Int = 0
+    }
+
+    /// What a call to `migrateToUUIDFoldersIfNeeded` did.
+    enum UUIDMigrationOutcome: Equatable {
+        /// Every folder is already keyed by uuid (or the store is empty).
+        case notNeeded
+        /// Refused before any I/O: a live-shaped root under a test host, or
+        /// a remote viewer (POI/ is synced from the master there).
+        case refused(String)
+        /// Ran; the report says what moved and what was skipped.
+        case ran(UUIDMigrationReport)
+    }
+
+    static let uuidMigrationFileName = ".uuid-migration.json"
+
+    /// Skip reasons — string-typed so they read well in the audit file.
+    enum UUIDMigrationSkip {
+        static let symlink = "symlink"
+        static let noProfile = "noProfile"
+        static let malformedJSON = "malformedJSON"
+        static let duplicateUUID = "duplicateUUID"
+        static let destinationExists = "destinationExists"
+        static let uuidWriteFailed = "uuidWriteFailed"
+        static let renameFailed = "renameFailed"
+    }
+
+    /// Serializes migration runs in-process. `NSLock` ≈ a C++ std::mutex;
+    /// the migration is called from `listAll()` on whatever actor the caller
+    /// is on, so the lock — not an actor — is what makes two concurrent
+    /// callers see one run.
+    private static let uuidMigrationLock = NSLock()
+
+    /// Summary lines for catalog.log, buffered until DashboardState has
+    /// opened the file (the migration can run before the dashboard exists —
+    /// PersonFinderModel's `savedProfiles` initializer calls `listAll()`).
+    /// Drained by `drainPendingCatalogLogLines()`.
+    private static var pendingCatalogLogLines: [String] = []
+
+    static func drainPendingCatalogLogLines() -> [String] {
+        uuidMigrationLock.lock()
+        defer { uuidMigrationLock.unlock() }
+        let lines = pendingCatalogLogLines
+        pendingCatalogLogLines.removeAll()
+        return lines
+    }
+
+    /// Folders that were reported as skipped this process, so a skipped
+    /// folder is logged once per launch — not on every `listAll()`.
+    private static var reportedSkips = Set<String>()
+
+    /// One-shot, idempotent move of every name-keyed profile folder under
+    /// `root` to `root/<UUID>/`. Safe to call before every enumeration: when
+    /// every folder is already uuid-named it costs one directory listing.
+    ///
+    /// Steps (docs/people_uuid_folders_design.md): refuse a live root under a
+    /// test host and any viewer; classify every candidate first (reading only
+    /// profile.json); back the whole directory up with an APFS clone BEFORE the
+    /// first rename; rename with RENAME_EXCL; rewrite referencePath and record
+    /// legacyFolderName; write the audit file after every rename; log per
+    /// folder and once in summary. Nothing is ever deleted.
+    ///
+    /// Memory: bounded by the number of profiles (a few dozen dictionaries);
+    /// photo bytes are never read — the clone is a metadata operation.
+    ///
+    /// - Parameters:
+    ///   - root: the POI directory (tests pass a temp root; production the store).
+    ///   - backupParent: where `POI-backup-<stamp>` lands; default = root's parent.
+    ///   - now: injectable clock for deterministic backup names in tests.
+    @discardableResult
+    static func migrateToUUIDFoldersIfNeeded(
+        root: URL? = nil,
+        backupParent: URL? = nil,
+        now: Date = Date()
+    ) -> UUIDMigrationOutcome {
+        uuidMigrationLock.lock()
+        defer { uuidMigrationLock.unlock() }
+
+        let root = (root ?? storeDir).standardizedFileURL
+        let fm = FileManager.default
+
+        // (a) Refuse the real store under a test host — same predicate the
+        // file store uses — and any viewer (POI/ is synced from the master).
+        do { try POIProfileFileStore.guardRoot(root) } catch {
+            return .refused(error.localizedDescription)
+        }
+        if ViewerWriteGuard.refuse("POIStorage.migrateToUUIDFolders") {
+            return .refused("viewer")
+        }
+
+        let folders = poiFolders(in: root)
+        // A folder whose name is its own uuid is done. Only the rest are
+        // candidates — the steady-state answer is "no candidates" and costs
+        // nothing beyond the listing we needed anyway.
+        let candidates = folders.filter { uuid(fromFolderName: $0.lastPathComponent) == nil }
+        guard !candidates.isEmpty else { return .notNeeded }
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        var report = UUIDMigrationReport(startedAt: now)
+        report.foldersBefore = folders.count
+        var lines: [String] = []
+        func log(_ line: String) {
+            lines.append(line)
+            appLog.write("[people] migration: \(line)")
+            storageLog.notice("migration: \(line, privacy: .public)")
+        }
+        func skip(_ folder: URL, _ reason: String, _ detail: String) {
+            report.skipped.append(.init(folder: folder.lastPathComponent, reason: reason, detail: detail))
+            let key = root.path + "/" + folder.lastPathComponent + "#" + reason
+            if !reportedSkips.contains(key) {
+                reportedSkips.insert(key)
+                log("skipped '\(folder.lastPathComponent)' (\(reason)): \(detail)")
+            }
+        }
+
+        // (c) Classify first. `plan` holds the folders that will move; every
+        // profile.json is read once, and no rename happens until the backup
+        // exists.
+        struct Move {
+            let source: URL
+            let uuid: UUID
+            var json: [String: Any]
+            let mintedUUID: Bool
+        }
+        var plan: [Move] = []
+        var ownersByUUID: [UUID: [URL]] = [:]
+        // Folders already keyed by uuid own that uuid too — a legacy folder
+        // pointing at one of them must not be renamed onto it.
+        for folder in folders where uuid(fromFolderName: folder.lastPathComponent) != nil {
+            if let id = uuid(fromFolderName: folder.lastPathComponent) {
+                ownersByUUID[id, default: []].append(folder)
+            }
+        }
+        for folder in candidates {
+            if (try? folder.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+                skip(folder, UUIDMigrationSkip.symlink, "a symbolic link is never moved")
+                continue
+            }
+            let profileURL = folder.appendingPathComponent("profile.json")
+            guard fm.fileExists(atPath: profileURL.path) else {
+                skip(folder, UUIDMigrationSkip.noProfile, "no profile.json — left in place")
+                continue
+            }
+            guard let data = try? Data(contentsOf: profileURL),
+                  let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  json["name"] is String
+            else {
+                skip(folder, UUIDMigrationSkip.malformedJSON, "profile.json could not be read — left in place, not deleted")
+                continue
+            }
+            let existing = (json["uuid"] as? String).flatMap(UUID.init(uuidString:))
+            let id = existing ?? UUID()
+            ownersByUUID[id, default: []].append(folder)
+            plan.append(Move(source: folder, uuid: id, json: json, mintedUUID: existing == nil))
+        }
+        // Duplicate uuids: skip every folder that shares one, name them all.
+        let duplicates = ownersByUUID.filter { $0.value.count > 1 }
+        if !duplicates.isEmpty {
+            for (id, owners) in duplicates {
+                let paths = owners.map(\.path).sorted().joined(separator: " | ")
+                for owner in owners where uuid(fromFolderName: owner.lastPathComponent) == nil {
+                    skip(owner, UUIDMigrationSkip.duplicateUUID,
+                         "uuid \(id.uuidString) is claimed by more than one folder: \(paths)")
+                }
+            }
+            plan.removeAll { duplicates[$0.uuid] != nil }
+        }
+
+        let willMove = !plan.isEmpty
+        if willMove {
+            // (b) BACKUP FIRST — the whole directory, before the first rename.
+            let stamp = trashTimestamp(now)
+            // Production: beside POI/ in Application Support/VideoScan/.
+            // Test host: beside the per-process store, in its own folder,
+            // so temp never fills with backups of backups.
+            let parent = (backupParent ?? defaultBackupParent(for: root)).standardizedFileURL
+            var backup = parent.appendingPathComponent("POI-backup-\(stamp)", isDirectory: true)
+            if fm.fileExists(atPath: backup.path) {
+                backup = parent.appendingPathComponent("POI-backup-\(stamp)-\(UUID().uuidString.prefix(8))", isDirectory: true)
+            }
+            let backupStart = clock.now
+            switch cloneOrCopyDirectory(from: root, to: backup) {
+            case .success(let method):
+                report.backupPath = backup.path
+                report.backupMethod = method
+                report.backupSeconds = seconds(clock.now - backupStart)
+                log("backup of \(folders.count) folder(s) at \(backup.path) via \(method) in \(format(report.backupSeconds)) s")
+            case .failure(let error):
+                // No backup, no migration. Everything stays as it was.
+                log("BACKUP FAILED, nothing moved: \(error.localizedDescription)")
+                report.finishedAt = Date()
+                report.elapsedSeconds = seconds(clock.now - started)
+                report.foldersAfter = poiFolders(in: root).count
+                pendingCatalogLogLines.append(contentsOf: lines.map { "People migration: \($0)" })
+                return .ran(report)
+            }
+        }
+
+        // (d) Rename, one folder at a time, recording each move as it lands.
+        let previousReport = readUUIDMigrationReport(root: root)
+        let renameStart = clock.now
+        for var move in plan {
+            let destination = root.appendingPathComponent(folderName(for: move.uuid), isDirectory: true)
+            if fm.fileExists(atPath: destination.path) {
+                skip(move.source, UUIDMigrationSkip.destinationExists,
+                     "\(destination.lastPathComponent) already exists — left in place")
+                continue
+            }
+            // A minted uuid is written into the OLD location first, so the
+            // identity is durable even if the rename below fails.
+            if move.mintedUUID {
+                move.json["uuid"] = move.uuid.uuidString
+                do {
+                    try writeJSON(move.json, to: move.source.appendingPathComponent("profile.json"))
+                } catch {
+                    skip(move.source, UUIDMigrationSkip.uuidWriteFailed,
+                         "could not persist a minted uuid: \(error.localizedDescription)")
+                    continue
+                }
+            }
+            let rc = renamex_np(move.source.path, destination.path, UInt32(RENAME_EXCL))
+            if rc != 0 {
+                let err = String(cString: strerror(errno))
+                skip(move.source, UUIDMigrationSkip.renameFailed, "rename(2) failed: \(err)")
+                continue
+            }
+            // Rewrite referencePath and keep the old name for the audit.
+            move.json["referencePath"] = destination.path
+            if move.json["legacyFolderName"] == nil {
+                move.json["legacyFolderName"] = move.source.lastPathComponent
+            }
+            do {
+                try writeJSON(move.json, to: destination.appendingPathComponent("profile.json"))
+            } catch {
+                // The folder moved; referencePath is healed on every load, so
+                // this is an audit gap, not a data problem. Say so.
+                log("moved '\(move.source.lastPathComponent)' → \(destination.lastPathComponent) but could not rewrite profile.json: \(error.localizedDescription)")
+            }
+            report.mapping[move.source.lastPathComponent] = destination.lastPathComponent
+            let name = (move.json["name"] as? String) ?? "?"
+            log("'\(move.source.lastPathComponent)' → \(destination.lastPathComponent) (\(name))\(move.mintedUUID ? " [uuid minted]" : "")")
+            // (e) Audit after every rename so a crash mid-way still leaves a
+            // record of what moved.
+            try? writeUUIDMigrationReport(merged(previousReport, with: report), root: root)
+        }
+        report.renameSeconds = seconds(clock.now - renameStart)
+
+        // (e)/(f) Final record + summary.
+        report.finishedAt = Date()
+        report.elapsedSeconds = seconds(clock.now - started)
+        report.complete = report.skipped.isEmpty
+        report.foldersAfter = poiFolders(in: root).count
+        let final = merged(previousReport, with: report)
+        do { try writeUUIDMigrationReport(final, root: root) } catch {
+            log("could not write \(uuidMigrationFileName): \(error.localizedDescription)")
+        }
+        let summary = "People migration: \(report.mapping.count) folder(s) → UUID, "
+            + "\(report.skipped.count) skipped, backup at \(report.backupPath ?? "(none needed)"), "
+            + "took \(format(report.elapsedSeconds)) s (rename \(format(report.renameSeconds)) s, "
+            + "backup \(format(report.backupSeconds)) s)"
+        appLog.write("[people] \(summary)")
+        storageLog.notice("\(summary, privacy: .public)")
+        pendingCatalogLogLines.append(contentsOf: lines.map { "People migration: \($0)" })
+        pendingCatalogLogLines.append(summary)
+        return .ran(report)
+    }
+
+    /// Reverse every move recorded in `.uuid-migration.json` under `root`:
+    /// rename `<UUID>/` back to its legacy name (RENAME_EXCL — a re-created
+    /// legacy folder is never clobbered), restore referencePath, and move
+    /// the audit file aside as `.uuid-migration-rolledback-<stamp>.json`.
+    /// Test-only entry point (no menu item); the backup clone is untouched.
+    /// Returns the number of folders renamed back.
+    @discardableResult
+    static func rollbackUUIDMigration(root: URL? = nil, now: Date = Date()) throws -> Int {
+        uuidMigrationLock.lock()
+        defer { uuidMigrationLock.unlock() }
+        let root = (root ?? storeDir).standardizedFileURL
+        try POIProfileFileStore.guardRoot(root)
+        try ViewerWriteGuard.check("POIStorage.rollbackUUIDMigration")
+        guard let report = readUUIDMigrationReport(root: root) else { return 0 }
+        let fm = FileManager.default
+        var restored = 0
+        for (old, new) in report.mapping {
+            let source = root.appendingPathComponent(new, isDirectory: true)
+            let destination = root.appendingPathComponent(old, isDirectory: true)
+            guard fm.fileExists(atPath: source.path) else { continue }
+            let rc = renamex_np(source.path, destination.path, UInt32(RENAME_EXCL))
+            guard rc == 0 else {
+                appLog.write("[people] rollback: could not rename \(new) back to '\(old)': \(String(cString: strerror(errno)))")
+                continue
+            }
+            let profileURL = destination.appendingPathComponent("profile.json")
+            if let data = try? Data(contentsOf: profileURL),
+               var json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                json["referencePath"] = destination.path
+                try? writeJSON(json, to: profileURL)
+            }
+            restored += 1
+            appLog.write("[people] rollback: \(new) → '\(old)'")
+        }
+        let aside = root.appendingPathComponent(".uuid-migration-rolledback-\(trashTimestamp(now)).json")
+        try? fm.moveItem(at: root.appendingPathComponent(uuidMigrationFileName), to: aside)
+        appLog.write("[people] rollback: \(restored) folder(s) renamed back; audit moved to \(aside.lastPathComponent)")
+        return restored
+    }
+
+    /// Where `POI-backup-<stamp>` lands by default: beside the store in
+    /// production; under a per-process sibling folder for a test host.
+    static func defaultBackupParent(for root: URL) -> URL {
+        let parent = root.deletingLastPathComponent()
+        guard TestEnvironment.isTestHost else { return parent }
+        return parent.appendingPathComponent("\(root.lastPathComponent)-backups", isDirectory: true)
+    }
+
+    /// The audit file under `root`, if one exists and decodes.
+    static func readUUIDMigrationReport(root: URL? = nil) -> UUIDMigrationReport? {
+        let url = (root ?? storeDir).appendingPathComponent(uuidMigrationFileName)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(UUIDMigrationReport.self, from: data)
+    }
+
+    private static func writeUUIDMigrationReport(_ report: UUIDMigrationReport, root: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(report).write(to: root.appendingPathComponent(uuidMigrationFileName), options: .atomic)
+    }
+
+    /// A later run keeps every earlier mapping (rollback needs all of them)
+    /// and otherwise describes the latest run.
+    private static func merged(_ previous: UUIDMigrationReport?, with latest: UUIDMigrationReport) -> UUIDMigrationReport {
+        guard let previous else { return latest }
+        var out = latest
+        out.mapping = previous.mapping.merging(latest.mapping) { _, new in new }
+        return out
+    }
+
+    private static func writeJSON(_ object: [String: Any], to url: URL) throws {
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// Clone a directory hierarchy with `clonefile(2)` (APFS: shares blocks,
+    /// metadata-only, seconds for thousands of photos), falling back to a
+    /// real copy on a volume that cannot clone. Returns the method used.
+    static func cloneOrCopyDirectory(from source: URL, to destination: URL) -> Result<String, Error> {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let supportsCloning = (try? source.resourceValues(forKeys: [.volumeSupportsFileCloningKey]))?
+            .volumeSupportsFileCloning ?? false
+        if supportsCloning, clonefile(source.path, destination.path, 0) == 0 {
+            return .success("clonefile")
+        }
+        let cloneErrno = errno
+        do {
+            try fm.copyItem(at: source, to: destination)
+            return .success(supportsCloning
+                            ? "copy (clonefile failed: \(String(cString: strerror(cloneErrno))))"
+                            : "copy (volume does not clone)")
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private static func seconds(_ d: Duration) -> Double {
+        let c = d.components
+        return Double(c.seconds) + Double(c.attoseconds) / 1e18
+    }
+
+    private static func format(_ s: Double) -> String { String(format: "%.3f", s) }
 }
