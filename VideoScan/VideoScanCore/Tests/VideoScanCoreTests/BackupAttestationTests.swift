@@ -51,13 +51,15 @@ final class BackupAttestationTests: XCTestCase {
 
     // MARK: latest per kind / merge / replace
 
-    func testLatestPerKindLaterAttestedAtWinsAndTieGoesToLaterElement() {
+    func testLatestPerKindLaterAttestedAtWinsAndTieIsConservativeNotPositional() {
         let older = a(.cloud, .no, at: 100)
         let newer = a(.cloud, .yes, "iCloud", at: 200)
         XCTAssertEqual(BackupAttestation.latestPerKind([newer, older])[.cloud], newer)
         XCTAssertEqual(BackupAttestation.latestPerKind([older, newer])[.cloud], newer)
-        let tieA = a(.offsite, .no, at: 300), tieB = a(.offsite, .yes, "Tim's", at: 300)
-        XCTAssertEqual(BackupAttestation.latestPerKind([tieA, tieB])[.offsite], tieB)
+        // Exact tie: the conservative answer wins in EITHER order (codex #1430).
+        let tieNo = a(.offsite, .no, at: 300), tieYes = a(.offsite, .yes, "Tim's", at: 300)
+        XCTAssertEqual(BackupAttestation.latestPerKind([tieNo, tieYes])[.offsite], tieNo)
+        XCTAssertEqual(BackupAttestation.latestPerKind([tieYes, tieNo])[.offsite], tieNo)
         XCTAssertTrue(BackupAttestation.latestPerKind([]).isEmpty)
     }
 
@@ -71,9 +73,11 @@ final class BackupAttestationTests: XCTestCase {
         // Base keeps a newer answer.
         let baseNewer = a(.cloud, .no, at: 300)
         XCTAssertEqual(BackupAttestation.merged([baseNewer], with: [incomingCloudNew]), [baseNewer])
-        // Exact tie: the record's own answer wins.
+        // Exact tie: the conservative answer (the base's "no") wins — and
+        // would from the other side too (see testEqualTimePolicy…).
         let tieIn = a(.cloud, .yes, at: 300)
         XCTAssertEqual(BackupAttestation.merged([baseNewer], with: [tieIn]), [baseNewer])
+        XCTAssertEqual(BackupAttestation.merged([tieIn], with: [baseNewer]), [baseNewer])
         // A "no" on one side vs nothing on the other is KEPT, both directions.
         XCTAssertEqual(BackupAttestation.merged([], with: [baseNewer]), [baseNewer])
         XCTAssertEqual(BackupAttestation.merged([baseNewer], with: []), [baseNewer])

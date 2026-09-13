@@ -142,6 +142,37 @@ final class BackupAttestationTimestampTests: XCTestCase {
         XCTAssertEqual(BackupAttestation.merged([first], with: [second]).map(\.answer), [.no])
     }
 
+    // MARK: Equal-time policy (codex #1430)
+
+    func testEqualTimePolicyIsConservativeAndOrderIndependent() {
+        // 0.3 ms and 0.4 ms after t both quantize to t — an exact tie by
+        // construction. NO beats YES; N/A beats YES; NO beats N/A — in
+        // both merge directions and both list orders.
+        let yes = BackupAttestation(kind: .cloud, answer: .yes, label: "iCloud", attestedAt: d(0.0003))
+        let no = BackupAttestation(kind: .cloud, answer: .no, attestedAt: d(0.0004))
+        let na = BackupAttestation(kind: .cloud, answer: .notApplicable, attestedAt: d(0.0004))
+        XCTAssertEqual(yes.attestedAt, no.attestedAt, "same millisecond")
+        for (winner, loser) in [(no, yes), (na, yes), (no, na)] {
+            XCTAssertEqual(BackupAttestation.merged([winner], with: [loser]), [winner])
+            XCTAssertEqual(BackupAttestation.merged([loser], with: [winner]), [winner])
+            XCTAssertEqual(BackupAttestation.latestPerKind([winner, loser])[.cloud], winner)
+            XCTAssertEqual(BackupAttestation.latestPerKind([loser, winner])[.cloud], winner)
+            XCTAssertTrue(BackupAttestation.prefers(winner, over: loser))
+            XCTAssertFalse(BackupAttestation.prefers(loser, over: winner))
+        }
+        // A LATER yes still beats an earlier no — the policy only breaks exact ties.
+        let laterYes = BackupAttestation(kind: .cloud, answer: .yes, attestedAt: d(0.001))
+        XCTAssertEqual(BackupAttestation.merged([no], with: [laterYes]), [laterYes])
+        // Same answer, same instant, different labels: one deterministic
+        // winner whichever way round; identical values never "prefer" each other.
+        let dropbox = BackupAttestation(kind: .cloud, answer: .yes, label: "Dropbox", attestedAt: d(0))
+        let icloud = BackupAttestation(kind: .cloud, answer: .yes, label: "iCloud", attestedAt: d(0))
+        XCTAssertEqual(BackupAttestation.merged([dropbox], with: [icloud]), BackupAttestation.merged([icloud], with: [dropbox]))
+        XCTAssertFalse(BackupAttestation.prefers(icloud, over: icloud))
+        // `replacing` is the user's NEW word: it always wins, tie or not.
+        XCTAssertEqual(BackupAttestation.replacing([no], with: yes), [yes])
+    }
+
     func testDecodeToleratesNumberAndRefusesGarbage() throws {
         // Foundation's default `.deferredToDate` writes seconds since the
         // reference date; accepted, never thrown away.

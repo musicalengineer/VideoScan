@@ -277,13 +277,38 @@ extension BackupAttestation {
     /// Stable kind order for every list this file returns.
     static func kindIndex(_ k: Kind) -> Int { Kind.allCases.firstIndex(of: k) ?? Kind.allCases.count }
 
+    /// EQUAL-TIME POLICY (codex #1430): two answers for one kind at the
+    /// same millisecond are ordered CONSERVATIVELY and deterministically,
+    /// never by argument order — "no" beats "n/a" beats "yes" (an
+    /// attestation the app cannot verify must never resurrect a "yes"
+    /// over a "no" by list position), then label, then `by`, as pure
+    /// tie-breakers so any two distinct values have one winner.
+    static func conservativeRank(_ a: Answer) -> Int {
+        switch a {
+        case .no:            return 2
+        case .notApplicable: return 1
+        case .yes:           return 0
+        }
+    }
+
+    /// Should `a` replace `b` as the answer for their (shared) kind?
+    /// Later `attestedAt` first; on an exact tie the equal-time policy.
+    /// Identical values → false (keep what is held).
+    public static func prefers(_ a: BackupAttestation, over b: BackupAttestation) -> Bool {
+        if a.attestedAt != b.attestedAt { return a.attestedAt > b.attestedAt }
+        let ra = conservativeRank(a.answer), rb = conservativeRank(b.answer)
+        if ra != rb { return ra > rb }
+        let la = a.label ?? "", lb = b.label ?? ""
+        if la != lb { return la > lb }
+        return a.by > b.by
+    }
+
     /// The latest answer per kind: later `attestedAt` wins; on an exact
-    /// tie the LATER element wins (a list is appended in time order, so
-    /// the most recently recorded answer is the answer).
+    /// tie the equal-time policy above decides (never list position).
     public static func latestPerKind(_ list: [BackupAttestation]) -> [Kind: BackupAttestation] {
         var out: [Kind: BackupAttestation] = [:]
         for a in list {
-            if let have = out[a.kind], have.attestedAt > a.attestedAt { continue }
+            if let have = out[a.kind], !prefers(a, over: have) { continue }
             out[a.kind] = a
         }
         return out
@@ -297,14 +322,15 @@ extension BackupAttestation {
 
     /// The INHERITANCE rule (design: "wherever the date goes, this goes"):
     /// union by kind, latest `attestedAt` wins, and on an exact tie the
-    /// record's OWN answer (`base`) wins. A kind present on only one side
-    /// is always kept — a "no" or "n/a" is never dropped in favour of
-    /// nothing. Returns the normalized list.
+    /// equal-time policy decides — the same answer whichever side is
+    /// `base`. A kind present on only one side is always kept — a "no"
+    /// or "n/a" is never dropped in favour of nothing. Returns the
+    /// normalized list.
     public static func merged(_ base: [BackupAttestation],
                               with incoming: [BackupAttestation]) -> [BackupAttestation] {
         var out = latestPerKind(base)
         for (kind, a) in latestPerKind(incoming) {
-            if let have = out[kind], have.attestedAt >= a.attestedAt { continue }
+            if let have = out[kind], !prefers(a, over: have) { continue }
             out[kind] = a
         }
         return out.values.sorted { kindIndex($0.kind) < kindIndex($1.kind) }

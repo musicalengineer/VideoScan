@@ -7,8 +7,10 @@
 //     updates and announces every record, and the log names the journal
 //     path and the REAL error (errno), never a generic "unreachable";
 //   - 5,000 records return within a budget with NO file I/O on the main
-//     actor: zero journal calls before return, one after; console lines
-//     through ONE `writeBatch`, never one `write` (= one fsync) per record.
+//     actor: zero journal calls and zero log calls before return, one
+//     append and ONE `writeBatch` after — both off the main thread (the
+//     counting sink records the thread, so it cannot hide main-actor
+//     logging; codex #1429).
 //
 // Everything runs against a temp sandbox; the journal writer and the log
 // sink are injected. Serialized: the tests swap the global `appLog`.
@@ -40,7 +42,8 @@ final class CountingAttestationJournalWriter: @unchecked Sendable {
 
 /// A log sink that tells `write` from `writeBatch` apart — PersistentLog
 /// fsyncs once per call of either, so the per-record beachball is the
-/// `write` count.
+/// `write` count — and records the THREAD each call arrived on, so a
+/// substitute sink cannot hide main-actor logging (codex #1429).
 final class BatchCountingLogSink: LogSink, @unchecked Sendable {
     let name = "batch-counting"
     var fileURL: URL? { nil }
@@ -48,13 +51,33 @@ final class BatchCountingLogSink: LogSink, @unchecked Sendable {
     private var buffer: [String] = []
     private(set) var writeCalls = 0
     private(set) var batchCalls = 0
+    /// True if ANY write/writeBatch ran on the main thread.
+    private(set) var sawMainThread = false
 
     var lines: [String] { lock.lock(); defer { lock.unlock() }; return buffer }
     func start(append: Bool) {}
     func flush() {}
     func close() {}
-    func write(_ line: String) { lock.lock(); writeCalls += 1; buffer.append(line); lock.unlock() }
-    func writeBatch(_ lines: [String]) { lock.lock(); batchCalls += 1; buffer.append(contentsOf: lines); lock.unlock() }
+    /// Only attestation lines are SCORED (counted / thread-checked); an
+    /// unrelated line — a debounced catalog save logging on the main
+    /// thread mid-test — is buffered but never makes the test flaky.
+    private static func isScored(_ lines: [String]) -> Bool { lines.contains { $0.hasPrefix("attestation: ") } }
+    func write(_ line: String) {
+        let main = Thread.isMainThread
+        lock.lock(); defer { lock.unlock() }
+        buffer.append(line)
+        guard Self.isScored([line]) else { return }
+        writeCalls += 1; sawMainThread = sawMainThread || main
+    }
+    func writeBatch(_ lines: [String]) {
+        let main = Thread.isMainThread
+        lock.lock(); defer { lock.unlock() }
+        buffer.append(contentsOf: lines)
+        guard Self.isScored(lines) else { return }
+        batchCalls += 1; sawMainThread = sawMainThread || main
+    }
+    /// The attestation lines only, in arrival order.
+    var attestationLines: [String] { lines.filter { $0.hasPrefix("attestation: ") } }
 }
 
 final class FsyncCounter: @unchecked Sendable {
@@ -97,6 +120,10 @@ struct BackupAttestationJournalTests {
         model.records = [a, b, c]
 
         let counter = CountingAttestationJournalWriter(forward: true)
+        let sink = BatchCountingLogSink()
+        let previousLog = appLog
+        appLog = sink
+        defer { appLog = previousLog }
         let fsyncs = FsyncCounter()
         let barriers = ArchivePromoteEngine.Barriers(
             fullFsync: { fd in fsyncs.bump(); return fcntl(fd, F_FULLFSYNC) == 0 ? 0 : Darwin.fsync(fd) },
@@ -108,7 +135,7 @@ struct BackupAttestationJournalTests {
             let w = model.recordAttestation(kind: .cloud, answer: .yes, label: "iCloud",
                                             at: at.addingTimeInterval(0.25), for: [a.id, b.id, c.id],
                                             journalWriter: counter.writer)
-            await w.journal?.value
+            await w.flush?.value
             return w.records.count
         }
         #expect(first == 3)
@@ -127,14 +154,20 @@ struct BackupAttestationJournalTests {
                                          journalWriter: counter.writer)
         let w3 = model.recordAttestation(kind: .drive, answer: .notApplicable, at: at.addingTimeInterval(2), for: [b.id],
                                          journalWriter: counter.writer)
-        await w2.journal?.value
-        await w3.journal?.value
+        await w2.flush?.value
+        await w3.flush?.value
         #expect(counter.batchSizes == [3, 2, 1])
         #expect(ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path).map(\.kind)
                 == ["cloud", "cloud", "cloud", "offsite", "offsite", "drive"], "call order preserved across off-main appends")
+        // The console log went through the same ordered worker: three
+        // writeBatch calls, in call order, none on the main thread.
+        #expect(sink.batchCalls == 3 && sink.writeCalls == 0)
+        #expect(sink.attestationLines.map { String($0.dropFirst("attestation: ".count).prefix(5)) }
+                == ["a.mov", "b.mov", "c.mov", "c.mov", "a.mov", "b.mov"], "console lines in call order: \(sink.lines)")
+        #expect(!sink.sawMainThread, "console batches ran OFF the main thread")
         // Unknown ids only → nothing to journal, no task.
         let w4 = model.recordAttestation(kind: .cloud, answer: .no, for: [UUID()], journalWriter: counter.writer)
-        #expect(w4.records.isEmpty && w4.journal == nil)
+        #expect(w4.records.isEmpty && w4.flush == nil)
         #expect(counter.batchSizes == [3, 2, 1], "an empty batch never touches the writer")
     }
 
@@ -164,9 +197,9 @@ struct BackupAttestationJournalTests {
         #expect(posted.map(\.filename) == ["a.mov", "b.mov"], "announced synchronously, before any journal attempt")
         #expect(a.backupAttestations.map(\.token) == ["cloud=no"] && b.backupAttestations.map(\.token) == ["cloud=no"])
         #expect(write?.records.count == 2)
-        #expect(write?.journal != nil, "an archive IS designated, so the append was attempted")
+        #expect(write?.flush != nil, "an archive IS designated, so the append was attempted")
 
-        await write?.journal?.value
+        await write?.flush?.value
         #expect(ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path).isEmpty, "nothing landed")
         let journalPath = ArchiveAttestationJournal.url(rootPath: sb.archiveRoot.path).path
         let failure = sink.lines.first { $0.contains("journal line(s) not written") }
@@ -179,7 +212,7 @@ struct BackupAttestationJournalTests {
         #expect(sink.lines.filter { $0.contains("attestation: a.mov") }.count == 1, "the per-record console line still appears once")
     }
 
-    @Test("SCALE: 5,000 records return within budget with no main-actor file I/O — zero journal calls before return, one after; console lines in ONE writeBatch")
+    @Test("SCALE: 5,000 records return within budget with no main-actor file I/O — zero journal calls and zero log calls before return; afterwards one append and ONE writeBatch, both off the main thread")
     func fiveThousandRecordsReturnWithinBudgetWithoutPerRecordIO() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("att5k")
         defer { sb.cleanup() }
@@ -210,13 +243,15 @@ struct BackupAttestationJournalTests {
         #expect(postedCount == 5_000, "one record-scoped post per record, all before return")
         #expect(elapsed < .seconds(2), "recordAttestation for 5,000 records took \(elapsed)")
         // Nothing has yielded the main actor yet, so the spawned task cannot
-        // have run: the journal writer has NOT been called on this path.
+        // have run: neither the journal writer nor the log has been touched.
         #expect(counter.callCount == 0, "no journal I/O before return")
-        #expect(sink.batchCalls == 1 && sink.writeCalls == 0, "console: ONE writeBatch, zero per-record writes")
-        #expect(sink.lines.count == 5_000)
+        #expect(sink.batchCalls == 0 && sink.writeCalls == 0, "no console I/O before return")
         #expect(records[4_999].backupAttestations.map(\.token) == ["offsite=yes 'Tim's house'"])
 
-        await write?.journal?.value
+        await write?.flush?.value
         #expect(counter.batchSizes == [5_000], "ONE append carrying every line")
+        #expect(sink.batchCalls == 1 && sink.writeCalls == 0, "console: ONE writeBatch, zero per-record writes")
+        #expect(sink.attestationLines.count == 5_000)
+        #expect(!sink.sawMainThread, "writeBatch ran OFF the main thread")
     }
 }

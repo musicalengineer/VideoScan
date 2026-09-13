@@ -241,7 +241,7 @@ struct BackupAttestationModelTests {
 
         // The archive journal (written off-main; awaited here): one line
         // per record, the human line inside.
-        await write?.journal?.value
+        await write?.flush?.value
         let entries = ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path)
         #expect(entries.count == 2)
         #expect(entries.map(\.line) == ["attestation cloud=yes 'iCloud' by rick", "attestation cloud=yes 'iCloud' by rick"])
@@ -256,8 +256,8 @@ struct BackupAttestationModelTests {
         let w2 = model.recordAttestation(kind: .cloud, answer: .notApplicable, at: at.addingTimeInterval(60), for: [b.id])
         let w3 = model.recordAttestation(kind: .offsite, answer: .no, label: "", at: at.addingTimeInterval(60), for: [b.id])
         #expect(b.backupAttestations.map(\.token) == ["cloud=n/a", "offsite=no"], "empty label → none")
-        await w2.journal?.value
-        await w3.journal?.value
+        await w2.flush?.value
+        await w3.flush?.value
         #expect(ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path).map(\.line).suffix(2)
                 == ["attestation cloud=n/a by rick", "attestation offsite=no by rick"])
         // The promote journal is untouched by attestation lines.
@@ -265,7 +265,7 @@ struct BackupAttestationModelTests {
     }
 
     @Test("no designated archive: the record is still written and announced; nothing is journaled anywhere")
-    func recordAttestationWithoutArchive() {
+    func recordAttestationWithoutArchive() async {
         let model = VideoScanModel()
         let a = rec("a.mov")
         model.records = [a]
@@ -276,7 +276,8 @@ struct BackupAttestationModelTests {
         }
         #expect(posted.count == 1)
         #expect(a.backupAttestations.map(\.token) == ["offsite=yes 'Tim's'"])
-        #expect(write?.journal == nil, "nothing to journal — no task is even spawned")
+        #expect(write?.flush != nil, "the console batch still flushes off-main even with no archive")
+        await write?.flush?.value
     }
 
     @Test("ISOLATION (poisoned-state): a real-looking archive tree is byte-identical after the whole flow — every write lands under the INJECTED root")
@@ -315,7 +316,7 @@ struct BackupAttestationModelTests {
         let r = MasterArchiveTestSupport.makeRecord(path: src.path, userDate: "1991")
         model.records = [r]
         let write = model.recordAttestation(kind: .cloud, answer: .yes, label: "iCloud", for: [r.id])
-        await write.journal?.value
+        await write.flush?.value
         #expect(ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path).count == 1, "the line landed under the injected root")
 
         #expect(fingerprint(decoyVolume) == before, "the real-looking tree is byte-for-byte unchanged")

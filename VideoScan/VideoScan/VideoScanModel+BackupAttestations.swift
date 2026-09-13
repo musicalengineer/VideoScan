@@ -23,18 +23,20 @@
 //     the catalog (one pass over `records`), builds `CopyFacts` and hands
 //     them to the pure `ProtectionSummary`. Never called per table row.
 //
-// MAIN-ACTOR RULE (codex #1416, 2026-09-12): `recordAttestation` does NO
-// file I/O on the main actor. The first cut opened/wrote/fsynced one
-// journal line per record inline — on a slow archive volume or a 5,000-
-// record batch that is a beachball, and every notification waited for
-// the loop to end. Now: the loop only mutates records and posts; the
-// journal batch is encoded once and appended by a single O_APPEND write
-// + one fsync on the cooperative pool (`@concurrent`), batches from
-// successive calls are chained so the file stays in call order, and
-// `appLog` lines go through `writeBatch` (one lock / one write / one
-// fsync — GH #162) instead of one fsync per record. A failed append logs
-// the REAL error with the journal path; the records are already updated
-// and announced by then.
+// MAIN-ACTOR RULE (codex #1416 / #1429, 2026-09-12): `recordAttestation`
+// does NO file I/O on the main actor — not the journal, not the console
+// log. The first cut opened/wrote/fsynced one journal line per record
+// inline and fsynced one `appLog` line per record — on a slow archive
+// volume or a 5,000-record batch that is a beachball, and every
+// notification waited for the loop to end. Now: the loop only mutates
+// records and posts; ONE worker task per call (chained after the
+// previous call's, so both files stay in call order) hops to the
+// cooperative pool (`@concurrent`) and there writes the console lines
+// through `appLog.writeBatch` (one lock / one write / one fsync — GH
+// #162; PersistentLog documents writeBatch as off-main work) and appends
+// the journal batch with a single O_APPEND write + one fsync. A failed
+// append logs the REAL error with the journal path; the records are
+// already updated and announced by then.
 //
 // Isolation: the journal root is the model's designated archive root —
 // tests inject a sandbox designation; nothing here ever names a real
@@ -174,28 +176,30 @@ enum ArchiveAttestationJournal {
 // MARK: - Model
 
 /// What `recordAttestation` did: the records it wrote (synchronously,
-/// announced before return) and the off-main journal append, awaitable
-/// (`await write.journal?.value`) when a caller or test needs the audit
-/// line on disk. nil journal = no designated archive or nothing to write.
+/// announced before return) and the off-main flush — console batch plus
+/// journal append — awaitable (`await write.flush?.value`) when a caller
+/// or test needs the lines on disk. nil = nothing was written, so nothing
+/// to flush.
 struct BackupAttestationWrite {
     let records: [VideoRecord]
-    let journal: Task<Void, Never>?
+    let flush: Task<Void, Never>?
 }
 
 extension VideoScanModel {
 
-    /// The tail of the journal-append chain: each batch waits for the
-    /// previous one, so `.attestation_journal.jsonl` stays in call order
-    /// even though the appends run off-main. (A static stored property is
-    /// allowed in an extension; an instance one is not.)
-    @MainActor private static var attestationJournalTail: Task<Void, Never>?
+    /// The tail of the flush chain: each call's worker waits for the
+    /// previous one, so the console log and `.attestation_journal.jsonl`
+    /// both stay in call order even though the writes run off-main. (A
+    /// static stored property is allowed in an extension; an instance
+    /// one is not.)
+    @MainActor private static var attestationFlushTail: Task<Void, Never>?
 
     /// Record the user's word for `recordIDs`: `kind` = `answer`, with an
     /// optional label ("iCloud", "Tim's house"). Replaces the same-kind
     /// answer on each record (history is the journal's job), posts one
-    /// record-scoped mutation per record as it is written, writes the
-    /// console lines in one batch, and appends one journal line per
-    /// record in ONE off-main durable write. Unknown ids are skipped.
+    /// record-scoped mutation per record as it is written, and hands the
+    /// console lines (one batch) and the journal lines (one durable
+    /// append) to ONE ordered off-main worker. Unknown ids are skipped.
     /// Never touches a file on the main actor.
     @MainActor
     @discardableResult
@@ -231,35 +235,42 @@ extension VideoScanModel {
             // for the journal.
             NotificationCenter.default.post(name: .videoScanCatalogMutated, object: rec)
         }
-        if !lines.isEmpty { appLog.writeBatch(lines) }
-
-        guard let root, !entries.isEmpty else {
-            return BackupAttestationWrite(records: changed, journal: nil)
+        guard !changed.isEmpty else {
+            return BackupAttestationWrite(records: [], flush: nil)
         }
-        let batch = entries
-        let previous = Self.attestationJournalTail
+        // Snapshots for the worker (value types — nothing shared with the
+        // main-actor state after this point).
+        let consoleLines = lines
+        let journalBatch = entries
+        let previous = Self.attestationFlushTail
         let task = Task(priority: .utility) {
             await previous?.value
-            await Self.appendAttestationJournalOffMain(batch, rootPath: root, writer: journalWriter)
+            await Self.flushAttestationsOffMain(console: consoleLines, journal: journalBatch,
+                                                rootPath: root, writer: journalWriter)
         }
-        Self.attestationJournalTail = task
-        return BackupAttestationWrite(records: changed, journal: task)
+        Self.attestationFlushTail = task
+        return BackupAttestationWrite(records: changed, flush: task)
     }
 
-    /// The off-main hop: one durable append for the batch; on failure the
-    /// REAL error and the journal path go to the log (the records are
-    /// already updated and announced — best effort, by design).
+    /// The off-main hop, in this order: the console batch (one
+    /// `writeBatch`), then one durable journal append when an archive is
+    /// designated; on an append failure the REAL error and the journal
+    /// path go to the log (the records are already updated and announced
+    /// — best effort, by design).
     #if compiler(>=6.2)
     @concurrent
     #endif
-    nonisolated static func appendAttestationJournalOffMain(_ entries: [ArchiveAttestationJournal.Entry],
-                                                            rootPath: String,
-                                                            writer: ArchiveAttestationJournal.Writer) async {
+    nonisolated static func flushAttestationsOffMain(console: [String],
+                                                     journal: [ArchiveAttestationJournal.Entry],
+                                                     rootPath: String?,
+                                                     writer: ArchiveAttestationJournal.Writer) async {
+        if !console.isEmpty { appLog.writeBatch(console) }
+        guard let rootPath, !journal.isEmpty else { return }
         do {
-            try writer(entries, rootPath)
+            try writer(journal, rootPath)
         } catch {
             let path = ArchiveAttestationJournal.url(rootPath: rootPath).path
-            appLog.write("attestation: \(entries.count) journal line(s) not written to \(path) — "
+            appLog.write("attestation: \(journal.count) journal line(s) not written to \(path) — "
                          + "\(ArchiveAttestationJournal.describe(error)); catalog records were updated")
         }
     }
