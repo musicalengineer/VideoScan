@@ -788,6 +788,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
     static func kinshipQuestion(in lower: String) -> HallieLineageQuestion? {
         // Sentence forms first (GH #182): "identify rick's children" would
         // otherwise be read by the fragment rule as the person "Identify Rick".
+        if let spouse = spouseSentenceQuestion(in: lower) { return spouse }
         if let sentence = namedKinSentenceQuestion(in: lower) { return sentence }
         if let fragment = kinFragmentQuestion(in: lower) { return fragment }
         // The relation word: "(great )*grand<x>", "3rd great grand<x>",
@@ -904,6 +905,22 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// referent, so "who were their children" keeps the road it had
     /// (codex #1352; singular-they deferred).
     static func namedKinSentenceQuestion(in lower: String) -> HallieLineageQuestion? {
+        // "tell me about his parents" (strict-015, live replay 2026-09-13,
+        // straight after "tell me about Nathaniel Caleb Parker"): the
+        // biography lane rightly refused "his parents" as a name, but no
+        // kin lane had an "about" opener, so the follow-up lane's pronoun
+        // rewrite ("… nathaniel caleb parker's parents") went to the
+        // translator, which read the kin word as a search keyword
+        // (shape=presence … keyword=parents). PRONOUN possessors only:
+        // "tell me about martha lamson's husband" and "tell me about
+        // rick's grandson" are pinned to their old road
+        // (HallieLineageTests, HallieKinshipSidePhrasingTests), and
+        // "their" keeps its road as below. A non-kin noun ("tell me about
+        // his death") is not this shape.
+        let aboutPronoun = /^(?:(?:and|also|then|so|ok|okay|hallie|please),?\s+)*(?:tell\s+(?:me|us)\s+(?:(?:all|more|everything)\s+)?about|what\s+do\s+you\s+know\s+about)\s+(his|her)\s+([a-z]+)\s*\??\s*$/
+        if let m = lower.firstMatch(of: aboutPronoun), let relation = kinFragmentNouns[String(m.2)] {
+            return .kinship(person: capitalizedName(String(m.1)), relation: relation, side: nil)
+        }
         let pattern = /^(?:(?:and|also|then|so|ok|okay|hallie|please),?\s+)*(?:(?:who|what)\s+(?:are|were|is|was)\s+(?:all\s+(?:of\s+)?)?(?:the\s+)?(?:names?\s+of\s+)?|(?:list|name|identify|give\s+me|show\s+me|tell\s+me)\s+(?:all\s+(?:of\s+)?)?(?:the\s+)?(?:names?\s+of\s+)?)(?:all\s+(?:of\s+)?)?(?:(his|her)|([a-z][a-z .'-]*?)'s?)\s+([a-z]+)\s*\??\s*$/
         guard let m = lower.firstMatch(of: pattern),
               let relation = kinFragmentNouns[String(m.3)] else { return nil }
@@ -918,6 +935,47 @@ enum HallieLineageQuestion: Equatable, Sendable {
               !possessor.hasPrefix("the ") else { return nil }
         return .kinship(person: capitalizedName(possessor), relation: relation, side: nil)
     }
+
+    /// The VERB form of the spouse question — "who/whom did X marry",
+    /// "who was X married to" — is the same one-hop kin ask as "who was
+    /// X's wife" and is claimed with the same possessor rules. strict-004
+    /// (live replay 2026-09-13): "whom did he marry" straight after "where
+    /// was he born?" was claimed by nobody, so the follow-up lane's pronoun
+    /// rewrite handed "whom did john hastings 3rd earl of pembroke marry"
+    /// to the translator, which read "marry" as a search keyword
+    /// (shape=presence … keyword=marry). A pronoun subject ("he", "she") is
+    /// handed on as the person for the executor's pre-translation step to
+    /// resolve from memory; a name is the person; "they" keeps its
+    /// road (codex #1352) and a "my …" subject is a nested relative this
+    /// route cannot express. A WHEN question is HallieMarriageDate's and
+    /// never matches: the sentence must open with who/whom and end on the
+    /// verb — "who did he marry in that video" is not this shape.
+    static func spouseSentenceQuestion(in lower: String) -> HallieLineageQuestion? {
+        let didMarry = /^(?:(?:and|also|then|so|ok|okay|hallie|please),?\s+)*(?:who|whom)\s+did\s+(?:(he|she)|([a-z][a-z .'-]*?))\s+(?:marry|wed)\s*\??\s*$/
+        let marriedTo = /^(?:(?:and|also|then|so|ok|okay|hallie|please),?\s+)*(?:who|whom)\s+(?:was|is|were)\s+(?:(he|she)|([a-z][a-z .'-]*?))\s+(?:married|wed|wedded)\s+to\s*\??\s*$/
+        for pattern in [didMarry, marriedTo] {
+            guard let m = lower.firstMatch(of: pattern) else { continue }
+            if let pronoun = m.1 {
+                return .kinship(person: capitalizedName(String(pronoun)), relation: .spouse, side: nil)
+            }
+            let subject = String(m.2 ?? "").trimmingCharacters(in: .whitespaces)
+            let words = subject.split(separator: " ").map(String.init)
+            guard !words.isEmpty, words.count <= 5,
+                  !words.contains(where: { kinFragmentSentenceWords.contains($0) }),
+                  !words.contains(where: { spouseSubjectStopWords.contains($0) }),
+                  !subject.hasPrefix("the ") else { return nil }
+            return .kinship(person: capitalizedName(subject), relation: .spouse, side: nil)
+        }
+        return nil
+    }
+
+    /// Subjects the spouse sentence refuses: plural / object pronouns
+    /// (their road is the translator's, codex #1352) and first-person
+    /// possessives (a nested relative).
+    private static let spouseSubjectStopWords: Set<String> = [
+        "my", "our", "their", "they", "them", "him", "it", "we", "you", "i", "us",
+        "anyone", "anybody", "someone", "somebody", "everyone", "everybody", "people",
+    ]
 
     /// "great great great grandpa" → (3, "grandpa"); "3rd great
     /// grandfather" → (3, "grandfather"); "5x great grandmother" → (5,

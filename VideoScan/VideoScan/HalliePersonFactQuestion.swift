@@ -14,7 +14,15 @@ enum HalliePersonFactQuestion {
         // biography of the whole clause. This lane runs before the lineage
         // detector (e7d71578), so an identity oracle that accepts the
         // clause as a name used to hand the card to the graph biography.
-        if case .personTree? = HallieLineageQuestion.detect(question) { return nil }
+        let lineage = HallieLineageQuestion.detect(question)
+        if case .personTree? = lineage { return nil }
+        // A PRONOUN-POSSESSED kin phrase is a kinship ask about the
+        // remembered person, never a name for the identity oracle to accept
+        // (strict-015, live replay 2026-09-13: "tell me about his parents").
+        // The lineage detector claims it; this lane steps aside whatever the
+        // oracle would have said about "his parents".
+        if case .kinship(let person?, _, _)? = lineage,
+           HalliePronounContinuity.isThirdPersonPronoun(person) { return nil }
         // Military-service shapes first (2026-09-11): "did my dad serve in
         // the marines" is a biography ask about ONE person whose subject
         // takes the same road as every other fact; the generic "tell me
@@ -26,7 +34,16 @@ enum HalliePersonFactQuestion {
             (#"^where (?:did|was) (.+?) (?:die|died)$"#, .deathPlace),
             (#"^when (?:was|were) (.+?) born$"#, .birth),
             (#"^when did (.+?) die$"#, .death),
-            (#"^(?:tell me about|who is|who was) (.+?)$"#, .biography)
+            // "tell me all about Edward III" (strict-005, live replay
+            // 2026-09-13): the opener was exactly "tell me about", so the
+            // sentence reached the translator and "all about" became search
+            // keywords (shape=presence person=edward iii keyword=all about).
+            // The everyday widenings of the same request open the biography;
+            // the remainder must still be a person the oracle knows, so
+            // "tell me all about the wedding video" keeps its catalog road.
+            // "what do you know about X" is NOT here: HallieAppV2Integration
+            // relies on it as a phrasing outside this lane.
+            (#"^(?:tell (?:me|us) (?:(?:all|more|everything) )?about|who is|who was) (.+?)$"#, .biography)
         ]
         for (pattern, operation) in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),

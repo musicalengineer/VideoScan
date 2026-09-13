@@ -2636,7 +2636,8 @@
    "category": "live",
    "text": "tell me about his parents",
    "expect": "kinship",
-   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed"
+   "notes": "harvested 2026-09-07 from the app transcript; LIVE MISS strict-015 in the strict replay visible-20260913-1020 (2026-09-13, real model): after 'tell me about Nathaniel Caleb Parker' it went to the catalog (shape=presence keyword=parents). Expect his parents from the tree. followsPrevious was missing, so the replay reset memory before it — fixed 2026-09-13.",
+   "followsPrevious": true
   },
   {
    "id": "lv260907-011",
@@ -2739,6 +2740,14 @@
    "followsPrevious": true
   },
   {
+   "id": "lv260913-001",
+   "category": "live",
+   "text": "whom did he marry",
+   "expect": "kinship",
+   "notes": "LIVE MISS strict-004 in the strict replay visible-20260913-1020 (2026-09-13, real model): after 'what country was John Hastings born in?' / 'where was he born?' it went to the catalog (shape=presence person=john hastings 3rd earl of pembroke keyword=marry). Expect his spouse from the tree; a pronoun with nobody in memory asks who.",
+   "followsPrevious": true
+  },
+  {
    "id": "lv260907-024",
    "category": "live",
    "text": "how old was he when he ided?",
@@ -2773,8 +2782,8 @@
    "id": "lv260907-028",
    "category": "live",
    "text": "tell me all about Edward III",
-   "expect": "catalog",
-   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed"
+   "expect": "biography",
+   "notes": "harvested 2026-09-07 from the app transcript; expectation was guessed 'catalog' — wrong. LIVE MISS strict-005 in the strict replay visible-20260913-1020 (2026-09-13, real model): fresh, went to the catalog (shape=presence person=edward iii keyword=all about). Expect the tree biography."
   },
   {
    "id": "lv260907-029",
