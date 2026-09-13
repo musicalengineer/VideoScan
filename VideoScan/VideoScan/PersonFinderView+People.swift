@@ -239,219 +239,247 @@ extension PersonFinderView {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        // The couple at the center of the roster, as the
-                        // first card — same photo as the Family Tree title
-                        // (CouplePortrait.swift). Scales with the gallery
-                        // slider like the person cards do.
-                        CouplePortraitView(placement: .people,
-                                           height: min(max(personImageSize * 1.5, 160), 300))
-                            .padding(.trailing, 4)
+                // `ScrollViewReader` ≈ a handle that lets code scroll to a
+                // card by id (the ForEach ids); used to keep the arrow-key
+                // selection in view.
+                ScrollViewReader { galleryScroll in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            // The couple at the center of the roster, as the
+                            // first card — same photo as the Family Tree title
+                            // (CouplePortrait.swift). Scales with the gallery
+                            // slider like the person cards do.
+                            CouplePortraitView(placement: .people,
+                                               height: min(max(personImageSize * 1.5, 160), 300))
+                                .padding(.trailing, 4)
 
-                        // Add Person — always left-aligned
-                        Button {
-                            editingOriginalName = nil
-                            editingProfile = POIProfile(name: "", referencePath: "")
-                        } label: {
-                            VStack(spacing: 6) {
-                                ZStack {
-                                    Circle()
-                                        .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
-                                        .foregroundColor(.secondary.opacity(0.4))
-                                        .frame(width: personImageSize, height: personImageSize)
-                                    Image(systemName: "plus")
-                                        .font(.system(size: personImageSize * 0.34, weight: .medium))
+                            // Add Person — always left-aligned
+                            Button {
+                                editingOriginalName = nil
+                                editingProfile = POIProfile(name: "", referencePath: "")
+                            } label: {
+                                VStack(spacing: 6) {
+                                    ZStack {
+                                        Circle()
+                                            .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
+                                            .foregroundColor(.secondary.opacity(0.4))
+                                            .frame(width: personImageSize, height: personImageSize)
+                                        Image(systemName: "plus")
+                                            .font(.system(size: personImageSize * 0.34, weight: .medium))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Text("Add Person")
+                                        .font(.system(size: personNameFontSize, weight: .medium))
                                         .foregroundColor(.secondary)
                                 }
-                                Text("Add Person")
-                                    .font(.system(size: personNameFontSize, weight: .medium))
-                                    .foregroundColor(.secondary)
+                                .frame(width: personCardWidth)
+                                .padding(.vertical, 4)
                             }
-                            .frame(width: personCardWidth)
-                            .padding(.vertical, 4)
-                        }
-                        .buttonStyle(.plain)
+                            .buttonStyle(.plain)
 
-                        // Build set of all people currently being scanned across all active jobs
-                        let scanningIDs = Set(model.jobs.filter { $0.status.isActive }.compactMap { $0.assignedProfile?.uuid })
-                        ForEach(displayedProfiles) { profile in
-                            let isBeingScanned = scanningIDs.contains(profile.uuid)
-                            let isActive = isBeingScanned
-                            PersonCard(profile: profile,
-                                       isActive: isActive,
-                                       justSaved: justSavedProfileID == profile.id,
-                                       saveProblem: profileSaveProblem?.profileID == profile.id
-                                           ? profileSaveProblem?.message : nil,
-                                       imageSize: personImageSize,
-                                       cardWidth: personCardWidth,
-                                       nameFontSize: personNameFontSize,
-                                       relationshipsLine: kinshipCenter.relationshipsLine(
-                                           for: profile, among: model.savedProfiles),
-                                       aliasWarning: kinshipCenter.aliasWarning(
-                                           for: profile, among: model.savedProfiles),
-                                       portrait: portraits[profile.id])
-                                // Holdout Review badge — top-trailing over
-                                // the portrait. The Button in the overlay
-                                // wins the click over the card's
-                                // onTapGesture below (deepest view first).
-                                .overlay(alignment: .topTrailing) {
-                                    holdoutReviewBadge(for: profile)
-                                }
-                                // A green check is the only tree state shown
-                                // in the gallery. Derived, ambiguous, broken,
-                                // absent, and not-in-tree all appear only via
-                                // "Show Missing GEDCOM" and editor details.
-                                .overlay(alignment: .topLeading) {
-                                    if let badge = treeLinks[profile.id],
-                                       TreeLinkBadge.hasGEDCOMID(badge) {
-                                        GEDCOMIDCheckView(badge: badge,
-                                                          personName: profile.name) {
-                                            showInFamilyTree(profile)
+                            // Build set of all people currently being scanned across all active jobs
+                            let scanningIDs = Set(model.jobs.filter { $0.status.isActive }.compactMap { $0.assignedProfile?.uuid })
+                            ForEach(displayedProfiles) { profile in
+                                let isBeingScanned = scanningIDs.contains(profile.uuid)
+                                let isActive = isBeingScanned
+                                PersonCard(profile: profile,
+                                           isActive: isActive,
+                                           justSaved: justSavedProfileID == profile.id,
+                                           saveProblem: profileSaveProblem?.profileID == profile.id
+                                               ? profileSaveProblem?.message : nil,
+                                           imageSize: personImageSize,
+                                           cardWidth: personCardWidth,
+                                           nameFontSize: personNameFontSize,
+                                           relationshipsLine: kinshipCenter.relationshipsLine(
+                                               for: profile, among: model.savedProfiles),
+                                           aliasWarning: kinshipCenter.aliasWarning(
+                                               for: profile, among: model.savedProfiles),
+                                           portrait: portraits[profile.id])
+                                    // Holdout Review badge — top-trailing over
+                                    // the portrait. The Button in the overlay
+                                    // wins the click over the card's
+                                    // onTapGesture below (deepest view first).
+                                    .overlay(alignment: .topTrailing) {
+                                        holdoutReviewBadge(for: profile)
+                                    }
+                                    // A green check is the only tree state shown
+                                    // in the gallery. Derived, ambiguous, broken,
+                                    // absent, and not-in-tree all appear only via
+                                    // "Show Missing GEDCOM" and editor details.
+                                    .overlay(alignment: .topLeading) {
+                                        if let badge = treeLinks[profile.id],
+                                           TreeLinkBadge.hasGEDCOMID(badge) {
+                                            GEDCOMIDCheckView(badge: badge,
+                                                              personName: profile.name) {
+                                                showInFamilyTree(profile)
+                                            }
+                                            .accessibilityIdentifier("pf.treelink.\(profile.name).\(profile.id)")
                                         }
-                                        .accessibilityIdentifier("pf.treelink.\(profile.name).\(profile.id)")
                                     }
-                                }
-                                .opacity(isBeingScanned ? 0.7 : 1.0)
-                                // Gauntlet flow 1 right-clicks the card to
-                                // reach "Search for <name>…". Test-only.
-                                // Name for the Gauntlet's eyes, uuid so two
-                                // Richards are two identifiers (2026-09-12).
-                                .accessibilityIdentifier("pf.person.\(profile.name).\(profile.id)")
-                                .onTapGesture {
-                                    if isBeingScanned {
-                                        scanLockMessage = "Cannot edit \(profile.displayName) while scanning for \(profile.displayName)."
-                                        return
+                                    .opacity(isBeingScanned ? 0.7 : 1.0)
+                                    // Gauntlet flow 1 right-clicks the card to
+                                    // reach "Search for <name>…". Test-only.
+                                    // Name for the Gauntlet's eyes, uuid so two
+                                    // Richards are two identifiers (2026-09-12).
+                                    .accessibilityIdentifier("pf.person.\(profile.name).\(profile.id)")
+                                    // Double-click opens the editor (same
+                                    // request as the context menu's Edit —
+                                    // PeopleGalleryNavigation.swift). Declared
+                                    // BEFORE the single tap: SwiftUI still
+                                    // fires the single on the first click, so
+                                    // the card is selected, then edited.
+                                    .onTapGesture(count: 2) {
+                                        performCardClick(.double, on: profile, isBeingScanned: isBeingScanned)
                                     }
-                                    // Load this person's reference faces into the strip for inspection
-                                    model.settings.applyProfile(profile)
-                                    model.settings.save()
-                                    model.referenceFaces.removeAll()
-                                    model.referenceLoadFailures.removeAll()
-                                    Task { await model.loadReference() }
-                                }
-                                .draggable(profile.id) {
-                                    PersonCard(profile: profile,
-                                               isActive: false,
-                                               imageSize: personImageSize * 0.8,
-                                               cardWidth: personCardWidth * 0.8,
-                                               nameFontSize: personNameFontSize)
-                                        .opacity(0.8)
-                                }
-                                .dropDestination(for: String.self) { items, _ in
-                                    guard let fromID = items.first else { return false }
-                                    model.reorderProfiles(fromID: fromID, toID: profile.id)
-                                    draggingProfileID = nil
-                                    return true
-                                } isTargeted: { targeted in
-                                    if targeted { draggingProfileID = profile.id }
-                                }
+                                    .onTapGesture {
+                                        performCardClick(.single, on: profile, isBeingScanned: isBeingScanned)
+                                    }
+                                    // The selected card — the person whose
+                                // faces are in the strip — wears a thin
+                                // accent frame so the arrow keys have
+                                // something visible to move (2026-09-13).
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.accentColor, lineWidth: 2)
-                                        .opacity(draggingProfileID == profile.id ? 1 : 0)
-                                        .animation(.easeInOut(duration: 0.15), value: draggingProfileID)
+                                        .stroke(Color.accentColor.opacity(0.55), lineWidth: 1.5)
+                                        .opacity(model.settings.activeProfileUUID == profile.uuid ? 1 : 0)
                                 )
-                                .contextMenu {
-                                    Button("Search for \(profile.displayName)\u{2026}") {
-                                        addJobForPerson(profile)
+                                .draggable(profile.id) {
+                                        PersonCard(profile: profile,
+                                                   isActive: false,
+                                                   imageSize: personImageSize * 0.8,
+                                                   cardWidth: personCardWidth * 0.8,
+                                                   nameFontSize: personNameFontSize)
+                                            .opacity(0.8)
                                     }
-                                    Divider()
-                                    Button("Show \(profile.displayName) in Family Tree") {
-                                        showInFamilyTree(profile)
+                                    .dropDestination(for: String.self) { items, _ in
+                                        guard let fromID = items.first else { return false }
+                                        model.reorderProfiles(fromID: fromID, toID: profile.id)
+                                        draggingProfileID = nil
+                                        return true
+                                    } isTargeted: { targeted in
+                                        if targeted { draggingProfileID = profile.id }
                                     }
-                                    Divider()
-                                    Button("Edit \(profile.displayName)\u{2026}") {
-                                        editingOriginalName = profile.name
-                                        editingProfile = profile
-                                    }
-                                    Divider()
-                                    // ONE review entry point (unified-review
-                                    // 2026-07-27): replaces the old
-                                    // "Confirm <name>…" item. Holdout-first
-                                    // when a blind queue is pending for this
-                                    // person, straight to candidates
-                                    // otherwise — same verb as the badge.
-                                    // Holdout queues and validation labels are
-                                    // keyed by the short name: a shared name is
-                                    // refused here, not guessed (2026-09-12).
-                                    let sharedName = model.nameIsShared(profile)
-                                    Button("Review \(profile.displayName)\u{2026}") {
-                                        confirmTarget = ConfirmSheetTarget(
-                                            profile: profile,
-                                            holdoutQueue: holdoutReview.pendingQueue(for: profile.name))
-                                    }
-                                    .disabled(sharedName)
-                                    .help(sharedName
-                                          ? PersonFinderModel.sharedNameRefusal(profile, operation: "review")
-                                          : "Blind holdout review first (when one is pending), then rate catalog-flagged candidates Definitely / Likely / No. Builds the labeled set the classifier trains on.")
-                                    Button("View Confirmations\u{2026}") {
-                                        confirmationsTarget = ConfirmationsTarget(profile: profile)
-                                    }
-                                    .disabled(sharedName)
-                                    .help(sharedName
-                                          ? PersonFinderModel.sharedNameRefusal(profile, operation: "confirmations")
-                                          : "Cumulative progress: outcomes, signal precision, rounds, what remains.")
-                                    if !model.referenceFaces.isEmpty
-                                        && (model.settings.activeProfileUUID.map { $0 == profile.uuid }
-                                            ?? (model.settings.personName.lowercased() == profile.name.lowercased())) {
-                                        Divider()
-                                        Menu("Remove Low-Confidence Photos") {
-                                            let poorCount = model.referenceFaces.filter { $0.confidence < 0.60 }.count
-                                            let belowGoodCount = model.referenceFaces.filter { $0.confidence < 0.80 }.count
-                                            Button("Below Fair (< 60%) — \(poorCount) photo\(poorCount == 1 ? "" : "s")") {
-                                                model.removeReferenceFaces(belowConfidence: 0.60)
-                                            }
-                                            .disabled(poorCount == 0)
-                                            Button("Below Good (< 80%) — \(belowGoodCount) photo\(belowGoodCount == 1 ? "" : "s")") {
-                                                model.removeReferenceFaces(belowConfidence: 0.80)
-                                            }
-                                            .disabled(belowGoodCount == 0)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(Color.accentColor, lineWidth: 2)
+                                            .opacity(draggingProfileID == profile.id ? 1 : 0)
+                                            .animation(.easeInOut(duration: 0.15), value: draggingProfileID)
+                                    )
+                                    .contextMenu {
+                                        Button("Search for \(profile.displayName)\u{2026}") {
+                                            addJobForPerson(profile)
                                         }
+                                        Divider()
+                                        Button("Show \(profile.displayName) in Family Tree") {
+                                            showInFamilyTree(profile)
+                                        }
+                                        Divider()
+                                        Button("Edit \(profile.displayName)\u{2026}") {
+                                            openEditor(PersonEditRequest(profile))
+                                        }
+                                        Divider()
+                                        // ONE review entry point (unified-review
+                                        // 2026-07-27): replaces the old
+                                        // "Confirm <name>…" item. Holdout-first
+                                        // when a blind queue is pending for this
+                                        // person, straight to candidates
+                                        // otherwise — same verb as the badge.
+                                        // Holdout queues and validation labels are
+                                        // keyed by the short name: a shared name is
+                                        // refused here, not guessed (2026-09-12).
+                                        let sharedName = model.nameIsShared(profile)
+                                        Button("Review \(profile.displayName)\u{2026}") {
+                                            confirmTarget = ConfirmSheetTarget(
+                                                profile: profile,
+                                                holdoutQueue: holdoutReview.pendingQueue(for: profile.name))
+                                        }
+                                        .disabled(sharedName)
+                                        .help(sharedName
+                                              ? PersonFinderModel.sharedNameRefusal(profile, operation: "review")
+                                              : "Blind holdout review first (when one is pending), then rate catalog-flagged candidates Definitely / Likely / No. Builds the labeled set the classifier trains on.")
+                                        Button("View Confirmations\u{2026}") {
+                                            confirmationsTarget = ConfirmationsTarget(profile: profile)
+                                        }
+                                        .disabled(sharedName)
+                                        .help(sharedName
+                                              ? PersonFinderModel.sharedNameRefusal(profile, operation: "confirmations")
+                                              : "Cumulative progress: outcomes, signal precision, rounds, what remains.")
+                                        if !model.referenceFaces.isEmpty
+                                            && (model.settings.activeProfileUUID.map { $0 == profile.uuid }
+                                                ?? (model.settings.personName.lowercased() == profile.name.lowercased())) {
+                                            Divider()
+                                            Menu("Remove Low-Confidence Photos") {
+                                                let poorCount = model.referenceFaces.filter { $0.confidence < 0.60 }.count
+                                                let belowGoodCount = model.referenceFaces.filter { $0.confidence < 0.80 }.count
+                                                Button("Below Fair (< 60%) — \(poorCount) photo\(poorCount == 1 ? "" : "s")") {
+                                                    model.removeReferenceFaces(belowConfidence: 0.60)
+                                                }
+                                                .disabled(poorCount == 0)
+                                                Button("Below Good (< 80%) — \(belowGoodCount) photo\(belowGoodCount == 1 ? "" : "s")") {
+                                                    model.removeReferenceFaces(belowConfidence: 0.80)
+                                                }
+                                                .disabled(belowGoodCount == 0)
+                                            }
+                                        }
+                                        Divider()
+                                        Button("Delete \(profile.displayName)\u{2026}", role: .destructive) {
+                                            confirmDeleteProfile = profile
+                                        }
+                                        .keyboardShortcut(.delete, modifiers: .command)
                                     }
-                                    Divider()
-                                    Button("Delete \(profile.displayName)\u{2026}", role: .destructive) {
-                                        confirmDeleteProfile = profile
-                                    }
-                                    .keyboardShortcut(.delete, modifiers: .command)
-                                }
-                        }
-
-                        // Step 3: "Search for Family" — fan a scan across
-                        // every saved POI profile against a folder picked
-                        // via NSOpenPanel. One click, N parallel jobs.
-                        // Disabled until at least one profile has photos
-                        // loaded, otherwise enqueueFamilyJobs filters
-                        // them all out and the click would no-op silently.
-                        Button {
-                            browseForFamilyScanFolder()
-                        } label: {
-                            VStack(spacing: 6) {
-                                ZStack {
-                                    Circle()
-                                        .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
-                                        .foregroundColor(.accentColor.opacity(0.6))
-                                        .frame(width: personImageSize, height: personImageSize)
-                                    Image(systemName: "person.2.crop.square.stack.fill")
-                                        .font(.system(size: personImageSize * 0.34, weight: .medium))
-                                        .foregroundColor(.accentColor)
-                                }
-                                Text("Search for Family")
-                                    .font(.system(size: personNameFontSize, weight: .medium))
-                                    .foregroundColor(.accentColor)
-                                    .lineLimit(1)
                             }
-                            .frame(width: personCardWidth)
-                            .padding(.vertical, 4)
+
+                            // Step 3: "Search for Family" — fan a scan across
+                            // every saved POI profile against a folder picked
+                            // via NSOpenPanel. One click, N parallel jobs.
+                            // Disabled until at least one profile has photos
+                            // loaded, otherwise enqueueFamilyJobs filters
+                            // them all out and the click would no-op silently.
+                            Button {
+                                browseForFamilyScanFolder()
+                            } label: {
+                                VStack(spacing: 6) {
+                                    ZStack {
+                                        Circle()
+                                            .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
+                                            .foregroundColor(.accentColor.opacity(0.6))
+                                            .frame(width: personImageSize, height: personImageSize)
+                                        Image(systemName: "person.2.crop.square.stack.fill")
+                                            .font(.system(size: personImageSize * 0.34, weight: .medium))
+                                            .foregroundColor(.accentColor)
+                                    }
+                                    Text("Search for Family")
+                                        .font(.system(size: personNameFontSize, weight: .medium))
+                                        .foregroundColor(.accentColor)
+                                        .lineLimit(1)
+                                }
+                                .frame(width: personCardWidth)
+                                .padding(.vertical, 4)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(model.savedProfiles.allSatisfy { $0.referencePath.isEmpty })
+                            .help("Pick a folder or volume — every saved person will be scanned against it in parallel. Catalog rows for matched files get tagged with the detected name(s).")
                         }
-                        .buttonStyle(.plain)
-                        .disabled(model.savedProfiles.allSatisfy { $0.referencePath.isEmpty })
-                        .help("Pick a folder or volume — every saved person will be scanned against it in parallel. Catalog rows for matched files get tagged with the detected name(s).")
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 4)
                     }
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 4)
+                    .frame(height: peopleGalleryHeight)
+                    // `.focusable()` lets the gallery itself take keyboard
+                    // focus (a card click grants it — selectGalleryCard);
+                    // ← / → then walk the cards in displayed order and stop
+                    // at the ends. Focus-scoped, so a text field elsewhere
+                    // keeps its own arrows. `.handled` ≈ "consumed, don't
+                    // pass to the next responder" (FamilyTreeView pattern).
+                    .focusable()
+                    .focusEffectDisabled()
+                    .focused($peopleGalleryFocused)
+                    .onKeyPress(.leftArrow) { moveGallerySelection(.previous, in: displayedProfiles) }
+                    .onKeyPress(.rightArrow) { moveGallerySelection(.next, in: displayedProfiles) }
+                    .onChange(of: model.settings.activeProfileUUID) { _, uuid in
+                        guard let cardID = model.savedProfiles.first(where: { $0.uuid == uuid })?.id else { return }
+                        withAnimation(.easeInOut(duration: 0.15)) { galleryScroll.scrollTo(cardID) }
+                    }
                 }
-                .frame(height: peopleGalleryHeight)
 
                 // Drag handle to resize the People gallery — the photos
                 // grow/shrink with the pane height, so this is also the
@@ -604,6 +632,57 @@ extension PersonFinderView {
     }
 }
 
+// MARK: - Card gestures (single click selects, double click edits)
+
+extension PersonFinderView {
+
+    /// One resolver for both clicks so the double-click can never drift
+    /// from the menu's Edit (PeopleCardAction is the tested value).
+    func performCardClick(_ click: PeopleCardAction.Click, on profile: POIProfile, isBeingScanned: Bool) {
+        switch PeopleCardAction.resolve(click, on: profile, isBeingScanned: isBeingScanned) {
+        case .refuseWhileScanning:
+            scanLockMessage = "Cannot edit \(profile.displayName) while scanning for \(profile.displayName)."
+        case .select:
+            selectGalleryCard(profile)
+        case .edit(let request):
+            openEditor(request)
+        }
+    }
+
+    /// The single-click behaviour: make this person the active profile
+    /// and load their reference faces into the strip for inspection.
+    func selectGalleryCard(_ profile: POIProfile) {
+        peopleGalleryFocused = true
+        model.settings.applyProfile(profile)
+        model.settings.save()
+        model.referenceFaces.removeAll()
+        model.referenceLoadFailures.removeAll()
+        Task { await model.loadReference() }
+    }
+
+    /// ← / → in the gallery: select the neighbouring card in the displayed
+    /// order (PeopleGalleryNavigation decides; stops at the ends). A card
+    /// being scanned is skipped over rather than refused — the selection
+    /// simply doesn't land on it. Always consumed so the scroll view never
+    /// interprets the arrow as a scroll.
+    func moveGallerySelection(_ step: PeopleGalleryNavigation.Step, in displayed: [POIProfile]) -> KeyPress.Result {
+        let scanning = Set(model.jobs.filter { $0.status.isActive }.compactMap { $0.assignedProfile?.uuid })
+        let selectable = displayed.filter { !scanning.contains($0.uuid) }
+        if let next = PeopleGalleryNavigation.neighbor(of: model.settings.activeProfileUUID, in: selectable, step: step) {
+            selectGalleryCard(next)
+        }
+        return .handled
+    }
+
+    /// Open the editor for the person the request names. The profile is
+    /// looked up by uuid in the live gallery — never by name — so a
+    /// request for one Richard can't open the other Richard's editor.
+    func openEditor(_ request: PersonEditRequest) {
+        guard let profile = model.savedProfiles.first(where: { $0.uuid == request.profileUUID }) else { return }
+        editingOriginalName = request.originalName
+        editingProfile = profile
+    }
+}
 
 /// A profile write that did not fully succeed, pinned to the card it
 /// belongs to. Carries the profile id so a later edit of a DIFFERENT

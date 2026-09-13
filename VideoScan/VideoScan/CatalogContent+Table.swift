@@ -209,7 +209,7 @@ extension CatalogContent {
 
     /// Sort + menus stage of the split — see `catalogTable`'s note.
     private var tableWithMenus: some View {
-        catalogTableBase
+        tableWithTrashShortcut
         .onChange(of: sortOrder) {
             onSort(sortOrder)
             tableData.sort(using: sortOrder)
@@ -227,6 +227,20 @@ extension CatalogContent {
             for r in recs { model.noteMissingFileForUserAction(r) }
             MediaOpener.open(recs)
         }
+    }
+
+    /// ⌘⌫ — the Finder gesture — moves the highlighted rows to the Trash
+    /// (Rick 2026-09-13). On the Table itself, so it only fires while the
+    /// table owns keyboard focus: the search box, rename fields and the
+    /// editor sheets keep their own ⌘⌫. Its own stage, same reason as
+    /// the others (GH #132). `.delete` is the Backspace key.
+    private var tableWithTrashShortcut: some View {
+        catalogTableBase
+            .onKeyPress(phases: .down) { press in
+                guard press.key == .delete, press.modifiers == .command else { return .ignored }
+                trashSelectedRows()
+                return .handled
+            }
     }
 
     private var catalogTableBase: some View {
@@ -1441,6 +1455,21 @@ extension CatalogContent {
     /// success is silent, matching Finder's behavior on trash/delete.
     /// Called from the row context menu's Delete File submenu after the
     /// detached FileManager pass completes.
+    /// ⌘⌫ handler: the highlighted rows, in table order, through the ONE
+    /// existing Trash routine (VideoScanModel+TrashSelection.swift → the
+    /// same `deleteConfirmedJunk(_:mode: .toTrash)` the row menu's "Move
+    /// to Trash" calls). No selection → nothing happens. Refusals are
+    /// console lines; the result is reported as the row menu reports it.
+    private func trashSelectedRows() {
+        guard !selectedIDs.isEmpty else { return }
+        let targets = tableData.filter { selectedIDs.contains($0.id) }
+        guard !targets.isEmpty else { return }
+        Task { @MainActor in
+            let result = await model.trashSelectedRecords(targets)
+            reportDeleteResult(result, mode: .toTrash)
+        }
+    }
+
     private func reportDeleteResult(
         _ result: VideoScanModel.JunkDeletionResult,
         mode: VideoScanModel.JunkDeletionMode

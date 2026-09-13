@@ -622,9 +622,16 @@ extension VideoScanModel {
             }
         }
         if protected > 0 {
-            log("\(verb): left \(protected) file(s) alone — they live in the Master Archive, which only archive actions may change.")
+            log(Self.masterArchiveRefusalLine(verb: verb, count: protected))
         }
         return kept
+    }
+
+    /// The one sentence every bulk verb writes when it leaves Master
+    /// Archive files alone (shared with the ⌘⌫ Trash plan, 2026-09-13, so
+    /// the console reads the same whichever path refused).
+    nonisolated static func masterArchiveRefusalLine(verb: String, count: Int) -> String {
+        "\(verb): left \(count) file(s) alone — they live in the Master Archive, which only archive actions may change."
     }
 
     // MARK: Promote — plan + routing
