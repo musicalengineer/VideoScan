@@ -1177,7 +1177,7 @@ struct ArchivistChatWindow: View {
                         picker: halliePicker)
                     guard !Task.isCancelled,
                           activeRequestID == requestID else { return }
-                    commitHallie(response, question: clause)
+                    commitHallie(response, requestID: requestID, question: clause)
                     // A which-one is pending: the next clause would run
                     // against an unresolved subject. Stop here — the
                     // reader's choice resumes only this clause.
@@ -1260,7 +1260,7 @@ struct ArchivistChatWindow: View {
                     history: history)
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
-                commitHallie(response)
+                commitHallie(response, requestID: requestID)
             } catch {
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
@@ -1274,130 +1274,55 @@ struct ArchivistChatWindow: View {
         }
     }
 
-    private func commitHallie(_ response: HallieAppTurnCoordinator.Response, question: String? = nil) {
-        // Rick 2026-08-22: "in-app, there's no audio." On by default; the
-        // settings sheet has the switch and the voice picker.
-        if HallieSpeaker.isEnabled() {
-            if let kokoro = response.pickerSpeech {
-                // The picker's candidates carry their own phoneme overrides
-                // ("One: [Latta](/lˈætə/). Two: …"); no lexicon pass.
-                HallieSpeaker.shared.speakPrepared(kokoro: kokoro, apple: response.pickerSpeechFallback ?? kokoro)
-            } else {
-                HallieSpeaker.shared.speak(response.result.prose, about: response.result.catalogPersonName)
-            }
-        }
-        lastResponder = response.responderHost
-        // A repair reply re-asks the pending which-one; keep it so the next
-        // typed or tapped name still selects from it.
-        if response.result.outcome == .repaired, response.pendingClarification == nil {
-            // keep pendingHallieClarification as is
-        } else {
-            pendingHallieClarification = response.pendingClarification
-        }
-        hallieTelling = response.telling
-        hallieDrill = response.drill
-        halliePicker = response.picker
-        hallieMemory.record(intent: response.executedIntent,
-                            result: response.result,
-                            question: question)
-        let citations = response.citations
-        let isFollowUpAction = response.result.route == .followUp
-            && response.result.mediaAction != nil
-        // Bare "play first" may refer only to evidence actually shown in
-        // this answer, never an unseen broad result set. A follow-up media
-        // action keeps the previous referent list intact.
-        if !isFollowUpAction {
-            lastMatches = citations.compactMap {
-                model.record(forID: $0.recordID)
-            }
-        }
-        let clarificationChips = response.result.clarification?.candidates.map {
-            ArchivistMessage.Chip(
-                label: $0.label,
-                action: .hallieIdentityChoice($0.id))
-        } ?? []
-        let offerChips = response.result.offeredActions.map { offer -> ArchivistMessage.Chip in
-            let label = HallieTurnExecutor.offerLabel(offer)
-            switch offer {
-            case .openFamilyTree(let name):
-                return ArchivistMessage.Chip(
-                    label: label, action: .openFamilyTree(personName: name))
-            case .openFamilyTreePerson(let id, let name):
-                return ArchivistMessage.Chip(
-                    label: label,
-                    action: .openFamilyTreePerson(
-                        personID: id, personName: name))
-            case .openFamilyTreeSurname(let surname):
-                return ArchivistMessage.Chip(
-                    label: label, action: .openFamilyTreeSurname(surname))
-            case .getFamilyTree:
-                return ArchivistMessage.Chip(label: label, action: .getFamilyTree)
-            case .ask(let question, _):
-                return ArchivistMessage.Chip(
-                    label: label, action: .askText(question, playAfterAnswer: false))
-            case .recompileFamilyTree:
-                return ArchivistMessage.Chip(
-                    label: label, action: .recompileFamilyTree(thenAsk: question))
-            case .openPeopleTab:
-                return ArchivistMessage.Chip(label: label, action: .openPeopleTab)
-            case .openAppDestination(let destination):
-                return ArchivistMessage.Chip(
-                    label: label, action: .openAppDestination(destination))
-            case .showPossibleDuplicate(let id, let name):
-                // Same navigation as a person focus: the record with both
-                // parents is what Rick needs to see.
-                return ArchivistMessage.Chip(
-                    label: label,
-                    action: .openFamilyTreePerson(personID: id, personName: name))
-            case .revealFolder(let url, _):
-                return ArchivistMessage.Chip(label: label, action: .revealFolder(url))
-            }
-        }
-        // The variations picker: one chip per way to say the name (click =
-        // hear it), then "That's it" for the one heard, and "None of these".
-        let pickerChips = response.picker.map { ArchivistMessage.pickerChips(for: $0) } ?? []
-        messages.append(ArchivistMessage(
-            role: .assistant,
-            text: response.result.prose,
-            queryLine: response.result.queryDescription,
-            basisLine: response.result.basisLine,
-            biographyPhoto: response.biographyPhoto,
-            attachments: response.result.attachments,
-            citations: isFollowUpAction ? [] : citations,
-            knowledgeCitations: response.result.knowledgeCitations,
-            responder: response.responderHost,
-            model: ollamaModel,
-            route: Self.transcriptLabel(response.result.route),
-            outcome: Self.transcriptLabel(response.result.outcome),
-            composedBy: response.result.composedBy.rawValue,
-            transcriptText: response.result.transcriptText,
-            chips: clarificationChips + offerChips + pickerChips))
-        if let action = response.result.mediaAction {
-            perform(action)
-        } else if response.playAfterAnswer, !lastMatches.isEmpty {
-            play(bestOf: lastMatches)
-        }
-        // "center the family tree on Martha Lamson" (2026-08-29): the user
-        // asked for the navigation, so the chip's own path runs without a
-        // tap. The prose already says what is happening; no second line.
-        if case .openFamilyTreePerson(let personID, let personName)? =
-            response.result.immediateOfferedAction {
-            openFamilyTreeTab(focus: personName, personID: personID, surname: nil, announce: false)
-            // AppStorage is only a hand-off request. FamilyTreeLiveModel logs
-            // whether the target was actually applied or rejected.
-            appLog.write(ArchivistDiagnosticLine.focusRequested)
-        }
-        // "I can do that now" (live miss #8): the recompile runs without a
-        // tap and the question that hit the refused tree is asked again.
-        if case .recompileFamilyTree? = response.result.immediateOfferedAction {
-            recompileFamilyTree(thenAsk: question)
-        }
-        // Explicit "show/open the … tab/window" asks carry the same action
-        // as their chip. Accept only this response's first offer; no old
-        // transcript state participates in the decision.
-        HallieAppNavigation.acceptImmediateOffer(from: response.result) {
-            MainWindowHelper.shared.openMainWindow()
-        }
+    private func commitHallie(
+        _ response: HallieAppTurnCoordinator.Response,
+        requestID: UUID,
+        question: String? = nil
+    ) {
+        HallieResponseCommit.apply(
+            response,
+            question: question,
+            modelName: ollamaModel,
+            requestID: requestID,
+            activeRequestID: activeRequestID,
+            isCancelled: Task.isCancelled,
+            state: .init(
+                lastResponder: lastResponder,
+                pendingClarification: pendingHallieClarification,
+                telling: hallieTelling,
+                drill: hallieDrill,
+                picker: halliePicker,
+                memory: hallieMemory,
+                lastMatches: lastMatches),
+            sinks: .init(
+                isSpeechEnabled: { HallieSpeaker.isEnabled() },
+                speakPrepared: { HallieSpeaker.shared.speakPrepared(kokoro: $0, apple: $1) },
+                speak: { HallieSpeaker.shared.speak($0, about: $1) },
+                recordForID: { model.record(forID: $0) },
+                publishState: { state in
+                    lastResponder = state.lastResponder
+                    pendingHallieClarification = state.pendingClarification
+                    hallieTelling = state.telling
+                    hallieDrill = state.drill
+                    halliePicker = state.picker
+                    hallieMemory = state.memory
+                    lastMatches = state.lastMatches
+                },
+                appendMessage: { messages.append($0) },
+                performMediaAction: { perform($0) },
+                play: { play(bestOf: $0) },
+                openFamilyTreePerson: { personID, personName in
+                    openFamilyTreeTab(focus: personName, personID: personID, surname: nil, announce: false)
+                    // AppStorage is only a hand-off request. FamilyTreeLiveModel logs
+                    // whether the target was actually applied or rejected.
+                    appLog.write(ArchivistDiagnosticLine.focusRequested)
+                },
+                recompileFamilyTree: { recompileFamilyTree(thenAsk: $0) },
+                acceptImmediateOffer: { result in
+                    HallieAppNavigation.acceptImmediateOffer(from: result) {
+                        MainWindowHelper.shared.openMainWindow()
+                    }
+                }))
     }
 
     /// A follow-up media action on ALREADY-CITED items ("play the first
@@ -1421,10 +1346,6 @@ struct ArchivistChatWindow: View {
         }
     }
 
-    private static func transcriptLabel(_ route: HallieTurnExecutor.Route) -> String {
-        HallieTurnExecutor.label(route)
-    }
-
     /// The last few SOCIAL (question, shown answer) pairs. Archive answers
     /// and evidence never enter free-form conversation history; this also
     /// prevents an ordinary chat sentence from leaking into factual prose.
@@ -1444,10 +1365,6 @@ struct ArchivistChatWindow: View {
             }
         }
         return Array(turns.suffix(HallieSocialConversation.maximumHistoryTurns))
-    }
-
-    private static func transcriptLabel(_ outcome: HallieTurnExecutor.Outcome) -> String {
-        HallieTurnExecutor.label(outcome)
     }
 
     // MARK: Play (Rick 2026-08-07: "at least 'play the current video'")

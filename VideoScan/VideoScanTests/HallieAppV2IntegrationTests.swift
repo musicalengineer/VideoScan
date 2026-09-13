@@ -852,14 +852,18 @@ struct HallieAppV2IntegrationTests {
         let chat = try productionSource("ArchivistChatWindow.swift")
         let ask = try slice(chat, from: "private func ask(_ text: String)",
                             through: "// MARK: Play")
-        let commit = try slice(
+        let commitWrapper = try slice(
             chat, from: "private func commitHallie(",
             through: "// MARK: Play")
+        let commit = try productionSource("HallieResponseCommit.swift")
+        #expect(commitWrapper.contains("HallieResponseCommit.apply("))
         #expect(commit.contains("action: .hallieIdentityChoice($0.id)"))
         // Clarification candidates never re-enter the ask pipeline by label;
         // only executor OFFERS (".ask(question:label:)") may become askText.
         #expect(!commit.contains("action: .askText($0.label"))
         #expect(!commit.contains("askText(candidate"))
+        #expect(!commitWrapper.contains("action: .askText($0.label"))
+        #expect(!commitWrapper.contains("askText(candidate"))
         #expect(commit.contains("response.pendingClarification"))
         #expect(chat.contains("HallieAppTurnCoordinator.continue("))
         // 2026-08-24: typed replies resolve through the shared deterministic
@@ -955,7 +959,8 @@ struct HallieAppV2IntegrationTests {
         #expect(row.contains("actionButton(\"Show in Finder\""))   // renamed 2026-08-24 (Rick)
         #expect(row.contains("actionButton(\"Show in Catalog\""))
         #expect(chat.contains("ArchivistCitationRow("))
-        #expect(chat.contains("let citations = response.citations"))
+        let commit = try productionSource("HallieResponseCommit.swift")
+        #expect(commit.contains("let citations = response.citations"))
         #expect(coordinator.contains("citations: Array(result.citations.prefix(25))"))
         #expect(chat.contains("model.record(forID: citation.recordID)"))
         #expect(chat.contains("activateFileViewerSelecting"))
