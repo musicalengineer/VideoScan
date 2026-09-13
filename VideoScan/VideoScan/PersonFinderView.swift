@@ -139,6 +139,12 @@ struct PersonFinderView: View {
     /// tree-link reducer verdict is not `.pinned`. Session-scoped on purpose:
     /// a filter that survived relaunch would hide people silently.
     @State var showMissingGEDCOM = false
+    /// Keyboard focus for the People gallery: ← / → walk the cards only
+    /// while the gallery itself owns focus, so the arrows never leave a
+    /// text field (editor sheet, search box). Set on a card click.
+    /// (`@FocusState` ≈ a two-way flag for "does this view have keyboard
+    /// focus" — written by clicks, read by the focus system.)
+    @FocusState var peopleGalleryFocused: Bool
     /// Exact-record hint for the Family Tree tab (same key FamilyTreeView
     /// reads); set alongside `ftHighlight` when the profile is pinned.
     @AppStorage("ftHighlightedPersonID") var ftHighlightID: String = ""
