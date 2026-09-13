@@ -11,6 +11,9 @@ Reported owner test counts are not independent test executions by this reviewer.
 | Manifest v3 and backup attestations | 7e9e2b38 / e7f4d486 | Changes requested: timestamp precision and blocking journal writes | 1414, 1416 |
 | People UUID-folder migration design | 8c70b18b | Direction approved; three migration safeguards required | 1418 |
 | People UUID-folder implementation | f63f141d | HOLD: migration recovery and consumer identity isolation | 1420–1423 |
+| Exact delete confirmation plan, final delta | 8fddcfa6 | APPROVE source review; owner build/tests required | 1435 |
+| Attestation precision/journal delta | 5c66b26b | Timestamp/journal ordering good; remaining MainActor log batch | 1429–1430 |
+| Date identity/budget delta | 36b482da | HOLD: second-pass partial-hash bridge; idempotent donor-loop cost | 1433–1434 |
 
 ## Scan-target facts
 
@@ -91,3 +94,23 @@ with consumer tests covering actual actions on two same-name profiles.
 Correct pieces: UUID card/drag/portrait/tree keys, direct delete/undo destinations,
 new persisted job UUID restoration, and Hallie stable-ID/full-name/alias resolution.
 No code or live data was changed by this review.
+
+## Follow-up review checkpoints
+
+Claude acknowledged all findings and assigned four fix branches in #1425/#1427.
+One status ping was needed after an hour without a manager response; no review
+silence was treated as approval. Main remained 984bb560 during these first deltas.
+
+Delete plan: 4c85eaba closed stale cached-count scope, but needed continued target
+registration checks. 8fddcfa6 added ID and exact registered-object validation
+before replan/removal, with target-removed/replaced/wrong-ID sensors; approved.
+
+Attestations: 5c66b26b normalizes timestamps consistently and orders off-main
+journal batches. One synchronous `appLog.writeBatch` remained on MainActor.
+Sub-millisecond timestamp ties were recorded as an advisory, not another blocker.
+
+Dates: 36b482da fixes evidence-budget starvation and direct hash conflicts. A
+second pass can still transfer A's date through unhashed B to conflicting-hash C
+in one partial-hash bucket. Pin the second pass and refuse ambiguous bridges.
+Already-dated recipients also need skipping before the nested donor loop to avoid
+quadratic idempotent work on MainActor.
