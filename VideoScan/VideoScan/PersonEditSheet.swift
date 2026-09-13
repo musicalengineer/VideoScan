@@ -937,16 +937,17 @@ struct PersonEditSheet: View {
     // MARK: Browse & Import
 
     /// Canonical local folder for this person's reference photos.
-    /// Lives at ~/Library/Application Support/VideoScan/POI/<name>/ — see
+    /// Lives at ~/Library/Application Support/VideoScan/POI/<UUID>/ — see
     /// POIStorage.swift. profile.json and photos share this folder.
     private func ensureLocalPhotoFolder() -> URL? {
-        // Typing a new name must not redirect imports into someone else's
-        // folder. Existing profiles keep importing into their original folder
-        // until the complete-folder rename commits on Save.
-        let storageName = originalProfile.name.isEmpty ? name : originalProfile.name
+        // Keyed by the uuid the sheet was opened with — for a new person a
+        // fresh uuid that `currentProfile` carries into Save — so what has
+        // been typed so far can never redirect imports into someone else's
+        // folder (2026-09-12). The file store still refuses a folder that
+        // turns out to belong to another uuid.
         do {
-            let dir = try POIProfileFileStore.folder(
-                component: POIStorage.sanitize(storageName), in: POIStorage.storeDir)
+            let dir = POIStorage.folder(for: originalProfile)
+            try POIProfileFileStore.guardRoot(dir.deletingLastPathComponent())
             _ = try POIProfileFileStore.save(id: originalProfile.uuid, destination: dir,
                 retire: { _ in }, write: { _, _ in })
             return dir

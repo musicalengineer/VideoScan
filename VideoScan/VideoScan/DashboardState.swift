@@ -15,6 +15,12 @@ final class DashboardState: ObservableObject {
             startSystemMetrics()
         }
         catalogLog.start(append: true)
+        // The People uuid migration can run before catalog.log is open
+        // (PersonFinderModel lists profiles at construction). Its audit
+        // lines wait in POIStorage until here.
+        for line in POIStorage.drainPendingCatalogLogLines() {
+            catalogLog.write(line)
+        }
     }
 
     // MARK: - Chip identity / match flash

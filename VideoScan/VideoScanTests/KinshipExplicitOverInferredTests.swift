@@ -81,7 +81,7 @@ struct KinshipExplicitOverInferredTests {
         let existing = profiles.first { $0.name == subject }?.kinships ?? []
         return KinshipValidation.validate(
             candidate: Kinship(relation: relation, relativeTo: .profile(name: anchor), basis: basis),
-            subjectProfileStableID: subject.lowercased(),
+            subjectProfileStableID: profiles.first { $0.name == subject }?.id ?? subject.lowercased(),
             existingRows: existing,
             inference: FamilyKinshipInference(profiles: profiles, graph: nil))
     }
@@ -182,7 +182,7 @@ struct KinshipExplicitOverInferredTests {
         let profiles = Self.oneCardCarriesEverything
         let twice = [Self.row(.sibling, of: "Ada"), Self.row(.sibling, of: "Ada")]
         let batch = KinshipValidation.validate(
-            batch: twice, subjectProfileStableID: "ben", profiles: profiles, graph: nil,
+            batch: twice, subjectProfileStableID: profiles.first { $0.name == "Ben" }!.id, profiles: profiles, graph: nil,
             currentRows: [])
         #expect(batch.blocksSave)
         #expect(batch.contains { $0.findings.contains { $0.rule == .duplicateRow && $0.isError } })
@@ -245,7 +245,7 @@ struct KinshipExplicitOverInferredTests {
                            basis: .attestedHalf(sharedParent: .profile(name: "Mira")))
 
         let f = KinshipValidation.validate(
-            candidate: half, subjectProfileStableID: "ben", existingRows: [],
+            candidate: half, subjectProfileStableID: profiles.first { $0.name == "Ben" }!.id, existingRows: [],
             inference: FamilyKinshipInference(profiles: profiles, graph: nil))
         #expect(!f.blocksSave)
         #expect(severity(f, of: .duplicateRow) == .warning)
@@ -254,10 +254,10 @@ struct KinshipExplicitOverInferredTests {
         var stored = profiles
         stored[stored.firstIndex { $0.name == "Ben" }!].kinships = [half]
         let overlay = FamilyKinshipOverlay(profiles: stored, graph: nil)
-        let ben = overlay.node(profileStableID: "ben")!
+        let ben = overlay.node(profileStableID: stored.first { $0.name == "Ben" }!.id)!
         let derivedParents = overlay.derivedEdges(from: ben)
             .filter { $0.relation == .parent }.map(\.to)
-        #expect(derivedParents == [overlay.node(profileStableID: "mira")!])
+        #expect(derivedParents == [overlay.node(profileStableID: stored.first { $0.name == "Mira" }!.id)!])
         #expect(overlay.warnings.isEmpty)   // dominance, not a fail-closed conflict
     }
 
@@ -279,7 +279,7 @@ struct KinshipExplicitOverInferredTests {
         let profiles = Self.oneCardCarriesEverything
         let inference = FamilyKinshipInference(profiles: profiles, graph: nil)
         let overlay = inference.overlay
-        let ben = overlay.node(profileStableID: "ben")!
+        let ben = overlay.node(profileStableID: profiles.first { $0.name == "Ben" }!.id)!
 
         // Guard the premise: the derivation really is producing parent
         // edges for Ben. If this stops being true the sensor below is

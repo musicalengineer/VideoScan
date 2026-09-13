@@ -371,18 +371,32 @@ struct POIStorageTests {
         #expect(POIStorage.sanitize("   ") == "reference")
     }
 
-    @Test func folderForReturnsPerPersonPath() {
-        let donna = POIStorage.folder(for: "Donna")
-        let rick = POIStorage.folder(for: "Rick")
+    /// Folders are keyed by uuid since 2026-09-12; the name-keyed form is
+    /// the LEGACY resolver, kept for migration and old descriptors only.
+    @Test func legacyFolderForNameReturnsSanitizedPath() {
+        let donna = POIStorage.legacyFolder(forName: "Donna")
+        let rick = POIStorage.legacyFolder(forName: "Rick")
         #expect(donna.lastPathComponent == "donna")
         #expect(rick.lastPathComponent == "rick")
-        #expect(POIStorage.folder(for: "DONNA").path == donna.path)
+        #expect(POIStorage.legacyFolder(forName: "DONNA").path == donna.path)
+    }
+
+    @Test func folderForProfileIsTheUppercaseUUID() {
+        let profile = POIProfile(name: "Donna", referencePath: "")
+        let folder = POIStorage.folder(for: profile)
+        #expect(folder.lastPathComponent == profile.uuid.uuidString.uppercased())
+        #expect(folder.path == POIStorage.folder(forUUID: profile.uuid).path)
+        // A rename does not move the folder.
+        var renamed = profile
+        renamed.name = "Donna Breen"
+        #expect(POIStorage.folder(for: renamed).path == folder.path)
     }
 
     @Test func profileURLEndsWithProfileJson() {
-        let url = POIStorage.profileURL(for: "Rick")
+        let profile = POIProfile(name: "Rick", referencePath: "")
+        let url = POIStorage.profileURL(for: profile)
         #expect(url.lastPathComponent == "profile.json")
-        #expect(url.deletingLastPathComponent().lastPathComponent == "rick")
+        #expect(url.deletingLastPathComponent().lastPathComponent == profile.id)
     }
 
     /// Pre-Gauntlet this asserted the PRODUCTION location

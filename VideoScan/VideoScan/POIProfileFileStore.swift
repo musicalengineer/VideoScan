@@ -4,13 +4,22 @@ import Foundation
 enum POIProfileFileStore {
     private static let lock = NSRecursiveLock()
 
-    enum Failure: LocalizedError {
+    enum Failure: LocalizedError, Equatable {
         case invalidName, differentPerson, unreadableIdentity, missingSource, occupiedDestination
         /// Raised only under a test host: the root is shaped like the user's live People store.
         case liveStoreUnderTest
+        /// The profile still lives in a pre-2026-09-12 name-keyed folder the
+        /// uuid migration could not move (duplicate uuid, unreadable JSON,
+        /// occupied destination…). Writing it to its uuid folder could
+        /// overwrite another person's biography or strand its photos, so
+        /// every mutation is refused until Rick resolves the folder.
+        case quarantined(folder: String, reason: String)
         var errorDescription: String? {
             switch self {
             case .liveStoreUnderTest: return "Refusing to touch a live People store from a test host."
+            case .quarantined(let folder, let reason):
+                return "This person still lives in the pre-migration folder '\(folder)' (\(reason)). "
+                    + "Resolve that folder in Finder — see POI/.uuid-migration.json — then try again. Nothing was written."
             case .invalidName: return "The person name must be a single folder name."
             case .differentPerson: return "Another person already uses this name. Choose a distinct short name, such as Richard Sr or Richard Jr."
             case .unreadableIdentity: return "The existing profile could not be identified safely. It has not been overwritten."

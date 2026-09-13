@@ -118,13 +118,13 @@ struct PromotePreviewSheet: View {
             Image(systemName: "person.crop.square.filled.and.at.rectangle")
                 .foregroundStyle(.secondary)
             switch action {
-            case .create(let cid, let name, let faceCount):
+            case .create(let cid, let name, let faceCount, _):
                 Text(name)
                     .font(.system(size: 13, weight: .medium))
                 Text("← cluster \(String(format: "%03d", cid)), \(faceCount) faces")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.secondary)
-            case .merge(let cid, let name, let faceCount, let existingCount):
+            case .merge(let cid, let name, let faceCount, let existingCount, _):
                 Text(name)
                     .font(.system(size: 13, weight: .medium))
                 Text("+ \(faceCount) faces from cluster \(String(format: "%03d", cid)) (existing: \(existingCount))")

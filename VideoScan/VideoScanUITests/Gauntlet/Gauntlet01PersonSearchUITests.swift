@@ -63,7 +63,10 @@ final class Gauntlet01PersonSearchUITests: GauntletTestCase {
         openTab(app, "People")
 
         // 3. Right-click the person card → "Search for Gauntlet…".
-        let card = app.otherElements["pf.person.Gauntlet"].firstMatch
+        // Identifier is pf.person.<name>.<uuid> since 2026-09-12 (two people
+        // may share a name); match on the name prefix.
+        let card = app.otherElements.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "pf.person.Gauntlet.")).firstMatch
         let cardFallback = app.staticTexts["Gauntlet"].firstMatch
         if card.waitForExistence(timeout: 30) {
             card.rightClick()

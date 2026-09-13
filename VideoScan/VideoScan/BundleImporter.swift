@@ -201,30 +201,39 @@ enum BundleImporter {
         var auditLines: [String] = []
 
         for src in poiFoldersInBundle {
-            let folderName = src.lastPathComponent
-            let dest = storeDir.appendingPathComponent(folderName,
-                                                       isDirectory: true)
-
             // -- Part 1.A: materialize iCloud-evicted contents --
             //
             // Only relevant if the bundle was opened from iCloud Drive. Local
-            // paths skip this step entirely (cheap check).
+            // paths skip this step entirely (cheap check). Done before the
+            // placement below reads the bundle's profile.json.
             do {
                 try await materializeIfUbiquitous(at: src)
             } catch {
                 let reason = "iCloud materialize failed: \(error.localizedDescription)"
-                failed.append((folderName, reason))
-                auditLines.append("[import] POI \(folderName): FAILED — \(reason)")
+                failed.append((src.lastPathComponent, reason))
+                auditLines.append("[import] POI \(src.lastPathComponent): FAILED — \(reason)")
                 continue
             }
 
+            // Where this person lives locally (2026-09-12: folders are keyed
+            // by uuid; a bundle may still carry the old name-keyed layout).
+            let placement = resolvePlacement(bundleFolder: src, storeDir: storeDir)
+            let folderName = placement.label
+            if let refusal = placement.refusal {
+                failed.append((folderName, refusal))
+                auditLines.append("[import] POI \(folderName): REFUSED — \(refusal)")
+                continue
+            }
+            let dest = placement.destination
+            let localExists = placement.localExists
+
             // -- Part 2: conflict resolution --
             let bundleRefCount = countReferencePhotos(under: src)
-            let localRefCount = fm.fileExists(atPath: dest.path)
+            let localRefCount = localExists
                 ? countReferencePhotos(under: dest)
                 : 0
             let bundleMtime = effectiveMTime(of: src, fallback: bundleExportedAt)
-            let localMtime: Date? = fm.fileExists(atPath: dest.path)
+            let localMtime: Date? = localExists
                 ? effectiveMTime(of: dest, fallback: nil)
                 : nil
 
@@ -233,7 +242,7 @@ enum BundleImporter {
                 localRefCount: localRefCount,
                 bundleMtime: bundleMtime,
                 localMtime: localMtime,
-                localExists: fm.fileExists(atPath: dest.path)
+                localExists: localExists
             )
 
             let auditPrefix = "[import] POI \(folderName): " +
@@ -268,6 +277,13 @@ enum BundleImporter {
                 try safeInstallPOI(src: src, dest: dest, folderName: folderName,
                                    trashDir: trashDir)
                 installed.append(folderName)
+                // A legacy bundle profile without a uuid adopts the one its
+                // folder is now keyed by (the local person's, or a minted
+                // one) — written into the installed JSON so the next load
+                // does not mint a different one.
+                if let adopt = placement.adoptUUID {
+                    adoptUUID(adopt, in: dest, auditLines: &auditLines)
+                }
                 // -- Part 3: field-level identity merge (mirror direction) --
                 // Bundle folder won; local-only identity fields survive.
                 if let filled = mergeProfileOnDisk(winnerDir: dest,
@@ -286,6 +302,136 @@ enum BundleImporter {
                                 failed: failed,
                                 fieldMerged: fieldMerged,
                                 auditLines: auditLines)
+    }
+
+    // MARK: - Placement: which local folder is this bundle person? (2026-09-12)
+
+    /// Where a bundle POI folder lands and whether a local copy already
+    /// exists. Local folders are keyed by uuid; bundles exported before
+    /// 2026-09-12 are keyed by sanitized name and their profile.json may
+    /// even lack a uuid. Both layouts are accepted:
+    ///
+    ///   1. bundle profile.json has a uuid and `storeDir/<UUID>/` exists → that.
+    ///   2. a legacy `storeDir/<bundle folder name>/` exists and is the same
+    ///      person (same uuid, or one side has none) → that folder, in place;
+    ///      the next launch's migration moves it to its uuid.
+    ///   3. no uuid in the bundle: a local profile with the same canonical
+    ///      name → that person's folder (its uuid is adopted).
+    ///   4. otherwise a fresh `storeDir/<UUID>/` (bundle uuid, else minted).
+    ///
+    /// `label` is the human name for results and audit lines (the profile's
+    /// name, else the bundle folder name).
+    struct Placement: Equatable {
+        let destination: URL
+        let localExists: Bool
+        let label: String
+        /// Set when the bundle JSON has no uuid: what the installed
+        /// profile.json must be given after the copy.
+        let adoptUUID: UUID?
+        /// Non-nil when the bundle person cannot be placed safely — a
+        /// name-identified bundle folder matches MORE THAN ONE local person
+        /// (Richard Jr and Richard Sr). The import records it as failed
+        /// with this sentence; nothing is copied or displaced.
+        var refusal: String? = nil
+    }
+
+    static func resolvePlacement(bundleFolder src: URL, storeDir: URL) -> Placement {
+        let fm = FileManager.default
+        let bundleFolderName = src.lastPathComponent
+        let bundleJSON = rawProfileJSON(at: src)
+        let bundleName = bundleJSON?["name"] as? String
+        let bundleUUID = (bundleJSON?["uuid"] as? String).flatMap(UUID.init(uuidString:))
+        let label = bundleName ?? bundleFolderName
+
+        func uuidIn(_ folder: URL) -> UUID? {
+            (rawProfileJSON(at: folder)?["uuid"] as? String).flatMap(UUID.init(uuidString:))
+        }
+        func exists(_ url: URL) -> Bool {
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+        }
+
+        // 1. uuid folder already local.
+        if let bundleUUID {
+            let uuidFolder = storeDir.appendingPathComponent(POIStorage.folderName(for: bundleUUID), isDirectory: true)
+            if exists(uuidFolder) {
+                return Placement(destination: uuidFolder, localExists: true, label: label, adoptUUID: nil)
+            }
+        }
+        // Every local folder whose canonical name is the bundle person's.
+        var namesakes: [(folder: URL, uuid: UUID?)] = []
+        if let bundleName {
+            let key = PersonResolver.normalize(bundleName)
+            for folder in POIStorage.poiFolders(in: storeDir) {
+                guard let json = rawProfileJSON(at: folder),
+                      let name = json["name"] as? String,
+                      PersonResolver.normalize(name) == key else { continue }
+                namesakes.append((folder, (json["uuid"] as? String).flatMap(UUID.init(uuidString:))))
+            }
+        }
+        func refuse(_ why: String) -> Placement {
+            var refused = Placement(destination: src, localExists: false, label: label, adoptUUID: nil)
+            refused.refusal = why + " Nothing was copied."
+            return refused
+        }
+        // 2. The bundle profile HAS a uuid: identity is that uuid, full stop.
+        //    A same-named local whose uuid is present and different is a
+        //    different person (or a machine that minted its own) and is
+        //    NEVER merged or overwritten — refused with the fix; a same-named
+        //    local with no uuid at all cannot be told apart and is refused
+        //    too (codex review of c56bd2bc: name identity applies only when
+        //    the incoming profile has no uuid).
+        if let bundleUUID {
+            if let same = namesakes.first(where: { $0.uuid == bundleUUID }) {
+                return Placement(destination: same.folder, localExists: true, label: label, adoptUUID: nil)
+            }
+            if !namesakes.isEmpty {
+                let where_ = namesakes.map { "\($0.folder.lastPathComponent) (\($0.uuid?.uuidString ?? "no uuid"))" }
+                    .sorted().joined(separator: ", ")
+                return refuse("'\(label)' in the bundle carries uuid \(bundleUUID.uuidString) but the local '\(label)' is \(where_) — a different identity. Not merged: give one of them a distinct short name, or re-export from the same store.")
+            }
+            return Placement(destination: storeDir.appendingPathComponent(POIStorage.folderName(for: bundleUUID), isDirectory: true),
+                             localExists: false, label: label, adoptUUID: nil)
+        }
+        // 3. No uuid in the bundle (pre-2026-08-28 export): name identity —
+        //    the UNIQUE local namesake; two namesakes are refused rather than
+        //    picked (codex review 2026-09-12).
+        if namesakes.count > 1 {
+            let where_ = namesakes.map(\.folder.lastPathComponent).sorted().joined(separator: ", ")
+            return refuse("'\(label)' is \(namesakes.count) people here (\(where_)) and the bundle identifies them by name only — export the bundle again from a uuid-keyed store, or give one of them a distinct short name first.")
+        }
+        if let match = namesakes.first {
+            return Placement(destination: match.folder, localExists: true, label: label, adoptUUID: match.uuid)
+        }
+        // 4. Nobody local by that name and no uuid: a fresh uuid folder.
+        let adopt = UUID()
+        return Placement(destination: storeDir.appendingPathComponent(POIStorage.folderName(for: adopt), isDirectory: true),
+                         localExists: false, label: label, adoptUUID: adopt)
+    }
+
+    /// profile.json as a dictionary — tolerant of keys this build does not
+    /// know, nil when missing or unreadable.
+    private static func rawProfileJSON(at dir: URL) -> [String: Any]? {
+        let url = dir.appendingPathComponent("profile.json")
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    /// Give an installed legacy profile.json its uuid (dictionary-level so
+    /// no key is dropped). A failure is audited, not thrown — the folder is
+    /// installed; `POIProfile.load` will persist a uuid on first load anyway.
+    private static func adoptUUID(_ id: UUID, in dir: URL, auditLines: inout [String]) {
+        guard var json = rawProfileJSON(at: dir) else { return }
+        guard json["uuid"] == nil else { return }
+        json["uuid"] = id.uuidString
+        json["referencePath"] = dir.path
+        do {
+            let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: dir.appendingPathComponent("profile.json"), options: .atomic)
+            auditLines.append("[import]   ↳ legacy profile given uuid \(id.uuidString)")
+        } catch {
+            auditLines.append("[import]   ↳ could not write uuid into profile.json: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Part 1.A: iCloud materialization

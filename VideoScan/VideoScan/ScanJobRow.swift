@@ -42,7 +42,7 @@ struct ScanJobRow: View {
     var isActive: Bool { job.status.isActive }
     var isScanning: Bool { job.status == .scanning }
 
-    var personName: String { job.assignedProfile?.name ?? "—" }
+    var personName: String { job.assignedProfile?.displayName ?? "—" }
     var volName: String { (job.searchPath as NSString).lastPathComponent }
     /// Prose form for inline use ("using algorithm: ArcFace") — friendly
     /// mixed case, no parenthetical descriptor. See displayName on

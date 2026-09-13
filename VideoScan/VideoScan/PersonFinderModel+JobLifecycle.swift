@@ -440,6 +440,18 @@ extension PersonFinderModel {
     func startJob(_ job: ScanJob) {
         guard !job.status.isActive else { return }
 
+        // Catalog writeback and the known-catalog prefilter are keyed by the
+        // canonical short name (see ScanJob.personLabel). Two people with one
+        // short name would write each other's history, so the scan is
+        // refused with the fix spelled out (codex review 2026-09-12).
+        if let profile = job.assignedProfile, nameIsShared(profile) {
+            let msg = "⚠ " + Self.sharedNameRefusal(profile, operation: "searching")
+            job.appendLog(msg)
+            osLog.error("startJob refused: shared short name \(profile.name, privacy: .public)")
+            job.status = .failed("Two people are called \(profile.name)")
+            return
+        }
+
         // Volume reachability — fail fast BEFORE the async loadFacesForJob
         // Task hop. Otherwise the user sees spinning/face-loading activity
         // and an eventual confusing error instead of an immediate "offline"
@@ -1388,7 +1400,9 @@ extension PersonFinderModel {
     ) -> PersistedJobDescriptor {
         let personName = job.assignedProfile?.name
             ?? (settings.personName.isEmpty ? "(global)" : settings.personName)
-        let folderName = job.assignedProfile.map { POIStorage.sanitize($0.name) }
+        // The uuid folder name (2026-09-12). Descriptors written before carry
+        // the sanitized short name; `POIProfile.load(name:)` accepts both.
+        let folderName = job.assignedProfile.map { POIStorage.folderName(for: $0.uuid) }
         // Resolve against the GLOBAL engine, not the hard-coded `.vision`
         // fallback: a job whose engine came from the app-wide setting (no
         // per-job override, profile token unset/legacy) ran that engine live,
@@ -1462,7 +1476,9 @@ extension PersonFinderModel {
             // open in the editor. This is the one I/O step that lives outside
             // makeJob so the pure constructor stays testable.
             if let folderName = descriptor.profileFolderName,
-               let profile = try? POIProfile.load(name: folderName) {
+               let profile = (POIStorage.uuid(fromFolderName: folderName)
+                                .flatMap { try? POIProfile.load(uuid: $0) })
+                            ?? (try? POIProfile.load(name: folderName)) {
                 job.assignedProfile = profile
             }
 

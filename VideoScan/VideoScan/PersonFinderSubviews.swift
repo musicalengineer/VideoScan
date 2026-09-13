@@ -146,7 +146,7 @@ struct PersonCard: View {
                     Circle()
                         .fill(Color.accentColor.opacity(0.15))
                         .frame(width: imageSize, height: imageSize)
-                    Text(String(profile.name.prefix(1)).uppercased())
+                    Text(String(profile.displayName.prefix(1)).uppercased())
                         .font(.system(size: imageSize * 0.42, weight: .bold, design: .rounded))
                         .foregroundColor(.accentColor)
                 }
@@ -185,7 +185,7 @@ struct PersonCard: View {
                         .foregroundColor(.green)
                         .transition(.scale.combined(with: .opacity))
                 }
-                Text(saveProblem != nil ? "Not saved" : justSaved ? "Saved" : profile.name)
+                Text(saveProblem != nil ? "Not saved" : justSaved ? "Saved" : profile.displayName)
                     .font(.system(size: nameFontSize, weight: isActive ? .bold : .medium))
                     .lineLimit(1)
                     .help(saveProblem ?? "")

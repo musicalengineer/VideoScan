@@ -4,9 +4,10 @@ import Testing
 
 /// Review probes for the 2026-09-12 rename fix: sequences the design doc calls
 /// "fail closed" are pinned here at the production seam (POIStorage.storeDir,
-/// a per-process temp dir under a test host). Probes never call
-/// `saveRenaming` on a path that would reach `POIProfile.delete(name:)`,
-/// because that retires into the real ~/dev/VideoScan/.trash.
+/// a per-process temp dir under a test host). The staging-copy rename is no
+/// longer what production does (folders are keyed by uuid; a rename is a
+/// JSON write), but POIProfileFileStore.save(previous:) is still the seam
+/// bundle/legacy tooling may use, so its probes stay.
 @Suite("People rename — review probes", .serialized)
 struct POIProfileRenameReviewProbeTests {
     private func requireSandbox() throws {
@@ -22,52 +23,46 @@ struct POIProfileRenameReviewProbeTests {
         try body(root)
     }
 
-    /// A crash between "publish destination" and "soft-retire source" leaves
-    /// two live folders with one UUID. Pins what the app then sees: both
-    /// enumerate (ids are name-based, so no ForEach collision), both keep
-    /// every photo, and renaming one back onto the other is refused, not merged.
-    @Test func twoLiveFoldersAfterCrashBetweenPublishAndRetire() throws {
+    /// A crash between "publish destination" and "soft-retire source" of the
+    /// PRE-uuid rename (2026-09-12 fix) left two name-keyed folders with one
+    /// uuid. Pins what the uuid-keyed store does with that leftover: the
+    /// migration skips BOTH (duplicateUUID), both keep every photo, both are
+    /// still listed, the audit file names both paths, and nothing is deleted.
+    @Test func twoLegacyFoldersWithOneUUIDAreSkippedByTheMigrationNotMerged() throws {
         try requireSandbox()
         let stem = "probe-\(UUID().uuidString.prefix(8))"
         let oldName = stem + "-old", newName = stem + "-new"
-        let oldFolder = POIStorage.folder(for: oldName), newFolder = POIStorage.folder(for: newName)
+        let oldFolder = POIStorage.legacyFolder(forName: oldName)
+        let newFolder = POIStorage.legacyFolder(forName: newName)
         defer {
             try? FileManager.default.removeItem(at: oldFolder)
             try? FileManager.default.removeItem(at: newFolder)
         }
-        var profile = POIProfile(name: oldName, referencePath: oldFolder.path)
-        try profile.save()
+        let id = UUID()
         let bytes = Data([1, 2, 3])
-        try bytes.write(to: oldFolder.appendingPathComponent("portrait.jpg"))
-        // The crash: the destination is published, the retirement never happens.
-        profile.name = newName
-        let warning = try POIProfileFileStore.save(
-            id: profile.uuid, destination: newFolder, previous: oldFolder,
-            retire: { _ in throw CocoaError(.fileWriteUnknown) },
-            write: { url, folder in
-                var staged = profile
-                staged.referencePath = folder.path
-                try JSONEncoder().encode(staged).write(to: url, options: .atomic)
-            })
-        #expect(warning != nil)
+        for (folder, name) in [(oldFolder, oldName), (newFolder, newName)] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            var profile = POIProfile(name: name, referencePath: folder.path, uuid: id)
+            profile.referencePath = folder.path
+            try JSONEncoder().encode(profile).write(to: folder.appendingPathComponent("profile.json"), options: .atomic)
+            try bytes.write(to: folder.appendingPathComponent("portrait.jpg"))
+        }
 
-        let listed = POIProfile.listAll().filter { $0.uuid == profile.uuid }
+        let listed = POIProfile.listAll().filter { $0.uuid == id }
         #expect(listed.count == 2)
-        #expect(Set(listed.map(\.id)).count == 2)
         // Compare resolved paths: storeDir is /var/..., enumeration yields /private/var/...
         let resolved = { (path: String) in URL(fileURLWithPath: path).resolvingSymlinksInPath().path }
         #expect(Set(listed.map { resolved($0.referencePath) })
                 == [resolved(oldFolder.path), resolved(newFolder.path)])
-
-        var back = try #require(listed.first { $0.name == newName })
-        back.name = oldName
-        #expect(throws: POIProfileFileStore.Failure.occupiedDestination) {
-            _ = try back.saveRenaming(from: newName)
-        }
+        #expect(!FileManager.default.fileExists(atPath: POIStorage.folder(forUUID: id).path),
+                "neither folder was renamed onto the shared uuid")
+        let report = try #require(POIStorage.readUUIDMigrationReport())
+        let skipped = report.skipped.filter { $0.reason == POIStorage.UUIDMigrationSkip.duplicateUUID }
+        #expect(Set(skipped.map(\.folder)).isSuperset(of: [oldFolder.lastPathComponent, newFolder.lastPathComponent]))
+        #expect(skipped.allSatisfy { $0.detail.contains(oldFolder.lastPathComponent) && $0.detail.contains(newFolder.lastPathComponent) })
+        #expect(!report.complete)
         #expect(try Data(contentsOf: oldFolder.appendingPathComponent("portrait.jpg")) == bytes)
         #expect(try Data(contentsOf: newFolder.appendingPathComponent("portrait.jpg")) == bytes)
-        #expect(FileManager.default.fileExists(atPath: oldFolder.appendingPathComponent("profile.json").path))
-        #expect(FileManager.default.fileExists(atPath: newFolder.appendingPathComponent("profile.json").path))
     }
 
     /// NFC and NFD spellings of "José" are one folder on APFS. Pins that the

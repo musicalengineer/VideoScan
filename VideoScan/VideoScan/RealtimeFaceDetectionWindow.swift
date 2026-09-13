@@ -147,7 +147,7 @@ private struct ActiveJobFaceDetectView: View {
     @Binding var selectedJobID: UUID?
     let fallbackPersonName: String
 
-    private var personName: String { job.assignedProfile?.name ?? fallbackPersonName }
+    private var personName: String { job.assignedProfile?.displayName ?? fallbackPersonName }
     private var engineTitle: String { job.effectiveEngine.title }
 
     var body: some View {
@@ -300,7 +300,7 @@ private struct ActiveJobFaceDetectView: View {
                     )) {
                         ForEach(pickerJobs) { j in
                             let vol = (j.searchPath as NSString).lastPathComponent
-                            let person = j.assignedProfile?.name
+                            let person = j.assignedProfile?.displayName
                             let status = j.status == .done ? " [Done]" :
                                          j.status == .scanning ? " [Scanning]" :
                                          j.status.isActive ? " [Active]" : ""

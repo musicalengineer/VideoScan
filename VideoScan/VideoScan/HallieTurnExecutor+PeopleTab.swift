@@ -286,24 +286,35 @@ extension HallieTurnExecutor {
             })
             switch resolver.resolve(typed) {
             case .resolved(let canonicalName):
-                return owners(of: [canonicalName], in: people)
+                return owners(of: [canonicalName], typed: typed, in: people)
             case .ambiguous(let candidates):
-                return owners(of: candidates, in: people)
+                return owners(of: candidates, typed: typed, in: people)
             case .unknown:
                 return .none
             }
         }
 
         /// The resolver speaks in canonical names; two profiles may share
-        /// one (a duplicate gallery entry), which is itself ambiguous.
+        /// one. Since 2026-09-12 that is by design — Richard Jr (Rick) and
+        /// Richard Sr (Dad) are both "Richard" — so when several profiles
+        /// own the resolved name, the TYPED spelling decides: the one whose
+        /// own alias or full-name form is what was typed wins ("rick",
+        /// "dad", "Richard Breen Sr"). The bare shared name matches nobody's
+        /// alias and stays ambiguous — ask, never guess.
         private static func owners(of canonicalNames: [String],
+                                   typed: String,
                                    in people: [ProfileSnapshot]) -> Claim {
             let keys = Set(canonicalNames.map(normalizeName))
             let owners = people.filter { keys.contains(normalizeName($0.canonicalName)) }
             switch owners.count {
             case 0: return .none
             case 1: return .one(owners[0])
-            default: return .ambiguous(owners)
+            default:
+                let key = normalizeName(typed)
+                let byOwnSpelling = owners.filter { profile in
+                    (profile.aliases + profile.fullNameForms).contains { normalizeName($0) == key }
+                }
+                return byOwnSpelling.count == 1 ? .one(byOwnSpelling[0]) : .ambiguous(owners)
             }
         }
 

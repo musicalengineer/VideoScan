@@ -98,7 +98,7 @@ struct LoggingHardeningTests {
         edited.kinships = [Kinship(
             relation: .spouse, relativeTo: .profile(id: anchor.uuid))]
 
-        #expect(saved.id != edited.id, "fixture must exercise a name-derived ID change")
+        #expect(saved.id == edited.id, "the id IS the uuid since 2026-09-12 — a rename keeps it")
         #expect(saved.uuid == edited.uuid, "durable profile identity must survive rename")
         let evaluation = PersonEditSheetKinshipSave.evaluate(
             profile: edited,

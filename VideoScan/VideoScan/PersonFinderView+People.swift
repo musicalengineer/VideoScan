@@ -113,7 +113,9 @@ extension PersonFinderView {
     /// change wherever Rick wants it after spot-test.
     @ViewBuilder
     func holdoutReviewBadge(for profile: POIProfile) -> some View {
-        if let queue = holdoutReview.pendingQueue(for: profile.name) {
+        // Queues are keyed by short name; a shared name gets no badge (the
+        // context menu explains why).
+        if !model.nameIsShared(profile), let queue = holdoutReview.pendingQueue(for: profile.name) {
             Button {
                 confirmTarget = ConfirmSheetTarget(profile: profile, holdoutQueue: queue)
             } label: {
@@ -132,7 +134,7 @@ extension PersonFinderView {
             }
             .buttonStyle(.plain)
             .help("\(queue.pendingCount) holdout video\(queue.pendingCount == 1 ? "" : "s") awaiting your blind yes/no review — click to start")
-            .accessibilityIdentifier("pf.holdout.review.\(profile.name)")
+            .accessibilityIdentifier("pf.holdout.review.\(profile.name).\(profile.id)")
         }
     }
 
@@ -272,9 +274,9 @@ extension PersonFinderView {
                         .buttonStyle(.plain)
 
                         // Build set of all people currently being scanned across all active jobs
-                        let scanningNames = Set(model.jobs.filter { $0.status.isActive }.compactMap { $0.assignedProfile?.name.lowercased() })
+                        let scanningIDs = Set(model.jobs.filter { $0.status.isActive }.compactMap { $0.assignedProfile?.uuid })
                         ForEach(displayedProfiles) { profile in
-                            let isBeingScanned = scanningNames.contains(profile.name.lowercased())
+                            let isBeingScanned = scanningIDs.contains(profile.uuid)
                             let isActive = isBeingScanned
                             PersonCard(profile: profile,
                                        isActive: isActive,
@@ -307,16 +309,18 @@ extension PersonFinderView {
                                                           personName: profile.name) {
                                             showInFamilyTree(profile)
                                         }
-                                        .accessibilityIdentifier("pf.treelink.\(profile.name)")
+                                        .accessibilityIdentifier("pf.treelink.\(profile.name).\(profile.id)")
                                     }
                                 }
                                 .opacity(isBeingScanned ? 0.7 : 1.0)
                                 // Gauntlet flow 1 right-clicks the card to
                                 // reach "Search for <name>…". Test-only.
-                                .accessibilityIdentifier("pf.person.\(profile.name)")
+                                // Name for the Gauntlet's eyes, uuid so two
+                                // Richards are two identifiers (2026-09-12).
+                                .accessibilityIdentifier("pf.person.\(profile.name).\(profile.id)")
                                 .onTapGesture {
                                     if isBeingScanned {
-                                        scanLockMessage = "Cannot edit \(profile.name) while scanning for \(profile.name)."
+                                        scanLockMessage = "Cannot edit \(profile.displayName) while scanning for \(profile.displayName)."
                                         return
                                     }
                                     // Load this person's reference faces into the strip for inspection
@@ -349,15 +353,15 @@ extension PersonFinderView {
                                         .animation(.easeInOut(duration: 0.15), value: draggingProfileID)
                                 )
                                 .contextMenu {
-                                    Button("Search for \(profile.name)\u{2026}") {
+                                    Button("Search for \(profile.displayName)\u{2026}") {
                                         addJobForPerson(profile)
                                     }
                                     Divider()
-                                    Button("Show \(profile.name) in Family Tree") {
+                                    Button("Show \(profile.displayName) in Family Tree") {
                                         showInFamilyTree(profile)
                                     }
                                     Divider()
-                                    Button("Edit \(profile.name)\u{2026}") {
+                                    Button("Edit \(profile.displayName)\u{2026}") {
                                         editingOriginalName = profile.name
                                         editingProfile = profile
                                     }
@@ -368,17 +372,29 @@ extension PersonFinderView {
                                     // when a blind queue is pending for this
                                     // person, straight to candidates
                                     // otherwise — same verb as the badge.
-                                    Button("Review \(profile.name)\u{2026}") {
+                                    // Holdout queues and validation labels are
+                                    // keyed by the short name: a shared name is
+                                    // refused here, not guessed (2026-09-12).
+                                    let sharedName = model.nameIsShared(profile)
+                                    Button("Review \(profile.displayName)\u{2026}") {
                                         confirmTarget = ConfirmSheetTarget(
                                             profile: profile,
                                             holdoutQueue: holdoutReview.pendingQueue(for: profile.name))
                                     }
-                                    .help("Blind holdout review first (when one is pending), then rate catalog-flagged candidates Definitely / Likely / No. Builds the labeled set the classifier trains on.")
+                                    .disabled(sharedName)
+                                    .help(sharedName
+                                          ? PersonFinderModel.sharedNameRefusal(profile, operation: "review")
+                                          : "Blind holdout review first (when one is pending), then rate catalog-flagged candidates Definitely / Likely / No. Builds the labeled set the classifier trains on.")
                                     Button("View Confirmations\u{2026}") {
                                         confirmationsTarget = ConfirmationsTarget(profile: profile)
                                     }
-                                    .help("Cumulative progress: outcomes, signal precision, rounds, what remains.")
-                                    if !model.referenceFaces.isEmpty && model.settings.personName.lowercased() == profile.name.lowercased() {
+                                    .disabled(sharedName)
+                                    .help(sharedName
+                                          ? PersonFinderModel.sharedNameRefusal(profile, operation: "confirmations")
+                                          : "Cumulative progress: outcomes, signal precision, rounds, what remains.")
+                                    if !model.referenceFaces.isEmpty
+                                        && (model.settings.activeProfileUUID.map { $0 == profile.uuid }
+                                            ?? (model.settings.personName.lowercased() == profile.name.lowercased())) {
                                         Divider()
                                         Menu("Remove Low-Confidence Photos") {
                                             let poorCount = model.referenceFaces.filter { $0.confidence < 0.60 }.count
@@ -394,7 +410,7 @@ extension PersonFinderView {
                                         }
                                     }
                                     Divider()
-                                    Button("Delete \(profile.name)\u{2026}", role: .destructive) {
+                                    Button("Delete \(profile.displayName)\u{2026}", role: .destructive) {
                                         confirmDeleteProfile = profile
                                     }
                                     .keyboardShortcut(.delete, modifiers: .command)
@@ -484,7 +500,7 @@ extension PersonFinderView {
                                     },
                                     onDismiss: { identityPickTarget = nil })
         }
-        .alert("Delete '\(confirmDeleteProfile?.name ?? "")' and all reference photos?",
+        .alert("Delete '\(confirmDeleteProfile?.displayName ?? "")' and all reference photos?",
                isPresented: Binding(
             get: { confirmDeleteProfile != nil },
             set: { if !$0 { confirmDeleteProfile = nil } }
@@ -492,9 +508,9 @@ extension PersonFinderView {
             Button("Cancel", role: .cancel) { confirmDeleteProfile = nil }
             Button("Delete", role: .destructive) {
                 if let p = confirmDeleteProfile {
-                    let name = p.name
+                    let name = p.displayName
                     Task { @MainActor in
-                        let ok = await model.deletePOI(named: name)
+                        let ok = await model.deletePOI(p)
                         if !ok {
                             scanLockMessage = "Could not move '\(name)' into .trash/. Check ~/dev/VideoScan/.trash/ permissions."
                         }
@@ -503,7 +519,7 @@ extension PersonFinderView {
                 }
             }
         } message: {
-            Text("Data is moved to ~/dev/VideoScan/.trash/POI-\(POIStorage.sanitize(confirmDeleteProfile?.name ?? ""))-<UTC>/ and is recoverable until you empty the trash manually. Nothing is permanently deleted.")
+            Text("Data is moved to ~/dev/VideoScan/.trash/POI-\(POIStorage.sanitize(confirmDeleteProfile?.displayName ?? ""))-<UTC>/ and is recoverable until you empty the trash manually. Nothing is permanently deleted.")
         }
         .alert("Scan in Progress", isPresented: Binding(
             get: { scanLockMessage != nil },

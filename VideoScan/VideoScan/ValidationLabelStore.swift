@@ -76,7 +76,9 @@ final class ValidationLabelStore: ObservableObject {
     // MARK: - Public API
 
     /// Append a label and persist. Returns the row that was written
-    /// (with id assigned).
+    /// (with id assigned). Labels are keyed by the person's SHORT name, so
+    /// a name two profiles share is refused here — at the sink — with
+    /// `PersonNameGuard.Refused` (2026-09-12).
     @discardableResult
     func record(
         recordPath: String,
@@ -84,7 +86,8 @@ final class ValidationLabelStore: ObservableObject {
         rating: ConfirmRating,
         signals: [String],
         score: Int
-    ) -> ValidationLabel {
+    ) throws -> ValidationLabel {
+        try PersonNameGuard.check(person, operation: "recording confirmation labels")
         let row = ValidationLabel(
             id: UUID(),
             recordPath: recordPath,
