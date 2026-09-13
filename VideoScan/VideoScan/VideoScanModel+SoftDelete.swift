@@ -70,6 +70,9 @@ extension VideoScanModel {
         // and can still be recovered via Show Removed → right-click → Restore.
         lastPurgedBatch = LastPurgedBatch(ids: changed, timestamp: now)
         lastPurgeUndoError = nil
+        // Media Ledger (stage 2): "You removed it from the catalog on …"
+        // — the file is untouched, so this is a set-aside-shaped line.
+        ledgerSetAside(changed.compactMap { record(forID: $0) }, reason: "removed-from-catalog", by: .rick, at: now)
         return changed.count
     }
 
@@ -106,6 +109,7 @@ extension VideoScanModel {
         rec.purgedAt = nil
         CorrelationScorer.revalidateExistingPairs(in: records)
         saveCatalogDebounced()
+        ledgerRestored([rec], by: .rick)
         // If the user manually restores a record from the most recent
         // purge batch, drop it from the undo set so the banner's "Undo"
         // doesn't no-op or surface a confusing partial restore later.
@@ -132,11 +136,13 @@ extension VideoScanModel {
     func undoLastPurge() -> Bool {
         guard let snap = lastPurgedBatch else { return false }
         var restored = 0
+        var restoredRecs: [VideoRecord] = []
         for id in snap.ids {
             if let rec = records.first(where: { $0.id == id }),
                rec.purgedAt != nil {
                 rec.purgedAt = nil
                 restored += 1
+                restoredRecs.append(rec)
             }
         }
         if restored == 0 {
@@ -151,6 +157,7 @@ extension VideoScanModel {
         saveCatalogDebounced()
         lastPurgedBatch = nil
         lastPurgeUndoError = nil
+        ledgerRestored(restoredRecs, by: .rick)
         return true
     }
 

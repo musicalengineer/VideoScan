@@ -28,6 +28,9 @@ import SwiftUI
 struct InspectorDateView: View {
 
     let record: VideoRecord
+    /// For the Media Ledger line on save (stage 2) — same injection as
+    /// InspectorPlaceView; the parent supplies the environment.
+    @EnvironmentObject var model: VideoScanModel
 
     @State private var entryText: String
     @State private var isKnown: Bool
@@ -200,5 +203,8 @@ struct InspectorDateView: View {
     private func save() {
         refreshTick &+= 1
         NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+        // Media Ledger (stage 2): "You set the date to … on …" — one
+        // line, off-main, after the catalog path above.
+        model.noteUserDateEdited(record)
     }
 }

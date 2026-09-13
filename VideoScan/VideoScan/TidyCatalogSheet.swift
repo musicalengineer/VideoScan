@@ -71,10 +71,23 @@ struct TidyCatalogSheet: View {
                     }
                     // Dry-run number only — never set aside by this sheet.
                     countRow("archivebox", .indigo,
-                             "Copies of archived media — \(Formatting.humanSize(plan.archivedCopyBytes)) outside the Master Archive (review coming)",
+                             "Copies of archived media — \(Formatting.humanSize(plan.archivedCopyBytes)) outside the Master Archive",
                              plan.archivedCopyCount)
                 }
                 .font(.system(size: 14))
+
+                // Stage 2 (Rick 2026-09-12): the same "Archived — what next?"
+                // sheet Promote shows, for the backlog — dry run, Apply
+                // disabled. Hop a turn after dismiss (chained-sheet rule).
+                if plan.archivedCopyCount > 0 {
+                    Button {
+                        dismiss()
+                        Task { @MainActor in await model.offerArchivedWhatNextForBacklog() }
+                    } label: {
+                        Label("Review copies of archived media… (dry run)", systemImage: "archivebox")
+                    }
+                    .accessibilityIdentifier("tidy.reviewArchivedCopies")
+                }
 
                 if !plan.rows.isEmpty {
                     HStack(spacing: 8) {

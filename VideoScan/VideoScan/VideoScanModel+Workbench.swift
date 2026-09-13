@@ -47,9 +47,10 @@ extension VideoScanModel {
     func discardWorkbench(_ recs: [VideoRecord]) -> Int {
         var count = 0
         let now = Date()
+        var trashed: [VideoRecord] = []
         for rec in recs {
             let url = URL(fileURLWithPath: rec.fullPath)
-            try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            if (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil { trashed.append(rec) }
             rec.purgedAt = now
             rec.lifecycleStage = .trashed
             count += 1
@@ -57,6 +58,7 @@ extension VideoScanModel {
         if count > 0 {
             saveCatalogNow()
             noteCatalogRecordsMutated()   // #160: in-place purge, no banner
+            ledgerCopyRemoved(trashed, permanent: false, by: .rick, at: now)   // Media Ledger (stage 2)
         }
         return count
     }

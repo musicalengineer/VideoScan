@@ -209,6 +209,7 @@ extension VideoScanModel {
                            by: String = "rick",
                            at: Date = Date(),
                            for recordIDs: [UUID],
+                           batchID: String? = nil,
                            journalWriter: @escaping ArchiveAttestationJournal.Writer = ArchiveAttestationJournal.liveWriter)
     -> BackupAttestationWrite {
         // One attestation value for the whole batch (same kind / answer /
@@ -249,6 +250,11 @@ extension VideoScanModel {
                                                 rootPath: root, writer: journalWriter)
         }
         Self.attestationFlushTail = task
+        // Media Ledger twin (stage 2): one `attestation` line per record,
+        // on the ledger's own ordered off-main worker. The attestation
+        // journal above keeps writing unchanged — the ledger is additive.
+        let actor = MediaLedgerEvent.Actor(rawValue: by) ?? .rick
+        ledgerAppend(ledgerAttestationEvents(changed, attestation: attestation, by: actor, batchID: batchID))
         return BackupAttestationWrite(records: changed, flush: task)
     }
 

@@ -175,6 +175,14 @@ struct SettingsTabView: View {
 
                 Divider()
 
+                // Protection bar (promote-and-prune stage 2, Rick
+                // 2026-09-12): copies required per importance level before
+                // extra copies may go. @AppStorage-backed; the plan reads
+                // ImportanceBar.load(defaults:).
+                PruneBarSettingsSection()
+
+                Divider()
+
                 HStack {
                     Button("Reset All to Defaults") {
                         settings = ScanPerformanceSettings()

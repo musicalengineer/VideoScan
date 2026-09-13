@@ -143,6 +143,13 @@ struct ContentView: View {
             PromoteToArchiveSheet(request: request)
                 .environmentObject(model)
         }
+        // "Archived — what next?" (promote-and-prune stage 2, DRY RUN):
+        // offered once per verified Promote batch and by Tidy for the
+        // backlog. Root-attached for the same reason as the sheets above.
+        .sheet(item: $model.pendingArchivedWhatNext) { request in
+            ArchivedWhatNextSheet(request: request)
+                .environmentObject(model)
+        }
         .alert(item: $model.pendingPromoteWithoutMaster) { pending in
             Alert(
                 title: Text("You need to designate a volume as the master archive."),

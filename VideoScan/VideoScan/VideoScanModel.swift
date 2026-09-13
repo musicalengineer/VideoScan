@@ -1435,6 +1435,18 @@ final class VideoScanModel: ObservableObject {
     /// warnings). Set by the catalog right-click and the File menu.
     @Published var pendingPromoteRequest: ArchivePromoteRequest?
 
+    /// Sheet driver for "Archived — what next?" (promote-and-prune stage
+    /// 2, Rick 2026-09-12): set ONCE per finished Promote batch when every
+    /// copy landed verified, and by Tidy → "Copies of archived media" for
+    /// the backlog. Bound in ContentView. Dry run: the sheet's Apply is
+    /// disabled until Rick has seen the numbers on real batches.
+    @Published var pendingArchivedWhatNext: ArchivedWhatNextRequest?
+
+    /// The Media Ledger (stage 2): the append-only, per-file audit trail
+    /// under App Support/VideoScan/ledger/ (a test host writes to a
+    /// scratch folder). Injectable so a test can point it at a sandbox.
+    var mediaLedger = MediaLedger()
+
     /// Alert driver: "You need to designate a volume as the master
     /// archive." Carries the ids the user tried to promote so the fix-it
     /// button can re-offer the promotion after Initialize.

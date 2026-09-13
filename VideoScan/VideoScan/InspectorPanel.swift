@@ -205,6 +205,15 @@ struct InspectorPanel: View {
                             .id(rec.id)
                     }
 
+                    // History (Media Ledger, stage 2 — Rick 2026-09-12):
+                    // dated sentences for this record, newest first, read
+                    // off-main and cached per record by the ledger. The
+                    // view does no file I/O and no O(records) work.
+                    inspectorSection("History", systemImage: "clock.arrow.circlepath") {
+                        InspectorHistoryView(record: rec)
+                            .id(rec.id)
+                    }
+
                     // Dossier — captions, transcript, OCR text, OCR dates,
                     // inferred date. Only shown when the record has been
                     // processed by the dossier pipeline so empty rows don't

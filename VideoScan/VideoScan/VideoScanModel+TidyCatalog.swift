@@ -284,6 +284,14 @@ extension VideoScanModel {
         saveCatalogDebounced()
         if remembered > 0 { scheduleIgnoredContentSave() }
         lastTidyBatch = LastTidyBatch(ids: changed)
+        // Media Ledger (stage 2): one setAside line per record, the
+        // ORIGINAL reason, batched on the ledger's off-main worker.
+        let tidyBatchID = "tidy-\(UUID().uuidString.prefix(8))"
+        var byReason: [String: [VideoRecord]] = [:]
+        for row in plan.rows where changed.contains(row.id) {
+            if let rec = record(forID: row.id) { byReason[row.reason.rawValue, default: []].append(rec) }
+        }
+        for (reason, recs) in byReason { ledgerSetAside(recs, reason: reason, by: .tidy, at: now, batchID: tidyBatchID) }
         log("Tidy Catalog: set aside \(changed.count) file(s) — \(plan.stillCount) photos, \(plan.musicCount) music, \(plan.unlinkedAudioCount) audio with no matching video, \(plan.livePhotoComplementCount) Live Photo halves, \(plan.junkCameBackCount) that came back after being set aside. Nothing was deleted; flip “Show set-aside files” to browse or put any of them back. A rescan will not bring them back (Tidy → Ignored content to put back).")
         appLog.write("Tidy Catalog applied: \(changed.count) record(s) set aside (stills \(plan.stillCount), music \(plan.musicCount), unlinked audio \(plan.unlinkedAudioCount), live photo \(plan.livePhotoComplementCount), came back \(plan.junkCameBackCount)); \(remembered) new ignore-list entr\(remembered == 1 ? "y" : "ies"); records untouched on disk")
         tidyCatalogLog.info("Tidy applied: setAside=\(changed.count) of planned \(plan.rows.count) remembered=\(remembered)")
@@ -321,6 +329,8 @@ extension VideoScanModel {
         if remembered > 0 { scheduleIgnoredContentSave() }
         lastTidyBatch = LastTidyBatch(ids: changed)
         noteCatalogRecordsMutated()
+        ledgerSetAside(changed.compactMap { record(forID: $0) },
+                       reason: CatalogScopePolicy.SetAsideReason.removedByUser.rawValue, by: .rick, at: now)
         log("Removed \(changed.count) file(s) from the catalog (files untouched). Flip “Show set-aside files” to browse or put any of them back. A rescan will not bring them back (Tidy → Ignored content to put back).")
         return changed.count
     }
@@ -333,17 +343,20 @@ extension VideoScanModel {
         guard let batch = lastTidyBatch else { return false }
         var restored = 0
         var forgotten = 0
+        var restoredRecs: [VideoRecord] = []
         for id in batch.ids {
             if let rec = record(forID: id), rec.setAsideReason != nil {
                 rec.setAsideReason = nil
                 restored += 1
                 forgotten += forgetIgnoredContent(for: rec)
+                restoredRecs.append(rec)
             }
         }
         lastTidyBatch = nil
         guard restored > 0 else { return false }
         saveCatalogDebounced()
         if forgotten > 0 { scheduleIgnoredContentSave() }
+        ledgerPutBack(restoredRecs, by: .rick)
         log("Tidy Catalog: undo — put \(restored) file(s) back in the catalog.")
         appLog.write("Tidy Catalog undo: restored \(restored) set-aside record(s); \(forgotten) ignore-list entr\(forgotten == 1 ? "y" : "ies") removed")
         return true
@@ -372,16 +385,19 @@ extension VideoScanModel {
     func restoreSetAsideRecords(ids: Set<UUID>) -> Int {
         var restored = 0
         var forgotten = 0
+        var restoredRecs: [VideoRecord] = []
         for id in ids {
             if let rec = record(forID: id), rec.setAsideReason != nil {
                 rec.setAsideReason = nil
                 restored += 1
                 forgotten += forgetIgnoredContent(for: rec)
+                restoredRecs.append(rec)
             }
         }
         guard restored > 0 else { return 0 }
         saveCatalogDebounced()
         if forgotten > 0 { scheduleIgnoredContentSave() }
+        ledgerPutBack(restoredRecs, by: .rick)
         if let batch = lastTidyBatch {
             let remaining = batch.ids.filter { !ids.contains($0) }
             lastTidyBatch = remaining.isEmpty ? nil : LastTidyBatch(ids: remaining)
