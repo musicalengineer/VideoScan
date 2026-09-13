@@ -9,7 +9,7 @@ Reported owner test counts are not independent test executions by this reviewer.
 | Cached scan-target facts, follow-up | 896a72ba / 7e2d8b17 | HOLD: destructive confirmation can use stale scope | 1417 |
 | Inferred-date catch-up and propagation | 3dbda42a / d3044517 | HOLD: identity and skipped-evidence corruption paths | 1413, 1415 |
 | Manifest v3 and backup attestations | 7e9e2b38 / e7f4d486 | Changes requested: timestamp precision and blocking journal writes | 1414, 1416 |
-| People UUID-folder migration | Awaiting design/code handoff | Pending | 1411, 1412 |
+| People UUID-folder migration design | 8c70b18b | Direction approved; three migration safeguards required | 1418 |
 
 ## Scan-target facts
 
@@ -53,3 +53,18 @@ finishes. Ordered journal I/O needs a background execution boundary.
 
 Legacy CSV widths, positional reads, quoting, ordinary place restoration,
 inheritance and repair undo appeared consistent in the inspected change.
+
+## People UUID migration design
+
+The identity/display direction is sound. Before implementation approval:
+
+1. Back up before **any** source mutation, including assigning legacy UUIDs.
+2. Persist planned old/new/UUID mappings before renames. Resume and rollback must
+   reconcile interrupted moves and JSON writes, not depend on a post-rename log
+   that may never have been written.
+3. Quarantined or skipped profiles must not silently save into a fresh UUID folder
+   or a colliding destination. Retain their actual location or refuse mutation
+   with an actionable diagnostic until the conflict is resolved.
+
+Audit name-based actions and accessibility identifiers now that duplicate legal
+given names are valid; UUID ownership must survive the UI-to-operation boundary.
