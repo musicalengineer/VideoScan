@@ -413,10 +413,10 @@ struct ConfirmVerbTests {
         return dir
     }
 
-    @Test func store_recordPersistsImmediately() {
+    @Test func store_recordPersistsImmediately() throws {
         let dir = tempDir("immediate")
         let store = ValidationLabelStore(directory: dir)
-        store.record(
+        try store.record(
             recordPath: "/v/x.mov", person: "Donna",
             rating: .definitely, signals: ["filename"], score: 10
         )
@@ -427,18 +427,18 @@ struct ConfirmVerbTests {
         #expect(reopened.labels[0].rating == .definitely)
     }
 
-    @Test func store_labeledByPathReturnsLatestForPerson() {
+    @Test func store_labeledByPathReturnsLatestForPerson() throws {
         let dir = tempDir("byPath")
         let store = ValidationLabelStore(directory: dir)
-        store.record(
+        try store.record(
             recordPath: "/v/a.mov", person: "Donna",
             rating: .likely, signals: [], score: 5
         )
-        store.record(
+        try store.record(
             recordPath: "/v/a.mov", person: "Donna",
             rating: .definitely, signals: [], score: 10
         )
-        store.record(
+        try store.record(
             recordPath: "/v/a.mov", person: "Matt",
             rating: .no, signals: [], score: 0
         )
@@ -448,19 +448,19 @@ struct ConfirmVerbTests {
         #expect(donnaLabels.count == 1, "Other person's labels excluded")
     }
 
-    @Test func store_roundSummaryCountsAndSignalSources() {
+    @Test func store_roundSummaryCountsAndSignalSources() throws {
         let dir = tempDir("summary")
         let store = ValidationLabelStore(directory: dir)
         let since = Date()
-        store.record(
+        try store.record(
             recordPath: "/v/a.mov", person: "Donna",
             rating: .definitely, signals: ["filename", "transcript×3"], score: 16
         )
-        store.record(
+        try store.record(
             recordPath: "/v/b.mov", person: "Donna",
             rating: .definitely, signals: ["PF-tagged"], score: 10
         )
-        store.record(
+        try store.record(
             recordPath: "/v/c.mov", person: "Donna",
             rating: .no, signals: ["transcript×1"], score: 17
         )

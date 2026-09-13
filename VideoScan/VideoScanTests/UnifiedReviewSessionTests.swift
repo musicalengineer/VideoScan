@@ -115,7 +115,7 @@ struct UnifiedReviewSessionTests {
         ]), in: dir)
         // A validation store with real content lives right next door.
         let store = ValidationLabelStore(directory: dir)
-        store.record(recordPath: "/Volumes/T/other.mov", person: "Donna",
+        try store.record(recordPath: "/Volumes/T/other.mov", person: "Donna",
                      rating: .definitely, signals: ["filename"], score: 10)
         let labelBytesBefore = try Data(contentsOf: store.fileURL)
 
@@ -140,7 +140,7 @@ struct UnifiedReviewSessionTests {
         let store = ValidationLabelStore(directory: dir)
         // Rating the SAME path that appears in the queue — the tempting
         // naive-merge shortcut would "helpfully" update the CSV row too.
-        store.record(recordPath: "/Volumes/T/a.mov", person: "Donna",
+        try store.record(recordPath: "/Volumes/T/a.mov", person: "Donna",
                      rating: .no, signals: ["control"], score: 0)
 
         #expect(store.labels.count == 1)
@@ -310,7 +310,7 @@ struct UnifiedReviewSessionTests {
         // surface must not take down the other.
         let store = ValidationLabelStore(directory: labelsDir)
         #expect(store.labels.isEmpty)
-        store.record(recordPath: "/v/x.mov", person: "Donna",
+        try store.record(recordPath: "/v/x.mov", person: "Donna",
                      rating: .likely, signals: ["filename"], score: 10)
         #expect(store.labels.count == 1)
 
@@ -337,7 +337,8 @@ struct UnifiedReviewSessionTests {
         #expect(!source.contains("Button(\"Confirm \\(profile.name)"),
                 "the redundant 'Confirm <name>…' menu item was removed 2026-07-27 — route through 'Review <name>…' instead")
         // …its replacement must exist…
-        #expect(source.contains("Button(\"Review \\(profile.name)"),
+        // Since 2026-09-12 the label shows the display name (first alias).
+        #expect(source.contains("Button(\"Review \\(profile.displayName)"),
                 "the unified 'Review <name>…' menu entry is missing — people would have no path to the labeling flow")
         // …and the nag-button badge entry point stays wired.
         #expect(source.contains("holdoutReviewBadge(for: profile)"),

@@ -1008,20 +1008,40 @@ struct POIProfile: Codable, Identifiable, Equatable {
     static func upgradingKinshipAnchors(_ profiles: [POIProfile],
                                         unpersistedUUIDs: Set<UUID> = []) -> [POIProfile] {
         let blocked = unpersistedUUIDs.union(profiles.filter { !$0.uuidPersisted }.map(\.uuid))
-        let byName = Dictionary(profiles.map { (PersonResolver.normalize($0.name), $0.uuid) },
-                                uniquingKeysWith: { first, _ in first })
+        // Every uuid a normalized name maps to. Only a UNIQUE match may be
+        // upgraded: with two Richards (2026-09-12) a legacy "Richard" row
+        // must stay name-keyed rather than become an arbitrary Richard's
+        // uuid that a later save would persist as the wrong relationship
+        // (codex review of c56bd2bc). Logged once per ambiguous name.
+        var ownersByName: [String: [UUID]] = [:]
+        for profile in profiles {
+            ownersByName[PersonResolver.normalize(profile.name), default: []].append(profile.uuid)
+        }
         return profiles.map { profile in
             var copy = profile
             copy.kinships = profile.kinships.map { row in
                 guard case .profileName(let name) = row.relativeTo,
-                      let id = byName[PersonResolver.normalize(name)],
-                      !blocked.contains(id) else { return row }
+                      let owners = ownersByName[PersonResolver.normalize(name)] else { return row }
+                guard owners.count == 1, let id = owners.first else {
+                    Self.noteAmbiguousAnchorOnce(name: name, on: profile.name, count: owners.count)
+                    return row
+                }
+                guard !blocked.contains(id) else { return row }
                 var upgraded = row
                 upgraded.relativeTo = .profile(id: id)
                 return upgraded
             }
             return copy
         }
+    }
+
+    /// Ambiguous legacy anchors logged once per (row-owner, name) per process.
+    nonisolated(unsafe) private static var ambiguousAnchorsNoted = Set<String>()
+    private static func noteAmbiguousAnchorOnce(name: String, on owner: String, count: Int) {
+        let key = owner.lowercased() + "→" + PersonResolver.normalize(name)
+        guard !ambiguousAnchorsNoted.contains(key) else { return }
+        ambiguousAnchorsNoted.insert(key)
+        identityLog.notice("POIProfile listAll: relationship on '\(owner, privacy: .public)' names '\(name, privacy: .public)', which \(count) profiles share — kept name-keyed, not upgraded to a uuid.")
     }
 
     /// Soft-delete the POI by moving its folder into ~/dev/VideoScan/.trash/.
@@ -1044,8 +1064,13 @@ struct POIProfile: Codable, Identifiable, Equatable {
         }
     }
 
-    /// Soft-delete THIS profile's folder.
+    /// Soft-delete THIS profile's folder. A quarantined profile (still in
+    /// a legacy folder the migration skipped) is refused: its uuid folder,
+    /// if one exists, belongs to someone else.
     func delete() throws {
+        if let quarantine {
+            throw POIProfileFileStore.Failure.quarantined(folder: quarantine.folder, reason: quarantine.reason)
+        }
         try Self.delete(uuid: uuid, displayName: displayName)
     }
 

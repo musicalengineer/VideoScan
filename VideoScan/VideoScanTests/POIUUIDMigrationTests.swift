@@ -536,4 +536,64 @@ struct POIUUIDMigrationTests {
         #expect(message.contains(".uuid-migration.json"))
         #expect(message.contains("Nothing was written"))
     }
+
+    /// SENSOR (codex #6): an internal ABSOLUTE symlink (dad/cover.jpg →
+    /// …/dad/original.jpg) still dereferences to the same bytes after the
+    /// folder moved, and again after rollback. A crash between the rename
+    /// and the rebase (mapping recorded, linksRebased not) is finished by
+    /// the next run. External and relative links are untouched.
+    @Test func internalAbsoluteSymlinksDereferenceAfterMigrationAndRollback() throws {
+        let root = try makeRoot()
+        defer { root.cleanup() }
+        let id = UUID()
+        let dad = try writeLegacy(root, folder: "dad", name: "Dad", uuid: id, photos: 1)
+        let original = Data((0..<128).map { _ in UInt8.random(in: 0...255) })
+        try original.write(to: dad.appendingPathComponent("original.jpg"))
+        let fm = FileManager.default
+        try fm.createSymbolicLink(atPath: dad.appendingPathComponent("cover.jpg").path,
+                                  withDestinationPath: dad.appendingPathComponent("original.jpg").path)
+        try fm.createSymbolicLink(atPath: dad.appendingPathComponent("relative.jpg").path,
+                                  withDestinationPath: "original.jpg")
+        let external = root.url.deletingLastPathComponent().appendingPathComponent("outside.jpg")
+        try Data([9]).write(to: external)
+        try fm.createSymbolicLink(atPath: dad.appendingPathComponent("outside.jpg").path,
+                                  withDestinationPath: external.path)
+
+        guard case .ran(let report) = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) else {
+            Issue.record("should run"); return
+        }
+        let moved = root.folder(POIStorage.folderName(for: id))
+        #expect(report.linksRebased == ["dad"])
+        // Dereference, not target-string equality.
+        #expect(try Data(contentsOf: moved.appendingPathComponent("cover.jpg")) == original)
+        #expect(try Data(contentsOf: moved.appendingPathComponent("relative.jpg")) == original)
+        #expect(try Data(contentsOf: moved.appendingPathComponent("outside.jpg")) == Data([9]))
+        #expect(try fm.destinationOfSymbolicLink(atPath: moved.appendingPathComponent("relative.jpg").path) == "original.jpg")
+        #expect(try fm.destinationOfSymbolicLink(atPath: moved.appendingPathComponent("outside.jpg").path) == external.path)
+        #expect(POIStorage.readUUIDMigrationReport(root: root.url)?.linksRebased == ["dad"])
+
+        // Crash simulation: mapping recorded, rebase not — and the link
+        // points at the vanished legacy path again.
+        try fm.removeItem(at: moved.appendingPathComponent("cover.jpg"))
+        try fm.createSymbolicLink(atPath: moved.appendingPathComponent("cover.jpg").path,
+                                  withDestinationPath: dad.appendingPathComponent("original.jpg").path)
+        var audit = try #require(POIStorage.readUUIDMigrationReport(root: root.url))
+        audit.linksRebased = []
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(audit).write(to: root.url.appendingPathComponent(POIStorage.uuidMigrationFileName))
+        #expect((try? Data(contentsOf: moved.appendingPathComponent("cover.jpg"))) == nil, "dangling before the rerun")
+        guard case .ran(let rerun) = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) else {
+            Issue.record("rerun should finish the rebase"); return
+        }
+        #expect(rerun.linksRebased == ["dad"])
+        #expect(rerun.backupPath == nil, "nothing moved, no second backup")
+        #expect(try Data(contentsOf: moved.appendingPathComponent("cover.jpg")) == original)
+        #expect(POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) == .notNeeded)
+
+        // Rollback rebases the links back to the legacy folder.
+        #expect(try POIStorage.rollbackUUIDMigration(root: root.url) == 1)
+        // Dereference again: the link follows the folder back.
+        #expect(try Data(contentsOf: dad.appendingPathComponent("cover.jpg")) == original)
+        #expect(try Data(contentsOf: dad.appendingPathComponent("relative.jpg")) == original)
+    }
 }

@@ -443,11 +443,16 @@ enum POIStorage {
         /// mapping not yet written when it stopped) that this run recognised
         /// by the uuid at the destination.
         var reconciled: [String] = []
+        /// Old folder names whose moved folder has had its internal ABSOLUTE
+        /// symlinks rebased (…/<old>/x → …/<UUID>/x). A mapping entry not
+        /// listed here is unfinished work a later run completes — the rebase
+        /// is idempotent, so a crash between rename and rebase is safe.
+        var linksRebased: [String] = []
 
         enum CodingKeys: String, CodingKey {
             case startedAt, finishedAt, planned, mapping, skipped, backupPath, backupMethod
             case backupVerified, backupSeconds, renameSeconds, elapsedSeconds, complete
-            case foldersBefore, foldersAfter, reconciled
+            case foldersBefore, foldersAfter, reconciled, linksRebased
         }
 
         init(startedAt: Date) { self.startedAt = startedAt }
@@ -471,6 +476,7 @@ enum POIStorage {
             foldersBefore = try c.decodeIfPresent(Int.self, forKey: .foldersBefore) ?? 0
             foldersAfter = try c.decodeIfPresent(Int.self, forKey: .foldersAfter) ?? 0
             reconciled = try c.decodeIfPresent([String].self, forKey: .reconciled) ?? []
+            linksRebased = try c.decodeIfPresent([String].self, forKey: .linksRebased) ?? []
         }
     }
 
@@ -625,7 +631,9 @@ enum POIStorage {
         // nothing beyond the listing we needed anyway.
         let candidates = folders.filter { uuid(fromFolderName: $0.lastPathComponent) == nil }
         let unreconciled = (previousReport?.planned ?? []).filter { previousReport?.mapping[$0.old] == nil }
-        if candidates.isEmpty && unreconciled.isEmpty {
+        let rebasedBefore = Set(previousReport?.linksRebased ?? [])
+        let pendingRebase = (previousReport?.mapping ?? [:]).filter { !rebasedBefore.contains($0.key) }
+        if candidates.isEmpty && unreconciled.isEmpty && pendingRebase.isEmpty {
             migrationStates[root.path] = .clean
             return .notNeeded
         }
@@ -670,9 +678,20 @@ enum POIStorage {
             report.mapping[planned.old] = planned.new
             report.reconciled.append(planned.old)
             log("reconciled '\(planned.old)' → \(planned.new) (renamed by an earlier run that stopped before recording it)")
+            let n = rebaseInternalLinks(in: new, from: old.path, to: new.path)
+            report.linksRebased.append(planned.old)
+            if n > 0 { log("rebased \(n) internal link(s) in \(planned.new)") }
+        }
+        // Moves an earlier run recorded but never finished rebasing.
+        for (old, new) in pendingRebase where !report.linksRebased.contains(old) {
+            let folder = root.appendingPathComponent(new, isDirectory: true)
+            guard fm.fileExists(atPath: folder.path) else { continue }
+            let n = rebaseInternalLinks(in: folder, from: root.appendingPathComponent(old, isDirectory: true).path, to: folder.path)
+            report.linksRebased.append(old)
+            if n > 0 { log("rebased \(n) internal link(s) in \(new) (left over from an earlier run)") }
         }
         if candidates.isEmpty {
-            // Only reconciliation was owed. Record it and stop.
+            // Only reconciliation / link rebasing was owed. Record it and stop.
             try? writeUUIDMigrationReport(merged(previousReport, with: report), root: root)
             report.complete = true
             return finish(.clean)
@@ -817,8 +836,13 @@ enum POIStorage {
                 // this is an audit gap, not a data problem. Say so.
                 log("moved '\(move.source.lastPathComponent)' → \(destination.lastPathComponent) but could not rewrite profile.json: \(error.localizedDescription)")
             }
+            // Internal absolute symlinks (dad/cover.jpg → …/dad/original.jpg)
+            // follow the folder; recorded so a crash here is finished later.
+            let rebased = rebaseInternalLinks(in: destination, from: move.source.path, to: destination.path)
+            report.linksRebased.append(move.source.lastPathComponent)
+            try? writeUUIDMigrationReport(merged(previousReport, with: report), root: root)
             let name = (move.json["name"] as? String) ?? "?"
-            log("'\(move.source.lastPathComponent)' → \(destination.lastPathComponent) (\(name))\(move.mintedUUID ? " [uuid minted]" : "")")
+            log("'\(move.source.lastPathComponent)' → \(destination.lastPathComponent) (\(name))\(move.mintedUUID ? " [uuid minted]" : "")\(rebased > 0 ? " [\(rebased) link(s) rebased]" : "")")
         }
         report.renameSeconds = seconds(clock.now - renameStart)
 
@@ -878,9 +902,11 @@ enum POIStorage {
                 json["referencePath"] = destination.path
                 try? writeJSON(json, to: profileURL)
             }
+            _ = rebaseInternalLinks(in: destination, from: source.path, to: destination.path)
             restored += 1
             appLog.write("[people] rollback: \(new) → '\(old)'")
         }
+        report.linksRebased = report.linksRebased.filter { remaining[$0] != nil }
         if remaining.isEmpty {
             let aside = root.appendingPathComponent(".uuid-migration-rolledback-\(trashTimestamp(now)).json")
             try? fm.moveItem(at: root.appendingPathComponent(uuidMigrationFileName), to: aside)
@@ -920,6 +946,57 @@ enum POIStorage {
         var planned = previous.planned
         for move in latest.planned where !planned.contains(move) { planned.append(move) }
         out.planned = planned
+        var rebased = previous.linksRebased
+        for old in latest.linksRebased where !rebased.contains(old) { rebased.append(old) }
+        out.linksRebased = rebased
+        return out
+    }
+
+    /// Rewrite every symlink directly inside `folder` (and its
+    /// subfolders) whose ABSOLUTE target starts with `oldPath/` so it points
+    /// at the same file under `newPath/`. Relative links and links pointing
+    /// elsewhere are untouched. Idempotent: a link already under `newPath`
+    /// is skipped, so this can run again after a crash. The same rule the
+    /// 2026-09-12 rename fix applies (POIProfileFileStore.save). Returns
+    /// the number of links rewritten; a link that cannot be rewritten is
+    /// left as it was (logged).
+    @discardableResult
+    static func rebaseInternalLinks(in folder: URL, from oldPath: String, to newPath: String) -> Int {
+        let fm = FileManager.default
+        // macOS spells temp/var paths two ways (/var/… and /private/var/…);
+        // a link written with one spelling must still be recognised when the
+        // folder path arrives in the other.
+        let oldPrefixes = pathSpellings(oldPath).map { $0.hasSuffix("/") ? $0 : $0 + "/" }
+        let newPrefix = newPath.hasSuffix("/") ? newPath : newPath + "/"
+        guard let entries = fm.enumerator(at: folder, includingPropertiesForKeys: [.isSymbolicLinkKey]) else { return 0 }
+        var count = 0
+        for case let link as URL in entries {
+            guard (try? link.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true,
+                  let target = try? fm.destinationOfSymbolicLink(atPath: link.path),
+                  let oldPrefix = oldPrefixes.first(where: { target.hasPrefix($0) })
+            else { continue }
+            let rebased = newPrefix + target.dropFirst(oldPrefix.count)
+            do {
+                try fm.removeItem(at: link)
+                try fm.createSymbolicLink(atPath: link.path, withDestinationPath: rebased)
+                count += 1
+            } catch {
+                appLog.write("[people] migration: could not rebase link \(link.lastPathComponent) in \(folder.lastPathComponent): \(error.localizedDescription)")
+                storageLog.error("migration: could not rebase link \(link.path, privacy: .public): \(String(describing: error), privacy: .public)")
+            }
+        }
+        return count
+    }
+
+    /// `/private/var/x` and `/var/x` (also /tmp, /etc) name the same place on
+    /// macOS; both spellings of `path`, the given one first.
+    static func pathSpellings(_ path: String) -> [String] {
+        var out = [path]
+        if path.hasPrefix("/private/") {
+            out.append(String(path.dropFirst("/private".count)))
+        } else if ["/var/", "/tmp/", "/etc/"].contains(where: { path.hasPrefix($0) }) {
+            out.append("/private" + path)
+        }
         return out
     }
 

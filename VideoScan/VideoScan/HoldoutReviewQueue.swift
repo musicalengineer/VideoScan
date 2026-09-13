@@ -302,6 +302,9 @@ struct HoldoutReviewQueue: Equatable, Sendable {
         guard confirm == "yes" || confirm == "no" else {
             throw QueueError.invalidAnswer(confirm)
         }
+        // The queue is keyed by the person's short name; a name two profiles
+        // share is refused before the CSV is touched (2026-09-12).
+        try PersonNameGuard.check(personName, operation: "holdout review")
         // Disk is the base, not memory. Same strict load as everywhere
         // else — a mid-session corruption throws here rather than being
         // papered over by a memory rewrite.

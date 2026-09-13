@@ -1633,14 +1633,20 @@ struct ConfirmPersonSheet: View {
             loadError = "Internal safety check refused to save this rating (nothing was written). Please tell Claude — this is a wiring bug."
             return
         }
-        // Persist label
-        personFinderModel.validationLabels.record(
-            recordPath: candidate.recordPath,
-            person: profile.name,
-            rating: rating,
-            signals: candidate.signals,
-            score: candidate.score
-        )
+        // Persist label. The sink refuses a short name two profiles share
+        // (a namesake may have appeared while this sheet was open).
+        do {
+            try personFinderModel.validationLabels.record(
+                recordPath: candidate.recordPath,
+                person: profile.name,
+                rating: rating,
+                signals: candidate.signals,
+                score: candidate.score
+            )
+        } catch {
+            loadError = "Not saved — \(error.localizedDescription)"
+            return
+        }
         roundLabels.append((candidate.recordPath, rating, candidate.signals))
 
         // Catalog writeback per rating tier

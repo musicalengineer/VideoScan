@@ -195,3 +195,25 @@ Consumers (codex #1422/#1423/#1426):
    full-name form) and the bare shared name is skipped.
 6. Accessibility identifiers are `pf.person.<name>.<uuid>` (also treelink,
    holdout badge); the Gauntlet matches on the name prefix.
+
+## Final codex pass (team-channel #1440–#1442)
+
+1. Import identity: a bundle profile **with** a uuid matches by uuid only; a
+   same-named local with a present, differing (or absent) uuid is refused
+   with the fix, never merged. Name identity applies only when the incoming
+   profile has no uuid, and then only to a unique local namesake.
+2. `resolveActiveProfile` returns `.missing(uuid)` when the stored active
+   uuid is gone; quick-save and rejection sync refuse, clear the stale
+   selection and say so. The name is consulted only when no uuid is stored.
+3. `PersonNameGuard` (injectable roster) guards the write sinks themselves:
+   `ValidationLabelStore.record` (now `throws`) and
+   `HoldoutReviewQueue.recordAnswer` refuse a shared short name; the sheet
+   surfaces the refusal. "Shared" = two or more gallery profiles with the name.
+4. `upgradingKinshipAnchors` upgrades a legacy name anchor only when exactly
+   one profile owns the name; ambiguous names stay name-keyed (logged once).
+5. Deleting a quarantined profile is refused in `PersonFinderModel.deletePOI`
+   (before any job is stopped) and in `POIProfile.delete()`.
+6. The migration rebases internal absolute symlinks after each rename
+   (`rebaseInternalLinks`, tolerant of `/private` path aliases), records it
+   in `linksRebased`, finishes it on a rerun after a crash, and undoes it on
+   rollback. Pinned by dereferencing the link.

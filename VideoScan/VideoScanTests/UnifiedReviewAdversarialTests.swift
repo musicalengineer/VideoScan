@@ -228,7 +228,7 @@ struct UnifiedReviewAdversarialTests {
 
         let labelsDirectory = try makeTempDir()
         let labels = ValidationLabelStore(directory: labelsDirectory)
-        labels.record(recordPath: "/v/free/already_labeled.mov", person: "Donna",
+        try labels.record(recordPath: "/v/free/already_labeled.mov", person: "Donna",
                       rating: .likely, signals: ["filename"], score: 10)
         let labelBytesBefore = try Data(contentsOf: labels.fileURL)
 

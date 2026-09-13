@@ -103,6 +103,10 @@ struct BundleImportFieldMergeTests {
         let trash = try makeTempDir("trash")
         let people = try makeTempDir("people")
         let localDir = try writePOI(under: store, profile: local, photoCount: localPhotos)
+        // The same person on both sides shares one uuid (exports since
+        // 2026-08-28 carry it; a present, differing uuid is refused now).
+        var bundle = bundle
+        bundle.uuid = local.uuid
         let bundleDir = try writePOI(under: people, profile: bundle, photoCount: bundlePhotos)
         try setMTimes(under: bundleDir, to: bundleMtime)
         return Scenario(store: store, trash: trash, people: people,
@@ -286,27 +290,23 @@ struct BundleImportFieldMergeTests {
         var bundleDirs: [URL] = []
         var localDirs: [String: URL] = [:]
         for (name, birth) in births {
-            localDirs[name] = try writePOI(
-                under: store,
-                profile: POIProfile(name: name, referencePath: "/local/\(name)"),
-                photoCount: 2)
+            let localProfile = POIProfile(name: name, referencePath: "/local/\(name)")
+            localDirs[name] = try writePOI(under: store, profile: localProfile, photoCount: 2)
             let b = try writePOI(
                 under: people,
                 profile: POIProfile(name: name, referencePath: "/bundle/\(name)",
-                                    birthdate: birth),
+                                    birthdate: birth, uuid: localProfile.uuid),
                 photoCount: 2)
             bundleDirs.append(b)
         }
         // Plus one preferBundle-direction POI: local-only identityNotes.
-        localDirs["matt"] = try writePOI(
-            under: store,
-            profile: POIProfile(name: "matt", referencePath: "/local/matt",
-                                identityNotes: "wore glasses since 1998"),
-            photoCount: 1)
+        let mattLocal = POIProfile(name: "matt", referencePath: "/local/matt",
+                                   identityNotes: "wore glasses since 1998")
+        localDirs["matt"] = try writePOI(under: store, profile: mattLocal, photoCount: 1)
         bundleDirs.append(try writePOI(
             under: people,
             profile: POIProfile(name: "matt", referencePath: "/bundle/matt",
-                                birthdate: date(1988)),
+                                birthdate: date(1988), uuid: mattLocal.uuid),
             photoCount: 4))
         for d in bundleDirs { try setMTimes(under: d, to: past) }
 

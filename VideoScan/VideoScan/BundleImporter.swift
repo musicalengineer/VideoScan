@@ -342,12 +342,6 @@ enum BundleImporter {
         let bundleName = bundleJSON?["name"] as? String
         let bundleUUID = (bundleJSON?["uuid"] as? String).flatMap(UUID.init(uuidString:))
         let label = bundleName ?? bundleFolderName
-        // A bundle folder still keyed by NAME was exported by a build that
-        // identified people by name — including the window (2026-08-28 →
-        // 2026-09-12) when each Mac minted its own uuid for the same person.
-        // Such a folder keeps name identity on import; a uuid-keyed folder
-        // is matched by uuid only.
-        let bundleIsLegacyLayout = POIStorage.uuid(fromFolderName: bundleFolderName) == nil
 
         func uuidIn(_ folder: URL) -> UUID? {
             (rawProfileJSON(at: folder)?["uuid"] as? String).flatMap(UUID.init(uuidString:))
@@ -364,48 +358,54 @@ enum BundleImporter {
                 return Placement(destination: uuidFolder, localExists: true, label: label, adoptUUID: nil)
             }
         }
-        // 2. legacy name-keyed local folder for the same person.
-        var legacyCandidates = [storeDir.appendingPathComponent(bundleFolderName, isDirectory: true)]
+        // Every local folder whose canonical name is the bundle person's.
+        var namesakes: [(folder: URL, uuid: UUID?)] = []
         if let bundleName {
-            legacyCandidates.append(storeDir.appendingPathComponent(POIStorage.sanitize(bundleName), isDirectory: true))
-        }
-        for legacy in legacyCandidates where exists(legacy)
-            && POIStorage.uuid(fromFolderName: legacy.lastPathComponent) == nil {
-            let localUUID = uuidIn(legacy)
-            let samePerson = bundleIsLegacyLayout || bundleUUID == nil || localUUID == nil || bundleUUID == localUUID
-            if samePerson {
-                return Placement(destination: legacy, localExists: true, label: label,
-                                 adoptUUID: bundleUUID == nil ? localUUID : nil)
-            }
-        }
-        // 3. name identity (legacy bundle layout, or no uuid at all): match
-        //    a local person by canonical name, whatever folder they are in.
-        //    Two local namesakes make the bundle person unplaceable: refuse
-        //    rather than pick one (codex review 2026-09-12).
-        if bundleIsLegacyLayout || bundleUUID == nil, let bundleName {
             let key = PersonResolver.normalize(bundleName)
-            var matches: [(folder: URL, uuid: UUID?)] = []
             for folder in POIStorage.poiFolders(in: storeDir) {
                 guard let json = rawProfileJSON(at: folder),
                       let name = json["name"] as? String,
                       PersonResolver.normalize(name) == key else { continue }
-                matches.append((folder, (json["uuid"] as? String).flatMap(UUID.init(uuidString:))))
-            }
-            if matches.count > 1 {
-                let where_ = matches.map(\.folder.lastPathComponent).sorted().joined(separator: ", ")
-                var refused = Placement(destination: src, localExists: false, label: label, adoptUUID: nil)
-                refused.refusal = "'\(bundleName)' is \(matches.count) people here (\(where_)) and the bundle identifies them by name only — export the bundle again from a uuid-keyed store, or give one of them a distinct short name first. Nothing was copied."
-                return refused
-            }
-            if let match = matches.first {
-                return Placement(destination: match.folder, localExists: true, label: label,
-                                 adoptUUID: bundleUUID == nil ? match.uuid : nil)
+                namesakes.append((folder, (json["uuid"] as? String).flatMap(UUID.init(uuidString:))))
             }
         }
-        // 4. fresh uuid folder.
-        let adopt = bundleUUID == nil ? UUID() : nil
-        let id = bundleUUID ?? adopt!
-        return Placement(destination: storeDir.appendingPathComponent(POIStorage.folderName(for: id), isDirectory: true),
+        func refuse(_ why: String) -> Placement {
+            var refused = Placement(destination: src, localExists: false, label: label, adoptUUID: nil)
+            refused.refusal = why + " Nothing was copied."
+            return refused
+        }
+        // 2. The bundle profile HAS a uuid: identity is that uuid, full stop.
+        //    A same-named local whose uuid is present and different is a
+        //    different person (or a machine that minted its own) and is
+        //    NEVER merged or overwritten — refused with the fix; a same-named
+        //    local with no uuid at all cannot be told apart and is refused
+        //    too (codex review of c56bd2bc: name identity applies only when
+        //    the incoming profile has no uuid).
+        if let bundleUUID {
+            if let same = namesakes.first(where: { $0.uuid == bundleUUID }) {
+                return Placement(destination: same.folder, localExists: true, label: label, adoptUUID: nil)
+            }
+            if !namesakes.isEmpty {
+                let where_ = namesakes.map { "\($0.folder.lastPathComponent) (\($0.uuid?.uuidString ?? "no uuid"))" }
+                    .sorted().joined(separator: ", ")
+                return refuse("'\(label)' in the bundle carries uuid \(bundleUUID.uuidString) but the local '\(label)' is \(where_) — a different identity. Not merged: give one of them a distinct short name, or re-export from the same store.")
+            }
+            return Placement(destination: storeDir.appendingPathComponent(POIStorage.folderName(for: bundleUUID), isDirectory: true),
+                             localExists: false, label: label, adoptUUID: nil)
+        }
+        // 3. No uuid in the bundle (pre-2026-08-28 export): name identity —
+        //    the UNIQUE local namesake; two namesakes are refused rather than
+        //    picked (codex review 2026-09-12).
+        if namesakes.count > 1 {
+            let where_ = namesakes.map(\.folder.lastPathComponent).sorted().joined(separator: ", ")
+            return refuse("'\(label)' is \(namesakes.count) people here (\(where_)) and the bundle identifies them by name only — export the bundle again from a uuid-keyed store, or give one of them a distinct short name first.")
+        }
+        if let match = namesakes.first {
+            return Placement(destination: match.folder, localExists: true, label: label, adoptUUID: match.uuid)
+        }
+        // 4. Nobody local by that name and no uuid: a fresh uuid folder.
+        let adopt = UUID()
+        return Placement(destination: storeDir.appendingPathComponent(POIStorage.folderName(for: adopt), isDirectory: true),
                          localExists: false, label: label, adoptUUID: adopt)
     }
 

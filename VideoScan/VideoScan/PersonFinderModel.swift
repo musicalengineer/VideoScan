@@ -563,6 +563,8 @@ final class PersonFinderModel: ObservableObject {
         case .ambiguous(let owners):
             referenceLoadError = Self.sharedNameRefusal(owners[0], operation: "rejecting reference photos")
             appLog.write("[people] rejection sync refused: \(referenceLoadError ?? "")")
+        case .missing(let id):
+            referenceLoadError = refuseMissingActiveProfile(id, operation: "rejecting reference photos")
         case .one(var profile):
             profile.rejectedFiles = settings.rejectedReferenceFiles
             try? profile.save()
@@ -598,12 +600,16 @@ final class PersonFinderModel: ObservableObject {
         case none
         case one(POIProfile)
         case ambiguous([POIProfile])
+        /// Settings name a uuid that is no longer in the gallery (deleted,
+        /// trashed by hand). The name is NOT consulted — a namesake could
+        /// be a different person (codex review of c56bd2bc).
+        case missing(UUID)
     }
 
     func resolveActiveProfile() -> ActiveProfileResolution {
-        if let id = settings.activeProfileUUID,
-           let profile = savedProfiles.first(where: { $0.uuid == id }) {
-            return .one(profile)
+        if let id = settings.activeProfileUUID {
+            if let profile = savedProfiles.first(where: { $0.uuid == id }) { return .one(profile) }
+            return .missing(id)
         }
         let target = settings.personName.lowercased()
         guard !target.isEmpty else { return .none }
@@ -621,13 +627,24 @@ final class PersonFinderModel: ObservableObject {
     /// name) refuse such a profile with an actionable message rather than
     /// guessing (codex review 2026-09-12).
     func nameIsShared(_ profile: POIProfile) -> Bool {
-        let key = profile.name.lowercased()
-        return savedProfiles.filter { $0.name.lowercased() == key && $0.uuid != profile.uuid }.isEmpty == false
+        PersonNameGuard.isShared(profile, among: savedProfiles)
     }
 
-    /// The sentence a refused name-keyed operation shows.
+    /// The sentence a refused name-keyed operation shows (one rule, in
+    /// PersonNameGuard, shared with the write sinks).
     static func sharedNameRefusal(_ profile: POIProfile, operation: String) -> String {
-        "Two people are called \(profile.name) — \(operation) is keyed by the short name. Give one of them a distinct short name first (aliases are what the cards show)."
+        PersonNameGuard.refusal(name: profile.name, operation: operation)
+    }
+
+    /// The sentence shown when the active selection names a person who is
+    /// gone. Clears the stale selection so the next card click starts clean.
+    func refuseMissingActiveProfile(_ id: UUID, operation: String) -> String {
+        settings.activeProfileUUID = nil
+        settings.referencePath = ""
+        settings.save()
+        let message = "The selected person (\(id.uuidString)) is no longer in the gallery — \(operation) was not done. Click a card to pick who you mean."
+        appLog.write("[people] \(operation) refused: active profile \(id.uuidString) missing")
+        return message
     }
 
     func saveCurrentPOI() {
@@ -637,6 +654,10 @@ final class PersonFinderModel: ObservableObject {
         let resolution = resolveActiveProfile()
         if case .ambiguous(let owners) = resolution {
             referenceLoadError = Self.sharedNameRefusal(owners[0], operation: "quick-save")
+            return
+        }
+        if case .missing(let id) = resolution {
+            referenceLoadError = refuseMissingActiveProfile(id, operation: "quick-save")
             return
         }
         if case .one(var existing) = resolution {
@@ -817,6 +838,17 @@ final class PersonFinderModel: ObservableObject {
     /// folder back into `storeDir` manually.
     @discardableResult
     func deletePOI(_ profile: POIProfile) async -> Bool {
+        // A profile the migration could not move still lives in its legacy
+        // folder; its uuid may ALSO name a folder that belongs to someone
+        // else (a duplicate-uuid twin). Deleting by uuid would trash that
+        // other owner, so the delete is refused before any job is stopped
+        // or any folder touched (codex review of c56bd2bc).
+        if let quarantine = profile.quarantine {
+            lastUndoError = POIProfileFileStore.Failure
+                .quarantined(folder: quarantine.folder, reason: quarantine.reason).errorDescription
+            appLog.write("[people] delete refused for quarantined '\(profile.name)' in '\(quarantine.folder)'")
+            return false
+        }
         // Swift's `lowercased()` ≈ C's tolower() on the whole string.
         let name = profile.name
         let target = name.lowercased()
