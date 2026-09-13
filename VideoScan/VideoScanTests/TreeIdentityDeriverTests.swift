@@ -185,8 +185,8 @@ struct TreeIdentityDeriverTests {
         let v = F.deriver([rickPinned, F.donna, F.tim]).derive(TreeIdentitySubject(F.tim))
         #expect(v == TreeIdentityDerivation.none)
         let all = F.deriver([rickPinned, F.donna, F.tim]).deriveAll()
-        #expect(all["tim"] == TreeIdentityDerivation.none)
-        #expect(all["rick"] == nil, "a pinned profile is not re-derived")
+        #expect(all[F.tim.id] == TreeIdentityDerivation.none)
+        #expect(all[rickPinned.id] == nil, "a pinned profile is not re-derived")
     }
 
     @Test func namesakeWithBirthYearIsCertain() {
@@ -286,7 +286,7 @@ struct TreeIdentityDeriverTests {
         let notInTree = F.profile("Bob", sex: .male, notInTree: true)
         let pinned = F.profile("Rick", sex: .male, pin: "GVQV-NW3")
         let all = F.deriver([quarantined, notInTree, pinned, F.donna]).deriveAll()
-        #expect(all.keys.sorted() == ["donna"])
+        #expect(all.keys.sorted() == [F.donna.id])
     }
 
     @Test func suggestionsAreCapped() {

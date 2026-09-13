@@ -225,14 +225,14 @@ struct FamilyKinshipTests {
         var renamed = upgraded[0]
         renamed.name = "Richard"
         let overlay = FamilyKinshipOverlay(profiles: [renamed, upgraded[1]], graph: nil)
-        #expect(overlay.relationshipsLine(forProfileStableID: "tim", kinships: upgraded[1].kinships)
+        #expect(overlay.relationshipsLine(forProfileStableID: upgraded[1].id, kinships: upgraded[1].kinships)
                 == "Richard's younger brother")
         // A uuid nobody has any more is named honestly and flagged.
         let orphan = Self.profile("Ann", sex: .female, kinships: [
             Kinship(relation: .sibling, relativeTo: .profile(id: UUID())),
         ])
         let orphaned = FamilyKinshipOverlay(profiles: [orphan], graph: nil)
-        #expect(orphaned.relationshipsLine(forProfileStableID: "ann", kinships: orphan.kinships)
+        #expect(orphaned.relationshipsLine(forProfileStableID: orphan.id, kinships: orphan.kinships)
                 == "a removed profile's sister")
         #expect(orphaned.warnings(forProfileNamed: "Ann").count == 1)
     }
@@ -359,18 +359,19 @@ struct FamilyKinshipTests {
     /// ("renée" ≠ normalize → "renee"), and a snapshot's stableID may be an
     /// arbitrary slug that is not the name at all.
     @Test func resolverCanonicalNamesReachVerticesWithDiacriticsAndSlugIDs() {
-        // Diacritics through the POIProfile path (id = name.lowercased()).
+        // Diacritics through the POIProfile path (id is the uuid since
+        // 2026-09-12; the resolver still speaks in canonical spellings).
         let renee = Self.profile("Renée", sex: .female)
         let marc = Self.profile("Marc", sex: .male, kinships: [
             Kinship(relation: .sibling, relativeTo: .profile(name: "Renée")),
         ])
-        #expect(renee.id == "renée")
+        #expect(renee.id == renee.uuid.uuidString)
         let byProfile = FamilyKinshipOverlay(profiles: [renee, marc], graph: nil)
         for spelling in ["Renée", "Renee", "RENEE", " renée "] {
-            #expect(byProfile.nodes(claiming: spelling) == [.profile(stableID: "renée")],
+            #expect(byProfile.nodes(claiming: spelling) == [.profile(stableID: renee.id)],
                     Comment(rawValue: spelling))
         }
-        #expect(byProfile.relatives(of: .profile(stableID: "renée"), relation: .sibling)
+        #expect(byProfile.relatives(of: .profile(stableID: renee.id), relation: .sibling)
                     .map(\.member.name) == ["Marc"])
 
         // Slug stableIDs through the snapshot path.
@@ -411,7 +412,7 @@ struct FamilyKinshipTests {
             Kinship(relation: .grandchild, relativeTo: .treePointer(pointer: "@I7@", sourceFingerprint: fingerprint)),
         ])
         let live = FamilyKinshipOverlay(profiles: [cara], graph: ancestry)
-        #expect(live.relationshipsLine(forProfileStableID: "cara", kinships: cara.kinships)
+        #expect(live.relationshipsLine(forProfileStableID: cara.id, kinships: cara.kinships)
                 == "Thankful Pratt's granddaughter")
         #expect(live.warnings.isEmpty)
         // A different export (even one that reuses @I7@) makes the row stale.
@@ -422,7 +423,7 @@ struct FamilyKinshipTests {
         0 TRLR
         """)
         let stale = FamilyKinshipOverlay(profiles: [cara], graph: other)
-        #expect(stale.relationshipsLine(forProfileStableID: "cara", kinships: cara.kinships)
+        #expect(stale.relationshipsLine(forProfileStableID: cara.id, kinships: cara.kinships)
                 == "tree person @I7@ (export changed)'s granddaughter")
         #expect(stale.warnings(forProfileNamed: "Cara") == ["Relationship row on Cara points at @I7@ in an older tree export — pick them again"])
         // Same content copied to a new file keeps the same fingerprint.
@@ -535,7 +536,7 @@ struct FamilyKinshipTests {
             Self.profile("Cyn", sex: .female),
         ]
         let overlay = FamilyKinshipOverlay(profiles: profiles, graph: nil)
-        let inLaws = overlay.relatives(of: .profile(stableID: "rick"), relation: .siblingInLaw)
+        let inLaws = overlay.relatives(of: .profile(stableID: profiles[0].id), relation: .siblingInLaw)
         #expect(inLaws.map(\.member.name) == ["Bob"])
 
         let brotherInLaw = ArchivistGraphExecutor.execute(kinship("Rick", .brotherInLaw), inputs: inputs(profiles))
@@ -583,13 +584,13 @@ struct FamilyKinshipTests {
 
     @Test func displayAddsDerivedRelationToDefaultAnchor() {
         let overlay = FamilyKinshipOverlay(profiles: Self.family, graph: nil)
-        let rick = overlay.node(profileStableID: "rick")
+        let rick = overlay.node(profileStableID: Self.family.first { $0.name == "Rick" }!.id)
         let sue = Self.family.first { $0.name == "Sue" }!
         #expect(overlay.relationshipsLine(forProfileStableID: sue.id, kinships: sue.kinships,
                                           defaultAnchor: rick)
                 == "Matt's wife (Rick's daughter-in-law)")
         // Anchored on Donna instead: Mary is her mother-in-law.
-        let donna = overlay.node(profileStableID: "donna")
+        let donna = overlay.node(profileStableID: Self.family.first { $0.name == "Donna" }!.id)
         let mary = Self.family.first { $0.name == "Mary" }!
         #expect(overlay.relationshipsLine(forProfileStableID: mary.id, kinships: mary.kinships,
                                           defaultAnchor: donna)
@@ -600,7 +601,7 @@ struct FamilyKinshipTests {
                                           defaultAnchor: rick)
                 == "Rick's younger brother")
         // No rows ⇒ no line.
-        #expect(overlay.relationshipsLine(forProfileStableID: "rick", kinships: []) == nil)
+        #expect(overlay.relationshipsLine(forProfileStableID: Self.family.first { $0.name == "Rick" }!.id, kinships: []) == nil)
     }
 
     @Test func treeAnchoredRowDisplaysTheTreeName() {
@@ -666,7 +667,7 @@ struct FamilyKinshipTests {
         // The graph vocabulary has no "grandchildren" word; the overlay
         // still composes child∘child for the display layer.
         let overlay = inputs().kinshipOverlay
-        let grandchildren = overlay.relatives(of: overlay.node(profileStableID: "mary")!, relation: .grandchild)
+        let grandchildren = overlay.relatives(of: overlay.node(profileStableID: Self.family.first { $0.name == "Mary" }!.id)!, relation: .grandchild)
         #expect(grandchildren.map(\.member.name) == ["Matt", "Timothy"])
         #expect(grandchildren.allSatisfy { $0.hops.count == 2 })
         let uncle = ArchivistGraphExecutor.execute(kinship("Timothy", .uncle), inputs: inputs())
@@ -774,8 +775,9 @@ struct FamilyKinshipTests {
         #expect(son.profileCandidates.isEmpty)
         #expect(!son.prose.hasPrefix("Rick's"))
         // No formal aliases → the tree cannot tell Jr from Sr → unbridged.
-        #expect(overlay.node(profileStableID: "rick") == .profile(stableID: "rick"))
-        #expect(overlay.node(profileStableID: "dad") == .profile(stableID: "dad"))
+        let rickID = Self.uncorrected[0].id, dadID = Self.uncorrected[1].id
+        #expect(overlay.node(profileStableID: rickID) == .profile(stableID: rickID))
+        #expect(overlay.node(profileStableID: dadID) == .profile(stableID: dadID))
 
         // The Relationships line resolves the ANCHOR by canonical profile,
         // so Rick's card still names the Dad profile, never himself.
@@ -840,7 +842,9 @@ struct FamilyKinshipTests {
     private static func writeLegacyProfileJSON(
         name: String, kinships: [[String: Any]] = []
     ) throws -> URL {
-        let folder = POIStorage.folder(for: name)
+        // Deliberately the pre-2026-09-12 name-keyed layout: these tests
+        // exercise the legacy-profile paths (uuid minting, migration).
+        let folder = POIStorage.legacyFolder(forName: name)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var obj: [String: Any] = ["name": name, "referencePath": folder.path]
         if !kinships.isEmpty { obj["kinships"] = kinships }
@@ -879,7 +883,8 @@ struct FamilyKinshipTests {
         let first = POIProfile.listAll()
         let anchor1 = try #require(first.first { $0.name == anchorName })
         let row1 = try #require(first.first { $0.name == rowName })
-        #expect(try Self.uuidOnDisk(anchorFolder) == anchor1.uuid.uuidString)
+        // listAll also ran the uuid migration: the folder is now keyed by uuid.
+        #expect(try Self.uuidOnDisk(POIStorage.folder(for: anchor1)) == anchor1.uuid.uuidString)
         #expect(row1.kinships == [Kinship(relation: .sibling, relativeTo: .profile(id: anchor1.uuid))])
         // The upgraded row is written the way production does it.
         try row1.save()
@@ -920,14 +925,15 @@ struct FamilyKinshipTests {
         // The row's own uuid WAS persistable (its folder is writable).
         #expect(row.uuidPersisted)
         #expect(row.kinshipAnchor == .profile(id: row.uuid))
-        #expect(try Self.uuidOnDisk(rowFolder) == row.uuid.uuidString)
+        // The row folder was writable, so listAll also moved it to its uuid folder.
+        #expect(try Self.uuidOnDisk(POIStorage.folder(for: row)) == row.uuid.uuidString)
 
         // After the folder becomes writable again, the next launch heals it.
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: anchorFolder.path)
         let healed = POIProfile.listAll()
         let anchor = try #require(healed.first { $0.name == anchorName })
         let healedRow = try #require(healed.first { $0.name == rowName })
-        #expect(try Self.uuidOnDisk(anchorFolder) == anchor.uuid.uuidString)
+        #expect(try Self.uuidOnDisk(POIStorage.folder(for: anchor)) == anchor.uuid.uuidString)
         #expect(healedRow.kinships == [Kinship(relation: .sibling, relativeTo: .profile(id: anchor.uuid))])
     }
 
@@ -954,7 +960,7 @@ struct FamilyKinshipTests {
         #expect(edited.kinships[0].relativeTo == .profileName(targetName))
         try edited.save()
         // What hit disk is a name anchor, not the ephemeral uuid.
-        let saved = try Data(contentsOf: editedFolder.appendingPathComponent("profile.json"))
+        let saved = try Data(contentsOf: POIStorage.profileURL(for: edited))
         let obj = try #require(try JSONSerialization.jsonObject(with: saved) as? [String: Any])
         let rel = try #require(((obj["kinships"] as? [[String: Any]])?.first?["relativeTo"]
                                 as? [String: Any])?["profile"] as? [String: Any])
@@ -979,7 +985,7 @@ struct FamilyKinshipTests {
         let target3 = try #require(launch3.first { $0.name == targetName })
         let edited3 = try #require(launch3.first { $0.name == editedName })
         #expect(target3.uuidPersisted)
-        #expect(try Self.uuidOnDisk(targetFolder) == target3.uuid.uuidString)
+        #expect(try Self.uuidOnDisk(POIStorage.folder(for: target3)) == target3.uuid.uuidString)
         #expect(target3.kinshipAnchor == .profile(id: target3.uuid))
         #expect(edited3.kinships == [Kinship(relation: .sibling, relativeTo: .profile(id: target3.uuid))])
         let overlay3 = FamilyKinshipOverlay(profiles: [target3, edited3], graph: nil)

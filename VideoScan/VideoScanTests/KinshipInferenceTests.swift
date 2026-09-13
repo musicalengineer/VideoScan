@@ -127,8 +127,16 @@ enum KinshipFixture {
         FamilyKinshipInference(profiles: profiles, graph: graph)
     }
 
+    /// The node a canonical name resolves to in `inference` (profile stable
+    /// ids are uuids since 2026-09-12, so the name is looked up, not lowercased).
+    /// An unknown name yields a stand-in profile node, as before.
     static func node(_ name: String, in inference: FamilyKinshipInference) -> FamilyKinshipInference.Node {
-        inference.overlay.node(profileStableID: name.lowercased()) ?? .profile(stableID: name.lowercased())
+        inference.overlay.nodes(claiming: name).first ?? .profile(stableID: name.lowercased())
+    }
+
+    /// The stable id (uuid string) of the named fixture profile.
+    static func stableID(_ name: String, in profiles: [POIProfile] = family) -> String {
+        profiles.first { $0.name == name }!.id
     }
 }
 
@@ -148,31 +156,32 @@ struct KinshipInferenceTests {
         #expect(n("Rick") == .tree(gedcomID: "@I1@"))
         #expect(n("Dad") == .tree(gedcomID: "@I2@"))
         #expect(n("Donna") == .tree(gedcomID: "@I3@"))
-        #expect(n("Eileen") == .profile(stableID: "eileen"))
+        #expect(n("Eileen") == .profile(stableID: KinshipFixture.stableID("Eileen")))
         #expect(inf.name(of: Self.martha) == "Martha Lamson")
         // An alias that matches a tree name exactly is NOT identity for the
         // engine — suggestion only.
         let profiles = KinshipFixture.family + [KinshipFixture.profile("Xavier", aliases: ["Xavier Breen"], sex: .male)]
         let inf2 = KinshipFixture.inference(profiles)
-        #expect(KinshipFixture.node("Xavier", in: inf2) == .profile(stableID: "xavier"))
+        #expect(KinshipFixture.node("Xavier", in: inf2) == .profile(stableID: KinshipFixture.stableID("Xavier", in: profiles)))
         let suggested = FamilyKinshipOverlay.suggestedTreeMatches(
             canonicalName: "Xavier", aliases: ["Xavier Breen"], graph: KinshipFixture.graph)
         #expect(suggested.map(\.id) == ["@X1@"])
         // The display overlay is the same identity space: no name bridge there either.
         let display = FamilyKinshipOverlay(profiles: profiles, graph: KinshipFixture.graph)
-        #expect(display.node(profileStableID: "xavier") == .profile(stableID: "xavier"))
+        #expect(display.node(profileStableID: KinshipFixture.stableID("Xavier", in: profiles)) == .profile(stableID: KinshipFixture.stableID("Xavier", in: profiles)))
     }
 
     @Test func stalePinFailsClosed() {
         let profiles = KinshipFixture.family + [KinshipFixture.profile("Ghost", sex: .male, pin: "NOPE-000")]
         let inf2 = KinshipFixture.inference(profiles)
-        #expect(KinshipFixture.node("Ghost", in: inf2) == .profile(stableID: "ghost"))
-        #expect(inf2.overlay.pinProblem(forProfileStableID: "ghost")
+        let ghostID = KinshipFixture.stableID("Ghost", in: profiles)
+        #expect(KinshipFixture.node("Ghost", in: inf2) == .profile(stableID: ghostID))
+        #expect(inf2.overlay.pinProblem(forProfileStableID: ghostID)
                 == "Ghost's family-tree pin points at a person this tree doesn't carry — pin them again")
         // No tree at all: the pin can't be checked; still a profile vertex.
         let offline = KinshipFixture.inference(profiles, graph: nil)
-        #expect(KinshipFixture.node("Rick", in: offline) == .profile(stableID: "rick"))
-        #expect(offline.overlay.pinProblem(forProfileStableID: "rick")?.hasSuffix("no tree is installed") == true)
+        #expect(KinshipFixture.node("Rick", in: offline) == .profile(stableID: KinshipFixture.stableID("Rick")))
+        #expect(offline.overlay.pinProblem(forProfileStableID: KinshipFixture.stableID("Rick"))?.hasSuffix("no tree is installed") == true)
         #expect(offline.relation(from: KinshipFixture.node("Michael", in: offline),
                                  to: KinshipFixture.node("Tim", in: offline))?.term == "uncle")
     }
@@ -180,11 +189,12 @@ struct KinshipInferenceTests {
     @Test func collidingPinsUnbridgeBothProfiles() {
         let profiles = KinshipFixture.family + [KinshipFixture.profile("Rick2", sex: .male, pin: "GVQV-NW3")]
         let inf2 = KinshipFixture.inference(profiles)
-        #expect(KinshipFixture.node("Rick", in: inf2) == .profile(stableID: "rick"))
-        #expect(KinshipFixture.node("Rick2", in: inf2) == .profile(stableID: "rick2"))
+        let rickID = KinshipFixture.stableID("Rick", in: profiles), rick2ID = KinshipFixture.stableID("Rick2", in: profiles)
+        #expect(KinshipFixture.node("Rick", in: inf2) == .profile(stableID: rickID))
+        #expect(KinshipFixture.node("Rick2", in: inf2) == .profile(stableID: rick2ID))
         let why = "Rick and Rick2 are both pinned to Richard Harding Breen Jr in the family tree — only one profile can be that person"
-        #expect(inf2.overlay.pinProblem(forProfileStableID: "rick") == why)
-        #expect(inf2.overlay.pinProblem(forProfileStableID: "rick2") == why)
+        #expect(inf2.overlay.pinProblem(forProfileStableID: rickID) == why)
+        #expect(inf2.overlay.pinProblem(forProfileStableID: rick2ID) == why)
         #expect(inf2.overlay.warnings(forProfileNamed: "Rick2") == [why])
         // Rick's rows still work: the DIRECT pin failed, but his explicit
         // "child of Dad" row reaches the (separately pinned) Dad vertex and
@@ -460,7 +470,7 @@ struct KinshipInferenceTests {
             KinshipFixture.profile("Me", sex: .male, kinships: [KinshipFixture.row(.child, of: "G1")]),
         ]
         let overlay = FamilyKinshipOverlay(profiles: profiles, graph: nil)
-        let hops = overlay.path(from: .profile(stableID: "me"), to: .profile(stableID: "g3"))
+        let hops = overlay.path(from: .profile(stableID: profiles[3].id), to: .profile(stableID: profiles[0].id))
         #expect(hops?.count == 3)
         #expect(overlay.term(for: hops ?? []) == "great-grandfather")
         #expect(overlay.term(for: Array((hops ?? []).prefix(2))) == "grandmother")
@@ -649,8 +659,8 @@ struct KinshipInferenceTests {
         var rick = p
         rick.aliases = ["Richard Harding Breen Jr"]
         let inf = KinshipFixture.inference([rick], graph: KinshipFixture.graph)
-        #expect(KinshipFixture.node("Rick", in: inf) == .profile(stableID: "rick"))
-        #expect(inf.overlay.pinProblem(forProfileStableID: "rick")
+        #expect(KinshipFixture.node("Rick", in: inf) == .profile(stableID: rick.id))
+        #expect(inf.overlay.pinProblem(forProfileStableID: rick.id)
                 == "Rick's family-tree pin could not be read (written by a newer app version?) — kept as is, not used")
     }
 
@@ -666,8 +676,8 @@ struct KinshipInferenceTests {
             profiles: profiles, graph: KinshipFixture.graph, cyberBrain: nil,
             speakers: HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae"))
         let overlay = HallieTurnExecutor.kinshipOverlay(context: context)
-        #expect(overlay?.node(profileStableID: "rick") == .tree(gedcomID: "@I1@"))
-        #expect(overlay?.node(profileStableID: "eileen") == .profile(stableID: "eileen"))
+        #expect(overlay?.node(profileStableID: KinshipFixture.stableID("Rick")) == .tree(gedcomID: "@I1@"))
+        #expect(overlay?.node(profileStableID: KinshipFixture.stableID("Eileen")) == .profile(stableID: KinshipFixture.stableID("Eileen")))
     }
 
     @Test func identicalDuplicateProfilePinsCollapseRegardlessOfOrder() {
@@ -885,8 +895,9 @@ struct KinshipInferenceTests {
         ], graph: nil)
         func d(_ s: String) -> FamilyKinshipInference.Node { KinshipFixture.node(s, in: disjoint) }
         #expect(disjoint.proposals(for: d("B")).isEmpty)
-        #expect(disjoint.parents(of: d("B")).map(\.node) == [d("P3"), d("P4")])
-        #expect(disjoint.parents(of: d("A")).map(\.node) == [d("P1"), d("P2")])
+        // Sets: vertex order follows the stable id, which is a uuid since 2026-09-12.
+        #expect(Set(disjoint.parents(of: d("B")).map(\.node)) == [d("P3"), d("P4")])
+        #expect(Set(disjoint.parents(of: d("A")).map(\.node)) == [d("P1"), d("P2")])
         let ab = disjoint.relation(from: d("A"), to: d("B"))
         #expect(ab?.term == "brother")
         #expect(ab?.caveats == ["recorded parents don't overlap (P1 and P2 vs P3 and P4) — check the rows"])
@@ -1155,11 +1166,11 @@ struct KinshipValidationTests {
     @Test func danglingAndStaleAnchorsAreErrors() {
         let unknownTree = KinshipValidation.validate(
             candidate: Kinship(relation: .parent, relativeTo: .treePerson(familySearchID: "NOPE")),
-            subjectProfileStableID: "rick", existingRows: [], inference: inf)
+            subjectProfileStableID: KinshipFixture.stableID("Rick"), existingRows: [], inference: inf)
         #expect(rules(unknownTree) == [.unresolvedAnchor])
         let removed = KinshipValidation.validate(
             candidate: Kinship(relation: .spouse, relativeTo: .profile(id: UUID())),
-            subjectProfileStableID: "rick", existingRows: [], inference: inf)
+            subjectProfileStableID: KinshipFixture.stableID("Rick"), existingRows: [], inference: inf)
         #expect(rules(removed) == [.unresolvedAnchor])
         // A stale pointer anchor already on a profile resolves to a placeholder.
         let profiles = KinshipFixture.family + [KinshipFixture.profile("Old", kinships: [
@@ -1168,7 +1179,7 @@ struct KinshipValidationTests {
         let inf2 = KinshipFixture.inference(profiles)
         let stale = KinshipValidation.validate(
             candidate: Kinship(relation: .spouse, relativeTo: .treePointer(pointer: "@I9@", sourceFingerprint: "stale")),
-            subjectProfileStableID: "rick", existingRows: [], inference: inf2)
+            subjectProfileStableID: KinshipFixture.stableID("Rick"), existingRows: [], inference: inf2)
         #expect(rules(stale) == [.unresolvedAnchor])
     }
 
@@ -1252,14 +1263,14 @@ struct KinshipValidationTests {
             let timRows = profiles.first { $0.name == "Tim" }?.kinships ?? []
             let attested = KinshipValidation.validate(
                 candidate: KinshipFixture.row(.sibling, of: "Zoe", basis: .attestedFull),
-                subjectProfileStableID: "tim", existingRows: timRows, inference: inf)
+                subjectProfileStableID: KinshipFixture.stableID("Tim"), existingRows: timRows, inference: inf)
             #expect(rules(attested).contains(.attestationConflict))
             #expect(attested.first { $0.rule == .attestationConflict }?.message
                     == "Attesting this sibling link would give Tim more than two parents (Dad, Eileen, Q1, Q2) — full siblings share parents; correct the other rows first.")
             // Unspecified is FULL too (codex #984): the same conflict, the same block.
             let unspecified = KinshipValidation.validate(
                 candidate: KinshipFixture.row(.sibling, of: "Zoe"),
-                subjectProfileStableID: "tim", existingRows: timRows, inference: inf)
+                subjectProfileStableID: KinshipFixture.stableID("Tim"), existingRows: timRows, inference: inf)
             #expect(unspecified.blocksSave)
             #expect(unspecified.first { $0.rule == .attestationConflict }?.message
                     == "This sibling link would give Tim more than two parents (Dad, Eileen, Q1, Q2) — full siblings share parents; correct the other rows first.")
@@ -1268,7 +1279,7 @@ struct KinshipValidationTests {
         // A half row naming a parent that does not exist: unresolved.
         let stale = KinshipValidation.validate(
             candidate: KinshipFixture.row(.sibling, of: "Zoe", basis: .attestedHalf(sharedParent: .profile(id: UUID()))),
-            subjectProfileStableID: "tim", existingRows: [], inference: inf)
+            subjectProfileStableID: KinshipFixture.stableID("Tim"), existingRows: [], inference: inf)
         #expect(rules(stale).contains(.unresolvedAnchor))
     }
 
@@ -1276,14 +1287,14 @@ struct KinshipValidationTests {
 
     @Test func batchCatchesThreeParentsEnteredTogether() {
         let batch = [KinshipFixture.row(.child, of: "Rick"), KinshipFixture.row(.child, of: "Donna"), KinshipFixture.row(.child, of: "Tim")]
-        let result = KinshipValidation.validate(batch: batch, subjectProfileStableID: "nana",
+        let result = KinshipValidation.validate(batch: batch, subjectProfileStableID: KinshipFixture.stableID("Nana"),
                                                 profiles: KinshipFixture.family, graph: KinshipFixture.graph)
         #expect(result.count == 3)
         #expect(result.allSatisfy { $0.findings.map(\.rule).contains(.tooManyParents) })
         #expect(result.blocksSave)
         // Two parents together: legal (Nana 1905 is older than both — only
         // the birthdate warning about a child born before the parent).
-        let two = KinshipValidation.validate(batch: Array(batch.prefix(2)), subjectProfileStableID: "nana",
+        let two = KinshipValidation.validate(batch: Array(batch.prefix(2)), subjectProfileStableID: KinshipFixture.stableID("Nana"),
                                              profiles: KinshipFixture.family, graph: KinshipFixture.graph)
         #expect(!two.blocksSave)
         #expect(two.flatMap(\.findings).map(\.rule) == [.parentNotOlder, .parentNotOlder])
@@ -1291,7 +1302,7 @@ struct KinshipValidationTests {
 
     @Test func batchCatchesDuplicatesTypedTwiceAndMultiRowCycles() {
         let twice = [KinshipFixture.row(.spouse, of: "Bob"), KinshipFixture.row(.spouse, of: "Bob")]
-        let dup = KinshipValidation.validate(batch: twice, subjectProfileStableID: "nana",
+        let dup = KinshipValidation.validate(batch: twice, subjectProfileStableID: KinshipFixture.stableID("Nana"),
                                              profiles: KinshipFixture.family, graph: KinshipFixture.graph)
         #expect(dup.map { $0.findings.map(\.rule) } == [[.duplicateRow, .spouseAgeGap], [.duplicateRow, .spouseAgeGap]])
         // A cycle that only closes through two new rows: C child of B and C
@@ -1301,18 +1312,18 @@ struct KinshipValidationTests {
             KinshipFixture.profile("C"),
         ]
         let rows = [KinshipFixture.row(.child, of: "B"), KinshipFixture.row(.parent, of: "A")]
-        let cycle = KinshipValidation.validate(batch: rows, subjectProfileStableID: "c", profiles: profiles, graph: nil)
+        let cycle = KinshipValidation.validate(batch: rows, subjectProfileStableID: profiles[2].id, profiles: profiles, graph: nil)
         #expect(cycle.map { $0.findings.map(\.rule) } == [[.parentChildCycle], [.parentChildCycle]])
         // Each row alone would have passed the single-candidate check.
         let alone = KinshipFixture.inference(profiles, graph: nil)
         for row in rows {
-            #expect(KinshipValidation.validate(candidate: row, subjectProfileStableID: "c", existingRows: [], inference: alone).isEmpty)
+            #expect(KinshipValidation.validate(candidate: row, subjectProfileStableID: profiles[2].id, existingRows: [], inference: alone).isEmpty)
         }
     }
 
     @Test func batchSkipsUnchangedRowsAndReportsUnknownProfiles() {
         let tim = KinshipFixture.family.first { $0.name == "Tim" }!
-        #expect(KinshipValidation.validate(batch: tim.kinships, subjectProfileStableID: "tim",
+        #expect(KinshipValidation.validate(batch: tim.kinships, subjectProfileStableID: KinshipFixture.stableID("Tim"),
                                            profiles: KinshipFixture.family, graph: KinshipFixture.graph).isEmpty)
         let ghost = KinshipValidation.validate(batch: [KinshipFixture.row(.spouse, of: "Rick")], subjectProfileStableID: "ghost",
                                                profiles: KinshipFixture.family, graph: KinshipFixture.graph)

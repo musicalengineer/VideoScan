@@ -7,12 +7,14 @@ import Foundation
 // + restore primitive are the testable surface — the SwiftUI banner is
 // confirmed visually per spec.
 //
-// These tests exercise POIStorage.restorePOIFolder(from:named:storeOverride:)
+// These tests exercise POIStorage.restorePOIFolder(from:uuid:storeOverride:)
 // directly with a per-test sandbox (no Application Support touches), mirroring
 // POIDeletionTests's pattern. Where the test name implies model-level
 // behavior, the test is staged so trashPOIFolder + restorePOIFolder run
 // against the same sandbox pair — this is the codepath PersonFinderModel
 // drives in production (it just passes nil overrides to use real paths).
+//
+// 2026-09-12: folders are keyed by uuid; restore lands at `storeDir/<UUID>/`.
 struct POIUndoDeleteTests {
 
     // MARK: - Sandbox helpers (mirror POIDeletionTests)
@@ -27,19 +29,29 @@ struct POIUndoDeleteTests {
         }
 
         @discardableResult
-        func makePOI(_ name: String) throws -> URL {
-            let folder = store.appendingPathComponent(POIStorage.sanitize(name),
-                                                      isDirectory: true)
+        func makePOI(_ name: String) throws -> POIProfile {
+            let profile = POIProfile(name: name, referencePath: "")
+            let folder = folder(of: profile)
             try FileManager.default.createDirectory(at: folder,
                                                     withIntermediateDirectories: true)
-            let profile = POIProfile(name: name, referencePath: folder.path)
+            var stored = profile
+            stored.referencePath = folder.path
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted]
-            try encoder.encode(profile)
+            try encoder.encode(stored)
                 .write(to: folder.appendingPathComponent("profile.json"))
             try Data([0xFF, 0xD8, 0xFF, 0xE0])  // JPEG magic — looks like a real photo
                 .write(to: folder.appendingPathComponent("photo_0.jpg"))
-            return folder
+            return stored
+        }
+
+        func folder(of profile: POIProfile) -> URL {
+            store.appendingPathComponent(POIStorage.folderName(for: profile.uuid), isDirectory: true)
+        }
+
+        func trash(_ profile: POIProfile) -> URL? {
+            POIStorage.trashPOIFolder(uuid: profile.uuid, displayName: profile.displayName,
+                                      storeOverride: store, trashOverride: trash)
         }
     }
 
@@ -59,12 +71,9 @@ struct POIUndoDeleteTests {
         let sandbox = try makeSandbox()
         defer { sandbox.cleanup() }
 
-        let src = try sandbox.makePOI("Donna")
-        let trashed = POIStorage.trashPOIFolder(
-            named: "Donna",
-            storeOverride: sandbox.store,
-            trashOverride: sandbox.trash
-        )
+        let donna = try sandbox.makePOI("Donna")
+        let src = sandbox.folder(of: donna)
+        let trashed = sandbox.trash(donna)
         #expect(trashed != nil, "Pre-condition: delete should succeed")
         #expect(!FileManager.default.fileExists(atPath: src.path),
                 "Pre-condition: source should be gone after delete")
@@ -72,14 +81,14 @@ struct POIUndoDeleteTests {
         guard let trashURL = trashed else { return }
         let result = POIStorage.restorePOIFolder(
             from: trashURL,
-            named: "Donna",
+            uuid: donna.uuid,
             storeOverride: sandbox.store
         )
 
-        // Restored to the original sanitized location.
+        // Restored to the original uuid location.
         if case let .restored(dest) = result {
             #expect(dest.path == src.path,
-                    "Restored folder should land at the original sanitized path")
+                    "Restored folder should land at the original uuid path")
             #expect(FileManager.default.fileExists(atPath: dest.path),
                     "Restored folder should exist on disk")
             // profile.json + the stub photo should ride along.
@@ -123,19 +132,11 @@ struct POIUndoDeleteTests {
         let sandbox = try makeSandbox()
         defer { sandbox.cleanup() }
 
-        _ = try sandbox.makePOI("Alpha")
-        _ = try sandbox.makePOI("Beta")
+        let alpha = try sandbox.makePOI("Alpha")
+        let beta = try sandbox.makePOI("Beta")
 
-        let trashedA = POIStorage.trashPOIFolder(
-            named: "Alpha",
-            storeOverride: sandbox.store,
-            trashOverride: sandbox.trash
-        )
-        let trashedB = POIStorage.trashPOIFolder(
-            named: "Beta",
-            storeOverride: sandbox.store,
-            trashOverride: sandbox.trash
-        )
+        let trashedA = sandbox.trash(alpha)
+        let trashedB = sandbox.trash(beta)
         #expect(trashedA != nil)
         #expect(trashedB != nil)
 
@@ -143,7 +144,7 @@ struct POIUndoDeleteTests {
         guard let bURL = trashedB else { return }
         let result = POIStorage.restorePOIFolder(
             from: bURL,
-            named: "Beta",
+            uuid: beta.uuid,
             storeOverride: sandbox.store
         )
 
@@ -152,11 +153,9 @@ struct POIUndoDeleteTests {
         }
 
         // Beta is back; Alpha is NOT (one-tap undo is gone for A).
-        let betaFolder = sandbox.store.appendingPathComponent("beta", isDirectory: true)
-        let alphaFolder = sandbox.store.appendingPathComponent("alpha", isDirectory: true)
-        #expect(FileManager.default.fileExists(atPath: betaFolder.path),
+        #expect(FileManager.default.fileExists(atPath: sandbox.folder(of: beta).path),
                 "Beta should be restored")
-        #expect(!FileManager.default.fileExists(atPath: alphaFolder.path),
+        #expect(!FileManager.default.fileExists(atPath: sandbox.folder(of: alpha).path),
                 "Alpha should remain trashed — superseded undo target")
         // Alpha's trash entry still exists on disk for manual recovery.
         if let aURL = trashedA {
@@ -166,22 +165,18 @@ struct POIUndoDeleteTests {
     }
 
     @Test func undo_refusesToOverwriteExistingPOI() throws {
-        // Spec: if the user re-creates the POI while the banner is up,
-        // undo must NOT clobber the new folder. Return .destinationExists,
-        // leave both folders alone.
+        // Spec: if the uuid folder reappears while the banner is up (a
+        // bundle import, a manual restore), undo must NOT clobber it.
+        // Return .destinationExists, leave both folders alone.
         let sandbox = try makeSandbox()
         defer { sandbox.cleanup() }
 
-        _ = try sandbox.makePOI("Alpha")
-        let trashed = POIStorage.trashPOIFolder(
-            named: "Alpha",
-            storeOverride: sandbox.store,
-            trashOverride: sandbox.trash
-        )
+        let alpha = try sandbox.makePOI("Alpha")
+        let trashed = sandbox.trash(alpha)
         #expect(trashed != nil)
 
-        // Manually re-create a POI/alpha/ folder with NEW content.
-        let recreated = sandbox.store.appendingPathComponent("alpha", isDirectory: true)
+        // Manually re-create the uuid folder with NEW content.
+        let recreated = sandbox.folder(of: alpha)
         try FileManager.default.createDirectory(at: recreated,
                                                 withIntermediateDirectories: true)
         let sentinel = recreated.appendingPathComponent("marker.txt")
@@ -190,7 +185,7 @@ struct POIUndoDeleteTests {
         guard let trashURL = trashed else { return }
         let result = POIStorage.restorePOIFolder(
             from: trashURL,
-            named: "Alpha",
+            uuid: alpha.uuid,
             storeOverride: sandbox.store
         )
 
@@ -207,18 +202,14 @@ struct POIUndoDeleteTests {
                 "Re-created folder's content must be byte-identical after refused undo")
     }
 
-    @Test func undo_handlesSanitizedNames() throws {
-        // Mirror deletePOI_sanitizesNameForTrashFolder: "Aunt Beth" → "aunt_beth"
-        // on the way out, and the same sanitization on the way back in.
+    @Test func undo_restoresToTheUUIDFolderWhateverTheName() throws {
+        // Mirror deletePOI_sanitizesNameForTrashFolder: "Aunt Beth" →
+        // "aunt_beth" in the trash label; the restore is keyed by uuid.
         let sandbox = try makeSandbox()
         defer { sandbox.cleanup() }
 
-        _ = try sandbox.makePOI("Aunt Beth")
-        let trashed = POIStorage.trashPOIFolder(
-            named: "Aunt Beth",
-            storeOverride: sandbox.store,
-            trashOverride: sandbox.trash
-        )
+        let beth = try sandbox.makePOI("Aunt Beth")
+        let trashed = sandbox.trash(beth)
         #expect(trashed != nil)
         if let dest = trashed {
             #expect(dest.lastPathComponent.hasPrefix("POI-aunt_beth-"),
@@ -228,18 +219,18 @@ struct POIUndoDeleteTests {
         guard let trashURL = trashed else { return }
         let result = POIStorage.restorePOIFolder(
             from: trashURL,
-            named: "Aunt Beth",     // pass the ORIGINAL name; sanitize() handles it
+            uuid: beth.uuid,
             storeOverride: sandbox.store
         )
 
         if case let .restored(dest) = result {
-            #expect(dest.lastPathComponent == "aunt_beth",
-                    "Restored folder must use the sanitized lowercase form")
+            #expect(dest.lastPathComponent == beth.id,
+                    "Restored folder must be the uuid folder")
             #expect(FileManager.default.fileExists(atPath: dest.path),
                     "Restored folder should exist")
             #expect(FileManager.default.fileExists(
                 atPath: dest.appendingPathComponent("profile.json").path
-            ), "profile.json must ride along on a sanitized-name restore")
+            ), "profile.json must ride along on a restore")
         } else {
             Issue.record("Expected .restored, got \(result)")
         }
@@ -256,7 +247,7 @@ struct POIUndoDeleteTests {
         let bogusURL = sandbox.trash.appendingPathComponent("POI-ghost-19700101-000000")
         let result = POIStorage.restorePOIFolder(
             from: bogusURL,
-            named: "Ghost",
+            uuid: UUID(),
             storeOverride: sandbox.store
         )
         #expect(result == .sourceMissing,
