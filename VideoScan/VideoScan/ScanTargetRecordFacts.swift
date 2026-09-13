@@ -51,6 +51,20 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
     /// and allocation-free per record: every per-target root form is
     /// prepared once up front (`PathScope.Root`, the `isUnder` "dir/").
     ///
+    /// Worst case codex measured on the first cut (#1417): building one
+    /// `TargetRemovalScope` per target and asking each `claimsNormalized`
+    /// per record is O(records × targets²) when targets nest — every
+    /// root contains the path, and every hit re-walks every other root.
+    /// Twenty nested folder targets under one volume target is not
+    /// exotic. So the removal rule is evaluated here in ONE walk over the
+    /// roots per record: collect which roots contain the path and how
+    /// many DISTINCT normalized roots that is. Exactly one distinct root
+    /// ⇒ that root (and any duplicate registration of the same path,
+    /// which the scope never treats as "other") claims the record; two or
+    /// more ⇒ nobody does. Byte-identical to `TargetRemovalScope.claims`
+    /// — `nestedTargetsProjectionMatchesScope_worstCaseIsLinearInTargets`
+    /// pins both the equivalence and the cost.
+    ///
     /// Empty `targets` → empty dictionary; a target with no records
     /// still gets an entry (zeroed), so a body lookup distinguishes
     /// "no records" from "cache not built yet" (`nil`).
@@ -60,9 +74,14 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
     ) -> [UUID: ScanTargetRecordFacts] {
         guard !targets.isEmpty else { return [:] }
         let prefixes = targets.map(\.searchPath)
-        // Delete count: the guarded removal's own scope per target.
-        let removalScopes = prefixes.map {
-            TargetRemovalScope(root: $0, allTargetRoots: prefixes)
+        // Delete count: the guarded removal's own rule, evaluated per
+        // record in one pass over the roots (see the doc comment).
+        let roots = prefixes.map { PathScope.Root($0) }
+        // `group[i]` = index of the first target whose normalized root
+        // equals target i's — duplicates of one path form one group.
+        var group = [Int](repeating: 0, count: roots.count)
+        for i in roots.indices {
+            group[i] = roots.firstIndex { $0.normalized == roots[i].normalized } ?? i
         }
         // Signature plan: `isUnder` normalisation — "/Volumes/X" must not
         // scope "/Volumes/X2"; an empty prefix scopes everything.
@@ -70,6 +89,10 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
         var counts = [Int](repeating: 0, count: targets.count)
         var plans = [VideoScanModel.ContentHashBackfillPlan](
             repeating: .init(), count: targets.count)
+        // Scratch for the roots containing the current record; reused
+        // across records so the loop stays allocation-free.
+        var containing = [Int]()
+        containing.reserveCapacity(targets.count)
 
         for rec in records {
             let path = rec.fullPath
@@ -83,8 +106,15 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
             // Normalize once per record, not once per target.
             let normPath = PathScope.normalize(path)
 
+            containing.removeAll(keepingCapacity: true)
+            var firstGroup = -1
+            var severalGroups = false
             for i in prefixes.indices {
-                if removalScopes[i].claimsNormalized(normPath) { counts[i] += 1 }
+                if roots[i].containsNormalized(normPath) {
+                    containing.append(i)
+                    if firstGroup < 0 { firstGroup = group[i] }
+                    else if group[i] != firstGroup { severalGroups = true }
+                }
                 guard planEligible else { continue }
                 let p = prefixes[i]
                 let d = dirs[i]
@@ -94,6 +124,11 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
                 guard under else { continue }
                 if hasSignature { plans[i].alreadyHashed += 1 }
                 else { plans[i].candidates += 1 }
+            }
+            // TargetRemovalScope.claims: under this root AND under no
+            // OTHER (distinct) root.
+            if !severalGroups {
+                for i in containing { counts[i] += 1 }
             }
         }
 

@@ -375,6 +375,45 @@ struct ScanTargetRecordFactsTests {
         #expect(elapsed < 0.5, "100k body-side reads must be O(1) each (got \(elapsed)s)")
     }
 
+    /// codex #1417: the first cut asked one `TargetRemovalScope` per
+    /// target per record; with NESTED targets every root contains the
+    /// path and every hit re-walks every other root — O(records ×
+    /// targets²). Fixture: one volume target plus 19 folder targets
+    /// nested in a chain 20 deep, 100k records spread over the depths.
+    /// Pins (a) byte-identical results to the per-target scope loop and
+    /// (b) a cost that does not blow up against the flat 20-volume
+    /// fixture above (same records × targets, same budget).
+    @Test
+    func nestedTargetsProjectionMatchesScope_worstCaseIsLinearInTargets() {
+        var roots = ["/Volumes/Nest"]
+        for d in 1..<20 { roots.append(roots[d - 1] + "/level\(d)") }
+        let targets: [ScanTargetRecordFacts.Target] = roots.map { (UUID(), $0) }
+        let records: [VideoRecord] = (0..<100_000).map { i in
+            makeRecord("\(roots[i % 20])/clip\(i).mov", hash: i % 3 == 0 ? "sig" : "")
+        }
+
+        let start = Date()
+        let facts = ScanTargetRecordFacts.project(records, targets: targets)
+        let elapsed = Date().timeIntervalSince(start)
+        print("ScanTargetRecordFacts.project nested 100k×20: \(String(format: "%.3f", elapsed)) s")
+
+        // Equivalence with the removal's own predicate, per target.
+        let scopes = roots.map { TargetRemovalScope(root: $0, allTargetRoots: roots) }
+        for (i, t) in targets.enumerated() {
+            let expected = records.reduce(0) { $0 + (scopes[i].claims($1.fullPath) ? 1 : 0) }
+            #expect(facts[t.id]?.records == expected, "target \(i) (\(roots[i]))")
+        }
+        // A record at depth d sits under roots 0…d. Only depth-0 files
+        // (directly in the volume root) are under exactly ONE root, so
+        // the volume target claims its own 5,000 and every nested
+        // folder target — all covered by its ancestors — claims none.
+        #expect(facts[targets[0].id]?.records == 5_000, "volume root: its direct files are under no other target")
+        #expect(facts[targets[1].id]?.records == 0, "first nested folder is covered by the volume target")
+        #expect(facts[targets[19].id]?.records == 0, "deepest nested root is covered by all 19 ancestors")
+        #expect(elapsed < 1.0,
+                "nested 100k×20 must cost the same order as flat 100k×20 (got \(elapsed)s)")
+    }
+
 
     // MARK: - 5. Source sensors
 

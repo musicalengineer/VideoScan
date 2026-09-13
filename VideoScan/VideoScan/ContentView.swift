@@ -450,8 +450,10 @@ struct CatalogView: View {
     @AppStorage("catalog.volumeShow") private var persistedVolumeShow: String = ""
     @State private var didLoadVolumeShow = false
     @State var showDeleteAllCatalogConfirm = false
-    @State var showDeleteVolumeCatalogConfirm = false
-    @State var deleteVolumeCatalogTarget: CatalogScanTarget?
+    /// The Delete Volume Catalog confirmation, carrying the EXACT plan
+    /// made at the gesture (codex #1417). nil = no alert. See
+    /// `presentDeleteVolumeCatalog(for:)` in CatalogView+ScanTargetsPane.
+    @State var deleteVolumeCatalogPrompt: DeleteVolumeCatalogPrompt?
     /// Selected volume IDs in the scan volumes table.
     @State var selectedVolumeIDs: Set<UUID> = []
     /// Per-volume aggregate cache (file count, error count, byte sum,
@@ -1037,21 +1039,25 @@ struct CatalogView: View {
         } message: {
             Text("This will delete all \(model.records.count) catalog records across every volume. The probe cache is unaffected.\n\nAre you sure?")
         }
-        .alert("Delete Volume Catalog", isPresented: $showDeleteVolumeCatalogConfirm) {
+        // Delete Volume Catalog (codex #1417): the message shows the count
+        // of the plan made at the gesture, and Delete applies THAT plan.
+        // The model refuses if the catalog moved underneath the dialog
+        // and hands back a fresh plan, which re-presents this alert with
+        // the new count — never a silent extra removal.
+        .alert(
+            "Delete Volume Catalog",
+            isPresented: Binding(
+                get: { deleteVolumeCatalogPrompt != nil },
+                set: { if !$0 { deleteVolumeCatalogPrompt = nil } }
+            ),
+            presenting: deleteVolumeCatalogPrompt
+        ) { prompt in
             Button("Delete", role: .destructive) {
-                if let target = deleteVolumeCatalogTarget {
-                    model.deleteCatalogForTarget(target)
-                }
+                confirmDeleteVolumeCatalog(prompt)
             }
             Button("Cancel", role: .cancel) { }
-        } message: {
-            if let target = deleteVolumeCatalogTarget {
-                // O(1): same projection the Delete menu row read.
-                let count = scanTargetFacts[target.id]?.records ?? 0
-                Text("Delete \(count) catalog record(s) for \(VolumeReachability.displayLabel(forPath: target.searchPath))?\n\nThe probe cache is unaffected — a re-scan will replay quickly from cache.")
-            } else {
-                Text("Delete catalog records for this volume?")
-            }
+        } message: { prompt in
+            Text(prompt.message)
         }
         .alert(
             model.missingDependency?.alertTitle ?? "Missing Dependency",
