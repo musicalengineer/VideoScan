@@ -913,6 +913,16 @@ final class VideoScanModel: ObservableObject {
     /// re-merge what we just loaded) and on every successful merge.
     var lastLiveReloadMtime: Date?
 
+    /// Date-inference pass memory (VideoScanModel+DateInference, codex
+    /// #1415): record id → fingerprint of the stored evidence that a
+    /// bounded pass already examined and found to name NO date. The
+    /// next pass skips those rows without spending budget, so a limited
+    /// pass ADVANCES instead of re-reading the same noise prefix. In-
+    /// memory only; a changed transcript / OCR / caption set changes the
+    /// fingerprint and the row is examined again. (For Rick: a
+    /// memo table, `std::unordered_map<uuid, size_t>`, keyed by row.)
+    var inferredDateNoDateEvidence: [UUID: Int] = [:]
+
     /// Per-volume snapshot of dossier + user-edit fields, captured by
     /// `snapshotPreservedFieldsForRescan` before the scan's removeAll
     /// destroys them, applied by `applyPreservedFieldsAfterRescan`
@@ -1021,6 +1031,14 @@ final class VideoScanModel: ObservableObject {
             // same bytes showed 1991 and the other 2026. Catch up every
             // record that has evidence but no conclusion, then share
             // dates across each content group. Bounded, one log line.
+            //
+            // codex #1413 (2026-09-12 evening): the first version of that
+            // pass keyed groups on duplicateGroupID and persisted 558
+            // dates onto heuristic siblings whose bytes differ. Unwind
+            // them first — reversible (sidecar under App Support/VideoScan/
+            // date-inference/), idempotent, machine data only — so the
+            // verified pass below re-dates only what it can prove.
+            unwindUnverifiedPropagatedDates(trigger: "load")
             catchUpInferredDates(trigger: "load")
             if migrated > 0 {
                 log("Migrated \(migrated) records to lifecycleStage.")
