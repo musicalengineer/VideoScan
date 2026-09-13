@@ -10,6 +10,7 @@ Reported owner test counts are not independent test executions by this reviewer.
 | Inferred-date catch-up and propagation | 3dbda42a / d3044517 | HOLD: identity and skipped-evidence corruption paths | 1413, 1415 |
 | Manifest v3 and backup attestations | 7e9e2b38 / e7f4d486 | Changes requested: timestamp precision and blocking journal writes | 1414, 1416 |
 | People UUID-folder migration design | 8c70b18b | Direction approved; three migration safeguards required | 1418 |
+| People UUID-folder implementation | f63f141d | HOLD: migration recovery and consumer identity isolation | 1420–1423 |
 
 ## Scan-target facts
 
@@ -68,3 +69,25 @@ The identity/display direction is sound. Before implementation approval:
 
 Audit name-based actions and accessibility identifiers now that duplicate legal
 given names are valid; UUID ownership must survive the UI-to-operation boundary.
+
+## People UUID implementation (`f63f141d`)
+
+Storage review confirmed skipped legacy duplicate UUIDs can still save into a
+conflicting/new UUID folder. Move mappings are written after the move, leaving a
+crash window. Although migration itself now backs up before minting UUIDs,
+`listAll`/`load(at:)` fallback writers bypass a failed backup. Partial rollback
+discards retry information; explicit-folder loading also bypasses test-root
+protection. See #1420–1421 for exact paths and correction to the design finding.
+
+Consumer review found active Person Finder selection remains name-based:
+quick-save/rejection/edit/delete operations can touch the wrong Richard. The new
+`displayName` also feeds operational `ScanJob.personLabel` filtering/writeback,
+so duplicate aliases collapse distinct people. Holdout queues and validation
+labels remain keyed by canonical name. Legacy bundle placement returns the first
+same-name profile; Identify Family ignores aliases and re-resolves name-only
+promotion actions. These need UUID identity or an explicit fail-closed bridge,
+with consumer tests covering actual actions on two same-name profiles.
+
+Correct pieces: UUID card/drag/portrait/tree keys, direct delete/undo destinations,
+new persisted job UUID restoration, and Hallie stable-ID/full-name/alias resolution.
+No code or live data was changed by this review.
