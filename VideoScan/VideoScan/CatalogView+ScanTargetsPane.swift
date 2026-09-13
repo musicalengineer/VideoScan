@@ -331,9 +331,12 @@ extension CatalogView {
     func confirmDeleteVolumeCatalog(_ prompt: DeleteVolumeCatalogPrompt) {
         let result = model.deleteCatalogForTarget(prompt.target, plan: prompt.plan)
         switch result {
-        case .applied, .refusedNoSnapshot:
+        case .applied, .refusedNoSnapshot, .cancelledTargetGone:
             // Applied: done. No-snapshot: the model already logged the
             // fail-safe degrade prominently; nothing was removed.
+            // Target gone (codex #1431): the model logged the one-line
+            // reason; the prompt is over — never re-present a plan for a
+            // target that is no longer registered.
             break
         case .refusedStale(let current):
             let replacement = DeleteVolumeCatalogPrompt(

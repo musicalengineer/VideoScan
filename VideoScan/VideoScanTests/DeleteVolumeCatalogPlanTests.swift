@@ -17,6 +17,11 @@
 //   4. COVERAGE       — another target registered under the root between
 //                       plan and confirm shrinks the set ⇒ refused (the
 //                       shown count is no longer true either way).
+//   4b. IDENTITY      — (codex #1431) the target removed from the list,
+//                       replaced by a re-add of the same path, or a plan
+//                       applied to a different target ⇒ CANCELLED (the
+//                       prompt ends; never re-presented), nothing removed:
+//                       deleteScanTarget's orphans stay orphans.
 //   5. UNRELATED BUMP — a revision bump that moves no path (an unrelated
 //                       save) still applies the shown plan: no needless
 //                       re-confirm.
@@ -208,6 +213,102 @@ struct DeleteVolumeCatalogPlanTests {
         #expect(current.count == 1)
         #expect(current.recordIDs == [top.id])
         #expect(current.keptCoveredByOtherTargets == 1)
+    }
+
+    // MARK: - 4b. Target identity (codex #1431)
+
+    /// The target is removed from the list while the alert is open.
+    /// `deleteScanTarget` keeps its records as orphans; a re-plan against
+    /// the stale object would find the same ids under the same root and
+    /// delete those orphans. Must CANCEL — never re-present.
+    @Test func targetRemovedBetweenPlanAndConfirmIsCancelled() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let a = CatalogScanTarget(searchPath: "/Volumes/A")
+        let b = CatalogScanTarget(searchPath: "/Volumes/B")
+        model.scanTargets = [a, b]
+        model.records = [makeRecord("/Volumes/A/clip.mov"), makeRecord("/Volumes/B/clip.mov")]
+        a.phase = .cataloged
+
+        let plan = model.planTargetRemoval(for: a)
+        #expect(plan.count == 1)
+
+        #expect(model.deleteScanTarget(a), "precondition: removed from the list")
+        #expect(model.records.count == 2, "precondition: deleteScanTarget keeps records as orphans")
+
+        let result = model.deleteCatalogForTarget(a, plan: plan)
+        guard case .cancelledTargetGone(let reason) = result else {
+            Issue.record("expected .cancelledTargetGone, got \(result)")
+            return
+        }
+        #expect(reason.contains("no longer in the scan-targets list"))
+        #expect(model.records.count == 2, "the orphans survive")
+        #expect(a.phase == .cataloged, "stale target object untouched")
+    }
+
+    /// Remove-and-re-add of the same path: a DIFFERENT target with its own
+    /// id now owns the root. The old plan must not apply to either object.
+    @Test func targetReplacedBySameRootRegistrationIsCancelled() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let old = CatalogScanTarget(searchPath: "/Volumes/A")
+        model.scanTargets = [old]
+        model.records = [makeRecord("/Volumes/A/clip.mov")]
+        let plan = model.planTargetRemoval(for: old)
+        #expect(plan.count == 1)
+
+        #expect(model.deleteScanTarget(old))
+        let replacement = CatalogScanTarget(searchPath: "/Volumes/A")
+        model.scanTargets.append(replacement)
+        #expect(replacement.id != old.id)
+
+        // Stale object: its id is no longer registered.
+        guard case .cancelledTargetGone = model.deleteCatalogForTarget(old, plan: plan) else {
+            Issue.record("stale object must be cancelled"); return
+        }
+        // New object, old plan: id mismatch.
+        guard case .cancelledTargetGone = model.deleteCatalogForTarget(replacement, plan: plan) else {
+            Issue.record("old plan on the replacement must be cancelled"); return
+        }
+        #expect(model.records.count == 1, "nothing removed by either attempt")
+        #expect(replacement.phase == .noCatalog && replacement.lastScannedDate == nil,
+                "replacement target state never touched")
+    }
+
+    /// A plan for A applied to B — same-root or not — is cancelled.
+    @Test func targetIDMismatchIsCancelled() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let a = CatalogScanTarget(searchPath: "/Volumes/A")
+        let b = CatalogScanTarget(searchPath: "/Volumes/B")
+        model.scanTargets = [a, b]
+        model.records = [makeRecord("/Volumes/A/clip.mov"), makeRecord("/Volumes/B/clip.mov")]
+        let planA = model.planTargetRemoval(for: a)
+        let result = model.deleteCatalogForTarget(b, plan: planA)
+        guard case .cancelledTargetGone(let reason) = result else {
+            Issue.record("expected .cancelledTargetGone, got \(result)"); return
+        }
+        #expect(reason.contains("different volume"))
+        #expect(model.records.count == 2)
+    }
+
+    /// The registered entry for the id must be THIS object — a same-id
+    /// impostor (should never happen; belt and suspenders) is cancelled.
+    @Test func registeredObjectMustBeTheAppliedObject() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let a = CatalogScanTarget(searchPath: "/Volumes/A")
+        model.scanTargets = [a]
+        model.records = [makeRecord("/Volumes/A/clip.mov")]
+        let plan = model.planTargetRemoval(for: a)
+        let impostor = CatalogScanTarget(searchPath: "/Volumes/A")
+        // Not registered, but claims the same id via the plan.
+        let forged = TargetRemovalPlan(targetID: impostor.id, root: plan.root, recordIDs: plan.recordIDs,
+                                       keptCoveredByOtherTargets: 0, revision: plan.revision)
+        guard case .cancelledTargetGone = model.deleteCatalogForTarget(impostor, plan: forged) else {
+            Issue.record("unregistered object must be cancelled"); return
+        }
+        #expect(model.records.count == 1)
     }
 
     // MARK: - 5. Unrelated revision bump still applies the shown plan

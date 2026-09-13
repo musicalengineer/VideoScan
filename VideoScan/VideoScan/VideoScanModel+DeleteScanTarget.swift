@@ -206,6 +206,17 @@ enum TargetRemovalPlanApplyResult: Equatable {
     /// Nothing was removed: the >threshold safety snapshot could not be
     /// written (the standing fail-safe degrade).
     case refusedNoSnapshot(wouldRemove: Int)
+    /// Nothing was removed and the prompt is OVER — do not re-present
+    /// (codex #1431). The target the plan was made for is not the one
+    /// being applied to, or is no longer a registered scan target: it
+    /// was removed from the list (its records are now orphans that
+    /// `deleteScanTarget` deliberately kept) or replaced by a fresh
+    /// registration of the same path (a different target with its own
+    /// id). Re-planning against a stale target object would find the
+    /// same ids under the same root and quietly delete the orphans, so
+    /// this is a cancel, never a re-confirm. `reason` is the one-line
+    /// message for the user.
+    case cancelledTargetGone(reason: String)
 }
 
 extension VideoScanModel {
@@ -327,6 +338,24 @@ extension VideoScanModel {
     func applyTargetRemoval(plan: TargetRemovalPlan,
                             target: CatalogScanTarget,
                             action: String) -> TargetRemovalPlanApplyResult {
+        // Identity first (codex #1431): the plan is for ONE registered
+        // target. Same id as the object being applied to, and that id is
+        // still registered as this very object. A stale object whose
+        // registration was removed (or replaced by a re-add of the same
+        // path) fails here — its records are orphans now, not this
+        // target's to delete.
+        let label = VolumeReachability.displayLabel(forPath: plan.root)
+        guard target.id == plan.targetID else {
+            let reason = "Delete cancelled: the confirmation was for a different volume than \(label). Nothing was deleted."
+            log("Target \(action) (\(plan.root)): \(reason)")
+            return .cancelledTargetGone(reason: reason)
+        }
+        guard let registered = scanTargets.first(where: { $0.id == plan.targetID }),
+              registered === target else {
+            let reason = "Delete cancelled: \(label) is no longer in the scan-targets list. Its catalog records were kept as orphans; nothing was deleted."
+            log("Target \(action) (\(plan.root)): \(reason)")
+            return .cancelledTargetGone(reason: reason)
+        }
         let rootMoved = target.searchPath != plan.root
         if rootMoved || plan.revision != catalogMutationRevision {
             let current = planTargetRemoval(for: target)
