@@ -210,6 +210,17 @@ enum ChannelCLI {
         run(["ack", "--agent", "rick", "\(row.messageID)"])
     }
 
+    /// Rick removes a message outright — stuck, wrong, or just unwanted
+    /// (Rick 9/13: "flush isn't enough … I need delete"). The CLI only
+    /// honours `--by rick`, and the whole message goes, every recipient.
+    static func deleteArguments(messageID: Int) -> [String] {
+        ["delete", "--by", "rick", "\(messageID)"]
+    }
+
+    static func deleteAsRick(_ row: ChannelRow) -> (ok: Bool, output: String) {
+        run(deleteArguments(messageID: row.messageID))
+    }
+
     /// One message from Rick to every agent at once ("--to all").
     static func broadcast(_ text: String) -> (ok: Bool, output: String) {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)

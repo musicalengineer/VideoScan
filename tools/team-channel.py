@@ -229,6 +229,42 @@ def acknowledge(connection: sqlite3.Connection, agent: str, message_ids: list[in
     return cursor.rowcount
 
 
+def delete_messages(connection: sqlite3.Connection, by: str, message_ids: list[int]) -> list[str]:
+    """Remove messages outright (Rick's "delete, not flush", 2026-09-13).
+
+    Only rick may delete. The recipients rows go first because the
+    connection does not enable foreign_keys, so ON DELETE CASCADE is
+    inert; replies that pointed at a deleted message keep their text and
+    lose only the reply_to link. Returns one summary line per deleted id.
+    """
+    if by != "rick":
+        raise ValueError("only rick may delete messages")
+    if not message_ids:
+        raise ValueError("at least one message id is required")
+    summaries: list[str] = []
+    with connection:
+        for message_id in dict.fromkeys(message_ids):
+            row = connection.execute(
+                "SELECT id, author, subject FROM messages WHERE id = ?", (message_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"message #{message_id} does not exist")
+            recipients = [
+                r["recipient"]
+                for r in connection.execute(
+                    "SELECT recipient FROM recipients WHERE message_id = ? ORDER BY recipient",
+                    (message_id,),
+                )
+            ]
+            connection.execute("DELETE FROM recipients WHERE message_id = ?", (message_id,))
+            connection.execute("UPDATE messages SET reply_to = NULL WHERE reply_to = ?", (message_id,))
+            connection.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+            summaries.append(
+                f"Deleted #{message_id}: {row['author']} -> {', '.join(recipients) or '-'}: {row['subject']}"
+            )
+    return summaries
+
+
 def format_messages(messages: list[sqlite3.Row], *, hook: bool = False) -> str:
     if not messages:
         return ""
@@ -318,6 +354,10 @@ def build_parser() -> argparse.ArgumentParser:
     ack.add_argument("--agent", required=True, choices=AGENTS)
     ack.add_argument("ids", nargs="+", type=int)
 
+    delete = subparsers.add_parser("delete", help="delete messages outright (rick only)")
+    delete.add_argument("--by", required=True, choices=AGENTS, help="who is deleting; must be rick")
+    delete.add_argument("ids", nargs="+", type=int)
+
     hook = subparsers.add_parser("hook", help="deliver new messages to an agent turn")
     hook.add_argument("--agent", required=True, choices=(*AGENTS, "auto"))
     hook.add_argument("--format", choices=("codex", "plain"), default="codex")
@@ -351,6 +391,9 @@ def main() -> int:
                     f"acknowledged {count} of {len(set(args.ids))} requested messages"
                 )
             print(f"Acknowledged {count} message(s) for {args.agent}.")
+        elif args.command == "delete":
+            for line in delete_messages(connection, args.by, args.ids):
+                print(line)
         elif args.command == "hook":
             try:
                 stdin_data = json.load(sys.stdin)

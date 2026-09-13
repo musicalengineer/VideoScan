@@ -242,6 +242,40 @@ class TeamChannelTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+    def test_delete_removes_message_and_recipients_and_unlinks_replies(self) -> None:
+        stuck = self.post(subject="Stuck forever")
+        reply = self.post(author="claude", recipients=["codex"], subject="Re: stuck")
+        self.connection.execute("UPDATE messages SET reply_to = ? WHERE id = ?", (stuck, reply))
+        self.connection.commit()
+
+        lines = team_channel.delete_messages(self.connection, "rick", [stuck, stuck])
+
+        self.assertEqual(lines, [f"Deleted #{stuck}: codex -> claude: Stuck forever"])
+        self.assertIsNone(
+            self.connection.execute("SELECT id FROM messages WHERE id = ?", (stuck,)).fetchone()
+        )
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM recipients WHERE message_id = ?", (stuck,)
+            ).fetchone()[0],
+            0,
+        )
+        self.assertIsNone(
+            self.connection.execute("SELECT reply_to FROM messages WHERE id = ?", (reply,)).fetchone()[0]
+        )
+        self.assertEqual([m["id"] for m in team_channel.pending_messages(self.connection, "claude")], [])
+
+    def test_delete_refuses_non_rick_and_missing_ids(self) -> None:
+        kept = self.post(subject="Keep me")
+        with self.assertRaises(ValueError):
+            team_channel.delete_messages(self.connection, "codex", [kept])
+        with self.assertRaises(ValueError):
+            team_channel.delete_messages(self.connection, "rick", [kept + 100])
+        with self.assertRaises(ValueError):
+            team_channel.delete_messages(self.connection, "rick", [])
+        # A refused delete leaves the message and its recipient row alone.
+        self.assertEqual([m["id"] for m in team_channel.pending_messages(self.connection, "claude")], [kept])
+
 
 class WriteOnlySeatTests(unittest.TestCase):
     def test_reviewer_can_post_but_all_never_addresses_it(self) -> None:

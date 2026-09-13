@@ -131,6 +131,7 @@ private struct RowView: View {
     let row: ChannelRow
     @ObservedObject var model: MonitorModel
     @State private var expanded = false
+    @State private var confirmDelete = false
     @AppStorage("codexThreadTarget") private var codexThreadTarget = ""
     @State private var composeText = ""
 
@@ -163,12 +164,29 @@ private struct RowView: View {
                     .font(.caption)
                     .textSelection(.enabled)
                     .padding(.leading, 26)
-                    .padding(.bottom, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                HStack {
+                    Spacer()
+                    Button(role: .destructive) { confirmDelete = true } label: {
+                        Label("Delete #\(row.messageID)", systemImage: "trash")
+                    }
+                    .font(.caption)
+                    .help("Remove this message from the channel for every recipient. Flush only hides it here.")
+                }
+                .padding(.bottom, 4)
             }
         }
         .padding(.vertical, 5)
         .help(row.body.prefix(600))
+        .confirmationDialog(
+            "Delete #\(row.messageID) from \(row.author) to \(row.recipient)?",
+            isPresented: $confirmDelete, titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) { model.deleteMessage(row) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("It disappears for every recipient. This cannot be undone.")
+        }
     }
 
     @ViewBuilder

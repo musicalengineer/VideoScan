@@ -162,6 +162,14 @@ final class MonitorModel: ObservableObject {
         }
     }
 
+    /// Delete the message from the channel database (all recipients).
+    /// Unlike Flush this is not a view filter: the row is gone for everyone.
+    func deleteMessage(_ row: ChannelRow) {
+        let result = ChannelCLI.deleteAsRick(row)
+        lastAction = result.ok ? result.output : "Delete failed: \(result.output)"
+        refresh()
+    }
+
     func markHandled(_ row: ChannelRow) {
         let result = ChannelCLI.ackAsRick(row)
         lastAction = result.ok ? "Marked #\(row.messageID) handled" : "Ack failed: \(result.output)"

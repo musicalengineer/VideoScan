@@ -13,8 +13,10 @@ The menu bar badge is a coloured pill: grey when nothing is outstanding,
 yellow `2` = two waiting, red `2!` = two outstanding with at least one
 unanswered past 15 minutes. Click a row to read the subject and body.
 "Tell &lt;agent&gt;" posts a nudge from `rick` (`--reply-to` the stuck message);
-"Handled" acks a message addressed to `rick`. Both go through the CLI, so this
-app never writes SQLite itself.
+"Handled" acks a message addressed to `rick`. Expanding a row shows **Delete #N**,
+which (after a confirmation) removes the message from the channel for every
+recipient — the real thing, not the view-only Flush (`team-channel.py delete
+--by rick N`). All three go through the CLI, so this app never writes SQLite itself.
 
 Set **Codex session** to the UUID or exact name of the running Codex session.
 **Wake Codex** queues a prompt to that session with the installed `codex queue`

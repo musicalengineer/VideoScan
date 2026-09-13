@@ -10,6 +10,12 @@ final class BroadcastAndFlushTests: XCTestCase {
         XCTAssertEqual(Broadcast.subject(for: "   "), "(message)")
     }
 
+    func testDeleteGoesThroughTheCLIAsRickForTheWholeMessage() {
+        // Delete is the opposite of Flush: it is a database write, routed
+        // through the CLI so validation (rick-only) stays in one place.
+        XCTAssertEqual(ChannelCLI.deleteArguments(messageID: 1464), ["delete", "--by", "rick", "1464"])
+    }
+
     func testFlushIsMonitorOnlyAndPrunesToOpenRows() {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("dismissed-\(UUID()).json")
         DismissedRows.save(["1:claude", "2:codex"], to: tmp)
