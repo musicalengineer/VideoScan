@@ -277,3 +277,74 @@ struct HallieStrictReplayFamilyIntentTests {
         #expect(result.prose == HalliePronounContinuity.whoDoYouMean("his"))
     }
 }
+
+// MARK: - Nested subjects (codex post-merge review 2026-09-13, Hallie routing)
+
+extension HallieStrictReplayFamilyIntentTests {
+
+    /// "who did his father marry": "his father" is a RELATIVE of someone,
+    /// not a person the spouse route can look up, yet the stop set only
+    /// knew my/our/their, so the route claimed a person called "His
+    /// Father" and the executor — which resolves only a whole-string
+    /// pronoun — went looking for him. The spouse route refuses a nested
+    /// subject (pronoun or possessive + kin word) so the sentence falls
+    /// through to the kinship / relative resolution instead of being
+    /// answered wrong. Refusal only; no nested resolver is built here.
+    @Test func spouseRouteRefusesNestedSubjects() {
+        let nested: [(question: String, literal: String)] = [
+            ("who did his father marry", "His Father"),
+            ("whom did her mother marry?", "Her Mother"),
+            ("who was his father married to", "His Father"),
+            ("who was her mother married to?", "Her Mother"),
+            ("who did his grandmother marry", "His Grandmother"),
+            ("and who did her husband marry", "Her Husband"),
+        ]
+        for (q, literal) in nested {
+            let got = Q.detect(q)
+            #expect(got != .kinship(person: literal, relation: .spouse, side: nil), Comment(rawValue: q))
+            if case .kinship(let person, .spouse, _) = got {
+                Issue.record("\(q): the spouse route claimed a subject (\(person ?? "nil"))")
+            }
+            #expect(got == nil, Comment(rawValue: "\(q) → \(String(describing: got)); expected the translator/kinship road"))
+        }
+        // A named possessor is nested too. (Where it lands afterwards is
+        // the apposition route's pre-existing "… → name Marry" reading,
+        // which codex noted predates this work and is not pinned here.)
+        let possessive = Q.detect("who did rick's father marry")
+        #expect(possessive != .kinship(person: "Rick's Father", relation: .spouse, side: nil))
+        if case .kinship(let person, .spouse, _) = possessive {
+            Issue.record("rick's father: the spouse route claimed a subject (\(person ?? "nil"))")
+        }
+    }
+
+    /// The neighbours keep their precedence: the marriage-date WHEN route
+    /// (nil here — HallieMarriageDate's), the whole pronoun, a plain name,
+    /// and the three original strict fixes are unchanged.
+    @Test func spouseRouteNeighboursKeepTheirPrecedence() {
+        #expect(Q.detect("when did his father marry") == nil)
+        #expect(Q.detect("when did he marry") == nil)
+        #expect(Q.detect("who did he marry") == .kinship(person: "He", relation: .spouse, side: nil))
+        #expect(Q.detect("whom did she marry?") == .kinship(person: "She", relation: .spouse, side: nil))
+        #expect(Q.detect("who did rick marry") == .kinship(person: "Rick", relation: .spouse, side: nil))
+        #expect(Q.detect("who was eileen latta married to") == .kinship(person: "Eileen Latta", relation: .spouse, side: nil))
+        // A bare kin word is left alone: a People-tab alias may own it (GH #180).
+        #expect(Q.detect("who did dad marry") == .kinship(person: "Dad", relation: .spouse, side: nil))
+        // The pronoun-possessive kin sentence still has its own lane.
+        #expect(Q.detect("who was his wife") == .kinship(person: "His", relation: .wife, side: nil))
+        #expect(Q.detect("tell me about his parents") == .kinship(person: "His", relation: .parents, side: nil))
+    }
+
+    /// With John Hastings in memory, "who did his father marry" must not
+    /// become a spouse query about a person called His Father, nor a
+    /// spouse query about John himself.
+    @Test func whoDidHisFatherMarryAfterABiographyIsNotASpouseAskAboutHisFather() async throws {
+        let memory = try await memoryAfterBiography(of: "john hastings", expecting: "John Hastings")
+        let outcome = pre("who did his father marry", memory: memory)
+        if case .run(let intent) = outcome, case .graph(let g) = intent.ast {
+            #expect(!(g.operation == .kinship && g.relation == .spouse && g.people.contains("His Father")),
+                    Comment(rawValue: "\(intent.ast)"))
+            #expect(!(g.operation == .kinship && g.relation == .spouse && g.people == ["John Hastings"]),
+                    Comment(rawValue: "answering about John, not his father: \(intent.ast)"))
+        }
+    }
+}

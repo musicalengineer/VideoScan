@@ -126,6 +126,39 @@ extension VideoScanModel {
         return changed
     }
 
+    /// The production sink (ContentView wires PersonFinder's
+    /// `onScanComplete` here). WHO the tag is about is checked HERE, at
+    /// the write, keyed by the profile uuid — not at scan start, which
+    /// cannot see a namesake created while the scan ran, a person deleted
+    /// while it ran, or a job restored from cache (codex post-merge review
+    /// 2026-09-13, People #2). The name written is the bound uuid's
+    /// CURRENT canonical name. A uuid that no longer resolves, or a name
+    /// two profiles share, is refused and logged: nothing is tagged.
+    /// `roster` is injectable for tests; production reads the gallery.
+    ///
+    /// The name-keyed overloads below are the resolved-name primitive
+    /// (tests, and any caller that has already settled identity).
+    @discardableResult
+    func applyDetectedPeople(
+        confirmed: [pfVideoResult],
+        suspected: [pfVideoResult],
+        identity: PersonTagIdentity,
+        roster: [POIProfile]? = nil
+    ) -> Int {
+        guard !identity.name.isEmpty else { return 0 }
+        if confirmed.isEmpty && suspected.isEmpty { return 0 }
+        switch PersonNameGuard.resolveForCatalogWrite(identity, among: roster ?? PersonNameGuard.roster()) {
+        case .refused(let why):
+            appLog.write("Catalog: tag writeback refused — \(why)")
+            return 0
+        case .write(let name):
+            if name != identity.name {
+                appLog.write("Catalog: tagging \(name) (the search was keyed by \(identity.name); the person was renamed while it ran)")
+            }
+            return applyDetectedPeople(confirmed: confirmed, suspected: suspected, person: name)
+        }
+    }
+
     /// Backward-compat / single-tier convenience: routes every match to
     /// `detectedPeople` (confirmed). Used by call sites that don't have
     /// engine-threshold context, and by the original test suite. Returns

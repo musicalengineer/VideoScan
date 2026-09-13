@@ -497,3 +497,103 @@ struct FamilyTaggingTests {
         #expect(decoded.records[0].suspectedPeople == ["Tim"])
     }
 }
+
+// MARK: - Identity at the write sink (codex post-merge review 2026-09-13, People #2)
+//
+// startJob refuses a shared short name at SCAN START. That guard cannot
+// see a namesake created while the scan ran, a profile deleted while it
+// ran, or a job restored from cache (which never passes startJob). The
+// catalog write itself must check who it is about — keyed by the profile
+// uuid, not the name — and refuse, leaving every tag untouched.
+
+extension FamilyTaggingTests {
+
+    private func person(_ name: String) -> POIProfile { POIProfile(name: name, referencePath: "") }
+
+    /// The scan started with one Richard; a second was created before it
+    /// finished. The name now resolves to two profiles → refused, tags unchanged.
+    @Test func writebackRefusesANamesakeCreatedMidScan() {
+        let model = VideoScanModel()
+        let family = record("/v/family.mov")
+        family.detectedPeople = ["Donna"]
+        family.suspectedPeople = ["Beth"]
+        model.records = [family]
+        let junior = person("Richard")
+        let senior = person("Richard")   // appeared mid-scan
+
+        let n = model.applyDetectedPeople(
+            confirmed: [match(path: "/v/family.mov")], suspected: [match(path: "/v/family.mov", bestDistance: 0.6)],
+            identity: PersonTagIdentity(profile: junior), roster: [junior, senior])
+        #expect(n == 0)
+        #expect(family.detectedPeople == ["Donna"] && family.suspectedPeople == ["Beth"], "nothing tagged, nothing moved")
+    }
+
+    /// A job restored from cache carries the uuid of a person who has since
+    /// been deleted (or whose folder was trashed by hand): the bound uuid
+    /// no longer resolves → refused, never "the other Richard".
+    @Test func writebackRefusesWhenTheBoundProfileNoLongerResolves() {
+        let model = VideoScanModel()
+        let family = record("/v/family.mov")
+        model.records = [family]
+        let junior = person("Richard")
+        let senior = person("Richard")
+
+        let n = model.applyDetectedPeople(
+            confirmed: [match(path: "/v/family.mov")], suspected: [],
+            identity: PersonTagIdentity(profile: junior), roster: [senior])
+        #expect(n == 0)
+        #expect(family.detectedPeople.isEmpty)
+    }
+
+    /// A profile whose uuid was never persisted (quarantined legacy folder)
+    /// is identified by name — and only while that name is unique.
+    @Test func writebackByNameOnlyWhenNoUUIDIsBound_andTheNameIsUnique() {
+        let model = VideoScanModel()
+        let family = record("/v/family.mov")
+        model.records = [family]
+        let junior = person("Richard")
+        let senior = person("Richard")
+
+        #expect(model.applyDetectedPeople(
+            confirmed: [match(path: "/v/family.mov")], suspected: [],
+            identity: PersonTagIdentity(name: "Richard", uuid: nil), roster: [junior, senior]) == 0)
+        #expect(family.detectedPeople.isEmpty)
+        #expect(model.applyDetectedPeople(
+            confirmed: [match(path: "/v/family.mov")], suspected: [],
+            identity: PersonTagIdentity(name: "Richard", uuid: nil), roster: [junior]) == 1)
+        #expect(family.detectedPeople == ["Richard"])
+    }
+
+    /// The uuid is the identity: the name written is the profile's CURRENT
+    /// canonical name, so a rename mid-scan tags the person, not a name
+    /// nobody owns any more.
+    @Test func writebackTagsTheBoundUUIDsCurrentName() {
+        let model = VideoScanModel()
+        let family = record("/v/family.mov")
+        model.records = [family]
+        let junior = person("Richard")
+        var renamed = junior
+        renamed.name = "Rick"
+
+        let n = model.applyDetectedPeople(
+            confirmed: [match(path: "/v/family.mov")], suspected: [],
+            identity: PersonTagIdentity(profile: junior), roster: [renamed, person("Richard")])
+        #expect(n == 1)
+        #expect(family.detectedPeople == ["Rick"], "keyed by uuid; 'Richard' being shared is irrelevant")
+    }
+
+    /// Both completion paths — the live scan and the cache restore — hand
+    /// the sink ONE derivation, `ScanJob.tagIdentity`: the canonical name
+    /// plus the profile uuid (nil only for a uuid that was never persisted).
+    @Test func scanJobTagIdentityCarriesTheProfileUUIDForLiveAndCachedCompletion() {
+        let job = ScanJob(searchPath: "/v")
+        #expect(job.tagIdentity == PersonTagIdentity(name: "", uuid: nil), "no profile: nothing to tag")
+        let junior = person("Richard")
+        job.assignedProfile = junior
+        #expect(job.tagIdentity == PersonTagIdentity(name: "Richard", uuid: junior.uuid))
+        var ephemeral = junior
+        ephemeral.uuidPersisted = false
+        job.assignedProfile = ephemeral
+        #expect(job.tagIdentity == PersonTagIdentity(name: "Richard", uuid: nil))
+    }
+}

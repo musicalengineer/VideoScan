@@ -1428,3 +1428,97 @@ struct InferredDatePropagationRealCatalogReport {
         #expect(unwound.sidecar?.path.hasPrefix(dst.path) == true, "the report's sidecar lands in scratch, never App Support")
     }
 }
+
+// MARK: - Provenance closure (codex post-merge review 2026-09-13, date cleanup)
+
+extension InferredDatePropagationTests {
+
+    /// A (aaaa, own) → B (bbbb, from A) → C (aaaa, from B) → D (aaaa,
+    /// from C). B goes; C and D are verified against the ORIGIN A and
+    /// stay — but their provenance ran through B. Without re-anchoring,
+    /// the NEXT cleanup found C's chain broken (B undated) and cleared a
+    /// correct date. C and D are re-anchored to A in the same backed-up
+    /// pass, the sidecar records the provenance it replaced, repeated
+    /// cleanups are no-ops, and the sidecar restores both the date and
+    /// the previous provenance.
+    @Test func unwindReanchorsRetainedDescendantsToTheirEarnedOrigin_idempotently() throws {
+        let dir = try scratchDir("unwind-reanchor")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let a = makeRecord(path: "/V/a.mxf", md5: "m", size: 100, contentHash: "v1:aaaa",
+                           inferred: Self.june21_1991, confidence: 0.95)
+        let b = makeRecord(path: "/W/a.mxf", md5: "m", size: 100, contentHash: "v1:bbbb",
+                           inferred: Self.june21_1991, confidence: 0.95, source: "propagated from \(a.id.uuidString)")
+        let c = makeRecord(path: "/X/a.mxf", md5: "m", size: 100, contentHash: "v1:aaaa",
+                           inferred: Self.june21_1991, confidence: 0.95, source: "propagated from \(b.id.uuidString)")
+        let d = makeRecord(path: "/Y/a.mxf", md5: "m", size: 100, contentHash: "v1:aaaa",
+                           inferred: Self.june21_1991, confidence: 0.95, source: "propagated from \(c.id.uuidString)")
+        // E hangs directly off A: untouched by the cleanup, not re-anchored.
+        let e = makeRecord(path: "/Z/a.mxf", md5: "m", size: 100, contentHash: "v1:aaaa",
+                           inferred: Self.june21_1991, confidence: 0.95, source: "propagated from \(a.id.uuidString)")
+        model.records = [a, b, c, d, e]
+        let fromA = "propagated from \(a.id.uuidString)"
+
+        let first = model.unwindUnverifiedPropagatedDates(trigger: "test")
+        #expect(first.unwound == 1 && first.conflictingHashes == 1, "only B")
+        #expect(first.reanchored == 2, "C and D")
+        #expect(b.inferredRecordDate == nil && b.inferredDateSource == nil)
+        #expect(c.inferredRecordDate == Self.june21_1991 && c.inferredDateSource == fromA)
+        #expect(d.inferredRecordDate == Self.june21_1991 && d.inferredDateSource == fromA)
+        #expect(e.inferredDateSource == fromA)
+
+        // The sidecar carries the replaced provenance.
+        let url = try #require(first.sidecar)
+        let payload = try VideoScanModel.unwoundSidecarDecoder()
+            .decode(VideoScanModel.UnwoundDateSidecar.self, from: Data(contentsOf: url))
+        #expect(payload.entries.map(\.recordID) == [b.id])
+        #expect(Set(payload.reanchored.map(\.recordID)) == [c.id, d.id])
+        let cEntry = try #require(payload.reanchored.first { $0.recordID == c.id })
+        #expect(cEntry.fullPath == "/X/a.mxf")
+        #expect(cEntry.previousSource == "propagated from \(b.id.uuidString)" && cEntry.newSource == fromA)
+
+        // Second and third cleanups: nothing to do; C and D keep their dates.
+        #expect(model.unwindUnverifiedPropagatedDates(trigger: "test") == VideoScanModel.UnwindResult())
+        #expect(model.unwindUnverifiedPropagatedDates(trigger: "test") == VideoScanModel.UnwindResult())
+        #expect(c.inferredRecordDate == Self.june21_1991 && d.inferredRecordDate == Self.june21_1991)
+        let byID = Dictionary(uniqueKeysWithValues: model.records.map { ($0.id, $0) })
+        #expect(VideoScanModel.originDonor(of: d, byID: byID) === a)
+
+        // Recovery: B's date comes back AND C/D's previous provenance comes back.
+        let restored = try VideoScanModel.reapplyUnwoundDates(from: url, to: model.records)
+        #expect(Set(restored.map(\.id)) == [b.id, c.id, d.id])
+        #expect(b.inferredRecordDate == Self.june21_1991 && b.inferredDateSource == fromA)
+        #expect(c.inferredDateSource == "propagated from \(b.id.uuidString)")
+        #expect(d.inferredDateSource == "propagated from \(c.id.uuidString)")
+        // A row re-dated since keeps its newer provenance.
+        c.inferredDateSource = VideoScanModel.InferredDateSource.catchUp
+        _ = try VideoScanModel.reapplyUnwoundDates(from: url, to: model.records)
+        #expect(c.inferredDateSource == VideoScanModel.InferredDateSource.catchUp)
+    }
+
+    /// An unwind whose sidecar cannot be WRITTEN (the directory exists but
+    /// is read-only — not the createDirectory failure) clears nothing and
+    /// re-anchors nothing. Injected for real with directory permissions.
+    @Test func unwindClearsNothingWhenTheSidecarWriteFails() throws {
+        let dir = try scratchDir("unwind-readonly")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let f = unwindFixture(model)
+        let sidecarDir = dir.appendingPathComponent("date-inference", isDirectory: true)
+        try FileManager.default.createDirectory(at: sidecarDir, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: sidecarDir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sidecarDir.path) }
+
+        let r = model.unwindUnverifiedPropagatedDates(sidecarDirectory: sidecarDir, trigger: "test")
+        #expect(r == VideoScanModel.UnwindResult(), "aborted: no sidecar, nothing counted")
+        #expect(f.heuristic.inferredRecordDate == Self.june21_1991
+                && f.heuristic.inferredDateSource == "propagated from \(f.donor.id.uuidString)", "no field cleared")
+        #expect(f.orphan.inferredRecordDate == Self.june21_1991)
+        #expect(f.userDated.inferredRecordDate == Self.june21_1991)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: sidecarDir.path).isEmpty, "no partial sidecar")
+
+        // Once writable, the same call succeeds.
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sidecarDir.path)
+        #expect(model.unwindUnverifiedPropagatedDates(sidecarDirectory: sidecarDir, trigger: "test").unwound == 3)
+    }
+}

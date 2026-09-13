@@ -57,4 +57,54 @@ enum PersonNameGuard {
     static func refusal(name: String, operation: String) -> String {
         "Two people are called \(name) — \(operation) is keyed by the short name. Give one of them a distinct short name first (aliases are what the cards show)."
     }
+
+    /// What a catalog tag writeback may do for `identity`, decided AT THE
+    /// SINK against the roster as it is NOW (codex post-merge review
+    /// 2026-09-13, People #2 — the scan-start guard cannot see a namesake
+    /// created mid-scan, a person deleted mid-scan, or a cache restore).
+    enum CatalogWriteResolution: Equatable {
+        /// Tag with this canonical name (the bound uuid's current name).
+        case write(name: String)
+        /// Tag nothing; the reason, for the log.
+        case refused(String)
+    }
+
+    /// A bound uuid must still resolve, and its CURRENT canonical name
+    /// must be unique in the roster; a name without a uuid must be unique.
+    static func resolveForCatalogWrite(_ identity: PersonTagIdentity,
+                                       among profiles: [POIProfile]) -> CatalogWriteResolution {
+        if let uuid = identity.uuid {
+            guard let profile = profiles.first(where: { $0.uuid == uuid }) else {
+                return .refused("The person this search was about (\(identity.name), \(uuid.uuidString)) is no longer in the gallery — the catalog was not tagged. Pick who you mean and search again.")
+            }
+            if isShared(profile.name, among: profiles) {
+                return .refused(refusal(name: profile.name, operation: "tagging the catalog"))
+            }
+            return .write(name: profile.name)
+        }
+        if isShared(identity.name, among: profiles) {
+            return .refused(refusal(name: identity.name, operation: "tagging the catalog"))
+        }
+        return .write(name: identity.name)
+    }
+}
+
+/// Who a catalog tag writeback is about. The uuid is the identity; the
+/// name is what the scan was keyed by (`ScanJob.personLabel`). `uuid` is
+/// nil only for a profile whose uuid was never persisted (a quarantined
+/// legacy folder — `POIProfile.uuidPersisted == false`): such a person is
+/// still identified by name, and only while that name is unique.
+/// (C++ readers: a two-field POD handed from the scan to the write sink.)
+struct PersonTagIdentity: Equatable, Sendable {
+    var name: String
+    var uuid: UUID?
+
+    init(name: String, uuid: UUID? = nil) {
+        self.name = name
+        self.uuid = uuid
+    }
+
+    init(profile: POIProfile) {
+        self.init(name: profile.name, uuid: profile.uuidPersisted ? profile.uuid : nil)
+    }
 }

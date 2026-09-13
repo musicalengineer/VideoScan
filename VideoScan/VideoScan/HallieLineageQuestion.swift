@@ -946,8 +946,13 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// (shape=presence … keyword=marry). A pronoun subject ("he", "she") is
     /// handed on as the person for the executor's pre-translation step to
     /// resolve from memory; a name is the person; "they" keeps its
-    /// road (codex #1352) and a "my …" subject is a nested relative this
-    /// route cannot express. A WHEN question is HallieMarriageDate's and
+    /// road (codex #1352) and a NESTED subject — "my …", "his father",
+    /// "her mother", "rick's father" — is a relative of someone, which
+    /// this one-hop route cannot express: it is refused so the sentence
+    /// falls through to the kinship / relative resolution instead of
+    /// being answered about a person called "His Father" (codex
+    /// post-merge review 2026-09-13; the executor resolves only a
+    /// whole-string pronoun). A WHEN question is HallieMarriageDate's and
     /// never matches: the sentence must open with who/whom and end on the
     /// verb — "who did he marry in that video" is not this shape.
     static func spouseSentenceQuestion(in lower: String) -> HallieLineageQuestion? {
@@ -963,19 +968,34 @@ enum HallieLineageQuestion: Equatable, Sendable {
             guard !words.isEmpty, words.count <= 5,
                   !words.contains(where: { kinFragmentSentenceWords.contains($0) }),
                   !words.contains(where: { spouseSubjectStopWords.contains($0) }),
-                  !subject.hasPrefix("the ") else { return nil }
+                  !subject.hasPrefix("the "),
+                  !isNestedKinSubject(words) else { return nil }
             return .kinship(person: capitalizedName(subject), relation: .spouse, side: nil)
         }
         return nil
     }
 
     /// Subjects the spouse sentence refuses: plural / object pronouns
-    /// (their road is the translator's, codex #1352) and first-person
-    /// possessives (a nested relative).
+    /// (their road is the translator's, codex #1352) and possessive
+    /// pronouns of every person — "my father", "his father", "her
+    /// mother" name a nested relative, never a person (codex post-merge
+    /// review 2026-09-13).
     private static let spouseSubjectStopWords: Set<String> = [
         "my", "our", "their", "they", "them", "him", "it", "we", "you", "i", "us",
+        "his", "her", "your", "its",
         "anyone", "anybody", "someone", "somebody", "everyone", "everybody", "people",
     ]
+
+    /// "rick's father", "martha lamson's husband", "rick's grandmother": a
+    /// possessive + kin word names a RELATIVE of the named person, which
+    /// the one-hop spouse route cannot express (pronoun possessors are
+    /// stop words above). A bare kin word ("dad") is left alone: a
+    /// People-tab alias may own it (GH #180).
+    private static func isNestedKinSubject(_ words: [String]) -> Bool {
+        guard words.count >= 2, let last = words.last else { return false }
+        let possessive = words.dropLast().contains { $0.hasSuffix("'s") || $0.hasSuffix("'") }
+        return possessive && (kinFragmentNouns[last] != nil || greatCount(in: last) != nil)
+    }
 
     /// "great great great grandpa" → (3, "grandpa"); "3rd great
     /// grandfather" → (3, "grandfather"); "5x great grandmother" → (5,

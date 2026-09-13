@@ -296,13 +296,99 @@ struct TwoRichardsConsumerSensorTests {
         model.settings.threshold = 0.9
         model.saveCurrentPOI()
         #expect(model.referenceLoadError?.contains("no longer in the gallery") == true)
-        #expect(model.settings.activeProfileUUID == nil, "stale selection cleared")
+        #expect(model.settings.activeProfileUUID == gone, "the stale selection stays bound so the refusal holds")
         #expect(try Data(contentsOf: POIStorage.profileURL(for: lone)) == before)
         model.settings.activeProfileUUID = gone
         model.settings.rejectedReferenceFiles = ["x.jpg"]
         model.syncRejectionsToProfile()
         #expect(try Data(contentsOf: POIStorage.profileURL(for: lone)) == before)
         #expect(try POIProfile.load(uuid: lone.uuid).rejectedFiles.isEmpty)
+    }
+
+    /// (2b) codex post-merge review 2026-09-13, People #1: the refusal must
+    /// HOLD. Clearing the stale uuid on the first refusal let the very
+    /// next quick-save or rejection sync fall into the unique-name path
+    /// and write the namesake. This is the REPEATED sequence — refuse →
+    /// operate again → refuse again — with nothing reset in between: the
+    /// lone namesake's bytes never change and the only way out is an
+    /// explicit re-selection (`applyProfile`, i.e. a card click).
+    @Test @MainActor
+    func repeatedOperationsAfterAMissingProfileRefusalStayRefused() throws {
+        let pair = try makePair()
+        defer { pair.cleanup() }
+        let model = PersonFinderModel()
+        var lone = POIProfile(name: "Lone\(pair.given.suffix(6))", referencePath: "")
+        try lone.save()
+        defer { try? FileManager.default.removeItem(at: POIStorage.folder(for: lone)) }
+        lone.referencePath = POIStorage.folder(for: lone).path
+        model.savedProfiles = POIProfile.listAll()
+        let gone = UUID()
+        model.settings.personName = lone.name
+        model.settings.activeProfileUUID = gone
+        let before = try Data(contentsOf: POIStorage.profileURL(for: lone))
+
+        // 1. quick-save → refused.
+        model.settings.threshold = 0.9
+        model.saveCurrentPOI()
+        #expect(model.referenceLoadError?.contains("no longer in the gallery") == true)
+        // 2. quick-save AGAIN, nothing reset → still refused, still no write.
+        model.referenceLoadError = nil
+        model.saveCurrentPOI()
+        #expect(model.referenceLoadError?.contains("no longer in the gallery") == true,
+                "the second quick-save must not fall through to the unique name")
+        #expect(model.resolveActiveProfile() == .missing(gone), "the refused uuid stays bound")
+        #expect(try Data(contentsOf: POIStorage.profileURL(for: lone)) == before)
+        // 3. rejection sync AGAIN → still refused.
+        model.referenceLoadError = nil
+        model.settings.rejectedReferenceFiles = ["x.jpg"]
+        model.syncRejectionsToProfile()
+        #expect(model.referenceLoadError?.contains("no longer in the gallery") == true)
+        model.referenceLoadError = nil
+        model.syncRejectionsToProfile()
+        #expect(model.referenceLoadError?.contains("no longer in the gallery") == true)
+        #expect(try Data(contentsOf: POIStorage.profileURL(for: lone)) == before, "the namesake's bytes never change")
+        #expect(try POIProfile.load(uuid: lone.uuid).rejectedFiles.isEmpty)
+        #expect(model.settings.activeProfileUUID == gone)
+
+        // Re-selecting a card is the way out: applyProfile binds the new
+        // uuid (and loads that person's own state), and the next quick-save
+        // writes the person the user just picked.
+        model.settings.applyProfile(lone)
+        #expect(model.resolveActiveProfile() == .one(model.savedProfiles.first { $0.uuid == lone.uuid }!))
+        model.settings.threshold = 0.61
+        model.saveCurrentPOI()
+        #expect(model.referenceLoadError == nil)
+        #expect(try POIProfile.load(uuid: lone.uuid).visionThreshold == 0.61)
+    }
+
+    /// (2c) The same hole through DELETE (found while fixing People #1):
+    /// deleting the ACTIVE Richard Jr while Richard Sr exists left
+    /// settings with the shared name and no uuid — the next quick-save
+    /// resolved the now-unique name to Sr and wrote Jr's settings into
+    /// him. After the delete the selection names a person who is gone and
+    /// every name-keyed write refuses until a card is clicked.
+    @Test @MainActor
+    func deletingTheActivePersonNeverLeavesTheNamesakeReachableByName() async throws {
+        let pair = try makePair()
+        defer { pair.cleanup() }
+        let model = PersonFinderModel()
+        model.savedProfiles = POIProfile.listAll()
+        model.settings.applyProfile(pair.junior)
+        let seniorBefore = try pair.jsonBytes(pair.senior)
+
+        #expect(await model.deletePOI(pair.junior))
+        defer { if let trash = model.lastDeletedPOI?.trashURL { try? FileManager.default.removeItem(at: trash) } }
+        #expect(model.settings.personName == pair.given, "the typed name is still there — that is the trap")
+
+        model.settings.threshold = 0.42
+        model.saveCurrentPOI()
+        #expect(model.referenceLoadError?.contains("no longer in the gallery") == true)
+        #expect(try pair.jsonBytes(pair.senior) == seniorBefore, "Sr is not written with Jr's settings")
+        #expect(model.settings.activeProfileUUID != pair.senior.uuid)
+        model.settings.rejectedReferenceFiles = ["x.jpg"]
+        model.syncRejectionsToProfile()
+        #expect(try pair.jsonBytes(pair.senior) == seniorBefore)
+        #expect(try POIProfile.load(uuid: pair.senior.uuid).rejectedFiles.isEmpty)
     }
 
     /// (3) The write sinks refuse a shared name even when the review
