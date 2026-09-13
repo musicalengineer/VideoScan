@@ -45,6 +45,14 @@ struct FamilyTreeBookmarks: Equatable, Sendable {
     var count: Int { entries.count }
     func contains(_ personID: String) -> Bool { entries[personID] != nil }
 
+    /// Project bookmarks onto installed people (or ordered search results).
+    /// Missing/stale IDs disappear naturally and the caller's sort survives.
+    /// O(people) time, at most people.count retained elements; no copied ID set.
+    func matchingPeople<Person>(in people: [Person], id: (Person) -> String) -> [Person] {
+        guard !entries.isEmpty else { return [] }
+        return people.filter { contains(id($0)) }
+    }
+
     /// Newest first — the order a "take me back" list wants.
     var mostRecentFirst: [Entry] {
         entries.values.sorted { $0.markedAt > $1.markedAt }

@@ -658,6 +658,15 @@ struct FamilyTreeView: View {
 
             verifyRow
 
+            Picker("People shown", selection: $model.showsBookmarkedPeopleOnly) {
+                Text("All people").tag(false)
+                Text(model.bookmarkListIsAvailable
+                     ? "Bookmarks (\(model.bookmarkedPeopleCount))" : "Bookmarks").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityIdentifier("ft.peopleScope")
+
             TextField("Search name, surname, or GEDCOM ID", text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
                 .focused($searchFocused)
@@ -689,6 +698,22 @@ struct FamilyTreeView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 6) {
+                        if model.showsBookmarkedPeopleOnly && model.bookmarkListIsAvailable
+                            && model.filteredPeople.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(model.bookmarkedPeopleCount == 0
+                                     ? "No bookmarks in this tree" : "No matching bookmarks")
+                                    .font(.headline)
+                                Text(model.bookmarkedPeopleCount == 0
+                                     ? "Right-click a person’s tree card and choose Bookmark to find them here later."
+                                     : "Try another name or clear the search to see all bookmarked people.")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 8)
+                            .accessibilityIdentifier("ft.bookmarksEmptyState")
+                        }
                         ForEach(model.filteredPeople) { person in
                             Button {
                                 model.select(person.id)

@@ -221,6 +221,23 @@ final class FamilyTreeLiveModel: ObservableObject {
         }
     }
 
+    /// Search and bookmark scope intersect; changing scope leaves the
+    /// selected tree person alone until the reader chooses another row.
+    @Published var showsBookmarkedPeopleOnly = false {
+        didSet {
+            if showsBookmarkedPeopleOnly != oldValue { refilter() }
+        }
+    }
+    @Published private(set) var bookmarkedPeopleCount = 0
+    /// A zero count means "no bookmarks" only once this source is ready.
+    var bookmarkListIsAvailable: Bool {
+        guard case .loaded = loadState else { return false }
+        return sourceAccess != .unavailable && !bookmarkSourceTransition
+    }
+    /// At most one summary per installed person (O(people) worst case).
+    /// Rebuilt on tree/bookmark changes, never during SwiftUI body evaluation.
+    private var bookmarkedPeopleInOrder: [FamilyTreePersonSummary] = []
+
     var isLive: Bool { graph != nil }
 
     /// Where photos come from. codex's FamilyAssetStore plugs in here
@@ -928,6 +945,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             fallback = FamilyTreeDemoData.rootID
         }
         selectedID = keep ?? fallback
+        rebuildBookmarkedPeople()
         refilter(step: "install: filter")
         scheduleNotesResolverRebuild()
         timed("install: selection + layout") { rebuildSelection() }
@@ -995,22 +1013,28 @@ final class FamilyTreeLiveModel: ObservableObject {
     func configure(source: FamilyAssetConfiguration) {
         let directory = source.gedcomDirectory()
         let accessChanged = sourceAccess != source.access
+        let sourceChanged = directory != originalsDirectory || accessChanged
+        let bookmarksChanged = bookmarksFollowSource && (bookmarksDirectory != directory || accessChanged)
         if directory != originalsDirectory, graph != nil {
             // Old cards may remain visible during the async replacement.
             // Their GEDCOM pointers must never be written into the new archive.
             bookmarkSourceTransition = true
         }
-        if directory != originalsDirectory || accessChanged {
+        if sourceChanged {
             // Reject an old source's in-flight result before it can be installed.
             loadGeneration &+= 1
             loadedRevision = nil
         }
         originalsDirectory = directory
         sourceAccess = source.access
-        if bookmarksFollowSource && (bookmarksDirectory != directory || accessChanged) {
+        if bookmarksChanged {
             bookmarksDirectory = directory
             bookmarks = source.access == .unavailable
                 ? FamilyTreeBookmarks() : FamilyTreeBookmarks.load(from: directory)
+        }
+        if sourceChanged || bookmarksChanged {
+            rebuildBookmarkedPeople()
+            refilter()
         }
     }
 
@@ -1019,6 +1043,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         graph = nil
         bookmarkSourceTransition = false
         summariesInOrder = []
+        bookmarkedPeopleInOrder = []
+        bookmarkedPeopleCount = 0
         peopleCount = 0
         filteredPeople = []
         selectedID = nil
@@ -1103,6 +1129,7 @@ final class FamilyTreeLiveModel: ObservableObject {
 
         switch resolveFocus(wanted, profiles: profiles) {
         case .hit(let id):
+            revealOutsideBookmarkScope(id)
             clearMissState()
             select(id)
             logFocus(kind: .name, result: .applied, since: started)
@@ -1126,6 +1153,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             logFocus(kind: .recordID, result: .rejectedMissingRecord, since: started)
             return false
         }
+        revealOutsideBookmarkScope(id)
         clearMissState()
         select(id)
         logFocus(kind: .recordID, result: .applied, since: started)
@@ -1198,6 +1226,9 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// selected so the canvas/inspector can't present the previous or
     /// default person as if they were the answer.
     private func applyMiss(name: String, notice: String) {
+        // External requests search the whole tree, including ambiguous
+        // matches the reader must choose between in the sidebar.
+        showsBookmarkedPeopleOnly = false
         if !name.isEmpty {
             searchText = name            // didSet clears the flags; set them after
             searchTextSetByMiss = true
@@ -1220,6 +1251,12 @@ final class FamilyTreeLiveModel: ObservableObject {
             searchText = ""              // didSet resets searchTextSetByMiss
         }
         searchTextSetByMiss = false
+    }
+
+    private func revealOutsideBookmarkScope(_ personID: String) {
+        if showsBookmarkedPeopleOnly && !bookmarks.contains(personID) {
+            showsBookmarkedPeopleOnly = false
+        }
     }
 
     // MARK: Keyboard navigation (sidebar ↑ / ↓ / Return)
@@ -1545,6 +1582,8 @@ final class FamilyTreeLiveModel: ObservableObject {
     func toggleBookmark(_ personID: String) -> Bool {
         guard !bookmarkSourceTransition else { return bookmarks.contains(personID) }
         let nowMarked = bookmarks.toggle(personID)
+        rebuildBookmarkedPeople()
+        if showsBookmarkedPeopleOnly { refilter() }
         if sourceAccess == .readWrite, let bookmarksDirectory {
             do {
                 try bookmarks.save(to: bookmarksDirectory)
@@ -1750,10 +1789,32 @@ final class FamilyTreeLiveModel: ObservableObject {
         timed(step) { refilterNow() }
     }
 
+    private func rebuildBookmarkedPeople() {
+        // The old graph can remain visible during an archive switch;
+        // file-local IDs from its rows must not match the new bookmarks.
+        guard !bookmarkSourceTransition, sourceAccess != .unavailable else {
+            bookmarkedPeopleInOrder = []
+            bookmarkedPeopleCount = 0
+            return
+        }
+        let people = isLive ? summariesInOrder : FamilyTreeDemoData.people
+        bookmarkedPeopleInOrder = bookmarks.matchingPeople(in: people, id: \.id)
+        bookmarkedPeopleCount = bookmarkedPeopleInOrder.count
+    }
+
     private func refilterNow() {
+        guard sourceAccess != .unavailable else {
+            filteredPeople = []
+            return
+        }
+        if showsBookmarkedPeopleOnly && bookmarkedPeopleInOrder.isEmpty {
+            filteredPeople = []
+            return
+        }
         let needle = searchText.trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else {
-            filteredPeople = isLive ? summariesInOrder : FamilyTreeDemoData.people
+            filteredPeople = showsBookmarkedPeopleOnly ? bookmarkedPeopleInOrder
+                : (isLive ? summariesInOrder : FamilyTreeDemoData.people)
             return
         }
         if let graph, isLive {
@@ -1764,10 +1825,14 @@ final class FamilyTreeLiveModel: ObservableObject {
             // per-person localizedCaseInsensitiveContains scan
             // (GedcomIndexEquivalenceTests pins it on the real export).
             let rows = graph.index.sidebarRows(containing: needle.lowercased())
-            filteredPeople = rows.map { summariesInOrder[Int($0)] }
+            filteredPeople = rows.compactMap { row in
+                let person = summariesInOrder[Int(row)]
+                return !showsBookmarkedPeopleOnly || bookmarks.contains(person.id) ? person : nil
+            }
             return
         }
-        filteredPeople = FamilyTreeDemoData.people.filter {
+        let people = showsBookmarkedPeopleOnly ? bookmarkedPeopleInOrder : FamilyTreeDemoData.people
+        filteredPeople = people.filter {
             $0.name.localizedCaseInsensitiveContains(needle)
                 || ($0.surname?.localizedCaseInsensitiveContains(needle) ?? false)
                 || $0.reference.localizedCaseInsensitiveContains(needle)
