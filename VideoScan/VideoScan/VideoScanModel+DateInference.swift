@@ -524,6 +524,16 @@ extension VideoScanModel {
         var inferredDateSource: String
     }
 
+    /// One retained row whose provenance was re-pointed from a cleared
+    /// intermediate to the origin that earned the date (codex post-merge
+    /// review 2026-09-13). `previousSource` is what to put back.
+    struct ReanchoredProvenanceEntry: Codable, Equatable, Sendable {
+        var recordID: UUID
+        var fullPath: String
+        var previousSource: String
+        var newSource: String
+    }
+
     /// The sidecar file. Written BEFORE any row is cleared; if it cannot
     /// be written, nothing is cleared.
     struct UnwoundDateSidecar: Codable, Equatable, Sendable {
@@ -531,10 +541,13 @@ extension VideoScanModel {
         var reason: String
         var conflictingHashes: Int
         var entries: [UnwoundDateEntry]
+        /// Additive (2026-09-13): sidecars written before it decode as [].
+        var reanchored: [ReanchoredProvenanceEntry] = []
     }
 
     struct UnwindResult: Equatable, Sendable {
         var unwound = 0
+        var reanchored = 0
         var conflictingHashes = 0
         var sidecar: URL?
     }
@@ -610,6 +623,26 @@ extension VideoScanModel {
         }
         guard !victims.isEmpty else { return result }
 
+        // codex post-merge review 2026-09-13: a RETAINED row whose
+        // provenance runs THROUGH a victim — A (aaaa, own) → B (bbbb, from
+        // A) → C (aaaa, from B): B goes, C is verified against A and stays
+        // — would lose its path to A the moment B is cleared, and the NEXT
+        // cleanup would clear a correct date. Re-anchor it to the origin it
+        // was verified against, in the same backed-up pass, directly (so a
+        // repeated cleanup finds nothing to do) and recorded (so the
+        // sidecar can put the previous provenance back).
+        let victimIDs = Set(victims.map(\.id))
+        var reanchors: [(rec: VideoRecord, entry: ReanchoredProvenanceEntry)] = []
+        for rec in records where Self.isPropagatedInferredDate(rec) && !victimIDs.contains(rec.id) {
+            let chain = Self.provenanceChain(of: rec, byID: byID)
+            guard let origin = chain.origin, let previous = rec.inferredDateSource,
+                  chain.via.contains(where: { victimIDs.contains($0) }) else { continue }
+            let newSource = InferredDateSource.propagated(from: origin)
+            guard newSource != previous else { continue }
+            reanchors.append((rec, ReanchoredProvenanceEntry(recordID: rec.id, fullPath: rec.fullPath,
+                                                             previousSource: previous, newSource: newSource)))
+        }
+
         // Sidecar first. No sidecar, no repair.
         let dir = sidecarDirectory ?? dateInferenceSidecarDirectory
         if Self.sidecarDirectoryIsRealAppSupportUnderTests(dir) {
@@ -619,7 +652,8 @@ extension VideoScanModel {
         let payload = UnwoundDateSidecar(savedAt: now,
                                          reason: "propagated date whose origin donor is not verified same content (codex #1413/#1439)",
                                          conflictingHashes: result.conflictingHashes,
-                                         entries: entries)
+                                         entries: entries,
+                                         reanchored: reanchors.map(\.entry))
         let url: URL
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -635,10 +669,16 @@ extension VideoScanModel {
             rec.inferredDateConfidence = nil
             rec.inferredDateSource = nil
         }
+        for (rec, entry) in reanchors {
+            rec.inferredDateSource = entry.newSource
+        }
         result.unwound = victims.count
-        announceInferredDateChanges(victims)
+        result.reanchored = reanchors.count
+        announceInferredDateChanges(victims + reanchors.map(\.rec))
         let line = "date inference: unwound \(result.unwound) unverified propagated dates "
-            + "(\(result.conflictingHashes) with conflicting hashes) — sidecar \(url.path)"
+            + "(\(result.conflictingHashes) with conflicting hashes)"
+            + (reanchors.isEmpty ? "" : ", re-anchored \(reanchors.count) retained descendant(s) to their earned origin")
+            + " — sidecar \(url.path)"
         log(line)
         appLog.write(line)
         return result
@@ -650,16 +690,26 @@ extension VideoScanModel {
     /// traceable origin cannot be verified and is unwound.
     @MainActor
     static func originDonor(of rec: VideoRecord, byID: [UUID: VideoRecord]) -> VideoRecord? {
+        provenanceChain(of: rec, byID: byID).origin
+    }
+
+    /// `originDonor` plus the ids walked to reach it (donors between `rec`
+    /// and the origin, origin included) — the unwind needs to know whether
+    /// a retained row's path to its origin runs through a cleared row.
+    @MainActor
+    static func provenanceChain(of rec: VideoRecord, byID: [UUID: VideoRecord]) -> (origin: VideoRecord?, via: [UUID]) {
         var visited: Set<UUID> = [rec.id]
+        var via: [UUID] = []
         var current = rec
         while isPropagatedInferredDate(current) {
             guard let source = current.inferredDateSource,
                   let donorID = UUID(uuidString: String(source.dropFirst(InferredDateSource.propagatedPrefix.count))),
                   let donor = byID[donorID],
-                  visited.insert(donorID).inserted else { return nil }
+                  visited.insert(donorID).inserted else { return (nil, via) }
+            via.append(donorID)
             current = donor
         }
-        return current.inferredRecordDate == nil ? nil : current
+        return (current.inferredRecordDate == nil ? nil : current, via)
     }
 
     /// `unwound-<yyyyMMdd-HHmmss>-<8 hex>.json`, opened create-exclusive
@@ -709,12 +759,17 @@ extension VideoScanModel {
     @discardableResult
     static func reapplyUnwoundDates(from sidecar: URL, to records: [VideoRecord]) throws -> [VideoRecord] {
         let payload = try unwoundSidecarDecoder().decode(UnwoundDateSidecar.self, from: Data(contentsOf: sidecar))
-        return reapplyUnwoundDates(payload.entries, to: records)
+        return reapplyUnwoundDates(payload.entries, reanchored: payload.reanchored, to: records)
     }
 
+    /// Returns every row touched: dates put back, and re-anchored
+    /// provenance put back where the re-anchor is still in place (a row
+    /// re-dated since keeps its newer provenance).
     @MainActor
     @discardableResult
-    static func reapplyUnwoundDates(_ entries: [UnwoundDateEntry], to records: [VideoRecord]) -> [VideoRecord] {
+    static func reapplyUnwoundDates(_ entries: [UnwoundDateEntry],
+                                    reanchored: [ReanchoredProvenanceEntry] = [],
+                                    to records: [VideoRecord]) -> [VideoRecord] {
         var byID: [UUID: VideoRecord] = [:]
         for rec in records { byID[rec.id] = rec }
         var restored: [VideoRecord] = []
@@ -726,6 +781,11 @@ extension VideoScanModel {
             rec.inferredDateConfidence = e.inferredDateConfidence
             rec.inferredDateSource = e.inferredDateSource
             restored.append(rec)
+        }
+        for e in reanchored {
+            guard let rec = byID[e.recordID], rec.inferredDateSource == e.newSource else { continue }
+            rec.inferredDateSource = e.previousSource
+            if !restored.contains(where: { $0.id == rec.id }) { restored.append(rec) }
         }
         return restored
     }
@@ -751,6 +811,24 @@ extension VideoScanModel {
         noteCatalogRecordsMutated()
         objectWillChange.send()
         saveCatalogDebounced()
+    }
+}
+
+// `reanchored` was added 2026-09-13: a sidecar written before then has no
+// such key and must still decode. (In an extension so the struct keeps its
+// memberwise init.)
+extension VideoScanModel.UnwoundDateSidecar {
+    private enum CodingKeys: String, CodingKey {
+        case savedAt, reason, conflictingHashes, entries, reanchored
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        savedAt = try c.decode(Date.self, forKey: .savedAt)
+        reason = try c.decode(String.self, forKey: .reason)
+        conflictingHashes = try c.decode(Int.self, forKey: .conflictingHashes)
+        entries = try c.decode([VideoScanModel.UnwoundDateEntry].self, forKey: .entries)
+        reanchored = try c.decodeIfPresent([VideoScanModel.ReanchoredProvenanceEntry].self, forKey: .reanchored) ?? []
     }
 }
 
