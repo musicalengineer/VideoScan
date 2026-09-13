@@ -242,7 +242,9 @@ extension HallieTurnExecutor {
         let shown = evidenceCitations.count
         let total = result.evidence.totalMatchCount
         if request.intent.countOnly {
-            let noun = effective.mediaKind == .video ? "video" : "catalog item"
+            // The same noun the list answers use ("N catalog items"), so a
+            // golden count reads the same whether the scope named a kind.
+            let noun = "catalog item"
             let scope = request.intent.refinementChange.map { " " + $0 } ?? ""
             prose = result.conclusion == .present
                 ? "\(total) \(noun)\(total == 1 ? "" : "s")\(scope)."

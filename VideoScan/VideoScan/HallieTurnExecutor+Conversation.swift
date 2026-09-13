@@ -645,7 +645,7 @@ extension HallieTurnExecutor {
     /// capability, commands, persona, record recogniser, bare name) — so a
     /// turn one of those claims never loads the identity sources for it;
     /// such a turn reports `.unknown` / `.none`.
-    struct Classified {
+    struct Classified: Sendable {
         let decision: PreTranslation
         let verdict: HallieModeClassifier.Verdict
     }
@@ -1277,7 +1277,7 @@ extension HallieTurnExecutor {
             question, snapshot: memory.followUpSnapshot, isKnownPerson: isKnownPerson)
         let keep: Bool
         switch resolution {
-        case .localQuery, .none, .declineNotRefinable, .declineUninterpretable:
+        case .localQuery, .none, .declineNotRefinable, .declineUninterpretable, .declineNotAKnownPerson:
             keep = true
         case .refine(let ast, _, _):
             if case .graph = ast { keep = true } else { keep = false }
@@ -1539,6 +1539,12 @@ extension HallieTurnExecutor {
             return .answer(followUpDecline(
                 "That's all of them — I've already shown all \(total)."))
 
+        case .declineNotAKnownPerson(let phrase):
+            return .answer(followUpDecline(
+                "I can search the family tree for a person by name, but “\(phrase)” isn't a name I know. "
+                + "Give me a name — or a surname, like “the Breens” — and I'll look.",
+                mode: .tree))
+
         case .declineNotRefinable(let reason):
             return .answer(followUpDecline(
                 "I can't refine my last answer that way — \(reason). Ask it as a new question and I'll look it up."))
@@ -1682,7 +1688,7 @@ extension HallieTurnExecutor {
     }
 
     private static func followUpDecline(
-        _ prose: String, offeredActions: [OfferedAction] = []
+        _ prose: String, offeredActions: [OfferedAction] = [], mode: HallieMode? = nil
     ) -> Result {
         Result(
             route: .followUp,
@@ -1692,7 +1698,8 @@ extension HallieTurnExecutor {
             queryDescription: nil,
             citations: [],
             catalogPersonName: nil,
-            offeredActions: offeredActions)
+            offeredActions: offeredActions,
+            mode: mode)
     }
 
     /// Help card / small talk / reset — deterministic, never a decline.

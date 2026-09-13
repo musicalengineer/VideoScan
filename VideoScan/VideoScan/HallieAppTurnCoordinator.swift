@@ -537,7 +537,7 @@ enum HallieAppTurnCoordinator {
         // when the question is one of those (O(records), milliseconds).
         let catalogStats = HallieCatalogStats.detect(routingQuestion) != nil
             ? HallieCatalogStats.compute(records: records) : nil
-        let preTranslation = try await preTranslationOffMain(
+        let classified = try await preTranslationOffMain(
             question: routingQuestion, playAfterAnswer: playAfterAnswer,
             memory: memory, catalogStats: catalogStats,
             selectedRecord: referent.recordID.map {
@@ -545,9 +545,17 @@ enum HallieAppTurnCoordinator {
             },
             dependencies: dependencies)
         try Task.checkCancellation()
+        let preTranslation = classified.decision
+        // One `[hallie-mode]` line per turn (design §3.3), beside the
+        // general lane's `[hallie-general]`.
+        appLog.write(classified.verdict.logLine(
+            question: routingQuestion, forced: memory.forcedMode != nil))
+        let turnMode = classified.verdict.mode
 
         let intent: HallieTurnExecutor.Intent
         let responderHost: String
+        /// A mode-gate rewrite's basis note (design §3.4 B); nil otherwise.
+        let gateNote: String?
         // Phrasing rides on the fleet the turn used: the demand-started /
         // loopback-routed hosts after a translation, the configured list for
         // a locally-resolved turn.
@@ -569,6 +577,7 @@ enum HallieAppTurnCoordinator {
         case .run(let local):
             intent = local
             responderHost = localResponder
+            gateNote = nil
 
         case .translate(let effectiveQuestion, let wantsPlay):
             let effectiveHosts: [String]
@@ -606,12 +615,10 @@ enum HallieAppTurnCoordinator {
                     effectiveQuestion, effectiveHosts, modelName)
             }
             try Task.checkCancellation()
+            let translatedAST: ArchivistQueryAST
             switch interpretation.value {
             case .archive(let ast):
-                intent = HallieTurnExecutor.Intent(
-                    originalQuestion: question,
-                    ast: ast,
-                    playAfterAnswer: wantsPlay)
+                translatedAST = ast
                 responderHost = interpretation.responderHost
 
             case .conversation(let kind):
@@ -626,10 +633,7 @@ enum HallieAppTurnCoordinator {
                     // a private-person or evidence question.
                     let translation = try await dependencies.translateAST(
                         effectiveQuestion, effectiveHosts, modelName)
-                    intent = HallieTurnExecutor.Intent(
-                        originalQuestion: question,
-                        ast: translation.ast,
-                        playAfterAnswer: wantsPlay)
+                    translatedAST = translation.ast
                     responderHost = translation.responderHost
                 } else {
                     let social = await dependencies.composeConversation(
@@ -653,6 +657,34 @@ enum HallieAppTurnCoordinator {
                         executedIntent: nil)
                 }
             }
+            // THE MODE GATE (design §3.4 B): the AST's family must agree
+            // with what the sentence asked. Tree mode never executes a
+            // catalog search; catalog mode never opens a biography by
+            // accident; unknown keeps the AST as translated.
+            switch HallieModeGate.reconcile(
+                ast: translatedAST, mode: turnMode, question: effectiveQuestion,
+                memory: memory, playAfterAnswer: wantsPlay) {
+            case .keep:
+                intent = HallieTurnExecutor.Intent(
+                    originalQuestion: question, ast: translatedAST, playAfterAnswer: wantsPlay)
+                gateNote = nil
+            case .rewrite(let ast, let note):
+                appLog.write("[hallie-mode] rewrite: \(note)")
+                intent = HallieTurnExecutor.Intent(
+                    originalQuestion: question, ast: ast, playAfterAnswer: wantsPlay)
+                gateNote = note
+            case .decline(let result):
+                appLog.write("[hallie-mode] declined: \(result.queryDescription ?? "")")
+                return Response(
+                    result: result,
+                    responderHost: responderHost,
+                    biographyPhoto: nil,
+                    capturedReferentID: referent.recordID,
+                    citations: [],
+                    pendingClarification: nil,
+                    playAfterAnswer: false,
+                    executedIntent: nil)
+            }
         }
         let composition = Composition(
             enabled: composeWithModel,
@@ -668,6 +700,7 @@ enum HallieAppTurnCoordinator {
             question: intent.originalQuestion,
             records: records,
             referent: referent,
+            mode: turnMode,
             dependencies: dependencies)
         let request = HallieTurnExecutor.Request(intent: intent)
         return try await runOffMain(
@@ -678,7 +711,10 @@ enum HallieAppTurnCoordinator {
             playAfterAnswer: intent.playAfterAnswer,
             composition: composition,
             dependencies: dependencies) {
-                try await dependencies.executeRequest(request, context)
+                let result = try await dependencies.executeRequest(request, context)
+                // A mode-gate rewrite is visible in the basis line.
+                guard let gateNote else { return result }
+                return result.prefixingBasis(gateNote)
             }
     }
 
@@ -719,9 +755,9 @@ enum HallieAppTurnCoordinator {
         catalogStats: HallieCatalogStats? = nil,
         selectedRecord: HallieTurnExecutor.SelectedRecord? = nil,
         dependencies: Dependencies
-    ) async throws -> HallieTurnExecutor.PreTranslation {
+    ) async throws -> HallieTurnExecutor.Classified {
         let worker = Task.detached(priority: .userInitiated) {
-            () throws -> HallieTurnExecutor.PreTranslation in
+            () throws -> HallieTurnExecutor.Classified in
             try Task.checkCancellation()
             // Lazy identity sources: nothing is read from disk unless the
             // resolver asks about a name.
@@ -741,7 +777,7 @@ enum HallieAppTurnCoordinator {
                 loaded = context
                 return context
             }
-            return HallieTurnExecutor.preTranslation(
+            return HallieTurnExecutor.preTranslationClassified(
                 question: question,
                 playAfterAnswer: playAfterAnswer,
                 memory: memory,
@@ -761,7 +797,10 @@ enum HallieAppTurnCoordinator {
                 selectedRecord: selectedRecord,
                 // Exact-name and persona oracles (GH #184 items 4–5); same
                 // lazy sources, so nothing is read unless a step asks.
-                identity: HallieTurnExecutor.nameIdentity { sources() })
+                identity: HallieTurnExecutor.nameIdentity { sources() },
+                // A "show me" offer names its tree person by id; a stale
+                // id (renamed / recompiled) is refused, never fired.
+                isTreePersonID: { sources().graph?.people[$0] != nil })
         }
         return try await withTaskCancellationHandler {
             try await worker.value
@@ -871,6 +910,7 @@ enum HallieAppTurnCoordinator {
         question: String,
         records: [VideoRecord],
         referent: CapturedReferent,
+        mode: HallieMode = .unknown,
         dependencies: Dependencies
     ) async throws -> HallieTurnExecutor.Context {
         let selectedDate = referent.temporalDate
@@ -967,7 +1007,8 @@ enum HallieAppTurnCoordinator {
                 selectedTemporalDate: selectedDate,
                 recordScope: recordScope,
                 speakers: dependencies.loadSpeakers(),
-                assumedTreeBridges: assumed)
+                assumedTreeBridges: assumed,
+                mode: mode)
             try Task.checkCancellation()
             return context
         }

@@ -448,6 +448,12 @@ enum HallieTurnExecutor {
         /// tree person id, valued "Rick as Richard Harding Breen Jr". An
         /// answer that leans on one says so in a "(taking …)" aside.
         let assumedTreeBridges: [String: String]
+        /// The FAMILY the turn was read in (docs/hallie_two_mode_design.md
+        /// §3.4 C): the executor's own cross-family fallbacks — a place
+        /// question becoming a catalog cross search, an unresolved
+        /// aggregate anchor becoming a presence search — are refused in
+        /// tree mode. `.unknown` = today's behaviour.
+        let mode: HallieMode
         /// An opaque capture identity. Copying Context preserves it; invoking
         /// the initializer creates a new capture that cannot continue an old
         /// clarification even if visible stable IDs and names are unchanged.
@@ -463,7 +469,8 @@ enum HallieTurnExecutor {
             selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot? = nil,
             recordScope: RecordScope = .noSelection,
             speakers: Speakers = .none,
-            assumedTreeBridges: [String: String] = [:]
+            assumedTreeBridges: [String: String] = [:],
+            mode: HallieMode = .unknown
         ) {
             self.presenceRecords = presenceRecords
             self.aggregateRecords = aggregateRecords
@@ -476,6 +483,7 @@ enum HallieTurnExecutor {
             self.recordScope = recordScope
             self.speakers = speakers
             self.assumedTreeBridges = assumedTreeBridges
+            self.mode = mode
             self.continuationToken = UUID()
         }
     }
@@ -1149,7 +1157,7 @@ enum HallieTurnExecutor {
                 isKnownPerson: { isKnownPerson($0, context: context)
                     || HallieOwnerResolver.isOwnerSpelling($0, owner: context.speakers.ownerName) },
                 isKnownSurname: { !isKnownPerson($0, context: context) && isKnownPerson($0, context: context, acceptSurname: true) }) {
-            case .presence(let people, let keywords, let wantsVideo):
+            case .presence(let people, let keywords, let wantsVideo) where context.mode != .tree:
                 var result = try await executePresenceLike(
                     .init(people: people, mediaKind: wantsVideo ? .video : nil, keywords: keywords.isEmpty ? nil : keywords),
                     route: .presence, request: request, context: context, dependencies: dependencies)
@@ -1160,7 +1168,9 @@ enum HallieTurnExecutor {
                 if let answer = HallieLineageAnswer.answer(.surnameTree(surname: surname), context: context) {
                     return answer.prefixingBasis("\"\(surname)\" is a family name, not a person, so I read the family tree. ")
                 }
-            case .decline:
+            case .presence, .decline:
+                // Tree mode (design §3.4 C): an unresolved anchor never
+                // becomes a catalog search; the honest decline below stands.
                 break
             }
             let execute = dependencies.executeAggregate

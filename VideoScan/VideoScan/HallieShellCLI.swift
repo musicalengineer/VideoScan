@@ -998,7 +998,8 @@ enum HallieShellCLI {
             // must agree on which date "this" is).
             let selectedRecord = state.selectedRecordID.flatMap(state.record)
             let selectedDate = selectedRecord.flatMap(temporalSelectionDate)
-            let pre = HallieTurnExecutor.preTranslation(
+            let treeGraph = state.graph
+            let classified = HallieTurnExecutor.preTranslationClassified(
                 question: routingQuestion,
                 playAfterAnswer: false,
                 memory: state.memory,
@@ -1017,8 +1018,15 @@ enum HallieShellCLI {
                     HallieTurnExecutor.SelectedRecord(recordID: $0.id, date: selectedDate)
                 },
                 // Exact-name and persona oracles (GH #184 items 4–5).
-                identity: HallieTurnExecutor.nameIdentity { identity })
+                identity: HallieTurnExecutor.nameIdentity { identity },
+                isTreePersonID: { treeGraph?.people[$0] != nil })
+            let pre = classified.decision
+            // One `[hallie-mode]` line per turn (design §3.3).
+            appLog.write(classified.verdict.logLine(
+                question: routingQuestion, forced: state.memory.forcedMode != nil))
             let intent: HallieTurnExecutor.Intent
+            /// A mode-gate rewrite's basis note (design §3.4 B); nil otherwise.
+            let gateNote: String?
             switch pre {
             case .answer(let result):
                 return await completeLocalAnswer(
@@ -1032,6 +1040,7 @@ enum HallieShellCLI {
             case .run(let local):
                 state.lastResponder = "local"
                 intent = local
+                gateNote = nil
                 if options.diagnostics {
                     output("interpreted: \(HallieTurnExecutor.description(of: local.ast)) (local)")
                 }
@@ -1068,16 +1077,14 @@ enum HallieShellCLI {
                     interpretation = try await dependencies.interpretTurn(
                         effectiveQuestion, options)
                 }
+                let translatedAST: ArchivistQueryAST
                 switch interpretation.value {
                 case .archive(let ast):
                     state.lastResponder = interpretation.responderHost
                     if options.diagnostics {
                         output("interpreted: \(HallieTurnExecutor.description(of: ast))")
                     }
-                    intent = HallieTurnExecutor.Intent(
-                        originalQuestion: question,
-                        ast: ast,
-                        playAfterAnswer: wantsPlay)
+                    translatedAST = ast
 
                 case .conversation(let kind):
                     // A model classification never gets the last word on the
@@ -1098,10 +1105,7 @@ enum HallieShellCLI {
                         if options.diagnostics {
                             output("interpreted: \(HallieTurnExecutor.description(of: translation.ast))")
                         }
-                        intent = HallieTurnExecutor.Intent(
-                            originalQuestion: question,
-                            ast: translation.ast,
-                            playAfterAnswer: wantsPlay)
+                        translatedAST = translation.ast
                     } else {
                         let social = await dependencies.composeConversation(
                             kind, routingQuestion, state.socialHistory, options)
@@ -1138,6 +1142,35 @@ enum HallieShellCLI {
                         return .answered
                     }
                 }
+                // THE MODE GATE (design §3.4 B), the same check the app runs.
+                switch HallieModeGate.reconcile(
+                    ast: translatedAST, mode: classified.verdict.mode,
+                    question: effectiveQuestion, memory: state.memory,
+                    playAfterAnswer: wantsPlay) {
+                case .keep:
+                    intent = HallieTurnExecutor.Intent(
+                        originalQuestion: question, ast: translatedAST, playAfterAnswer: wantsPlay)
+                    gateNote = nil
+                case .rewrite(let ast, let note):
+                    appLog.write("[hallie-mode] rewrite: \(note)")
+                    if options.diagnostics { output("mode gate: \(note)") }
+                    intent = HallieTurnExecutor.Intent(
+                        originalQuestion: question, ast: ast, playAfterAnswer: wantsPlay)
+                    gateNote = note
+                case .decline(let result):
+                    appLog.write("[hallie-mode] declined: \(result.queryDescription ?? "")")
+                    return await completeLocalAnswer(
+                        result,
+                        question: question,
+                        identity: identity,
+                        options: options,
+                        state: &state,
+                        output: output,
+                        dependencies: dependencies)
+                }
+            }
+            if options.diagnostics {
+                output("mode: \(classified.verdict.mode.rawValue) (\(classified.verdict.reasonText))")
             }
 
             var recordScope: HallieTurnExecutor.RecordScope = .noSelection
@@ -1184,9 +1217,11 @@ enum HallieShellCLI {
                 cyberBrain: state.cyberBrain,
                 selectedTemporalDate: selectedDate,
                 recordScope: recordScope,
-                speakers: state.speakers)
+                speakers: state.speakers,
+                mode: classified.verdict.mode)
             let request = HallieTurnExecutor.Request(intent: intent)
             var result = try await dependencies.executeRequest(request, context)
+            if let gateNote { result = result.prefixingBasis(gateNote) }
             state.memory.record(intent: intent, result: result)
             result = await phrase(result, question: question, options: options,
                                   state: &state, dependencies: dependencies)

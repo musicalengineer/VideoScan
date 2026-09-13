@@ -137,7 +137,7 @@ struct HallieCatalogCountFollowUpTests {
         // run as a year, so "clip_1995" would count as 1995 too.
         func letters(_ n: Int) -> String {
             var n = n, out = ""
-            repeat { out.append(Character(UnicodeScalar(97 + n % 26)!)); n /= 26 } while n > 0
+            repeat { out.append(Character(UnicodeScalar(UInt8(97 + n % 26)))); n /= 26 } while n > 0
             return out
         }
         let records = (0..<100_000).map { index in

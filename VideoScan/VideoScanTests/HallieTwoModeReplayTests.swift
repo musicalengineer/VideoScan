@@ -93,15 +93,20 @@ struct HallieTwoModeReplayTests {
               speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
     }
 
-    private func pre(_ q: String, memory: Exec.ConversationMemory = .init(),
-                     catalogStats: HallieCatalogStats? = nil) -> Exec.PreTranslation {
+    private func classified(_ q: String, memory: Exec.ConversationMemory = .init(),
+                            catalogStats: HallieCatalogStats? = nil) -> Exec.Classified {
         let context = self.context
-        return Exec.preTranslation(
+        return Exec.preTranslationClassified(
             question: q, playAfterAnswer: false, memory: memory,
             isKnownPerson: { Exec.isKnownPerson($0, context: context) },
             catalogStats: catalogStats,
             lineageAnswer: { HallieLineageAnswer.answer($0, context: context) },
             identity: Exec.nameIdentity { context })
+    }
+
+    private func pre(_ q: String, memory: Exec.ConversationMemory = .init(),
+                     catalogStats: HallieCatalogStats? = nil) -> Exec.PreTranslation {
+        classified(q, memory: memory, catalogStats: catalogStats).decision
     }
 
     /// One turn end to end: pre-translation, then the stand-in translator
@@ -114,12 +119,24 @@ struct HallieTwoModeReplayTests {
         catalogStats: HallieCatalogStats? = nil
     ) async throws -> Exec.Result {
         let context = self.context
-        switch pre(text, memory: memory, catalogStats: catalogStats) {
+        let turn = classified(text, memory: memory, catalogStats: catalogStats)
+        switch turn.decision {
         case .translate(let question, let play):
             let ast = try #require(translated, "\(text): unexpectedly needed translation")
-            let intent = Exec.Intent(originalQuestion: text, ast: ast, playAfterAnswer: play)
-            _ = question
-            let result = try await Exec.execute(.init(intent: intent), context: context)
+            // Step 4: the mode gate, exactly as the app and shell apply it.
+            var executed = ast
+            var note: String?
+            switch HallieModeGate.reconcile(ast: ast, mode: turn.verdict.mode, question: question,
+                                            memory: memory, playAfterAnswer: play) {
+            case .keep: break
+            case .rewrite(let rewritten, let n): executed = rewritten; note = n
+            case .decline(let result):
+                memory.record(intent: nil, result: result, question: text)
+                return result
+            }
+            let intent = Exec.Intent(originalQuestion: text, ast: executed, playAfterAnswer: play)
+            var result = try await Exec.execute(.init(intent: intent), context: context)
+            if let note { result = result.prefixingBasis(note) }
             memory.record(intent: intent, result: result)
             return result
         case .run(let intent):
@@ -172,23 +189,27 @@ struct HallieTwoModeReplayTests {
 
     // MARK: 2. strict-004 / -015 residue — the pronoun rewrite is mode-blind
 
-    /// TODAY: "what did he do for a living" after John Hastings' biography
-    /// is rewritten to his name and translated; when the model answers
-    /// with a presence AST the executor runs the catalog search as-is and
-    /// the kin/occupation words become keywords.
-    /// AFTER: the sticky tree mode reconciles a presence AST for a tree
-    /// question into a graph biography (or declines) — no keyword search.
-    @Test func translatorPresenceAfterABiographyRunsAsACatalogSearch() async throws {
+    /// STEP 0 (today): "what did he do for a living" after John Hastings'
+    /// biography was rewritten to his name and translated; when the model
+    /// answered with a presence AST the executor ran the catalog search
+    /// as-is and the words became keywords.
+    /// STEP 4: the sticky tree mode reconciles the presence AST into a
+    /// graph biography — no keyword search — and the basis says so.
+    @Test func translatorPresenceAfterABiographyIsReconciledIntoTheTree() async throws {
         var memory = try await memoryAfterBiography(of: "john hastings", expecting: "John Hastings")
         let q = "what did he do for a living?"
-        #expect(pre(q, memory: memory)
-                == .translate(question: "what did John Hastings do for a living?", playAfterAnswer: false))
+        let turn = classified(q, memory: memory)
+        #expect(turn.decision == .translate(question: "what did John Hastings do for a living?", playAfterAnswer: false))
+        #expect(turn.verdict == .init(mode: .tree, reason: .sticky(.tree)))
         let result = try await run(
             q, memory: &memory,
             translated: .presence(.init(people: ["john hastings"], keywords: ["living"])))
-        #expect(result.route == .presence, Comment(rawValue: result.prose))
-        #expect(result.queryDescription?.contains("keyword=") == true,
+        #expect(result.route == .graph, Comment(rawValue: result.prose))
+        #expect(result.outcome == .answered, Comment(rawValue: result.prose))
+        #expect(result.queryDescription?.contains("keyword=") != true,
                 Comment(rawValue: result.queryDescription ?? "nil"))
+        #expect(result.basisLine.contains("as a family-tree question about john hastings"), Comment(rawValue: result.basisLine))
+        #expect(memory.mode == .tree)
     }
 
     // MARK: 3. cs030 — "play the longest video in the archive"
@@ -202,7 +223,9 @@ struct HallieTwoModeReplayTests {
     @Test func playTheLongestVideoInTheArchiveDeadEndsOnAggregate() async throws {
         var memory = Exec.ConversationMemory()
         let q = "play the longest video in the archive"
-        #expect(pre(q) == .translate(question: "the longest video in the archive", playAfterAnswer: true))
+        let turn = classified(q)
+        #expect(turn.decision == .translate(question: "the longest video in the archive", playAfterAnswer: true))
+        #expect(turn.verdict.mode == .catalog, "steps 1–4 guarantee the FAMILY; the superlative is step 5")
         let result = try await run(q, memory: &memory,
                                    translated: .aggregate(.init(operation: .coOccurrence, anchorPeople: ["archive"])))
         #expect(result.route == .aggregate, Comment(rawValue: result.prose))
@@ -289,25 +312,39 @@ struct HallieTwoModeReplayTests {
     /// TODAY: no lane claims it; the translator answers with a whole-tree
     /// summary. The titled-ancestors route is a separate design; this
     /// branch only guarantees the turn is read as a TREE question.
-    @Test func highestTitleInMyFamilyTreeIsTranslated() {
+    @Test func highestTitleInMyFamilyTreeIsTranslatedInTreeMode() {
         let q = "who is the highest royalty or title in my family tree?"
-        #expect(pre(q) == .translate(question: q, playAfterAnswer: false))
+        let turn = classified(q)
+        #expect(turn.decision == .translate(question: q, playAfterAnswer: false))
+        #expect(turn.verdict.mode == .tree, Comment(rawValue: "\(turn.verdict)"))
+        // A translator `presence` for it would now be declined honestly.
+        if case .decline(let result) = HallieModeGate.reconcile(
+            ast: .presence(.init(keywords: ["royalty", "title"])), mode: turn.verdict.mode,
+            question: q, memory: .init()) {
+            #expect(result.route == .graph && result.outcome == .declined && result.mode == .tree)
+        } else {
+            Issue.record("a presence search for a tree question must be declined in tree mode")
+        }
     }
 
     // MARK: 7. lv260907-004 — "search the family tree for a title like king"
 
-    /// TODAY: the local family-tree shape fills its person slot with
-    /// "title like king" without asking the oracle, and the executor
-    /// answers "I don't find title like king".
-    /// AFTER: the person slot requires a known person; otherwise an honest
+    /// STEP 0 (today): the local family-tree shape filled its person slot
+    /// with "title like king" without asking the oracle, and the executor
+    /// answered "I don't find title like king" with a "remember it?" offer.
+    /// STEP 4: the person slot requires a known person; otherwise an honest
     /// decline naming the phrase, with no "remember it?" offer.
-    @Test func searchTheFamilyTreeForATitleFillsThePersonSlotBlindly() {
+    @Test func searchTheFamilyTreeForATitleIsDeclinedByName() {
         let q = "search the family tree for a title like king"
-        guard case .run(let intent) = pre(q) else {
-            Issue.record("expected the local family-tree shape, got \(pre(q))")
+        let turn = classified(q)
+        #expect(turn.verdict.mode == .tree)
+        guard case .answer(let result) = turn.decision else {
+            Issue.record("expected the decline, got \(turn.decision)")
             return
         }
-        #expect(intent.ast == .graph(.init(people: ["title like king"], operation: .familyTree)),
-                Comment(rawValue: "\(intent.ast)"))
+        #expect(result.outcome == .declined)
+        #expect(result.mode == .tree)
+        #expect(result.prose.contains("“title like king” isn't a name I know"), Comment(rawValue: result.prose))
+        #expect(!result.prose.lowercased().contains("remember"), Comment(rawValue: result.prose))
     }
 }
