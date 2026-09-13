@@ -151,6 +151,10 @@ extension PersonFinderView {
         // photos are memoised too; cards perform only a dictionary lookup.
         let portraits = photoCenter.peoplePhotos(
             for: model.savedProfiles, kinshipCenter: kinshipCenter)
+        // Same discipline for the warning triangles: the overlay is built
+        // once (memoised on tree generation + kinship signature) and each
+        // card takes its own entry out of the map.
+        let warnings = kinshipCenter.warnings(among: model.savedProfiles)
 
         return VStack(alignment: .leading, spacing: 6) {
             // Inline undo banner — armed by deletePOI, dismissed by undo /
@@ -292,8 +296,10 @@ extension PersonFinderView {
                                            nameFontSize: personNameFontSize,
                                            relationshipsLine: kinshipCenter.relationshipsLine(
                                                for: profile, among: model.savedProfiles),
-                                           aliasWarning: kinshipCenter.aliasWarning(
-                                               for: profile, among: model.savedProfiles),
+                                           warnings: warnings[profile.id] ?? [],
+                                           onWarningAction: { action in
+                                               performWarningAction(action, on: profile)
+                                           },
                                            portrait: portraits[profile.id])
                                     // Holdout Review badge — top-trailing over
                                     // the portrait. The Button in the overlay
@@ -672,6 +678,20 @@ extension PersonFinderView {
             selectGalleryCard(next)
         }
         return .handled
+    }
+
+    /// A warning popover's fix button. The route is decided by the pure
+    /// `PersonWarningRoute` (tested on its own), so a fix for one Richard
+    /// can never open the other Richard's card: the request travels by
+    /// uuid, exactly like the double-click and the context menu.
+    func performWarningAction(_ action: KinshipWarning.Action, on profile: POIProfile) {
+        switch PersonWarningRoute.route(for: action, on: profile) {
+        case .editPerson(let request):
+            openEditor(request)
+        case .familyTree(let uuid):
+            guard let live = model.savedProfiles.first(where: { $0.uuid == uuid }) else { return }
+            showInFamilyTree(live)
+        }
     }
 
     /// Open the editor for the person the request names. The profile is
