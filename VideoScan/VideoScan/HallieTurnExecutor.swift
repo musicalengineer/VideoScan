@@ -171,6 +171,11 @@ enum HallieTurnExecutor {
         /// `ast` as a list sorted by date and pick one. Nil for every other
         /// turn; the presence route reads it (+DateOrdered).
         let dateOrder: DateOrderRequest?
+        /// A COUNT re-run (design §3.5, "and how many from the 80s"): the
+        /// presence route phrases "N videos from the 1980s" and cites at
+        /// most a handful; conversation memory keeps the count scope
+        /// alive. Off for every other turn.
+        let countOnly: Bool
 
         init(
             originalQuestion: String,
@@ -182,7 +187,8 @@ enum HallieTurnExecutor {
             refinementChange: String? = nil,
             speakerBindings: [SpeakerBinding] = [],
             pinnedGraphSubjects: [Int: CandidateID] = [:],
-            dateOrder: DateOrderRequest? = nil
+            dateOrder: DateOrderRequest? = nil,
+            countOnly: Bool = false
         ) {
             self.originalQuestion = originalQuestion
             self.ast = ast
@@ -194,6 +200,7 @@ enum HallieTurnExecutor {
             self.speakerBindings = speakerBindings
             self.pinnedGraphSubjects = pinnedGraphSubjects
             self.dateOrder = dateOrder
+            self.countOnly = countOnly
         }
 
         /// The same intent with a rewritten graph AST and/or extra pins.
@@ -212,7 +219,8 @@ enum HallieTurnExecutor {
                 refinementChange: refinementChange,
                 speakerBindings: newBindings ?? speakerBindings,
                 pinnedGraphSubjects: newPins ?? pinnedGraphSubjects,
-                dateOrder: dateOrder)
+                dateOrder: dateOrder,
+                countOnly: countOnly)
         }
     }
 
@@ -597,6 +605,13 @@ enum HallieTurnExecutor {
         /// — "Did you mean X or Y?" and an unresolved "my dad" are declines
         /// too, and they offer no retry.
         let retryOffer: HallieOfferAcceptance.Offer?
+        /// The FAMILY the turn was read in (docs/hallie_two_mode_design.md
+        /// §3.2): set by the mode-aware handlers and the mode gate so a
+        /// DECLINED turn still moves the session to the mode the classifier
+        /// chose ("not in the tree" keeps you in tree mode). Nil = derive
+        /// from the route (ConversationMemory.record). Copied by every
+        /// copy helper — HallieResultCopyRoundTripTests walks them.
+        let mode: HallieMode?
 
         init(
             route: Route,
@@ -619,7 +634,8 @@ enum HallieTurnExecutor {
             immediateOfferedAction: OfferedAction? = nil,
             subjectLifeStatus: LifeStatus? = nil,
             refinableQuery: RefinableQuery? = nil,
-            retryOffer: HallieOfferAcceptance.Offer? = nil
+            retryOffer: HallieOfferAcceptance.Offer? = nil,
+            mode: HallieMode? = nil
         ) {
             self.route = route
             self.outcome = outcome
@@ -644,6 +660,7 @@ enum HallieTurnExecutor {
             self.subjectLifeStatus = subjectLifeStatus
             self.refinableQuery = refinableQuery
             self.retryOffer = retryOffer
+            self.mode = mode
         }
 
         /// The same answer with extra things to look at. Facts untouched.
@@ -660,7 +677,8 @@ enum HallieTurnExecutor {
                 immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery,
-                retryOffer: retryOffer)
+                retryOffer: retryOffer,
+                mode: mode)
         }
 
         /// The same answer with an OFFER appended (2026-09-10, the gallery
@@ -691,7 +709,8 @@ enum HallieTurnExecutor {
                 immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery,
-                retryOffer: retryOffer)
+                retryOffer: retryOffer,
+                mode: mode)
         }
 
         /// The same answer carrying a PROVENANCE note — how Hallie read the
@@ -728,7 +747,8 @@ enum HallieTurnExecutor {
                 immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery,
-                retryOffer: retryOffer)
+                retryOffer: retryOffer,
+                mode: mode)
         }
 
         /// The same answer with its prose replaced by a verified composition.
@@ -757,7 +777,8 @@ enum HallieTurnExecutor {
                 immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery,
-                retryOffer: retryOffer)
+                retryOffer: retryOffer,
+                mode: mode)
         }
     }
 

@@ -88,6 +88,76 @@ extension HallieTurnExecutor {
         /// "yes" after those must not silently rerun a stripped search.
         private(set) var pendingOffer: HallieOfferAcceptance.Offer?
 
+        // MARK: Two-mode session state (docs/hallie_two_mode_design.md §3.1-3.2)
+
+        /// Which FAMILY the conversation is in right now — catalog or family
+        /// tree — from the last substantive answer. Lives here, not on the
+        /// coordinator's Response, so every client gets it through the
+        /// `record` call it already makes. Never persisted.
+        private(set) var mode: HallieMode = .unknown
+        /// The user forced it (pill / ":mode" / "in the family tree, not
+        /// videos"). Stays until reset or the user picks Auto.
+        private(set) var forcedMode: HallieMode?
+        /// The tree-side continuation context ("show me" after a biography).
+        private(set) var tree = TreeContext()
+        /// The catalog-side continuation context (sticky count scope).
+        private(set) var catalog = CatalogContext()
+
+        var effectiveMode: HallieMode { forcedMode ?? mode }
+
+        struct TreeContext: Sendable, Equatable {
+            /// Canonical subject — the same value as `lastSubject`, kept in
+            /// sync by `record`, never computed twice.
+            var subject: String?
+            /// The relation last asked about the subject (phase 2 fills it).
+            var lastRelation: ArchivistQueryAST.Graph.Relation?
+            /// What the last tree answer OFFERED to show — openFamilyTree*,
+            /// revealFolder — so "show me" acts on it. Empty after a tree
+            /// answer with none, and after any catalog answer.
+            var lastOffers: [OfferedAction] = []
+            /// The photo the last tree answer showed (alias of
+            /// `lastPhotoAttachment`); "show me" re-attaches it.
+            var lastPhoto: HalliePhotoAttachment?
+        }
+
+        struct CatalogContext: Sendable, Equatable {
+            /// The last list query (the result set's AST, else the last
+            /// list-shaped AST).
+            var lastQuery: ArchivistQueryAST?
+            /// The last exact match count.
+            var resultCount: Int?
+            /// The question was a COUNT ("how many…"); follow-ups stay counts
+            /// until a non-count catalog answer or a tree answer clears it.
+            var countScope: CountScope?
+            /// Alias of `lastChain`.
+            var chain: ArchivistFollowUpResolver.Chain?
+        }
+
+        enum CountScope: Sendable, Equatable {
+            case wholeCatalog
+            case query(ArchivistQueryAST)
+
+            /// The AST a count re-run executes — the whole catalog maps to
+            /// every record exactly as `dateOrderedTurn` does.
+            var ast: ArchivistQueryAST {
+                switch self {
+                case .wholeCatalog: return .presence(.init(mediaKind: nil))
+                case .query(let ast): return ast
+                }
+            }
+        }
+
+        /// The user picked a mode (header pill, ":mode tree"). Held until
+        /// `unforce()` or reset.
+        mutating func force(_ mode: HallieMode) {
+            forcedMode = mode
+        }
+
+        /// Back to automatic.
+        mutating func unforce() {
+            forcedMode = nil
+        }
+
         enum RecordDecline: Sendable, Equatable {
             /// A file named in the question that was not found or fit
             /// several records.
@@ -128,6 +198,13 @@ extension HallieTurnExecutor {
                 return
             }
             recordExchange(intent: intent, result: result, question: question)
+            recordMode(intent: intent, result: result)
+            // The mode contexts are typed views over the fields below; they
+            // are synced LAST, on every path out of this function — the
+            // intent-less answers (catalog stats, local tree answers) leave
+            // through the `guard let intent` below.
+            // C++ analogy: `defer` ≈ a scope-exit guard (RAII destructor).
+            defer { syncModeContexts(intent: intent, result: result) }
             // An offer is good for one reply: whatever this turn was, the
             // last one's offer is gone, and only an answer that OFFERED a
             // retry in its own prose leaves a new one.
@@ -214,6 +291,90 @@ extension HallieTurnExecutor {
                 recordRecordTurn(ast: ast, result: result)
             case .temporal, .unsupportedEvent, .followUp, .capability,
                  .help, .smalltalk, .conversation, .telling, .reset:
+                break
+            }
+        }
+
+        /// The mode transition (design §3.2): the answer's own verdict when
+        /// it carries one (a mode-aware decline), else the route's family.
+        /// Follow-ups, help, small talk, capability and conversation leave
+        /// it as it was. Runs BEFORE the field updates so the contexts
+        /// below see the new mode.
+        private mutating func recordMode(intent: Intent?, result: Result) {
+            if let chosen = result.mode {
+                mode = chosen
+                return
+            }
+            switch result.route {
+            case .graph, .telling:
+                mode = .tree
+            case .presence, .cross, .aggregate, .record, .temporal:
+                mode = .catalog
+            case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
+                 .conversation, .reset:
+                break
+            }
+        }
+
+        /// The typed views over what memory already keeps, plus the four
+        /// genuinely new fields: count scope and the tree offers. Runs
+        /// AFTER every other field has been updated for this turn.
+        private mutating func syncModeContexts(intent: Intent?, result: Result) {
+            tree.subject = lastSubject
+            tree.lastPhoto = lastPhotoAttachment
+            catalog.chain = lastChain
+            catalog.lastQuery = lastResultSet?.ast ?? lastAST.flatMap { ast in
+                switch ast {
+                case .presence, .cross, .event: return ast
+                default: return nil
+                }
+            }
+            switch result.route {
+            case .graph, .telling:
+                // Show-able offers only; the "ask" chips and navigation
+                // offers are not things to show.
+                tree.lastOffers = result.offeredActions.filter { action in
+                    switch action {
+                    case .openFamilyTree, .openFamilyTreePerson, .openFamilyTreeSurname,
+                         .revealFolder, .showPossibleDuplicate:
+                        return true
+                    case .getFamilyTree, .ask, .recompileFamilyTree, .openPeopleTab,
+                         .openAppDestination:
+                        return false
+                    }
+                }
+                catalog.countScope = nil
+                catalog.resultCount = nil
+            case .presence, .cross:
+                tree.lastOffers = []
+                catalog.resultCount = result.matchCount
+                // A count answered with a match count keeps its scope; a
+                // count-only re-run keeps it alive; any other list answer
+                // clears it.
+                if result.outcome == .answered, let intent, result.matchCount != nil,
+                   intent.countOnly || HallieCountAsk.isCountAsk(intent.originalQuestion) {
+                    catalog.countScope = .query(intent.ast)
+                } else {
+                    catalog.countScope = nil
+                }
+            case .aggregate:
+                tree.lastOffers = []
+                catalog.resultCount = nil
+                // "how many videos do we have" / "what years": the whole
+                // catalog is the count scope (HallieCatalogStats.answer sets
+                // refinableQuery for exactly those two).
+                if result.outcome == .answered, result.refinableQuery == .wholeCatalog,
+                   result.queryDescription?.hasPrefix("catalog-stats") == true {
+                    catalog.countScope = .wholeCatalog
+                } else {
+                    catalog.countScope = nil
+                }
+            case .record, .temporal:
+                tree.lastOffers = []
+                catalog.countScope = nil
+                catalog.resultCount = nil
+            case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
+                 .conversation, .reset:
                 break
             }
         }
@@ -306,7 +467,17 @@ extension HallieTurnExecutor {
         }
 
         var followUpSnapshot: ArchivistFollowUpResolver.Snapshot? {
-            guard lastAST != nil || lastResultSet != nil else { return nil }
+            guard lastAST != nil || lastResultSet != nil else {
+                // A catalog-wide count leaves the whole catalog as its list
+                // (design §3.5): "how many of those are from the 90s" has a
+                // referent. The synthesized AST is the one `dateOrderedTurn`
+                // runs for the same scope; it carries no items, so a media
+                // action on it still goes through `declineNoPriorResultTurn`.
+                guard lastRefinable == .wholeCatalog else { return nil }
+                return ArchivistFollowUpResolver.Snapshot(
+                    ast: CountScope.wholeCatalog.ast, items: [],
+                    shownCount: 0, totalMatchCount: 0, chain: nil)
+            }
             let items = (lastResultSet?.citations ?? []).map { citation in
                 ArchivistFollowUpResolver.Snapshot.Item(
                     filename: citation.filename,
@@ -490,7 +661,8 @@ extension HallieTurnExecutor {
                 offeredActions: a.offeredActions + [.ask(question: second, label: String(label))],
                 attachments: a.attachments,
                 performsFirstOfferedAction: a.immediateOfferedAction != nil,
-                immediateOfferedAction: a.immediateOfferedAction))
+                immediateOfferedAction: a.immediateOfferedAction,
+                mode: a.mode))
         }
         return preTranslationSingle(
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
@@ -602,7 +774,8 @@ extension HallieTurnExecutor {
             answerPlan: plan, composedBy: b.composedBy, transcriptText: transcript,
             attachments: a.attachments + b.attachments,
             performsFirstOfferedAction: immediateAction != nil,
-            immediateOfferedAction: immediateAction)
+            immediateOfferedAction: immediateAction,
+            mode: b.mode ?? a.mode)
     }
 
     /// "c3" → "c7" for offset 4; anything that is not a claim ID is returned
@@ -1504,6 +1677,7 @@ extension HallieTurnExecutor.Result {
             // HallieResultCopyRoundTripTests walks every copy helper.
             subjectLifeStatus: subjectLifeStatus,
             refinableQuery: refinableQuery,
-            retryOffer: retryOffer)
+            retryOffer: retryOffer,
+            mode: mode)
     }
 }

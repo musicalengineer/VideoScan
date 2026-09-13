@@ -212,7 +212,11 @@ struct HallieTwoModeReplayTests {
         #expect(first.outcome == .answered)
         #expect(first.refinableQuery == .wholeCatalog)
         #expect(memory.lastRefinable == .wholeCatalog)
-        #expect(memory.followUpSnapshot == nil, "TODAY: a count leaves nothing to refine")
+        // Step 2: the whole-catalog count now leaves a referent for "of those".
+        #expect(memory.followUpSnapshot?.ast == .presence(.init(mediaKind: nil)))
+        #expect(memory.followUpSnapshot?.items.isEmpty == true)
+        #expect(memory.catalog.countScope == .wholeCatalog)
+        #expect(memory.mode == .catalog)
 
         let second = "How many of those are from the 90s?"
         #expect(pre(second, memory: memory) == .translate(question: second, playAfterAnswer: false))

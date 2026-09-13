@@ -207,6 +207,16 @@ enum HallieModeClassifier {
         return .unknown
     }
 
+    /// The same decision read from conversation memory (the previous mode
+    /// and any forced mode live there).
+    static func classify(
+        _ question: String,
+        memory: HallieTurnExecutor.ConversationMemory,
+        oracle: Oracle
+    ) -> Verdict {
+        classify(question, previous: memory.mode, forced: memory.forcedMode, oracle: oracle)
+    }
+
     // MARK: - Pieces
 
     private static func firstPhrase(_ phrases: [String], in padded: String) -> String? {
@@ -217,7 +227,7 @@ enum HallieModeClassifier {
         var best: (mode: HallieMode, phrase: String)?
         for (mode, phrases) in [(HallieMode.tree, treeScopePhrases), (.catalog, catalogScopePhrases)] {
             for phrase in phrases where padded.contains(" " + phrase + " ") {
-                if best == nil || phrase.count > best!.phrase.count { best = (mode, phrase) }
+                if phrase.count > (best?.phrase.count ?? -1) { best = (mode, phrase) }
             }
         }
         return best

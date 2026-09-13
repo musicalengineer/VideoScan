@@ -63,7 +63,8 @@ struct HallieResultCopyRoundTripTests {
             performsFirstOfferedAction: true,
             subjectLifeStatus: .deceased,
             refinableQuery: .wholeCatalog,
-            retryOffer: offer)
+            retryOffer: offer,
+            mode: .tree)
         return (result, offer)
     }
 
@@ -95,6 +96,7 @@ struct HallieResultCopyRoundTripTests {
             #expect(copied.subjectLifeStatus == .deceased, Comment(rawValue: "\(name) dropped subjectLifeStatus"))
             #expect(copied.retryOffer == offer, Comment(rawValue: "\(name) dropped retryOffer"))
             #expect(copied.refinableQuery == .wholeCatalog, Comment(rawValue: "\(name) dropped refinableQuery"))
+            #expect(copied.mode == .tree, Comment(rawValue: "\(name) dropped mode"))
             #expect(copied.performsFirstOfferedAction, Comment(rawValue: "\(name) dropped performsFirstOfferedAction"))
             #expect(copied.immediateOfferedAction == original.immediateOfferedAction,
                     Comment(rawValue: "\(name) changed immediateOfferedAction"))
