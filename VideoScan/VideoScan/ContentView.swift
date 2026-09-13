@@ -172,11 +172,11 @@ struct ContentView: View {
             // borderline matches to `suspectedPeople`. Weak ref on the
             // catalog model so teardown is clean under test hosts.
             personFinderModel.onScanComplete = {
-                [weak model] person, confirmed, suspected in
+                [weak model] identity, confirmed, suspected in
                 model?.applyDetectedPeople(
                     confirmed: confirmed,
                     suspected: suspected,
-                    person: person
+                    identity: identity
                 )
             }
 

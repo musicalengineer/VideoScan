@@ -78,6 +78,13 @@ final class ScanJob: ObservableObject, Identifiable {
     /// bridge — never the display alias, which is editable and can be
     /// shared). UI labels use `personDisplayLabel`.
     var personLabel: String { assignedProfile?.name ?? "" }
+    /// Who a catalog tag writeback for this job is about: the canonical
+    /// name plus the profile uuid. The ONE derivation both completion
+    /// paths (live scan, cache restore) hand the write sink, which checks
+    /// it there — not at scan start (codex post-merge review 2026-09-13).
+    var tagIdentity: PersonTagIdentity {
+        assignedProfile.map(PersonTagIdentity.init(profile:)) ?? PersonTagIdentity(name: "")
+    }
     /// What the row shows: the first alias (Rick's ruling 2026-09-12).
     var personDisplayLabel: String { assignedProfile?.displayName ?? "" }
 
@@ -381,7 +388,7 @@ final class PersonFinderModel: ObservableObject {
     /// isolation without dragging in catalog wiring.
     var onScanComplete: (
         @MainActor (
-            _ personLabel: String,
+            _ identity: PersonTagIdentity,
             _ confirmed: [pfVideoResult],
             _ suspected: [pfVideoResult]
         ) -> Void

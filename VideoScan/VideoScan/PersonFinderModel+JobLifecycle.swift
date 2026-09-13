@@ -431,7 +431,7 @@ extension PersonFinderModel {
                 let (confirmed, suspected) = Self.splitByConfidence(
                     validResults, threshold: threshold
                 )
-                onComplete?(job.personLabel, confirmed, suspected)
+                onComplete?(job.tagIdentity, confirmed, suspected)
                 onAnnotate(job)
             }
         }
@@ -1210,7 +1210,7 @@ extension PersonFinderModel {
         dashboard: DashboardState?,
         onComplete: (
             @MainActor (
-                _ personLabel: String,
+                _ identity: PersonTagIdentity,
                 _ confirmed: [pfVideoResult],
                 _ suspected: [pfVideoResult]
             ) -> Void
@@ -1361,7 +1361,7 @@ extension PersonFinderModel {
                 let (confirmed, suspected) = Self.splitByConfidence(
                     validResults, threshold: scanThreshold
                 )
-                onComplete?(person, confirmed, suspected)
+                onComplete?(job.tagIdentity, confirmed, suspected)
 
                 // Identity narrowing: stamp plausibility + reason on each
                 // result row from the POI's priors × the catalog's dossier
