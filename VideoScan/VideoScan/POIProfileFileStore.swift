@@ -6,8 +6,11 @@ enum POIProfileFileStore {
 
     enum Failure: LocalizedError {
         case invalidName, differentPerson, unreadableIdentity, missingSource, occupiedDestination
+        /// Raised only under a test host: the root is shaped like the user's live People store.
+        case liveStoreUnderTest
         var errorDescription: String? {
             switch self {
+            case .liveStoreUnderTest: return "Refusing to touch a live People store from a test host."
             case .invalidName: return "The person name must be a single folder name."
             case .differentPerson: return "Another person already uses this name. Choose a distinct short name, such as Richard Sr or Richard Jr."
             case .unreadableIdentity: return "The existing profile could not be identified safely. It has not been overwritten."
@@ -17,7 +20,22 @@ enum POIProfileFileStore {
         }
     }
 
+    /// Trailing path shape of the user's live store (POIStorage.storeDir in production).
+    static let liveStoreSuffix = ["Library", "Application Support", "VideoScan", "POI"]
+
+    /// Settings-pollution sensor (feature-test checklist, dimension 4). Under a
+    /// test host the only legal roots are per-process temp dirs; a root shaped
+    /// like the live People store is refused before a byte is read or written.
+    /// `isTestHost` is injectable so the predicate is testable in both directions.
+    static func guardRoot(_ root: URL, isTestHost: Bool = TestEnvironment.isTestHost) throws {
+        guard isTestHost else { return }
+        if Array(root.standardizedFileURL.pathComponents.suffix(liveStoreSuffix.count)) == liveStoreSuffix {
+            throw Failure.liveStoreUnderTest
+        }
+    }
+
     static func folder(component: String, in root: URL) throws -> URL {
+        try guardRoot(root)
         guard !component.isEmpty, component != ".", component != "..",
               !component.contains("/") else { throw Failure.invalidName }
         return root.appendingPathComponent(component, isDirectory: true)
@@ -37,6 +55,8 @@ enum POIProfileFileStore {
         let destination = destination.standardizedFileURL
         let previous = previous?.standardizedFileURL
         let isRename = previous != nil && previous != destination
+        try guardRoot(destination.deletingLastPathComponent())
+        if let previous { try guardRoot(previous.deletingLastPathComponent()) }
 
         func checkIdentity(_ folder: URL, required: Bool) throws {
             if let values = try? folder.resourceValues(forKeys: [.isSymbolicLinkKey]),
