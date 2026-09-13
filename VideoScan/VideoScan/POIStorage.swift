@@ -97,7 +97,8 @@ enum POIStorage {
             includingPropertiesForKeys: [.isDirectoryKey]
         )) ?? []
         return contents.filter { url in
-            (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            !url.lastPathComponent.hasPrefix(".poi-rename-")
+                && (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
         }
     }
 

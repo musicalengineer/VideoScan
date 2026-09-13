@@ -939,10 +939,21 @@ struct PersonEditSheet: View {
     /// Canonical local folder for this person's reference photos.
     /// Lives at ~/Library/Application Support/VideoScan/POI/<name>/ — see
     /// POIStorage.swift. profile.json and photos share this folder.
-    private func ensureLocalPhotoFolder() -> URL {
-        let dir = POIStorage.folder(for: name)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+    private func ensureLocalPhotoFolder() -> URL? {
+        // Typing a new name must not redirect imports into someone else's
+        // folder. Existing profiles keep importing into their original folder
+        // until the complete-folder rename commits on Save.
+        let storageName = originalProfile.name.isEmpty ? name : originalProfile.name
+        do {
+            let dir = try POIProfileFileStore.folder(
+                component: POIStorage.sanitize(storageName), in: POIStorage.storeDir)
+            _ = try POIProfileFileStore.save(id: originalProfile.uuid, destination: dir,
+                retire: { _ in }, write: { _, _ in })
+            return dir
+        } catch {
+            photoImportProblem = "Could not add photos: \(error.localizedDescription)"
+            return nil
+        }
     }
 
     /// Copy image files (one photo or a folder) into the person's local
@@ -950,7 +961,7 @@ struct PersonEditSheet: View {
     /// the trace Rick did not have when photos silently failed to appear
     /// (GH #151).
     private func copyPhotosToLocal(from sourceURL: URL) {
-        let destDir = ensureLocalPhotoFolder()
+        guard let destDir = ensureLocalPhotoFolder() else { return }
         let outcome = ReferencePhotoImporter.copy(from: sourceURL, into: destDir)
         appLog.write("[people] add photos for \(name.isEmpty ? "(unnamed)" : name) from "
                      + "\(sourceURL.lastPathComponent): \(outcome.summary)")
@@ -986,7 +997,7 @@ struct PersonEditSheet: View {
             photosPickerItems = []
         }
 
-        let destDir = ensureLocalPhotoFolder()
+        guard let destDir = ensureLocalPhotoFolder() else { return }
         referencePath = destDir.path
 
         // Use a timestamp prefix to avoid overwriting previous imports.

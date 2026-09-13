@@ -530,19 +530,21 @@ extension PersonFinderView {
                     fingerprint: { kinshipCenter.graphFingerprint })
                 photoCenter.invalidate()
                 let outcome = model.updateProfile(updated, oldName: editingOriginalName)
-                // If this person is now the active POI, reload their faces
-                if model.settings.personName.lowercased() == updated.name.lowercased() {
-                    Task { await model.loadPOI(updated) }
-                }
                 // Report what actually happened. "Saved" is earned by a write
                 // that reached disk, never by having been asked to write.
                 if let problem = outcome.problem {
                     profileSaveProblem = ProfileSaveProblem(
-                        profileID: updated.id, message: problem)
+                        profileID: outcome.reachedDisk ? updated.id : profile.id, message: problem)
                 } else {
                     profileSaveProblem = nil
                 }
                 guard outcome.reachedDisk else { return }
+                // Reload only the committed profile: the editor's snapshot still
+                // points at the old folder after a rename.
+                if model.settings.personName.lowercased() == updated.name.lowercased(),
+                   let committed = model.savedProfiles.first(where: { $0.uuid == updated.uuid && $0.name == updated.name }) {
+                    Task { await model.loadPOI(committed) }
+                }
                 // Flash the saved indicator on the card
                 justSavedProfileID = updated.id
                 Task {

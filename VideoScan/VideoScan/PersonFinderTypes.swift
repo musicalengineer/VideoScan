@@ -809,12 +809,24 @@ struct POIProfile: Codable, Identifiable, Equatable {
     // moving the user's home directory can't break things.
 
     func save() throws {
+        _ = try saveRenaming(from: nil)
+    }
+
+    /// A non-nil result means saved, but the old folder could not be retired.
+    func saveRenaming(from oldName: String?) throws -> String? {
         // Remote viewer (Phase 1): POI/ is synced FROM the master; never
         // written here (the kinship attestations ride in profile.json).
         try ViewerWriteGuard.check("POIProfile.save")
-        let folder = POIStorage.folder(for: name)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try write(profileJSONAt: POIStorage.profileURL(for: name), folder: folder)
+        let folder = try POIProfileFileStore.folder(component: POIStorage.sanitize(name), in: POIStorage.storeDir)
+        let previous = try oldName.map {
+            try POIProfileFileStore.folder(component: POIStorage.sanitize($0), in: POIStorage.storeDir)
+        }
+        return try POIProfileFileStore.save(id: uuid, destination: folder, previous: previous,
+            retire: { _ in
+                if let oldName { try Self.delete(name: oldName) }
+            }, write: { url, finalFolder in
+                try self.write(profileJSONAt: url, folder: finalFolder)
+            })
     }
 
     /// The ONE writer for profile.json (atomic replace). `save()` and the
@@ -837,12 +849,16 @@ struct POIProfile: Codable, Identifiable, Equatable {
         let data = try Data(contentsOf: POIStorage.profileURL(for: name))
         var profile = try JSONDecoder().decode(POIProfile.self, from: data)
         // Heal referencePath — its folder is implicit, always the POI's own folder.
-        profile.referencePath = POIStorage.folder(for: profile.name).path
+        profile.referencePath = POIStorage.folder(for: name).path
         // First load of a pre-uuid profile.json: persist the freshly minted
         // uuid so kinship anchors written later stay durable across renames.
         // Failure is logged, not thrown — the load itself still succeeds.
         if !Self.hasUUIDKey(data) {
-            do { try profile.save() } catch {
+            do {
+                try ViewerWriteGuard.check("POIProfile.save")
+                try profile.write(profileJSONAt: POIStorage.profileURL(for: name),
+                                  folder: POIStorage.folder(for: name))
+            } catch {
                 profile.uuidPersisted = false
                 identityLog.error("POIProfile load: could not persist the minted uuid for '\(profile.name, privacy: .public)' — anchors to it stay name-based. \(String(describing: error), privacy: .public)")
             }
@@ -980,7 +996,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
         let fm = FileManager.default
         let folders = ((try? fm.contentsOfDirectory(
             at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? [])
-            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
+            .filter { !$0.lastPathComponent.hasPrefix(".poi-rename-")
+                && (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
         var key: [String: Date] = [:]
         for folder in folders {
             let url = folder.appendingPathComponent("profile.json")

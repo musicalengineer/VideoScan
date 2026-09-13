@@ -564,9 +564,25 @@ final class PersonFinderModel: ObservableObject {
 
     func saveCurrentPOI() {
         let cover = POIProfile.bestCoverFilename(from: referenceFaces)
-        let profile = settings.toProfile(coverImageFilename: cover)
+        var profile = settings.toProfile(coverImageFilename: cover)
         guard !profile.name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        try? profile.save()
+        if var existing = savedProfiles.first(where: { $0.name.lowercased() == profile.name.lowercased() }) {
+            // Recognition quick-save must preserve the existing identity and biography.
+            existing.rejectedFiles = profile.rejectedFiles
+            existing.engine = profile.engine
+            existing.visionThreshold = profile.visionThreshold
+            existing.arcfaceThreshold = profile.arcfaceThreshold
+            existing.adafaceThreshold = profile.adafaceThreshold
+            existing.minFaceConfidence = profile.minFaceConfidence
+            existing.largestFaceOnly = profile.largestFaceOnly
+            if let cover { existing.coverImageFilename = cover }
+            profile = existing
+        }
+        do { try profile.save() }
+        catch {
+            referenceLoadError = "Profile not saved: \(error.localizedDescription)"
+            return
+        }
         savedProfiles = POIProfile.listAll()
         referenceLoadError = nil   // clear stale info messages
     }
@@ -588,7 +604,7 @@ final class PersonFinderModel: ObservableObject {
     }
 
     /// Save an edited profile back to disk and refresh the gallery.
-    /// If the name changed, delete the old file first.
+    /// A rename preserves the complete photo folder before retiring the old name.
     /// What a profile write actually did. Returned — not swallowed — because
     /// the People tab is the source of truth for the family Rick knew
     /// personally (director ruling, 2026-09-06). A save that fails silently
@@ -623,26 +639,20 @@ final class PersonFinderModel: ObservableObject {
 
     @discardableResult
     func updateProfile(_ updated: POIProfile, oldName: String? = nil) -> ProfileSaveOutcome {
-        // Write BEFORE retiring the old folder. The old order — delete, then
-        // `try?` save — could move a person into .trash/ and then fail to
-        // write the replacement, so a rename that hit a full disk or a
-        // read-only volume erased the person while the card flashed "Saved".
         var outcome = ProfileSaveOutcome.saved
         do {
-            try updated.save()
+            if let warning = try updated.saveRenaming(from: oldName) {
+                outcome = .savedOldNameRemains(warning)
+            }
         } catch {
             // Nothing was deleted and nothing was written: the profile on
             // disk is exactly what it was before this call.
             return .failed(error.localizedDescription)
         }
-        if let old = oldName, old.lowercased() != updated.name.lowercased() {
-            do {
-                try POIProfile.delete(name: old)
-            } catch {
-                outcome = .savedOldNameRemains(error.localizedDescription)
-            }
-        }
         savedProfiles = POIProfile.listAll()
+
+        // Editor snapshots still carry the old photo path. Refresh every consumer.
+        let updated = savedProfiles.first(where: { $0.uuid == updated.uuid && $0.name == updated.name }) ?? updated
 
         // If the edited person is the currently active one, sync settings
         if settings.personName.lowercased() == (oldName ?? updated.name).lowercased() {
