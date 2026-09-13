@@ -482,7 +482,7 @@ struct HalliePlaceRecordRouteTests {
 
         let guessed = ArchivistRecordDossierSnapshot(presence: presence, userPlace: "Franklin, MA", userPlaceStatus: .estimated)
         let g = ArchivistRecordExecutor.execute(.init(reference: .currentSelection, operations: [.place]), snapshot: guessed, ownerName: nil)
-        #expect(g.prose == "tape.mov was taken at Franklin, MA, as your best guess.")
+        #expect(g.prose == "tape.mov was taken at Franklin, Massachusetts, as your best guess.")
 
         let none = ArchivistRecordDossierSnapshot(presence: presence)
         let n = ArchivistRecordExecutor.execute(.init(reference: .currentSelection, operations: [.place]), snapshot: none, ownerName: nil)
