@@ -45,9 +45,14 @@ extension HallieShellCLI {
         knowledgeCitations: [HallieTurnExecutor.KnowledgeCitation] = [],
         attachments: [HallieAttachment] = [],
         composedBy: String? = nil,
+        mode: String? = nil,
         state: inout Session
     ) -> HallieTranscriptEvent {
         state.transcriptSequence += 1
+        // An assistant event records the session's effective mode (design
+        // §3.7) unless the caller supplied one; user / system events carry
+        // none.
+        let recordedMode = mode ?? (kind == .assistant ? state.memory.effectiveMode.rawValue : nil)
         return HallieTranscriptEvent(
             sessionID: state.transcriptSessionID,
             runID: state.runID,
@@ -75,7 +80,8 @@ extension HallieShellCLI {
             },
             attachmentOutline: attachments.isEmpty
                 ? nil : HallieAttachmentText.lines(attachments),
-            composedBy: composedBy)
+            composedBy: composedBy,
+            mode: recordedMode)
     }
 
     static func transcriptLabel(_ route: HallieTurnExecutor.Route) -> String {

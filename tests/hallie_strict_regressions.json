@@ -1,7 +1,7 @@
 {
  "version": 1,
  "created": "2026-09-07",
- "description": "STRICT regression gate for the nightly Hallie replay. Every entry is a live miss from Rick's own sessions whose corrected behaviour was fixed AND pinned by unit tests on the date given. Expectations are CONSTRAINTS on the corrected behaviour — route, outcome, required or forbidden text — never the text of the previous wrong answer and never a whole expected sentence. A defect flag on any entry fails the strict verdict; the advisory hallie_eval_corpus.json stays advisory. Chains marked followsPrevious replay in one session (no :reset between them). Add an entry only after the fix has a unit test; remove one only with the commit that removes the behaviour. Fields the grader honours: expectedRoutes, expectedOutcome, mustContain, mustNotContain, mustMatch, mustMatchQueryDescription, mustMatchAttachmentOutline (codex #1190).",
+ "description": "STRICT regression gate for the nightly Hallie replay. Every entry is a live miss from Rick's own sessions whose corrected behaviour was fixed AND pinned by unit tests on the date given. Expectations are CONSTRAINTS on the corrected behaviour — route, outcome, required or forbidden text — never the text of the previous wrong answer and never a whole expected sentence. A defect flag on any entry fails the strict verdict; the advisory hallie_eval_corpus.json stays advisory. Chains marked followsPrevious replay in one session (no :reset between them). Add an entry only after the fix has a unit test; remove one only with the commit that removes the behaviour. Fields the grader honours: expectedRoutes, expectedOutcome, mustContain, mustNotContain, mustMatch, mustMatchQueryDescription, mustMatchAttachmentOutline (codex #1190), expectMode (tree | catalog — the session mode the transcript recorded for the turn; design docs/hallie_two_mode_design.md §3.7).",
  "questions": [
   {
    "id": "strict-001",
@@ -67,6 +67,7 @@
    "text": "whom did he marry",
    "followsPrevious": true,
    "expect": "kinship",
+   "expectMode": "tree",
    "mustMatch": [
     "Mortimer|Lancaster"
    ],
@@ -87,6 +88,7 @@
     "graph"
    ],
    "expectedOutcome": "answered",
+   "expectMode": "tree",
    "mustContain": [
     "Windsor"
    ],
@@ -269,6 +271,7 @@
    "expectedRoutes": [
     "graph"
    ],
+   "expectMode": "tree",
    "mustMatch": [
     "Abigail Wright|Stephen Parker"
    ],
@@ -550,6 +553,175 @@
     "surname"
    ],
    "notes": "Rick 2026-09-11: 'I'd like Hallie to mention my dad's Marine Corps service in the 1940s.' CyberBrain passage bio.richard-breen-sr-marine-corps.2026-09-11 (person.richard-harding-breen-sr.i342486893646). Live replay before the fix: 0/8 phrasings — resolved father declined 'one person at a time', bare 'dad' → Dafydd ab Einion, 'marine corps' read as a surname, named ask answered with birth/death. Fixed by HallieServiceQuestion + HallieTurnExecutor+Service."
+  },
+  {
+   "id": "strict-032",
+   "category": "strict",
+   "text": "how many videos do you have",
+   "expect": "catalog",
+   "expectedRoutes": [
+    "aggregate"
+   ],
+   "expectedOutcome": "answered",
+   "expectMode": "catalog",
+   "mustMatch": [
+    "\\d"
+   ],
+   "notes": "Two-mode design step 3 (eval cc001): the catalog-wide count leaves a count scope in memory and puts the session in catalog mode. Pinned by HallieTwoModeReplayTests.countChainStaysACountAndReplacesTheDecade."
+  },
+  {
+   "id": "strict-033",
+   "category": "strict",
+   "text": "How many of those are from the 90s?",
+   "followsPrevious": true,
+   "expect": "catalog",
+   "expectedRoutes": [
+    "presence"
+   ],
+   "expectMode": "catalog",
+   "mustMatch": [
+    "catalog items? from the 1990s|Nothing from the 1990s"
+   ],
+   "mustNotContain": [
+    "couldn't tell how"
+   ],
+   "notes": "cc002: the sticky count scope answers locally as a count of the 1990s (HallieCatalogCountFollowUp) — no translation, never the 'couldn't tell how to narrow' decline."
+  },
+  {
+   "id": "strict-034",
+   "category": "strict",
+   "text": "and how many from the 80s",
+   "followsPrevious": true,
+   "expect": "catalog",
+   "expectedRoutes": [
+    "presence"
+   ],
+   "expectMode": "catalog",
+   "mustMatch": [
+    "catalog items? from the 1980s|Nothing from the 1980s"
+   ],
+   "mustNotContain": [
+    "1990s"
+   ],
+   "notes": "cc003: the 80s REPLACE the 90s — a new decade never intersects with the old one (pinned against applyCumulative in HallieTwoModeReplayTests)."
+  },
+  {
+   "id": "strict-035",
+   "category": "strict",
+   "text": "tell me about me",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "expectMode": "tree",
+   "notes": "Anchor for strict-036: the owner's own biography (owner binding) leaves the Open-in-Family-Tree offer in tree memory."
+  },
+  {
+   "id": "strict-036",
+   "category": "strict",
+   "text": "show me",
+   "followsPrevious": true,
+   "expect": "biography",
+   "expectedOutcome": "answered",
+   "expectMode": "tree",
+   "mustNotContain": [
+    "Ask me for something first",
+    "couldn't tell how"
+   ],
+   "notes": "Two-mode design step 3 (HallieTreeFollowUp): 'show me' right after a biography performs the remembered offer (the app opens the tree; the shell lists it) instead of the catalog's 'ask me for something first' decline. Pinned by HallieTwoModeReplayTests / HallieTreeFollowUpTests."
+  },
+  {
+   "id": "strict-037",
+   "category": "strict",
+   "text": "play the longest video in the archive",
+   "expect": "catalog",
+   "expectedRoutes": [
+    "presence"
+   ],
+   "expectedOutcome": "answered",
+   "expectMode": "catalog",
+   "mustMatch": [
+    "longest"
+   ],
+   "mustNotContain": [
+    "couldn't safely interpret",
+    "co-occurrence"
+   ],
+   "notes": "Two-mode design step 5 (eval cs030, HallieCatalogSuperlative): a local ordered run on the presence route sorted by running time, the play verb honoured; the translator is never asked. Declines only when no record carries a probed running time. Pinned by HallieCatalogSuperlativeTests."
+  },
+  {
+   "id": "strict-038",
+   "category": "strict",
+   "text": "in the family tree going back, find the highest level of royalty or title such as lord, prince, king, etc.",
+   "expect": "graceful_decline",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectMode": "tree",
+   "mustNotContain": [
+    "remember",
+    "found nothing in the catalog"
+   ],
+   "notes": "lv260907-002 (ledger row 1). The titled-ancestors search is phase 2 (docs/hallie_titled_ancestors_design.md); until it lands the honest answer is a tree-mode decline (HallieModeGate) — never a catalog filename search, never a 'remember it?' offer. expect=graceful_decline on purpose: do not 'fix' this row back to kinship until the titled route exists."
+  },
+  {
+   "id": "strict-039",
+   "category": "strict",
+   "text": "not in videos, in family tree",
+   "followsPrevious": true,
+   "expect": "graceful_decline",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectMode": "tree",
+   "mustNotContain": [
+    "can't refine my last answer",
+    "remember"
+   ],
+   "notes": "lv260907-003 (ledger row 2). Two-mode design step 6 (HallieModeCorrection): forces tree mode and re-asks row 1 under it — the answer is row 1's honest tree-mode decline again, never the refinement decline. Pinned by HallieModeCorrectionTests.ledgerRowTwoReRunsRowOneUnderTreeMode."
+  },
+  {
+   "id": "strict-040",
+   "category": "strict",
+   "text": "search the family tree for a title like king",
+   "followsPrevious": true,
+   "expect": "graceful_decline",
+   "expectedRoutes": [
+    "graph",
+    "follow-up"
+   ],
+   "expectMode": "tree",
+   "mustNotContain": [
+    "remember"
+   ],
+   "notes": "lv260907-004. 'title like king' is not a person: Resolution.declineNotAKnownPerson names the phrase (route follow-up, tree mode) with no 'remember it?' offer — design step 4. The real answer is phase 2."
+  },
+  {
+   "id": "strict-041",
+   "category": "strict",
+   "text": "tell me about Thankful Pratt",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "expectMode": "tree",
+   "notes": "Anchor for strict-042: the biography (d. 1849) leaves the photo / gallery offer in tree memory."
+  },
+  {
+   "id": "strict-042",
+   "category": "strict",
+   "text": "why do you ask me for a photo of Thankful Pratt who died before photography was commonly available?",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectMode": "tree",
+   "mustNotContain": [
+    "born",
+    "passed away",
+    "at rest"
+   ],
+   "notes": "lv260902-003. The offer-challenge answer (photography floor 1839 vs d. 1849) is phase 2; until it lands this row pins only the mode (tree) and that the challenge never becomes a birth / death recital."
   }
  ]
 }

@@ -1464,19 +1464,7 @@ enum HallieShellCLI {
             }
             await dependencies.recordTranscript([event])
         case ":mode":
-            // Design §3.6: ":mode" prints the session's mode and whether it
-            // is held; ":mode tree|catalog" holds it, ":mode auto" releases.
-            if parts.count >= 2 {
-                switch parts[1].lowercased() {
-                case "tree", "family-tree", "familytree", "family": state.memory.force(.tree)
-                case "catalog", "catalogue", "archive", "videos": state.memory.force(.catalog)
-                case "auto", "automatic", "off", "clear": state.memory.unforce()
-                default:
-                    output("usage: :mode [tree|catalog|auto]")
-                    return .continueSession
-                }
-            }
-            output(modeLine(state.memory))
+            output(modeCommand(parts, state: &state))
         case ":cancel":
             if state.pendingClarification != nil {
                 state.pendingClarification = nil
@@ -1595,6 +1583,21 @@ enum HallieShellCLI {
     /// the diagnostics line uses for a forced turn.
     static func modeLine(_ memory: HallieTurnExecutor.ConversationMemory) -> String {
         "mode: \(memory.effectiveMode.rawValue) (\(memory.forcedMode != nil ? "forced" : "automatic"))"
+    }
+
+    /// Design §3.6: ":mode" prints the session's mode and whether it is
+    /// held; ":mode tree|catalog" holds it, ":mode auto" releases. Returns
+    /// the line to print.
+    static func modeCommand(_ parts: [String], state: inout Session) -> String {
+        if parts.count >= 2 {
+            switch parts[1].lowercased() {
+            case "tree", "family-tree", "familytree", "family": state.memory.force(.tree)
+            case "catalog", "catalogue", "archive", "videos": state.memory.force(.catalog)
+            case "auto", "automatic", "off", "clear": state.memory.unforce()
+            default: return "usage: :mode [tree|catalog|auto]"
+            }
+        }
+        return modeLine(state.memory)
     }
 
     static func resetSession(_ state: inout Session) -> HallieTranscriptEvent {

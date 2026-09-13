@@ -63,6 +63,11 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
     /// older lines (and non-answer events) decode unchanged. When "model",
     /// `text` keeps the claim tags ("… [c1]") for traceability.
     let composedBy: String?
+    /// "tree" | "catalog" | "unknown" — the session's effective mode when
+    /// an assistant answer was recorded (design §3.7), so the eval harness
+    /// can assert the FAMILY a turn was answered in (`expectMode`). Optional
+    /// so older lines decode unchanged; nil on user and system events.
+    let mode: String?
 
     init(
         timestamp: Date = Date(),
@@ -83,7 +88,8 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
         mediaEvidence: [MediaEvidence] = [],
         knowledgeEvidence: [KnowledgeEvidence] = [],
         attachmentOutline: [String]? = nil,
-        composedBy: String? = nil
+        composedBy: String? = nil,
+        mode: String? = nil
     ) {
         self.version = Self.schemaVersion
         self.timestamp = timestamp
@@ -105,6 +111,7 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
         self.knowledgeEvidence = knowledgeEvidence
         self.attachmentOutline = attachmentOutline
         self.composedBy = composedBy
+        self.mode = mode
     }
 
     /// The evidence kept when a line would exceed the store's cap. A
@@ -132,7 +139,7 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
             basisLine: basisLine, responder: responder, model: model,
             route: route, outcome: outcome, offeredActions: offeredActions,
             mediaEvidence: [], knowledgeEvidence: [],
-            attachmentOutline: nil, composedBy: composedBy)
+            attachmentOutline: nil, composedBy: composedBy, mode: mode)
     }
 
     /// This event with its evidence trimmed to the bounds above. The text,
@@ -159,7 +166,7 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
             route: route, outcome: outcome, offeredActions: offeredActions,
             mediaEvidence: trimmedMedia, knowledgeEvidence: trimmedKnowledge,
             attachmentOutline: attachmentOutline.map { Array($0.prefix(Self.boundedEvidenceItems)) },
-            composedBy: composedBy)
+            composedBy: composedBy, mode: mode)
     }
 }
 

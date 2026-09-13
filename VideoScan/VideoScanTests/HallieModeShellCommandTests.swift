@@ -101,6 +101,10 @@ struct HallieModeShellCommandTests {
         #expect(forcedLines.count == 2, Comment(rawValue: harness.output.joined(separator: "\n")))
         let answers = harness.transcriptEvents.filter { $0.kind == .assistant }
         #expect(answers.last?.route == "graph", Comment(rawValue: answers.last?.text ?? "nil"))
+        // Step 8: the transcript line carries the session's mode; the
+        // user's line carries none.
+        #expect(answers.last?.mode == "tree")
+        #expect(harness.transcriptEvents.first { $0.kind == .user }?.mode == nil)
         #expect(harness.translatedQuestions.isEmpty)
     }
 

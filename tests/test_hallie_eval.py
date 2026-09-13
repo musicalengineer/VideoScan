@@ -963,3 +963,47 @@ class NightlyReplayVerdictTests(unittest.TestCase):
         self.assertEqual(report["clean"], 0)
         self.assertEqual(report["defects"], 0)
         self.assertTrue(report["incomplete"])
+
+    # Design §3.7 (two-mode session state): the transcript's `mode` and the
+    # corpus's `expectMode` are additive — they never change an existing
+    # field, flag, or artifact.
+    def test_mode_passes_through_build_records(self):
+        questions = [{"id": "q1", "text": "tell me about Alpha", "expectMode": "tree"}]
+        events = [{"kind": "user", "text": "tell me about Alpha"},
+                  {"kind": "assistant", "route": "graph", "outcome": "answered",
+                   "text": "Alpha was born in Ireland.", "mode": "tree"}]
+        records, _, _ = hallie_eval.build_records(questions, events)
+        self.assertEqual(records[0]["mode"], "tree")
+        self.assertEqual(records[0]["expectMode"], "tree")
+
+    def test_mode_mismatch_fires_only_when_the_families_differ(self):
+        questions = [{"id": "q1", "text": "tell me about Alpha", "expectMode": "tree"}]
+        events = [{"kind": "user", "text": "tell me about Alpha"},
+                  {"kind": "assistant", "route": "graph", "outcome": "answered",
+                   "text": "Alpha was born in Ireland.", "mode": "catalog"}]
+        records, _, _ = hallie_eval.build_records(questions, events)
+        flags = hallie_eval.grade_record(records[0])
+        self.assertIn("mode_mismatch", flags)
+        self.assertEqual([f for f in flags if f != "mode_mismatch"], [])
+        events[1]["mode"] = "tree"
+        records, _, _ = hallie_eval.build_records(questions, events)
+        self.assertNotIn("mode_mismatch", hallie_eval.grade_record(records[0]))
+        # No expectation on the row: any mode is fine.
+        questions[0].pop("expectMode")
+        events[1]["mode"] = "catalog"
+        records, _, _ = hallie_eval.build_records(questions, events)
+        self.assertNotIn("mode_mismatch", hallie_eval.grade_record(records[0]))
+
+    def test_records_without_mode_grade_unchanged(self):
+        base = {"answer": "Alpha was born in Ireland.", "route": "graph", "outcome": "answered"}
+        self.assertEqual(hallie_eval.grade_record(dict(base)), [])
+        # An older transcript has no `mode`; a row that expects one is not
+        # flagged for it — there is nothing to compare.
+        self.assertEqual(hallie_eval.grade_record(dict(base, expectMode="tree")), [])
+        questions = [{"id": "q1", "text": "tell me about Alpha", "expectMode": "tree"}]
+        events = [{"kind": "user", "text": "tell me about Alpha"},
+                  {"kind": "assistant", "route": "graph", "outcome": "answered",
+                   "text": "Alpha was born in Ireland."}]
+        records, _, _ = hallie_eval.build_records(questions, events)
+        self.assertIsNone(records[0]["mode"])
+        self.assertEqual(hallie_eval.grade_record(records[0]), [])

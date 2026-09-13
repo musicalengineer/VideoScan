@@ -286,6 +286,7 @@ def build_records(questions, turns):
                 "expectedRoutes": q.get("expectedRoutes"),
                 "expectedOutcome": q.get("expectedOutcome"),
                 "expectedOutcomes": q.get("expectedOutcomes"),
+                "expectMode": q.get("expectMode"),
                 "mustContain": q.get("mustContain", []),
                 "mustNotContain": q.get("mustNotContain", []),
                 "mustMatch": q.get("mustMatch", []),
@@ -302,6 +303,7 @@ def build_records(questions, turns):
                 "route": ans.get("route"),
                 "outcome": ans.get("outcome"),
                 "outcomes": ans.get("outcomes"),
+                "mode": ans.get("mode"),
                 "queryDescription": ans.get("queryDescription", ""),
                 "attachmentOutline": ans.get("attachmentOutline") or [],
                 "composedBy": ans.get("composedBy"),
@@ -589,6 +591,14 @@ def grade_record(r):
     normalized_outcome = "needsClarification" if outcome == "needs-clarification" else outcome
     if expected_outcomes and normalized_outcome not in expected_outcomes:
         flags.append("outcome_mismatch")
+    # The session mode the transcript recorded (design §3.7): a row may pin
+    # the FAMILY — "tree" / "catalog" — and a turn answered in the other one
+    # is flagged even when route and outcome look right. Additive: a record
+    # without `mode` (an older log) grades exactly as before.
+    expected_mode = r.get("expectMode")
+    observed_mode = r.get("mode")
+    if expected_mode and observed_mode and observed_mode != expected_mode:
+        flags.append("mode_mismatch")
 
     lowered = a.lower()
     for forbidden in r.get("mustNotContain") or []:

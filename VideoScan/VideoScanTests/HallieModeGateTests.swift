@@ -73,7 +73,8 @@ struct HallieModeGateTests {
         #expect(result.route == .graph)
         #expect(result.outcome == .declined)
         #expect(result.mode == .tree)
-        #expect(result.prose == "I read that as a family-tree question, but I couldn't tell who it is about — name the person.")
+        #expect(result.prose == "I read that as a family-tree question, but I couldn't tell who it is about — name the person, "
+                + "or say “in the catalog” and I'll search the videos instead.")
         // Two people: still nobody definite.
         if case .decline = tree(.presence(.init(people: ["rick", "donna"])), "how are they related") {} else {
             Issue.record("two people must decline, never guess one")

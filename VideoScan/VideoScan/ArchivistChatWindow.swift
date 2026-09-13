@@ -751,7 +751,11 @@ struct ArchivistChatWindow: View {
                 knowledgeEvidence: knowledge,
                 attachmentOutline: message.attachments.isEmpty
                     ? nil : HallieAttachmentText.lines(message.attachments),
-                composedBy: message.composedBy))
+                composedBy: message.composedBy,
+                // The session's mode when the answer was recorded (design
+                // §3.7, phase 1): exact for a one-clause turn; a split turn
+                // logs the last clause's mode.
+                mode: message.role == .assistant ? hallieMemory.effectiveMode.rawValue : nil))
         }
         guard !events.isEmpty else { return }
         Task { await HallieConversationRecorder.shared.append(events) }
