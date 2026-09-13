@@ -532,8 +532,11 @@ enum HallieShellCLI {
     static let help = """
     Commands: :help, :quit, :cancel, :reset, :session, :list, :select N, :select <filename>,
               :play N, :reveal N,
-              :photo, :open-photo, :reveal-photo
+              :photo, :open-photo, :reveal-photo,
+              :mode, :mode tree|catalog|auto
     :reset forgets the current conversation and starts a new logged session.
+    :mode shows which side of the archive Hallie is on; :mode tree|catalog holds it,
+    :mode auto lets the conversation decide again.
     Say "let me tell you about <someone>" and Hallie listens and remembers
     (saved to the family CyberBrain only with --remember).
     """
@@ -1460,6 +1463,20 @@ enum HallieShellCLI {
                 output("session-id: \(state.transcriptSessionID.uuidString)")
             }
             await dependencies.recordTranscript([event])
+        case ":mode":
+            // Design §3.6: ":mode" prints the session's mode and whether it
+            // is held; ":mode tree|catalog" holds it, ":mode auto" releases.
+            if parts.count >= 2 {
+                switch parts[1].lowercased() {
+                case "tree", "family-tree", "familytree", "family": state.memory.force(.tree)
+                case "catalog", "catalogue", "archive", "videos": state.memory.force(.catalog)
+                case "auto", "automatic", "off", "clear": state.memory.unforce()
+                default:
+                    output("usage: :mode [tree|catalog|auto]")
+                    return .continueSession
+                }
+            }
+            output(modeLine(state.memory))
         case ":cancel":
             if state.pendingClarification != nil {
                 state.pendingClarification = nil
@@ -1572,6 +1589,12 @@ enum HallieShellCLI {
         state.history = []
         state.socialHistory = []
         state.lastResponder = "none"
+    }
+
+    /// "mode: tree (forced)" / "mode: unknown (automatic)" — the same words
+    /// the diagnostics line uses for a forced turn.
+    static func modeLine(_ memory: HallieTurnExecutor.ConversationMemory) -> String {
+        "mode: \(memory.effectiveMode.rawValue) (\(memory.forcedMode != nil ? "forced" : "automatic"))"
     }
 
     static func resetSession(_ state: inout Session) -> HallieTranscriptEvent {

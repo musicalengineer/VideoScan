@@ -160,6 +160,9 @@ struct HallieWebTests {
         let body = json(response)
         #expect(body["prose"] as? String == "I found 1 catalog item matching that.")
         #expect(body["route"] as? String == "presence")
+        // The page's mode label (design §3.6): a presence answer leaves the
+        // session in catalog mode.
+        #expect(body["mode"] as? String == "catalog")
         #expect(recorder.questions == ["show me the cape"])
         #expect(recorder.speakers == ["Donna Breen"], "the device's person is 'I', not the Mac's owner")
         let citations = body["citations"] as? [[String: Any]] ?? []
