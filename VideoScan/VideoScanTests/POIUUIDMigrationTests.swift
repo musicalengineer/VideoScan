@@ -393,4 +393,147 @@ struct POIUUIDMigrationTests {
         #expect(profile.displayName == "Leg\(tag)")
         #expect(POIStorage.readUUIDMigrationReport()?.mapping[legacy.lastPathComponent] == profile.id)
     }
+
+    // MARK: - Safeguards (codex review of f63f141d, 2026-09-12)
+
+    /// SENSOR: a run that renamed a folder and stopped before recording the
+    /// move (crash between rename and checkpoint) is reconciled by the next
+    /// run from the durable plan + the uuid at the destination — never
+    /// treated as "already uuid, nothing to do" and never renamed twice.
+    @Test func interruptedAfterRenameThenRerunReconciles() throws {
+        let root = try makeRoot()
+        defer { root.cleanup() }
+        let a = UUID(), b = UUID()
+        try writeLegacy(root, folder: "alpha", name: "Alpha", uuid: a)
+        try writeLegacy(root, folder: "bravo", name: "Bravo", uuid: b)
+        // The plan the interrupted run had persisted before its first rename …
+        let plan = [POIStorage.PlannedMove(old: "alpha", new: POIStorage.folderName(for: a), uuid: a.uuidString),
+                    POIStorage.PlannedMove(old: "bravo", new: POIStorage.folderName(for: b), uuid: b.uuidString)]
+        var interrupted = POIStorage.UUIDMigrationReport(startedAt: Date())
+        interrupted.planned = plan
+        interrupted.backupPath = "/simulated"
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(interrupted).write(to: root.url.appendingPathComponent(POIStorage.uuidMigrationFileName))
+        // … and the one rename it made before dying (no mapping entry).
+        try FileManager.default.moveItem(at: root.folder("alpha"), to: root.folder(POIStorage.folderName(for: a)))
+        let alphaInode = (try? FileManager.default.attributesOfItem(atPath: root.folder(POIStorage.folderName(for: a)).path))?[.systemFileNumber] as? Int
+
+        guard case .ran(let report) = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) else {
+            Issue.record("should run"); return
+        }
+        #expect(report.reconciled == ["alpha"])
+        #expect(report.mapping["alpha"] == POIStorage.folderName(for: a))
+        #expect(report.mapping["bravo"] == POIStorage.folderName(for: b))
+        #expect(report.complete)
+        #expect((try? FileManager.default.attributesOfItem(atPath: root.folder(POIStorage.folderName(for: a)).path))?[.systemFileNumber] as? Int == alphaInode,
+                "the reconciled folder was not touched again")
+        let audit = try #require(POIStorage.readUUIDMigrationReport(root: root.url))
+        #expect(Set(audit.planned) == Set(plan))
+        #expect(audit.mapping.count == 2)
+        // And now the store is clean.
+        #expect(POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) == .notNeeded)
+    }
+
+    /// SENSOR: when the backup cannot be taken, nothing under the root
+    /// changes — not a rename, not a minted uuid, not the audit file — and
+    /// the read path refuses to write a legacy folder for that root.
+    @Test func backupFailureMeansZeroWritesAnywhere() throws {
+        let root = try makeRoot()
+        defer { root.cleanup() }
+        try writeLegacy(root, folder: "rick", name: "Rick", uuid: UUID())
+        let legacy = try writeLegacy(root, folder: "nouuid", name: "No Uuid", uuid: nil)
+        // A regular FILE where the backup parent should be: clone and copy both fail.
+        let blocker = root.url.deletingLastPathComponent().appendingPathComponent("blocked")
+        try Data("not a directory".utf8).write(to: blocker)
+        let unwritableParent = blocker.appendingPathComponent("backups", isDirectory: true)
+        // Fingerprint everything under the fixture's parent (store + blocker).
+        let before = try manifest(of: root.url.deletingLastPathComponent())
+
+        let outcome = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: unwritableParent)
+        guard case .ran(let report) = outcome else { Issue.record("expected .ran, got \(outcome)"); return }
+        #expect(report.backupPath == nil)
+        #expect(report.mapping.isEmpty)
+        #expect(!report.complete)
+        #expect(try manifest(of: root.url.deletingLastPathComponent()) == before, "fingerprint unchanged: zero writes")
+        #expect(POIStorage.migrationState(root: root.url) == .backupFailed)
+        #expect(!POIStorage.legacyWritesPermitted(root: root.url))
+
+        // The read path honours the state: a legacy profile without a uuid
+        // loads with an unpersisted (ephemeral) uuid and the file is untouched.
+        let loaded = try POIProfile.load(at: legacy)
+        #expect(!loaded.uuidPersisted)
+        #expect(loaded.kinshipAnchor == .profileName("No Uuid"))
+        #expect(try manifest(of: root.url.deletingLastPathComponent()) == before)
+    }
+
+    /// SENSOR: rollback keeps the entries it could not reverse (a legacy
+    /// name re-created in the meantime) so a later attempt can retry them;
+    /// nothing is clobbered and the audit file survives.
+    @Test func rollbackRetainsUnresolvedEntries() throws {
+        let root = try makeRoot()
+        defer { root.cleanup() }
+        let a = UUID(), b = UUID()
+        try writeLegacy(root, folder: "alpha", name: "Alpha", uuid: a)
+        try writeLegacy(root, folder: "bravo", name: "Bravo", uuid: b)
+        guard case .ran(let report) = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) else {
+            Issue.record("should run"); return
+        }
+        #expect(report.mapping.count == 2)
+        // Someone re-created "alpha" by hand: the reverse rename must not clobber it.
+        try FileManager.default.createDirectory(at: root.folder("alpha"), withIntermediateDirectories: true)
+        try Data("hand made".utf8).write(to: root.folder("alpha").appendingPathComponent("note.txt"))
+
+        let restored = try POIStorage.rollbackUUIDMigration(root: root.url)
+        #expect(restored == 1)
+        #expect(FileManager.default.fileExists(atPath: root.folder("bravo").path))
+        #expect(FileManager.default.fileExists(atPath: root.folder(POIStorage.folderName(for: a)).path), "alpha's uuid folder is still there")
+        #expect(try String(contentsOf: root.folder("alpha").appendingPathComponent("note.txt"), encoding: .utf8) == "hand made")
+        let audit = try #require(POIStorage.readUUIDMigrationReport(root: root.url), "audit retained")
+        #expect(audit.mapping == ["alpha": POIStorage.folderName(for: a)])
+        #expect(audit.planned.map(\.old) == ["alpha"])
+        // Out of the way now: the retry completes and the audit moves aside.
+        try FileManager.default.moveItem(at: root.folder("alpha"), to: root.folder("alpha-handmade"))
+        #expect(try POIStorage.rollbackUUIDMigration(root: root.url) == 1)
+        #expect(POIStorage.readUUIDMigrationReport(root: root.url) == nil)
+        #expect(FileManager.default.fileExists(atPath: root.folder("alpha").path))
+    }
+
+    /// SENSOR: a profile the migration skipped (a duplicate-uuid pair here)
+    /// keeps its legacy folder and REFUSES to save with the reason from the
+    /// audit file; no uuid folder is created and neither twin changes.
+    @Test func skippedProfileSaveRefusesWithTheAuditReason() throws {
+        try #require(TestEnvironment.isTestHost)
+        let id = UUID()
+        let tag = String(UUID().uuidString.prefix(6))
+        let twins = ["twin-a-\(tag)", "twin-b-\(tag)"].map { POIStorage.legacyFolder(forName: $0) }
+        defer { twins.forEach { try? FileManager.default.removeItem(at: $0) } }
+        for (i, folder) in twins.enumerated() {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            var profile = POIProfile(name: "Twin\(tag)", referencePath: folder.path, uuid: id)
+            profile.notes = "twin \(i)"
+            try JSONEncoder().encode(profile).write(to: folder.appendingPathComponent("profile.json"))
+            try Data([UInt8(i)]).write(to: folder.appendingPathComponent("photo.jpg"))
+        }
+        let before = try twins.map { try Data(contentsOf: $0.appendingPathComponent("profile.json")) }
+
+        let listed = POIProfile.listAll().filter { $0.uuid == id }
+        #expect(listed.count == 2)
+        for var twin in listed {
+            let q = try #require(twin.quarantine)
+            #expect(twin.referencePath.hasSuffix(q.folder))
+            #expect(q.reason.hasPrefix(POIStorage.UUIDMigrationSkip.duplicateUUID))
+            twin.notes = "edited"
+            #expect(throws: POIProfileFileStore.Failure.quarantined(folder: q.folder, reason: q.reason)) {
+                try twin.save()
+            }
+            #expect(throws: (any Error).self) { _ = try twin.saveRenaming(from: twin.name) }
+        }
+        #expect(!FileManager.default.fileExists(atPath: POIStorage.folder(forUUID: id).path), "no uuid folder was created")
+        #expect(try twins.map { try Data(contentsOf: $0.appendingPathComponent("profile.json")) } == before)
+        // The refusal reads as a sentence Rick can act on.
+        let message = POIProfileFileStore.Failure.quarantined(folder: twins[0].lastPathComponent, reason: "duplicateUUID: x").errorDescription ?? ""
+        #expect(message.contains("pre-migration folder"))
+        #expect(message.contains(".uuid-migration.json"))
+        #expect(message.contains("Nothing was written"))
+    }
 }

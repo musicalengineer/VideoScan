@@ -1007,7 +1007,9 @@ struct FamilyKinshipTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
         let writable = try POIProfile.load(name: name)
         #expect(writable.uuidPersisted)
-        #expect(try Self.uuidOnDisk(folder) == writable.uuid.uuidString)
+        // load(name:) runs the migration first: the writable folder moved to
+        // its uuid folder, uuid persisted there (2026-09-12).
+        #expect(try Self.uuidOnDisk(POIStorage.folder(for: writable)) == writable.uuid.uuidString)
         #expect(writable.kinshipAnchor == .profile(id: writable.uuid))
     }
 

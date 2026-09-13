@@ -401,9 +401,18 @@ enum POIStorage {
 
     // MARK: - Migration 2: name-keyed folders → uuid-keyed folders (2026-09-12)
 
+    /// One move the migration intends to make, persisted BEFORE the first
+    /// rename so a crash mid-way leaves a record a later run can reconcile.
+    struct PlannedMove: Codable, Hashable {
+        let old: String
+        let new: String
+        let uuid: String
+    }
+
     /// Audit record for the name→uuid move, written to `POI/.uuid-migration.json`.
-    /// `mapping` is old folder name → new folder name (the uuid); a later
-    /// run merges into it, so the file always lists everything that ever
+    /// `planned` is written before the first rename; `mapping` (old folder
+    /// name → new folder name) grows as moves land; a later run merges into
+    /// both, so the file always lists everything that was ever planned or
     /// moved and can drive `rollbackUUIDMigration`.
     struct UUIDMigrationReport: Codable, Equatable {
         struct Skipped: Codable, Equatable {
@@ -413,10 +422,12 @@ enum POIStorage {
         }
         var startedAt: Date
         var finishedAt: Date?
+        var planned: [PlannedMove] = []
         var mapping: [String: String] = [:]
         var skipped: [Skipped] = []
         var backupPath: String?
         var backupMethod: String?
+        var backupVerified: Bool = false
         var backupSeconds: Double = 0
         var renameSeconds: Double = 0
         var elapsedSeconds: Double = 0
@@ -428,6 +439,39 @@ enum POIStorage {
         /// smaller after (nothing is deleted).
         var foldersBefore: Int = 0
         var foldersAfter: Int = 0
+        /// Planned moves a previous run had already made (folder renamed,
+        /// mapping not yet written when it stopped) that this run recognised
+        /// by the uuid at the destination.
+        var reconciled: [String] = []
+
+        enum CodingKeys: String, CodingKey {
+            case startedAt, finishedAt, planned, mapping, skipped, backupPath, backupMethod
+            case backupVerified, backupSeconds, renameSeconds, elapsedSeconds, complete
+            case foldersBefore, foldersAfter, reconciled
+        }
+
+        init(startedAt: Date) { self.startedAt = startedAt }
+
+        /// Tolerant decode: an audit file written by an earlier build of this
+        /// branch (no `planned` / `reconciled`) still loads.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            startedAt = try c.decode(Date.self, forKey: .startedAt)
+            finishedAt = try c.decodeIfPresent(Date.self, forKey: .finishedAt)
+            planned = try c.decodeIfPresent([PlannedMove].self, forKey: .planned) ?? []
+            mapping = try c.decodeIfPresent([String: String].self, forKey: .mapping) ?? [:]
+            skipped = try c.decodeIfPresent([Skipped].self, forKey: .skipped) ?? []
+            backupPath = try c.decodeIfPresent(String.self, forKey: .backupPath)
+            backupMethod = try c.decodeIfPresent(String.self, forKey: .backupMethod)
+            backupVerified = try c.decodeIfPresent(Bool.self, forKey: .backupVerified) ?? false
+            backupSeconds = try c.decodeIfPresent(Double.self, forKey: .backupSeconds) ?? 0
+            renameSeconds = try c.decodeIfPresent(Double.self, forKey: .renameSeconds) ?? 0
+            elapsedSeconds = try c.decodeIfPresent(Double.self, forKey: .elapsedSeconds) ?? 0
+            complete = try c.decodeIfPresent(Bool.self, forKey: .complete) ?? false
+            foldersBefore = try c.decodeIfPresent(Int.self, forKey: .foldersBefore) ?? 0
+            foldersAfter = try c.decodeIfPresent(Int.self, forKey: .foldersAfter) ?? 0
+            reconciled = try c.decodeIfPresent([String].self, forKey: .reconciled) ?? []
+        }
     }
 
     /// What a call to `migrateToUUIDFoldersIfNeeded` did.
@@ -454,11 +498,53 @@ enum POIStorage {
         static let renameFailed = "renameFailed"
     }
 
+    /// What the last migration run in this process concluded about a root.
+    /// Drives `legacyWritesPermitted`: the read-path uuid writers may touch
+    /// a not-yet-migrated (legacy) folder only when a verified backup exists
+    /// or there was never anything to move.
+    enum MigrationState: Equatable {
+        /// No legacy folders at all.
+        case clean
+        /// Legacy folders remain but none will move (all skipped); nothing
+        /// in the store was mutated by the migration.
+        case nothingToMove
+        /// A verified backup exists at this path; moves happened after it.
+        case backedUp(String)
+        /// The backup could not be taken or verified — nothing moved, and
+        /// nothing else may write into a legacy folder either.
+        case backupFailed
+        /// Refused before any I/O (live root under a test host, viewer).
+        case refused
+    }
+
     /// Serializes migration runs in-process. `NSLock` ≈ a C++ std::mutex;
     /// the migration is called from `listAll()` on whatever actor the caller
     /// is on, so the lock — not an actor — is what makes two concurrent
     /// callers see one run.
     private static let uuidMigrationLock = NSLock()
+
+    /// Per-root state (keyed by standardized path).
+    private static var migrationStates: [String: MigrationState] = [:]
+
+    /// The last known state for `root`, nil when no run has looked at it in
+    /// this process.
+    static func migrationState(root: URL? = nil) -> MigrationState? {
+        uuidMigrationLock.lock()
+        defer { uuidMigrationLock.unlock() }
+        return migrationStates[(root ?? storeDir).standardizedFileURL.path]
+    }
+
+    /// May a read path (`POIProfile.load`, `listAll`'s uuid persistence)
+    /// write a minted uuid INTO A LEGACY FOLDER under `root`? Only when the
+    /// migration has looked at the root and found nothing to move, or has a
+    /// verified backup of it. Unknown, refused and backup-failed all mean
+    /// no — the original stays byte-identical until a backup exists.
+    static func legacyWritesPermitted(root: URL? = nil) -> Bool {
+        switch migrationState(root: root) {
+        case .clean?, .nothingToMove?, .backedUp?: return true
+        case .backupFailed?, .refused?, nil: return false
+        }
+    }
 
     /// Summary lines for catalog.log, buffered until DashboardState has
     /// opened the file (the migration can run before the dashboard exists —
@@ -478,24 +564,37 @@ enum POIStorage {
     /// folder is logged once per launch — not on every `listAll()`.
     private static var reportedSkips = Set<String>()
 
+    /// Why a legacy folder under `root` is still there, from the audit file:
+    /// the skip reason and detail, or "not migrated yet" when the audit does
+    /// not mention it. Used to refuse edits of a quarantined profile with an
+    /// actionable message.
+    static func quarantineReason(forLegacyFolder name: String, root: URL? = nil) -> String {
+        if let entry = readUUIDMigrationReport(root: root)?.skipped.last(where: { $0.folder == name }) {
+            return "\(entry.reason): \(entry.detail)"
+        }
+        return "not migrated yet"
+    }
+
     /// One-shot, idempotent move of every name-keyed profile folder under
     /// `root` to `root/<UUID>/`. Safe to call before every enumeration: when
     /// every folder is already uuid-named it costs one directory listing.
     ///
-    /// Steps (docs/people_uuid_folders_design.md): refuse a live root under a
-    /// test host and any viewer; classify every candidate first (reading only
-    /// profile.json); back the whole directory up with an APFS clone BEFORE the
-    /// first rename; rename with RENAME_EXCL; rewrite referencePath and record
-    /// legacyFolderName; write the audit file after every rename; log per
-    /// folder and once in summary. Nothing is ever deleted.
+    /// Order of operations (docs/people_uuid_folders_design.md, hardened
+    /// after codex review 2026-09-12):
+    ///   1. refuse a live root under a test host and any viewer;
+    ///   2. reconcile a previous run's plan (a folder it renamed but never
+    ///      recorded is recognised by the uuid at the destination);
+    ///   3. classify every candidate IN MEMORY, reading only profile.json;
+    ///   4. when at least one folder will move: clone the whole directory
+    ///      to a backup, VERIFY it, and only then write anything;
+    ///   5. persist the plan (old → new → uuid) to the audit file;
+    ///   6. rename with RENAME_EXCL, checkpointing each move in the audit;
+    ///   7. rewrite referencePath / legacyFolderName in the moved JSON.
+    /// Nothing is ever deleted. A failed or unverified backup means zero
+    /// writes, and `legacyWritesPermitted` stays false for the root.
     ///
     /// Memory: bounded by the number of profiles (a few dozen dictionaries);
     /// photo bytes are never read — the clone is a metadata operation.
-    ///
-    /// - Parameters:
-    ///   - root: the POI directory (tests pass a temp root; production the store).
-    ///   - backupParent: where `POI-backup-<stamp>` lands; default = root's parent.
-    ///   - now: injectable clock for deterministic backup names in tests.
     @discardableResult
     static func migrateToUUIDFoldersIfNeeded(
         root: URL? = nil,
@@ -508,21 +607,28 @@ enum POIStorage {
         let root = (root ?? storeDir).standardizedFileURL
         let fm = FileManager.default
 
-        // (a) Refuse the real store under a test host — same predicate the
+        // 1. Refuse the real store under a test host — same predicate the
         // file store uses — and any viewer (POI/ is synced from the master).
         do { try POIProfileFileStore.guardRoot(root) } catch {
+            migrationStates[root.path] = .refused
             return .refused(error.localizedDescription)
         }
         if ViewerWriteGuard.refuse("POIStorage.migrateToUUIDFolders") {
+            migrationStates[root.path] = .refused
             return .refused("viewer")
         }
 
         let folders = poiFolders(in: root)
+        let previousReport = readUUIDMigrationReport(root: root)
         // A folder whose name is its own uuid is done. Only the rest are
         // candidates — the steady-state answer is "no candidates" and costs
         // nothing beyond the listing we needed anyway.
         let candidates = folders.filter { uuid(fromFolderName: $0.lastPathComponent) == nil }
-        guard !candidates.isEmpty else { return .notNeeded }
+        let unreconciled = (previousReport?.planned ?? []).filter { previousReport?.mapping[$0.old] == nil }
+        if candidates.isEmpty && unreconciled.isEmpty {
+            migrationStates[root.path] = .clean
+            return .notNeeded
+        }
 
         let clock = ContinuousClock()
         let started = clock.now
@@ -542,10 +648,38 @@ enum POIStorage {
                 log("skipped '\(folder.lastPathComponent)' (\(reason)): \(detail)")
             }
         }
+        func finish(_ state: MigrationState) -> UUIDMigrationOutcome {
+            report.finishedAt = Date()
+            report.elapsedSeconds = seconds(clock.now - started)
+            report.foldersAfter = poiFolders(in: root).count
+            migrationStates[root.path] = state
+            pendingCatalogLogLines.append(contentsOf: lines.map { "People migration: \($0)" })
+            return .ran(report)
+        }
 
-        // (c) Classify first. `plan` holds the folders that will move; every
-        // profile.json is read once, and no rename happens until the backup
-        // exists.
+        // 2. Reconcile: a previous run planned a move, renamed the folder,
+        // and stopped before recording it. The uuid at the destination is
+        // the proof; the mapping gets the entry it was owed.
+        for planned in unreconciled {
+            let old = root.appendingPathComponent(planned.old, isDirectory: true)
+            let new = root.appendingPathComponent(planned.new, isDirectory: true)
+            guard !fm.fileExists(atPath: old.path), fm.fileExists(atPath: new.path),
+                  let json = readProfileJSON(in: new),
+                  (json["uuid"] as? String)?.uppercased() == planned.uuid.uppercased()
+            else { continue }
+            report.mapping[planned.old] = planned.new
+            report.reconciled.append(planned.old)
+            log("reconciled '\(planned.old)' → \(planned.new) (renamed by an earlier run that stopped before recording it)")
+        }
+        if candidates.isEmpty {
+            // Only reconciliation was owed. Record it and stop.
+            try? writeUUIDMigrationReport(merged(previousReport, with: report), root: root)
+            report.complete = true
+            return finish(.clean)
+        }
+
+        // 3. Classify IN MEMORY. `plan` holds the folders that will move;
+        // every profile.json is read once, nothing is written.
         struct Move {
             let source: URL
             let uuid: UUID
@@ -556,7 +690,7 @@ enum POIStorage {
         var ownersByUUID: [UUID: [URL]] = [:]
         // Folders already keyed by uuid own that uuid too — a legacy folder
         // pointing at one of them must not be renamed onto it.
-        for folder in folders where uuid(fromFolderName: folder.lastPathComponent) != nil {
+        for folder in folders {
             if let id = uuid(fromFolderName: folder.lastPathComponent) {
                 ownersByUUID[id, default: []].append(folder)
             }
@@ -571,10 +705,7 @@ enum POIStorage {
                 skip(folder, UUIDMigrationSkip.noProfile, "no profile.json — left in place")
                 continue
             }
-            guard let data = try? Data(contentsOf: profileURL),
-                  let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  json["name"] is String
-            else {
+            guard let json = readProfileJSON(in: folder), json["name"] is String else {
                 skip(folder, UUIDMigrationSkip.malformedJSON, "profile.json could not be read — left in place, not deleted")
                 continue
             }
@@ -583,61 +714,78 @@ enum POIStorage {
             ownersByUUID[id, default: []].append(folder)
             plan.append(Move(source: folder, uuid: id, json: json, mintedUUID: existing == nil))
         }
-        // Duplicate uuids: skip every folder that shares one, name them all.
+        // Duplicate uuids: skip every legacy folder that shares one, name them all.
         let duplicates = ownersByUUID.filter { $0.value.count > 1 }
-        if !duplicates.isEmpty {
-            for (id, owners) in duplicates {
-                let paths = owners.map(\.path).sorted().joined(separator: " | ")
-                for owner in owners where uuid(fromFolderName: owner.lastPathComponent) == nil {
-                    skip(owner, UUIDMigrationSkip.duplicateUUID,
-                         "uuid \(id.uuidString) is claimed by more than one folder: \(paths)")
-                }
-            }
-            plan.removeAll { duplicates[$0.uuid] != nil }
-        }
-
-        let willMove = !plan.isEmpty
-        if willMove {
-            // (b) BACKUP FIRST — the whole directory, before the first rename.
-            let stamp = trashTimestamp(now)
-            // Production: beside POI/ in Application Support/VideoScan/.
-            // Test host: beside the per-process store, in its own folder,
-            // so temp never fills with backups of backups.
-            let parent = (backupParent ?? defaultBackupParent(for: root)).standardizedFileURL
-            var backup = parent.appendingPathComponent("POI-backup-\(stamp)", isDirectory: true)
-            if fm.fileExists(atPath: backup.path) {
-                backup = parent.appendingPathComponent("POI-backup-\(stamp)-\(UUID().uuidString.prefix(8))", isDirectory: true)
-            }
-            let backupStart = clock.now
-            switch cloneOrCopyDirectory(from: root, to: backup) {
-            case .success(let method):
-                report.backupPath = backup.path
-                report.backupMethod = method
-                report.backupSeconds = seconds(clock.now - backupStart)
-                log("backup of \(folders.count) folder(s) at \(backup.path) via \(method) in \(format(report.backupSeconds)) s")
-            case .failure(let error):
-                // No backup, no migration. Everything stays as it was.
-                log("BACKUP FAILED, nothing moved: \(error.localizedDescription)")
-                report.finishedAt = Date()
-                report.elapsedSeconds = seconds(clock.now - started)
-                report.foldersAfter = poiFolders(in: root).count
-                pendingCatalogLogLines.append(contentsOf: lines.map { "People migration: \($0)" })
-                return .ran(report)
+        for (id, owners) in duplicates {
+            let paths = owners.map(\.path).sorted().joined(separator: " | ")
+            for owner in owners where uuid(fromFolderName: owner.lastPathComponent) == nil {
+                skip(owner, UUIDMigrationSkip.duplicateUUID,
+                     "uuid \(id.uuidString) is claimed by more than one folder: \(paths)")
             }
         }
+        plan.removeAll { duplicates[$0.uuid] != nil }
+        // A destination that already exists (a uuid folder from another
+        // source) is refused up front — it would fail RENAME_EXCL anyway,
+        // and the plan must not promise a move that cannot happen.
+        plan.removeAll { move in
+            let destination = root.appendingPathComponent(folderName(for: move.uuid), isDirectory: true)
+            guard fm.fileExists(atPath: destination.path) else { return false }
+            skip(move.source, UUIDMigrationSkip.destinationExists,
+                 "\(destination.lastPathComponent) already exists — left in place")
+            return true
+        }
 
-        // (d) Rename, one folder at a time, recording each move as it lands.
-        let previousReport = readUUIDMigrationReport(root: root)
+        guard !plan.isEmpty else {
+            // Everything left is quarantined; the migration wrote nothing
+            // into any profile folder (only the audit file).
+            try? writeUUIDMigrationReport(merged(previousReport, with: report), root: root)
+            return finish(.nothingToMove)
+        }
+
+        // 4. BACKUP FIRST — the whole directory, verified, before any write.
+        let stamp = trashTimestamp(now)
+        let parent = (backupParent ?? defaultBackupParent(for: root)).standardizedFileURL
+        var backup = parent.appendingPathComponent("POI-backup-\(stamp)", isDirectory: true)
+        if fm.fileExists(atPath: backup.path) {
+            backup = parent.appendingPathComponent("POI-backup-\(stamp)-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        }
+        let backupStart = clock.now
+        switch cloneOrCopyDirectory(from: root, to: backup) {
+        case .success(let method):
+            report.backupSeconds = seconds(clock.now - backupStart)
+            let verified = verifyBackup(of: root, at: backup, folders: plan.map(\.source))
+            report.backupPath = backup.path
+            report.backupMethod = method
+            report.backupVerified = verified
+            guard verified else {
+                log("BACKUP NOT VERIFIED at \(backup.path) (via \(method)) — nothing moved, nothing written")
+                return finish(.backupFailed)
+            }
+            log("backup of \(folders.count) folder(s) at \(backup.path) via \(method) in \(format(report.backupSeconds)) s, verified")
+        case .failure(let error):
+            // No backup, no migration. Everything stays as it was.
+            log("BACKUP FAILED, nothing moved, nothing written: \(error.localizedDescription)")
+            return finish(.backupFailed)
+        }
+
+        // 5. Durable plan BEFORE the first rename.
+        report.planned = plan.map {
+            PlannedMove(old: $0.source.lastPathComponent, new: folderName(for: $0.uuid), uuid: $0.uuid.uuidString)
+        }
+        do {
+            try writeUUIDMigrationReport(merged(previousReport, with: report), root: root)
+        } catch {
+            log("could not write the plan to \(uuidMigrationFileName) — nothing moved: \(error.localizedDescription)")
+            return finish(.backupFailed)
+        }
+
+        // 6./7. Rename, one folder at a time, checkpointing each move.
         let renameStart = clock.now
         for var move in plan {
             let destination = root.appendingPathComponent(folderName(for: move.uuid), isDirectory: true)
-            if fm.fileExists(atPath: destination.path) {
-                skip(move.source, UUIDMigrationSkip.destinationExists,
-                     "\(destination.lastPathComponent) already exists — left in place")
-                continue
-            }
-            // A minted uuid is written into the OLD location first, so the
-            // identity is durable even if the rename below fails.
+            // A minted uuid is written into the OLD location first (after the
+            // backup, before the rename) so the identity is durable even if
+            // the rename below fails.
             if move.mintedUUID {
                 move.json["uuid"] = move.uuid.uuidString
                 do {
@@ -654,6 +802,9 @@ enum POIStorage {
                 skip(move.source, UUIDMigrationSkip.renameFailed, "rename(2) failed: \(err)")
                 continue
             }
+            // Checkpoint the move before anything else touches the folder.
+            report.mapping[move.source.lastPathComponent] = destination.lastPathComponent
+            try? writeUUIDMigrationReport(merged(previousReport, with: report), root: root)
             // Rewrite referencePath and keep the old name for the audit.
             move.json["referencePath"] = destination.path
             if move.json["legacyFolderName"] == nil {
@@ -666,39 +817,34 @@ enum POIStorage {
                 // this is an audit gap, not a data problem. Say so.
                 log("moved '\(move.source.lastPathComponent)' → \(destination.lastPathComponent) but could not rewrite profile.json: \(error.localizedDescription)")
             }
-            report.mapping[move.source.lastPathComponent] = destination.lastPathComponent
             let name = (move.json["name"] as? String) ?? "?"
             log("'\(move.source.lastPathComponent)' → \(destination.lastPathComponent) (\(name))\(move.mintedUUID ? " [uuid minted]" : "")")
-            // (e) Audit after every rename so a crash mid-way still leaves a
-            // record of what moved.
-            try? writeUUIDMigrationReport(merged(previousReport, with: report), root: root)
         }
         report.renameSeconds = seconds(clock.now - renameStart)
 
-        // (e)/(f) Final record + summary.
-        report.finishedAt = Date()
-        report.elapsedSeconds = seconds(clock.now - started)
+        // Final record + summary.
         report.complete = report.skipped.isEmpty
-        report.foldersAfter = poiFolders(in: root).count
-        let final = merged(previousReport, with: report)
-        do { try writeUUIDMigrationReport(final, root: root) } catch {
+        let outcome = finish(.backedUp(backup.path))
+        do { try writeUUIDMigrationReport(merged(previousReport, with: report), root: root) } catch {
             log("could not write \(uuidMigrationFileName): \(error.localizedDescription)")
         }
-        let summary = "People migration: \(report.mapping.count) folder(s) → UUID, "
-            + "\(report.skipped.count) skipped, backup at \(report.backupPath ?? "(none needed)"), "
+        let summary = "People migration: \(report.mapping.count) folder(s) → UUID"
+            + (report.reconciled.isEmpty ? "" : " (\(report.reconciled.count) reconciled)")
+            + ", \(report.skipped.count) skipped, backup at \(report.backupPath ?? "(none)"), "
             + "took \(format(report.elapsedSeconds)) s (rename \(format(report.renameSeconds)) s, "
             + "backup \(format(report.backupSeconds)) s)"
         appLog.write("[people] \(summary)")
         storageLog.notice("\(summary, privacy: .public)")
-        pendingCatalogLogLines.append(contentsOf: lines.map { "People migration: \($0)" })
         pendingCatalogLogLines.append(summary)
-        return .ran(report)
+        return outcome
     }
 
     /// Reverse every move recorded in `.uuid-migration.json` under `root`:
     /// rename `<UUID>/` back to its legacy name (RENAME_EXCL — a re-created
-    /// legacy folder is never clobbered), restore referencePath, and move
-    /// the audit file aside as `.uuid-migration-rolledback-<stamp>.json`.
+    /// legacy folder is never clobbered) and restore referencePath. Entries
+    /// whose reverse rename fails are RETAINED in the audit file so a later
+    /// attempt can retry them; the file is moved aside as
+    /// `.uuid-migration-rolledback-<stamp>.json` only when nothing remains.
     /// Test-only entry point (no menu item); the backup clone is untouched.
     /// Returns the number of folders renamed back.
     @discardableResult
@@ -708,39 +854,45 @@ enum POIStorage {
         let root = (root ?? storeDir).standardizedFileURL
         try POIProfileFileStore.guardRoot(root)
         try ViewerWriteGuard.check("POIStorage.rollbackUUIDMigration")
-        guard let report = readUUIDMigrationReport(root: root) else { return 0 }
+        guard var report = readUUIDMigrationReport(root: root) else { return 0 }
         let fm = FileManager.default
         var restored = 0
+        var remaining: [String: String] = [:]
         for (old, new) in report.mapping {
             let source = root.appendingPathComponent(new, isDirectory: true)
             let destination = root.appendingPathComponent(old, isDirectory: true)
-            guard fm.fileExists(atPath: source.path) else { continue }
+            guard fm.fileExists(atPath: source.path) else {
+                // Nothing to move back (already rolled back, or trashed by
+                // the user) — keep the audit honest but do not retry forever.
+                appLog.write("[people] rollback: \(new) is gone; '\(old)' not restored")
+                continue
+            }
             let rc = renamex_np(source.path, destination.path, UInt32(RENAME_EXCL))
             guard rc == 0 else {
-                appLog.write("[people] rollback: could not rename \(new) back to '\(old)': \(String(cString: strerror(errno)))")
+                appLog.write("[people] rollback: could not rename \(new) back to '\(old)': \(String(cString: strerror(errno))) — entry retained")
+                remaining[old] = new
                 continue
             }
             let profileURL = destination.appendingPathComponent("profile.json")
-            if let data = try? Data(contentsOf: profileURL),
-               var json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            if var json = readProfileJSON(in: destination) {
                 json["referencePath"] = destination.path
                 try? writeJSON(json, to: profileURL)
             }
             restored += 1
             appLog.write("[people] rollback: \(new) → '\(old)'")
         }
-        let aside = root.appendingPathComponent(".uuid-migration-rolledback-\(trashTimestamp(now)).json")
-        try? fm.moveItem(at: root.appendingPathComponent(uuidMigrationFileName), to: aside)
-        appLog.write("[people] rollback: \(restored) folder(s) renamed back; audit moved to \(aside.lastPathComponent)")
+        if remaining.isEmpty {
+            let aside = root.appendingPathComponent(".uuid-migration-rolledback-\(trashTimestamp(now)).json")
+            try? fm.moveItem(at: root.appendingPathComponent(uuidMigrationFileName), to: aside)
+            appLog.write("[people] rollback: \(restored) folder(s) renamed back; audit moved to \(aside.lastPathComponent)")
+        } else {
+            report.mapping = remaining
+            report.planned = report.planned.filter { remaining[$0.old] != nil }
+            try writeUUIDMigrationReport(report, root: root)
+            appLog.write("[people] rollback: \(restored) folder(s) renamed back; \(remaining.count) entr\(remaining.count == 1 ? "y" : "ies") retained for retry")
+        }
+        migrationStates[root.path] = nil
         return restored
-    }
-
-    /// Where `POI-backup-<stamp>` lands by default: beside the store in
-    /// production; under a per-process sibling folder for a test host.
-    static func defaultBackupParent(for root: URL) -> URL {
-        let parent = root.deletingLastPathComponent()
-        guard TestEnvironment.isTestHost else { return parent }
-        return parent.appendingPathComponent("\(root.lastPathComponent)-backups", isDirectory: true)
     }
 
     /// The audit file under `root`, if one exists and decodes.
@@ -759,13 +911,22 @@ enum POIStorage {
         try encoder.encode(report).write(to: root.appendingPathComponent(uuidMigrationFileName), options: .atomic)
     }
 
-    /// A later run keeps every earlier mapping (rollback needs all of them)
-    /// and otherwise describes the latest run.
+    /// A later run keeps every earlier mapping and plan entry (rollback and
+    /// reconciliation need all of them) and otherwise describes the latest run.
     private static func merged(_ previous: UUIDMigrationReport?, with latest: UUIDMigrationReport) -> UUIDMigrationReport {
         guard let previous else { return latest }
         var out = latest
         out.mapping = previous.mapping.merging(latest.mapping) { _, new in new }
+        var planned = previous.planned
+        for move in latest.planned where !planned.contains(move) { planned.append(move) }
+        out.planned = planned
         return out
+    }
+
+    /// profile.json in `folder` as a dictionary — nil when missing or unreadable.
+    private static func readProfileJSON(in folder: URL) -> [String: Any]? {
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent("profile.json")) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
     private static func writeJSON(_ object: [String: Any], to url: URL) throws {
@@ -773,12 +934,24 @@ enum POIStorage {
         try data.write(to: url, options: .atomic)
     }
 
+    /// Where `POI-backup-<stamp>` lands by default: beside the store in
+    /// production; under a per-process sibling folder for a test host.
+    static func defaultBackupParent(for root: URL) -> URL {
+        let parent = root.deletingLastPathComponent()
+        guard TestEnvironment.isTestHost else { return parent }
+        return parent.appendingPathComponent("\(root.lastPathComponent)-backups", isDirectory: true)
+    }
+
     /// Clone a directory hierarchy with `clonefile(2)` (APFS: shares blocks,
     /// metadata-only, seconds for thousands of photos), falling back to a
     /// real copy on a volume that cannot clone. Returns the method used.
     static func cloneOrCopyDirectory(from source: URL, to destination: URL) -> Result<String, Error> {
         let fm = FileManager.default
-        try? fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        do {
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        } catch {
+            return .failure(error)
+        }
         let supportsCloning = (try? source.resourceValues(forKeys: [.volumeSupportsFileCloningKey]))?
             .volumeSupportsFileCloning ?? false
         if supportsCloning, clonefile(source.path, destination.path, 0) == 0 {
@@ -793,6 +966,30 @@ enum POIStorage {
         } catch {
             return .failure(error)
         }
+    }
+
+    /// The backup is trusted only when it lists the same top-level entries
+    /// as the store and, for every folder about to move, carries the same
+    /// profile.json bytes and the same number of entries. Photo bytes are
+    /// not compared — a clone shares them by construction, and reading
+    /// thousands of photos here would be the memory hazard this file avoids.
+    static func verifyBackup(of root: URL, at backup: URL, folders: [URL]) -> Bool {
+        let fm = FileManager.default
+        guard let rootNames = try? fm.contentsOfDirectory(atPath: root.path),
+              let backupNames = try? fm.contentsOfDirectory(atPath: backup.path),
+              Set(rootNames) == Set(backupNames)
+        else { return false }
+        for folder in folders {
+            let mirror = backup.appendingPathComponent(folder.lastPathComponent, isDirectory: true)
+            guard let original = try? Data(contentsOf: folder.appendingPathComponent("profile.json")),
+                  let copy = try? Data(contentsOf: mirror.appendingPathComponent("profile.json")),
+                  original == copy,
+                  let a = try? fm.contentsOfDirectory(atPath: folder.path),
+                  let b = try? fm.contentsOfDirectory(atPath: mirror.path),
+                  a.count == b.count
+            else { return false }
+        }
+        return true
     }
 
     private static func seconds(_ d: Duration) -> Double {

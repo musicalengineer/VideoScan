@@ -145,3 +145,53 @@ belt-and-braces copy and is never touched by rollback.
 * Sensors — `migrationNeverDeletesAFolder`,
   `twoProfilesWithTheSameGivenNameCoexist`, `renameNeverMovesPhotos`,
   `displayNameIsTheFirstAlias`.
+
+## Amendments after codex review (same night)
+
+Storage safeguards (design 8c70b18b approved; code held for these):
+
+* **Backup before any write.** Candidates are classified in memory first.
+  The clone is taken only when at least one folder will move, and is
+  **verified** (same top-level entries; for every folder that will move,
+  identical `profile.json` bytes and entry count) before a byte is written.
+  A failed or unverified backup means zero writes and the root is marked
+  `backupFailed`.
+* **Read paths never mutate a legacy folder without that backup.**
+  `POIProfile.load(at:)` (which now runs `guardRoot` before any I/O) and
+  `listAll()` persist a minted uuid into a name-keyed folder only when
+  `POIStorage.legacyWritesPermitted(root:)` — the migration found nothing to
+  move, or has a verified backup. Otherwise the profile loads with an
+  ephemeral uuid (`uuidPersisted == false`, name-based anchor), as before.
+* **Durable plan.** `planned: [{old, new, uuid}]` is written to the audit
+  file after the backup and before the first rename; every move is
+  checkpointed into `mapping` immediately after its rename. A later run
+  reconciles a planned move whose folder was renamed but never recorded by
+  reading the uuid at the destination (`reconciled` in the report).
+* **Rollback retains unresolved entries.** A reverse rename that fails
+  (RENAME_EXCL against a re-created legacy folder) keeps its mapping/plan
+  entry in the audit file for retry; the file moves aside only when empty.
+* **Quarantine refuses mutation.** A profile still in a skipped legacy
+  folder (`POIProfile.quarantine`) throws
+  `POIProfileFileStore.Failure.quarantined(folder:reason:)` on `save()` with
+  the audit reason and the fix; no uuid folder is created.
+
+Consumers (codex #1422/#1423/#1426):
+
+1. `PersonFinderSettings.activeProfileUUID` (additive key) is set by
+   `applyProfile`; quick-save, rejection sync, edit sync, delete and the
+   reference-path heal resolve the active person by uuid, by name only when
+   it is unique, and **refuse** when ambiguous (`sharedNameRefusal`).
+2. `ScanJob.personLabel` is the canonical name again (the catalog's
+   detectedPeople / prefilter bridge); `personDisplayLabel` is for rows.
+   `startJob` refuses a profile whose canonical name is shared.
+3. Holdout review queues and validation labels stay name-keyed; the Review
+   / View Confirmations entry points and the badge are disabled for a
+   shared name with the refusal as help text.
+4. `BundleImporter.resolvePlacement` collects every same-name local match
+   for a name-identified bundle folder and refuses when there is more than
+   one (`Placement.refusal`; the import reports it as failed, nothing copied).
+5. `IdentifyFamilyModel.PromotionAction` carries the uuid; a cluster name is
+   resolved once at plan time (canonical name wins, else a unique alias /
+   full-name form) and the bare shared name is skipped.
+6. Accessibility identifiers are `pf.person.<name>.<uuid>` (also treelink,
+   holdout badge); the Gauntlet matches on the name prefix.

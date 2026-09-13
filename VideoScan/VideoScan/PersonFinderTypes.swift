@@ -179,6 +179,12 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
 
 struct PersonFinderSettings: Equatable {
     var personName: String = "Donna"
+    /// The ACTIVE People-tab profile (2026-09-12, codex review): the durable
+    /// identity behind `personName`, so quick-save, rejection sync, edit and
+    /// delete never pick the wrong Richard. nil for settings written before
+    /// this key existed; callers then fall back to the name only when it is
+    /// unique in the gallery. Additive UserDefaults key.
+    var activeProfileUUID: UUID? = nil
     var referencePath: String = ""
     var outputDir: String = ""          // empty → Desktop/<name>_clips
     var threshold: Float = 0.52
@@ -296,6 +302,7 @@ struct PersonFinderSettings: Equatable {
     private static func restoreStrings(_ s: inout PersonFinderSettings, from defaults: UserDefaults) {
         let d = defaults; let p = prefix
         if let v = d.string(forKey: "\(p)personName") { s.personName = v }
+        if let v = d.string(forKey: "\(p)activeProfileUUID") { s.activeProfileUUID = UUID(uuidString: v) }
         if let v = d.string(forKey: "\(p)referencePath") { s.referencePath = v }
         if let v = d.string(forKey: "\(p)outputDir") { s.outputDir = v }
         if let v = d.string(forKey: "\(p)recognitionEngine") {
@@ -362,6 +369,7 @@ struct PersonFinderSettings: Equatable {
     /// Apply a POI profile to these settings.
     mutating func applyProfile(_ profile: POIProfile) {
         personName = profile.name
+        activeProfileUUID = profile.uuid
         referencePath = profile.referencePath
         rejectedReferenceFiles = profile.rejectedFiles
         // migratePersisted: profile.json written before #144 may carry the
@@ -388,6 +396,7 @@ struct PersonFinderSettings: Equatable {
         let d = defaults
         let p = Self.prefix
         d.set(personName, forKey: "\(p)personName")
+        d.set(activeProfileUUID?.uuidString, forKey: "\(p)activeProfileUUID")
         d.set(referencePath, forKey: "\(p)referencePath")
         d.set(outputDir, forKey: "\(p)outputDir")
         d.set(recognitionEngine.rawValue, forKey: "\(p)recognitionEngine")
@@ -852,6 +861,13 @@ struct POIProfile: Codable, Identifiable, Equatable {
         // Remote viewer (Phase 1): POI/ is synced FROM the master; never
         // written here (the kinship attestations ride in profile.json).
         try ViewerWriteGuard.check("POIProfile.save")
+        // A profile the migration could not move keeps its legacy folder and
+        // refuses every write (codex review 2026-09-12): saving it into its
+        // uuid folder could overwrite a same-uuid twin's biography or leave
+        // a second folder without the photos.
+        if let quarantine {
+            throw POIProfileFileStore.Failure.quarantined(folder: quarantine.folder, reason: quarantine.reason)
+        }
         let folder = POIStorage.folder(for: self)
         _ = try POIProfileFileStore.save(id: uuid, destination: folder, previous: nil,
             retire: { _ in }, write: { url, finalFolder in
@@ -868,6 +884,20 @@ struct POIProfile: Codable, Identifiable, Equatable {
     func saveRenaming(from oldName: String?) throws -> String? {
         try save()
         return nil
+    }
+
+    /// Non-nil when this profile still lives in a pre-2026-09-12 name-keyed
+    /// folder inside the store — one the uuid migration skipped. `folder` is
+    /// that folder's name; `reason` comes from the audit file.
+    var quarantine: (folder: String, reason: String)? {
+        guard !referencePath.isEmpty else { return nil }
+        let url = URL(fileURLWithPath: referencePath, isDirectory: true).standardizedFileURL
+        let store = POIStorage.storeDir.standardizedFileURL
+        guard url.deletingLastPathComponent().resolvingSymlinksInPath().path == store.resolvingSymlinksInPath().path,
+              POIStorage.uuid(fromFolderName: url.lastPathComponent) == nil,
+              FileManager.default.fileExists(atPath: url.path)
+        else { return nil }
+        return (url.lastPathComponent, POIStorage.quarantineReason(forLegacyFolder: url.lastPathComponent))
     }
 
     /// The ONE writer for profile.json (atomic replace). `save()` and the
@@ -891,6 +921,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// authoritative for referencePath. A pre-uuid profile.json gets its
     /// minted uuid persisted right here; failure is logged, not thrown.
     static func load(at folder: URL) throws -> POIProfile {
+        // Same settings-pollution gate as the file store, before any I/O.
+        try POIProfileFileStore.guardRoot(folder.deletingLastPathComponent())
         let profileURL = folder.appendingPathComponent("profile.json")
         let data = try Data(contentsOf: profileURL)
         var profile = try JSONDecoder().decode(POIProfile.self, from: data)
@@ -898,7 +930,15 @@ struct POIProfile: Codable, Identifiable, Equatable {
         profile.referencePath = folder.path
         // First load of a pre-uuid profile.json: persist the freshly minted
         // uuid so kinship anchors written later stay durable across renames.
+        // A LEGACY folder is written only once the migration has a verified
+        // backup of the store (codex review 2026-09-12); until then the
+        // original stays byte-identical and the anchor stays name-based.
         if !Self.hasUUIDKey(data) {
+            guard Self.legacyWritePermitted(folder: folder) else {
+                profile.uuidPersisted = false
+                identityLog.notice("POIProfile load: not persisting a minted uuid for '\(profile.name, privacy: .public)' — its folder is pre-migration and no verified backup exists yet.")
+                return profile
+            }
             do {
                 try ViewerWriteGuard.check("POIProfile.save")
                 try profile.write(profileJSONAt: profileURL, folder: folder)
@@ -908,6 +948,14 @@ struct POIProfile: Codable, Identifiable, Equatable {
             }
         }
         return profile
+    }
+
+    /// May a read path write into `folder`? Always for a uuid-keyed folder
+    /// (it is already the migrated shape); for a legacy folder only when
+    /// `POIStorage.legacyWritesPermitted` says the store is backed up.
+    private static func legacyWritePermitted(folder: URL) -> Bool {
+        if POIStorage.uuid(fromFolderName: folder.lastPathComponent) != nil { return true }
+        return POIStorage.legacyWritesPermitted(root: folder.deletingLastPathComponent())
     }
 
     /// Load by durable identity — the normal way since 2026-09-12.
@@ -924,7 +972,9 @@ struct POIProfile: Codable, Identifiable, Equatable {
     static func load(name: String) throws -> POIProfile {
         let wanted = PersonResolver.normalize(name)
         let wantedFolder = POIStorage.sanitize(name)
-        for folder in POIStorage.poiFolders(in: POIStorage.storeDir) {
+        // allPOIFolders runs the migrations first, so a legacy folder found
+        // here is one the migration deliberately left in place.
+        for folder in POIStorage.allPOIFolders() {
             if folder.lastPathComponent == wantedFolder {
                 return try load(at: folder)
             }
@@ -1015,6 +1065,13 @@ struct POIProfile: Codable, Identifiable, Equatable {
         // is the one on disk after restart — not a per-launch ephemeral.
         var unpersisted = Set<UUID>()
         for (profile, folder) in decoded.legacy {
+            // Never mutate a pre-migration folder without a verified backup
+            // (codex review 2026-09-12) — the anchor stays name-based.
+            guard legacyWritePermitted(folder: folder) else {
+                unpersisted.insert(profile.uuid)
+                identityLog.notice("POIProfile listAll: not persisting a minted uuid for '\(profile.name, privacy: .public)' — pre-migration folder, no verified backup.")
+                continue
+            }
             do {
                 try profile.write(profileJSONAt: folder.appendingPathComponent("profile.json"),
                                   folder: folder)
