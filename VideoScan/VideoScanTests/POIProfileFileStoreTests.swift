@@ -269,4 +269,39 @@ struct POIProfileFileStoreTests {
             #expect(try snapshot(destination) == before)
         }
     }
+
+    /// Poisoned-state sensor (feature-test checklist, dimension 4): a root
+    /// shaped like the user's live People store is refused under a test host
+    /// even when injected explicitly, and the predicate is pinned in BOTH
+    /// directions so production (not a test host) keeps using the real path.
+    /// C++ analogy: `#expect(throws:)` is EXPECT_THROW with the closure as the
+    /// statement under test; `throws: Never.self` is EXPECT_NO_THROW.
+    @Test func storeNeverTouchesTheRealPOIRoot() throws {
+        try withRoot { sandbox in
+            let decoy = sandbox.appendingPathComponent("Library/Application Support/VideoScan/POI", isDirectory: true)
+            try FileManager.default.createDirectory(at: decoy, withIntermediateDirectories: true)
+            let destination = decoy.appendingPathComponent("richard", isDirectory: true)
+            #expect(throws: POIProfileFileStore.Failure.liveStoreUnderTest) {
+                try POIProfileFileStore.folder(component: "richard", in: decoy)
+            }
+            #expect(throws: POIProfileFileStore.Failure.liveStoreUnderTest) {
+                try POIProfileFileStore.save(id: UUID(), destination: destination,
+                    retire: { _ in Issue.record("Must not retire") }, write: { _, _ in Issue.record("Must not write") })
+            }
+            // A rename OUT of the live store is refused too (the source side is guarded).
+            #expect(throws: POIProfileFileStore.Failure.liveStoreUnderTest) {
+                try POIProfileFileStore.save(id: UUID(), destination: sandbox.appendingPathComponent("elsewhere", isDirectory: true),
+                    previous: destination,
+                    retire: { _ in Issue.record("Must not retire") }, write: { _, _ in Issue.record("Must not write") })
+            }
+            #expect(try FileManager.default.contentsOfDirectory(atPath: decoy.path).isEmpty)
+            #expect(!FileManager.default.fileExists(atPath: sandbox.appendingPathComponent("elsewhere").path))
+            // The predicate, not the environment: production is not a test host.
+            #expect(throws: Never.self) { try POIProfileFileStore.guardRoot(decoy, isTestHost: false) }
+            #expect(throws: POIProfileFileStore.Failure.liveStoreUnderTest) { try POIProfileFileStore.guardRoot(decoy, isTestHost: true) }
+            #expect(throws: Never.self) { try POIProfileFileStore.guardRoot(sandbox, isTestHost: true) }
+            // And the production seam really is on a temp root in this process.
+            #expect(throws: Never.self) { try POIProfileFileStore.guardRoot(POIStorage.storeDir) }
+        }
+    }
 }
