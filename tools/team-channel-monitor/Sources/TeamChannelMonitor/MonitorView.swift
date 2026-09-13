@@ -165,28 +165,33 @@ private struct RowView: View {
                     .textSelection(.enabled)
                     .padding(.leading, 26)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                HStack {
+                // Inline two-step confirm: .confirmationDialog never presents
+                // inside a MenuBarExtra window (Rick 9/13: "can't delete").
+                HStack(spacing: 8) {
                     Spacer()
-                    Button(role: .destructive) { confirmDelete = true } label: {
-                        Label("Delete #\(row.messageID)", systemImage: "trash")
+                    if confirmDelete {
+                        Text("Delete #\(row.messageID) for every recipient?")
+                            .font(.caption).foregroundStyle(.red)
+                        Button("Cancel") { confirmDelete = false }.font(.caption)
+                        Button(role: .destructive) {
+                            confirmDelete = false
+                            model.deleteMessage(row)
+                        } label: { Text("Delete").bold() }
+                        .font(.caption)
+                    } else {
+                        Button(role: .destructive) { confirmDelete = true } label: {
+                            Label("Delete #\(row.messageID)", systemImage: "trash")
+                        }
+                        .font(.caption)
+                        .help("Remove this message from the channel for every recipient. Flush only hides it here.")
                     }
-                    .font(.caption)
-                    .help("Remove this message from the channel for every recipient. Flush only hides it here.")
                 }
                 .padding(.bottom, 4)
             }
         }
         .padding(.vertical, 5)
         .help(row.body.prefix(600))
-        .confirmationDialog(
-            "Delete #\(row.messageID) from \(row.author) to \(row.recipient)?",
-            isPresented: $confirmDelete, titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive) { model.deleteMessage(row) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("It disappears for every recipient. This cannot be undone.")
-        }
+        .onChange(of: expanded) { _ in confirmDelete = false }
     }
 
     @ViewBuilder
