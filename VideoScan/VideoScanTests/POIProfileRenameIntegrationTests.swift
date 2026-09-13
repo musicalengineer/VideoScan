@@ -33,7 +33,8 @@ struct POIProfileRenameIntegrationTests {
         #expect(loaded.uuid == profile.uuid)
         #expect(loaded.notes == profile.notes)
         #expect(loaded.referencePath == folder.path)
-        #expect(try Data(contentsOf: folder.appendingPathComponent(loaded.coverImageFilename!)) == bytes)
+        let coverFilename = try #require(loaded.coverImageFilename)
+        #expect(try Data(contentsOf: folder.appendingPathComponent(coverFilename)) == bytes)
     }
 
     @Test func directSaveRejectsAnotherPersonEvenWithDifferentSuffix() throws {
