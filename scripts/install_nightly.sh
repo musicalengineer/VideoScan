@@ -64,6 +64,8 @@ cat > "$PLIST" <<PLIST
     <dict>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>VIDEOSCAN_NIGHTLY_TEST_TIMEOUT_SECONDS</key>
+        <string>2700</string>
         <key>HOME</key>
         <string>$HOME</string>
     </dict>
