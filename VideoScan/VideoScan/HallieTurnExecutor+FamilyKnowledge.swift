@@ -217,7 +217,8 @@ extension HallieTurnExecutor {
                 subjectLifeStatus: result.subjectLifeStatus,
                 refinableQuery: result.refinableQuery,
                 retryOffer: result.retryOffer,
-                mode: result.mode)
+                mode: result.mode,
+                modeForce: result.modeForce)
         }
     }
 }

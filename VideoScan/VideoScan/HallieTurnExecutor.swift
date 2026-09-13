@@ -177,6 +177,11 @@ enum HallieTurnExecutor {
         /// most a handful; conversation memory keeps the count scope
         /// alive. Off for every other turn.
         let countOnly: Bool
+        /// A spoken mode correction re-asked the last question under a
+        /// forced family (design §3.6, HallieModeCorrection); conversation
+        /// memory applies it when this intent's answer is recorded. Nil
+        /// for every other turn.
+        let modeForce: HallieModeForce?
 
         init(
             originalQuestion: String,
@@ -189,7 +194,8 @@ enum HallieTurnExecutor {
             speakerBindings: [SpeakerBinding] = [],
             pinnedGraphSubjects: [Int: CandidateID] = [:],
             order: OrderRequest? = nil,
-            countOnly: Bool = false
+            countOnly: Bool = false,
+            modeForce: HallieModeForce? = nil
         ) {
             self.originalQuestion = originalQuestion
             self.ast = ast
@@ -202,6 +208,7 @@ enum HallieTurnExecutor {
             self.pinnedGraphSubjects = pinnedGraphSubjects
             self.order = order
             self.countOnly = countOnly
+            self.modeForce = modeForce
         }
 
         /// The same intent with a rewritten graph AST and/or extra pins.
@@ -221,7 +228,27 @@ enum HallieTurnExecutor {
                 speakerBindings: newBindings ?? speakerBindings,
                 pinnedGraphSubjects: newPins ?? pinnedGraphSubjects,
                 order: order,
-                countOnly: countOnly)
+                countOnly: countOnly,
+                modeForce: modeForce)
+        }
+
+        /// The same intent carrying a mode force (a spoken correction's
+        /// re-ask). Nil leaves it as is.
+        func forcing(_ force: HallieModeForce?) -> Intent {
+            guard let force else { return self }
+            return Intent(
+                originalQuestion: originalQuestion,
+                ast: ast,
+                playAfterAnswer: playAfterAnswer,
+                citationOffset: citationOffset,
+                refinementNote: refinementNote,
+                refinementChain: refinementChain,
+                refinementChange: refinementChange,
+                speakerBindings: speakerBindings,
+                pinnedGraphSubjects: pinnedGraphSubjects,
+                order: order,
+                countOnly: countOnly,
+                modeForce: force)
         }
     }
 
@@ -641,6 +668,11 @@ enum HallieTurnExecutor {
         /// from the route (ConversationMemory.record). Copied by every
         /// copy helper — HallieResultCopyRoundTripTests walks them.
         let mode: HallieMode?
+        /// A spoken mode correction with nothing to re-ask (design §3.6):
+        /// the honest decline still carries the switch, and conversation
+        /// memory applies it when the answer is recorded. Nil otherwise.
+        /// Copied by every copy helper.
+        let modeForce: HallieModeForce?
 
         init(
             route: Route,
@@ -664,7 +696,8 @@ enum HallieTurnExecutor {
             subjectLifeStatus: LifeStatus? = nil,
             refinableQuery: RefinableQuery? = nil,
             retryOffer: HallieOfferAcceptance.Offer? = nil,
-            mode: HallieMode? = nil
+            mode: HallieMode? = nil,
+            modeForce: HallieModeForce? = nil
         ) {
             self.route = route
             self.outcome = outcome
@@ -690,6 +723,7 @@ enum HallieTurnExecutor {
             self.refinableQuery = refinableQuery
             self.retryOffer = retryOffer
             self.mode = mode
+            self.modeForce = modeForce
         }
 
         /// The same answer with extra things to look at. Facts untouched.
@@ -707,7 +741,8 @@ enum HallieTurnExecutor {
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
-                mode: mode)
+                mode: mode,
+                modeForce: modeForce)
         }
 
         /// The same answer with an OFFER appended (2026-09-10, the gallery
@@ -739,7 +774,8 @@ enum HallieTurnExecutor {
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
-                mode: mode)
+                mode: mode,
+                modeForce: modeForce)
         }
 
         /// The same answer carrying a PROVENANCE note — how Hallie read the
@@ -777,7 +813,8 @@ enum HallieTurnExecutor {
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
-                mode: mode)
+                mode: mode,
+                modeForce: modeForce)
         }
 
         /// The same answer with its prose replaced by a verified composition.
@@ -807,7 +844,38 @@ enum HallieTurnExecutor {
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
-                mode: mode)
+                mode: mode,
+                modeForce: modeForce)
+        }
+
+        /// The same answer carrying a mode force (a spoken correction's
+        /// re-ask that was answered locally). Nil leaves it as is.
+        func forcing(_ force: HallieModeForce?) -> Result {
+            guard let force else { return self }
+            return Result(
+                route: route,
+                outcome: outcome,
+                prose: prose,
+                basisLine: basisLine,
+                queryDescription: queryDescription,
+                citations: citations,
+                knowledgeCitations: knowledgeCitations,
+                catalogPersonName: catalogPersonName,
+                clarification: clarification,
+                matchCount: matchCount,
+                mediaAction: mediaAction,
+                offeredActions: offeredActions,
+                answerPlan: answerPlan,
+                composedBy: composedBy,
+                transcriptText: transcriptText,
+                attachments: attachments,
+                performsFirstOfferedAction: performsFirstOfferedAction,
+                immediateOfferedAction: immediateOfferedAction,
+                subjectLifeStatus: subjectLifeStatus,
+                refinableQuery: refinableQuery,
+                retryOffer: retryOffer,
+                mode: mode,
+                modeForce: force)
         }
     }
 

@@ -271,7 +271,7 @@ struct HallieCatalogSuperlativeTests {
         #expect(byLength.count == n - 100)
         #expect(byLength.first?.durationSeconds == longest)
         #expect(bySize.count == n)
-        #expect(bySize.first!.sizeBytes! <= bySize.last!.sizeBytes!)
+        #expect((bySize.first?.sizeBytes ?? 0) <= (bySize.last?.sizeBytes ?? 0))
         #expect(elapsed < .seconds(4), "two 100k sorts took \(elapsed) (budget 4 s)")
 
         // End to end through the executor: 100k snapshots, one turn. Unique
