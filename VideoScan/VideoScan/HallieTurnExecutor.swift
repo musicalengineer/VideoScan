@@ -167,10 +167,11 @@ enum HallieTurnExecutor {
         /// already disambiguated by a chip: slot index → chosen identity,
         /// so the second slot's clarification does not lose it.
         let pinnedGraphSubjects: [Int: CandidateID]
-        /// "and the newest?" / "the second oldest one" (2026-09-02): re-run
-        /// `ast` as a list sorted by date and pick one. Nil for every other
+        /// "and the newest?" / "the second oldest one" (2026-09-02) / "the
+        /// longest video in the archive" (step 5): re-run `ast` as a list
+        /// sorted by date, length or size and pick one. Nil for every other
         /// turn; the presence route reads it (+DateOrdered).
-        let dateOrder: DateOrderRequest?
+        let order: OrderRequest?
         /// A COUNT re-run (design §3.5, "and how many from the 80s"): the
         /// presence route phrases "N videos from the 1980s" and cites at
         /// most a handful; conversation memory keeps the count scope
@@ -187,7 +188,7 @@ enum HallieTurnExecutor {
             refinementChange: String? = nil,
             speakerBindings: [SpeakerBinding] = [],
             pinnedGraphSubjects: [Int: CandidateID] = [:],
-            dateOrder: DateOrderRequest? = nil,
+            order: OrderRequest? = nil,
             countOnly: Bool = false
         ) {
             self.originalQuestion = originalQuestion
@@ -199,7 +200,7 @@ enum HallieTurnExecutor {
             self.refinementChange = refinementChange
             self.speakerBindings = speakerBindings
             self.pinnedGraphSubjects = pinnedGraphSubjects
-            self.dateOrder = dateOrder
+            self.order = order
             self.countOnly = countOnly
         }
 
@@ -219,7 +220,7 @@ enum HallieTurnExecutor {
                 refinementChange: refinementChange,
                 speakerBindings: newBindings ?? speakerBindings,
                 pinnedGraphSubjects: newPins ?? pinnedGraphSubjects,
-                dateOrder: dateOrder,
+                order: order,
                 countOnly: countOnly)
         }
     }
@@ -238,11 +239,31 @@ enum HallieTurnExecutor {
         case wholeCatalog
     }
 
-    /// "the newest" / "the second oldest one": which end, which position.
-    struct DateOrderRequest: Sendable, Equatable {
-        enum Order: Sendable, Equatable {
-            case newestFirst
-            case oldestFirst
+    /// "the newest" / "the second oldest one" / "the longest video in the
+    /// archive": which key, which end, which position. Was DateOrderRequest
+    /// (date only) until design §3.5 step 5 added length and size.
+    struct OrderRequest: Sendable, Equatable {
+        enum Order: String, Sendable, Equatable, CaseIterable {
+            case newest, oldest, longest, shortest, largest, smallest
+
+            /// What the list is sorted by.
+            enum Key: Sendable, Equatable { case date, duration, size }
+            var key: Key {
+                switch self {
+                case .newest, .oldest: return .date
+                case .longest, .shortest: return .duration
+                case .largest, .smallest: return .size
+                }
+            }
+            /// The asked-for end comes FIRST in the ordered list.
+            var descending: Bool {
+                switch self {
+                case .newest, .longest, .largest: return true
+                case .oldest, .shortest, .smallest: return false
+                }
+            }
+            /// The word the answer uses ("The newest of …").
+            var word: String { rawValue }
         }
         let order: Order
         /// 1-based: "the newest" = 1, "the second newest" = 2.

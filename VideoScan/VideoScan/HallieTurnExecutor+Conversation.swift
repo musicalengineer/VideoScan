@@ -268,7 +268,7 @@ extension HallieTurnExecutor {
                         totalMatchCount: result.matchCount ?? result.citations.count)
                     if !result.citations.isEmpty { lastShownList = lastResultSet }
                     lastRecordDecline = nil
-                    if let ordered = intent.dateOrder {
+                    if let ordered = intent.order {
                         // "and the newest?" keeps the scope it sorted, so
                         // "and the oldest?" sorts the same thing.
                         lastRefinable = ordered.scope
@@ -1234,6 +1234,16 @@ extension HallieTurnExecutor {
            let count = HallieCatalogCountFollowUp.detect(question, memory: memory) {
             return .run(count)
         }
+        // "play the longest video in the archive" (eval cs030, design §3.5
+        // step 5): a local sort by length or size, never the translator's
+        // guess. Not in tree mode — there "in the archive" is a scope
+        // override that already made the verdict catalog, and a bare "the
+        // longest one" stays the tree follow-up lane's to refuse.
+        if verdict.mode != .tree,
+           let superlative = HallieCatalogSuperlative.detect(
+               question, playAfterAnswer: playAfterAnswer, memory: memory) {
+            return .run(superlative)
+        }
         if let turn = knowledgeLaneTurn(
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
             isKnownPerson: isKnownPerson, lineageAnswer: lineageAnswer) {
@@ -1582,14 +1592,14 @@ extension HallieTurnExecutor {
         case .list(let last, _): ast = last
         case .wholeCatalog: ast = .presence(.init(mediaKind: nil))
         }
-        let request = DateOrderRequest(
-            order: order == .newestFirst ? .newestFirst : .oldestFirst,
+        let request = OrderRequest(
+            order: order == .newestFirst ? .newest : .oldest,
             ordinal: ordinal, scope: scope)
         return .run(Intent(
             originalQuestion: question, ast: ast,
             playAfterAnswer: playAfterAnswer || verb == .play,
-            refinementNote: "the last question sorted by date (\(order == .newestFirst ? "newest" : "oldest") first)",
-            dateOrder: request))
+            refinementNote: "the last question sorted by date (\(request.order.word) first)",
+            order: request))
     }
 
     /// "ok show me the second one" when the current result set is empty:
@@ -1623,12 +1633,12 @@ extension HallieTurnExecutor {
                 case .list(let last, _): ast = last
                 case .wholeCatalog: ast = .presence(.init(mediaKind: nil))
                 }
-                let order: DateOrderRequest.Order = position.wantsLast ? .newestFirst : .oldestFirst
+                let order: OrderRequest.Order = position.wantsLast ? .newest : .oldest
                 return .run(Intent(
                     originalQuestion: question, ast: ast,
                     playAfterAnswer: playAfterAnswer || verb == .play,
-                    refinementNote: "the last question sorted by date (\(order == .newestFirst ? "newest" : "oldest") first)",
-                    dateOrder: DateOrderRequest(
+                    refinementNote: "the last question sorted by date (\(order.word) first)",
+                    order: OrderRequest(
                         order: order, ordinal: position.wantsLast ? 1 : (position.ordinal ?? 1),
                         scope: scope)))
             }
