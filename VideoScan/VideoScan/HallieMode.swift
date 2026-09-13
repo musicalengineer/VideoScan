@@ -28,3 +28,17 @@ enum HallieMode: String, Sendable, Equatable, Codable, CaseIterable {
         }
     }
 }
+
+/// What a turn asks conversation memory to do with the FORCED mode
+/// (design §3.6, "correction by talking"). Rides on the Intent or the
+/// Result of the turn that asked, so every client's existing
+/// `memory.record` call applies it — the pill and ":mode" call
+/// `force`/`unforce` directly instead.
+enum HallieModeForce: Sendable, Equatable {
+    /// Hold this family until reset, Automatic, or the other family is
+    /// named.
+    case force(HallieMode)
+    /// Back to automatic: the sentence named the OTHER family than the
+    /// one currently forced.
+    case unforce
+}

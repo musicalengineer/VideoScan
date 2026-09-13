@@ -87,6 +87,7 @@ enum HallieWebPage {
         <body>
         <header>
           <h1>\(name)</h1>
+          <span id="modePill" class="tiny" title="Which side of the archive she is on: the catalog or the family tree">Listening</span>
           <button id="speakToggle" title="Read answers aloud">🔈 Read aloud</button>
           <select id="voicePick" title="Which voice reads aloud" style="display:none;font-size:15px;max-width:150px;border:1px solid var(--line);border-radius:10px;background:none;color:var(--ink);padding:5px"></select>
           <button id="whoBtn" title="Who is talking">👤</button>
@@ -124,6 +125,12 @@ enum HallieWebPage {
           document.getElementById('whoBtn').onclick = askWho;
           speakToggle.onclick = function () { speak = !speak; store('hallie.speak', speak ? 'on' : 'off'); speakToggle.textContent = speak ? '🔊 Reading aloud' : '🔈 Read aloud'; if (!speak && window.speechSynthesis) speechSynthesis.cancel(); voicePick.style.display = speak && voicePick.options.length ? '' : 'none'; };
 
+          // The Mac's mode pill, in words (design §3.6): "tree" / "catalog"
+          // from the answer JSON, else Listening.
+          var modePill = document.getElementById('modePill');
+          function showMode(m) {
+            modePill.textContent = m === 'tree' ? 'Family tree' : m === 'catalog' ? 'Catalog' : 'Listening';
+          }
           function add(role, text) {
             var d = document.createElement('div');
             d.className = 'msg ' + role;
@@ -177,6 +184,7 @@ enum HallieWebPage {
             });
           }
           function render(r) {
+            if (r.mode) showMode(r.mode);
             var d = add('her', r.prose || '');
             if (r.basis) {
               var b = document.createElement('div'); b.className = 'basis'; b.textContent = r.basis; d.appendChild(b);

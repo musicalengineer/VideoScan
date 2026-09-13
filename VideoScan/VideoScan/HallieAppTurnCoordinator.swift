@@ -666,12 +666,14 @@ enum HallieAppTurnCoordinator {
                 memory: memory, playAfterAnswer: wantsPlay) {
             case .keep:
                 intent = HallieTurnExecutor.Intent(
-                    originalQuestion: question, ast: translatedAST, playAfterAnswer: wantsPlay)
+                    originalQuestion: question, ast: translatedAST, playAfterAnswer: wantsPlay,
+                    modeForce: classified.modeForce)
                 gateNote = nil
             case .rewrite(let ast, let note):
                 appLog.write("[hallie-mode] rewrite: \(note)")
                 intent = HallieTurnExecutor.Intent(
-                    originalQuestion: question, ast: ast, playAfterAnswer: wantsPlay)
+                    originalQuestion: question, ast: ast, playAfterAnswer: wantsPlay,
+                    modeForce: classified.modeForce)
                 gateNote = note
             case .decline(let result):
                 appLog.write("[hallie-mode] declined: \(result.queryDescription ?? "")")

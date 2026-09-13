@@ -357,7 +357,8 @@ struct ArchivistChatWindow: View {
                             // Archivist feels slow" and "the primary is
                             // asleep so you are on the laptop" look
                             // identical without this line.
-                            Text("answered by \(OllamaEndpoints.displayLabel(for: responder))")
+                            Text("answered by \(OllamaEndpoints.displayLabel(for: responder))"
+                                 + HallieModePillModel.detailsSuffix(for: hallieMemory.effectiveMode))
                                 .font(.system(size: 13))
                                 .foregroundStyle(.tertiary)
                                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -612,6 +613,14 @@ struct ArchivistChatWindow: View {
                 Text("Family Archivist")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
+                // Which side of the archive she is on (design §3.6): one
+                // enum read from memory, no O(records) work in the header.
+                // Choosing holds the mode; Automatic lets the talk decide.
+                HallieModePill(
+                    model: .init(mode: hallieMemory.effectiveMode,
+                                 forced: hallieMemory.forcedMode != nil),
+                    onForce: { hallieMemory.force($0) },
+                    onAutomatic: { hallieMemory.unforce() })
                 if archivistName == "Hallie Mae" {
                     // Who she was — the archivist is a real person.
                     Text("Hallie Mae McGill Latta · 1876–1908 · Louisville, Kentucky")
@@ -742,7 +751,11 @@ struct ArchivistChatWindow: View {
                 knowledgeEvidence: knowledge,
                 attachmentOutline: message.attachments.isEmpty
                     ? nil : HallieAttachmentText.lines(message.attachments),
-                composedBy: message.composedBy))
+                composedBy: message.composedBy,
+                // The session's mode when the answer was recorded (design
+                // §3.7, phase 1): exact for a one-clause turn; a split turn
+                // logs the last clause's mode.
+                mode: message.role == .assistant ? hallieMemory.effectiveMode.rawValue : nil))
         }
         guard !events.isEmpty else { return }
         Task { await HallieConversationRecorder.shared.append(events) }

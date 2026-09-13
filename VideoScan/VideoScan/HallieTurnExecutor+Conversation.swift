@@ -68,6 +68,13 @@ extension HallieTurnExecutor {
         /// failures, follow-up refusals) and repairs themselves leave it in
         /// place so a second complaint still points at the same ask.
         private(set) var lastExchange: Exchange?
+        /// The last question that went to a lane — answered OR declined —
+        /// for a spoken mode correction to re-ask ("not in videos, in
+        /// family tree" right after a tree-mode gate decline, design §3.6).
+        /// `lastExchange` keeps only substantive answers, and the very turn
+        /// a correction follows is usually a decline. Never a follow-up,
+        /// help, small talk or the correction itself.
+        private(set) var lastAsk: String?
         /// The file a `record` turn could not settle ("New Hampshire.mov",
         /// "the selected video") — set when a record turn is declined
         /// (not found / ambiguous / nothing selected), which also empties
@@ -198,6 +205,15 @@ extension HallieTurnExecutor {
                 return
             }
             recordExchange(intent: intent, result: result, question: question)
+            // A spoken mode correction rode in on the intent or the answer
+            // (design §3.6): applied BEFORE the mode moves, so from here
+            // on the forced family outranks this turn's route family.
+            if let force = intent?.modeForce ?? result.modeForce {
+                switch force {
+                case .force(let mode): forcedMode = mode
+                case .unforce: forcedMode = nil
+                }
+            }
             recordMode(intent: intent, result: result)
             // The mode contexts are typed views over the fields below; they
             // are synced LAST, on every path out of this function — the
@@ -268,7 +284,7 @@ extension HallieTurnExecutor {
                         totalMatchCount: result.matchCount ?? result.citations.count)
                     if !result.citations.isEmpty { lastShownList = lastResultSet }
                     lastRecordDecline = nil
-                    if let ordered = intent.dateOrder {
+                    if let ordered = intent.order {
                         // "and the newest?" keeps the scope it sorted, so
                         // "and the oldest?" sorts the same thing.
                         lastRefinable = ordered.scope
@@ -410,6 +426,16 @@ extension HallieTurnExecutor {
             let asked = result.clarification?.intent.originalQuestion
                 ?? intent?.originalQuestion
                 ?? question
+            if let asked, !asked.isEmpty {
+                let laneRoute: Bool
+                switch result.route {
+                case .presence, .cross, .aggregate, .temporal, .graph, .telling, .unsupportedEvent, .record:
+                    laneRoute = true
+                case .capability, .followUp, .help, .smalltalk, .conversation, .reset:
+                    laneRoute = false
+                }
+                if laneRoute || intent != nil || result.clarification != nil { lastAsk = asked }
+            }
             let substantive: Bool
             if result.clarification != nil || intent != nil {
                 substantive = true
@@ -648,6 +674,18 @@ extension HallieTurnExecutor {
     struct Classified: Sendable {
         let decision: PreTranslation
         let verdict: HallieModeClassifier.Verdict
+        /// A spoken mode correction asked memory to force / unforce the
+        /// family (design §3.6). A `.run` intent and a local `.answer`
+        /// already carry it; a client that translates builds its Intent
+        /// with this so the force is applied when the answer is recorded.
+        let modeForce: HallieModeForce?
+
+        init(decision: PreTranslation, verdict: HallieModeClassifier.Verdict,
+             modeForce: HallieModeForce? = nil) {
+            self.decision = decision
+            self.verdict = verdict
+            self.modeForce = modeForce
+        }
     }
 
     /// C++ analogy: a memoised thunk — an `std::optional` cache in front of
@@ -694,6 +732,43 @@ extension HallieTurnExecutor {
                               isKnownPerson: { _ in false },
                               isNamedFile: namedFile))
         }
+        // Correcting the mode by talking (design §3.6, ledger row 2 /
+        // lv260907-003): "not in videos, in family tree" forces the named
+        // family and re-asks the last question under it — the same re-ask
+        // shape the person-fact lane's tree correction uses. Beside the
+        // repair step on purpose: the detector claims only a sentence made
+        // of cue, family and filler words, so "no, I meant the catalog" is
+        // a correction while "no, that's wrong — you gave me videos" stays
+        // a repair. Nothing to re-ask → an honest decline that still
+        // switches. Naming the OTHER family than the one forced returns
+        // to automatic.
+        if let correction = HallieModeCorrection.detect(question) {
+            let force = HallieModeCorrection.force(for: correction, forcedMode: memory.forcedMode)
+            let forcedVerdict = HallieModeClassifier.Verdict(mode: correction.mode, reason: .forced)
+            guard let last = memory.lastAsk ?? memory.lastExchange?.question else {
+                return Classified(
+                    decision: .answer(HallieModeCorrection.nothingToReask(correction, force: force)),
+                    verdict: forcedVerdict, modeForce: force)
+            }
+            var forced = memory
+            forced.force(correction.mode)
+            let reasked = preTranslationSingle(
+                question: last, playAfterAnswer: false, memory: forced,
+                isKnownPerson: isKnownPerson, isInnerCircleName: isInnerCircleName,
+                catalogStats: catalogStats,
+                rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
+                relationshipsOverview: relationshipsOverview,
+                researchAnswer: researchAnswer, selectedRecord: selectedRecord,
+                identity: identity, modeVerdict: LazyModeVerdict { forcedVerdict },
+                isTreePersonID: isTreePersonID)
+            let corrected: PreTranslation
+            switch reasked {
+            case .run(let intent): corrected = .run(intent.forcing(force))
+            case .answer(let result): corrected = .answer(result.forcing(force))
+            case .translate: corrected = reasked
+            }
+            return Classified(decision: corrected, verdict: forcedVerdict, modeForce: force)
+        }
         let decision: PreTranslation
         if let (first, second) = splitTwoQuestions(question),
            case .answer(let a) = preTranslationSingle(
@@ -729,7 +804,8 @@ extension HallieTurnExecutor {
                     attachments: a.attachments,
                     performsFirstOfferedAction: a.immediateOfferedAction != nil,
                     immediateOfferedAction: a.immediateOfferedAction,
-                    mode: a.mode))
+                    mode: a.mode,
+                    modeForce: a.modeForce))
             }
         } else {
             decision = preTranslationSingle(
@@ -845,7 +921,8 @@ extension HallieTurnExecutor {
             attachments: a.attachments + b.attachments,
             performsFirstOfferedAction: immediateAction != nil,
             immediateOfferedAction: immediateAction,
-            mode: b.mode ?? a.mode)
+            mode: b.mode ?? a.mode,
+            modeForce: b.modeForce ?? a.modeForce)
     }
 
     /// "c3" → "c7" for offset 4; anything that is not a claim ID is returned
@@ -1234,6 +1311,16 @@ extension HallieTurnExecutor {
            let count = HallieCatalogCountFollowUp.detect(question, memory: memory) {
             return .run(count)
         }
+        // "play the longest video in the archive" (eval cs030, design §3.5
+        // step 5): a local sort by length or size, never the translator's
+        // guess. Not in tree mode — there "in the archive" is a scope
+        // override that already made the verdict catalog, and a bare "the
+        // longest one" stays the tree follow-up lane's to refuse.
+        if verdict.mode != .tree,
+           let superlative = HallieCatalogSuperlative.detect(
+               question, playAfterAnswer: playAfterAnswer, memory: memory) {
+            return .run(superlative)
+        }
         if let turn = knowledgeLaneTurn(
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
             isKnownPerson: isKnownPerson, lineageAnswer: lineageAnswer) {
@@ -1582,14 +1669,14 @@ extension HallieTurnExecutor {
         case .list(let last, _): ast = last
         case .wholeCatalog: ast = .presence(.init(mediaKind: nil))
         }
-        let request = DateOrderRequest(
-            order: order == .newestFirst ? .newestFirst : .oldestFirst,
+        let request = OrderRequest(
+            order: order == .newestFirst ? .newest : .oldest,
             ordinal: ordinal, scope: scope)
         return .run(Intent(
             originalQuestion: question, ast: ast,
             playAfterAnswer: playAfterAnswer || verb == .play,
-            refinementNote: "the last question sorted by date (\(order == .newestFirst ? "newest" : "oldest") first)",
-            dateOrder: request))
+            refinementNote: "the last question sorted by date (\(request.order.word) first)",
+            order: request))
     }
 
     /// "ok show me the second one" when the current result set is empty:
@@ -1623,12 +1710,12 @@ extension HallieTurnExecutor {
                 case .list(let last, _): ast = last
                 case .wholeCatalog: ast = .presence(.init(mediaKind: nil))
                 }
-                let order: DateOrderRequest.Order = position.wantsLast ? .newestFirst : .oldestFirst
+                let order: OrderRequest.Order = position.wantsLast ? .newest : .oldest
                 return .run(Intent(
                     originalQuestion: question, ast: ast,
                     playAfterAnswer: playAfterAnswer || verb == .play,
-                    refinementNote: "the last question sorted by date (\(order == .newestFirst ? "newest" : "oldest") first)",
-                    dateOrder: DateOrderRequest(
+                    refinementNote: "the last question sorted by date (\(order.word) first)",
+                    order: OrderRequest(
                         order: order, ordinal: position.wantsLast ? 1 : (position.ordinal ?? 1),
                         scope: scope)))
             }
@@ -1868,6 +1955,7 @@ extension HallieTurnExecutor.Result {
             subjectLifeStatus: subjectLifeStatus,
             refinableQuery: refinableQuery,
             retryOffer: retryOffer,
-            mode: mode)
+            mode: mode,
+            modeForce: modeForce)
     }
 }

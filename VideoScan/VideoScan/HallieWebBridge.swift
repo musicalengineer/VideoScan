@@ -256,7 +256,8 @@ final class HallieWebBridge {
             let citations = merged?.citations ?? response.citations
             if !isFollowUpAction { session.lastCitations = citations }
             sessions[sessionID] = session
-            return .json(payload(for: response, citations: isFollowUpAction ? [] : citations, merged: merged))
+            return .json(payload(for: response, citations: isFollowUpAction ? [] : citations, merged: merged,
+                                 mode: session.memory.effectiveMode))
         } catch {
             sessions[sessionID] = session
             return .json([
@@ -368,9 +369,12 @@ final class HallieWebBridge {
     /// basis, attachments and knowledge with the union across the pieces.
     /// For one clause it is nil (or equal to the response) and the payload
     /// is byte-for-byte what it always was.
+    /// `mode`: the session's effective mode AFTER this answer was recorded
+    /// (design §3.6) — the page shows the same words as the Mac's pill.
     func payload(for response: HallieAppTurnCoordinator.Response,
                  citations: [HallieTurnExecutor.Citation],
-                 merged: MergedReply? = nil) -> [String: Any] {
+                 merged: MergedReply? = nil,
+                 mode: HallieMode? = nil) -> [String: Any] {
         let result = response.result
         var chips: [[String: Any]] = []
         if let clarification = result.clarification {
@@ -425,7 +429,7 @@ final class HallieWebBridge {
         } else if response.playAfterAnswer {
             play = cited.filter { ($0["playable"] as? Bool) == true }.prefix(1).map { $0 }
         }
-        return [
+        var json: [String: Any] = [
             "prose": prose,
             "basis": merged?.basis ?? result.basisLine,
             "attachments": (merged?.attachments ?? result.attachments).map { attachmentJSON($0) },
@@ -440,6 +444,8 @@ final class HallieWebBridge {
             },
             "listening": response.telling != nil,
         ]
+        if let mode { json["mode"] = mode.rawValue }
+        return json
     }
 
     /// How a record can reach the page: straight from the Mac, through a

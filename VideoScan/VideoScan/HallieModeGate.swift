@@ -61,7 +61,8 @@ enum HallieModeGate {
             let description = Exec.description(of: ast)
             return .decline(Exec.Result(
                 route: .graph, outcome: .declined,
-                prose: "I read that as a family-tree question, but I couldn't tell who it is about — name the person.",
+                prose: "I read that as a family-tree question, but I couldn't tell who it is about — name the person, "
+                    + "or say “in the catalog” and I'll search the videos instead.",
                 basisLine: "Basis: tree mode; the translator returned a catalog search (\(description)) naming no one person, so nothing was searched.",
                 queryDescription: "mode gate: tree refused \(description)",
                 citations: [], catalogPersonName: nil,

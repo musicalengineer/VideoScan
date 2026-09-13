@@ -552,6 +552,9 @@ enum ArchivistFollowUpResolver {
         "movies", "entry", "entries", "hit", "hits", "list", "listed", "shown",
         "you", "found", "mentioned", "above", "there", "here", "we", "have",
         "got", "either", "any", "some", "cited",
+        // "play the first one in the archive" (design §3.5 step 5): the
+        // catalog's other names are filler in a referent, like "catalog".
+        "archive", "collection", "library",
     ]
     private static let allWords: Set<String> = ["all", "both", "every", "each", "everything"]
 

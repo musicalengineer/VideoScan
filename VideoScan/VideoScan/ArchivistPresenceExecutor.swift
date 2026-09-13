@@ -337,6 +337,11 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
     let userPlace: String?
     /// "known" / "estimated" when placed; nil when unplaced.
     let userPlaceStatus: String?
+    /// The probed running time, for "the longest video in the archive"
+    /// (design §3.5, step 5). Nil when the probe left none (0 → nil).
+    let durationSeconds: Double?
+    /// The file's size on disk, for "the biggest file". Nil when unknown.
+    let sizeBytes: Int64?
 
     init(
         id: UUID = UUID(),
@@ -360,7 +365,9 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
         ocrText: [SceneCaption] = [],
         resolvedDate: Date? = nil,
         userPlace: String? = nil,
-        userPlaceStatus: String? = nil
+        userPlaceStatus: String? = nil,
+        durationSeconds: Double? = nil,
+        sizeBytes: Int64? = nil
     ) {
         self.id = id
         self.fullPath = fullPath
@@ -384,6 +391,8 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
         self.resolvedDate = resolvedDate
         self.userPlace = userPlace
         self.userPlaceStatus = userPlace == nil ? nil : (userPlaceStatus ?? UserPlaceStatus.estimated.rawValue)
+        self.durationSeconds = (durationSeconds ?? 0) > 0 ? durationSeconds : nil
+        self.sizeBytes = (sizeBytes ?? 0) > 0 ? sizeBytes : nil
     }
 
     /// The date this record sorts by for "the newest / oldest one": the
@@ -432,7 +441,9 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
             ocrText: record.ocrText,
             resolvedDate: ArchivistTemporalSelectionDateSnapshot.resolvedCatalogDate(record: record)?.date,
             userPlace: record.userPlace,
-            userPlaceStatus: record.userPlace == nil ? nil : record.userPlaceStatus.rawValue)
+            userPlaceStatus: record.userPlace == nil ? nil : record.userPlaceStatus.rawValue,
+            durationSeconds: record.durationSeconds,
+            sizeBytes: record.sizeBytes)
     }
 
     /// Bulk bridge yields between bounded batches so snapshot refresh cannot
@@ -515,6 +526,17 @@ enum ArchivistPresenceExecutor {
     struct DatedMatch: Sendable, Equatable {
         let citation: ArchivistEvidenceCitation
         let date: Date?
+        /// The other two keys "the longest / the biggest" sort by (step 5).
+        let durationSeconds: Double?
+        let sizeBytes: Int64?
+
+        init(citation: ArchivistEvidenceCitation, date: Date?,
+             durationSeconds: Double? = nil, sizeBytes: Int64? = nil) {
+            self.citation = citation
+            self.date = date
+            self.durationSeconds = durationSeconds
+            self.sizeBytes = sizeBytes
+        }
     }
 
     /// EVERY proven match for `query` (no 25-item cap — the caller sorts and
@@ -531,13 +553,16 @@ enum ArchivistPresenceExecutor {
             if let query {
                 guard !query.hasInvalidYearRange, !query.isEmpty,
                       let citation = citation(for: record, query: query) else { continue }
-                matches.append(DatedMatch(citation: citation, date: record.orderingDate))
+                matches.append(DatedMatch(
+                    citation: citation, date: record.orderingDate,
+                    durationSeconds: record.durationSeconds, sizeBytes: record.sizeBytes))
             } else {
                 matches.append(DatedMatch(
                     citation: ArchivistEvidenceCitation(
                         recordID: record.id, fullPath: record.fullPath,
                         filename: record.filename, playbackSeconds: nil, bases: []),
-                    date: record.orderingDate))
+                    date: record.orderingDate,
+                    durationSeconds: record.durationSeconds, sizeBytes: record.sizeBytes))
             }
         }
         return matches

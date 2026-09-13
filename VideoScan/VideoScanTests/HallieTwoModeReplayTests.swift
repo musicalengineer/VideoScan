@@ -214,22 +214,34 @@ struct HallieTwoModeReplayTests {
 
     // MARK: 3. cs030 — "play the longest video in the archive"
 
-    /// TODAY: no catalog superlative exists; the media resolver reads
-    /// "archive" as content, hands the remainder to the translator with a
-    /// play intent, and the model's `aggregate anchorPeople:["archive"]`
-    /// dead-ends on the aggregate decline.
-    /// AFTER (step 5, out of this branch's scope): a local duration
-    /// superlative. Steps 1–4 only guarantee mode = catalog for the turn.
-    @Test func playTheLongestVideoInTheArchiveDeadEndsOnAggregate() async throws {
+    /// STEP 0 (today): no catalog superlative existed; the media resolver
+    /// read "archive" as content, handed the remainder to the translator
+    /// with a play intent, and the model's `aggregate anchorPeople:
+    /// ["archive"]` dead-ended on the aggregate decline.
+    /// STEP 5: HallieCatalogSuperlative claims the sentence locally — a
+    /// presence run sorted longest first with the play verb honoured —
+    /// and the translator is never asked. This fixture's records carry no
+    /// running time, so the honest outcome here is the "none I can put in
+    /// order" decline; the answered path, ties and scale are pinned in
+    /// HallieCatalogSuperlativeTests.
+    @Test func playTheLongestVideoInTheArchiveIsALocalOrderedRun() async throws {
         var memory = Exec.ConversationMemory()
         let q = "play the longest video in the archive"
         let turn = classified(q)
-        #expect(turn.decision == .translate(question: "the longest video in the archive", playAfterAnswer: true))
-        #expect(turn.verdict.mode == .catalog, "steps 1–4 guarantee the FAMILY; the superlative is step 5")
-        let result = try await run(q, memory: &memory,
-                                   translated: .aggregate(.init(operation: .coOccurrence, anchorPeople: ["archive"])))
-        #expect(result.route == .aggregate, Comment(rawValue: result.prose))
+        guard case .run(let intent) = turn.decision else {
+            Issue.record("expected a local ordered run, got \(turn.decision)")
+            return
+        }
+        #expect(turn.verdict.mode == .catalog)
+        #expect(intent.playAfterAnswer)
+        #expect(intent.order?.order == .longest)
+        #expect(intent.ast == .presence(.init(mediaKind: .video)))
+        let result = try await run(q, memory: &memory)
+        #expect(result.route == .presence, Comment(rawValue: result.prose))
         #expect(result.outcome == .declined, Comment(rawValue: result.prose))
+        #expect(result.prose.hasSuffix("but none of them has a running time I can put in order."),
+                Comment(rawValue: result.prose))
+        #expect(memory.mode == .catalog)
     }
 
     // MARK: 4. cc001 → cc002 → cc003 — the count chain

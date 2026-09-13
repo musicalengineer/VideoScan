@@ -167,15 +167,21 @@ enum HallieTurnExecutor {
         /// already disambiguated by a chip: slot index → chosen identity,
         /// so the second slot's clarification does not lose it.
         let pinnedGraphSubjects: [Int: CandidateID]
-        /// "and the newest?" / "the second oldest one" (2026-09-02): re-run
-        /// `ast` as a list sorted by date and pick one. Nil for every other
+        /// "and the newest?" / "the second oldest one" (2026-09-02) / "the
+        /// longest video in the archive" (step 5): re-run `ast` as a list
+        /// sorted by date, length or size and pick one. Nil for every other
         /// turn; the presence route reads it (+DateOrdered).
-        let dateOrder: DateOrderRequest?
+        let order: OrderRequest?
         /// A COUNT re-run (design §3.5, "and how many from the 80s"): the
         /// presence route phrases "N videos from the 1980s" and cites at
         /// most a handful; conversation memory keeps the count scope
         /// alive. Off for every other turn.
         let countOnly: Bool
+        /// A spoken mode correction re-asked the last question under a
+        /// forced family (design §3.6, HallieModeCorrection); conversation
+        /// memory applies it when this intent's answer is recorded. Nil
+        /// for every other turn.
+        let modeForce: HallieModeForce?
 
         init(
             originalQuestion: String,
@@ -187,8 +193,9 @@ enum HallieTurnExecutor {
             refinementChange: String? = nil,
             speakerBindings: [SpeakerBinding] = [],
             pinnedGraphSubjects: [Int: CandidateID] = [:],
-            dateOrder: DateOrderRequest? = nil,
-            countOnly: Bool = false
+            order: OrderRequest? = nil,
+            countOnly: Bool = false,
+            modeForce: HallieModeForce? = nil
         ) {
             self.originalQuestion = originalQuestion
             self.ast = ast
@@ -199,8 +206,9 @@ enum HallieTurnExecutor {
             self.refinementChange = refinementChange
             self.speakerBindings = speakerBindings
             self.pinnedGraphSubjects = pinnedGraphSubjects
-            self.dateOrder = dateOrder
+            self.order = order
             self.countOnly = countOnly
+            self.modeForce = modeForce
         }
 
         /// The same intent with a rewritten graph AST and/or extra pins.
@@ -219,8 +227,28 @@ enum HallieTurnExecutor {
                 refinementChange: refinementChange,
                 speakerBindings: newBindings ?? speakerBindings,
                 pinnedGraphSubjects: newPins ?? pinnedGraphSubjects,
-                dateOrder: dateOrder,
-                countOnly: countOnly)
+                order: order,
+                countOnly: countOnly,
+                modeForce: modeForce)
+        }
+
+        /// The same intent carrying a mode force (a spoken correction's
+        /// re-ask). Nil leaves it as is.
+        func forcing(_ force: HallieModeForce?) -> Intent {
+            guard let force else { return self }
+            return Intent(
+                originalQuestion: originalQuestion,
+                ast: ast,
+                playAfterAnswer: playAfterAnswer,
+                citationOffset: citationOffset,
+                refinementNote: refinementNote,
+                refinementChain: refinementChain,
+                refinementChange: refinementChange,
+                speakerBindings: speakerBindings,
+                pinnedGraphSubjects: pinnedGraphSubjects,
+                order: order,
+                countOnly: countOnly,
+                modeForce: force)
         }
     }
 
@@ -238,11 +266,31 @@ enum HallieTurnExecutor {
         case wholeCatalog
     }
 
-    /// "the newest" / "the second oldest one": which end, which position.
-    struct DateOrderRequest: Sendable, Equatable {
-        enum Order: Sendable, Equatable {
-            case newestFirst
-            case oldestFirst
+    /// "the newest" / "the second oldest one" / "the longest video in the
+    /// archive": which key, which end, which position. Was DateOrderRequest
+    /// (date only) until design §3.5 step 5 added length and size.
+    struct OrderRequest: Sendable, Equatable {
+        enum Order: String, Sendable, Equatable, CaseIterable {
+            case newest, oldest, longest, shortest, largest, smallest
+
+            /// What the list is sorted by.
+            enum Key: Sendable, Equatable { case date, duration, size }
+            var key: Key {
+                switch self {
+                case .newest, .oldest: return .date
+                case .longest, .shortest: return .duration
+                case .largest, .smallest: return .size
+                }
+            }
+            /// The asked-for end comes FIRST in the ordered list.
+            var descending: Bool {
+                switch self {
+                case .newest, .longest, .largest: return true
+                case .oldest, .shortest, .smallest: return false
+                }
+            }
+            /// The word the answer uses ("The newest of …").
+            var word: String { rawValue }
         }
         let order: Order
         /// 1-based: "the newest" = 1, "the second newest" = 2.
@@ -620,6 +668,11 @@ enum HallieTurnExecutor {
         /// from the route (ConversationMemory.record). Copied by every
         /// copy helper — HallieResultCopyRoundTripTests walks them.
         let mode: HallieMode?
+        /// A spoken mode correction with nothing to re-ask (design §3.6):
+        /// the honest decline still carries the switch, and conversation
+        /// memory applies it when the answer is recorded. Nil otherwise.
+        /// Copied by every copy helper.
+        let modeForce: HallieModeForce?
 
         init(
             route: Route,
@@ -643,7 +696,8 @@ enum HallieTurnExecutor {
             subjectLifeStatus: LifeStatus? = nil,
             refinableQuery: RefinableQuery? = nil,
             retryOffer: HallieOfferAcceptance.Offer? = nil,
-            mode: HallieMode? = nil
+            mode: HallieMode? = nil,
+            modeForce: HallieModeForce? = nil
         ) {
             self.route = route
             self.outcome = outcome
@@ -669,6 +723,7 @@ enum HallieTurnExecutor {
             self.refinableQuery = refinableQuery
             self.retryOffer = retryOffer
             self.mode = mode
+            self.modeForce = modeForce
         }
 
         /// The same answer with extra things to look at. Facts untouched.
@@ -686,7 +741,8 @@ enum HallieTurnExecutor {
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
-                mode: mode)
+                mode: mode,
+                modeForce: modeForce)
         }
 
         /// The same answer with an OFFER appended (2026-09-10, the gallery
@@ -718,7 +774,8 @@ enum HallieTurnExecutor {
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
-                mode: mode)
+                mode: mode,
+                modeForce: modeForce)
         }
 
         /// The same answer carrying a PROVENANCE note — how Hallie read the
@@ -756,7 +813,8 @@ enum HallieTurnExecutor {
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
-                mode: mode)
+                mode: mode,
+                modeForce: modeForce)
         }
 
         /// The same answer with its prose replaced by a verified composition.
@@ -786,7 +844,38 @@ enum HallieTurnExecutor {
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
-                mode: mode)
+                mode: mode,
+                modeForce: modeForce)
+        }
+
+        /// The same answer carrying a mode force (a spoken correction's
+        /// re-ask that was answered locally). Nil leaves it as is.
+        func forcing(_ force: HallieModeForce?) -> Result {
+            guard let force else { return self }
+            return Result(
+                route: route,
+                outcome: outcome,
+                prose: prose,
+                basisLine: basisLine,
+                queryDescription: queryDescription,
+                citations: citations,
+                knowledgeCitations: knowledgeCitations,
+                catalogPersonName: catalogPersonName,
+                clarification: clarification,
+                matchCount: matchCount,
+                mediaAction: mediaAction,
+                offeredActions: offeredActions,
+                answerPlan: answerPlan,
+                composedBy: composedBy,
+                transcriptText: transcriptText,
+                attachments: attachments,
+                performsFirstOfferedAction: performsFirstOfferedAction,
+                immediateOfferedAction: immediateOfferedAction,
+                subjectLifeStatus: subjectLifeStatus,
+                refinableQuery: refinableQuery,
+                retryOffer: retryOffer,
+                mode: mode,
+                modeForce: force)
         }
     }
 
