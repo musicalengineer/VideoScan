@@ -644,9 +644,14 @@ final class PersonFinderModel: ObservableObject {
     }
 
     /// The sentence shown when the active selection names a person who is
-    /// gone. Clears the stale selection so the next card click starts clean.
+    /// gone. The uuid STAYS bound: clearing it (the 2026-09-12 shape) left
+    /// `personName` alone, so the very next quick-save or rejection sync
+    /// fell into the unique-name path and wrote a namesake (codex
+    /// post-merge review 2026-09-13, People #1). `resolveActiveProfile`
+    /// keeps answering `.missing` until an explicit re-selection —
+    /// `applyProfile` from a card click — or Clear replaces the uuid. Only
+    /// the photo path is dropped, so nothing loads from the vanished folder.
     func refuseMissingActiveProfile(_ id: UUID, operation: String) -> String {
-        settings.activeProfileUUID = nil
         settings.referencePath = ""
         settings.save()
         let message = "The selected person (\(id.uuidString)) is no longer in the gallery — \(operation) was not done. Click a card to pick who you mean."
@@ -889,7 +894,16 @@ final class PersonFinderModel: ObservableObject {
             referenceSources = []
             referenceLoadFailures = []
             settings.referencePath = ""
-            settings.activeProfileUUID = nil
+            // The selection now names a person who is GONE, and stays bound
+            // to that uuid. Clearing it left `personName` alone with the
+            // (now unique) short name, and the next quick-save resolved it
+            // to the namesake — Richard Sr written with Richard Jr's
+            // settings (codex post-merge review 2026-09-13, People #1).
+            // Every name-keyed write refuses via `.missing` until a card is
+            // clicked; undo restores the same uuid and the selection is
+            // live again. Bound explicitly: a pre-uuid selection matched
+            // by name has the same hole.
+            settings.activeProfileUUID = profile.uuid
             settings.rejectedReferenceFiles = []
             settings.save()
         }
