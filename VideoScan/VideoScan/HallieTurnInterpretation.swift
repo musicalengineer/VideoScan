@@ -70,10 +70,23 @@ enum HallieConversationGuard {
         "your grandpa", "your uncle", "your aunt",
     ]
 
-    private static let archiveWords: Set<String> = [
+    /// The archive vocabulary, split by FAMILY (docs/hallie_two_mode_design.md
+    /// step 1) so HallieModeClassifier can read each half; the guard itself
+    /// still tests the UNION, so its behaviour is byte-identical to the one
+    /// mixed set it had before. Catalog half: things one plays, counts or
+    /// searches, plus the provenance words.
+    static let catalogCues: Set<String> = [
         "archive", "catalog", "video", "videos", "clip", "clips",
         "recording", "recordings", "media", "mxf", "transcript",
-        "caption", "captions", "file", "files", "biography",
+        "caption", "captions", "file", "files",
+        "evidence", "source", "sources", "tape",
+        "footage", "film", "movie", "photo", "picture", "audio",
+        "sound", "track",
+    ]
+
+    /// Tree half: people, relations, vital facts.
+    static let treeCues: Set<String> = [
+        "biography",
         "born", "birth", "died", "death", "related", "relationship",
         "father", "mother", "parents", "parent", "spouse", "husband",
         "wife", "children", "child", "son", "daughter", "grandfather",
@@ -81,10 +94,10 @@ enum HallieConversationGuard {
         "mom", "mum", "dad", "grandma", "grandpa", "nana", "uncle",
         "aunt", "cousin", "brother", "sister", "niece", "nephew",
         "grandson", "granddaughter", "in-law", "married", "wedding",
-        "maiden", "passed", "evidence", "source", "sources", "tape",
-        "footage", "film", "movie", "photo", "picture", "audio",
-        "sound", "track",
+        "maiden", "passed",
     ]
+
+    private static let archiveWords: Set<String> = catalogCues.union(treeCues)
 
     /// Direct tree questions addressed to "you" must not be mistaken for a
     /// memory trap. They have a grounded graph answer when the tree has one.
