@@ -13,6 +13,10 @@ name: Nightly Static Analysis
 #   thread-sanitizer    — Disabled on GH-hosted runners. Run TSan on local
 #                         Mac hardware / self-hosted macOS instead.
 #   lint-strict         — SwiftLint --strict + Periphery without retain-public.
+#   source-ratchets     — Build-free source ratchets (pure Python, ubuntu):
+#                         subprocess-injection + check-then-act on removable
+#                         volumes, both against grandfathered baselines in
+#                         ci/baselines/. Fails only on NEW violations.
 #   aggregate           — Collects every count and appends one row to
 #                         metrics/static_analysis.jsonl on the metrics branch.
 #
@@ -40,12 +44,25 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 60
     outputs:
-      # warning_count = concurrency-class findings only. The raw grep total
-      # includes -warn-long-* perf-timing lines whose embedded millisecond
-      # values jitter run-to-run on shared runners, so sort -u re-counts
-      # them and the "trend" is ~2/3 noise (found 2026-07-07).
+      # warning_count = concurrency-class findings only.
+      #
+      # The -warn-long-* perf-timing lines used to be worse than noisy — they
+      # were INVISIBLE. The bucket grep matched the FLAG names
+      # ("warn-long-function-bodies"), but the compiler's warning text never
+      # contains them; it says "took 254ms to type-check (limit: 100ms)". So
+      # perf-findings.txt was empty every single night while 98 real timing
+      # warnings hid in the "other" bucket (found 2026-09-13). Fixed below.
+      #
+      # They are now parsed properly by scripts/typecheck_timing_ratchet.py,
+      # which keys each finding by FUNCTION IDENTITY (file + symbol) and
+      # carries the millisecond value as data. That is what makes the trend
+      # readable: the same slow function is the same entry night over night,
+      # instead of sort -u re-counting it whenever the timing jittered.
       warning_count: ${{ steps.count.outputs.concurrency }}
       warning_total: ${{ steps.count.outputs.warnings }}
+      typecheck_identities: ${{ steps.typecheck.outputs.typecheck_identities }}
+      typecheck_new_slow: ${{ steps.typecheck.outputs.typecheck_new_over_threshold }}
+      typecheck_saturated: ${{ steps.typecheck.outputs.typecheck_saturated }}
 
     steps:
       - name: Checkout
@@ -130,10 +147,18 @@ jobs:
           if [ -f strict-concurrency.log ]; then
             grep -E ': warning: ' strict-concurrency.log | sort -u > all-warnings.txt || true
             grep -E '(sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable)' all-warnings.txt > concurrency-findings.txt || true
-            grep -E 'warn-long-function-bodies|warn-long-expression' all-warnings.txt > perf-findings.txt || true
-            grep -Ev '(sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable|warn-long-function-bodies|warn-long-expression)' all-warnings.txt > other-findings.txt || true
+            # Match the WARNING TEXT, not the flag name. The old pattern
+            # ('warn-long-function-bodies') never appears in compiler output,
+            # so this bucket read 0 every night since the job was written.
+            grep -E 'took [0-9]+ms to type-check' all-warnings.txt > perf-findings.txt || true
+            grep -Ev '(sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable|took [0-9]+ms to type-check)' all-warnings.txt > other-findings.txt || true
+            # The saturated case is an ERROR, not a warning, so it is not in
+            # all-warnings.txt. It is the shape that turned CI red on
+            # 2026-09-01 (CatalogView.body, 495 lines, compiles on the M4 and
+            # not on the runner), so pull it out of the raw log separately.
+            grep -E 'unable to type-check this expression in reasonable time' strict-concurrency.log | sort -u > typecheck-saturated.txt || true
           else
-            : > all-warnings.txt; : > concurrency-findings.txt; : > perf-findings.txt; : > other-findings.txt
+            : > all-warnings.txt; : > concurrency-findings.txt; : > perf-findings.txt; : > other-findings.txt; : > typecheck-saturated.txt
           fi
 
           C_COUNT=$(wc -l < concurrency-findings.txt | tr -d ' ')
@@ -171,6 +196,31 @@ jobs:
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # -----------------------------------------------------------------
+      # The type-check timing metric, made readable.
+      #
+      # Parses every "took NNNms to type-check" warning (and the saturated
+      # "unable to type-check ... in reasonable time" error) and keys each one
+      # by FUNCTION IDENTITY — file + symbol — with the millisecond value as
+      # data rather than part of the key. That produces a top-20 list that is
+      # the same list tomorrow, and turns "a new function crossed the line"
+      # into a real event.
+      #
+      # THIS STEP CAN FAIL THE JOB, and it is not a build failure when it
+      # does: it means a NEW function type-checks slower than the threshold in
+      # scripts/typecheck_timing_ratchet.py (NEW_FUNCTION_THRESHOLD_MS, 500).
+      # Known-slow entries are grandfathered in ci/baselines/typecheck_timing.json
+      # and entries that merely got slower are reported, never gated — gating
+      # on a jittering millisecond value would rebuild the exact noise this
+      # replaces.
+      - name: Type-check timing (identity-keyed) + ratchet
+        id: typecheck
+        if: always()
+        run: |
+          python3 scripts/typecheck_timing_ratchet.py strict-concurrency.log \
+            --json-out typecheck-timing.json \
+            --top-out typecheck-top20.txt
+
       - name: Upload concurrency artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -182,6 +232,9 @@ jobs:
             concurrency-findings.txt
             perf-findings.txt
             other-findings.txt
+            typecheck-saturated.txt
+            typecheck-timing.json
+            typecheck-top20.txt
           retention-days: 30
 
   # -------------------------------------------------------------------
@@ -636,9 +689,74 @@ jobs:
           retention-days: 14
 
   # -------------------------------------------------------------------
+  # Build-free source ratchets. Pure python3 stdlib over the .swift text, so
+  # this needs no Xcode, no Metal toolchain and no 40-minute build — it runs
+  # on ubuntu in well under a minute and reports even on the nights the macOS
+  # build dies (which, per GH #171, is a thing that happens).
+  #
+  # Both checkers are GRANDFATHERED ratchets: today's hits are recorded in
+  # ci/baselines/*.json and reported as pre-existing; the job goes red only on
+  # a NEW violation or on a baseline entry that grew. We are not refactoring
+  # 1,300 files tonight — we are stopping the bleeding.
+  #
+  # Run either one locally exactly as CI does:
+  #   python3 scripts/check_subprocess_injection.py --root .
+  #   python3 scripts/check_volume_check_then_act.py --root .
+  # Accept a deliberate change with --update-baseline, and explain it in the
+  # commit message.
+  source-ratchets:
+    name: Source ratchets (injection + check-then-act)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      injection_new: ${{ steps.injection.outputs.new_count }}
+      injection_baseline: ${{ steps.injection.outputs.pre_existing_count }}
+      checkthenact_new: ${{ steps.checkthenact.outputs.new_count }}
+      checkthenact_baseline: ${{ steps.checkthenact.outputs.pre_existing_count }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Pins the property that VideoScan never builds a shell command STRING:
+      # ProcessRunner sets executableURL + an arguments ARRAY (posix_spawn with
+      # a real argv), so there is no string for an injection to live in. Also
+      # pins the ffmpeg concat-demuxer escaping, the one place our data reaches
+      # a parser we do not control.
+      - name: Subprocess-injection ratchet
+        id: injection
+        run: |
+          python3 scripts/check_subprocess_injection.py \
+            --root . \
+            --json-out ratchet-injection.json
+
+      # Reliability, not security: a removable volume can vanish between
+      # "does this exist?" and the write. Fix template is the descriptor copy
+      # in PromoteToArchiveJob / ArchivePromoteEngine.
+      - name: Check-then-act on removable volumes
+        id: checkthenact
+        if: always()
+        run: |
+          python3 scripts/check_volume_check_then_act.py \
+            --root . \
+            --json-out ratchet-check-then-act.json
+
+      - name: Upload ratchet findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-ratchets
+          path: |
+            ratchet-injection.json
+            ratchet-check-then-act.json
+            ci/baselines/subprocess_injection.json
+            ci/baselines/volume_check_then_act.json
+          retention-days: 30
+
+  # -------------------------------------------------------------------
   aggregate:
     name: Aggregate & push to metrics branch
-    needs: [strict-concurrency, codeql, thread-sanitizer, lint-strict]
+    needs: [strict-concurrency, codeql, thread-sanitizer, lint-strict, source-ratchets]
     if: always()
     runs-on: macos-15
     timeout-minutes: 5
@@ -658,18 +776,31 @@ jobs:
           TSAN_ISSUES: ${{ needs.thread-sanitizer.outputs.issue_count }}
           SWIFTLINT_STRICT: ${{ needs.lint-strict.outputs.swiftlint_count }}
           PERIPHERY_AGGRESSIVE: ${{ needs.lint-strict.outputs.periphery_count }}
+          TYPECHECK_IDENTITIES: ${{ needs.strict-concurrency.outputs.typecheck_identities }}
+          TYPECHECK_NEW_SLOW: ${{ needs.strict-concurrency.outputs.typecheck_new_slow }}
+          TYPECHECK_SATURATED: ${{ needs.strict-concurrency.outputs.typecheck_saturated }}
+          RATCHET_INJECTION_NEW: ${{ needs.source-ratchets.outputs.injection_new }}
+          RATCHET_CHECKTHENACT_NEW: ${{ needs.source-ratchets.outputs.checkthenact_new }}
         run: |
           set -e
           TS="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           SHA="${GITHUB_SHA:0:8}"
-          ROW=$(printf '{"ts":"%s","sha":"%s","run_kind":"nightly","concurrency_warnings":%s,"strict_warning_total":%s,"codeql_findings":%s,"tsan_issues":%s,"swiftlint_strict":%s,"periphery_aggressive":%s}' \
+          # typecheck_identities is the column to watch over time: it is a
+          # COUNT OF FUNCTIONS, not a count of log lines, so it no longer
+          # wanders with millisecond jitter.
+          ROW=$(printf '{"ts":"%s","sha":"%s","run_kind":"nightly","concurrency_warnings":%s,"strict_warning_total":%s,"codeql_findings":%s,"tsan_issues":%s,"swiftlint_strict":%s,"periphery_aggressive":%s,"typecheck_identities":%s,"typecheck_new_slow":%s,"typecheck_saturated":%s,"ratchet_injection_new":%s,"ratchet_check_then_act_new":%s}' \
                 "$TS" "$SHA" \
                 "${CONCURRENCY_WARNINGS:-null}" \
                 "${STRICT_WARNING_TOTAL:-null}" \
                 "${CODEQL_FINDINGS:-null}" \
                 "${TSAN_ISSUES:-null}" \
                 "${SWIFTLINT_STRICT:-null}" \
-                "${PERIPHERY_AGGRESSIVE:-null}")
+                "${PERIPHERY_AGGRESSIVE:-null}" \
+                "${TYPECHECK_IDENTITIES:-null}" \
+                "${TYPECHECK_NEW_SLOW:-null}" \
+                "${TYPECHECK_SATURATED:-null}" \
+                "${RATCHET_INJECTION_NEW:-null}" \
+                "${RATCHET_CHECKTHENACT_NEW:-null}")
           echo "Row: $ROW"
 
           git config user.name 'github-actions[bot]'
@@ -703,6 +834,13 @@ jobs:
           TSAN_ISSUES: ${{ needs.thread-sanitizer.outputs.issue_count }}
           SWIFTLINT_STRICT: ${{ needs.lint-strict.outputs.swiftlint_count }}
           PERIPHERY_AGGRESSIVE: ${{ needs.lint-strict.outputs.periphery_count }}
+          TYPECHECK_IDENTITIES: ${{ needs.strict-concurrency.outputs.typecheck_identities }}
+          TYPECHECK_NEW_SLOW: ${{ needs.strict-concurrency.outputs.typecheck_new_slow }}
+          TYPECHECK_SATURATED: ${{ needs.strict-concurrency.outputs.typecheck_saturated }}
+          RATCHET_INJECTION_NEW: ${{ needs.source-ratchets.outputs.injection_new }}
+          RATCHET_INJECTION_BASE: ${{ needs.source-ratchets.outputs.injection_baseline }}
+          RATCHET_CTA_NEW: ${{ needs.source-ratchets.outputs.checkthenact_new }}
+          RATCHET_CTA_BASE: ${{ needs.source-ratchets.outputs.checkthenact_baseline }}
         run: |
           {
             echo "## Nightly static analysis — $(date -u +'%Y-%m-%d')"
@@ -714,6 +852,17 @@ jobs:
             echo "| Thread Sanitizer | Mac/self-hosted only |"
             echo "| SwiftLint --strict | ${SWIFTLINT_STRICT:-?} |"
             echo "| Periphery aggressive | ${PERIPHERY_AGGRESSIVE:-?} |"
+            echo ""
+            echo "| Ratchet | New (gated) | Grandfathered |"
+            echo "|---|---:|---:|"
+            echo "| Subprocess injection / concat escaping | ${RATCHET_INJECTION_NEW:-?} | ${RATCHET_INJECTION_BASE:-?} |"
+            echo "| Check-then-act on removable volumes | ${RATCHET_CTA_NEW:-?} | ${RATCHET_CTA_BASE:-?} |"
+            echo "| New function over the type-check threshold | ${TYPECHECK_NEW_SLOW:-?} | — |"
+            echo ""
+            echo "Slow-to-type-check identities tracked: **${TYPECHECK_IDENTITIES:-?}** "
+            echo "(saturated / \"unable to type-check\": **${TYPECHECK_SATURATED:-?}**). "
+            echo "Top 20 worst is in the strict-concurrency job summary and in the "
+            echo "\`strict-concurrency-log\` artifact as \`typecheck-top20.txt\`."
             echo ""
             echo "Per-tool details are in the jobs above. CodeQL alerts also live under **Security → Code Scanning**."
             echo "Trend history: \`metrics/static_analysis.jsonl\` on the \`metrics\` branch."

@@ -1,0 +1,9 @@
+{
+  "note": "Check-then-act-on-removable-volume baseline. Pre-existing hits only; new hits fail the nightly job. Fix template: PromoteToArchiveJob / ArchivePromoteEngine descriptor copy.",
+  "entry_count": 2,
+  "hit_count": 2,
+  "entries": {
+    "volume-check-then-act|VideoScan/VideoScan/VideoScanModel+Rename.swift|renameRecord:fileExists(atPath:)(newPath)->moveItem(to:)(newPath)": 1,
+    "volume-check-then-act|VideoScan/VideoScan/VolumeCompare.swift|fastCopy:fileExists(atPath:)(destFile)->copyItem(to:)(destFile)": 1
+  }
+}
