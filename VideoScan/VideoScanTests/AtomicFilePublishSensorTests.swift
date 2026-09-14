@@ -66,7 +66,11 @@ struct AtomicFilePublishSensorTests {
 
     @Test func productionCodeNeverCallsReplaceItemAt() throws {
         let sources = try productionSources()
-        #expect(!sources.isEmpty, "the sensor must actually be reading sources")
+        // A source sensor that reads nothing passes forever. VideoScan has
+        // several hundred production Swift files; if this ever drops to a
+        // handful the path logic has broken, not the codebase.
+        #expect(sources.count > 150,
+                "the sensor must actually be reading sources — saw \(sources.count)")
 
         var offenders: [String] = []
         for (rel, text) in sources {
@@ -119,7 +123,12 @@ struct AtomicFilePublishSensorTests {
         for rel in stores {
             let text = try String(contentsOf: repoRoot.appendingPathComponent(rel),
                                   encoding: .utf8)
-            if !text.contains("AtomicFilePublish.write(") { missing.append(rel) }
+            // Either entry point counts — writeJSON(_:to:) funnels into
+            // write(_:to:). Matching only "write(" would fail a store that
+            // legitimately uses the JSON form.
+            let routed = text.contains("AtomicFilePublish.write(")
+                || text.contains("AtomicFilePublish.writeJSON(")
+            if !routed { missing.append(rel) }
         }
         #expect(missing.isEmpty, """
             These stores publish files and must do it through \
