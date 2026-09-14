@@ -878,7 +878,14 @@ func concatenateWithDecadeChapters(results: [VideoResult], config: Config) async
     let listPath = (tmp as NSString).appendingPathComponent("pf_list_\(ts).txt")
     let metaPath = (tmp as NSString).appendingPathComponent("pf_meta_\(ts).txt")
 
-    let listContent = entries.map { "file '\($0.clipPath)'" }.joined(separator: "\n")
+    // Single quotes escaped as '\'' — the ffmpeg concat demuxer's own quoting
+    // rule. Without this a path like "Donna's birthday.mov" truncates at the
+    // apostrophe and the wrong file is concatenated (or ffmpeg fails).
+    // Same rule as PersonFinderCompilation.swift in the app.
+    let listContent = entries.map { e -> String in
+        let escaped = e.clipPath.replacingOccurrences(of: "'", with: "'\\''")
+        return "file '\(escaped)'"
+    }.joined(separator: "\n")
     try? listContent.write(toFile: listPath, atomically: true, encoding: .utf8)
 
     // Write ffmetadata with chapter markers
@@ -981,7 +988,10 @@ func concatenateClips(results: [VideoResult], config: Config) async {
     let tmp = NSTemporaryDirectory()
     let ts = Int(Date().timeIntervalSince1970)
     let listPath = (tmp as NSString).appendingPathComponent("pf_concat_\(ts).txt")
-    let listContent = clipPaths.map { "file '\($0)'" }.joined(separator: "\n")
+    // Single quotes escaped as '\'' — see the note at the chapter-concat site.
+    let listContent = clipPaths
+        .map { "file '\($0.replacingOccurrences(of: "'", with: "'\\''"))'" }
+        .joined(separator: "\n")
     try? listContent.write(toFile: listPath, atomically: true, encoding: .utf8)
 
     // Determine output path

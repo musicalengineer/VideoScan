@@ -1,9 +1,6 @@
 {
   "note": "Subprocess-injection ratchet baseline. Every entry here is a PRE-EXISTING hit, grandfathered in. New hits fail the nightly job. Shrink this file, never grow it casually.",
-  "entry_count": 2,
-  "hit_count": 2,
-  "entries": {
-    "concat-unescaped|swift_cli/PersonFinder.swift|file '\\($0)'": 1,
-    "concat-unescaped|swift_cli/PersonFinder.swift|file '\\($0.clipPath)'": 1
-  }
+  "entry_count": 0,
+  "hit_count": 0,
+  "entries": {}
 }
