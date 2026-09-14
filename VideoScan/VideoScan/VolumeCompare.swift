@@ -3,6 +3,7 @@
 // but not the other. Primary use case: rescue unique files from aging drives
 // before they fail, without blindly copying everything (including duplicates).
 
+import Darwin
 import Foundation
 import SwiftUI
 import Combine
@@ -145,9 +146,26 @@ final class VolumeRescueOperation: ObservableObject {
     @Published var isRunning = false
     @Published var progress: Double = 0
     @Published var currentFile: String = ""
+    /// Files that are now SAFE at the destination: newly copied +
+    /// already-present + repaired. Progress and the toolbar chip read this.
     @Published var filesCopied: Int = 0
     @Published var filesFailed: Int = 0
+    /// Bytes this run actually WROTE, measured from write(2) in
+    /// RescueFileCopier. Files that were already present contribute
+    /// nothing here — they're counted in `bytesAlreadyPresent`. Before
+    /// 2026-09-13 this accrued the catalog's source size for every file,
+    /// including skipped ones, so it was a claim rather than a
+    /// measurement.
     @Published var bytesWritten: Int64 = 0
+    /// Subset of `filesCopied` that a previous rescue had already put
+    /// there, whole (same size as the source). Shown so a resumed rescue
+    /// reads honestly instead of looking like it re-copied everything.
+    @Published var filesAlreadyPresent: Int = 0
+    @Published var bytesAlreadyPresent: Int64 = 0
+    /// Destinations found INCOMPLETE (size ≠ source) and re-copied. Before
+    /// 2026-09-13 these were silently counted as good copies — this
+    /// counter is the visible half of that fix.
+    @Published var filesRepaired: Int = 0
     @Published var errors: [String] = []
     @Published var isDone = false
 
@@ -175,6 +193,26 @@ final class VolumeRescueOperation: ObservableObject {
     /// can pin the edge cases (empty / whitespace / already-trimmed)
     /// without standing up a VolumeRescueOperation. Used by
     /// `start(folderName:)` before constructing rescueDir.
+    /// One honest line for the completion banner. Pure + nonisolated so a
+    /// test can pin the wording without standing up the operation, and so
+    /// the SwiftUI body stays a single `Text` (this view has tripped the
+    /// type-checker's timeout before).
+    ///
+    /// "Safe" is the total that now exists at the destination; the bytes
+    /// figure is what this run actually WROTE, so a resumed rescue reads
+    /// "40 safe · 0 failed · 0 bytes · 40 already there" instead of
+    /// claiming it copied 400 GB it never touched.
+    nonisolated static func doneSummary(safe: Int,
+                                        failed: Int,
+                                        bytesWritten: Int64,
+                                        alreadyPresent: Int,
+                                        repaired: Int) -> String {
+        var parts = ["\(safe) safe", "\(failed) failed", humanSize(bytesWritten) + " written"]
+        if alreadyPresent > 0 { parts.append("\(alreadyPresent) already there") }
+        if repaired > 0 { parts.append("\(repaired) incomplete re-copied") }
+        return parts.joined(separator: " · ")
+    }
+
     nonisolated static func sanitizeRescueFolderName(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? defaultRescueFolderName : trimmed
@@ -198,6 +236,9 @@ final class VolumeRescueOperation: ObservableObject {
         filesCopied = 0
         filesFailed = 0
         bytesWritten = 0
+        filesAlreadyPresent = 0
+        bytesAlreadyPresent = 0
+        filesRepaired = 0
         errors = []
         currentProcess = nil
         // Remember destination so post-completion UX can trigger a
@@ -233,7 +274,7 @@ final class VolumeRescueOperation: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 let elapsed = Date().timeIntervalSince(started)
-                rescueLog.notice("Rescue done: copied=\(self.filesCopied, privacy: .public) failed=\(self.filesFailed, privacy: .public) bytes=\(humanSize(self.bytesWritten), privacy: .public) elapsed=\(Int(elapsed), privacy: .public)s")
+                rescueLog.notice("Rescue done: safe=\(self.filesCopied, privacy: .public) failed=\(self.filesFailed, privacy: .public) written=\(humanSize(self.bytesWritten), privacy: .public) alreadyPresent=\(self.filesAlreadyPresent, privacy: .public) (\(humanSize(self.bytesAlreadyPresent), privacy: .public)) repairedIncomplete=\(self.filesRepaired, privacy: .public) elapsed=\(Int(elapsed), privacy: .public)s")
                 self.progress = 1.0
                 self.isRunning = false
                 self.isDone = true
@@ -253,6 +294,9 @@ final class VolumeRescueOperation: ObservableObject {
         filesCopied = 0
         filesFailed = 0
         bytesWritten = 0
+        filesAlreadyPresent = 0
+        bytesAlreadyPresent = 0
+        filesRepaired = 0
         currentFile = ""
     }
 
@@ -282,6 +326,16 @@ final class VolumeRescueOperation: ObservableObject {
 
     // MARK: - Fast Copy (FileManager)
 
+    /// Fast mode: descriptor copy through a `.partial`, no checksum.
+    ///
+    /// Every file goes through `RescueFileCopier`, which publishes a file
+    /// only by renaming a complete `.partial` onto the final name. The
+    /// previous implementation called `FileManager.copyItem` straight to
+    /// the final name and treated ANY pre-existing destination as "already
+    /// copied" — so an interrupted rescue left truncated files at final
+    /// names and the next run reported them as good (found by the
+    /// check-then-act ratchet, 2026-09-13). Counters here now record what
+    /// the copier measured, not what the catalog claimed the size was.
     private nonisolated func fastCopy(files: [VideoRecordSnapshot], sourcePath: String, rescueDir: String, total: Int) async {
         let fm = FileManager.default
 
@@ -290,7 +344,6 @@ final class VolumeRescueOperation: ObservableObject {
 
             let srcFile = rec.fullPath
             let filename = rec.filename
-            let sizeBytes = rec.sizeBytes
             let relative = Self.relativePath(srcFile, under: sourcePath, fallback: filename)
             let destFile = (rescueDir as NSString).appendingPathComponent(relative)
             let destDir = (destFile as NSString).deletingLastPathComponent
@@ -311,21 +364,38 @@ final class VolumeRescueOperation: ObservableObject {
                 continue
             }
 
-            if fm.fileExists(atPath: destFile) {
-                await MainActor.run { [weak self] in
-                    self?.filesCopied += 1
-                    self?.bytesWritten += sizeBytes
-                }
-                continue
-            }
-
             do {
-                try fm.copyItem(atPath: srcFile, toPath: destFile)
-                await MainActor.run { [weak self] in
-                    self?.filesCopied += 1
-                    self?.bytesWritten += sizeBytes
+                let outcome = try RescueFileCopier.copy(source: srcFile,
+                                                        destination: destFile,
+                                                        shouldCancel: { Task.isCancelled })
+                switch outcome {
+                case .copied(let written):
+                    await MainActor.run { [weak self] in
+                        self?.filesCopied += 1
+                        self?.bytesWritten += written
+                    }
+                case .alreadyPresent(let bytes):
+                    // Resumed rescue: this file was already there, whole.
+                    // It counts as safe, but this run did not write it.
+                    await MainActor.run { [weak self] in
+                        self?.filesCopied += 1
+                        self?.filesAlreadyPresent += 1
+                        self?.bytesAlreadyPresent += bytes
+                    }
+                case .recopiedIncomplete(let written, let previousSize):
+                    // The bug this fix exists for: before today this file
+                    // would have been counted as a good copy. Say so loudly.
+                    rescueLog.warning("Incomplete rescue copy REPAIRED: \(relative, privacy: .public) was \(previousSize, privacy: .public) bytes, source is \(written, privacy: .public) — re-copied")
+                    await MainActor.run { [weak self] in
+                        self?.filesCopied += 1
+                        self?.filesRepaired += 1
+                        self?.bytesWritten += written
+                    }
                 }
+            } catch RescueFileCopier.Failure.cancelled {
+                break
             } catch {
+                rescueLog.error("Rescue copy failed: \(relative, privacy: .public) — \(String(describing: error), privacy: .public)")
                 await MainActor.run { [weak self] in
                     self?.filesFailed += 1
                     self?.errors.append("\(relative) — \(error.localizedDescription)")
@@ -344,7 +414,6 @@ final class VolumeRescueOperation: ObservableObject {
 
             let srcFile = rec.fullPath
             let filename = rec.filename
-            let sizeBytes = rec.sizeBytes
             let relative = Self.relativePath(srcFile, under: sourcePath, fallback: filename)
             let destFile = (rescueDir as NSString).appendingPathComponent(relative)
             let destDir = (destFile as NSString).deletingLastPathComponent
@@ -370,7 +439,19 @@ final class VolumeRescueOperation: ObservableObject {
                 continue
             }
 
-            // rsync with checksum verification
+            // rsync with checksum verification.
+            //
+            // NOTE (2026-09-13, while fixing the fast path): `--partial`
+            // keeps an interrupted transfer AT THE FINAL NAME, so this mode
+            // can also leave a truncated file named like a good one. It is
+            // less dangerous than the old fast path was, because the next
+            // run's `--checksum` pass re-transfers anything whose content
+            // doesn't match, so rsync itself never mistakes it for
+            // complete — but a catalog scan of the destination in between
+            // would. The fix is `--partial-dir=.videoscan-partial`, which
+            // parks partials in a sidecar directory instead. Deliberately
+            // NOT changed here: one bug per change, and this one needs its
+            // own test pass. Reported to the Manager 2026-09-13.
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: "/usr/bin/rsync")
             proc.arguments = [
@@ -401,9 +482,17 @@ final class VolumeRescueOperation: ObservableObject {
                 }
 
                 if proc.terminationStatus == 0 {
+                    // Measure what is actually at the destination rather
+                    // than trusting the catalog's size for this record
+                    // (consistency with the fast path, which now reports
+                    // only measured bytes). rsync exited 0, so the file is
+                    // there and checksum-verified; if we somehow can't
+                    // measure it, report 0 written rather than invent a
+                    // number.
+                    let landed = Self.measuredSize(ofFileAt: destFile) ?? 0
                     await MainActor.run { [weak self] in
                         self?.filesCopied += 1
-                        self?.bytesWritten += sizeBytes
+                        self?.bytesWritten += landed
                     }
                 } else {
                     let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
@@ -426,6 +515,18 @@ final class VolumeRescueOperation: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    /// Size of a file as measured through an open descriptor (fstat on the
+    /// thing we actually opened, not a question about a name). nil when it
+    /// can't be opened or isn't a regular file.
+    nonisolated static func measuredSize(ofFileAt path: String) -> Int64? {
+        let fd = Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { Darwin.close(fd) }
+        var sb = stat()
+        guard fstat(fd, &sb) == 0, (sb.st_mode & S_IFMT) == S_IFREG else { return nil }
+        return Int64(sb.st_size)
+    }
 
     private nonisolated static func relativePath(_ fullPath: String, under basePath: String, fallback: String) -> String {
         if fullPath.hasPrefix(basePath) {
@@ -1058,7 +1159,11 @@ struct VolumeCompareSheet: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Copy finished")
                 .font(.callout.bold())
-            Text("\(rescue.filesCopied) copied · \(rescue.filesFailed) failed · \(humanSize(rescue.bytesWritten))")
+            Text(VolumeRescueOperation.doneSummary(safe: rescue.filesCopied,
+                                                   failed: rescue.filesFailed,
+                                                   bytesWritten: rescue.bytesWritten,
+                                                   alreadyPresent: rescue.filesAlreadyPresent,
+                                                   repaired: rescue.filesRepaired))
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
