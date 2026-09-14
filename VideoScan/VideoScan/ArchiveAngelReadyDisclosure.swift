@@ -71,6 +71,11 @@ struct ArchiveAngelReadyDisclosure: View {
         if isDone, let r = plan.report { return "Archive Angel: " + r.summary }
         if isPromoting { return "Archive Angel is promoting \(selectedCount)…" }
         let n = ready.count
+        // Everything in the batch was skipped: say so, rather than the
+        // "0 videos ready" that reads like a stuck job.
+        if n == 0, plan.skippedCount > 0 {
+            return "Archive Angel prepared nothing — you skipped \(plan.skippedCount) in this batch"
+        }
         return "Archive Angel has \(n) video\(n == 1 ? "" : "s") ready to be promoted"
             + (selectedCount == n ? "" : " (\(selectedCount) selected)")
     }

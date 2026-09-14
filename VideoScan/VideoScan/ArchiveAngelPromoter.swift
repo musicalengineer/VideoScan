@@ -250,6 +250,10 @@ final class ArchiveAngelPromoter: ObservableObject {
                 report.failed.append(entry.filename)
             }
         }
+        // The user's own skips are part of the batch's story, kept apart
+        // from `failed` (Rick 2026-09-13): "3 skipped", never "3 failed".
+        let skipped = plan.entries.filter { $0.status == .skipped }.map(\.filename)
+        report.skippedByUser = skipped.isEmpty ? nil : skipped
         plan.report = report
         plan.status = plan.readyCount == 0 ? .promoted : .ready
         plan.finishedAt = Date()

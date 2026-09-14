@@ -1,8 +1,14 @@
 // ArchiveAngelDetailView.swift
 // Expanded panel for an Archive Angel row in the Media File Operations
-// window: one line per plan entry (status, step chips, first why-line)
-// and the rejection summary. Pure presentation over the job's published
-// plan — the full review happens in the Archive tab's sheet.
+// window: one line per plan entry (status, step chips, first why-line),
+// a Skip button per row, and the rejection summary. Presentation over the
+// job's published plan — the full review happens in the Archive tab's
+// sheet.
+//
+// Skip (Rick 2026-09-13, watching a batch roll by): "just skip this file
+// for this batch is fine. skip." One verb, the button performs the action,
+// no confirmation. Skipped rows STAY in the list — greyed, with the time
+// they were skipped — because he wants to "look at them later".
 
 import SwiftUI
 
@@ -34,7 +40,7 @@ struct ArchiveAngelDetailView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Text("\(job.plan.readyCount) ready · \(job.plan.entries.count) picked · "
+            Text("\(job.plan.readyCount) ready\(job.plan.skippedClause) · \(job.plan.entries.count) picked · "
                  + "\(job.plan.rejectedTotal) rejected · \(job.plan.overflow) more would qualify")
                 .font(.system(size: 12, weight: .medium))
             Spacer()
@@ -59,14 +65,45 @@ struct ArchiveAngelDetailView: View {
                     Text("\(entry.score)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
                     Spacer(minLength: 4)
                     ForEach(entry.steps) { step in chip(step) }
+                    skipButton(entry)
                 }
                 if let why = entry.evidence.first?.line {
                     Text(why).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                // An export whose original the catalog cannot see (Rick
+                // 2026-09-13: "so many .vs.edit.mov and _balanced files").
+                // Name-only fact, so it says "looks like" — the scorer's
+                // rejection needs the original to be IN the catalog.
+                if let base = entry.derivativeOfStem {
+                    Text("looks like a derivative export of “\(base)” — the original is not in the catalog")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.orange)
+                        .lineLimit(1)
+                }
+                if let skipNote = entry.skipNote, entry.status == .skipped {
+                    Text(skipNote).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 if let f = entry.failure {
                     Text(f).font(.system(size: 11)).foregroundStyle(.red).lineLimit(1)
                 }
             }
+        }
+        .opacity(entry.status == .skipped ? 0.6 : 1)
+    }
+
+    /// One verb; pressing it performs the skip. Absent once the row is
+    /// settled (promoted, failed, already skipped) — there is nothing left
+    /// to skip.
+    @ViewBuilder
+    private func skipButton(_ entry: ArchiveAngelPlan.Entry) -> some View {
+        if entry.status.isSkippable, job.state.isActive {
+            Button("Skip") { job.skip(entryID: entry.id) }
+                .buttonStyle(.borderless)
+                .font(.system(size: 10, weight: .medium))
+                .help(entry.status == .preparing
+                      ? "Skip this file — stops its transcode, drops its partial companions and moves on to the next one. The batch keeps running."
+                      : "Skip this file for this batch. Nothing is written to the catalog, so a later batch may propose it again.")
+                .accessibilityIdentifier("archiveAngel.row.skip")
         }
     }
 
@@ -86,6 +123,8 @@ struct ArchiveAngelDetailView: View {
         case .ready: return "checkmark.circle.fill"
         case .promoted: return "archivebox.fill"
         case .failed: return "xmark.circle.fill"
+        // A decision, not a breakage — never the red x of `.failed`.
+        case .skipped: return "arrow.uturn.forward.circle"
         }
     }
 
@@ -96,6 +135,7 @@ struct ArchiveAngelDetailView: View {
         case .ready: return .green
         case .promoted: return .blue
         case .failed: return .red
+        case .skipped: return .secondary
         }
     }
 

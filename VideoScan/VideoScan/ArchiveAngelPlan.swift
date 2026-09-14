@@ -62,6 +62,28 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         case ready
         case promoted
         case failed
+        /// The user pressed Skip on this row while the batch was preparing
+        /// (Rick 2026-09-13: "just skip this file for this batch is fine").
+        /// DISTINCT from `.failed` on purpose — "I decided against it" and
+        /// "the transcode blew up" must never look alike in the plan, the
+        /// icons or the summary. Scope: this batch only; nothing durable is
+        /// written to the record, so a later batch may propose it again.
+        case skipped
+
+        /// Rows the preparation loop has not settled yet. A skipped row is
+        /// settled — it keeps its status through an interruption.
+        var isUnsettled: Bool { self == .pending || self == .preparing }
+
+        /// A skip is only meaningful while the row is still on its way into
+        /// the batch. Promoted / failed / already-skipped rows refuse it.
+        var isSkippable: Bool { self == .pending || self == .preparing || self == .ready }
+    }
+
+    /// What the preparation loop does with a row when it reaches it.
+    enum LoopAction: Equatable, Sendable {
+        case prepare          // pending / preparing
+        case passOver         // ready (resumed batch), promoted, failed
+        case reclaimBuffer    // skipped — delete its companions, then go on
     }
 
     struct Entry: Codable, Sendable, Identifiable, Equatable {
@@ -93,10 +115,47 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         /// Archive relpath of the original after Promote (nil until then).
         var promotedRelPath: String?
         var failure: String?
+        /// When the user pressed Skip (nil = never skipped). Optional so
+        /// batches written before 2026-09-13 still decode — synthesized
+        /// Codable does NOT fall back to a property's default value for a
+        /// missing key (≈ a C++ struct with no default-member-init: the
+        /// field would simply be garbage, so Swift refuses instead).
+        var skippedAt: Date?
+        /// Short human line for a skipped row ("Skipped by you at 14:32 —
+        /// not in this batch"). Never rendered as a failure.
+        var skipNote: String?
 
         var companionsMade: [StepOutcome] { steps.filter { $0.state == .done && $0.outputRelPath != nil } }
         var isOriginalOnly: Bool { status == .ready && companionsMade.isEmpty }
         func step(_ kind: StepKind) -> StepOutcome { steps.first { $0.kind == kind } ?? StepOutcome(kind: kind) }
+        /// The user's skip, recorded on the row. Clears `failure` — a skip
+        /// is a decision, not a breakage — and leaves the step outcomes
+        /// alone (the preparation loop marks the stopped step `.skipped`).
+        mutating func markSkippedByUser(at when: Date = Date(), note: String) {
+            status = .skipped
+            skippedAt = when
+            skipNote = note
+            failure = nil
+        }
+
+        var loopAction: LoopAction {
+            switch status {
+            case .pending, .preparing: return .prepare
+            case .skipped: return .reclaimBuffer
+            case .ready, .promoted, .failed: return .passOver
+            }
+        }
+
+        /// The original this file was exported from, by NAME ONLY
+        /// (`something.vs.edit.mov` → "something"). Rick 2026-09-13 spotted
+        /// a batch full of derivative exports: the scorer only rejects one
+        /// when the original is IN the catalog, so these are exports whose
+        /// original the catalog cannot see. Pure string work on the
+        /// filename — no catalog lookup, no new plumbing.
+        var derivativeOfStem: String? {
+            ArchiveAngelNaming.derivativeBaseStem((filename as NSString).deletingPathExtension)
+        }
+
         mutating func set(_ kind: StepKind, _ state: StepState, note: String = "", output: String? = nil) {
             if let i = steps.firstIndex(where: { $0.kind == kind }) {
                 steps[i].state = state; steps[i].note = note; steps[i].outputRelPath = output
@@ -113,10 +172,17 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         var balancedAudio = 0
         var originalOnly: [String] = []
         var failed: [String] = []
+        /// Rows the user skipped for this batch. Optional so reports written
+        /// before 2026-09-13 still decode. Reported separately from `failed`
+        /// — a skip is never a failure.
+        var skippedByUser: [String]?
         var summary: String {
             var s = "\(promotedOriginals) promoted (\(promotedOriginals) originals, \(accessCopies) access "
                 + "\(accessCopies == 1 ? "copy" : "copies"), \(losslessCopies) lossless, \(balancedAudio) balanced audio)"
             if !originalOnly.isEmpty { s += "; \(originalOnly.count) original-only: " + originalOnly.joined(separator: ", ") }
+            if let skipped = skippedByUser, !skipped.isEmpty {
+                s += "; \(skipped.count) skipped: " + skipped.joined(separator: ", ")
+            }
             if !failed.isEmpty { s += "; \(failed.count) failed: " + failed.joined(separator: ", ") }
             return s
         }
@@ -153,6 +219,12 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
 
     var selectedEntries: [Entry] { entries.filter { $0.selected && $0.status == .ready } }
     var readyCount: Int { entries.filter { $0.status == .ready }.count }
+    /// Rows the user skipped for this batch — counted, kept and shown, so
+    /// Rick can "look at them later" (2026-09-13).
+    var skippedCount: Int { entries.filter { $0.status == .skipped }.count }
+    var skippedEntries: [Entry] { entries.filter { $0.status == .skipped } }
+    /// "· 3 skipped" for a status line, or "" when nothing was skipped.
+    var skippedClause: String { skippedCount > 0 ? " · \(skippedCount) skipped" : "" }
 
     /// GH #177 (Rick 2026-09-10 evening): three cancelled batches stayed
     /// `preparing` forever — invisible in the Archive tab (only `ready`
@@ -161,21 +233,46 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
     /// rows never prepared become `failed` with the reason; rows already
     /// prepared keep the batch alive as `ready` (they are reviewable);
     /// nothing prepared → `discarded`. Returns true when the batch stays.
+    ///
+    /// A `.skipped` row is already settled: the user decided, so a settle
+    /// leaves it exactly as it is — never converted to failed or ready
+    /// (2026-09-13). Only `pending`/`preparing` rows are unsettled.
     @discardableResult
     mutating func settleAfterInterruption(reason: String) -> Bool {
-        for i in entries.indices where entries[i].status == .pending || entries[i].status == .preparing {
+        for i in entries.indices where entries[i].status.isUnsettled {
             entries[i].status = .failed
             entries[i].failure = reason
         }
         if readyCount > 0 {
             status = .ready
-            log.append("Settled after interruption: \(readyCount) ready, the rest marked failed — \(reason)")
+            log.append("Settled after interruption: \(readyCount) ready"
+                       + (skippedCount > 0 ? ", \(skippedCount) skipped by you" : "")
+                       + ", the rest marked failed — \(reason)")
             return true
         }
         status = .discarded
-        log.append("Discarded after interruption: nothing was prepared — \(reason)")
+        log.append("Discarded after interruption: nothing was prepared"
+                   + (skippedCount > 0 ? " (\(skippedCount) skipped by you)" : "") + " — \(reason)")
         return false
     }
+    /// THE SKIP TRANSITION (Rick 2026-09-13: "just skip this file for this
+    /// batch is fine. skip."). Pure and total: marks the row `.skipped`
+    /// with its note, or returns nil when the row is unknown or no longer
+    /// skippable. The caller (`ArchiveAngelJob.skip`) owns the side effects
+    /// — cancelling that row's sub-job, reclaiming its buffer folder,
+    /// saving the plan.
+    ///
+    /// Scope: this batch only. Nothing is written to the catalog record,
+    /// so a later batch may propose the same file again.
+    mutating func skipEntry(id: UUID, now: Date = Date(),
+                            note: (EntryStatus, Date) -> String) -> (index: Int, previous: EntryStatus)? {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return nil }
+        let previous = entries[i].status
+        guard previous.isSkippable else { return nil }
+        entries[i].markSkippedByUser(at: now, note: note(previous, now))
+        return (i, previous)
+    }
+
     var rejectedTotal: Int { rejected.values.reduce(0, +) }
     var bytesToCopy: Int64 {
         selectedEntries.reduce(0) { $0 + $1.sizeBytes }
@@ -270,7 +367,11 @@ enum ArchiveAngelPlanStore {
     /// Records already spoken for by another batch: every ready row in a
     /// ready or promoting plan, plus the pending/preparing rows of a plan
     /// whose job is still LIVE (plan.json moving). Promoted, failed,
-    /// discarded and interrupted rows are free again (GH #177).
+    /// discarded and interrupted rows are free again (GH #177) — and so is
+    /// a row the user SKIPPED (2026-09-13): a skip means "not in this
+    /// batch", so the record must be free for the next one. The switch
+    /// below enumerates the reserving statuses explicitly; `.skipped` is
+    /// deliberately absent from every arm.
     nonisolated static func inFlightRecordIDs(bufferRoot: URL, now: Date = Date(),
                                               staleAfter: TimeInterval = 3600,
                                               fileManager fm: FileManager = .default) -> Set<UUID> {
