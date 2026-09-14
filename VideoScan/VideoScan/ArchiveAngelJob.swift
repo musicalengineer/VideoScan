@@ -13,6 +13,12 @@
 //   • cancel stops the current sub-job and leaves what was prepared
 //     as `.ready`, the rest `.pending`, plan status `.preparing`.
 //
+// Cancel vs skip (Rick 2026-09-13): `cancel()` ends the JOB — sub-job and
+// task both cancelled, the batch settles. `skip(entryID:)` ends ONE ROW —
+// only that row's sub-job is cancelled, the row becomes `.skipped`, its
+// partial companions are deleted, and the loop carries on with the next
+// entry. The job's state is never touched by a skip.
+//
 // Originals are never copied here. Every media-writing step is an
 // existing job (Verify Audio, Balance Audio, Transcode) launched through
 // the Center with the buffer as its output — nothing new touches ffmpeg.
@@ -58,8 +64,14 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     /// Internal so tests can `await job.task?.value`.
     private(set) var task: Task<Void, Never>?
     /// The Verify / Balance / Transcode job currently running for an
-    /// entry — cancelled together with this job.
+    /// entry — cancelled together with this job, and cancelled ALONE when
+    /// that one entry is skipped.
     private var currentSubJob: (any MediaFileOperationJob)?
+    /// The entry the preparation loop is holding right now (nil between
+    /// entries). `skip(entryID:)` uses it to tell "this is the live one,
+    /// the loop will clean up after me" from "nobody is holding it, I clean
+    /// up myself".
+    private(set) var preparingEntryID: UUID?
 
     var title: String {
         explicitRecordIDs == nil
@@ -148,6 +160,10 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         task = Task {}
     }
 
+    /// STOP THE WHOLE JOB. Cancels the live sub-job AND this job's task, so
+    /// `stopRequested` turns true, the loop breaks and the batch settles
+    /// (`finishCancelled`). Contrast `skip(entryID:)`, which cancels only
+    /// the sub-job and leaves the job running.
     func cancel() {
         guard state.isActive else { return }
         state = .cancelling
@@ -157,6 +173,66 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     }
 
     private var stopRequested: Bool { state.cancelWasRequested || Task.isCancelled }
+
+    // MARK: Skip one entry (Rick 2026-09-13: "just skip this file for this
+    // batch is fine. skip.")
+    //
+    // A skip is NOT a cancel. Nothing here touches `state` or `task`, so
+    // `stopRequested` stays false: the batch keeps running and moves to the
+    // next entry. The only thing cancelled is the sub-job of the row being
+    // skipped. The decision lives in the plan (`EntryStatus.skipped`),
+    // which is saved immediately, so it survives a quit and a settle.
+    //
+    // Scope: THIS batch only. No disposition, tag or catalog field is
+    // written — a later batch may propose the file again.
+
+    /// Skip `id` for this batch. Valid from `.pending`, `.preparing` and
+    /// `.ready`; anything else (already promoted, failed or skipped) is
+    /// refused and returns false.
+    @discardableResult
+    func skip(entryID id: UUID, now: Date = Date()) -> Bool {
+        // The transition itself lives on the plan (pure, unit-tested); the
+        // job only does the side effects.
+        guard let (idx, before) = plan.skipEntry(id: id, now: now, note: Self.skipNote) else { return false }
+        let filename = plan.entries[idx].filename
+        note("Archive Angel: you skipped \(filename) — out of this batch (it was \(before.rawValue)); "
+             + "nothing was written to the catalog, so a later batch may propose it again")
+
+        if preparingEntryID == id {
+            // The live one. Stop ONLY its sub-job; the loop notices the
+            // `.skipped` status when the sub-job unwinds, deletes the
+            // partial companions and continues with the next entry. The
+            // buffer folder must NOT be deleted here — ffmpeg may still
+            // have the file open.
+            currentSubJob?.cancel()
+            subtitleText = "Skipping \(filename)…"
+        } else {
+            // Nobody is holding it: reclaim its buffer space and persist
+            // the decision now. Both hops are off the main actor.
+            let snapshot = plan
+            let entry = plan.entries[idx]
+            Task.detached(priority: .utility) {
+                ArchiveAngelPlanStore.removeEntryFolder(snapshot, entry: entry)
+                try? await Self.savePlanOffMain(snapshot)
+            }
+        }
+        return true
+    }
+
+    nonisolated static func skipNote(was: ArchiveAngelPlan.EntryStatus, at when: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm"
+        let where_ = was == .ready ? "after it was prepared" : "while it was \(was.rawValue)"
+        return "Skipped by you at \(f.string(from: when)) \(where_) — not in this batch"
+    }
+
+    /// True once the user has skipped the entry the loop is working on.
+    private func wasSkipped(_ idx: Int) -> Bool {
+        plan.entries.indices.contains(idx) && plan.entries[idx].status == .skipped
+    }
+
+    private let skipStepNote = "You skipped this file — this step was stopped"
 
     // MARK: Run
 
@@ -273,7 +349,16 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         let total = plan.entries.count
         for idx in plan.entries.indices {
             if stopRequested { break }
-            if plan.entries[idx].status == .ready { continue }   // resumed batch
+            // Only unsettled rows are prepared: a resumed batch's `.ready`
+            // rows, and any row the user skipped before the loop reached
+            // it, are passed over.
+            switch plan.entries[idx].loopAction {
+            case .passOver: continue            // resumed-ready, promoted, failed
+            case .reclaimBuffer:                // skipped before the loop arrived
+                _ = await settleSkip(idx, total: total)
+                continue
+            case .prepare: break                // `break` leaves the switch, not the for
+            }
             let entry = plan.entries[idx]
 
             // Free-space precheck (design §5): a stopped batch is still reviewable.
@@ -287,21 +372,31 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                 break
             }
 
-            guard let rec = model.record(forID: entry.id),
-                  await Self.fileExistsOffMain(entry.sourcePath) else {
+            let sourceExists = await Self.fileExistsOffMain(entry.sourcePath)
+            // A skip that landed during the two probes above wins: a user's
+            // decision is never overwritten by a failure verdict.
+            if await settleSkip(idx, total: total) { continue }
+            guard let rec = model.record(forID: entry.id), sourceExists else {
                 plan.entries[idx].status = .failed
                 plan.entries[idx].failure = "Source file is missing — cannot promote."
                 _ = await savePlan()
                 continue
             }
             plan.entries[idx].status = .preparing
+            preparingEntryID = entry.id
             _ = await savePlan()
             note("Archive Angel [\(idx + 1)/\(total)] \(entry.filename) — preparing (\(ByteCountFormatter.string(fromByteCount: entry.sizeBytes, countStyle: .file)), score \(entry.score))")
 
             let entryDir = URL(fileURLWithPath: plan.batchDir).appendingPathComponent(entry.id.uuidString, isDirectory: true)
             await Self.ensureDirectoryOffMain(entryDir)
+            // The user may have pressed Skip during those two hops.
+            if await settleSkip(idx, total: total) { continue }
 
             await prepare(index: idx, record: rec, entryDir: entryDir, position: idx + 1, total: total)
+            preparingEntryID = nil
+            // Skipped while preparing: clean up its partial companions and
+            // go on. The batch is NOT cancelled — `stopRequested` is false.
+            if await settleSkip(idx, total: total) { continue }
             if stopRequested { break }
 
             plan.entries[idx].status = .ready
@@ -318,9 +413,27 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         plan.finishedAt = Date()
         _ = await savePlan()
         let ready = plan.readyCount
-        let summary = "\(ready) ready to review · \(plan.rejectedTotal) rejected · \(plan.overflow) more would qualify"
+        // "7 ready to review · 3 skipped · 412 rejected · 18 more would
+        // qualify" — the skips are the user's own, counted apart from
+        // rejections and never folded into failures.
+        let summary = "\(ready) ready to review\(plan.skippedClause) · \(plan.rejectedTotal) rejected · \(plan.overflow) more would qualify"
         model.log("Archive Angel: " + summary)
         finish(success: summary)
+    }
+
+    /// The loop's half of a skip: the row is already `.skipped` in the plan
+    /// (the button did that), so here we only reclaim the buffer and save.
+    /// Returns true when the caller should move to the next entry.
+    private func settleSkip(_ idx: Int, total: Int) async -> Bool {
+        guard wasSkipped(idx) else { return false }
+        preparingEntryID = nil
+        let entry = plan.entries[idx]
+        await Self.removeEntryFolderOffMain(plan, entry: entry)
+        fractionValue = Double(idx + 1) / Double(total)
+        note("Archive Angel [\(idx + 1)/\(total)] \(entry.filename) — skipped by you; "
+             + "its partial companions were removed from the buffer, the batch continues")
+        _ = await savePlan()
+        return true
     }
 
     // MARK: Preparation of one entry
@@ -345,7 +458,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             currentSubJob = vj
             await vj.task?.value
             currentSubJob = nil
-            if let d = vj.diagnosis {
+            if wasSkipped(idx) {
+                step(idx, .verifyAudio, .skipped, note: skipStepNote)
+            } else if let d = vj.diagnosis {
                 diagnosis = d
                 step(idx, .verifyAudio, .done, note: HelperAudioOutcome.from(d).headline)
             } else if case .failed(let m) = vj.state {
@@ -357,7 +472,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             step(idx, .verifyAudio, .skipped, note: "A verify job for this file is already running")
         }
         _ = await savePlan()
-        if stopRequested { return }
+        if stopRequested || wasSkipped(idx) { return }
 
         // b. Balanced audio — only on a fixable problem.
         progress("balancing audio", 1)
@@ -375,7 +490,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                     currentSubJob = bj
                     await bj.task?.value
                     currentSubJob = nil
-                    if case .finished = bj.state, let out = bj.publishedURL,
+                    if wasSkipped(idx) {
+                        step(idx, .balanceAudio, .skipped, note: skipStepNote)
+                    } else if case .finished = bj.state, let out = bj.publishedURL,
                        await Self.fileSizeOffMain(out) > 0 {
                         let companion = model.records.first { $0.fullPath == out.path }
                         balancedRecord = companion
@@ -399,7 +516,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             step(idx, .balanceAudio, .skipped, note: "Audio OK — nothing to fix")
         }
         _ = await savePlan()
-        if stopRequested { return }
+        if stopRequested || wasSkipped(idx) { return }
 
         // c. Access copy — always; from the balanced companion when there is one.
         progress("access copy", 2)
@@ -410,7 +527,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                            outputURL: accessOut, model: model, center: center,
                            doneNote: balancedRecord == nil ? "HEVC access copy" : "HEVC access copy (from balanced audio)")
         _ = await savePlan()
-        if stopRequested { return }
+        if stopRequested || wasSkipped(idx) { return }
 
         // d. Lossless — only when enabled AND the format is at risk.
         progress("lossless copy", 3)
@@ -440,6 +557,13 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         currentSubJob = tj
         await tj.task?.value
         currentSubJob = nil
+        if wasSkipped(idx) {
+            // The user skipped this file mid-transcode: record the step as
+            // SKIPPED. A partial output is irrelevant — the whole entry
+            // folder is about to be deleted.
+            step(idx, kind, .skipped, note: skipStepNote)
+            return
+        }
         let outBytes = await Self.fileSizeOffMain(tj.outputURL)
         if case .finished = tj.state, outBytes > 0 {
             let companion = model.records.first { $0.fullPath == tj.outputURL.path }
@@ -591,6 +715,17 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         if FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.removeItem(at: url)
         }
+    }
+
+    /// Delete one entry's companions from the buffer (skip / cleanup).
+    /// Worst case it removes one entry folder — a handful of files, no
+    /// recursion beyond it, nothing read into memory.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func removeEntryFolderOffMain(_ plan: ArchiveAngelPlan,
+                                                     entry: ArchiveAngelPlan.Entry) async {
+        ArchiveAngelPlanStore.removeEntryFolder(plan, entry: entry)
     }
 
     #if compiler(>=6.2)

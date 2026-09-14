@@ -125,9 +125,13 @@ struct ArchiveAngelReviewSheet: View {
                         .toggleStyle(.checkbox)
                         .disabled(isPromoting || isDone)
                 } else {
-                    Image(systemName: entry.status == .promoted ? "checkmark.seal.fill" : "xmark.octagon.fill")
-                        .foregroundStyle(entry.status == .promoted ? Color.green : Color.red)
+                    // A row the USER skipped is not a casualty — grey
+                    // turn-arrow, never the red octagon of a failure
+                    // (Rick 2026-09-13).
+                    Image(systemName: Self.settledSymbol(entry.status))
+                        .foregroundStyle(Self.settledColor(entry.status))
                         .frame(width: 16)
+                        .help(entry.skipNote ?? entry.failure ?? entry.status.rawValue)
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
@@ -146,6 +150,12 @@ struct ArchiveAngelReviewSheet: View {
                         Text(failure)
                             .font(.system(size: 11))
                             .foregroundStyle(Color.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if entry.status == .skipped, let skipNote = entry.skipNote {
+                        Text(skipNote)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if let rel = entry.promotedRelPath {
@@ -169,13 +179,15 @@ struct ArchiveAngelReviewSheet: View {
         .opacity(entry.status == .ready && !entry.selected ? 0.55 : 1)
     }
 
-    /// "5 promoted · 1 failed — Show" under the ready rows.
+    /// "5 promoted · 3 skipped · 1 failed — Show" under the ready rows.
     private var settledLine: some View {
         let promoted = settledEntries.filter { $0.status == .promoted }.count
         let failed = settledEntries.filter { $0.status == .failed }.count
-        let other = settledEntries.count - promoted - failed
+        let skipped = settledEntries.filter { $0.status == .skipped }.count
+        let other = settledEntries.count - promoted - failed - skipped
         var parts: [String] = []
         if promoted > 0 { parts.append("\(promoted) already promoted") }
+        if skipped > 0 { parts.append("\(skipped) skipped") }
         if failed > 0 { parts.append("\(failed) failed") }
         if other > 0 { parts.append("\(other) still preparing") }
         return HStack(spacing: 6) {
@@ -192,6 +204,23 @@ struct ArchiveAngelReviewSheet: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
+    }
+
+    /// Icon/colour for a row that is no longer awaiting a decision.
+    static func settledSymbol(_ status: ArchiveAngelPlan.EntryStatus) -> String {
+        switch status {
+        case .promoted: return "checkmark.seal.fill"
+        case .skipped: return "arrow.uturn.forward.circle"
+        default: return "xmark.octagon.fill"
+        }
+    }
+
+    static func settledColor(_ status: ArchiveAngelPlan.EntryStatus) -> Color {
+        switch status {
+        case .promoted: return .green
+        case .skipped: return .secondary
+        default: return .red
+        }
     }
 
     private func scoreBadge(_ score: Int) -> some View {
