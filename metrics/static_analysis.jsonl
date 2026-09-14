@@ -144,3 +144,4 @@
 {"ts":"2026-09-11T10:02:01Z","sha":"bde0f1eb","run_kind":"nightly","concurrency_warnings":153,"strict_warning_total":490,"codeql_findings":5,"tsan_issues":null,"swiftlint_strict":341,"periphery_aggressive":0}
 {"ts":"2026-09-12T09:39:31Z","sha":"f7a8d54a","run_kind":"nightly","concurrency_warnings":155,"strict_warning_total":458,"codeql_findings":5,"tsan_issues":null,"swiftlint_strict":342,"periphery_aggressive":0}
 {"ts":"2026-09-13T10:37:28Z","sha":"55eeef39","run_kind":"nightly","concurrency_warnings":156,"strict_warning_total":426,"codeql_findings":5,"tsan_issues":null,"swiftlint_strict":345,"periphery_aggressive":0}
+{"ts":"2026-09-14T11:06:37Z","sha":"eb2eede1","run_kind":"nightly","concurrency_warnings":160,"strict_warning_total":526,"codeql_findings":7,"tsan_issues":null,"swiftlint_strict":357,"periphery_aggressive":0,"typecheck_identities":177,"typecheck_new_slow":1,"typecheck_saturated":0,"ratchet_injection_new":0,"ratchet_check_then_act_new":0}
