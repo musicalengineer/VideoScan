@@ -284,53 +284,8 @@ extension ConfirmPersonSheet {
                       : (allRemainingHidden ? "externaldrive.badge.exclamationmark" : "hourglass"))
                     .font(.system(size: 18))
                     .foregroundColor(fullyCommitted ? .green : .orange)
-                VStack(alignment: .leading, spacing: 3) {
-                    if holdout != nil {
-                        if fullyCommitted {
-                            Text("Holdout review done \u{2014} all \(holdoutAccountableTotal) answered and saved to the review file.")
-                                .font(.system(size: 12).weight(.medium))
-                            Text("Continuing with new candidates below. Your blind answers never touch the model from this app.")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        } else if holdoutEffectivePending == 0 {
-                            Text("Holdout review done \u{2014} finishing saving \(inFlightAnswerIds.count) answer\(inFlightAnswerIds.count == 1 ? "" : "s")\u{2026}")
-                                .font(.system(size: 12).weight(.medium))
-                            Text("Continuing with new candidates below; this note updates when the save completes.")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        } else if allRemainingHidden {
-                            Text("All reviewable holdout videos answered\(holdoutHiddenSuffix).")
-                                .font(.system(size: 12).weight(.medium))
-                            Text(allHiddenExplanation)
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("\(holdoutActionablePending) holdout video\(holdoutActionablePending == 1 ? "" : "s") still pending\(holdoutHiddenSuffix).")
-                                .font(.system(size: 12).weight(.medium))
-                            Text("The Review badge stays up until every row has an answer \u{2014} finish now, or continue with new candidates below and come back anytime.")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                            Button("Continue Reviewing") { resumeHoldout() }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .padding(.top, 2)
-                        }
-                    } else {
-                        // FAIL-CLOSED landing (load failure): candidates
-                        // are NOT offered — retry or close only.
-                        Text("No review queue could be loaded.")
-                            .font(.system(size: 12).weight(.medium))
-                        if let err = holdoutSaveError {
-                            Text(err)
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        }
-                        Button("Try Again") { startHoldout() }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .padding(.top, 2)
-                    }
-                }
+                holdoutStatusMessages(fullyCommitted: fullyCommitted,
+                                      allRemainingHidden: allRemainingHidden)
                 Spacer()
             }
             .padding(10)
@@ -503,5 +458,61 @@ extension ConfirmPersonSheet {
         phase = .holdout
         keepalive.start()
         holdoutGo(to: idx)
+    }
+
+    /// The banner's message column. Split out of `holdoutStatusBanner`
+    /// 2026-09-14: inline, the if/else chain of interpolated Texts took the
+    /// getter to 672 ms of type-checking on the CI runner — a NEW entry over
+    /// the nightly ratchet's threshold the night the ratchet landed. Pure
+    /// move; the two flags the branches read are passed in.
+    @ViewBuilder
+    func holdoutStatusMessages(fullyCommitted: Bool, allRemainingHidden: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if holdout != nil {
+                if fullyCommitted {
+                    Text("Holdout review done \u{2014} all \(holdoutAccountableTotal) answered and saved to the review file.")
+                        .font(.system(size: 12).weight(.medium))
+                    Text("Continuing with new candidates below. Your blind answers never touch the model from this app.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                } else if holdoutEffectivePending == 0 {
+                    Text("Holdout review done \u{2014} finishing saving \(inFlightAnswerIds.count) answer\(inFlightAnswerIds.count == 1 ? "" : "s")\u{2026}")
+                        .font(.system(size: 12).weight(.medium))
+                    Text("Continuing with new candidates below; this note updates when the save completes.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                } else if allRemainingHidden {
+                    Text("All reviewable holdout videos answered\(holdoutHiddenSuffix).")
+                        .font(.system(size: 12).weight(.medium))
+                    Text(allHiddenExplanation)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("\(holdoutActionablePending) holdout video\(holdoutActionablePending == 1 ? "" : "s") still pending\(holdoutHiddenSuffix).")
+                        .font(.system(size: 12).weight(.medium))
+                    Text("The Review badge stays up until every row has an answer \u{2014} finish now, or continue with new candidates below and come back anytime.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    Button("Continue Reviewing") { resumeHoldout() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .padding(.top, 2)
+                }
+            } else {
+                // FAIL-CLOSED landing (load failure): candidates
+                // are NOT offered — retry or close only.
+                Text("No review queue could be loaded.")
+                    .font(.system(size: 12).weight(.medium))
+                if let err = holdoutSaveError {
+                    Text(err)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                Button("Try Again") { startHoldout() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .padding(.top, 2)
+            }
+        }
     }
 }
