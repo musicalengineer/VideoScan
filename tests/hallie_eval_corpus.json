@@ -1,7 +1,7 @@
 {
  "version": 1,
  "created": "2026-08-21",
- "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 386 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+ "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 399 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
  "expect_values": {
   "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
   "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -3260,6 +3260,90 @@
    "text": "where was david t mcgill born?",
    "expect": "kinship",
    "notes": "harvested 2026-09-11 from the app transcript (2026-09-11); expectation unconfirmed"
+  },
+  {
+   "id": "lv260913-002",
+   "category": "live",
+   "text": "find a video of donna down the cape in 1993",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-13 from the app transcript (2026-09-13); expectation unconfirmed"
+  },
+  {
+   "id": "lv260913-003",
+   "category": "live",
+   "text": "how many files have been archived?",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-13 from the app transcript (2026-09-13); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260913-004",
+   "category": "live",
+   "text": "tell me about this file Cape-1993-archive.mkv",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-13 from the app transcript (2026-09-13); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260913-005",
+   "category": "live",
+   "text": "tell me about /Volumes/MediaExpansion/Converted_VHS_Tapes_2026/Cape-1993/Cape-1993-archive.mkv",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-13 from the app transcript (2026-09-13); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260913-006",
+   "category": "live",
+   "text": "tell me about this file's journey",
+   "expect": "clarify",
+   "notes": "VERIFIED 2026-09-13 from the transcript: nothing was selected, so asking \"Which video?\" is CORRECT behaviour, not a miss. Harvester inferred \"biography\" from the route; relabelled after reading the turn.",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260913-007",
+   "category": "live",
+   "text": "good morning hallie, say hi to my driend david",
+   "expect": "social",
+   "notes": "harvested 2026-09-13 from the app transcript (2026-09-13); expectation unconfirmed"
+  },
+  {
+   "id": "lv260913-008",
+   "category": "live",
+   "text": "show Timmy as a baby saying peekaboo",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-13 from the app transcript (2026-09-13); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260913-009",
+   "category": "live",
+   "text": "any video with peekaboo",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-13 from the app transcript (2026-09-13); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260913-010",
+   "category": "live",
+   "text": "tell me about my immediate family",
+   "expect": "biography",
+   "notes": "harvested 2026-09-13 from the app transcript (2026-09-13); expectation unconfirmed"
+  },
+  {
+   "id": "lv260913-011",
+   "category": "live",
+   "text": "very good, now tell me about beth",
+   "expect": "biography",
+   "notes": "VERIFIED 2026-09-13 from the transcript: Hallie answered with the tree's 2190-namesake clarification. Beth is Rick's sister — People profile ACE38016 (Elizabeth, alias \"beth\"). The People tab is the source of truth for the inner circle (Rick 2026-09-04), so this must resolve to her, not to tree namesakes. Live miss; fix on feature/hallie-people-tab-wins.",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260913-012",
+   "category": "live",
+   "text": "find donna down the cape in the 90s",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-13 from the app transcript (2026-09-14); expectation unconfirmed"
   }
  ]
 }
