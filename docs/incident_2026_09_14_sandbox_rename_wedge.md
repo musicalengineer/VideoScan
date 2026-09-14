@@ -1,11 +1,10 @@
 # P0 — VideoScan processes wedge unkillably at exit (Sandbox.kext rename lock)
 
-**Status: OPEN.** Root cause not yet proven. Written 2026-09-14 ~18:10 ET so the
-investigation survives a reboot of the M4.
+**Status: ROOT CAUSE PROVEN AND FIXED, 2026-09-14 ~19:30 ET.**
+Fix on `fix/sandbox-rename-swap-wedge` (`6c4623ca`).
 
 **Impact:** Rick cancelled a live demo for his uncle on 2026-09-14 — the app
-would neither launch nor quit properly. Xcode could not quit. Two reboots so far
-(2026-09-13 ~13:15, and one pending).
+would neither launch nor quit properly. Xcode could not quit. Three reboots.
 
 ---
 
@@ -14,136 +13,158 @@ would neither launch nor quit properly. Xcode could not quit. Two reboots so far
 VideoScan processes enter state `?E` (exiting) with zero resident memory and the
 command name in parentheses — `(VideoScan)`. They **cannot be killed**; `kill -9`
 does nothing because the thread is stuck inside the kernel. Only a reboot clears
-them. While present, a later VideoScan process *can* block at exit behind the
-lock they still hold.
+them.
+
+Two further consequences, both observed:
+
+- A later process of the same app can block at exit behind the lock a corpse
+  still holds (M4: four corpses chained to one owner).
+- **The app can no longer be launched.** `xcodebuild` dies instantly with
+  `IDELaunchServicesLauncher.m:418 … Assertion failed: childPID > 0` —
+  LaunchServices will not start another instance of a bundle id whose previous
+  instance never finished dying. This is the other half of the demo symptom.
 
 Detector: `scripts/check_wedged_processes.py` (exit 1 when any are present).
 
 ---
 
-## PROVEN (two independent machines, from spindumps)
+## ROOT CAUSE
 
-Evidence preserved in `~/Library/Logs/VideoScan/incidents/2026-09-14-sandbox-wedge/`
-(raw + decoded; decode with `spindump -i raw.txt -o decoded.txt`).
+`FileManager.replaceItemAt(_:withItemAt:)` compiles to
+`renameatx_np(… RENAME_SWAP)` on APFS. `Sandbox.kext` hooks that syscall in
+`hook_vnode_notify_will_rename_swap`, where it takes an `IORWLock`
+**exclusively and keeps holding it** across the VFS rename. The holding thread
+then sleeps in `vfs_subr.c` waiting on a vnode whose iocount belongs to a second
+thread — which is itself parked in the same hook waiting for that rwlock.
 
-### M4 (Mac16,9, kernel t6041, macOS 26.6.2 / 25G83)
+**ABBA deadlock, inside the kernel, unrecoverable from user space.** The threads
+never return, so the process can never finish exiting, so the rwlock is never
+released.
 
-Four wedged processes, started Sep 13 20:34 → Sep 14 02:28 (Rick's spot-test
-session plus Claude's overnight agent runs):
+### The stacks, symbolicated
 
-| PID | started | what it was |
-|---|---|---|
-| 35869 | Sep 13 20:34:54 | Rick's Release app |
-| 51245 | Sep 13 21:47:19 | test host — **holds the lock** |
-| 59499 | Sep 13 23:00:55 | test host |
-| 71905 | Sep 14 02:27:59 | test host |
+Both spindumps were symbolicated against the on-disk kernels in
+`/System/Library/Kernels/` by nearest preceding exported symbol
+(`sym.py` in the evidence directory). The structure is **identical** on
+M4/t6041 and M1/t6000:
 
-Five threads across those four processes are blocked in:
-
-```
-hook_vnode_notify_will_rename_swap + 140 (Sandbox + 105200)
-  IORWLockWrite + 180
-    (suspended, blocked by krwlock for writing owned by VideoScan [51245] thread 0xc0b24)
-```
-
-`51245` thread `0xc0b24` **holds** that rwlock and is itself asleep in
-`lck_mtx_sleep`, last ran 70,044 s before the dump. Its process is a zombie, so
-the lock is never released. The lock is shared across processes of the same app.
-
-### M1 (MacBookPro18,2, kernel t6000, same macOS build, uptime 26 days)
-
-One wedged process, PID 81216, started Sep 14 09:59:45 during the nightly test
-lane. Same structure, but entirely **self**-deadlocked — 4 threads:
-
-| thread | state |
+| role | frames |
 |---|---|
-| `0x13bd0a1` | **holds** the rwlock, asleep in `lck_mtx_sleep` |
-| `0x13bc619` | asleep in `lck_mtx_sleep`, same shape |
-| `0x13bc61a` | blocked in the rename hook, wants the rwlock |
-| `0x13bd0a2` | blocked in the rename hook, wants the rwlock |
+| blocked threads | `renameat_internal` (`_futimes+8472`) → mac rename hook dispatch (`_mac_vnode_label_set+3432`) → `hook_vnode_notify_will_rename_swap` → `lck_rw_lock_exclusive` |
+| **lock owner** | `renameat_internal` (`_futimes+8136` — same function, 336 bytes later, i.e. *past* the hook and still holding) → `_vnode_removefsref+356` → `_sleep+296` → `lck_mtx_sleep` |
 
-**The M1 dump carries the key clue** — its own header notes:
+The `_futimes+N` / `_vnode_removefsref+N` names are the nearest *exported*
+symbols in `vfs_syscalls.c` and `vfs_subr.c`; the real functions are static.
+What matters is that the owner is in the same syscall as the blocked threads,
+past the hook, asleep on a vnode.
 
-```
-Workqueue exceeded cooperative thread limit for 1 sample
-  (more swift tasks runnable than allowed to run concurrently)
-Workqueue exceeded active constrained thread limit for 1 sample
-```
+Raw evidence in `~/Library/Logs/VideoScan/incidents/2026-09-14-sandbox-wedge/`
+(decode a raw dump with `spindump -i raw.txt -o decoded.txt`).
 
-Swift's cooperative thread pool was saturated at the moment of deadlock.
+### Reproduced from scratch
 
----
+`wedge_repro3.py` and `wedge_min.py` in the evidence directory. Plain,
+unsandboxed **Python** — no VideoScan code, no app bundle, no sandbox,
+M1 internal SSD:
 
-## DISPROVEN (do not re-litigate without new evidence)
+| workload | result |
+|---|---|
+| 2 threads, `RENAME_SWAP`, **same** path pair | **WEDGED after 26 ops** |
+| 8 threads, `RENAME_SWAP`, disjoint pairs, one dir | 40,000 ops, 4.9 s, clean |
+| 8 threads, `rename(2)`, **same** destination | 32,000 ops, 12.7 s, clean |
+| 8 threads, `renamex_np(RENAME_EXCL)`, same dir | clean |
 
-1. **"`renamex_np` is the trigger because it is new since 2026-09-12"** (commit
-   `bd05b08a`, the People UUID-folder migration, which introduced both
-   `renamex_np` and `clonefile` — genuinely their first appearance in six months
-   of the project). A harness doing **3,200 concurrent directory renames across 8
-   threads**, both `rename(2)` and `renamex_np(RENAME_EXCL)`, under
-   `sandbox-exec`, completed in ~1 s with zero wedges on the M1.
-   (`wedge_repro.py`)
-2. **"Renames in flight while the process exits."** 40 rounds per arm of abrupt
-   `_exit()` mid-rename: zero wedges. (`wedge_repro2.py`)
-3. **"Swift cooperative-pool saturation alone, in any sandboxed binary."** A
-   Swift harness flooding the pool with blocking FS work then exiting: 12 rounds,
-   zero wedges. (`PoolWedge.swift`)
-4. **"The machine is globally poisoned."** False — ordinary and `sandbox-exec`
-   processes perform `rename`/`renamex_np`/`clonefile` instantly while four
-   VideoScan processes are wedged, and a fresh Debug app launched AND quit
-   cleanly on 2026-09-14 ~17:46. The four are corpses, not an active trap.
+**The trigger is exactly two concurrent rename-SWAPS onto one destination.**
+Disjoint paths are safe. Plain `rename(2)` is safe.
 
-Likely reason 1–3 all failed: the lock appears to be taken for **container /
-sandbox-extension bookkeeping**, which a real App-Sandboxed bundle (and an XCTest
-host) has and a `sandbox-exec` binary does not.
+### Not volume specific
+
+The lock is taken in the MAC layer, above the filesystem — the syscall never
+reaches APFS. Observed on an internal SSD (M1 home), a RAM disk
+(`/Volumes/XcodeRAM`) and `~/Library/Caches`. **The Pegasus R4 / FamilyArchive
+is not implicated.**
 
 ---
 
-## CURRENT HYPOTHESIS
+## WHY NOW, AND NOT IN THE PREVIOUS SIX MONTHS
 
-Blocking filesystem work performed on **Swift's cooperative thread pool**
-saturates it (one thread per core). One task acquires the Sandbox kext's rename
-rwlock and then waits on something that needs another task to make progress;
-that task can never be scheduled because every pool thread is blocked. Circular
-wait → the process can never exit.
+`replaceItemAt` had exactly one call site until July — `PreviewDiskCache`,
+serialised behind its own lock. Between 2026-09-09 and 2026-09-13 **four more
+stores adopted it**: `ArchiveAngelPlan` (09-09), `ArchiveAngelEvidenceStore`
+(09-09), `IgnoredContentStore` (09-11), `HoldoutClearStore` (09-13). All publish
+sidecars into one shared directory, and two of them document in their own
+comments that "two saves in flight" race onto the same URL — the wedge condition
+verbatim. First wedge: the night of 09-13.
 
-Fits all the evidence: the spindump's own workqueue note; four of five wedges
-being XCTest hosts (a full battery is the one workload that floods the pool with
-concurrent file-touching tasks); rarity in ordinary app use; and why it appeared
-now rather than in March — the suite has grown, not the syscalls.
+Test hosts wedged most often because Swift Testing runs tests in parallel and
+these stores write to the **real** Application Support path (the known settings
+pollution class), so several tests publish the same sidecar at once.
 
-## EXPERIMENT IN FLIGHT (started 2026-09-14 ~18:00)
+---
 
-`ab_wedge.sh` on **M1 and M5**, both on commit `eb2eede1`, arms in opposite
-order to cancel ordering effects:
+## THE FIX
 
-- arm A: full `VideoScanTests` battery, `-parallel-testing-enabled YES` ×2
-- arm B: same battery, `-parallel-testing-enabled NO` ×2
+`AtomicFilePublish.replaceItem(at:withItemAt:)` in `VideoScanCore` — a temp file
+in the destination's own directory, published with plain `rename(2)`. Equally
+atomic on APFS, different Sandbox hook, immune. All seven production call sites
+converted plus two in the tests; the repo now contains no `RENAME_SWAP`.
 
-Wedge count is taken before and after each run. Logs: `/tmp/ab-wedge.log` and
-`/tmp/ab-<arm>-<run>.log` on each machine (those machines are NOT being
-rebooted). **Read: do wedges appear only in the parallel arm?**
+`AtomicFilePublishSensorTests` keeps it that way. It is deliberately a **source**
+sensor: a test that actually provoked the deadlock would wedge the test host and
+cost another reboot, so there is no way to assert on this bug at runtime and
+live. It also pins the replacement's behaviour, including 8 tasks × 250
+concurrent publishes to one destination.
 
-- Yes → hypothesis holds. Immediate mitigation: bound test parallelism. Real
-  fix: move blocking file I/O off the cooperative executor.
-- No → hypothesis dies; we still gain a measured baseline on two machines.
+---
+
+## DISPROVEN — including things this document previously asserted
+
+1. **"Pool saturation on Swift's cooperative executor."** Dead. M5 wedged during
+   the A/B's arm B, with `-parallel-testing-enabled NO`. The spindump's
+   workqueue note was a symptom of the deadlock, not its cause.
+2. **"The M1 A/B showed no wedges in either arm."** The M1 A/B was **void** —
+   all four runs died instantly on `childPID > 0` because a corpse from 09:59
+   was already blocking LaunchServices. No tests ever ran. `ab_wedge.sh` counted
+   wedges without checking that the battery executed.
+3. **"The Sandbox hook needs a real App-Sandboxed bundle / container
+   bookkeeping."** Wrong. VideoScan sets `ENABLE_APP_SANDBOX = NO`, and the
+   reproducer is an ordinary Python process.
+4. **"`renamex_np` is the trigger because it is new since `bd05b08a`"** (the POI
+   UUID migration). Exonerated — that is `RENAME_EXCL`, a plain rename, and the
+   hook in every stack is the *swap* variant.
+5. **"Renames in flight while the process exits."** No.
+6. **"The machine is globally poisoned."** No — the lock is path-scoped. With two
+   corpses present on the M1, ordinary renames and even single-threaded
+   `RENAME_SWAP` still completed instantly. What a corpse *does* block is
+   relaunching the same bundle id.
+
+Why repros #1 and #2 could not have worked: they never issued a `RENAME_SWAP`,
+and they gave every thread its own directory with unique names, so no two
+threads ever touched one vnode.
+
+---
 
 ## CONTRIBUTING FACTOR (ours, regardless of root cause)
 
-On the night of 2026-09-13 an agent ran the **full 7,661-test battery twice**,
+On the night of 2026-09-13 an agent ran the full 7,661-test battery twice,
 against the standing policy of focused suites during rapid dev. That is what
 turned a rare bug into four wedges in one night and cost the demo. Agents are
 restricted to focused suites.
 
-## NEXT STEPS
+---
 
-1. Read the A/B result on M1 and M5.
-2. If confirmed: bound test parallelism now; then audit blocking FS work inside
-   async contexts (`POIStorage`, catalog/store writers, `ArchiveAngelPlan` saves)
-   and move it to a dedicated executor.
-3. Re-run the A/B as the fix's oracle — a fix nobody can measure is a theory.
-4. Report to Apple with both spindumps: a kext rwlock held by a sleeping thread
-   of a zombie process is their bug regardless of what provokes it.
+## STILL OPEN
+
+- **Report to Apple.** A kext rwlock held across a sleeping VFS operation, by a
+  thread of a process that can then never exit, is their bug regardless of what
+  provokes it. Attach both spindumps and `wedge_min.py` — 2 threads, 26 ops,
+  ~40 lines of Python, no privileges, no sandbox, wedges a process permanently
+  and costs a reboot. That is a denial of service any process can inflict on
+  itself.
+- `scripts/check_wedged_processes.py` belongs in the morning brief so the rate
+  is measured, not discovered during a demo.
+- M1 and M5 both hold corpses from today's experiments and need a reboot before
+  they can run the VideoScan suite again.
 
 ## OPEN, UNRELATED, FOUND ALONG THE WAY
 
