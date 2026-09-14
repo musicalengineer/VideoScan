@@ -126,6 +126,10 @@ struct PersonFinderView: View {
     /// (`@StateObject` ≈ the view OWNS this heap object across renders,
     /// vs `@ObservedObject` which merely borrows one.)
     @StateObject var holdoutReview = HoldoutReviewCenter()
+    /// Which person's Review badge has its explainer popover open (nil =
+    /// none). Rick 2026-09-13: the badge must say what it means and offer
+    /// a way out before it opens the review sheet.
+    @State var holdoutPopoverProfileID: String?
     /// Derived "Relationships" lines for the People cards (2026-08-27).
     /// Observed so cards refresh once the family tree finishes loading.
     @ObservedObject var kinshipCenter = KinshipDisplayCenter.shared

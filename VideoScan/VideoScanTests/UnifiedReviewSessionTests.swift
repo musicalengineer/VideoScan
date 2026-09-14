@@ -358,21 +358,33 @@ struct UnifiedReviewSessionTests {
     /// the scoring task), resumeHoldout purges candidate state, and the
     /// validation store has exactly ONE call site in the sheet.
     @Test func sensor_sheetWiringRoutesThroughCustodyAndBlindnessGates() throws {
-        let sheetFile = URL(fileURLWithPath: #filePath)
+        // The sheet is FOUR files since the 2026-09-13 split (the single
+        // file passed SwiftLint's length limits): the shared shape plus
+        // +Holdout / +HoldoutNavigation / +Candidates. Every claim below
+        // is about "the sheet", so the scan reads the whole family and
+        // concatenates it — a guard moved to a sibling file is still
+        // wired, but a guard DELETED still fails the sensor.
+        let sheetDir = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()            // VideoScanTests/
             .deletingLastPathComponent()            // VideoScan/ (project dir)
-            .appendingPathComponent("VideoScan/ConfirmPersonSheet.swift")
-        let source = try String(contentsOf: sheetFile, encoding: .utf8)
+            .appendingPathComponent("VideoScan")
+        let sheetFiles = ["ConfirmPersonSheet.swift",
+                          "ConfirmPersonSheet+Holdout.swift",
+                          "ConfirmPersonSheet+HoldoutNavigation.swift",
+                          "ConfirmPersonSheet+Candidates.swift"]
+        let source = try sheetFiles
+            .map { try String(contentsOf: sheetDir.appendingPathComponent($0), encoding: .utf8) }
+            .joined(separator: "\n")
 
         // (a) Holdout answers consult the custody router before writing.
-        let holdoutAnswerBody = memberBody(of: source, from: "private func holdoutAnswer(")
+        let holdoutAnswerBody = memberBody(of: source, from: "func holdoutAnswer(")
         #expect(holdoutAnswerBody.contains("ReviewWriteRouting.sink(for: .holdout"),
                 "holdoutAnswer no longer routes through ReviewWriteRouting — the custody sensors can't see this wiring, do not remove it")
         #expect(holdoutAnswerBody.contains("== .sealedHoldoutCSV"),
                 "holdoutAnswer must require the sealed-CSV sink verdict")
 
         // (b) Candidate ratings consult the custody router before writing.
-        let applyBody = memberBody(of: source, from: "private func apply(rating: ConfirmRating")
+        let applyBody = memberBody(of: source, from: "func apply(rating: ConfirmRating")
         #expect(applyBody.contains("ReviewWriteRouting.sink(for: .candidate"),
                 "apply(rating:to:) no longer routes through ReviewWriteRouting")
         #expect(applyBody.contains("== .validationStoreAndCatalog"),
@@ -380,7 +392,7 @@ struct UnifiedReviewSessionTests {
 
         // (c) The blindness gate guards prepareSetup at entry AND inside
         // the scoring task (the schedule-vs-run window, QA 🟡 C).
-        let prepareBody = memberBody(of: source, from: "private func prepareSetup(")
+        let prepareBody = memberBody(of: source, from: "func prepareSetup(")
         #expect(occurrences(
             of: "guard ReviewSessionPolicy.mayLoadCandidates(in: policyPhase) else",
             in: String(prepareBody)) >= 2,
@@ -388,7 +400,7 @@ struct UnifiedReviewSessionTests {
 
         // (d) Re-entering the blind phase purges candidate state and
         // rebuilds media metadata from queue rows only (QA 🟠 A).
-        let resumeBody = memberBody(of: source, from: "private func resumeHoldout(")
+        let resumeBody = memberBody(of: source, from: "func resumeHoldout(")
         #expect(resumeBody.contains("ReviewSessionPolicy.mustPurgeCandidates(entering: .holdout)"),
                 "resumeHoldout no longer consults the purge policy")
         #expect(resumeBody.contains("buildMediaMeta(for: Set(q.rows.map(\\.fullPath)))"),
@@ -413,7 +425,7 @@ struct UnifiedReviewSessionTests {
         // (g) Blocker fix 2026-07-27: queue load failure FAILS CLOSED —
         // startHoldout's catch lands on the fail-closed phase, never the
         // candidate transition.
-        let startHoldoutBody = memberBody(of: source, from: "private func startHoldout(")
+        let startHoldoutBody = memberBody(of: source, from: "func startHoldout(")
         #expect(startHoldoutBody.contains("phase = sheetPhase(ReviewSessionPolicy.phaseAfterQueueLoadFailure)"),
                 "startHoldout's load-failure path no longer fails closed — a broken queue would leak the session into candidate scoring")
     }

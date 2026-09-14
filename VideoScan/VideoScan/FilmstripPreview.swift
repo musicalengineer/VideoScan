@@ -47,6 +47,11 @@ struct FilmstripPreviewView: View {
     /// strings render as generic wording.
     let videoCodec: String
     let container: String
+    /// Replacement wording for the explainer line. nil keeps the catalog
+    /// pane's technical badge; the blind review pane passes its own plain
+    /// sentence so the reviewer reads one explanation, not two
+    /// (2026-09-13). Defaulted, so every existing call site is unchanged.
+    var explanation: String? = nil
 
     /// ~1.5 fps auto-advance.
     static let frameIntervalSeconds: Double = 0.65
@@ -142,6 +147,7 @@ struct FilmstripPreviewView: View {
     }
 
     private var badgeText: String {
+        if let explanation, !explanation.isEmpty { return explanation }
         let codecLabel = videoCodec.isEmpty ? "this format" : videoCodec
         let containerLabel = container.isEmpty ? "this container" : container
         return "FILMSTRIP PREVIEW — macOS can't play \(codecLabel) in \(containerLabel)"

@@ -92,6 +92,21 @@ struct HoldoutReviewQueue: Equatable, Sendable {
     var answeredCount: Int { rows.count - pendingCount }
     var firstPendingIndex: Int? { rows.firstIndex { $0.isPending } }
 
+    /// Stable identity for sidecar keying — "<dated dir>/<filename>",
+    /// e.g. "2026-08-05/rick-review-neutral.csv". Deliberately NOT the
+    /// absolute path: the repo root differs between Rick's checkout and a
+    /// worktree, and a clear made against this queue must follow the
+    /// queue, not the machine. Used by HoldoutClearStore; nothing about
+    /// it is written into the CSV.
+    var queueKey: String { Self.queueKey(forCSV: csvURL) }
+
+    static func queueKey(forCSV url: URL) -> String {
+        let file = url.lastPathComponent
+        let dir = url.deletingLastPathComponent().lastPathComponent
+        guard !dir.isEmpty, dir != "/" else { return file }
+        return "\(dir)/\(file)"
+    }
+
     /// Next pending row strictly after `idx`, wrapping to the front if
     /// needed. Excludes `idx` itself — so after answering row `idx` the
     /// caller lands on the next open question, and a Skip on the last
@@ -460,19 +475,43 @@ final class HoldoutReviewCenter: ObservableObject {
     /// of the still-pending row, so the warning has done its job.
     @Published private(set) var answerWriteFailure: String?
 
-    private let repoRoot: URL
+    /// Rows Rick set aside — the app-side, reversible way out of a row
+    /// that cannot be reviewed (HoldoutClearStore). Owned here because
+    /// the badge, the popover, and the review sheet must all subtract the
+    /// SAME set; the store's `revision` is republished through this
+    /// center's objectWillChange so a clear repaints the gallery.
+    let clears: HoldoutClearStore
 
-    init(repoRoot: URL = HoldoutReviewQueue.defaultRepoRoot) {
+    private let repoRoot: URL
+    /// Keeps the clear store's change forwarding alive for the life of
+    /// the center. (`AnyCancellable` ≈ an RAII handle: dropping it
+    /// unsubscribes.)
+    private var clearForwarding: AnyCancellable?
+
+    /// `clears` is Optional-with-nil rather than a defaulted expression:
+    /// a default argument is evaluated in a NONISOLATED context, and
+    /// constructing a `@MainActor` store there is an error under Swift 6.
+    /// (For Rick: the default is computed at the call site, which may be
+    /// on another thread — so build it inside the body instead.)
+    init(repoRoot: URL = HoldoutReviewQueue.defaultRepoRoot,
+         clears: HoldoutClearStore? = nil) {
+        let store = clears ?? HoldoutClearStore()
         self.repoRoot = repoRoot
+        self.clears = store
+        clearForwarding = store.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
-    /// Re-discover the newest queue. The directory listing + 36-row parse
-    /// is tiny, but it's still file I/O — keep it off the main actor.
-    /// (`@concurrent` forces the global executor; a plain `nonisolated
-    /// async` would inherit the CALLER's actor under Approachable
-    /// Concurrency — see the project's concurrency-trap memory.)
+    /// Re-discover the newest queue and reload the clear sidecar. The
+    /// directory listing + 36-row parse is tiny, but it's still file I/O
+    /// — keep it off the main actor. (`@concurrent` forces the global
+    /// executor; a plain `nonisolated async` would inherit the CALLER's
+    /// actor under Approachable Concurrency — see the project's
+    /// concurrency-trap memory.)
     func refresh() async {
         let root = repoRoot
+        await clears.load()
         do {
             queue = try await Self.discover(root: root)
             errorMessage = nil
@@ -500,14 +539,37 @@ final class HoldoutReviewCenter: ObservableObject {
         answerWriteFailure = nil
     }
 
+    /// Cleared reviewIds for a queue — O(1). The ONE place the badge, the
+    /// popover, and the review sheet get the subtraction from.
+    func clearedReviewIds(for queue: HoldoutReviewQueue) -> Set<String> {
+        clears.clearedReviewIds(queueKey: queue.queueKey)
+    }
+
+    /// Rows still owed an answer, with Rick's clears subtracted. Goes
+    /// through HoldoutNavigation's single `pending` definition — the
+    /// queue's own `pendingCount` is the raw CSV fact and deliberately
+    /// knows nothing about clears.
+    func effectivePendingCount(for queue: HoldoutReviewQueue) -> Int {
+        let cleared = clearedReviewIds(for: queue)
+        guard !cleared.isEmpty else { return queue.pendingCount }
+        return HoldoutNavigation.pendingCount(rows: queue.rows, cleared: cleared)
+    }
+
     /// The queue that should light the Review badge on `personName`'s
     /// card — non-nil only when the newest queue is for that person AND
-    /// has at least one pending row.
+    /// has at least one row still owed an answer (cleared rows do not
+    /// count; that is the whole point of clearing one).
     func pendingQueue(for personName: String) -> HoldoutReviewQueue? {
         guard let q = queue,
-              q.pendingCount > 0,
-              q.personName.caseInsensitiveCompare(personName) == .orderedSame
+              q.personName.caseInsensitiveCompare(personName) == .orderedSame,
+              effectivePendingCount(for: q) > 0
         else { return nil }
         return q
+    }
+
+    /// What the badge should say — the count Rick sees on the capsule.
+    func badgeCount(for personName: String) -> Int {
+        guard let q = pendingQueue(for: personName) else { return 0 }
+        return effectivePendingCount(for: q)
     }
 }

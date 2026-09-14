@@ -46,6 +46,20 @@
 // modal sheet, fixed width, primary content on the left, action
 // affordances on the right. Rick 2026-06-16.
 //
+// FILE SPLIT (2026-09-13): this file keeps the session's shared shape —
+// stored state, init, body, header/footer, the candidate-phase views and
+// the derived counts. Each phase's machinery lives beside it:
+//   • ConfirmPersonSheet+Holdout.swift    — phase 1 (blind): the pane,
+//     the filmstrip surface, the status banner, the offline/unrenderable
+//     prefilter, navigation, set-aside, and the answer write-chain.
+//   • ConfirmPersonSheet+Candidates.swift — phase 2: round lifecycle,
+//     rating write-back, thumbnail loading, open/reveal helpers.
+// A cross-file `extension` cannot see `private` members, so the members
+// those files share with this one are internal here. (Swift extension ≈
+// C++ partial class: no new stored state, methods share the same `self`;
+// `private` means file-private to ONE of these files.) Same discipline
+// as PersonFinderView+People.swift.
+//
 // HDD PERFORMANCE (fix/review-sheet-performance, 2026-07-26): review
 // media lives on the LaCie USB HDD. Three changes keep the pane usable
 // there (now serving BOTH phases — one thumbnail + read-ahead path):
@@ -72,9 +86,10 @@ import os
 
 /// File-scope (not a member) so escaped write-chain tasks can log after
 /// the view is gone. Same category as the queue itself — one trail for
-/// the whole holdout pipeline.
-private let holdoutSheetLog = Logger(subsystem: "Rick-Breen.VideoScan",
-                                     category: "poi.holdout-review")
+/// the whole holdout pipeline. Internal rather than file-private because
+/// the two split files log into the same trail.
+let holdoutSheetLog = Logger(subsystem: "Rick-Breen.VideoScan",
+                             category: "poi.holdout-review")
 
 /// Identifiable wrapper so `.sheet(item:)` can drive the sheet from
 /// PersonFinderView. The id is per-presentation, not per-profile, so
@@ -107,24 +122,34 @@ struct ConfirmPersonSheet: View {
     var onViewConfirmations: (() -> Void)? = nil
 
     @EnvironmentObject var personFinderModel: PersonFinderModel
+    // Read as `catalogModel.records` in ConfirmPersonSheet+Candidates.swift
+    // (the held-out identity matcher and the round assembly) and in
+    // +HoldoutNavigation.swift (the media-metadata pass). The lint hook is
+    // per-file, so those uses are invisible to it — same situation as
+    // CatalogHelpers.swift. The subscription is real work, not a leftover.
+    // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var catalogModel: VideoScanModel
     /// The badge center — outlives this sheet, so background write
     /// failures reported to it survive dismissal (QA 2026-07-26 🟠).
+    // Read in +Holdout.swift (clearAnswerWriteFailure, clearedReviewIds) and
+    // +HoldoutNavigation.swift (the write-chain's failure report); per-file
+    // lint can't see across the 2026-09-13 split.
+    // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var holdoutCenter: HoldoutReviewCenter
     @Environment(\.dismiss) private var dismiss
 
-    @State private var candidates: [PersonCandidateScore] = []
-    @State private var currentIndex: Int = 0
+    @State var candidates: [PersonCandidateScore] = []
+    @State var currentIndex: Int = 0
     /// Local round state — paths the user has labeled THIS session.
     /// Used so the in-sheet summary at the end is for this round only,
     /// not the cumulative store. The store has every label across
     /// sessions; this captures the slice the user just produced.
-    @State private var roundStart: Date = Date()
-    @State private var roundLabels: [(path: String, rating: ConfirmRating, signals: [String])] = []
-    @State private var thumbnail: NSImage?
-    @State private var thumbnailLoadTask: Task<Void, Never>?
+    @State var roundStart: Date = Date()
+    @State var roundLabels: [(path: String, rating: ConfirmRating, signals: [String])] = []
+    @State var thumbnail: NSImage?
+    @State var thumbnailLoadTask: Task<Void, Never>?
     @State private var showSummary: Bool = false
-    @State private var loadError: String?
+    @State var loadError: String?
 
     /// Unified session phase. `.holdout` is the blind pane; `.setup` is
     /// the transition/setup pane (holdout status banner + round-size
@@ -132,10 +157,10 @@ struct ConfirmPersonSheet: View {
     /// `.labeling` is the per-candidate review; `.summary` is the
     /// end-of-session report. Maps 1:1 onto ReviewSessionPhase (the
     /// pure policy layer the sensors test) via `policyPhase`.
-    @State private var phase: Phase = .setup
+    @State var phase: Phase = .setup
     enum Phase { case holdout, setup, labeling, summary }
 
-    private var policyPhase: ReviewSessionPhase {
+    var policyPhase: ReviewSessionPhase {
         switch phase {
         case .holdout:  return .holdout
         case .setup:    return .candidateSetup
@@ -147,7 +172,7 @@ struct ConfirmPersonSheet: View {
     /// Inverse mapping — lets the sheet land on a phase the POLICY layer
     /// chose (e.g. the fail-closed load-failure landing), keeping the
     /// decision in the testable pure layer.
-    private func sheetPhase(_ p: ReviewSessionPhase) -> Phase {
+    func sheetPhase(_ p: ReviewSessionPhase) -> Phase {
         switch p {
         case .holdout:           return .holdout
         case .candidateSetup:    return .setup
@@ -157,71 +182,94 @@ struct ConfirmPersonSheet: View {
     }
 
     /// Stats from round assembly — shown in the setup pane.
-    @State private var stats: ConfirmRoundStats?
+    @State var stats: ConfirmRoundStats?
 
     /// User's pick from the round-size picker. Default 25; bumped to
     /// 100 if the user picks the long-round option.
-    @State private var roundSize: Int = 25
+    @State var roundSize: Int = 25
 
     /// Held during setup so we don't re-score the catalog on every
     /// roundSize tick. Recomputed when the setup phase is entered; the
     /// picker just slices off the front. PURGED whenever the session
     /// re-enters the holdout phase (blindness gate, design note D1).
-    @State private var fullCandidatePool: [PersonCandidateScore] = []
+    @State var fullCandidatePool: [PersonCandidateScore] = []
 
-    private let controlK: Int = 5
+    let controlK: Int = 5
 
     // MARK: Holdout-mode state
 
     /// Mutable working copy of the queue — every answer writes through
     /// to the CSV via recordAnswer, so this mirrors disk at all times.
-    @State private var holdout: HoldoutReviewQueue?
-    @State private var holdoutIndex: Int = 0
+    @State var holdout: HoldoutReviewQueue?
+    @State var holdoutIndex: Int = 0
     /// Notes draft for the CURRENT row — prefilled from the row when
     /// navigating so Back-and-edit round-trips cleanly.
-    @State private var holdoutNotes: String = ""
+    @State var holdoutNotes: String = ""
     /// stat() result for the current row's file. Computed in a BACKGROUND
     /// task on navigation (never in the view body, never on the main
     /// actor — a stat against a spun-down USB HDD can stall for seconds).
     /// Optimistically true while the stat is in flight.
-    @State private var holdoutReachable: Bool = true
-    @State private var holdoutSaveError: String?
-    @State private var holdoutAnsweredThisSession: Int = 0
+    @State var holdoutReachable: Bool = true
+    @State var holdoutSaveError: String?
+    @State var holdoutAnsweredThisSession: Int = 0
 
     // MARK: HDD-performance state (fix/review-sheet-performance)
 
     /// True when thumbnail generation FAILED for the current item — shows
     /// the placeholder instead of an eternal spinner.
-    @State private var thumbnailFailed: Bool = false
+    @State var thumbnailFailed: Bool = false
     /// Background stat() for the current row (cancelled on navigation).
-    @State private var reachabilityTask: Task<Void, Never>?
+    @State var reachabilityTask: Task<Void, Never>?
     /// Tail of the serialized answer-write chain. Each new answer chains
     /// onto the previous task, so CSV read-modify-writes execute strictly
     /// one at a time, in click order — two quick answers can never
     /// interleave. Deliberately NOT cancelled on dismiss: queued answers
     /// must reach the CSV.
-    @State private var holdoutWriteChain: Task<Void, Never>?
+    @State var holdoutWriteChain: Task<Void, Never>?
     /// reviewIds of WAS-PENDING answers whose background write hasn't
     /// committed yet. Used to (a) keep navigation from revisiting a row
     /// the user just answered, (b) show optimistic answered/pending
     /// counts. The in-memory queue itself is only mutated after the
     /// durable write succeeds (WAL discipline, QA 2026-07-25 minor 1).
-    @State private var inFlightAnswerIds: Set<String> = []
+    @State var inFlightAnswerIds: Set<String> = []
     /// Catalog MEDIA metadata (container/codec/duration) by fullPath for
     /// the rows/candidates of this session — routing input for the
     /// thumbnail renderer. Built once per phase entry (one pass over
     /// records), never in the view body. Media facts only — no
     /// detection/scoring data crosses into the blind pane.
-    @State private var mediaMetaByPath: [String: HoldoutMediaMeta] = [:]
+    @State var mediaMetaByPath: [String: HoldoutMediaMeta] = [:]
+    // MARK: Filmstrip review (feature/holdout-review-explain-clear)
+    //
+    // AVFoundation cannot decode FFV1/Matroska, so those rows used to be
+    // hidden from the review entirely. They are now REVIEWED AS FRAMES:
+    // ~16 ffmpeg-ripped stills auto-playing at ~1.5 fps (the same
+    // FilmstripPreviewView the catalog preview pane uses), and Rick
+    // answers yes/no exactly as he would from a played video.
+    //
+    // Memory: ONE strip at a time — ≤16 CGImages at ≤480 px wide ≈ 8 MB —
+    // released on every navigation (the task is cancelled and the state
+    // reset in holdoutGo). The rip itself is bounded by
+    // renderPreviewFilmstrip's own concurrency window.
+
+    /// Current row's filmstrip: idle / loading(progress) / ready(frames).
+    /// Carries the path so a late-landing task can never paint another
+    /// row's frames.
+    @State var holdoutFilmstrip: PreviewFilmstripState = .idle
+    /// The in-flight rip, cancelled on navigation and on disappear.
+    @State var holdoutFilmstripTask: Task<Void, Never>?
+    /// Set when the rip produced nothing — the pane says so plainly and
+    /// offers the way out instead of spinning forever.
+    @State var holdoutFilmstripError: String?
+
     /// Read-ahead: warms the next files (head+tail bytes) and
     /// pre-generates the next thumbnail, one file at a time. Serves BOTH
     /// phases. Created lazily (not at property init) so its render
     /// closure can consult the model's shared negative cache — a
     /// known-bad NEXT item must not re-attempt a full render on every
     /// navigation (QA 2026-07-26 🟡 2).
-    @State private var prefetcher: HoldoutReviewPrefetcher?
+    @State var prefetcher: HoldoutReviewPrefetcher?
     /// Keeps the LaCie spindle from head-parking between answers/ratings.
-    @State private var keepalive = HoldoutSpindleKeepalive()
+    @State var keepalive = HoldoutSpindleKeepalive()
 
     // MARK: Prefilter state (fix/review-offline-prefilter)
     //
@@ -235,21 +283,34 @@ struct ConfirmPersonSheet: View {
     /// Rows whose file is unreachable: volume unmounted (sweep stage 1),
     /// file missing on a mounted volume (sweep stage 2), or vanished
     /// after the sweep (per-row backstop). Rebuilt by each sweep.
-    @State private var offlineExcludedPaths: Set<String> = []
-    /// Rows QuickTime can't play, decided ZERO-I/O from catalog facts
-    /// (PreviewFrameRouter .ffmpegDirect — QT's boundary IS AVF's).
-    /// Rows with no catalog record are presented: unknown ≠ unplayable.
-    /// Computed once per open; catalog facts don't change mid-session.
-    @State private var unplayableExcludedPaths: Set<String> = []
+    @State var offlineExcludedPaths: Set<String> = []
+    /// Rows NOTHING can draw a frame from, decided ZERO-I/O from catalog
+    /// facts (HoldoutNavigation.unrenderablePaths — today: the catalog
+    /// names a container but no video stream). Rows with no catalog
+    /// record are presented: unknown ≠ unplayable. Computed once per
+    /// open; catalog facts don't change mid-session.
+    ///
+    /// NARROWED 2026-09-13: this used to hold every PreviewFrameRouter
+    /// `.ffmpegDirect` row — which hid Donna's FFV1 Matroska master from
+    /// the sheet while the badge still counted it pending. Those rows are
+    /// now reviewed through the filmstrip (see `holdoutFilmstrip`), so
+    /// only the truly unrenderable stay excluded.
+    @State var unplayableExcludedPaths: Set<String> = []
+    /// reviewIds Rick set aside for this queue (HoldoutClearStore). Not
+    /// an answer and NEVER written to the CSV — just out of the pending
+    /// counts and out of navigation until an undo brings it back.
+    /// Snapshotted from the store at open and after each clear, so the
+    /// pure navigation helpers get a plain Set.
+    @State var clearedReviewIds: Set<String> = []
     /// Derived hidden-pending counts, stored (not computed per render —
     /// the 100k-row scale test says no O(rows) work in view bodies).
     /// Recomputed via recomputeHiddenCounts() whenever the sets or the
     /// queue's pending flags change.
-    @State private var offlineHiddenPending: Int = 0
-    @State private var unplayableHiddenPending: Int = 0
+    @State var offlineHiddenPending: Int = 0
+    @State var unplayableHiddenPending: Int = 0
     /// One background reachability sweep per open (and per "Continue
     /// Reviewing" click). No polling.
-    @State private var offlineSweepTask: Task<Void, Never>?
+    @State var offlineSweepTask: Task<Void, Never>?
     /// Backstop insertions made AFTER the current sweep launched. The
     /// sweep completion REPLACES the offline set (so a reconnected
     /// volume's rows come back) — but a wholesale replace would drop a
@@ -259,7 +320,7 @@ struct ConfirmPersonSheet: View {
     /// completion therefore merges: sweep result ∪ THIS set. Reset at
     /// each sweep launch — never unioned across sweeps, or a
     /// reconnected volume could never come back.
-    @State private var backstopInsertsSinceSweep: Set<String> = []
+    @State var backstopInsertsSinceSweep: Set<String> = []
 
     // MARK: Offline-copy preview resolution (Rick 2026-07-30)
     //
@@ -275,7 +336,7 @@ struct ConfirmPersonSheet: View {
     // offline set so navigation lands on it. Replaced wholesale by each
     // sweep, exactly like offlineExcludedPaths — so a reconnected original
     // stops showing the copy note.
-    @State private var resolvedPreviewPath: [String: String] = [:]
+    @State var resolvedPreviewPath: [String: String] = [:]
     /// Originals whose volume is offline BUT which have strong-identity
     /// copy candidates — so their offline/reviewable verdict is DEFERRED to
     /// the background sweep (which checks copy liveness) rather than the
@@ -284,38 +345,54 @@ struct ConfirmPersonSheet: View {
     /// WITHOUT backstop-excluding it, so a live copy the sweep is about to
     /// resolve isn't pre-emptively hidden (Rick 2026-07-30). Populated at
     /// each sweep launch (keys of the candidate map), cleared at completion.
-    @State private var awaitingCopyResolution: Set<String> = []
+    @State var awaitingCopyResolution: Set<String> = []
 
     /// The session includes a holdout portion (regardless of the phase
     /// currently showing).
-    private var isHoldout: Bool { holdoutQueue != nil }
+    var isHoldout: Bool { holdoutQueue != nil }
 
     /// Pending/answered counts adjusted for in-flight background writes,
     /// so the header and status banner tick immediately on an answer (the
     /// authoritative queue state follows when the write commits).
-    private var holdoutEffectivePending: Int {
-        max(0, (holdout?.pendingCount ?? 0) - inFlightAnswerIds.count)
+    /// Cleared rows are subtracted through HoldoutNavigation's ONE
+    /// pending definition, not by a local `- clearedCount` — the badge,
+    /// the popover, and this header must not be able to disagree.
+    var holdoutEffectivePending: Int {
+        guard let q = holdout else { return 0 }
+        let pending = HoldoutNavigation.pendingCount(rows: q.rows, cleared: clearedReviewIds)
+        return max(0, pending - inFlightAnswerIds.count)
+    }
+    /// Rows Rick set aside in THIS queue. Stored count would be O(rows)
+    /// per render, so it reads the snapshot Set's size — O(1).
+    private var clearedThisQueue: Int { clearedReviewIds.count }
+    /// Rows this session is still accountable for — the denominator Rick
+    /// sees. A set-aside row leaves the denominator rather than being
+    /// counted as answered; claiming an answer that isn't in the CSV
+    /// would be a lie in both directions.
+    var holdoutAccountableTotal: Int {
+        guard let q = holdout else { return 0 }
+        return max(0, q.rows.count - clearedThisQueue)
     }
     private var holdoutEffectiveAnswered: Int {
-        guard let q = holdout else { return 0 }
-        return q.rows.count - holdoutEffectivePending
+        max(0, holdoutAccountableTotal - holdoutEffectivePending)
     }
     /// Pending rows the user can actually be shown right now.
-    private var holdoutActionablePending: Int {
+    var holdoutActionablePending: Int {
         max(0, holdoutEffectivePending - offlineHiddenPending - unplayableHiddenPending)
     }
     /// Banner completion state — true only when a queue actually LOADED
     /// and every answer has durably committed. A load FAILURE has zero
     /// effective pending too, and must not paint the banner green
     /// (QA 2026-07-27 nit; also dedupes the expression).
-    private var holdoutFullyCommitted: Bool {
+    var holdoutFullyCommitted: Bool {
         holdout != nil && holdoutEffectivePending == 0 && inFlightAnswerIds.isEmpty
     }
     /// " · 3 offline, 2 unplayable hidden" — empty when nothing is hidden.
-    private var holdoutHiddenSuffix: String {
+    var holdoutHiddenSuffix: String {
         var parts: [String] = []
         if offlineHiddenPending > 0 { parts.append("\(offlineHiddenPending) offline") }
-        if unplayableHiddenPending > 0 { parts.append("\(unplayableHiddenPending) unplayable") }
+        if unplayableHiddenPending > 0 { parts.append("\(unplayableHiddenPending) with no frames to show") }
+        if clearedThisQueue > 0 { parts.append("\(clearedThisQueue) set aside") }
         guard !parts.isEmpty else { return "" }
         return " \u{00B7} " + parts.joined(separator: ", ") + " hidden"
     }
@@ -366,6 +443,7 @@ struct ConfirmPersonSheet: View {
             thumbnailLoadTask?.cancel()
             reachabilityTask?.cancel()
             offlineSweepTask?.cancel()
+            holdoutFilmstripTask?.cancel()
             prefetcher?.cancelAll()
             keepalive.stop()
             // holdoutWriteChain is NOT cancelled: any queued answers
@@ -390,7 +468,7 @@ struct ConfirmPersonSheet: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            if phase == .holdout, let q = holdout {
+            if phase == .holdout, holdout != nil {
                 // Effective counts: an optimistically advanced answer
                 // ticks the header immediately even while its serialized
                 // background write is still in flight. Hidden rows are
@@ -398,7 +476,7 @@ struct ConfirmPersonSheet: View {
                 // COUNT is deliberately absent — knowing it would require
                 // running the scorer during the blind phase (design note
                 // D3), so the header only promises "candidates next".
-                Text("Holdout: \(holdoutEffectiveAnswered) of \(q.rows.count) answered\(holdoutHiddenSuffix)\(candidatePhaseFollows ? " \u{00B7} candidates next" : "")")
+                Text("Holdout: \(holdoutEffectiveAnswered) of \(holdoutAccountableTotal) answered\(holdoutHiddenSuffix)\(candidatePhaseFollows ? " \u{00B7} candidates next" : "")")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
             } else if phase == .labeling && !candidates.isEmpty {
@@ -466,7 +544,7 @@ struct ConfirmPersonSheet: View {
         }
     }
 
-    private func thumbnailView(path: String, filename: String) -> some View {
+    func thumbnailView(path: String, filename: String) -> some View {
         VStack(spacing: 8) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
@@ -680,1159 +758,4 @@ struct ConfirmPersonSheet: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
     }
-
-    // MARK: - Holdout pane (phase 1)
-
-    /// The blind review pane. Renders ONLY from HoldoutReviewRow —
-    /// thumbnail/open/reveal, a yes/no question, and notes. Nothing else.
-    @ViewBuilder
-    private var holdoutPane: some View {
-        if let q = holdout, q.rows.indices.contains(holdoutIndex) {
-            let row = q.rows[holdoutIndex]
-            HStack(alignment: .top, spacing: 16) {
-                if holdoutReachable {
-                    VStack(spacing: 6) {
-                        // Preview surfaces (thumbnail/open/reveal) use the
-                        // resolved live copy when the original is offline;
-                        // the answer write-back still keys on row.fullPath
-                        // (Rick 2026-07-30).
-                        thumbnailView(path: previewPath(for: row.fullPath),
-                                      filename: row.filename)
-                        holdoutCopyNote(for: row.fullPath)
-                    }
-                    .frame(width: 320)
-                } else {
-                    VStack(spacing: 10) {
-                        Image(systemName: "externaldrive.badge.exclamationmark")
-                            .font(.system(size: 34))
-                        Text("Video is offline")
-                            .font(.headline)
-                        Text(row.filename)
-                            .font(.caption.monospaced())
-                            .lineLimit(2)
-                    }
-                    .foregroundColor(.secondary)
-                    .frame(width: 320)
-                    .frame(maxHeight: .infinity)
-                }
-                holdoutAnswerView(for: row)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-        } else {
-            // Defensive only — navigation always lands on a valid index
-            // or transitions to the setup pane. Render the status banner
-            // so a broken queue still explains itself.
-            VStack { holdoutStatusBanner; Spacer() }
-        }
-    }
-
-    /// Subtle two-line transparency note shown when the previewed media is
-    /// a live byte-identical copy standing in for an offline original
-    /// (Rick 2026-07-30). Neutral by design — byte-identical content, no
-    /// scores/predictions — so it does not break the blind contract.
-    @ViewBuilder
-    private func holdoutCopyNote(for original: String) -> some View {
-        if let copy = resolvedPreviewPath[original] {
-            VStack(alignment: .leading, spacing: 1) {
-                Label("Previewing verified copy on \(VolumeReachability.volumeName(forPath: copy))",
-                      systemImage: "doc.on.doc")
-                    .font(.caption2)
-                Text("original offline on \(VolumeReachability.volumeName(forPath: original))")
-                    .font(.caption2)
-                    .padding(.leading, 18)
-            }
-            .foregroundColor(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private func holdoutAnswerView(for row: HoldoutReviewRow) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Is \(profile.name) in this video?")
-                .font(.system(size: 13).weight(.medium))
-            Text("Watch as much as you need — answer from what you see, not from memory of the filename.")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if !row.isPending {
-                // Reached via Back — show the saved answer; a new click
-                // overwrites it in the CSV.
-                Label("Currently answered: \(row.rickConfirm) \u{2014} answering again overwrites",
-                      systemImage: "pencil.circle")
-                    .font(.caption)
-                    .foregroundColor(.orange)
-            }
-            if !holdoutReachable {
-                Label("Volume offline — open won't work", systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundColor(.orange)
-            }
-
-            HStack(spacing: 10) {
-                Button {
-                    holdoutAnswer("yes")
-                } label: {
-                    Label("Yes", systemImage: "checkmark.circle.fill")
-                        .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.bordered)
-                .tint(.green)
-                .help("\(profile.name) is visible in this video")
-                .disabled(!holdoutReachable)
-                Button {
-                    holdoutAnswer("no")
-                } label: {
-                    Label("No", systemImage: "xmark.circle.fill")
-                        .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
-                .help("\(profile.name) is not visible in this video")
-                .disabled(!holdoutReachable)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Notes (optional)")
-                    .font(.system(size: 11).weight(.medium))
-                    .foregroundColor(.secondary)
-                TextField("e.g. brief glimpse at 2:10, poor lighting", text: $holdoutNotes)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            Spacer()
-
-            HStack {
-                Button("Back") { holdoutGo(to: holdoutIndex - 1) }
-                    .buttonStyle(.borderless)
-                    .disabled(!ReviewSessionPolicy.canGoBack(in: .holdout, index: holdoutIndex))
-                    .help("Revisit the previous video (answered ones can be re-answered)")
-                Spacer()
-                Button("Skip") { holdoutSkip() }
-                    .buttonStyle(.borderless)
-                    .help("Leave this one unanswered for now and move on")
-            }
-            .font(.caption)
-        }
-    }
-
-    // MARK: - Holdout status banner (transition pane, design note D6)
-
-    /// Understated banner shown above the candidate setup pane when the
-    /// session had a holdout portion. Reuses the honest states the old
-    /// done pane had — a just-answered last row shows "done" immediately,
-    /// but the COMPLETION claim ("saved to the review file") is only made
-    /// once every in-flight write has committed (QA 2026-07-26 🟠 c);
-    /// hidden (offline/unplayable) rows get their own honest branch.
-    @ViewBuilder
-    private var holdoutStatusBanner: some View {
-        if isHoldout {
-            let fullyCommitted = holdoutFullyCommitted
-            let allRemainingHidden = holdoutEffectivePending > 0 && holdoutActionablePending == 0
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: fullyCommitted ? "checkmark.seal.fill"
-                      : (allRemainingHidden ? "externaldrive.badge.exclamationmark" : "hourglass"))
-                    .font(.system(size: 18))
-                    .foregroundColor(fullyCommitted ? .green : .orange)
-                VStack(alignment: .leading, spacing: 3) {
-                    if let q = holdout {
-                        if fullyCommitted {
-                            Text("Holdout review done \u{2014} all \(q.rows.count) answered and saved to the review file.")
-                                .font(.system(size: 12).weight(.medium))
-                            Text("Continuing with new candidates below. Your blind answers never touch the model from this app.")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        } else if holdoutEffectivePending == 0 {
-                            Text("Holdout review done \u{2014} finishing saving \(inFlightAnswerIds.count) answer\(inFlightAnswerIds.count == 1 ? "" : "s")\u{2026}")
-                                .font(.system(size: 12).weight(.medium))
-                            Text("Continuing with new candidates below; this note updates when the save completes.")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        } else if allRemainingHidden {
-                            Text("All reviewable holdout videos answered\(holdoutHiddenSuffix).")
-                                .font(.system(size: 12).weight(.medium))
-                            Text(allHiddenExplanation)
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("\(holdoutActionablePending) holdout video\(holdoutActionablePending == 1 ? "" : "s") still pending\(holdoutHiddenSuffix).")
-                                .font(.system(size: 12).weight(.medium))
-                            Text("The Review badge stays up until every row has an answer \u{2014} finish now, or continue with new candidates below and come back anytime.")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                            Button("Continue Reviewing") { resumeHoldout() }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .padding(.top, 2)
-                        }
-                    } else {
-                        // FAIL-CLOSED landing (load failure): candidates
-                        // are NOT offered — retry or close only.
-                        Text("No review queue could be loaded.")
-                            .font(.system(size: 12).weight(.medium))
-                        if let err = holdoutSaveError {
-                            Text(err)
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        }
-                        Button("Try Again") { startHoldout() }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .padding(.top, 2)
-                    }
-                }
-                Spacer()
-            }
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill((holdoutFullyCommitted ? Color.green : Color.orange).opacity(0.10))
-            )
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-        }
-    }
-
-    /// Banner copy for the all-hidden state, naming BOTH reasons with
-    /// their remedies — offline is recoverable by reconnecting; unplayable
-    /// needs conversion first.
-    private var allHiddenExplanation: String {
-        var parts: [String] = []
-        if offlineHiddenPending > 0 {
-            parts.append("\(offlineHiddenPending) pending row\(offlineHiddenPending == 1 ? " is" : "s are") on offline volumes \u{2014} reconnect those drives and reopen the review to finish them.")
-        }
-        if unplayableHiddenPending > 0 {
-            parts.append("\(unplayableHiddenPending) pending row\(unplayableHiddenPending == 1 ? "" : "s") can't be played by QuickTime (legacy/archival formats) \u{2014} they need conversion before they can be reviewed.")
-        }
-        parts.append("The Review badge stays up until every row has an answer.")
-        return parts.joined(separator: " ")
-    }
-
-    // MARK: - Holdout lifecycle
-
-    /// Entry point when the session has a holdout portion. No scoring,
-    /// no ValidationLabelStore — reload the queue fresh from disk and
-    /// position onto the first unanswered actionable row. If nothing is
-    /// actionable, fall straight through to the candidate transition.
-    ///
-    /// The working copy still comes from disk, not from the
-    /// discovery-time snapshot in `holdoutQueue`, so the sheet shows the
-    /// real pending rows/count (a snapshot can predate hand edits or a
-    /// regenerated queue). Data safety no longer hinges on this open-time
-    /// reload: recordAnswer merges each answer onto a fresh disk load
-    /// (QA 2026-07-25 gate finding 1), so even a stale working copy
-    /// cannot clobber external edits. On load failure we surface the
-    /// error and move to the transition pane — never fall back to the
-    /// snapshot. QA 2026-07-25 blocker; regression tests:
-    /// regression_staleSnapshotOpenPreservesExternalAnswer,
-    /// regression_externalEditDuringOpenSessionSurvivesRecordAnswer.
-    private func startHoldout() {
-        guard let snapshot = holdoutQueue else {
-            transitionToCandidates()
-            return
-        }
-        do {
-            let fresh = try snapshot.freshCopyFromDisk()
-            holdout = fresh
-            // A prior session's write failure has done its job once the
-            // user is back in front of the (still-pending) row.
-            holdoutCenter.clearAnswerWriteFailure()
-            // Catalog MEDIA metadata for the queue's files, one pass over
-            // records (media facts only — the blind pane never sees
-            // detection/scoring data).
-            buildMediaMeta(for: Set(fresh.rows.map(\.fullPath)))
-            ensurePrefetcher()
-            // Prefilter (Rick 2026-07-26: never present offline or
-            // unplayable videos). Unplayable: pure catalog facts, zero
-            // I/O. Offline: a synchronous VOLUME-level precheck here —
-            // VolumeReachability.isReachable is documented to never touch
-            // the disk on the caller's thread (SWR cache + kernel mount
-            // table) — so the very first landing already skips rows on
-            // disconnected drives; the honest per-file sweep then runs in
-            // the background and refines the set.
-            unplayableExcludedPaths = HoldoutNavigation.unplayablePaths(
-                rows: fresh.rows, meta: mediaMetaByPath)
-            // Offline-copy preview resolution (Rick 2026-07-30): DEFER the
-            // synchronous volume-level offline verdict for any pending row
-            // that has strong-identity copy candidates. Otherwise Rick's
-            // 5 rows — all on the unmounted RicksBackups — would be marked
-            // offline here, firstActionableIndex() would be nil, and the
-            // session would transition to candidates BEFORE the background
-            // sweep could resolve their live LaCieWorkspace copies. Deferred
-            // rows stay actionable (shown optimistically); the sweep then
-            // either resolves a live copy (→ preview) or confirms offline.
-            let pending = fresh.rows.filter(\.isPending)
-            // Build the strong-identity copy-candidate map ONCE (one O(records)
-            // OnlineCopyFinder index pass) and reuse it for both the deferral
-            // set here and the sweep launched below — no double build.
-            let candidateMap = buildCopyCandidateMap(forPending: pending.map(\.fullPath))
-            offlineExcludedPaths = Self.volumeLevelOfflinePaths(rows: pending)
-                .subtracting(candidateMap.keys)
-            recomputeHiddenCounts()
-            startOfflineSweep(precomputedCandidates: candidateMap)
-            if let idx = firstActionableIndex() {
-                phase = .holdout
-                // Spindle keepalive for the whole session — see
-                // HoldoutSpindleKeepalive for the head-park rationale.
-                keepalive.start()
-                holdoutGo(to: idx)
-            } else {
-                transitionToCandidates()
-            }
-        } catch {
-            // FAIL CLOSED (blocker fix 2026-07-27): a load failure must
-            // NEVER hand the session to the candidate phase — with the
-            // queue unreadable we cannot know which paths are sealed for
-            // blind review, so candidate scoring cannot be allowed to
-            // run. Land on the error pane; Try Again / Close only.
-            holdout = nil
-            holdoutSaveError = "Could not reload review queue: \(error.localizedDescription)"
-            phase = sheetPhase(ReviewSessionPolicy.phaseAfterQueueLoadFailure)
-        }
-    }
-
-    // MARK: - Phase transitions (unified session)
-
-    /// The holdout → candidates handoff: enters the setup pane and runs
-    /// the candidate scorer THERE, lazily — the blindness gate's one
-    /// legal loading point (design note D1). Also the entry path for
-    /// sessions with no holdout portion at all (startHoldout falls
-    /// through here on empty/failed queues).
-    private func transitionToCandidates() {
-        phase = .setup
-        prepareSetup()
-    }
-
-    /// "Continue Reviewing" — back into the skipped holdout rows. PURGES
-    /// candidate state first (ReviewSessionPolicy.mustPurgeCandidates):
-    /// loaded-but-hidden prediction data is not allowed to coexist with
-    /// presentable blind rows; the ~1–2 s re-score on the next
-    /// transition is the price of the hard guarantee.
-    private func resumeHoldout() {
-        // Fresh sweep per Continue click (a drive may have been
-        // reconnected while the pane sat open).
-        startOfflineSweep()
-        guard let idx = firstActionableIndex() else { return }
-        if ReviewSessionPolicy.mustPurgeCandidates(entering: .holdout) {
-            fullCandidatePool = []
-            stats = nil
-            candidates = []
-            currentIndex = 0
-            // REBUILD the media-metadata map from the queue rows alone
-            // (QA 2026-07-27 🟠 A): the candidate-phase entries' KEYS —
-            // which files the scorer surfaced — are themselves
-            // model-derived state, and retaining them into the blind
-            // phase would violate the never-LOADED bar. merge:false
-            // resets the map before refilling from holdout rows only.
-            if let q = holdout {
-                buildMediaMeta(for: Set(q.rows.map(\.fullPath)))
-            }
-        }
-        phase = .holdout
-        keepalive.start()
-        holdoutGo(to: idx)
-    }
-
-    // MARK: - Offline / unplayable prefilter
-
-    /// The path preview surfaces should use for `original`: the resolved
-    /// live byte-identical copy when the sweep found one, else the original
-    /// itself. Preview-only — callers that write the answer or key the
-    /// sealed identity keep using `row.fullPath` directly (Rick 2026-07-30).
-    private func previewPath(for original: String) -> String {
-        resolvedPreviewPath[original] ?? original
-    }
-
-    /// VOLUME-level offline check, main-safe by construction: only
-    /// consults VolumeReachability.isReachable (SWR cache / kernel mount
-    /// table — never disk I/O on the caller's thread), one lookup per
-    /// distinct volume. Internal (non-/Volumes) paths pass — the per-file
-    /// sweep and the per-row backstop cover those.
-    private nonisolated static func volumeLevelOfflinePaths(rows: [HoldoutReviewRow]) -> Set<String> {
-        var verdictByVolume: [String: Bool] = [:]
-        var offline = Set<String>()
-        for row in rows {
-            guard let key = HoldoutNavigation.volumeKey(forPath: row.fullPath) else { continue }
-            let reachable = verdictByVolume[key] ?? {
-                let v = VolumeReachability.isReachable(path: key)
-                verdictByVolume[key] = v
-                return v
-            }()
-            if !reachable { offline.insert(row.fullPath) }
-        }
-        return offline
-    }
-
-    /// Build the strong-identity copy-candidate map for a set of pending
-    /// originals: original fullPath → ordered live-copy CANDIDATE paths
-    /// (liveness unchecked — the sweep stats those). One O(records)
-    /// OnlineCopyFinder index build; call on the main actor, off the view
-    /// body (Rick 2026-07-30). Originals with no candidate are omitted.
-    private func buildCopyCandidateMap(forPending pendingPaths: [String]) -> [String: [String]] {
-        let resolver = HoldoutCopyResolver(records: catalogModel.records)
-        var map: [String: [String]] = [:]
-        for path in pendingPaths {
-            let candidates = resolver.copyCandidates(for: path)
-            if !candidates.isEmpty { map[path] = candidates }
-        }
-        return map
-    }
-
-    /// ONE background reachability sweep over the pending rows — run per
-    /// open and per "Continue Reviewing" click, no polling. Cheap ladder:
-    /// volume reachability once per distinct volume (mount table — no
-    /// disk touch for unmounted drives), then fileExists per row only on
-    /// reachable volumes, strictly serialized at O(rows). Result REPLACES
-    /// the offline set (a reconnected volume's rows come back); the
-    /// per-row backstop re-inserts anything that vanishes afterwards.
-    ///
-    /// `precomputedCandidates` lets the caller (startHoldout) hand in the
-    /// copy-candidate map it already built for its deferral set, so the open
-    /// path pays ONE O(records) OnlineCopyFinder index pass, not two
-    /// (Rick 2026-07-30). resumeHoldout passes nil — its pending set changed,
-    /// so the map is rebuilt for the current rows.
-    private func startOfflineSweep(precomputedCandidates: [String: [String]]? = nil) {
-        guard let q = holdout else { return }
-        offlineSweepTask?.cancel()
-        backstopInsertsSinceSweep = []
-        let pendingRows = q.rows.filter(\.isPending).map(\.fullPath)
-        // Offline-copy preview resolution (Rick 2026-07-30): the strong-
-        // identity copy candidates are precomputed on the main actor, where
-        // the catalog lives — one O(records) index build off the view body.
-        // The sweep's @concurrent half does the per-candidate liveness stats
-        // in its existing serialized context, so we never touch `records`
-        // from the background and never do O(records) work in a body.
-        let copyCandidates = precomputedCandidates
-            ?? buildCopyCandidateMap(forPending: pendingRows)
-        // Gate the per-row backstop for these originals until the sweep
-        // returns a verdict (a live copy resolution must not be pre-empted
-        // by holdoutGo's optimistic stat of the offline original).
-        awaitingCopyResolution = Set(copyCandidates.keys)
-        offlineSweepTask = Task { @MainActor in
-            let result = await Self.sweepOfflinePaths(
-                paths: pendingRows, copyCandidates: copyCandidates)
-            guard !Task.isCancelled else { return }
-            // Pure set-algebra merge (extracted + unit-testable — QA flagged
-            // this as the likeliest regression site, 2026-07-30). Sweep
-            // result ∪ backstop-inserts-since-launch, MINUS anything the
-            // sweep resolved to a live copy (resolution is authoritative — a
-            // live byte-identical copy was just statted). `resolvedPreviewPath`
-            // is replaced wholesale each sweep so a reconnected original drops
-            // its copy note; never merged across sweeps.
-            let merged = Self.mergeSweepResult(
-                offline: result.offline,
-                backstop: backstopInsertsSinceSweep,
-                resolved: result.resolved)
-            offlineExcludedPaths = merged.excluded
-            resolvedPreviewPath = merged.resolved
-            awaitingCopyResolution = []
-            recomputeHiddenCounts()
-            // If the row on screen just turned out to be offline, honor
-            // "never present an offline video" — move along (or to the
-            // candidate transition if nothing actionable remains). The
-            // INVERSE case (a row that was showing its transient offline
-            // pane while awaiting resolution, now resolved to a live copy)
-            // re-lands so the copy's reachability + thumbnail get picked up.
-            if phase == .holdout, let qq = holdout,
-               qq.rows.indices.contains(holdoutIndex),
-               qq.rows[holdoutIndex].isPending {
-                let cur = qq.rows[holdoutIndex].fullPath
-                if offlineExcludedPaths.contains(cur) {
-                    holdoutAdvance()
-                } else if resolvedPreviewPath[cur] != nil, !holdoutReachable {
-                    holdoutGo(to: holdoutIndex)
-                }
-            }
-        }
-    }
-
-    /// The blocking half of the sweep, off the main actor. Serialized —
-    /// one stat at a time — so a spun-down HDD sees a polite sequential
-    /// scan, not a seek storm.
-    ///
-    /// Offline-copy preview resolution (Rick 2026-07-30): when a path is
-    /// found offline, walk its precomputed strong-identity `copyCandidates`
-    /// (ordered by HoldoutCopyResolver / OnlineCopyFinder) and take the
-    /// first one that is on a mounted volume AND exists on disk. That
-    /// original is NOT added to the offline set — it is reviewable via the
-    /// live copy — and is recorded in the returned `resolved` map
-    /// (original → live copy). The candidate liveness stats reuse the same
-    /// serialized, memoized-per-volume ladder, so the polite-sequential
-    /// property holds for the copies too.
-    #if compiler(>=6.2)
-    @concurrent
-    #endif
-    private nonisolated static func sweepOfflinePaths(
-        paths: [String],
-        copyCandidates: [String: [String]]
-    ) async -> (offline: Set<String>, resolved: [String: String]) {
-        var offline = Set<String>()
-        var resolved: [String: String] = [:]
-        var volumeReachable: [String: Bool] = [:]
-
-        // Shared liveness test: mounted volume (memoized, kernel mount table
-        // — no disk spin-up for unmounted drives) + file present. Used for
-        // both the primary paths and the copy candidates.
-        func isLive(_ path: String) -> Bool {
-            if let key = HoldoutNavigation.volumeKey(forPath: path) {
-                let reachable = volumeReachable[key] ?? {
-                    // Honest one-shot answer: the kernel mount table
-                    // (getmntinfo MNT_NOWAIT — in-kernel state, never
-                    // spins up a disk), not the SWR cache, so a just-
-                    // yanked drive can't answer stale-true.
-                    let v = VolumeReachability.currentMountedRoots().contains(key)
-                    volumeReachable[key] = v
-                    return v
-                }()
-                if !reachable { return false }
-            }
-            // Mounted volume or internal path → the file itself decides.
-            return FileManager.default.fileExists(atPath: path)
-        }
-
-        for path in paths {
-            if Task.isCancelled { return (offline, resolved) }
-            if isLive(path) { continue }
-            // Original is offline — try a live byte-identical copy before
-            // giving up and hiding the row.
-            if let candidates = copyCandidates[path],
-               let live = candidates.first(where: { isLive($0) }) {
-                resolved[path] = live
-            } else {
-                offline.insert(path)
-            }
-        }
-        return (offline, resolved)
-    }
-
-    /// Pure set-algebra for the sweep completion, extracted so it is
-    /// unit-testable without a sheet (Rick 2026-07-30 — QA flagged the merge
-    /// as the likeliest future regression site). The excluded set is the
-    /// sweep's offline verdict UNIONED with anything the per-row backstop
-    /// flagged since this sweep launched, MINUS every original the sweep
-    /// resolved to a live copy — resolution wins over an optimistic backstop
-    /// flag because it statted a live byte-identical copy. `resolved` passes
-    /// through unchanged (it is replaced wholesale each sweep upstream); it
-    /// rides along so the single call site gets both values from one tested
-    /// surface.
-    nonisolated static func mergeSweepResult(
-        offline: Set<String>,
-        backstop: Set<String>,
-        resolved: [String: String]
-    ) -> (excluded: Set<String>, resolved: [String: String]) {
-        (offline.union(backstop).subtracting(resolved.keys), resolved)
-    }
-
-    /// Refresh the stored hidden-pending counts (never computed in view
-    /// bodies — the queue can be arbitrarily large per the scale test).
-    private func recomputeHiddenCounts() {
-        guard let q = holdout else {
-            offlineHiddenPending = 0
-            unplayableHiddenPending = 0
-            return
-        }
-        let counts = HoldoutNavigation.hiddenPendingCounts(
-            rows: q.rows,
-            inFlight: inFlightAnswerIds,
-            offlineExcluded: offlineExcludedPaths,
-            unplayableExcluded: unplayableExcludedPaths)
-        offlineHiddenPending = counts.offline
-        unplayableHiddenPending = counts.unplayable
-    }
-
-    /// Navigate to a holdout row: reset the thumbnail, prefill the notes
-    /// draft, and kick off the background stat + thumbnail load. NO
-    /// synchronous file I/O here — a fileExists against a spun-down USB
-    /// HDD can stall the main thread for seconds, which was navigation
-    /// bug #2 of the LaCie review slowness (2026-07-26).
-    private func holdoutGo(to idx: Int) {
-        guard let q = holdout, q.rows.indices.contains(idx) else { return }
-        thumbnailLoadTask?.cancel()
-        reachabilityTask?.cancel()
-        thumbnail = nil
-        thumbnailFailed = false
-        holdoutIndex = idx
-        holdoutNotes = q.rows[idx].notes
-        // Sealed identity stays the ORIGINAL; preview surfaces follow the
-        // resolved live copy when the sweep found one (Rick 2026-07-30).
-        let original = q.rows[idx].fullPath
-        let path = previewPath(for: original)
-        keepalive.setCurrentPath(path)
-
-        // Optimistic: render as reachable immediately; the background
-        // stat corrects to the offline pane if the file is gone. The
-        // thumbnail load starts right away — on a spun-up disk it wins;
-        // on a missing file it fails fast and the stat verdict lands.
-        holdoutReachable = true
-        reachabilityTask = Task { @MainActor in
-            let exists = await Self.statFileExists(path)
-            guard !Task.isCancelled, holdoutIndex == idx else { return }
-            holdoutReachable = exists
-            if !exists {
-                thumbnailLoadTask?.cancel()
-                thumbnail = nil
-                // While the sweep is still deciding whether this offline
-                // original has a LIVE copy, don't backstop-exclude it — the
-                // transient offline pane is expected, and the sweep's
-                // resolution (or offline verdict) is authoritative
-                // (Rick 2026-07-30). Otherwise: backstop feeds the
-                // prefilter — a file can vanish AFTER the open-time sweep,
-                // so exclude it (navigation is once-per-open, no polling).
-                // Recorded per-sweep so an in-flight sweep's completion
-                // can't wholesale-replace it away (QA minor 1). Keyed on the
-                // ORIGINAL: offlineExcludedPaths and navigation key by
-                // row.fullPath, and if the previewed copy ALSO vanished the
-                // row is once again unreviewable.
-                if !awaitingCopyResolution.contains(original) {
-                    offlineExcludedPaths.insert(original)
-                    backstopInsertsSinceSweep.insert(original)
-                    recomputeHiddenCounts()
-                }
-            }
-        }
-        loadThumbnail(path: path)
-    }
-
-    /// stat() off the main actor (house convention: @concurrent so the
-    /// blocking call can't inherit the caller's actor).
-    #if compiler(>=6.2)
-    @concurrent
-    #endif
-    private nonisolated static func statFileExists(_ path: String) async -> Bool {
-        FileManager.default.fileExists(atPath: path)
-    }
-
-    /// Record yes/no + notes for the current row. Still write-through —
-    /// every answer is durably in the CSV moments after the click — but
-    /// the CSV reload+rewrite runs OFF the main actor (bug #2:
-    /// synchronous Data(contentsOf:) + atomic rewrite per answer stalled
-    /// the UI on slow disks). The UI advances optimistically; writes are
-    /// chained so they execute strictly one at a time in click order
-    /// (two quick answers can never interleave the read-modify-write),
-    /// and each write STILL merges onto a fresh disk load inside
-    /// HoldoutReviewQueue.recordAnswer — the QA-gated semantic (commit
-    /// 65fbfcf) is untouched, only the executor changed.
-    private func holdoutAnswer(_ confirm: String) {
-        guard let q = holdout, q.rows.indices.contains(holdoutIndex) else { return }
-        let row = q.rows[holdoutIndex]
-        // WRITE-SINK CUSTODY: a blind answer may only route to the
-        // sealed CSV. The router returning anything else means a wiring
-        // bug — drop the write loudly, never coerce
-        // (UnifiedReviewSessionTests custody sensors).
-        guard ReviewWriteRouting.sink(for: .holdout(row),
-                                      answer: .holdoutConfirm(confirm)) == .sealedHoldoutCSV else {
-            holdoutSheetLog.fault("custody: holdout answer refused a non-CSV sink — dropped")
-            // Visible to Rick, not just Console (QA 2026-07-27 🟡 D) —
-            // a future wiring bug must not present as a dead button.
-            holdoutSaveError = "Internal safety check refused to save this answer (nothing was written). Please tell Claude — this is a wiring bug."
-            return
-        }
-        let notes = holdoutNotes
-        let snapshot = q          // Sendable value copy for the writer
-        let wasPending = row.isPending
-        let filename = row.filename
-
-        if wasPending {
-            inFlightAnswerIds.insert(row.reviewId)
-            // In-flight rows count toward neither hidden bucket
-            // (QA minor 2) — refresh so the counts flip immediately.
-            recomputeHiddenCounts()
-        }
-        holdoutSaveError = nil
-
-        // Captured HERE (view installed, wrapper resolved) so the escaped
-        // task holds the center CLASS REFERENCE — a failure landing after
-        // dismissal must not go through dead @EnvironmentObject storage.
-        let center = holdoutCenter
-        let previous = holdoutWriteChain
-        holdoutWriteChain = Task { @MainActor in
-            _ = await previous?.value   // strict FIFO across answers
-            let result = await Self.performAnswerWrite(
-                queue: snapshot, reviewId: row.reviewId,
-                confirm: confirm, notes: notes)
-            // Commit-after-write, on the main actor: memory only ever
-            // reflects what is durably on disk (WAL discipline).
-            switch result {
-            case .success(let updated):
-                holdout = updated
-                if wasPending { holdoutAnsweredThisSession += 1 }
-            case .failure(let error):
-                // Three surfaces, because the sheet may already be gone
-                // (QA 2026-07-26 🟠): the in-sheet banner, the log trail,
-                // and the badge center the gallery watches. The row is
-                // still pending on disk — nothing was written — so the
-                // badge count stays honest too.
-                holdoutSheetLog.error("holdout answer write FAILED — file: \(filename, privacy: .public), reviewId: \(row.reviewId, privacy: .public), error: \(error.localizedDescription, privacy: .public)")
-                holdoutSaveError = "Could not save answer for \(filename): \(error.localizedDescription) \u{2014} the row is still pending; use Back to re-answer."
-                center.reportAnswerWriteFailure(
-                    "The answer for \(filename) was not saved (\(error.localizedDescription)). Its row is still pending \u{2014} reopen the review to answer it again.")
-            }
-            if wasPending { inFlightAnswerIds.remove(row.reviewId) }
-            // AFTER the in-flight removal, whatever the outcome: on
-            // success the pending flags changed; on failure the row is
-            // pending-and-visible again — either way the hidden counts
-            // must reflect the post-commit truth (QA minor 2).
-            recomputeHiddenCounts()
-        }
-        holdoutAdvance()
-    }
-
-    /// The CSV read-modify-write, off the main actor. Delegates entirely
-    /// to HoldoutReviewQueue.recordAnswer, which reloads the CSV fresh
-    /// from disk as the merge base — the snapshot's staleness cannot
-    /// clobber external edits (QA 2026-07-25 gate finding 1; regression
-    /// tests pin it).
-    #if compiler(>=6.2)
-    @concurrent
-    #endif
-    private nonisolated static func performAnswerWrite(
-        queue: HoldoutReviewQueue, reviewId: String,
-        confirm: String, notes: String
-    ) async -> Result<HoldoutReviewQueue, any Error> {
-        var q = queue
-        do {
-            try q.recordAnswer(reviewId: reviewId, confirm: confirm, notes: notes)
-            return .success(q)
-        } catch {
-            return .failure(error)
-        }
-    }
-
-    /// Navigation goes through the PURE decision in HoldoutNavigation:
-    /// pending, minus in-flight answers, minus offline-excluded, minus
-    /// unplayable-excluded. The user is simply never shown a hidden row.
-    private func nextActionableIndex(after idx: Int, in q: HoldoutReviewQueue) -> Int? {
-        HoldoutNavigation.nextActionableIndex(
-            after: idx, rows: q.rows,
-            inFlight: inFlightAnswerIds,
-            offlineExcluded: offlineExcludedPaths,
-            unplayableExcluded: unplayableExcludedPaths)
-    }
-
-    private func firstActionableIndex() -> Int? {
-        guard let q = holdout else { return nil }
-        return HoldoutNavigation.firstActionableIndex(
-            rows: q.rows,
-            inFlight: inFlightAnswerIds,
-            offlineExcluded: offlineExcludedPaths,
-            unplayableExcluded: unplayableExcludedPaths)
-    }
-
-    /// Called right after an answer is enqueued (or a Skip) — the current
-    /// row is either in flight or deliberately left pending; move to the
-    /// next actionable one, or hand the session over to the candidate
-    /// phase when the blind portion is done.
-    private func holdoutAdvance() {
-        guard let q = holdout else { return }
-        if let next = nextActionableIndex(after: holdoutIndex, in: q) {
-            holdoutGo(to: next)
-        } else {
-            transitionToCandidates()
-        }
-    }
-
-    private func holdoutSkip() {
-        guard let q = holdout else { return }
-        if let next = nextActionableIndex(after: holdoutIndex, in: q) {
-            holdoutGo(to: next)
-        } else {
-            // Nothing else actionable — this row remains unanswered by
-            // choice (resume lands here next open); on to candidates.
-            transitionToCandidates()
-        }
-    }
-
-    /// Build the fullPath → media-metadata map for the given files in
-    /// ONE pass over the catalog (never per navigation, never in a view
-    /// body). Files not in the catalog simply have no entry — the
-    /// renderer then takes the shared default (AVF watchdog + ffmpeg
-    /// fallback) path. `merge:` keeps the holdout rows' entries alive
-    /// when the candidate phase adds its own.
-    private func buildMediaMeta(for paths: Set<String>, merge: Bool = false) {
-        if !merge { mediaMetaByPath = [:] }
-        guard !paths.isEmpty else { return }
-        var map: [String: HoldoutMediaMeta] = mediaMetaByPath
-        map.reserveCapacity(map.count + paths.count)
-        for rec in catalogModel.records where paths.contains(rec.fullPath) {
-            map[rec.fullPath] = HoldoutMediaMeta(
-                container: rec.container,
-                videoCodec: rec.videoCodec,
-                durationSeconds: rec.durationSeconds,
-                likelyUnanalyzable: rec.isLikelyUnanalyzable)
-        }
-        mediaMetaByPath = map
-    }
-
-    /// Create the shared read-ahead worker (both phases) if it doesn't
-    /// exist yet. The render closure guards on the model's shared
-    /// negative cache — same gate as the interactive path — but does NOT
-    /// record failures (best-effort; nil is not a fact about the file).
-    /// QA 2026-07-26 🟡 2.
-    private func ensurePrefetcher() {
-        guard prefetcher == nil else { return }
-        let failureStore = catalogModel.thumbnailFailureStore
-        prefetcher = HoldoutReviewPrefetcher(
-            renderThumbnail: { path, meta in
-                guard !failureStore.isKnownFailure(atPath: path) else { return nil }
-                return await ReviewThumbnailRenderer.renderOrNil(path: path, meta: meta)
-            })
-    }
-
-    /// Queue read-ahead for the next few items of the CURRENT phase —
-    /// ONE path for both (design note: one thumbnail + read-ahead
-    /// pipeline). Called from the thumbnail-load completion so the disk
-    /// sees strictly one reader at a time — the prefetcher additionally
-    /// serializes its own batches internally.
-    private func schedulePrefetch() {
-        guard let prefetcher else { return }
-        var entries: [HoldoutReviewPrefetcher.Entry] = []
-        switch phase {
-        case .holdout:
-            guard let q = holdout else { return }
-            let n = q.rows.count
-            guard n > 0 else { return }
-            var i = holdoutIndex
-            for _ in 0..<max(n - 1, 0) {
-                i = (i + 1) % n
-                let r = q.rows[i]
-                // Only warm rows the user can actually be shown — hidden
-                // (offline/unplayable) rows would waste the HDD's time.
-                guard HoldoutNavigation.isActionable(
-                    r, inFlight: inFlightAnswerIds,
-                    offlineExcluded: offlineExcludedPaths,
-                    unplayableExcluded: unplayableExcludedPaths) else { continue }
-                entries.append(HoldoutReviewPrefetcher.Entry(
-                    // Warm the PREVIEW path — a resolved offline-with-copy
-                    // row must prefetch the live copy, not the offline
-                    // original it's standing in for (Rick 2026-07-30). Meta
-                    // stays keyed on the original: the copy is byte-identical
-                    // content, so the catalog's routing metadata still fits.
-                    path: previewPath(for: r.fullPath),
-                    meta: mediaMetaByPath[r.fullPath],
-                    // Pre-decode a thumbnail only for the NEXT item; bytes
-                    // warming covers the rest of the window.
-                    wantsThumbnail: entries.isEmpty))
-                if entries.count >= HoldoutReviewPrefetcher.lookahead { break }
-            }
-        case .labeling:
-            // Candidate walk is LINEAR (no wrap — matches navigation).
-            var i = currentIndex + 1
-            while i < candidates.count && entries.count < HoldoutReviewPrefetcher.lookahead {
-                let c = candidates[i]
-                entries.append(HoldoutReviewPrefetcher.Entry(
-                    path: c.recordPath,
-                    meta: mediaMetaByPath[c.recordPath],
-                    wantsThumbnail: entries.isEmpty))
-                i += 1
-            }
-        case .setup, .summary:
-            return
-        }
-        if !entries.isEmpty { prefetcher.schedule(entries: entries) }
-    }
-
-    // MARK: - Candidate round lifecycle (phase 2)
-
-    private func prepareSetup() {
-        // BLINDNESS GATE (design note D1): candidate scoring may not run
-        // while any blind row can still be presented. This guard bites in
-        // production — a future caller wiring prepareSetup into the
-        // holdout phase gets a refusal + fault log, not a quiet leak.
-        guard ReviewSessionPolicy.mayLoadCandidates(in: policyPhase) else {
-            holdoutSheetLog.fault("blindness gate: prepareSetup refused during the holdout phase")
-            return
-        }
-        roundStart = Date()
-        // Score in the background — for 16k records this is ~1-2 sec.
-        // Keep the @MainActor scope clean by hopping out and back.
-        Task { @MainActor in
-            // Second gate INSIDE the task (QA 2026-07-27 🟡 C): between
-            // scheduling and execution the user can click "Continue
-            // Reviewing" — without this, the scorer would still RUN
-            // during the blind phase (its result discarded below, but
-            // the work itself is forbidden, not just the storage).
-            guard ReviewSessionPolicy.mayLoadCandidates(in: policyPhase) else {
-                holdoutSheetLog.info("blindness gate: candidate scoring skipped — session re-entered the holdout phase before the scorer started")
-                return
-            }
-            let already = Set(personFinderModel.validationLabels
-                .labeledByPath(for: profile.name).keys)
-            // FULL-QUEUE blindness exclusion by CONTENT IDENTITY
-            // (blocker fixes 2026-07-27 — codex #35 applied strictly,
-            // codex #39): every row of the ACTIVE holdout queue — any
-            // answer state — is barred from the round, positives and
-            // controls, along with every catalog record that is the
-            // SAME MEDIA at a different path (partialMD5 / dup group /
-            // stem+size). Queue-path union covers the in-memory session
-            // copy (optimistic in-flight answers), a fresh disk load
-            // (external edits; tiny local CSV, same as startHoldout),
-            // and the badge center's discovered queue (candidates-only
-            // sessions where the queue is fully answered and
-            // pendingQueue returned nil).
-            let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
-                sessionQueue: holdout,
-                diskQueue: holdoutQueue.flatMap { try? $0.freshCopyFromDisk() },
-                discoveredQueue: holdoutCenter.queue,
-                records: catalogModel.records)
-            var rng = SystemRandomNumberGenerator()
-            let result = pfConfirmRound(
-                name: profile.name,
-                records: catalogModel.records,
-                topN: 100,   // upper bound; the roundSize picker trims
-                controlK: controlK,
-                alreadyLabeled: already,
-                heldOut: heldOut,
-                rng: &rng
-            )
-            // The user may have clicked "Continue Reviewing" while the
-            // scorer ran — candidate state is forbidden near blind rows,
-            // so a late-landing result is discarded, not stored.
-            guard ReviewSessionPolicy.mayLoadCandidates(in: policyPhase) else {
-                holdoutSheetLog.info("blindness gate: discarded candidate scores that landed after re-entering the holdout phase")
-                return
-            }
-            self.fullCandidatePool = result.candidates
-            self.stats = result.stats
-            // Default to a sensible round size if 25 isn't reachable.
-            let availOnline = result.candidates.filter { $0.reachable }.count
-            if availOnline < self.roundSize {
-                self.roundSize = max(min(availOnline, 25), 1)
-            }
-        }
-    }
-
-    private func startRound() {
-        // Slice the pre-scored pool to the user's chosen round size.
-        let onlineOnly = fullCandidatePool.filter { $0.reachable }
-        candidates = Array(onlineOnly.prefix(roundSize))
-        currentIndex = 0
-        phase = .labeling
-        // Media metadata for thumbnail routing (confirm mode reads the
-        // catalog anyway, so this leaks nothing new). Merged so the
-        // holdout rows' entries survive for a later "Continue Reviewing".
-        buildMediaMeta(for: Set(candidates.map(\.recordPath)), merge: true)
-        ensurePrefetcher()
-        keepalive.start()
-        if !candidates.isEmpty {
-            keepalive.setCurrentPath(candidates[0].recordPath)
-            loadThumbnail(path: candidates[0].recordPath)
-        }
-    }
-
-    private func apply(rating: ConfirmRating, to candidate: PersonCandidateScore) {
-        // WRITE-SINK CUSTODY: a candidate rating may only route to the
-        // validation store + catalog — never the sealed CSV. Same drop-
-        // loudly contract as the holdout side.
-        guard ReviewWriteRouting.sink(for: .candidate(candidate),
-                                      answer: .rating(rating)) == .validationStoreAndCatalog else {
-            holdoutSheetLog.fault("custody: candidate rating refused a non-validation sink — dropped")
-            // Visible to Rick, not just Console (QA 2026-07-27 🟡 D).
-            loadError = "Internal safety check refused to save this rating (nothing was written). Please tell Claude — this is a wiring bug."
-            return
-        }
-        // Persist label. The sink refuses a short name two profiles share
-        // (a namesake may have appeared while this sheet was open).
-        do {
-            try personFinderModel.validationLabels.record(
-                recordPath: candidate.recordPath,
-                person: profile.name,
-                rating: rating,
-                signals: candidate.signals,
-                score: candidate.score
-            )
-        } catch {
-            loadError = "Not saved — \(error.localizedDescription)"
-            return
-        }
-        roundLabels.append((candidate.recordPath, rating, candidate.signals))
-
-        // Catalog writeback per rating tier
-        catalogWriteback(rating: rating, candidate: candidate)
-
-        advance()
-    }
-
-    private func catalogWriteback(rating: ConfirmRating, candidate: PersonCandidateScore) {
-        guard let rec = catalogModel.records.first(where: { $0.id == candidate.recordID })
-        else { return }
-        let p = profile.name
-        // Each writeback path enforces "this person belongs in EXACTLY
-        // ONE tier" — confirmedByUserPeople, suspectedPeople, or
-        // rejectedPeople — and cleans up the other two. This makes
-        // re-rating (via the Back button) idempotent: the catalog
-        // state always reflects the user's most recent decision.
-        switch rating.writebackTier {
-        case .confirmed:
-            removePerson(p, from: &rec.suspectedPeople)
-            removePerson(p, from: &rec.rejectedPeople)
-            if !rec.confirmedByUserPeople.contains(where: {
-                $0.name.caseInsensitiveCompare(p) == .orderedSame
-            }) {
-                rec.confirmedByUserPeople.append(ConfirmedTag(name: p, confirmedAt: Date()))
-            }
-            catalogModel.saveCatalogDebounced()
-        case .suspected:
-            removeConfirmed(p, from: &rec.confirmedByUserPeople)
-            removePerson(p, from: &rec.rejectedPeople)
-            if !rec.suspectedPeople.contains(where: {
-                $0.caseInsensitiveCompare(p) == .orderedSame
-            }) {
-                rec.suspectedPeople.append(p)
-            }
-            catalogModel.saveCatalogDebounced()
-        case .rejected:
-            removeConfirmed(p, from: &rec.confirmedByUserPeople)
-            removePerson(p, from: &rec.suspectedPeople)
-            // Also remove from detectedPeople so a stale PF tag from
-            // a prior scan doesn't keep this video showing up in
-            // people:donna search after the user explicitly said No.
-            removePerson(p, from: &rec.detectedPeople)
-            if !rec.rejectedPeople.contains(where: {
-                $0.caseInsensitiveCompare(p) == .orderedSame
-            }) {
-                rec.rejectedPeople.append(p)
-            }
-            catalogModel.saveCatalogDebounced()
-        case .none:
-            // Cameo / legacy Unsure/Unlikely — no catalog mutation.
-            // Label is still in the sidecar for training-data purposes.
-            break
-        }
-    }
-
-    private func removePerson(_ name: String, from arr: inout [String]) {
-        arr.removeAll { $0.caseInsensitiveCompare(name) == .orderedSame }
-    }
-
-    private func removeConfirmed(_ name: String, from arr: inout [ConfirmedTag]) {
-        arr.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
-    }
-
-    private func advance() {
-        thumbnailLoadTask?.cancel()
-        thumbnail = nil
-        // Same LINEAR walk the prefetcher and the pure core use — a
-        // skipped candidate does not come back around (pre-unification
-        // semantic, pinned by nav_linearPolicyNeverWraps).
-        if let next = HoldoutNavigation.nextIndex(
-            after: currentIndex, count: candidates.count, wraps: false,
-            isActionable: { _ in true }) {
-            currentIndex = next
-            keepalive.setCurrentPath(candidates[next].recordPath)
-            loadThumbnail(path: candidates[next].recordPath)
-        } else {
-            // Out of candidates — show the summary automatically
-            phase = .summary
-        }
-    }
-
-    private func goBack() {
-        // Pure navigation — go back to the previous candidate whether
-        // it was labeled or skipped (Rick 2026-06-16: an accidental
-        // Skip needs to be recoverable, not just an accidental rating).
-        // If the previous candidate WAS labeled this round, pop its
-        // entry from roundLabels so the user can re-rate without
-        // double-counting in the summary. The label sidecar's most-
-        // recent-wins semantics handles the duplicate-label case
-        // cleanly on the next .apply call.
-        //
-        // NEVER crosses into the holdout rows — canGoBack is false at
-        // index 0 regardless of holdout history (design note D2).
-        guard ReviewSessionPolicy.canGoBack(in: .candidateLabeling,
-                                            index: currentIndex) else { return }
-        let prevPath = candidates[currentIndex - 1].recordPath
-        if let last = roundLabels.last, last.path == prevPath {
-            roundLabels.removeLast()
-        }
-        thumbnailLoadTask?.cancel()
-        currentIndex -= 1
-        keepalive.setCurrentPath(prevPath)
-        loadThumbnail(path: prevPath)
-    }
-
-    // MARK: - Thumbnail loading
-    //
-    // ROUTED (fix/review-sheet-performance, 2026-07-26). The old private
-    // generator here was AVF-only with NO routing/deadline/fallback and
-    // — worse — awaited asset.load(.duration) first, which on an
-    // AVF-hostile or moov-at-end file on the LaCie meant minutes of
-    // container grinding before the midpoint request even started. Now:
-    // catalog metadata routes the decoder up front, AVF runs under the
-    // shared watchdog, ffmpeg is the fallback, failures show a
-    // placeholder and land in the model's negative cache.
-
-    private func loadThumbnail(path: String) {
-        thumbnailFailed = false
-        // Read-ahead may have pre-decoded this exact frame — instant.
-        if let cg = prefetcher?.cachedThumbnail(for: path) {
-            thumbnail = NSImage(cgImage: cg, size: .zero)
-            schedulePrefetch()
-            return
-        }
-        let meta = mediaMetaByPath[path]
-        // Captured on the main actor; the store itself is the shared
-        // lock-guarded negative cache (same instance the catalog preview
-        // pane uses, so a file that failed THERE skips the retry HERE).
-        let failureStore = catalogModel.thumbnailFailureStore
-        thumbnailLoadTask = Task { @MainActor in
-            let img = await Self.loadRoutedThumbnail(path: path, meta: meta,
-                                                     failureStore: failureStore)
-            guard !Task.isCancelled else { return }
-            if let img {
-                self.thumbnail = NSImage(cgImage: img, size: .zero)
-            } else {
-                self.thumbnail = nil
-                self.thumbnailFailed = true
-            }
-            // Start read-ahead only once the current item's disk work is
-            // done — one reader at a time keeps the HDD sequential.
-            schedulePrefetch()
-        }
-    }
-
-    /// Negative-cache check + routed render + failure recording, all off
-    /// the main actor (isKnownFailure stats the file).
-    #if compiler(>=6.2)
-    @concurrent
-    #endif
-    private nonisolated static func loadRoutedThumbnail(
-        path: String, meta: HoldoutMediaMeta?,
-        failureStore: ThumbnailFailureStore
-    ) async -> CGImage? {
-        if failureStore.isKnownFailure(atPath: path) { return nil }
-        do {
-            return try await ReviewThumbnailRenderer.render(path: path, meta: meta)
-        } catch {
-            // Same exclusions as the catalog path (QA 2026-07-26):
-            // cancellation says nothing about the file, and a missing
-            // ffmpeg binary is an environment failure — neither may
-            // poison the negative cache against a good file.
-            if !(error is CancellationError), !Task.isCancelled,
-               (error as? PreviewFrameError) != .ffmpegUnavailable {
-                failureStore.recordFailure(forPath: path)
-            }
-            return nil
-        }
-    }
-
-    // MARK: - Helpers
-
-    private func openInQuickTime(_ path: String) {
-        guard let qtURL = NSWorkspace.shared.urlForApplication(
-            withBundleIdentifier: "com.apple.QuickTimePlayerX"
-        ) else { return }
-        NSWorkspace.shared.open(
-            [URL(fileURLWithPath: path)],
-            withApplicationAt: qtURL,
-            configuration: NSWorkspace.OpenConfiguration()
-        )
-    }
-
-    private func revealInFinder(_ path: String) {
-        NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
-    }
-
 }

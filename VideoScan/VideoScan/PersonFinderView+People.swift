@@ -103,10 +103,21 @@ extension PersonFinderView {
     }
 
     /// Holdout Review badge — shown on a PersonCard while the newest
-    /// blind review queue is for this person and still has pending rows.
-    /// Clicking it opens the review directly (nag-button pattern: the
-    /// badge performs the work). Visibility state lives in
-    /// holdoutReview (PersonFinderView.swift); no file I/O happens here.
+    /// blind review queue is for this person and still has rows owed an
+    /// answer. Visibility state lives in holdoutReview
+    /// (PersonFinderView.swift); no file I/O happens here.
+    ///
+    /// 2026-09-13: the click now opens an EXPLAINER POPOVER instead of
+    /// jumping straight into the sheet. Donna's badge sat at "Review 1"
+    /// forever — the sheet hid the only pending row (an FFV1 Matroska
+    /// master AVFoundation can't decode) while the badge kept counting
+    /// it, so the badge could neither be satisfied nor dismissed. The
+    /// popover says what the number is made of and offers Start Review /
+    /// Set Aside / Undo. The nag-button spirit survives: every path out
+    /// of the popover performs the fix.
+    ///
+    /// The count comes from HoldoutReviewCenter.badgeCount — the one
+    /// pending definition, with Rick's set-aside rows subtracted.
     ///
     /// PLACEMENT NOTE: currently overlaid top-trailing on the card —
     /// deliberately a self-contained view so moving it is a one-line
@@ -116,12 +127,13 @@ extension PersonFinderView {
         // Queues are keyed by short name; a shared name gets no badge (the
         // context menu explains why).
         if !model.nameIsShared(profile), let queue = holdoutReview.pendingQueue(for: profile.name) {
+            let count = holdoutReview.effectivePendingCount(for: queue)
             Button {
-                confirmTarget = ConfirmSheetTarget(profile: profile, holdoutQueue: queue)
+                holdoutPopoverProfileID = (holdoutPopoverProfileID == profile.id) ? nil : profile.id
             } label: {
                 HStack(spacing: 3) {
                     Image(systemName: "eye.fill")
-                    Text("Review \(queue.pendingCount)")
+                    Text("Review \(count)")
                 }
                 .font(.system(size: max(9, personNameFontSize * 0.72), weight: .semibold))
                 .foregroundColor(.white)
@@ -133,8 +145,23 @@ extension PersonFinderView {
                 )
             }
             .buttonStyle(.plain)
-            .help("\(queue.pendingCount) holdout video\(queue.pendingCount == 1 ? "" : "s") awaiting your blind yes/no review — click to start")
+            .help("\(count) holdout video\(count == 1 ? "" : "s") awaiting your blind yes/no review — click to see what's in the way")
             .accessibilityIdentifier("pf.holdout.review.\(profile.name).\(profile.id)")
+            .popover(isPresented: Binding(
+                get: { holdoutPopoverProfileID == profile.id },
+                set: { if !$0 { holdoutPopoverProfileID = nil } }
+            ), arrowEdge: .bottom) {
+                HoldoutReviewBadgePopover(
+                    personName: profile.displayName,
+                    queue: queue,
+                    records: catalogModel.records,
+                    center: holdoutReview,
+                    onStartReview: {
+                        holdoutPopoverProfileID = nil
+                        confirmTarget = ConfirmSheetTarget(profile: profile,
+                                                           holdoutQueue: queue)
+                    })
+            }
         }
     }
 
