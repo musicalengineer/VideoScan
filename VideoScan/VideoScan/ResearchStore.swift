@@ -19,6 +19,7 @@
 
 import CryptoKit
 import Foundation
+import VideoScanCore
 
 struct ResearchStore: Sendable {
     /// The People directory (FamilyAssetStore.peopleDirectory in
@@ -184,7 +185,7 @@ struct ResearchStore: Sendable {
         let temp = directory.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
         do {
             try data.write(to: temp, options: [.atomic])
-            _ = try fm.replaceItemAt(url, withItemAt: temp)
+            try AtomicFilePublish.replaceItem(at: url, withItemAt: temp)
         } catch {
             try? fm.removeItem(at: temp)
             throw StoreError.ioFailure(error.localizedDescription)

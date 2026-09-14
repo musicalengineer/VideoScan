@@ -46,6 +46,7 @@
 import Combine
 import Foundation
 import os
+import VideoScanCore
 
 private let holdoutClearLog = Logger(
     subsystem: "Rick-Breen.VideoScan",
@@ -392,7 +393,7 @@ final class HoldoutClearStore: ObservableObject {
             // neither fails.
             let tmp = dir.appendingPathComponent(".holdout-review-clears.\(UUID().uuidString).tmp")
             try data.write(to: tmp, options: .atomic)
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+            try AtomicFilePublish.replaceItem(at: url, withItemAt: tmp)
             return true
         } catch {
             return false

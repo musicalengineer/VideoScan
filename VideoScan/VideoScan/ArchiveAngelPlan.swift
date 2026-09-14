@@ -11,6 +11,7 @@
 // Promote job copies originals source → archive at approval time.
 
 import Foundation
+import VideoScanCore
 
 struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
 
@@ -308,7 +309,7 @@ enum ArchiveAngelPlanStore {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let tmp = dir.appendingPathComponent(".plan.json.tmp")
         try data.write(to: tmp, options: .atomic)
-        _ = try FileManager.default.replaceItemAt(plan.planURL, withItemAt: tmp)
+        try AtomicFilePublish.replaceItem(at: plan.planURL, withItemAt: tmp)
     }
 
     nonisolated static func load(batchDir: String) throws -> ArchiveAngelPlan {

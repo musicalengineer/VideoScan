@@ -311,7 +311,7 @@ public final class PreviewDiskCache: @unchecked Sendable {
             let tmp = rootURL.appendingPathComponent("tmp-\(UUID().uuidString)")
             do {
                 try jpeg.write(to: tmp)
-                _ = try fm.replaceItemAt(dest, withItemAt: tmp)
+                try AtomicFilePublish.replaceItem(at: dest, withItemAt: tmp)
             } catch {
                 diskCacheLog.notice("Disk-cache write failed (\(error.localizedDescription, privacy: .public)) — preview still served from L1")
                 try? fm.removeItem(at: tmp)
@@ -437,8 +437,8 @@ public final class PreviewDiskCache: @unchecked Sendable {
                 let tmp = rootURL.appendingPathComponent("tmp-\(UUID().uuidString)")
                 do {
                     try payload.data.write(to: tmp)
-                    _ = try fm.replaceItemAt(rootURL.appendingPathComponent(payload.filename),
-                                             withItemAt: tmp)
+                    try AtomicFilePublish.replaceItem(
+                        at: rootURL.appendingPathComponent(payload.filename), withItemAt: tmp)
                     written += Int64(payload.data.count)
                 } catch {
                     diskCacheLog.notice("Filmstrip cache write failed (\(error.localizedDescription, privacy: .public)) — partial set left for prune")

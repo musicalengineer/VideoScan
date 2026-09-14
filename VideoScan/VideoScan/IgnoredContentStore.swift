@@ -35,6 +35,7 @@
 
 import Foundation
 import Combine
+import VideoScanCore
 
 /// One identity a store entry answers to. (For Rick: a tagged union —
 /// `enum` with associated values is Swift's `std::variant` with names.)
@@ -347,7 +348,7 @@ final class IgnoredContentStore: ObservableObject {
             // last replace wins, neither fails.
             let tmp = dir.appendingPathComponent(".ignored-content.\(UUID().uuidString).tmp")
             try data.write(to: tmp, options: .atomic)
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+            try AtomicFilePublish.replaceItem(at: url, withItemAt: tmp)
             return true
         } catch {
             return false
