@@ -140,16 +140,68 @@ pollution class), so several tests publish the same sidecar at once.
 
 ## THE FIX
 
-`AtomicFilePublish.replaceItem(at:withItemAt:)` in `VideoScanCore` — a temp file
-in the destination's own directory, published with plain `rename(2)`. Equally
-atomic on APFS, different Sandbox hook, immune. All seven production call sites
-converted plus two in the tests; the repo now contains no `RENAME_SWAP`.
+`AtomicFilePublish` in `VideoScanCore`. **One entry point owns the whole
+publish** — `write(_:to:durability:createIntermediates:)` creates the directory,
+writes a uniquely named temp beside the destination, publishes it with plain
+`rename(2)`, cleans up on failure, and logs. All seven production call sites are
+one line each; the repo contains no `RENAME_SWAP`.
 
-`AtomicFilePublishSensorTests` keeps it that way. It is deliberately a **source**
-sensor: a test that actually provoked the deadlock would wedge the test host and
-cost another reboot, so there is no way to assert on this bug at runtime and
-live. It also pins the replacement's behaviour, including 8 tasks × 250
-concurrent publishes to one destination.
+The first pass wrapped only the rename and left each store to hand-roll the
+rest. Rick's call (2026-09-14): *"it is best to get it correct by implementing a
+wrapper with safeguards rather than changing N call sites."* He was right, and
+the evidence is that seven copy-pasted call sites had drifted into five
+conventions, **two of them with a fixed temp name** — so two concurrent saves
+stomped each other's temp and could publish a torn file. No call site names a
+temp any more.
+
+### Durability
+
+`durability: .fast | .fullFsync`. The five JSON sidecar stores use `.fullFsync`
+(`F_FULLFSYNC` on the payload, then an fsync of the parent directory): they are
+not regenerable, and forced reboots are this bug's operational reality.
+`PreviewDiskCache` stays `.fast` — 16 device flushes per filmstrip for
+regenerable JPEGs is the wrong trade.
+
+### Hang forensics
+
+Every publish registers in an in-flight registry. A process-wide watchdog logs
+at `.error` when one has been outstanding more than 10 s, and
+`applicationWillTerminate` logs `inFlightSummary()` through the write-through
+`appLog`. **A non-empty list at exit is the signature of this wedge.** If it ever
+recurs, the log names the file instead of just the hang — the thing whose
+absence cost two days in September 2026.
+
+### Sensors
+
+`AtomicFilePublishSensorTests` — deliberately **source** sensors: a test that
+actually provoked the deadlock would wedge the test host and cost another
+reboot, so there is no way to assert on this bug at runtime and live. They ban
+both `FileManager` swap spellings (`replaceItemAt(` and `replaceItem(at:` — the
+second is equally `RENAME_SWAP` and was initially missed), require the sidecar
+stores to route through the wrapper, and hold an exact-set allowlist of the
+files permitted to call bare `rename(`. All three were proven by deliberately
+reintroducing violations and watching them go red.
+
+## QA REVIEW, 2026-09-14
+
+An independent review of the fix branch found the design sound (*"the shape is
+right and the collapse was the correct call"*) and caught **a regression the fix
+introduced**: the new temp name is hidden (leading dot), while
+`PreviewDiskCache.pruneNow` enumerated with `.skipsHiddenFiles` and reaped only
+the old `tmp-` prefix. A process killed between the temp write and the rename —
+exactly this P0's failure mode — leaked the temp forever, unswept and uncounted
+against the size cap. The wrapper now owns and exposes the temp convention
+(`temporarySuffix` / `isTemporaryPublishArtifact`), and two tests pin both the
+sweep and the age gate that must still spare an in-flight publish.
+
+Also fixed from that review: a flaky assertion on the process-global registry;
+`writeJSON`, whose default encoder contradicted every sidecar loader and would
+have caused silent data loss on the documented "blessed path" (deleted); the
+missing fsync; the second swap spelling; `Failure` not conforming to
+`LocalizedError`, which threw away the errno it captured; unrelated dependency
+bumps that had ridden in on the branch; and concurrency tests that used
+`withTaskGroup` around blocking file I/O and so would not have produced the
+pile-up they claim to pin.
 
 ---
 
