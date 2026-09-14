@@ -19,10 +19,14 @@ Two further consequences, both observed:
 
 - A later process of the same app can block at exit behind the lock a corpse
   still holds (M4: four corpses chained to one owner).
-- **The app can no longer be launched.** `xcodebuild` dies instantly with
-  `IDELaunchServicesLauncher.m:418 … Assertion failed: childPID > 0` —
-  LaunchServices will not start another instance of a bundle id whose previous
-  instance never finished dying. This is the other half of the demo symptom.
+- **Sometimes the app can no longer be launched.** On the M1, four consecutive
+  `xcodebuild` runs died instantly with
+  `IDELaunchServicesLauncher.m:418 … Assertion failed: childPID > 0` while a
+  corpse was present. **But this is NOT simply "a corpse blocks relaunch"** —
+  on the M5, a test host launched and ran 60 tests normally with a corpse
+  present. A corpse is not sufficient to cause it, and the M1 failure's real
+  cause is **not established**. Do not assume this explains the demo's
+  "would not launch" symptom; that remains unexplained.
 
 Detector: `scripts/check_wedged_processes.py` (exit 1 when any are present).
 
@@ -123,9 +127,10 @@ concurrent publishes to one destination.
    the A/B's arm B, with `-parallel-testing-enabled NO`. The spindump's
    workqueue note was a symptom of the deadlock, not its cause.
 2. **"The M1 A/B showed no wedges in either arm."** The M1 A/B was **void** —
-   all four runs died instantly on `childPID > 0` because a corpse from 09:59
-   was already blocking LaunchServices. No tests ever ran. `ab_wedge.sh` counted
-   wedges without checking that the battery executed.
+   all four runs died instantly on `childPID > 0`, so no tests ever ran.
+   `ab_wedge.sh` counted wedges without checking that the battery executed.
+   (The *reason* those launches failed is still unknown — see the symptom
+   section. A corpse alone does not do it.)
 3. **"The Sandbox hook needs a real App-Sandboxed bundle / container
    bookkeeping."** Wrong. VideoScan sets `ENABLE_APP_SANDBOX = NO`, and the
    reproducer is an ordinary Python process.
@@ -135,8 +140,8 @@ concurrent publishes to one destination.
 5. **"Renames in flight while the process exits."** No.
 6. **"The machine is globally poisoned."** No — the lock is path-scoped. With two
    corpses present on the M1, ordinary renames and even single-threaded
-   `RENAME_SWAP` still completed instantly. What a corpse *does* block is
-   relaunching the same bundle id.
+   `RENAME_SWAP` still completed instantly, and on the M5 a full test host
+   launched and ran 60 tests with a corpse present.
 
 Why repros #1 and #2 could not have worked: they never issued a `RENAME_SWAP`,
 and they gave every thread its own directory with unique names, so no two
