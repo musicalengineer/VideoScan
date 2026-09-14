@@ -253,7 +253,9 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
             let data = try enc.encode(file)
             let dir = url.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let tmp = dir.appendingPathComponent(".evidence.json.tmp")
+            // Unique per save — see ArchiveAngelPlan.save. A shared temp name
+            // lets two concurrent saves publish a torn file.
+            let tmp = dir.appendingPathComponent(".evidence.json.\(UUID().uuidString).tmp")
             try data.write(to: tmp, options: .atomic)
             try AtomicFilePublish.replaceItem(at: url, withItemAt: tmp)
             return true
