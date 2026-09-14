@@ -115,7 +115,44 @@ private let treeText = """
 
 private func names(_ hits: [Overlay.Hit]) -> [String] { hits.map(\.member.name).sorted() }
 
+/// The vertex of a SNAPSHOT fixture. `snapshot(_:)` above sets `stableID`
+/// to the lowercased name, so this IS the key the overlay built from it.
+/// It is wrong for a real `POIProfile` — use `profileVertex` there.
 private func node(_ name: String) -> Overlay.Node { .profile(stableID: name.lowercased()) }
+
+/// The vertex of a real `POIProfile`, keyed the way production keys it.
+///
+/// `POIProfile.id` has been `POIStorage.folderName(for: uuid)` since the
+/// People uuid migration (2026-09-12), so re-deriving a stableID from the
+/// display name asks the overlay for a vertex it does not have: every
+/// `relatives(of:)` comes back empty, and only the POSITIVE assertions
+/// notice — the negative "nothing leaked" ones keep passing over an empty
+/// graph. A missing vertex therefore records an issue naming BOTH keys
+/// instead of quietly standing in. Sensor:
+/// `profileVerticesAreKeyedByProfileIdNotByName`.
+@MainActor
+private func profileVertex(_ name: String, in profiles: [POIProfile], of overlay: Overlay,
+                           _ location: SourceLocation = #_sourceLocation) -> Overlay.Node {
+    guard let profile = profiles.first(where: { $0.name == name }) else {
+        Issue.record("no profile named \(name) in the fixture", sourceLocation: location)
+        return .profile(stableID: name.lowercased())
+    }
+    guard let vertex = overlay.node(profileStableID: profile.id) else {
+        Issue.record("""
+            the overlay has no vertex for \(name) under the id production uses (\(profile.id)) \
+            — profile-id derivation and test-side vertex construction have diverged
+            """, sourceLocation: location)
+        return .profile(stableID: profile.id)
+    }
+    return vertex
+}
+
+/// One in-memory profile per snapshot: the People-tab value the display
+/// path actually consumes, each with a uuid — hence an id — of its own.
+private func isolatedProfile(_ s: Snapshot) -> POIProfile {
+    POIProfile(name: s.canonicalName, referencePath: "/isolated/people/\(s.stableID)",
+               aliases: s.aliases, sex: s.sex, kinships: s.kinships)
+}
 
 private let fullRule = "derived from Rick's rows: full siblings share parents"
 
@@ -1014,20 +1051,23 @@ struct FamilyKinshipSiblingInferenceIsolationTests {
         #expect(poisonOverlay.derivedEdgeCount == 0)
 
         // The center and the overlay, built from the in-memory family only.
-        func inMemory(_ s: Snapshot) -> POIProfile {
-            POIProfile(name: s.canonicalName, referencePath: "/isolated/people/\(s.stableID)",
-                       aliases: s.aliases, sex: s.sex, kinships: s.kinships)
-        }
-        let profiles = family().map(inMemory)
+        // Vertices come from each profile's OWN id (a uuid since
+        // 2026-09-12), never from its display name — see `profileVertex`.
+        let profiles = family().map(isolatedProfile)
         let center = KinshipDisplayCenter()
         let overlay = center.overlay(for: profiles)
-        #expect(names(overlay.relatives(of: node("Ma"), relation: .child)) == ["Beth", "Ellen", "Rick", "Tim"])
-        #expect(names(overlay.relatives(of: node("Tim"), relation: .parent)) == ["Dad", "Ma"])
+        func vertex(_ name: String) -> Overlay.Node { profileVertex(name, in: profiles, of: overlay) }
+        #expect(names(overlay.relatives(of: vertex("Ma"), relation: .child)) == ["Beth", "Ellen", "Rick", "Tim"])
+        #expect(names(overlay.relatives(of: vertex("Tim"), relation: .parent)) == ["Dad", "Ma"])
         #expect(overlay.derivedEdgeCount == 12)
         #expect(overlay.warnings.isEmpty, Comment(rawValue: overlay.warnings.joined(separator: " | ")))
         for name in ["Tim", "Ma", "Rick", "Other"] {
             #expect(overlay.warnings(forProfileNamed: name).isEmpty, Comment(rawValue: name))
         }
+        // The store's extra person is not merely warning-free here — he is
+        // not in this identity space at all. A leak would put him in it.
+        #expect(overlay.nodes(claiming: "Other").isEmpty)
+        #expect(!names(overlay.relatives(of: vertex("Tim"), relation: .parent)).contains("Other"))
         #expect(center.aliasWarning(for: profiles[1], among: profiles) == nil)   // Tim
         // The poisoned owner only changes the display anchor, never a fact:
         // Rick's line still names his stored rows; Beth (no rows) has none.
@@ -1037,8 +1077,42 @@ struct FamilyKinshipSiblingInferenceIsolationTests {
         #expect(center.relationshipsLine(for: profiles[3], among: profiles) == nil)
         // The engine agrees, from the same profiles.
         let engine = center.inference(for: profiles)
-        #expect(engine.parents(of: node("Tim")).map { engine.name(of: $0.node) }.sorted() == ["Dad", "Ma"])
+        let timInEngine = profileVertex("Tim", in: profiles, of: engine.overlay)
+        #expect(engine.parents(of: timInEngine).map { engine.name(of: $0.node) }.sorted() == ["Dad", "Ma"])
         #expect(engine.derivationProblems.isEmpty)
         #expect(defaults.string(forKey: keys[2]) == "poison.invalid")
+    }
+
+    /// SENSOR (2026-09-13). The isolation test above asserted over an EMPTY
+    /// overlay from the People uuid migration (2026-09-12) until today: its
+    /// vertices were built as `.profile(stableID: name.lowercased())` while
+    /// `POIProfile.id` had become `POIStorage.folderName(for: uuid)`, so
+    /// every lookup missed and no poison could have been detected. This
+    /// pins the two derivations together — production's key IS the uuid
+    /// folder name, the overlay carries a vertex under exactly that key,
+    /// the pre-migration name key is NOT a vertex, and the helper the
+    /// assertions above go through returns the production one. If profile
+    /// ids or vertex keying move again, this fails loudly here instead of
+    /// hollowing out the test next door.
+    @MainActor
+    @Test func profileVerticesAreKeyedByProfileIdNotByName() {
+        let profiles = family().map(isolatedProfile)
+        let overlay = Overlay(profiles: profiles, graph: nil)
+        for profile in profiles {
+            #expect(profile.id == POIStorage.folderName(for: profile.uuid),
+                    Comment(rawValue: "\(profile.name): id \(profile.id)"))
+            #expect(overlay.node(profileStableID: profile.id) == .profile(stableID: profile.id),
+                    Comment(rawValue: "\(profile.name) has no vertex under its production id"))
+            #expect(profileVertex(profile.name, in: profiles, of: overlay) == .profile(stableID: profile.id),
+                    Comment(rawValue: profile.name))
+            let preMigrationKey = Overlay.Node.profile(stableID: profile.name.lowercased())
+            #expect(overlay.member(preMigrationKey) == nil,
+                    Comment(rawValue: "\(profile.name) is reachable by the pre-migration name key — "
+                            + "profile-id derivation moved; update profileVertex and every "
+                            + "test that keys vertices by id"))
+        }
+        // The difference between verifying something and verifying nothing.
+        #expect(!overlay.relatives(of: profileVertex("Ma", in: profiles, of: overlay), relation: .child).isEmpty)
+        #expect(overlay.relatives(of: .profile(stableID: "ma"), relation: .child).isEmpty)
     }
 }

@@ -1126,13 +1126,28 @@ struct FamilyKinshipTests {
         #expect(overlay?.edgeCount == 5_000)
 
         // Queries stay bounded on the dense ring (≤ 3 hops, no blow-up).
+        // The vertices are the profiles' OWN ids — uuids since the People
+        // migration of 2026-09-12. A name-derived "p\(i)" key matches no
+        // vertex, and this budget would then be timing empty dictionary
+        // misses (it was, from that migration until 2026-09-13).
+        let indices = Array(stride(from: 0, to: 500, by: 50))
+        let vertices = indices.map { FamilyKinshipOverlay.Node.profile(stableID: profiles[$0].id) }
+        let targets = indices.map { FamilyKinshipOverlay.Node.profile(stableID: profiles[($0 + 7) % 500].id) }
+        var cousinCounts: [Int] = []
+        var pathsFound = 0
         let queryTime = clock.measure {
-            for i in stride(from: 0, to: 500, by: 50) {
-                _ = overlay?.relatives(of: .profile(stableID: "p\(i)"), relation: .cousin)
-                _ = overlay?.path(from: .profile(stableID: "p\(i)"), to: .profile(stableID: "p\((i + 7) % 500)"))
+            for k in indices.indices {
+                cousinCounts.append(overlay?.relatives(of: vertices[k], relation: .cousin).count ?? 0)
+                if overlay?.path(from: vertices[k], to: targets[k]) != nil { pathsFound += 1 }
             }
         }
         #expect(queryTime < .milliseconds(200), "10 cousin + 10 path queries took \(queryTime)")
+        // The budget above means nothing unless the queries answered. Every
+        // sampled ring member has the same fan-out — its own stored cousin
+        // row, the inverse of the row naming it, and the cousins the ring's
+        // parent/sibling edges derive — and every pair is connected.
+        #expect(cousinCounts.allSatisfy { $0 == 6 }, "cousin counts \(cousinCounts)")
+        #expect(pathsFound == indices.count, "paths found \(pathsFound) of \(indices.count)")
     }
 }
 
