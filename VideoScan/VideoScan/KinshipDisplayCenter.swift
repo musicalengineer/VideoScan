@@ -98,6 +98,16 @@ final class KinshipDisplayCenter: ObservableObject {
     /// notes edit or a repeated Hallie turn does NOT rebuild.
     private(set) var inferenceBuildCount = 0
 
+    /// The gallery's per-person warning map (`warnings(among:)`), memoised
+    /// exactly like the inference engine: (graph generation, kinship
+    /// signature). A notes or photo edit never rebuilds it.
+    private var cachedWarnings: [String: [KinshipWarning]]?
+    private var warningsSignature: Int?
+    private var warningsGeneration = -1
+    /// Bumps each time that map is (re)built — the view sensor pins that a
+    /// gallery render costs ONE build, not one per card.
+    private(set) var warningMapBuildCount = 0
+
     /// Lazily computed content fingerprint for the installed generation.
     private var fingerprintCache: (generation: Int, value: String?)?
 
@@ -231,6 +241,35 @@ final class KinshipDisplayCenter: ObservableObject {
     func aliasWarning(for profile: POIProfile, among profiles: [POIProfile]) -> String? {
         let lines = overlay(for: profiles).warnings(forProfileStableID: profile.id)
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    /// profile.id → its classified warnings, built ONCE for the whole
+    /// gallery and memoised on (graph generation, kinship signature) — the
+    /// `treeLinkBadges` discipline. The People gallery reads this map above
+    /// the `ForEach`; each card then does a dictionary lookup, so no card
+    /// body ever builds an overlay or walks the profile list (project rule:
+    /// no O(records) work in a view body).
+    ///
+    /// Cost: one memoised overlay plus one `structuredWarnings` lookup per
+    /// person. Memory: one small array per person who actually has a
+    /// warning — Rick's People tab is a few dozen entries at most.
+    func warnings(among profiles: [POIProfile]) -> [String: [KinshipWarning]] {
+        let signature = Self.kinshipSignature(of: profiles)
+        if let cachedWarnings, warningsSignature == signature, warningsGeneration == graphGeneration {
+            return cachedWarnings
+        }
+        let built = overlay(for: profiles)
+        var map: [String: [KinshipWarning]] = [:]
+        map.reserveCapacity(profiles.count)
+        for profile in profiles {
+            let warnings = built.structuredWarnings(forProfileStableID: profile.id)
+            if !warnings.isEmpty { map[profile.id] = warnings }
+        }
+        cachedWarnings = map
+        warningsSignature = signature
+        warningsGeneration = graphGeneration
+        warningMapBuildCount += 1
+        return map
     }
 
     /// Tree people whose name contains every typed token; capped so a

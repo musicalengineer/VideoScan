@@ -54,7 +54,6 @@ import Foundation
 import VideoScanCore
 
 struct FamilyKinshipOverlay: Sendable {
-
     // MARK: Identity space
 
     /// One vertex. A profile that bridges to a tree record becomes that
@@ -246,7 +245,7 @@ struct FamilyKinshipOverlay: Sendable {
         }
     }
 
-    private var members: [Node: Member] = [:]
+    private(set) var members: [Node: Member] = [:]
     /// Stored rows + their implied inverses ONLY (`edges(from:)`). The
     /// inference engine reads these AND `derivedEdges(from:)`, so the
     /// derivation policy lives in exactly one place (codex #984).
@@ -254,7 +253,7 @@ struct FamilyKinshipOverlay: Sendable {
     /// Read-time derived edges (`Derivation`), kept apart so a consumer can
     /// tell a stored fact from an inference; the walks union the two.
     private var derivedOutgoing: [Node: [Edge]] = [:]
-    private var nodeByProfileStableID: [String: Node] = [:]
+    private(set) var nodeByProfileStableID: [String: Node] = [:]
     /// The profile's own full name per vertex ("Richard" + Breen + Sr →
     /// "Richard Breen Sr"), for `unambiguousName`. Absent for a vertex whose
     /// profile has no surname, which is the common case and the reason the
@@ -275,13 +274,13 @@ struct FamilyKinshipOverlay: Sendable {
     private let fingerprint: String?
     /// Normalized spelling → profile nodes claiming it (canonical + aliases).
     private var nodesBySpelling: [String: [Node]] = [:]
-    private var canonicalNodesBySpelling: [String: [Node]] = [:]
+    private(set) var canonicalNodesBySpelling: [String: [Node]] = [:]
     /// VERBATIM canonical name → vertices, for PersonResolver's verdicts
     /// (which return the canonical spelling as stored). Keyed as-is, not by
     /// stableID, because a stableID may be an arbitrary slug and
     /// POIProfile.id keeps diacritics ("renée") that `normalize` folds
     /// ("renee") — codex #795 B.
-    private var nodesByCanonicalName: [String: [Node]] = [:]
+    private(set) var nodesByCanonicalName: [String: [Node]] = [:]
     private let graph: GedcomFamilyGraph?
     /// Non-blocking data-hygiene nudges found while building (2026-08-28,
     /// codex #772): an alias that is a relational WORD ("Dad" on Rick) is
@@ -292,6 +291,16 @@ struct FamilyKinshipOverlay: Sendable {
     /// persistent log. Callers may summarize warning RULES at an
     /// orchestration boundary, but the user-facing prose stays in memory.
     private(set) var warnings: [String] = []
+    /// The SAME warnings, in the SAME order, each classified by the site
+    /// that produced it (2026-09-13). `warnings` stays the string array
+    /// every existing reader uses — Hallie's basis lines and the strict
+    /// replays pin those exact strings — and this is the parallel view the
+    /// People-tab popover reads for "why this matters" / "how to fix".
+    private(set) var structuredWarnings: [KinshipWarning] = []
+    /// Line → its classification, so a lookup that starts from `warnings`
+    /// (by node, or by stableID through `pinProblems`) can be mapped back
+    /// without a second pass over anything.
+    private(set) var warningsByLine: [String: KinshipWarning] = [:]
     /// One warning per distinct condition even when duplicate profile input
     /// reaches the builder. This also prevents repeated UI badges when an
     /// overlay is reconstructed for several Hallie turns.
@@ -310,7 +319,7 @@ struct FamilyKinshipOverlay: Sendable {
     /// by display name (codex #1019 item 4: two profiles that both read
     /// "Mary" must not badge each other); pin problems are keyed by
     /// stableID in `pinProblems` and joined at lookup.
-    private var warningsByNode: [Node: [String]] = [:]
+    private(set) var warningsByNode: [Node: [String]] = [:]
     /// The one verdict per directly recorded sibling pair (codex #1019
     /// item 2), computed by the derivation pass from the coalesced rows.
     private var siblingVerdicts: [UnorderedPair: SiblingVerdict] = [:]
@@ -501,7 +510,7 @@ struct FamilyKinshipOverlay: Sendable {
     private mutating func deriveSharedParents() {
         var pass = SharedParentDerivation(host: self)
         pass.run()
-        for (line, nodes) in pass.warningsInOrder { note(line, nodes: nodes) }
+        for entry in pass.warningsInOrder { note(entry.code, entry.line, nodes: entry.nodes) }
         derivationProblems = pass.problems
         siblingVerdicts = pass.verdicts
         // Stable order per vertex: parents before children, then by name.
@@ -569,7 +578,11 @@ struct FamilyKinshipOverlay: Sendable {
         private(set) var problems: [Node: [String]] = [:]
         /// The one verdict per directly recorded pair (codex #1019 item 2).
         private(set) var verdicts: [Pair: SiblingVerdict] = [:]
-        private(set) var warningsInOrder: [(line: String, nodes: [Node])] = []
+        /// Each warning with the vertices it involves AND its code: every
+        /// `fail(...)` is a contradiction the set failed closed on; the one
+        /// direct append below is a half row whose shared parent is gone,
+        /// which has its own remedy (pick the parent again).
+        private(set) var warningsInOrder: [(line: String, nodes: [Node], code: KinshipWarning.Code)] = []
 
         init(host: FamilyKinshipOverlay) { self.host = host }
 
@@ -692,7 +705,7 @@ struct FamilyKinshipOverlay: Sendable {
                     verdicts[key] = .unresolved
                     warningsInOrder.append((
                         "The shared parent named on the half-sibling row between \(a) and \(b) could not be found — nothing derived across that row until they are picked again",
-                        [key.a, key.b]))
+                        [key.a, key.b], .halfSiblingParentMissing))
                     continue
                 }
                 // `.unspecified` and/or `.attestedFull`: FULL.
@@ -749,7 +762,7 @@ struct FamilyKinshipOverlay: Sendable {
                 failedNodes.insert(node)
                 if !(problems[node]?.contains(reason) ?? false) { problems[node, default: []].append(reason) }
             }
-            warningsInOrder.append((reason, involved))
+            warningsInOrder.append((reason, involved, .derivationConflict))
         }
 
         // MARK: 4. Validate every set independently of who is missing a parent
@@ -980,7 +993,8 @@ struct FamilyKinshipOverlay: Sendable {
         for alias in snapshot.aliases {
             let word = PersonResolver.normalize(alias)
             guard Self.relationalWords.contains(word), word != canonicalWord else { continue }
-            note("Alias '\(alias)' on \(snapshot.canonicalName) looks relational — use a Relationship row instead",
+            note(.relationalAlias,
+                 "Alias '\(alias)' on \(snapshot.canonicalName) looks relational — use a Relationship row instead",
                  nodes: [node])
         }
         for spelling in [snapshot.canonicalName] + snapshot.aliases {
@@ -1022,13 +1036,13 @@ struct FamilyKinshipOverlay: Sendable {
             guard meanings.count == 1, let meaning = meanings.first else {
                 let why = "\(displayName)'s duplicate profile definitions disagree about the family-tree pin — pin the profile again"
                 pinProblems[stableID] = why
-                note(why)
+                note(.pinDefinitionsDisagree, why)
                 continue
             }
             if meaning.unreadable {
                 let why = "\(displayName)'s family-tree pin could not be read (written by a newer app version?) — kept as is, not used"
                 pinProblems[stableID] = why
-                note(why)
+                note(.pinUnreadable, why)
                 continue
             }
             guard let pin = meaning.identity else { continue }
@@ -1040,11 +1054,12 @@ struct FamilyKinshipOverlay: Sendable {
                 person = (sourceFingerprint == fingerprint) ? graph?.people[pointer] : nil
             }
             guard let person else {
-                let why = graph == nil
+                let noTree = graph == nil
+                let why = noTree
                     ? "\(displayName)'s family-tree pin can't be checked — no tree is installed"
                     : "\(displayName)'s family-tree pin points at a person this tree doesn't carry — pin them again"
                 pinProblems[stableID] = why
-                note(why)
+                note(noTree ? .pinNoTreeInstalled : .pinNotInTree, why)
                 continue
             }
             resolved[stableID] = person
@@ -1060,7 +1075,7 @@ struct FamilyKinshipOverlay: Sendable {
                 resolved[id] = nil
                 pinProblems[id] = why
             }
-            note(why)
+            note(.pinCollision, why)
         }
         return resolved
     }
@@ -1077,7 +1092,8 @@ struct FamilyKinshipOverlay: Sendable {
             if members[node] == nil {
                 members[node] = Member(node: node, name: "a removed profile", sex: nil, birthdate: nil,
                                        profileStableID: nil, gedcomID: nil)
-                note("Relationship row on \(storedOn) points at a profile that no longer exists — remove or re-pick it",
+                note(.danglingRelationshipRow,
+                     "Relationship row on \(storedOn) points at a profile that no longer exists — remove or re-pick it",
                      nodes: [subject])
             }
             return node
@@ -1112,7 +1128,8 @@ struct FamilyKinshipOverlay: Sendable {
             if members[node] == nil {
                 members[node] = Member(node: node, name: "tree person \(pointer) (export changed)", sex: nil,
                                        birthdate: nil, profileStableID: nil, gedcomID: nil)
-                note("Relationship row on \(storedOn) points at \(pointer) in an older tree export — pick them again",
+                note(.staleTreePointer,
+                     "Relationship row on \(storedOn) points at \(pointer) in an older tree export — pick them again",
                      nodes: [subject])
             }
             return node
@@ -1131,15 +1148,22 @@ struct FamilyKinshipOverlay: Sendable {
         return node
     }
 
-    private mutating func note(_ line: String) {
+    /// Record one warning line under the code of the condition that caused
+    /// it. The line is the dedupe key (unchanged since 2026-08-28) and the
+    /// code rides alongside it, so the card can explain the nudge without
+    /// anyone ever parsing the prose back apart.
+    private mutating func note(_ code: KinshipWarning.Code, _ line: String) {
         guard warningKeys.insert(line).inserted else { return }
         warnings.append(line)
+        let warning = KinshipWarning(code: code, text: line)
+        structuredWarnings.append(warning)
+        warningsByLine[line] = warning
     }
 
     /// A warning that involves these vertices: each of them finds it
     /// through `warnings(forProfileStableID:)` / `warnings(forProfileNamed:)`.
-    private mutating func note(_ line: String, nodes: [Node]) {
-        note(line)
+    private mutating func note(_ code: KinshipWarning.Code, _ line: String, nodes: [Node]) {
+        note(code, line)
         for node in nodes where !(warningsByNode[node]?.contains(line) ?? false) {
             warningsByNode[node, default: []].append(line)
         }
@@ -1238,9 +1262,6 @@ struct FamilyKinshipOverlay: Sendable {
     /// exists (they are the same vertex by construction).
     func node(gedcomID: String) -> Node { .tree(gedcomID: gedcomID) }
 
-    /// Why a profile's tree pin did not bridge, nil when it did (or none).
-    func pinProblem(forProfileStableID stableID: String) -> String? { pinProblems[stableID] }
-
     /// Vertices a typed spelling may mean, by PersonResolver's verdict —
     /// the same verdict the presence/aggregate routes get, so "Dad" claimed
     /// by both Rick (alias) and Dad (canonical) is AMBIGUOUS here too, never
@@ -1277,41 +1298,6 @@ struct FamilyKinshipOverlay: Sendable {
         return canonicalNodesBySpelling[PersonResolver.normalize(canonical)] ?? []
     }
 
-    /// Warnings involving this profile (for the card badge): its hygiene,
-    /// dangling-row and pin lines, plus every derivation conflict its
-    /// sibling set or parent rows are part of — in `warnings` order. Keyed
-    /// by the profile's vertex and stableID (codex #1019 item 4), so a
-    /// namesake elsewhere in the People tab never wears this badge.
-    func warnings(forProfileStableID stableID: String) -> [String] {
-        var nodes: [Node] = []
-        if let node = nodeByProfileStableID[stableID] { nodes.append(node) }
-        return warnings(for: nodes, stableIDs: [stableID])
-    }
-
-    /// The same by display name, for callers that hold only a name: the
-    /// name is resolved to the profile vertex(es) carrying it as their
-    /// canonical spelling — a name is not an identity, so when two profiles
-    /// share one canonical name both profiles' warnings are returned. The
-    /// card badge uses `warnings(forProfileStableID:)`.
-    func warnings(forProfileNamed name: String) -> [String] {
-        var nodes = nodesByCanonicalName[name] ?? []
-        if nodes.isEmpty { nodes = canonicalNodesBySpelling[PersonResolver.normalize(name)] ?? [] }
-        if nodes.isEmpty {
-            // A placeholder left by a row that names nobody's profile.
-            let placeholder = Node.profile(stableID: PersonResolver.normalize(name))
-            if members[placeholder] != nil { nodes = [placeholder] }
-        }
-        let stableIDs = nodes.compactMap { members[$0]?.profileStableID }
-        return warnings(for: nodes, stableIDs: stableIDs)
-    }
-
-    private func warnings(for nodes: [Node], stableIDs: [String]) -> [String] {
-        var lines = Set<String>()
-        for node in nodes { for line in warningsByNode[node] ?? [] { lines.insert(line) } }
-        for id in stableIDs { if let why = pinProblems[id] { lines.insert(why) } }
-        return warnings.filter(lines.contains)
-    }
-
     /// The ONE verdict for a directly recorded sibling pair — full, half
     /// through a named parent, conflict, or unresolved — regardless of
     /// which card the rows sit on or the order they were read in. nil when
@@ -1319,15 +1305,6 @@ struct FamilyKinshipOverlay: Sendable {
     func siblingVerdict(_ a: Node, _ b: Node) -> SiblingVerdict? {
         guard a != b else { return nil }
         return siblingVerdicts[UnorderedPair(a, b)]
-    }
-
-    /// The derivation conflicts any of these vertices is involved in, in
-    /// `warnings` order and without repeats — for Hallie's basis line when
-    /// a question touches a sibling set that failed closed.
-    func derivationWarnings(touching nodes: [Node]) -> [String] {
-        var lines = Set<String>()
-        for node in nodes { for line in derivationProblems[node] ?? [] { lines.insert(line) } }
-        return warnings.filter(lines.contains)
     }
 
     /// Does this vertex have any overlay knowledge at all (stored or derived)?

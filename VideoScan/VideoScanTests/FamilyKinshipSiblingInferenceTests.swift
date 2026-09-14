@@ -892,6 +892,15 @@ struct FamilyKinshipSiblingInferenceTests {
         for id in ["rick", "ma", "dad", "other"] {
             #expect(overlay.warnings(forProfileStableID: id) == [conflict], Comment(rawValue: id))
         }
+        // 2026-09-13: the card's popover reads the SAME lookup, classified.
+        // Each Mary gets her own cause, so neither is shown the other's
+        // "why this matters" or sent to the other's fix.
+        #expect(overlay.structuredWarnings(forProfileStableID: "mary")
+                == [KinshipWarning(code: .derivationConflict, text: conflict)])
+        #expect(overlay.structuredWarnings(forProfileStableID: "mary-2")
+                == [KinshipWarning(code: .relationalAlias, text: hygiene)])
+        #expect(overlay.structuredWarnings(forProfileNamed: "Mom").isEmpty)
+        #expect(overlay.structuredWarnings.map(\.text) == overlay.warnings)
         #expect(overlay.derivationWarnings(touching: [.profile(stableID: "mary-2")]).isEmpty)
         #expect(overlay.derivationWarnings(touching: [.profile(stableID: "mary")]) == [conflict])
         #expect(overlay.derivationProblems[.profile(stableID: "mary-2")] == nil)

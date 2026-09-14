@@ -103,13 +103,26 @@ struct PersonCard: View {
     /// Derived "Relationships" caption ("Rick's younger brother"), nil when
     /// the profile has none. Computed by the gallery, never stored.
     var relationshipsLine: String? = nil
-    /// Non-blocking data nudge (a relational alias like "Dad" on a profile
-    /// that isn't Dad). Shown as a small badge whose tooltip says what to do.
-    var aliasWarning: String? = nil
+    /// Non-blocking data nudges (a relational alias like "Dad" on a profile
+    /// that isn't Dad, a dangling relationship row, a broken tree pin …),
+    /// already classified by the overlay and looked up ONCE for the whole
+    /// gallery — this card only renders what it is handed (2026-09-13).
+    /// The triangle is a button: it opens a popover with one section per
+    /// warning, and the hover tooltip stays as the summary it always was.
+    var warnings: [KinshipWarning] = []
+    /// What to do when Rick presses a section's fix button. nil = the card
+    /// is decoration (the drag preview), so the triangle stays a plain
+    /// badge with its tooltip and no popover.
+    var onWarningAction: ((KinshipWarning.Action) -> Void)? = nil
     /// The resolved portrait (one photo per person, 2026-08-29): the Family
     /// Tree's explicit choice when it is the latest, else the cover. Nil
     /// (no resolver consulted) falls back to the profile cover as before.
     var portrait: PersonPhotoResolution? = nil
+
+    /// Popover presentation only — the card owns no data of its own.
+    /// (`@State` in a `struct` view ≈ a member SwiftUI keeps alive across
+    /// re-renders; the struct itself is still rebuilt every time.)
+    @State private var showingWarnings = false
 
     private var ringGradient: AngularGradient {
         AngularGradient(
@@ -166,13 +179,7 @@ struct PersonCard: View {
             .animation(.easeInOut(duration: 0.3), value: justSaved)
 
             HStack(spacing: 3) {
-                if let aliasWarning {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: max(9, nameFontSize * 0.7)))
-                        .foregroundColor(.orange)
-                        .help(aliasWarning)
-                        .accessibilityLabel(aliasWarning)
-                }
+                warningBadge
                 if let saveProblem {
                     Image(systemName: "exclamationmark.octagon.fill")
                         .font(.system(size: max(9, nameFontSize * 0.7)))
@@ -207,6 +214,43 @@ struct PersonCard: View {
         .frame(width: cardWidth)
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+    }
+
+    /// The yellow triangle. Clickable when the card was given somewhere to
+    /// send Rick; a plain glyph with its tooltip otherwise (drag preview).
+    @ViewBuilder
+    private var warningBadge: some View {
+        if let summary = KinshipWarning.tooltip(for: warnings) {
+            if let onWarningAction {
+                Button {
+                    showingWarnings = true
+                } label: {
+                    warningTriangle
+                }
+                .buttonStyle(.plain)
+                .help(summary)
+                .accessibilityLabel(summary)
+                .accessibilityIdentifier(PersonWarningPopoverModel.badgeIdentifier(
+                    personName: profile.name, profileID: profile.id))
+                .popover(isPresented: $showingWarnings, arrowEdge: .bottom) {
+                    PersonWarningPopover(personName: profile.displayName,
+                                         profileID: profile.id,
+                                         warnings: warnings,
+                                         onAction: onWarningAction,
+                                         onDismiss: { showingWarnings = false })
+                }
+            } else {
+                warningTriangle
+                    .help(summary)
+                    .accessibilityLabel(summary)
+            }
+        }
+    }
+
+    private var warningTriangle: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: max(9, nameFontSize * 0.7)))
+            .foregroundColor(.orange)
     }
 }
 
