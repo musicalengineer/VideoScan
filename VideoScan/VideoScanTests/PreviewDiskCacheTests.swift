@@ -390,4 +390,62 @@ struct PreviewDiskCacheTests {
             throw CocoaError(.fileWriteUnknown)
         }
     }
+
+    /// Regression sensor for the QA finding of 2026-09-14.
+    ///
+    /// `AtomicFilePublish.write` names its in-flight temp
+    /// ".<destination>.<uuid>.vspublish.tmp" beside the destination — which is
+    /// HIDDEN. `pruneNow` used to enumerate with `.skipsHiddenFiles` and reap
+    /// only the old "tmp-" prefix, so a process killed between the temp write
+    /// and the rename — EXACTLY the P0 failure mode, and exactly what a forced
+    /// reboot produces — leaked that file forever: never swept, never counted
+    /// against `sizeCapBytes`, invisible in a normal `ls`.
+    @Test("crashed-write orphans from AtomicFilePublish are swept by pruneNow")
+    func pruneSweepsAtomicFilePublishOrphans() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fm = FileManager.default
+
+        // Live payloads, so the under-cap path is the one exercised.
+        for i in 0..<10 {
+            try Data(repeating: 0xAB, count: 100)
+                .write(to: root.appendingPathComponent("payload\(i)-fast.jpg"))
+        }
+
+        let stale = Date(timeIntervalSinceNow: -(PreviewDiskCache.tmpSweepMinAgeSeconds + 60))
+        var orphans: [URL] = []
+        for i in 0..<5 {
+            let orphan = root.appendingPathComponent(
+                ".payload\(i)-fast.jpg.\(UUID().uuidString)\(AtomicFilePublish.temporarySuffix)")
+            try Data(repeating: 0xCD, count: 100).write(to: orphan)
+            try fm.setAttributes([.modificationDate: stale], ofItemAtPath: orphan.path)
+            orphans.append(orphan)
+        }
+
+        PreviewDiskCache(rootURL: root).pruneNow()
+
+        let survivors = orphans.filter { fm.fileExists(atPath: $0.path) }
+        #expect(survivors.isEmpty, """
+            \(survivors.count) AtomicFilePublish temp(s) survived pruneNow. A killed \
+            or kernel-wedged process leaks them forever and they never count against \
+            sizeCapBytes: \(survivors.map(\.lastPathComponent))
+            """)
+    }
+
+    /// The age gate must still protect a publish that is in flight right now —
+    /// sweeping a live temp would delete the file a store wrote milliseconds ago.
+    @Test("a fresh AtomicFilePublish temp is NOT swept")
+    func pruneSparesInFlightPublishTemps() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let live = root.appendingPathComponent(
+            ".payload-fast.jpg.\(UUID().uuidString)\(AtomicFilePublish.temporarySuffix)")
+        try Data(repeating: 0xEF, count: 100).write(to: live)
+
+        PreviewDiskCache(rootURL: root).pruneNow()
+
+        #expect(FileManager.default.fileExists(atPath: live.path),
+                "the age gate must spare a temp a live publish is still using")
+    }
 }

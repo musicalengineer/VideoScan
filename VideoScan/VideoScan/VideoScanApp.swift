@@ -224,6 +224,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quitLine = "app quitting — \(BuildInfo.summary)"
         NSLog("VideoScan: %@", quitLine)
         appLog.write(quitLine)
+        // A non-empty list here is the signature of the 2026-09-14 kernel
+        // wedge: a publish that started and can never finish. appLog is
+        // write-through, so this survives a hang immediately after.
+        if let stuck = AtomicFilePublish.inFlightSummary() {
+            NSLog("VideoScan: publishes still in flight at quit — %@", stuck)
+            appLog.write("publishes still in flight at quit — \(stuck)")
+        }
         MainActor.assumeIsolated {
             // Belt-and-suspenders: a termination path that skipped
             // applicationShouldTerminate (rare) could still have a VLM

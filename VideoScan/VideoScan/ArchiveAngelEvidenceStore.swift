@@ -10,6 +10,7 @@
 
 import Foundation
 import Combine
+import VideoScanCore
 
 /// Grade band (Rick 2026-09-09): a letter the eye reads faster than a score.
 /// A ready · B nearly ready · C candidate · D weak · X excluded (floor).
@@ -249,12 +250,7 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
         do {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601
-            let data = try enc.encode(file)
-            let dir = url.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let tmp = dir.appendingPathComponent(".evidence.json.tmp")
-            try data.write(to: tmp, options: .atomic)
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+            try AtomicFilePublish.write(try enc.encode(file), to: url, durability: .fullFsync)
             return true
         } catch {
             return false

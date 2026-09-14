@@ -46,6 +46,7 @@
 import Combine
 import Foundation
 import os
+import VideoScanCore
 
 private let holdoutClearLog = Logger(
     subsystem: "Rick-Breen.VideoScan",
@@ -384,15 +385,9 @@ final class HoldoutClearStore: ObservableObject {
             // "2026-08-05/rick-review-neutral.csv", not the "\/" JSON
             // default. This file is meant to be openable in an editor.
             enc.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
-            let data = try enc.encode(file)
-            let dir = url.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            // Unique temp name per save: a clear and an immediate undo
-            // must not steal each other's temp file — last replace wins,
-            // neither fails.
-            let tmp = dir.appendingPathComponent(".holdout-review-clears.\(UUID().uuidString).tmp")
-            try data.write(to: tmp, options: .atomic)
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+            // A clear and an immediate undo can race here; AtomicFilePublish
+            // gives each its own temp — last writer wins, neither fails.
+            try AtomicFilePublish.write(try enc.encode(file), to: url, durability: .fullFsync)
             return true
         } catch {
             return false

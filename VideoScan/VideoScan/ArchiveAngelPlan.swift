@@ -11,6 +11,7 @@
 // Promote job copies originals source → archive at approval time.
 
 import Foundation
+import VideoScanCore
 
 struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
 
@@ -303,12 +304,10 @@ enum ArchiveAngelPlanStore {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         enc.dateEncodingStrategy = .iso8601
-        let data = try enc.encode(plan)
-        let dir = URL(fileURLWithPath: plan.batchDir)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let tmp = dir.appendingPathComponent(".plan.json.tmp")
-        try data.write(to: tmp, options: .atomic)
-        _ = try FileManager.default.replaceItemAt(plan.planURL, withItemAt: tmp)
+        // A forced reboot is the operational reality of this app's worst bug;
+        // the plan is not regenerable, so pay for the device flush.
+        try AtomicFilePublish.write(try enc.encode(plan), to: plan.planURL,
+                                    durability: .fullFsync)
     }
 
     nonisolated static func load(batchDir: String) throws -> ArchiveAngelPlan {
