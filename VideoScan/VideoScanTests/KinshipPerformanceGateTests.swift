@@ -86,7 +86,12 @@ struct KinshipPerformanceGateTests {
         let c = built!.counters
         #expect(c.adjacencySorts >= 100 && c.adjacencySorts < 200, "sorts at build \(c.adjacencySorts)")
         #expect(c.expansions == 0 && c.ancestorSearches == 0 && c.pairMisses == 0)
-        #expect(node(0, in: built!) != .profile(stableID: "c0"), "pins must resolve on the compiled fixture")
+        // "not the lowercased name" stopped being evidence of anything when
+        // profile ids became uuids (2026-09-12) — an UNRESOLVED pin also
+        // fails that test now. Assert the shape a resolved pin actually has.
+        if case .tree = node(0, in: built!) {} else {
+            Issue.record("pins must resolve on the compiled fixture: C0 is \(node(0, in: built!))")
+        }
     }
 
     @Test func firstDeepQueryUnder50msThenWarmRepeatsAreFree() {

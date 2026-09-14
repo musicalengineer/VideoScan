@@ -1065,11 +1065,30 @@ struct KinshipValidationTests {
                           inference: FamilyKinshipInference? = nil, profiles: [POIProfile] = KinshipFixture.family)
         -> [KinshipValidation.Finding] {
         let inf = inference ?? self.inf
-        let existing = profiles.first { $0.name == subject }?.kinships ?? []
+        guard let subjectProfile = profiles.first(where: { $0.name == subject }) else {
+            Issue.record("no profile named \(subject) in the fixture — its stable id would be a guess")
+            return []
+        }
+        // SENSOR: ids are per-profile uuids, so `inference:` and `profiles:`
+        // must be the SAME fixture. Mismatched ones used to answer
+        // `.unresolvedAnchor` for every rule below — a whole suite of
+        // silently untested validation rules.
+        if inf.overlay.node(profileStableID: subjectProfile.id) == nil {
+            Issue.record("""
+                \(subject) is not a vertex in the inference passed here — the `inference:` and \
+                `profiles:` arguments come from different fixtures, so every finding would be \
+                .unresolvedAnchor
+                """)
+        }
         return KinshipValidation.validate(
             candidate: Kinship(relation: relation, relativeTo: .profile(name: anchor)),
-            subjectProfileStableID: subject.lowercased(),
-            existingRows: existing, inference: inf)
+            // PersonEditSheet passes `profile.id`, which has been the uuid
+            // folder name since 2026-09-12. Lowercasing the display name
+            // here made the subject unknown to the overlay, so EVERY finding
+            // came back `.unresolvedAnchor` ("save it first") and no rule
+            // below was exercised (found 2026-09-13).
+            subjectProfileStableID: subjectProfile.id,
+            existingRows: subjectProfile.kinships, inference: inf)
     }
 
     private func rules(_ findings: [KinshipValidation.Finding]) -> [KinshipValidation.Rule] { findings.map(\.rule) }
@@ -1143,8 +1162,12 @@ struct KinshipValidationTests {
         // share parents, attested or not (one policy, codex #984) — so
         // "Dad child of Tim" is a cycle in both bases.
         #expect(rules(validate("Dad", .child, of: "Tim")).contains(.parentChildCycle))
-        let att = KinshipFixture.inference(KinshipFixture.family(timBasis: .attestedFull))
-        #expect(rules(validate("Dad", .child, of: "Tim", inference: att)).contains(.parentChildCycle))
+        // The engine and the profiles must be the SAME fixture: ids are
+        // per-profile uuids, so a second `family()` is a different family.
+        let attestedFamily = KinshipFixture.family(timBasis: .attestedFull)
+        let att = KinshipFixture.inference(attestedFamily)
+        #expect(rules(validate("Dad", .child, of: "Tim", inference: att, profiles: attestedFamily))
+                    .contains(.parentChildCycle))
     }
 
     @Test func moreThanTwoParentsAfterNodeDedup() {
@@ -1250,6 +1273,28 @@ struct KinshipValidationTests {
         #expect(rules(validate("Kevin", .child, of: "Donna", inference: offline)) == [.treePinProblem])
     }
 
+    /// The whole message except the ORDER of the parent list, which
+    /// production does not fix: `KinshipValidation` joins
+    /// `inference.parents(of:)`, ordered by vertex identity key — a uuid
+    /// since 2026-09-12 — so "(Dad, Eileen, Q1, Q2)" and "(… Q2, Q1)" both
+    /// occur between runs. Reported to Rick 2026-09-13 as a production
+    /// question (ordering user-facing name lists is a behaviour change);
+    /// the names, the wording and the rule are still pinned exactly.
+    private func expectParentConflict(_ findings: [KinshipValidation.Finding], verb: String,
+                                      _ location: SourceLocation = #_sourceLocation) {
+        guard let message = findings.first(where: { $0.rule == .attestationConflict })?.message else {
+            Issue.record("no .attestationConflict finding in \(rules(findings))", sourceLocation: location)
+            return
+        }
+        let head = "\(verb) would give Tim more than two parents ("
+        let tail = ") — full siblings share parents; correct the other rows first."
+        #expect(message.hasPrefix(head), Comment(rawValue: message), sourceLocation: location)
+        #expect(message.hasSuffix(tail), Comment(rawValue: message), sourceLocation: location)
+        let listed = message.dropFirst(head.count).dropLast(tail.count)
+            .components(separatedBy: ", ").sorted()
+        #expect(listed == ["Dad", "Eileen", "Q1", "Q2"], Comment(rawValue: message), sourceLocation: location)
+    }
+
     @Test func aSiblingRowThatWouldGiveThreeParentsIsAnErrorInEveryBasis() {
         // Tim already has Dad + Eileen through his row to Rick (derived —
         // one policy, attested or not); a second full row to Zoe (parents
@@ -1261,19 +1306,21 @@ struct KinshipValidationTests {
             ]
             let inf = KinshipFixture.inference(profiles)
             let timRows = profiles.first { $0.name == "Tim" }?.kinships ?? []
+            // `in: profiles` matters: ids are per-profile uuids, so Tim's id
+            // in THIS fixture is not his id in the shared `family`.
             let attested = KinshipValidation.validate(
                 candidate: KinshipFixture.row(.sibling, of: "Zoe", basis: .attestedFull),
-                subjectProfileStableID: KinshipFixture.stableID("Tim"), existingRows: timRows, inference: inf)
+                subjectProfileStableID: KinshipFixture.stableID("Tim", in: profiles),
+                existingRows: timRows, inference: inf)
             #expect(rules(attested).contains(.attestationConflict))
-            #expect(attested.first { $0.rule == .attestationConflict }?.message
-                    == "Attesting this sibling link would give Tim more than two parents (Dad, Eileen, Q1, Q2) — full siblings share parents; correct the other rows first.")
+            expectParentConflict(attested, verb: "Attesting this sibling link")
             // Unspecified is FULL too (codex #984): the same conflict, the same block.
             let unspecified = KinshipValidation.validate(
                 candidate: KinshipFixture.row(.sibling, of: "Zoe"),
-                subjectProfileStableID: KinshipFixture.stableID("Tim"), existingRows: timRows, inference: inf)
+                subjectProfileStableID: KinshipFixture.stableID("Tim", in: profiles),
+                existingRows: timRows, inference: inf)
             #expect(unspecified.blocksSave)
-            #expect(unspecified.first { $0.rule == .attestationConflict }?.message
-                    == "This sibling link would give Tim more than two parents (Dad, Eileen, Q1, Q2) — full siblings share parents; correct the other rows first.")
+            expectParentConflict(unspecified, verb: "This sibling link")
         }
         let inf = KinshipFixture.inference(KinshipFixture.family)
         // A half row naming a parent that does not exist: unresolved.
