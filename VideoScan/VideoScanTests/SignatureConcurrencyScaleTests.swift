@@ -258,8 +258,7 @@ struct SignatureVerificationTests {
             .deletingLastPathComponent().appendingPathComponent("replacement.mov")
         FileManager.default.createFile(
             atPath: replacement.path, contents: Data(bytes))
-        try AtomicFilePublish.replaceItem(
-            at: URL(fileURLWithPath: keeper), withItemAt: replacement)
+        try AtomicFilePublish.publish(replacement, as: URL(fileURLWithPath: keeper))
 
         guard case .failure(.changedSinceVerification(let changedPath)) =
                 SignatureVerification.revalidate(proof) else {
@@ -286,8 +285,7 @@ struct SignatureVerificationTests {
             .deletingLastPathComponent().appendingPathComponent("new-target.mov")
         FileManager.default.createFile(
             atPath: replacement.path, contents: Data(bytes))
-        try AtomicFilePublish.replaceItem(
-            at: URL(fileURLWithPath: keeperTarget), withItemAt: replacement)
+        try AtomicFilePublish.publish(replacement, as: URL(fileURLWithPath: keeperTarget))
 
         guard case .failure(.changedSinceVerification(let changedPath)) =
                 SignatureVerification.revalidate(proof) else {

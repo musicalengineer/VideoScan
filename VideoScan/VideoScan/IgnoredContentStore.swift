@@ -343,7 +343,7 @@ final class IgnoredContentStore: ObservableObject {
             // Two saves in flight (an apply, then an immediate undo) are
             // safe here: AtomicFilePublish gives each its own temp and
             // publishes with rename(2) — last writer wins, neither fails.
-            try AtomicFilePublish.write(try enc.encode(file), to: url)
+            try AtomicFilePublish.write(try enc.encode(file), to: url, durability: .fullFsync)
             return true
         } catch {
             return false

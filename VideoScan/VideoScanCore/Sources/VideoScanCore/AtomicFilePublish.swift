@@ -22,7 +22,7 @@ private let publishLog = Logger(subsystem: "Rick-Breen.VideoScan",
 /// cost Rick a live demo on 2026-09-14.
 ///
 /// Measured that day (M1, macOS 26.6.2, plain unsandboxed Python — nothing
-/// app-specific about it), four threads or fewer onto ONE destination:
+/// app-specific about it), onto ONE destination:
 ///
 /// | workload                                        | result              |
 /// |-------------------------------------------------|---------------------|
@@ -49,20 +49,60 @@ private let publishLog = Logger(subsystem: "Rick-Breen.VideoScan",
 /// Full evidence, both spindumps, the symbolicated kernel stacks and every
 /// harness: `docs/incident_2026_09_14_sandbox_rename_wedge.md`.
 ///
-/// - Important: Do not reintroduce `replaceItemAt` anywhere in this project.
-///   `AtomicFilePublishSensorTests` fails if it reappears.
+/// - Important: Do not reintroduce `FileManager.replaceItemAt` — or its other
+///   spelling, `FileManager.replaceItem(at:withItemAt:backupItemName:options:
+///   resultingItemURL:)` — anywhere in this project. Both are `RENAME_SWAP`.
+///   `AtomicFilePublishSensorTests` fails if either reappears.
 public enum AtomicFilePublish {
 
     // MARK: - Errors
 
-    public struct Failure: Error, CustomStringConvertible {
-        public let source: URL
-        public let destination: URL
+    public struct Failure: LocalizedError, CustomStringConvertible {
+        public let operation: String
+        public let path: String
         public let errnoValue: Int32
+
         public var description: String {
-            "rename(\(source.path) -> \(destination.path)) failed: "
+            "\(operation) failed for \(path): "
             + String(cString: strerror(errnoValue)) + " (errno \(errnoValue))"
         }
+        /// Without this, `localizedDescription` bridges to the useless
+        /// "The operation couldn't be completed. (… error 1.)" and the errno
+        /// this type went to the trouble of capturing never reaches the user.
+        public var errorDescription: String? { description }
+    }
+
+    // MARK: - Durability
+
+    public enum Durability: Sendable {
+        /// Write, then `rename(2)`. Atomic for any live reader — nobody ever
+        /// sees a partial file. Does NOT survive a power loss or a hard
+        /// reboot: APFS may surface the rename ahead of the data.
+        case fast
+        /// `F_FULLFSYNC` the payload before publishing it, and fsync the
+        /// parent directory after, so the file survives a forced reboot.
+        /// Costs a real device round-trip; worth it for a sidecar you would
+        /// hate to lose, wrong for a regenerable preview.
+        case fullFsync
+    }
+
+    // MARK: - The temp-file contract
+
+    /// Suffix every in-flight publish temp carries.
+    ///
+    /// Exposed deliberately: a crashed or kernel-wedged process leaves these
+    /// behind, so anything that sweeps a directory this type publishes into
+    /// needs to recognise them. `PreviewDiskCache.pruneNow` does.
+    public static let temporarySuffix = ".vspublish.tmp"
+
+    /// Is `name` a temp left behind by an interrupted publish?
+    public static func isTemporaryPublishArtifact(_ name: String) -> Bool {
+        name.hasSuffix(temporarySuffix)
+    }
+
+    private static func temporaryURL(beside destination: URL) -> URL {
+        destination.deletingLastPathComponent().appendingPathComponent(
+            ".\(destination.lastPathComponent).\(UUID().uuidString)\(temporarySuffix)")
     }
 
     // MARK: - In-flight tracking (hang forensics)
@@ -75,7 +115,7 @@ public enum AtomicFilePublish {
         public var age: TimeInterval { -startedAt.timeIntervalSinceNow }
     }
 
-    /// Registry of publishes currently inside `rename(2)` or the temp write.
+    /// Registry of publishes currently in progress.
     ///
     /// If the kernel ever wedges us again the stack is unreachable and the
     /// process cannot be killed — but *another* thread can still read this and
@@ -87,8 +127,9 @@ public enum AtomicFilePublish {
         private var entries: [UInt64: InFlight] = [:]
         private var nextToken: UInt64 = 0
         private var watchdog: DispatchSourceTimer?
-        /// Publishes older than this are reported as probably wedged.
-        private let stallThreshold: TimeInterval = 3.0
+        /// Deliberately generous. A slow spinning USB volume can legitimately
+        /// take seconds; we only want to hear about something pathological.
+        private let stallThreshold: TimeInterval = 10.0
 
         func begin(destination: URL, byteCount: Int) -> UInt64 {
             lock.lock()
@@ -114,8 +155,12 @@ public enum AtomicFilePublish {
             return entries.values.sorted { $0.startedAt < $1.startedAt }
         }
 
-        /// One timer for the whole process, armed on the first publish and
-        /// left running. It fires rarely and does nothing when idle.
+        /// One timer for the whole process, armed on the first publish.
+        ///
+        /// Created under the lock behind a second `guard`: two threads can both
+        /// see `needsWatchdog`, but only one may ever construct a
+        /// `DispatchSourceTimer`. Dropping an unresumed one aborts the process
+        /// ("release of a suspended object").
         private func startWatchdog() {
             lock.lock()
             guard watchdog == nil else { lock.unlock(); return }
@@ -125,15 +170,20 @@ public enum AtomicFilePublish {
             watchdog = timer
             lock.unlock()
 
-            timer.schedule(deadline: .now() + 2.0, repeating: 2.0, leeway: .seconds(1))
+            // Coarse, with a full second of leeway: this is a rare-event
+            // watchdog, not a clock. It must not become a wakeup source that
+            // costs battery on the MacBook Pro for nothing.
+            timer.schedule(deadline: .now() + 5.0, repeating: 5.0, leeway: .seconds(2))
             timer.setEventHandler { [weak self] in
                 guard let self else { return }
+                // snapshot() releases the lock before we log.
                 for entry in self.snapshot() where entry.age > self.stallThreshold {
                     publishLog.error("""
-                        atomic publish STALLED \(String(format: "%.1f", entry.age), privacy: .public)s \
-                        — \(entry.destination, privacy: .public) (\(entry.byteCount, privacy: .public) bytes). \
-                        If this never clears the thread is wedged in the kernel; \
-                        see docs/incident_2026_09_14_sandbox_rename_wedge.md
+                        atomic publish has not completed in \
+                        \(String(format: "%.0f", entry.age), privacy: .public)s — \
+                        \(entry.destination, privacy: .public) \
+                        (\(entry.byteCount, privacy: .public) bytes). If it never \
+                        completes, see docs/incident_2026_09_14_sandbox_rename_wedge.md
                         """)
                 }
             }
@@ -144,12 +194,12 @@ public enum AtomicFilePublish {
     private static let registry = Registry()
 
     /// Publishes that have started and not finished, oldest first.
-    ///
-    /// Worth logging on the app's termination path: a non-empty result at exit
-    /// is the signature of the 2026-09-14 wedge.
     public static func inFlight() -> [InFlight] { registry.snapshot() }
 
     /// One line describing anything still in flight, or `nil` when idle.
+    ///
+    /// Logged on the app's termination path — a non-empty result at exit is
+    /// the signature of the 2026-09-14 wedge.
     public static func inFlightSummary() -> String? {
         let entries = inFlight()
         guard !entries.isEmpty else { return nil }
@@ -162,29 +212,50 @@ public enum AtomicFilePublish {
 
     /// Write `data` to `url` atomically.
     ///
-    /// Creates the destination's directory if needed, writes to a **uniquely
-    /// named** temp file beside it, then publishes with `rename(2)`. A reader
-    /// sees either the whole previous file or the whole new one, never a
-    /// partial write, and two concurrent publishes to one `url` are safe —
-    /// last writer wins, neither fails, neither wedges.
+    /// Writes to a **uniquely named** temp beside the destination, then
+    /// publishes with `rename(2)`. A reader sees either the whole previous
+    /// file or the whole new one, never a partial write, and two concurrent
+    /// publishes to one `url` are safe — last writer wins, neither fails,
+    /// neither wedges.
     ///
     /// The temp is removed on any failure, so a failed save leaves no litter.
+    /// A temp that survives a crash is swept by whoever owns the directory;
+    /// see ``isTemporaryPublishArtifact(_:)``.
+    ///
+    /// - Parameters:
+    ///   - durability: `.fullFsync` to survive a forced reboot. Default
+    ///     `.fast`, which is atomic for live readers only.
+    ///   - createIntermediates: create the destination's directory if missing.
+    ///     Pass `false` where a deliberately removed directory must stay
+    ///     removed rather than silently reappear.
     ///
     /// - Note: The temp write is deliberately NOT `.atomic`. The temp name is
     ///   already unique, so `.atomic` would only add a second redundant
     ///   temp-and-rename underneath this one.
-    public static func write(_ data: Data, to url: URL) throws {
-        let dir = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let tmp = dir.appendingPathComponent(
-            ".\(url.lastPathComponent).\(UUID().uuidString).tmp")
-
+    public static func write(
+        _ data: Data,
+        to url: URL,
+        durability: Durability = .fast,
+        createIntermediates: Bool = true
+    ) throws {
+        // begin() FIRST: createDirectory on a stalled network or offline
+        // volume is itself a plausible hang site, and a hang the forensics
+        // cannot see is the thing this registry exists to prevent.
         let token = registry.begin(destination: url, byteCount: data.count)
         defer { registry.end(token) }
         let started = Date()
 
+        if createIntermediates {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        let tmp = temporaryURL(beside: url)
+
         do {
-            try data.write(to: tmp)
+            switch durability {
+            case .fast:       try data.write(to: tmp)
+            case .fullFsync:  try writeAndSync(data, to: tmp)
+            }
         } catch {
             try? FileManager.default.removeItem(at: tmp)
             publishLog.error("""
@@ -195,14 +266,20 @@ public enum AtomicFilePublish {
         }
 
         do {
-            try replaceItem(at: url, withItemAt: tmp)
+            try publish(tmp, as: url)
         } catch {
             try? FileManager.default.removeItem(at: tmp)
             publishLog.error("""
                 atomic publish FAILED renaming \(url.lastPathComponent, privacy: .public): \
-                \(String(describing: error), privacy: .public)
+                \(error.localizedDescription, privacy: .public)
                 """)
             throw error
+        }
+
+        if durability == .fullFsync {
+            // The directory entry itself must reach stable storage too, or a
+            // reboot can lose the rename that a synced payload was published by.
+            syncDirectory(url.deletingLastPathComponent())
         }
 
         let elapsed = -started.timeIntervalSinceNow
@@ -220,26 +297,59 @@ public enum AtomicFilePublish {
         }
     }
 
-    /// Encode `value` as JSON and publish it at `url` atomically.
-    ///
-    /// The single entry point every JSON sidecar store in this project should
-    /// use, so none of them can drift back into a hand-rolled save.
-    public static func writeJSON<T: Encodable>(
-        _ value: T, to url: URL, encoder: JSONEncoder = JSONEncoder()
-    ) throws {
-        try write(try encoder.encode(value), to: url)
-    }
-
-    /// Move `source` onto `destination`, replacing whatever is there, as one
+    /// Rename `source` onto `destination`, replacing whatever is there, as one
     /// atomic step.
     ///
-    /// Prefer ``write(_:to:)`` — it owns the temp name and the cleanup too.
-    /// This lower-level form is for callers that already hold a fully written
-    /// file (a rendered payload, a verified copy) on the **same volume** as
-    /// `destination`.
-    public static func replaceItem(at destination: URL, withItemAt source: URL) throws {
-        if rename(source.path, destination.path) != 0 {
-            throw Failure(source: source, destination: destination, errnoValue: errno)
+    /// Prefer ``write(_:to:durability:createIntermediates:)`` — it owns the
+    /// temp name and the cleanup too. This lower-level form is for callers
+    /// that already hold a fully written file (a rendered payload, a verified
+    /// copy) on the **same volume** as `destination`.
+    ///
+    /// - Note: Named `publish`, not `replaceItem`, on purpose.
+    ///   `FileManager.replaceItem(at:withItemAt:…)` falls back to a copy across
+    ///   volumes; this returns `EXDEV`. Borrowing the name would promise
+    ///   semantics it does not deliver — and would collide textually with the
+    ///   very API the sensors ban.
+    public static func publish(_ source: URL, as destination: URL) throws {
+        if Darwin.rename(source.path, destination.path) != 0 {
+            throw Failure(operation: "rename", path: destination.path, errnoValue: errno)
         }
+    }
+
+    // MARK: - Durable write helpers
+
+    private static func writeAndSync(_ data: Data, to url: URL) throws {
+        let fd = Darwin.open(url.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+        guard fd >= 0 else {
+            throw Failure(operation: "open", path: url.path, errnoValue: errno)
+        }
+        defer { Darwin.close(fd) }
+
+        try data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+            guard let base = buffer.baseAddress else { return }
+            var offset = 0
+            while offset < buffer.count {
+                let n = Darwin.write(fd, base.advanced(by: offset), buffer.count - offset)
+                if n < 0 {
+                    if errno == EINTR { continue }
+                    throw Failure(operation: "write", path: url.path, errnoValue: errno)
+                }
+                offset += n
+            }
+        }
+        // F_FULLFSYNC, not fsync(2): on macOS only this asks the drive to
+        // flush its own write cache.
+        guard fcntl(fd, F_FULLFSYNC) != -1 else {
+            throw Failure(operation: "F_FULLFSYNC", path: url.path, errnoValue: errno)
+        }
+    }
+
+    /// Best-effort — a failure here costs durability, not correctness, and
+    /// must never fail a save that already landed.
+    private static func syncDirectory(_ url: URL) {
+        let fd = Darwin.open(url.path, O_RDONLY)
+        guard fd >= 0 else { return }
+        defer { Darwin.close(fd) }
+        _ = fcntl(fd, F_FULLFSYNC)
     }
 }

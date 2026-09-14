@@ -309,7 +309,9 @@ public final class PreviewDiskCache: @unchecked Sendable {
             // publish is a rename(2) within one volume. NSTemporaryDirectory()
             // would risk a cross-volume copy, which is NOT atomic.
             do {
-                try AtomicFilePublish.write(jpeg, to: dest)
+                // Previews are regenerable — .fast, and no per-write
+                // createDirectory (the cache root is made at init).
+                try AtomicFilePublish.write(jpeg, to: dest, createIntermediates: false)
             } catch {
                 diskCacheLog.notice("Disk-cache write failed (\(error.localizedDescription, privacy: .public)) — preview still served from L1")
                 return 0
@@ -433,7 +435,8 @@ public final class PreviewDiskCache: @unchecked Sendable {
             for payload in payloads {
                 do {
                     try AtomicFilePublish.write(
-                        payload.data, to: rootURL.appendingPathComponent(payload.filename))
+                        payload.data, to: rootURL.appendingPathComponent(payload.filename),
+                        createIntermediates: false)
                     written += Int64(payload.data.count)
                 } catch {
                     diskCacheLog.notice("Filmstrip cache write failed (\(error.localizedDescription, privacy: .public)) — partial set left for prune")
@@ -535,9 +538,12 @@ public final class PreviewDiskCache: @unchecked Sendable {
     public func pruneNow() {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
+        // NOT .skipsHiddenFiles: AtomicFilePublish names its in-flight temp
+        // ".<destination>.<uuid>.vspublish.tmp", which is hidden. Skipping
+        // hidden files here is what let crashed-write orphans leak forever
+        // after the 2026-09-14 wedge (QA review, same day).
         guard let entries = try? fm.contentsOfDirectory(
-            at: rootURL, includingPropertiesForKeys: keys,
-            options: .skipsHiddenFiles) else {
+            at: rootURL, includingPropertiesForKeys: keys) else {
             return
         }
 
@@ -549,7 +555,8 @@ public final class PreviewDiskCache: @unchecked Sendable {
             // race an in-flight store and delete the temp file that store
             // wrote milliseconds ago. Only tmp files past
             // tmpSweepMinAgeSeconds are provably orphans.
-            if url.lastPathComponent.hasPrefix("tmp-") {
+            if url.lastPathComponent.hasPrefix("tmp-")
+                || AtomicFilePublish.isTemporaryPublishArtifact(url.lastPathComponent) {
                 if let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
                    let mtime = vals.contentModificationDate,
                    Date().timeIntervalSince(mtime) > Self.tmpSweepMinAgeSeconds {

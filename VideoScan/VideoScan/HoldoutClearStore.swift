@@ -387,7 +387,7 @@ final class HoldoutClearStore: ObservableObject {
             enc.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
             // A clear and an immediate undo can race here; AtomicFilePublish
             // gives each its own temp — last writer wins, neither fails.
-            try AtomicFilePublish.write(try enc.encode(file), to: url)
+            try AtomicFilePublish.write(try enc.encode(file), to: url, durability: .fullFsync)
             return true
         } catch {
             return false

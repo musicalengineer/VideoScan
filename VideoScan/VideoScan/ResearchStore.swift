@@ -183,7 +183,7 @@ struct ResearchStore: Sendable {
             throw StoreError.ioFailure("research directory is not a plain directory: \(directory.path)")
         }
         do {
-            try AtomicFilePublish.write(data, to: url)
+            try AtomicFilePublish.write(data, to: url, durability: .fullFsync)
         } catch {
             throw StoreError.ioFailure(error.localizedDescription)
         }

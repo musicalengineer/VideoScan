@@ -250,7 +250,7 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
         do {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601
-            try AtomicFilePublish.write(try enc.encode(file), to: url)
+            try AtomicFilePublish.write(try enc.encode(file), to: url, durability: .fullFsync)
             return true
         } catch {
             return false

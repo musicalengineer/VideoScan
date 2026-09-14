@@ -43,13 +43,23 @@ struct AtomicFilePublishSensorTests {
             .deletingLastPathComponent()   // repo root
     }
 
-    /// Every production Swift file — the app target and VideoScanCore.
+    /// Everything that ships or runs on a machine we would have to reboot.
+    /// TestDriver runs in CI; swift_cli and tools run on Rick's boxes.
+    static let productionRoots = [
+        "VideoScan/VideoScan",
+        "VideoScan/VideoScanCore/Sources",
+        "swift_cli",
+        "TestDriver/Sources",
+        "tools",
+    ]
+
+    /// Every production Swift file.
     /// Tests are excluded: a test may legitimately name the syscall in a
     /// comment, and this file certainly does.
     private func productionSources() throws -> [(String, String)] {
         let fm = FileManager.default
         var out: [(String, String)] = []
-        for sub in ["VideoScan/VideoScan", "VideoScan/VideoScanCore/Sources"] {
+        for sub in Self.productionRoots {
             let root = repoRoot.appendingPathComponent(sub)
             guard let walk = fm.enumerator(at: root,
                                            includingPropertiesForKeys: nil,
@@ -60,6 +70,45 @@ struct AtomicFilePublishSensorTests {
             }
         }
         return out
+    }
+
+    // MARK: - 0. The predicate, extracted so it is itself testable
+
+    /// Does this line call a `RENAME_SWAP` API?
+    ///
+    /// `FileManager` has TWO spellings and both are the swap:
+    /// `replaceItemAt(_:withItemAt:)` and
+    /// `replaceItem(at:withItemAt:backupItemName:options:resultingItemURL:)`.
+    /// Matching only the first is the hole QA found on 2026-09-14.
+    static func isRenameSwapCallSite(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.hasPrefix("//") else { return false }
+        let code = trimmed.replacingOccurrences(
+            of: "\"[^\"]*\"", with: "", options: .regularExpression)
+        guard code.contains("replaceItemAt(") || code.contains("replaceItem(at:") else {
+            return false
+        }
+        // Our own wrapper is spelled publish(_:as:) precisely so it cannot
+        // collide here, but stay explicit in case that ever changes back.
+        return !code.contains("AtomicFilePublish.")
+    }
+
+    @Test func theSyscallPredicateCatchesBothFileManagerSpellings() {
+        #expect(Self.isRenameSwapCallSite(
+            "_ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)"))
+        #expect(Self.isRenameSwapCallSite(
+            "try fm.replaceItem(at: url, withItemAt: tmp, backupItemName: nil, "
+            + "options: [], resultingItemURL: &out)"),
+            "the second FileManager spelling is RENAME_SWAP too")
+        #expect(!Self.isRenameSwapCallSite(
+            "try AtomicFilePublish.publish(tmp, as: url)"),
+            "our own wrapper must never be flagged")
+        #expect(!Self.isRenameSwapCallSite(
+            "// historical note about replaceItemAt(" + ")"),
+            "comments are not call sites")
+        #expect(!Self.isRenameSwapCallSite(
+            "log.error(\"replaceItemAt( is banned\")"),
+            "string literals are not call sites")
     }
 
     // MARK: - 1. The syscall must not come back
@@ -75,7 +124,7 @@ struct AtomicFilePublishSensorTests {
         var offenders: [String] = []
         for (rel, text) in sources {
             for (n, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated()
-            where line.contains("replaceItemAt(") && !line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
+            where Self.isRenameSwapCallSite(String(line)) {
                 offenders.append("\(rel):\(n + 1)")
             }
         }
@@ -83,14 +132,16 @@ struct AtomicFilePublishSensorTests {
             FileManager.replaceItemAt is RENAME_SWAP on APFS and deadlocks \
             inside Sandbox.kext when two saves race onto one destination — \
             an unkillable process that only a reboot clears (P0, 2026-09-14). \
-            Use AtomicFilePublish.replaceItem(at:withItemAt:) instead. \
+            Use AtomicFilePublish.write(_:to:) instead. \
             Offending call sites: \(offenders.joined(separator: ", "))
             """)
     }
 
     @Test func productionCodeNeverRequestsRenameSwap() throws {
+        let sources = try productionSources()
+        #expect(sources.count > 150, "the sensor must be reading sources — saw \(sources.count)")
         var offenders: [String] = []
-        for (rel, text) in try productionSources() {
+        for (rel, text) in sources {
             for (n, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated()
             where line.contains("RENAME_SWAP") && !line.trimmingCharacters(in: .whitespaces).hasPrefix("//")
                     && !rel.hasSuffix("AtomicFilePublish.swift") {
@@ -123,12 +174,7 @@ struct AtomicFilePublishSensorTests {
         for rel in stores {
             let text = try String(contentsOf: repoRoot.appendingPathComponent(rel),
                                   encoding: .utf8)
-            // Either entry point counts — writeJSON(_:to:) funnels into
-            // write(_:to:). Matching only "write(" would fail a store that
-            // legitimately uses the JSON form.
-            let routed = text.contains("AtomicFilePublish.write(")
-                || text.contains("AtomicFilePublish.writeJSON(")
-            if !routed { missing.append(rel) }
+            if !text.contains("AtomicFilePublish.write(") { missing.append(rel) }
         }
         #expect(missing.isEmpty, """
             These stores publish files and must do it through \
@@ -151,7 +197,7 @@ struct AtomicFilePublishSensorTests {
     @Test func onlyKnownSitesCallRenameDirectly() throws {
         /// Each of these publishes a file that is ALREADY ON DISK, which is
         /// not what AtomicFilePublish.write(_:to:) models (it takes Data).
-        /// Converting them to AtomicFilePublish.replaceItem is worth doing,
+        /// Converting them to AtomicFilePublish.publish(_:as:) is worth doing,
         /// but not in the same change as a P0 fix — they are recently
         /// hardened paths. Tracked as follow-up in the incident doc.
         let justified: Set<String> = [
@@ -165,8 +211,10 @@ struct AtomicFilePublishSensorTests {
             "VideoScan/VideoScanCore/Sources/VideoScanCore/CyberBrainWriter.swift",
         ]
 
+        let sources = try productionSources()
+        #expect(sources.count > 150, "the sensor must be reading sources — saw \(sources.count)")
         var found: Set<String> = []
-        for (rel, text) in try productionSources() {
+        for (rel, text) in sources {
             for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 guard !trimmed.hasPrefix("//") else { continue }
@@ -204,7 +252,7 @@ struct AtomicFilePublishSensorTests {
         let tmp = dir.appendingPathComponent(".store.json.tmp")
         try Data("new".utf8).write(to: tmp)
 
-        try AtomicFilePublish.replaceItem(at: dest, withItemAt: tmp)
+        try AtomicFilePublish.publish(tmp, as: dest)
 
         #expect(try String(contentsOf: dest, encoding: .utf8) == "new")
         #expect(!FileManager.default.fileExists(atPath: tmp.path), "the temp is consumed")
@@ -220,7 +268,7 @@ struct AtomicFilePublishSensorTests {
         let tmp = dir.appendingPathComponent(".store.json.tmp")
         try Data("first".utf8).write(to: tmp)
 
-        try AtomicFilePublish.replaceItem(at: dest, withItemAt: tmp)
+        try AtomicFilePublish.publish(tmp, as: dest)
         #expect(try String(contentsOf: dest, encoding: .utf8) == "first")
     }
 
@@ -232,9 +280,8 @@ struct AtomicFilePublishSensorTests {
 
         // Source does not exist ⇒ ENOENT, surfaced rather than swallowed.
         #expect(throws: AtomicFilePublish.Failure.self) {
-            try AtomicFilePublish.replaceItem(
-                at: dir.appendingPathComponent("dest"),
-                withItemAt: dir.appendingPathComponent("missing"))
+            try AtomicFilePublish.publish(dir.appendingPathComponent("missing"),
+                                          as: dir.appendingPathComponent("dest"))
         }
     }
 
@@ -248,22 +295,22 @@ struct AtomicFilePublishSensorTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let dest = dir.appendingPathComponent("store.json")
 
-        await withTaskGroup(of: Void.self) { group in
-            for writer in 0..<8 {
-                group.addTask {
-                    for i in 0..<250 {
-                        let tmp = dir.appendingPathComponent(".store.\(writer)-\(i).tmp")
-                        try? Data("w\(writer)".utf8).write(to: tmp)
-                        try? AtomicFilePublish.replaceItem(at: dest, withItemAt: tmp)
-                    }
-                }
+        // concurrentPerform, NOT withTaskGroup: these loops block in the
+        // filesystem, and a blocked cooperative task does not yield its
+        // thread. On a 2-core runner a task group gives 2 real writers —
+        // enough to pass while never creating the pile-up this pins.
+        DispatchQueue.concurrentPerform(iterations: 8) { writer in
+            for i in 0..<250 {
+                let tmp = dir.appendingPathComponent(".store.\(writer)-\(i).tmp")
+                try? Data("w\(writer)".utf8).write(to: tmp)
+                try? AtomicFilePublish.publish(tmp, as: dest)
             }
         }
 
         let final = try String(contentsOf: dest, encoding: .utf8)
         #expect(final.hasPrefix("w"), "the destination holds one writer's whole payload, never a shred")
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
-            .filter { $0.hasSuffix(".tmp") }
+            .filter { AtomicFilePublish.isTemporaryPublishArtifact($0) }
         #expect(leftovers.isEmpty, "every temp was consumed by its rename")
     }
 
@@ -309,50 +356,39 @@ struct AtomicFilePublishSensorTests {
             try AtomicFilePublish.write(Data("boom".utf8), to: dest)
         }
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
-            .filter { $0.hasSuffix(".tmp") }
+            .filter { AtomicFilePublish.isTemporaryPublishArtifact($0) }
         #expect(leftovers.isEmpty, "a failed publish must not litter: \(leftovers)")
-    }
-
-    @Test func writeJSONRoundTrips() throws {
-        struct Payload: Codable, Equatable { let name: String; let count: Int }
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("atomic-publish-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let dest = dir.appendingPathComponent("payload.json")
-
-        let value = Payload(name: "Donna", count: 3)
-        try AtomicFilePublish.writeJSON(value, to: dest)
-        let back = try JSONDecoder().decode(Payload.self, from: Data(contentsOf: dest))
-        #expect(back == value)
     }
 
     /// The forensics hook. A non-empty in-flight list at process exit is the
     /// signature of the 2026-09-14 wedge, so it must be accurate and must
     /// drain.
-    @Test func inFlightIsEmptyWhenIdleAndDrainsAfterPublishing() async throws {
-        #expect(AtomicFilePublish.inFlightSummary() == nil, "idle before")
-
+    @Test func inFlightIsEmptyWhenIdleAndDrainsAfterPublishing() throws {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("atomic-publish-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        await withTaskGroup(of: Void.self) { group in
-            for w in 0..<8 {
-                group.addTask {
-                    for i in 0..<100 {
-                        try? AtomicFilePublish.write(
-                            Data("w\(w)-\(i)".utf8),
-                            to: dir.appendingPathComponent("shared.json"))
-                    }
-                }
+        // The registry is process-global and Swift Testing runs this target in
+        // parallel — every store suite publishes into it too. Asserting on the
+        // global would be a flake generator, so scope to our own destinations.
+        func mine() -> [AtomicFilePublish.InFlight] {
+            AtomicFilePublish.inFlight().filter { $0.destination.hasPrefix(dir.path) }
+        }
+        #expect(mine().isEmpty, "idle before, for this test's destinations")
+
+        DispatchQueue.concurrentPerform(iterations: 8) { w in
+            for i in 0..<100 {
+                try? AtomicFilePublish.write(
+                    Data("w\(w)-\(i)".utf8),
+                    to: dir.appendingPathComponent("shared.json"))
             }
         }
 
-        #expect(AtomicFilePublish.inFlight().isEmpty,
-                "every publish must deregister: \(AtomicFilePublish.inFlightSummary() ?? "-")")
+        #expect(mine().isEmpty,
+                "every publish must deregister: \(mine().map(\.destination))")
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
-            .filter { $0.hasSuffix(".tmp") }
+            .filter { AtomicFilePublish.isTemporaryPublishArtifact($0) }
         #expect(leftovers.isEmpty, "no temps survive 800 racing publishes")
     }
 }

@@ -304,7 +304,10 @@ enum ArchiveAngelPlanStore {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         enc.dateEncodingStrategy = .iso8601
-        try AtomicFilePublish.write(try enc.encode(plan), to: plan.planURL)
+        // A forced reboot is the operational reality of this app's worst bug;
+        // the plan is not regenerable, so pay for the device flush.
+        try AtomicFilePublish.write(try enc.encode(plan), to: plan.planURL,
+                                    durability: .fullFsync)
     }
 
     nonisolated static func load(batchDir: String) throws -> ArchiveAngelPlan {
