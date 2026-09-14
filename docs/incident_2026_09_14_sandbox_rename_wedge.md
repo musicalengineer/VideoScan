@@ -81,6 +81,38 @@ M1 internal SSD:
 **The trigger is exactly two concurrent rename-SWAPS onto one destination.**
 Disjoint paths are safe. Plain `rename(2)` is safe.
 
+### Every other way we publish a file was then checked too
+
+Each converted call site still writes its temp with `Data.write(options: .atomic)`
+first, so if Foundation's atomic writers also swapped, converting the publish
+step would have fixed nothing. They do not. `AtomicProbe.swift` and
+`StringProbe.swift` in the evidence directory, 4 threads onto ONE destination:
+
+| writer | ops | result |
+|---|---|---|
+| `Data.write(to:options:.atomic)` | 12,000 | clean, 2.0 s |
+| `String.write(to:atomically:)` | 8,000 | clean, 1.0 s |
+| `NSDictionary.write(to:atomically:)` | 8,000 | clean, 1.0 s |
+| the `AtomicFilePublish` shape (unique temp + `rename(2)`) | 12,000 | clean, 2.0 s |
+
+So all 56 `.atomic` writes in production are safe, and the only source of
+`RENAME_SWAP` in this project was `FileManager.replaceItemAt`.
+
+### Confidence, stated honestly
+
+High on the mechanism: the deadlock is **deterministic**, not a rare race —
+contended `RENAME_SWAP` wedges within ~26 ops every time, so there is no
+long tail of unlucky timings to worry about. High on our code being clean:
+an exhaustive grep over app, VideoScanCore, swift_cli and tests finds no
+`replaceItemAt` and no `RENAME_SWAP`, and the six months of clean history
+before 09-09 says our own call sites were the whole source.
+
+The residual risk that inspection cannot close is a **system framework** we
+call in-process emitting a swap on a path two of our threads contend. The
+oracle for that is empirical and still owed: run the full battery — the
+workload that produced four wedges on 09-13 and one on the M5 on 09-14 — on
+the fixed build, on a rebooted machine, and count wedges.
+
 ### Not volume specific
 
 The lock is taken in the MAC layer, above the filesystem — the syscall never
