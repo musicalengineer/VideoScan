@@ -93,9 +93,10 @@ struct AtomicFilePublishSensorTests {
                 offenders.append("\(rel):\(n + 1)")
             }
         }
-        #expect(offenders.isEmpty,
-                "RENAME_SWAP deadlocks in Sandbox.kext under concurrent saves "
-                + "to one path (P0, 2026-09-14). Offenders: \(offenders.joined(separator: ", "))")
+        #expect(offenders.isEmpty, """
+            RENAME_SWAP deadlocks in Sandbox.kext under concurrent saves to one \
+            path (P0, 2026-09-14). Offenders: \(offenders.joined(separator: ", "))
+            """)
     }
 
     // MARK: - 2. The replacement actually does what the stores need
