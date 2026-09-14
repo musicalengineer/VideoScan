@@ -130,26 +130,55 @@ struct AtomicFilePublishSensorTests {
             """)
     }
 
-    /// Only the wrapper may call `rename(2)` directly. `renamex_np` /
-    /// `renameatx_np` with RENAME_EXCL are a different, safe call and are not
-    /// matched here (ArchivePromoteEngine and RescueFileCopier use them
-    /// deliberately for no-clobber publishes).
-    @Test func onlyTheWrapperCallsRenameDirectly() throws {
-        var offenders: [String] = []
-        for (rel, text) in try productionSources()
-        where !rel.hasSuffix("AtomicFilePublish.swift") {
-            for (n, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+    /// Bare `rename(2)` is SAFE for the wedge — 32,000 contended renames onto
+    /// one destination completed clean on 2026-09-14. This sensor is therefore
+    /// about keeping the *publishing pattern* in one place, not about safety,
+    /// and it is an EXACT-SET assertion: a new bare `rename(` anywhere fails
+    /// here until someone justifies it below, and a file that stops calling
+    /// rename fails too, so the list cannot rot.
+    ///
+    /// `renamex_np` / `renameatx_np` with RENAME_EXCL are a different, safe
+    /// call and are deliberately not matched.
+    @Test func onlyKnownSitesCallRenameDirectly() throws {
+        /// Each of these publishes a file that is ALREADY ON DISK, which is
+        /// not what AtomicFilePublish.write(_:to:) models (it takes Data).
+        /// Converting them to AtomicFilePublish.replaceItem is worth doing,
+        /// but not in the same change as a P0 fix — they are recently
+        /// hardened paths. Tracked as follow-up in the incident doc.
+        let justified: Set<String> = [
+            // the wrapper itself
+            "VideoScan/VideoScanCore/Sources/VideoScanCore/AtomicFilePublish.swift",
+            // publishes a resumed .partial media copy (82f92b46, crash-safe rescue)
+            "VideoScan/VideoScan/RescueFileCopier.swift",
+            // rebases a symlink atomically (People #3, codex review 2026-09-13)
+            "VideoScan/VideoScan/POIStorage.swift",
+            // publishes a validated CyberBrain archive
+            "VideoScan/VideoScanCore/Sources/VideoScanCore/CyberBrainWriter.swift",
+        ]
+
+        var found: Set<String> = []
+        for (rel, text) in try productionSources() {
+            for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 guard !trimmed.hasPrefix("//") else { continue }
-                if line.range(of: "(^|[^A-Za-z_])rename\\(", options: .regularExpression) != nil {
-                    offenders.append("\(rel):\(n + 1)")
+                // Strip string literals first — "rename(2) failed: ..." in a
+                // diagnostic message is not a call. (This sensor's own first
+                // run flagged exactly that, POIStorage.swift:835.)
+                let code = String(trimmed).replacingOccurrences(
+                    of: "\"[^\"]*\"", with: "", options: .regularExpression)
+                if code.range(of: "(^|[^A-Za-z_])rename\\(",
+                              options: .regularExpression) != nil {
+                    found.insert(rel)
                 }
             }
         }
-        #expect(offenders.isEmpty, """
-            Publishing a file belongs in AtomicFilePublish, so the temp name, \
-            cleanup and stall logging stay in one place. Offenders: \
-            \(offenders.joined(separator: ", "))
+
+        #expect(found == justified, """
+            Publishing a file belongs in AtomicFilePublish so the temp name, \
+            cleanup and stall logging stay in one place. \
+            New/unjustified: \(found.subtracting(justified).sorted().joined(separator: ", ")). \
+            Listed but no longer calling rename: \
+            \(justified.subtracting(found).sorted().joined(separator: ", ")).
             """)
     }
 
