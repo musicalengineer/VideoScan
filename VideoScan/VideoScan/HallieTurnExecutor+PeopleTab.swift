@@ -269,12 +269,24 @@ extension HallieTurnExecutor {
             case none
         }
 
+        /// How hard a typed spelling has to match before a profile claims it.
+        enum Matching: Equatable {
+            /// PersonResolver's full verdict, bounded spelling recovery and
+            /// all ("Jusson Lambe" → "Judson Lamb"). The long-standing
+            /// behaviour of every caller before 2026-09-13.
+            case includingSpellingRecovery
+            /// Only a spelling the profile genuinely owns — its canonical
+            /// name, one of its aliases, or a derived full-name form.
+            case exact
+        }
+
         /// PersonResolver's verdict (#778), mapped back onto profiles. A
         /// selected People chip (`selected` = the continuation after a
         /// "which one?") names the profile directly and skips resolution.
         static func claim(_ typed: String,
                           selected: CandidateID? = nil,
-                          in profiles: [ProfileSnapshot]) -> Claim {
+                          in profiles: [ProfileSnapshot],
+                          matching: Matching = .includingSpellingRecovery) -> Claim {
             let people = merged(profiles)
             if case .profileStableID(let stableID) = selected {
                 return people.first { $0.stableID == stableID }.map(Claim.one) ?? .none
@@ -284,13 +296,94 @@ extension HallieTurnExecutor {
                                  aliases: $0.aliases,
                                  fullNameForms: $0.fullNameForms)
             })
-            switch resolver.resolve(typed) {
+            let resolution = matching == .exact
+                ? resolver.resolveExact(typed) : resolver.resolve(typed)
+            switch resolution {
             case .resolved(let canonicalName):
                 return owners(of: [canonicalName], typed: typed, in: people)
             case .ambiguous(let candidates):
                 return owners(of: candidates, typed: typed, in: people)
             case .unknown:
                 return .none
+            }
+        }
+
+        /// `claim` with no spelling recovery — the matching the People-tab
+        /// precedence rule uses. See `Matching.exact`.
+        static func exactClaim(_ typed: String, in profiles: [ProfileSnapshot]) -> Claim {
+            claim(typed, in: profiles, matching: .exact)
+        }
+
+        // MARK: - Precedence over the family tree (live miss 2026-09-13)
+
+        /// WHO a graph-route name is about, when the People tab has an
+        /// opinion and the family tree could not settle on one record.
+        ///
+        /// THE LIVE MISS (session 7A7B536C, 2026-09-13). "very good, now
+        /// tell me about beth" came back "The family tree has 2190 people
+        /// named Beth (as Elizabeth) — which one?", with no chips offered,
+        /// while Rick's SISTER sat in the People tab under canonical name
+        /// "Elizabeth" with "beth" among her aliases. The People-tab answer
+        /// existed but was gated on `context.graph == nil` — profiles only
+        /// spoke when no tree was installed at all — so the moment a tree
+        /// was imported the People tab stopped being a knowledge source for
+        /// every graph-route name. That contradicts Rick's ruling of
+        /// 2026-09-04 (the People tab is the source of truth for the inner
+        /// circle) and the 2026-08-22 landing rule (exact name wins).
+        ///
+        /// THE RULE, and it is deliberately narrow: an exact People match
+        /// decides WHO is being asked about. It does not decide WHAT is
+        /// said.
+        ///   • pinned to a tree person → that tree record answers, so a
+        ///     People match makes the tree answer BETTER, never bypasses it;
+        ///   • no usable pin → the profile answers, and the answer still
+        ///     names the tree's namesakes so an ancestor stays one sentence
+        ///     away (see `treeSentence`);
+        ///   • two profiles owning the spelling → the People-side "which
+        ///     one?", never the tree's namesake path;
+        ///   • anything less than an exact match → `.none`, and today's
+        ///     tree behaviour runs untouched.
+        ///
+        /// WHERE IT IS ASKED matters as much as what it answers. The one
+        /// caller (HallieTurnExecutor, the GEDCOM-ambiguity fork) consults
+        /// this ONLY after `HallieWhichOne` has concluded it cannot offer
+        /// chips — too many namesakes and no anchor. Where the tree can put
+        /// a real choice in front of Rick ("Richard Breen b. 1931 or b.
+        /// 1962?") it still does. Two pickable ancestors beat an unpinned
+        /// profile; 2190 strangers and no chips at all do not.
+        enum Precedence: Equatable {
+            /// The profile is pinned to this family-tree person.
+            case treePerson(gedcomPersonID: String, profileName: String)
+            /// The profile answers from itself.
+            case profile(ProfileSnapshot)
+            /// Several profiles own the spelling — ask which.
+            case ambiguous([ProfileSnapshot])
+            /// The People tab has no exact opinion; the tree decides.
+            case none
+        }
+
+        static func precedence(typed: String,
+                               profiles: [ProfileSnapshot]?,
+                               graph: GedcomFamilyGraph?) -> Precedence {
+            let gallery = profiles ?? []
+            switch exactClaim(typed, in: gallery) {
+            case .none:
+                return .none
+            case .ambiguous(let claimants):
+                return .ambiguous(claimants)
+            case .one(let profile):
+                // The SAME pin seam every other route uses (HallieVitalDates,
+                // 2026-09-04): it resolves FamilySearch IDs and export-local
+                // pointers and fails closed on stale, unreadable and colliding
+                // pins. Resolved over the whole gallery because "two profiles
+                // pinned the same tree person" can only be seen from there.
+                let ownership = HallieVitalDates.pinOwnership(
+                    profiles: gallery.map(HallieVitalProfile.init), graph: graph)
+                if let personID = ownership.treePersonID(ownedBy: profile.stableID) {
+                    return .treePerson(gedcomPersonID: personID,
+                                       profileName: profile.canonicalName)
+                }
+                return .profile(profile)
             }
         }
 
@@ -337,9 +430,24 @@ extension HallieTurnExecutor {
         /// The graph route's answer when the tree has nothing but the People
         /// tab does. Answered for biography / a known birth date; an honest
         /// decline (still naming what IS known) for relations and deaths.
+        /// `typed` is the spelling the question actually used and
+        /// `treeNamesakes` how many family-tree records the tree route had
+        /// already found under it. Both are supplied only by the precedence
+        /// route (2026-09-13), where a tree IS installed and did hold
+        /// namesakes. Absent ⇒ the pre-existing "no tree could place this
+        /// person" wording, unchanged.
+        ///
+        /// The count is PASSED IN rather than recomputed on purpose: the
+        /// tree route reached its namesakes through the profile's canonical
+        /// name ("Elizabeth"), and `graph.people(matching:)` on the typed
+        /// spelling ("beth") does not expand diminutives and would answer 0.
+        /// Quoting a different number than the tree route would have is how
+        /// two answers to one question start disagreeing.
         static func answer(profile: ProfileSnapshot,
                            payload: ArchivistQueryAST.Graph,
                            context: Context,
+                           typed: String? = nil,
+                           treeNamesakes: Int = 0,
                            queryDescription: String) -> Result {
             let name = profile.canonicalName
             // FIRST MENTION IN FULL, short name afterwards (2026-09-04) —
@@ -400,14 +508,18 @@ extension HallieTurnExecutor {
                         + (aliases.isEmpty ? "" : " (also known as \(aliases.joined(separator: ", ")))")
                         + ", so I know the name — but I can't trace \(what)for \(name) yet.")
             }
-            sentences.append(treeSentence(for: name, graph: context.graph))
+            let namesakes = typed == nil ? 0 : max(0, treeNamesakes)
+            sentences.append(treeSentence(for: name, typed: namesakes > 0 ? typed : nil,
+                                          namesakes: namesakes, graph: context.graph))
             sentences.append("If you tell me more about \(name) — “let me tell you about \(name)” — I'll remember it.")
 
             var checked = "Checked: People profile “\(name)” (alternate names, birth date"
             if !profile.note.isEmpty, payload.operation == .biography {
                 checked += ", biography — quoted from the profile Rick maintains"
             }
-            checked += "); family tree (no entry for \(name))"
+            checked += namesakes > 0
+                ? "); family tree (\(namesakes) namesakes, none selected — the People tab named the person)"
+                : "); family tree (no entry for \(name))"
             checked += context.presenceRecords.isEmpty ? "." : "; catalog tags (\(videos))."
             return Result(
                 route: .graph,
@@ -602,9 +714,35 @@ extension HallieTurnExecutor {
         /// 2026-08-26): FamilySearch strips living people's dates, so the
         /// latest birth year says nothing about who is in the tree — Rick
         /// IS in it, undated. Only the honest fact: no record matched.
-        static func treeSentence(for name: String, graph: GedcomFamilyGraph?) -> String {
+        ///
+        /// `typed` (2026-09-13) is set only when the People tab OUTRANKED a
+        /// tree that does hold namesakes. Then "I couldn't match her" would
+        /// be false — nothing was tried, the People tab simply named the
+        /// person — and, more importantly, Rick asks about distant tree
+        /// people under the same given names as his own family. The count
+        /// and the way back keep an ancestor exactly one sentence away
+        /// instead of letting a sister quietly swallow the name.
+        ///
+        /// Both `typed` and `namesakes` come from the caller, which already
+        /// knows them. The "(as Elizabeth)" aside is built exactly the way
+        /// `HallieWhichOne.prose` builds it, so the sentence Rick gets
+        /// INSTEAD of the which-one names those people in the same words
+        /// the which-one would have used.
+        static func treeSentence(for name: String, typed: String? = nil,
+                                 namesakes: Int = 0,
+                                 graph: GedcomFamilyGraph?) -> String {
             guard let graph, !graph.people.isEmpty else {
                 return "I don't have an imported family tree to place \(name) in."
+            }
+            if let typed, namesakes > 0 {
+                let shown = HallieWhichOne.display(typed)
+                let forms = GedcomFamilyGraph.givenNameForms(
+                    of: FamilyIdentityText.tokens(typed).first ?? "")
+                let asFormal = forms.count > 1 && forms[0] != forms[1]
+                    ? " (as \(forms[1].capitalized))" : ""
+                return "The family tree also has \(namesakes) "
+                    + (namesakes == 1 ? "person" : "people")
+                    + " named \(shown)\(asFormal) — say a surname or a birth year if you meant one of them."
             }
             return "I couldn't match \(name) to a record in the family tree I have."
         }
