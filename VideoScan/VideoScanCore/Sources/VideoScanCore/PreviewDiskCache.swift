@@ -305,16 +305,13 @@ public final class PreviewDiskCache: @unchecked Sendable {
                 return 0
             }
 
-            // Temp-in-same-dir + rename = atomic publish (rename(2) within
-            // one volume). NSTemporaryDirectory() would risk a cross-volume
-            // copy, which is NOT atomic.
-            let tmp = rootURL.appendingPathComponent("tmp-\(UUID().uuidString)")
+            // AtomicFilePublish keeps the temp beside the destination, so the
+            // publish is a rename(2) within one volume. NSTemporaryDirectory()
+            // would risk a cross-volume copy, which is NOT atomic.
             do {
-                try jpeg.write(to: tmp)
-                try AtomicFilePublish.replaceItem(at: dest, withItemAt: tmp)
+                try AtomicFilePublish.write(jpeg, to: dest)
             } catch {
                 diskCacheLog.notice("Disk-cache write failed (\(error.localizedDescription, privacy: .public)) — preview still served from L1")
-                try? fm.removeItem(at: tmp)
                 return 0
             }
 
@@ -434,15 +431,12 @@ public final class PreviewDiskCache: @unchecked Sendable {
 
             var written: Int64 = 0
             for payload in payloads {
-                let tmp = rootURL.appendingPathComponent("tmp-\(UUID().uuidString)")
                 do {
-                    try payload.data.write(to: tmp)
-                    try AtomicFilePublish.replaceItem(
-                        at: rootURL.appendingPathComponent(payload.filename), withItemAt: tmp)
+                    try AtomicFilePublish.write(
+                        payload.data, to: rootURL.appendingPathComponent(payload.filename))
                     written += Int64(payload.data.count)
                 } catch {
                     diskCacheLog.notice("Filmstrip cache write failed (\(error.localizedDescription, privacy: .public)) — partial set left for prune")
-                    try? fm.removeItem(at: tmp)
                     return written
                 }
             }

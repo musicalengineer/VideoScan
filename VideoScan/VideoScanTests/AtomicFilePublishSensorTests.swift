@@ -99,6 +99,60 @@ struct AtomicFilePublishSensorTests {
             """)
     }
 
+    // MARK: - 1b. The PATTERN must not drift back either
+
+    /// The syscall sensor above is necessary but not sufficient. The two
+    /// torn-file bugs found on 2026-09-14 (`.plan.json.tmp` and
+    /// `.evidence.json.tmp`, both fixed temp names) existed because the
+    /// write-temp-then-publish pattern had been copy-pasted into seven call
+    /// sites with five different conventions. Pin the single entry point.
+    @Test func sidecarStoresPublishThroughTheWrapper() throws {
+        let stores = [
+            "VideoScan/VideoScan/ArchiveAngelPlan.swift",
+            "VideoScan/VideoScan/ArchiveAngelEvidenceStore.swift",
+            "VideoScan/VideoScan/IgnoredContentStore.swift",
+            "VideoScan/VideoScan/HoldoutClearStore.swift",
+            "VideoScan/VideoScan/ResearchStore.swift",
+            "VideoScan/VideoScanCore/Sources/VideoScanCore/PreviewDiskCache.swift",
+        ]
+        var missing: [String] = []
+        for rel in stores {
+            let text = try String(contentsOf: repoRoot.appendingPathComponent(rel),
+                                  encoding: .utf8)
+            if !text.contains("AtomicFilePublish.write(") { missing.append(rel) }
+        }
+        #expect(missing.isEmpty, """
+            These stores publish files and must do it through \
+            AtomicFilePublish.write(_:to:), which owns the unique temp name, \
+            the rename(2), the cleanup and the stall logging. Hand-rolling it \
+            is how the fixed-temp-name bugs got in. Missing: \
+            \(missing.joined(separator: ", "))
+            """)
+    }
+
+    /// Only the wrapper may call `rename(2)` directly. `renamex_np` /
+    /// `renameatx_np` with RENAME_EXCL are a different, safe call and are not
+    /// matched here (ArchivePromoteEngine and RescueFileCopier use them
+    /// deliberately for no-clobber publishes).
+    @Test func onlyTheWrapperCallsRenameDirectly() throws {
+        var offenders: [String] = []
+        for (rel, text) in try productionSources()
+        where !rel.hasSuffix("AtomicFilePublish.swift") {
+            for (n, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.hasPrefix("//") else { continue }
+                if line.range(of: "(^|[^A-Za-z_])rename\\(", options: .regularExpression) != nil {
+                    offenders.append("\(rel):\(n + 1)")
+                }
+            }
+        }
+        #expect(offenders.isEmpty, """
+            Publishing a file belongs in AtomicFilePublish, so the temp name, \
+            cleanup and stall logging stay in one place. Offenders: \
+            \(offenders.joined(separator: ", "))
+            """)
+    }
+
     // MARK: - 2. The replacement actually does what the stores need
 
     @Test func replaceItemPublishesOverAnExistingFile() throws {
@@ -173,5 +227,94 @@ struct AtomicFilePublishSensorTests {
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
             .filter { $0.hasSuffix(".tmp") }
         #expect(leftovers.isEmpty, "every temp was consumed by its rename")
+    }
+
+    // MARK: - 3. The wrapper's own safeguards
+
+    @Test func writeCreatesMissingDirectories() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("atomic-publish-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let dest = dir.appendingPathComponent("nested/deeper/store.json")
+
+        try AtomicFilePublish.write(Data("hello".utf8), to: dest)
+        #expect(try String(contentsOf: dest, encoding: .utf8) == "hello")
+    }
+
+    @Test func writeLeavesNoTempBehindOnSuccess() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("atomic-publish-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        for i in 0..<20 {
+            try AtomicFilePublish.write(Data("v\(i)".utf8),
+                                        to: dir.appendingPathComponent("store.json"))
+        }
+        let names = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        #expect(names == ["store.json"], "exactly the published file, no temps: \(names)")
+    }
+
+    @Test func writeLeavesNoTempBehindOnFailure() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("atomic-publish-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // Publishing ONTO an existing directory fails at the rename (EISDIR).
+        let dest = dir.appendingPathComponent("occupied")
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: dest.appendingPathComponent("child"), withIntermediateDirectories: true)
+
+        #expect(throws: (any Error).self) {
+            try AtomicFilePublish.write(Data("boom".utf8), to: dest)
+        }
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasSuffix(".tmp") }
+        #expect(leftovers.isEmpty, "a failed publish must not litter: \(leftovers)")
+    }
+
+    @Test func writeJSONRoundTrips() throws {
+        struct Payload: Codable, Equatable { let name: String; let count: Int }
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("atomic-publish-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let dest = dir.appendingPathComponent("payload.json")
+
+        let value = Payload(name: "Donna", count: 3)
+        try AtomicFilePublish.writeJSON(value, to: dest)
+        let back = try JSONDecoder().decode(Payload.self, from: Data(contentsOf: dest))
+        #expect(back == value)
+    }
+
+    /// The forensics hook. A non-empty in-flight list at process exit is the
+    /// signature of the 2026-09-14 wedge, so it must be accurate and must
+    /// drain.
+    @Test func inFlightIsEmptyWhenIdleAndDrainsAfterPublishing() async throws {
+        #expect(AtomicFilePublish.inFlightSummary() == nil, "idle before")
+
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("atomic-publish-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        await withTaskGroup(of: Void.self) { group in
+            for w in 0..<8 {
+                group.addTask {
+                    for i in 0..<100 {
+                        try? AtomicFilePublish.write(
+                            Data("w\(w)-\(i)".utf8),
+                            to: dir.appendingPathComponent("shared.json"))
+                    }
+                }
+            }
+        }
+
+        #expect(AtomicFilePublish.inFlight().isEmpty,
+                "every publish must deregister: \(AtomicFilePublish.inFlightSummary() ?? "-")")
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasSuffix(".tmp") }
+        #expect(leftovers.isEmpty, "no temps survive 800 racing publishes")
     }
 }

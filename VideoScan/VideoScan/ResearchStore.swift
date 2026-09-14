@@ -182,12 +182,9 @@ struct ResearchStore: Sendable {
         guard values?.isDirectory == true, values?.isSymbolicLink != true else {
             throw StoreError.ioFailure("research directory is not a plain directory: \(directory.path)")
         }
-        let temp = directory.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
         do {
-            try data.write(to: temp, options: [.atomic])
-            try AtomicFilePublish.replaceItem(at: url, withItemAt: temp)
+            try AtomicFilePublish.write(data, to: url)
         } catch {
-            try? fm.removeItem(at: temp)
             throw StoreError.ioFailure(error.localizedDescription)
         }
     }

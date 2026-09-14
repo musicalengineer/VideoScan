@@ -304,16 +304,7 @@ enum ArchiveAngelPlanStore {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         enc.dateEncodingStrategy = .iso8601
-        let data = try enc.encode(plan)
-        let dir = URL(fileURLWithPath: plan.batchDir)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        // Unique per save: two saves in flight must not stomp each other's
-        // temp, which would publish a torn file — and a shared temp name is
-        // also the RENAME_SWAP wedge condition if Foundation's .atomic write
-        // ever swaps (P0, 2026-09-14).
-        let tmp = dir.appendingPathComponent(".plan.json.\(UUID().uuidString).tmp")
-        try data.write(to: tmp, options: .atomic)
-        try AtomicFilePublish.replaceItem(at: plan.planURL, withItemAt: tmp)
+        try AtomicFilePublish.write(try enc.encode(plan), to: plan.planURL)
     }
 
     nonisolated static func load(batchDir: String) throws -> ArchiveAngelPlan {

@@ -340,15 +340,10 @@ final class IgnoredContentStore: ObservableObject {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601
             enc.outputFormatting = [.sortedKeys]
-            let data = try enc.encode(file)
-            let dir = url.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            // Unique temp name per save: two saves in flight (apply, then
-            // an immediate undo) must not steal each other's temp file —
-            // last replace wins, neither fails.
-            let tmp = dir.appendingPathComponent(".ignored-content.\(UUID().uuidString).tmp")
-            try data.write(to: tmp, options: .atomic)
-            try AtomicFilePublish.replaceItem(at: url, withItemAt: tmp)
+            // Two saves in flight (an apply, then an immediate undo) are
+            // safe here: AtomicFilePublish gives each its own temp and
+            // publishes with rename(2) — last writer wins, neither fails.
+            try AtomicFilePublish.write(try enc.encode(file), to: url)
             return true
         } catch {
             return false
