@@ -22,8 +22,10 @@
 //
 // Shape follows IgnoredContentStore / ArchiveAngelEvidenceStore: a
 // main-actor façade over a Codable value, loaded and saved off-main,
-// written atomically (temp file in the same directory + replaceItemAt —
-// a reader never sees a torn file). Every read and mutation is O(1).
+// written atomically via AtomicFilePublish (temp file in the same
+// directory + rename(2) — a reader never sees a torn file, and we stay
+// off RENAME_SWAP, which deadlocks Sandbox.kext; see the P0 of
+// 2026-09-14). Every read and mutation is O(1).
 //
 // KEYING: (queueKey, reviewId). `queueKey` is the CSV's identity —
 // "<dated dir>/rick-review-neutral.csv" — so a clear made against the
