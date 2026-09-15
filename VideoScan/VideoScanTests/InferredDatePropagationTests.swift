@@ -1374,6 +1374,12 @@ struct InferredDatePropagationRealCatalogReport {
             try? FileManager.default.removeItem(at: src)
             try? FileManager.default.removeItem(at: dst)
         }
+        // THE SAFETY PROPERTY OF THIS WHOLE SUITE, pinned unconditionally:
+        // the report reads Rick's real catalog and must never write to it.
+        // Recorded before any work so it holds no matter which branch the
+        // data happens to take today.
+        let realCatalogModifiedBefore = try FileManager.default
+            .attributesOfItem(atPath: realCatalogURL().path)[.modificationDate] as? Date
         try FileManager.default.copyItem(at: realCatalogURL(), to: src.appendingPathComponent("catalog.json"))
         let records = CatalogStore(directory: src).load()
 
@@ -1425,7 +1431,26 @@ struct InferredDatePropagationRealCatalogReport {
         \(redated.propagated) propagated, \(redated.folderYear) folder-year (\(redated.examined) examined)
           LOAD PREVIEW — a second unwind finds: \(again)
         """)
-        #expect(unwound.sidecar?.path.hasPrefix(dst.path) == true, "the report's sidecar lands in scratch, never App Support")
+        // A SIDECAR IS ONLY WRITTEN WHEN SOMETHING IS UNWOUND (nightly red,
+        // 2026-09-14/15). This asserted `sidecar?.path.hasPrefix(dst) == true`
+        // unconditionally, which quietly assumed Rick's live catalog always
+        // holds at least one unverified propagated date. It stopped holding —
+        // "unwind clears: 0" — so `sidecar` was nil, `nil == true` was false,
+        // and a REPORT with nothing to report turned three nightly hosts red.
+        // Both branches are now real assertions rather than one that happens
+        // to be true on today's data.
+        if let sidecar = unwound.sidecar {
+            #expect(sidecar.path.hasPrefix(dst.path),
+                    "the report's sidecar lands in scratch, never App Support")
+        } else {
+            #expect(unwound.unwound == 0,
+                    "no sidecar is only correct when nothing was unwound — \(unwound.unwound) rows were")
+        }
+
+        let realCatalogModifiedAfter = try FileManager.default
+            .attributesOfItem(atPath: realCatalogURL().path)[.modificationDate] as? Date
+        #expect(realCatalogModifiedAfter == realCatalogModifiedBefore,
+                "the report must never write to the real catalog at \(realCatalogURL().path)")
     }
 }
 
