@@ -135,3 +135,51 @@ wedged on 09-13, where the app logged `app quitting` and never reached
 Exercised along the way: a 3 GB promote, a 263 GB promote, Tidy, attestations,
 311-file manifest writes, and filmstrip publishes from the detached sweep
 daemon — all through the new publish path, with no slow or stalled line.
+
+---
+
+## 6. Log-forensics audit — blocking calls with no BEGIN line
+
+Audited the whole production tree against Rick's rule. Ranked by (plausibility
+of a hang) x (silence of the log). **Fixed tonight** on
+`fix/quit-path-hang-forensics` and `fix/volume-rename-notice-logging`; the rest
+is a work list needing his call because they are behaviour changes, not logging.
+
+### Fixed tonight (pure additive logging, no behaviour change)
+
+| # | site | why it mattered |
+|---|---|---|
+| 1 | `RAMDisk.swift` — **the entire file had zero logging** | Runs synchronously on the quit path AFTER the "app quitting" line. `contentsOfDirectory(/Volumes)` stats the mount table and `hdiutil detach -force` + `waitUntilExit()` has no deadline. On an unresponsive mount this reproduces the 2026-09-13 signature byte for byte — a **second, independent way to get the symptom that cost the demo.** |
+| 2 | `CatalogStore.swift:860` quit-time save | Blocks the MAIN THREAD in `writeQueue.sync`: encode ~100k records, atomic write, `F_FULLFSYNC`, full streaming SHA-256 re-read. No begin line, and its success line was `.debug` (not persisted). |
+| 7 | `VideoScanApp.swift:226-270` | Three unlogged blocking steps after "app quitting". |
+| 8 | `VideoScanApp.swift:177-193` quit alert | Neither the dialog nor the choice was recorded. **"Keep Working" was indistinguishable in the log from a hang** — neither produces an "app quitting" line. |
+| 9 | volume-rename notice | Already fixed earlier tonight — see §2. |
+
+Plus two level promotions: `CatalogStore` `.debug` → `.notice`, MLX shutdown
+`.info` → `.notice`. Neither `.debug` nor `.info` is durably persisted by the
+unified log, so both were useless for reading back after a hang.
+
+### NOT fixed — behaviour changes, Rick's call
+
+| # | site | risk |
+|---|---|---|
+| 🔴 3 | `PreviewDiskCache.swift:209` `flock(fd, LOCK_EX)` | Blocking, no timeout, no log. The lockfile is **shared with the detached `previewsweepd`**, which outlives app quit by design. If that helper wedges it holds the lock forever and the three hottest preview paths block with no trace. Fix is a `LOCK_NB` probe + log before falling back to blocking. |
+| 🔴 4 | `VolumeCompare.swift:428,455` rescue `rsync`/`mkdir` | Raw `Process` + `waitUntilExit()`, bypassing `ProcessRunner` — no deadline, no SIGTERM→SIGKILL, outside `StallMonitor`. **This is the path that copies off a drive Rick believes is dying.** No per-file begin line, so a 14-hour wedge says "Rescue start: 4,812 files" and nothing else. |
+| 🟠 5 | `DriveHealth.swift:294,421,471` | `diskutil` / `smartctl` / `system_profiler` with **no `deadlineSeconds`**, and no logger in the file. A sick drive spins the Storage tab forever, silently. |
+| 🟠 6 | `ProcessRunner.swift:395` | No launch line — one line would cover **48 shell-out sites**. Must be `.debug` or watchdog-gated, not `.notice`: ffprobe runs thousands of times per scan and `.notice` would flood. The right shape is the `AtomicFilePublish` pattern — an in-flight registry a second thread can report from. |
+| 🟠 10 | `HallieWebProxy.swift:173`, `HallieWebPoster.swift:98` | Raw `Process` bridged to a continuation resumed **only** from `terminationHandler`. A wedged ffmpeg leaks the task forever and a family member's browser just spins. |
+| 🟠 11 | `FilesystemWalker.swift:152` | The scan walker's only heartbeat is an in-memory UI label that evaporates on reboot. A throttled `appLog.write` would leave the last directory entered on disk. |
+| 🟡 12 | `HallieWebServer.swift:233` | `_ = ready.wait(timeout: .now() + 5)` discards its own timeout and returns success pointing at a listener that never came up. Bounded, but a silent lie. |
+| 🟡 13 | `ScanEngine.swift:22` | `runFFProbe` with no deadline. Small blast radius (one caller). |
+| 🟡 14 | MFO START lines are `.info` across 11 jobs | The begin/end discipline here is **exemplary** — only the level is wrong for post-hoc reading. Promote START/DONE for irreversible ops to `.notice`. |
+
+### Already good — no action
+`AtomicFilePublish` (the reference implementation), `StallMonitor` + the MFO
+jobs that use it, `ProcessRunner`'s deadline/SIGTERM/SIGKILL/abandon escalation,
+`VolumeReachability` (`getmntinfo(MNT_NOWAIT)` throughout — correct by
+construction), `AudioTranscriber`, and `OllamaQueryTranslator` (every network
+path bounded).
+
+**Recommended order**: quit path (done) → `ProcessRunner` launch line → deadlines
+(`DriveHealth`, `ScanEngine`) → route the strays through `ProcessRunner` (rescue
+copy, Hallie ffmpeg, RAMDisk) → `flock` wait line, walker heartbeat.
