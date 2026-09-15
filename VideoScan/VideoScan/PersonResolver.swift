@@ -160,6 +160,28 @@ struct PersonResolver: Sendable {
         })
     }
 
+    /// The EXACT half of `resolve`, and nothing else: the normalized
+    /// spelling index, under the exact-name-wins rule. A spelling no
+    /// identity actually owns is `.unknown` here however close it looks —
+    /// there is no recovery pass.
+    ///
+    /// Split out for the People-tab precedence rule (2026-09-13). That rule
+    /// lets a People profile outrank the family tree, so it must only ever
+    /// fire on a spelling the profile genuinely owns: recovering "Bess"
+    /// onto Rick's sister and then letting her beat a legitimate ancestor
+    /// of that name is precisely the shadowing the rule must not cause.
+    ///
+    /// C++ analogy: this is the `find()` on the hash index; `resolve`
+    /// below is `find()` plus a fuzzy fallback search.
+    func resolveExact(_ typed: String) -> PersonResolution {
+        let key = Self.normalize(typed)
+        guard !key.isEmpty, let claimants = index[key] else { return .unknown }
+        let hits = claimants.winners
+        if hits.count == 1 { return .resolved(canonicalName: hits[0]) }
+        if hits.count > 1 { return .ambiguous(candidates: hits) }
+        return .unknown
+    }
+
     /// Exact normalized match first, under the exact-name-wins rule (see
     /// the file header and PersonNameClaim): an identity NAMED the typed
     /// spelling beats one that merely lists it as an alias. A narrowly
@@ -167,13 +189,10 @@ struct PersonResolver: Sendable {
     /// fails: short names are never guessed, and tied nearest identities
     /// are surfaced as ambiguous.
     func resolve(_ typed: String) -> PersonResolution {
-        let key = Self.normalize(typed)
-        guard !key.isEmpty else { return .unknown }
-        if let claimants = index[key] {
-            let hits = claimants.winners
-            if hits.count == 1 { return .resolved(canonicalName: hits[0]) }
-            if hits.count > 1 { return .ambiguous(candidates: hits) }
-        }
+        let exact = resolveExact(typed)
+        guard case .unknown = exact else { return exact }
+        // Only reached on a miss, so the hit path normalizes once.
+        guard !Self.normalize(typed).isEmpty else { return .unknown }
         let recovered = HallieSpellingRecovery.bestMatches(
             typed: typed,
             candidates: spellingEntries.map {

@@ -722,6 +722,43 @@
     "at rest"
    ],
    "notes": "lv260902-003. The offer-challenge answer (photography floor 1839 vs d. 1849) is phase 2; until it lands this row pins only the mode (tree) and that the challenge never becomes a birth / death recital."
+  },
+  {
+   "id": "strict-043",
+   "category": "strict",
+   "text": "tell me about beth",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "expectMode": "tree",
+   "mustContain": [
+    "People"
+   ],
+   "mustNotContain": [
+    "which one?",
+    "Add a surname or a birth year",
+    "none offered",
+    "nothing was looked up"
+   ],
+   "notes": "lv260913-001 (session 7A7B536C). LIVE MISS: \"very good, now tell me about beth\" came back \"The family tree has 2190 people named Beth (as Elizabeth) — which one?\" with NO chips offered, while Rick's sister sat in the People tab as canonical \"Elizabeth\" with the alias \"beth\". Root cause: the People-tab branch in HallieTurnExecutor.executeGraphCase was gated on `context.graph == nil`, so an imported tree silenced the People tab for every graph-route name — against Rick's ruling of 2026-09-04 (People tab = source of truth for the inner circle) and the 2026-08-22 exact-name-wins rule. Fixed by PeopleTab.precedence: an EXACT People name/alias match decides who is meant, but only where HallieWhichOne had already given up on offering chips. A pinned profile still answers from the tree. Pinned by PeopleTabPrecedenceTests; the boundary (a tree that CAN offer a real choice still offers it) by aTreeThatCanOfferARealChoiceStillOffersIt. The answer still names the tree's namesakes so a legitimate ancestor stays one follow-up away — do NOT add \"2190\" to mustNotContain."
+  },
+  {
+   "id": "strict-044",
+   "category": "strict",
+   "text": "Beth Breen Beth McAuliffe",
+   "followsPrevious": true,
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectMode": "tree",
+   "mustNotContain": [
+    "no family source was consulted",
+    "graph-query validation only"
+   ],
+   "notes": "lv260913-002, the follow-up to strict-043. Rick answered the which-one with his sister's maiden AND married names in one line; the translator read two people and the people-count guard declined with \"Checked: graph-query validation only\". HallieTurnExecutor.collapsedDoubleName now collapses two names that EXACTLY claim the same People profile into one person, visibly in the basis (\"as one person\"). This row pins only that the turn reaches a family source — the collapse needs surname/maidenName filled on the profile, so do not tighten it to expectedOutcome=answered until Rick's Beth profile carries both. Two names meaning two people still decline (PeopleTabDoubleNameTests.twoNamesThatMeanTwoPeopleStillDecline)."
   }
  ]
 }

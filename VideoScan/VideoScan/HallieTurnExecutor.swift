@@ -1466,6 +1466,26 @@ enum HallieTurnExecutor {
                 name: payload.people[1].trimmingCharacters(in: .whitespacesAndNewlines))
             return HallieLineageAnswer.kinshipApposition(apposition, context: context)
         }
+        // MAIDEN AND MARRIED, IN ONE BREATH (live 2026-09-13, the follow-up
+        // to the Beth miss). Asked "which Beth?", Rick answered "Beth Breen
+        // Beth McAuliffe" — his sister's two surnames, the way a man
+        // identifies his sister to someone who didn't recognise her. The
+        // translator read two people and the people-count guard declined
+        // with "I wasn't sure which person you meant".
+        //
+        // When BOTH spellings EXACTLY claim the SAME People profile they are
+        // provably one person said twice, and the turn continues as if the
+        // first had been typed alone. Nothing weaker collapses: two names
+        // that mean two people, or either name unknown to the People tab,
+        // still get today's decline. Runs after the relationship and
+        // kinship-apposition branches, which take two names legitimately.
+        if let collapsed = collapsedDoubleName(payload, context: context) {
+            let inner = try await executeGraphCase(
+                collapsed.payload,
+                request: Request(intent: request.intent.replacing(ast: .graph(collapsed.payload))),
+                context: context, dependencies: dependencies)
+            return inner.prefixingBasis(collapsed.note)
+        }
         // CyberBrain answers only when it knows the requested identity.
         // A `nil` here means CyberBrain has no opinion, and the turn
         // continues on the pre-existing profiles + GEDCOM path exactly
@@ -1504,6 +1524,16 @@ enum HallieTurnExecutor {
         // No tree at all, but the People tab knows the name: answer from
         // the profile (see +PeopleTab) rather than "I don't have a tree" —
         // or ask which one when several profiles claim the spelling.
+        //
+        // `context.graph == nil` HERE IS NOT THE OLD BUG, and must not be
+        // deleted as if it were. This gate is the no-tree case, and it uses
+        // the FUZZY claim on purpose: with no tree to shadow there is
+        // nothing for a recovered spelling to outrank. What was wrong until
+        // 2026-09-13 is that this was the ONLY place a profile could speak
+        // on the graph route, so an installed tree silenced the People tab
+        // entirely. The precedence rule for a tree that IS installed lives
+        // at the ambiguity fork below (PeopleTab.precedence) and is exact-
+        // match only. See PeopleTabPrecedenceTests.
         if context.graph == nil, let typed = payload.people.first,
            let result = peopleTabResult(
                typed: typed, payload: payload, request: request, context: context,
@@ -1659,6 +1689,16 @@ enum HallieTurnExecutor {
                 let arrangement = HallieWhichOne.arrange(
                     people, graph: graph,
                     ownerFamilySearchID: context.speakers.ownerFamilySearchID)
+                // PEOPLE-TAB PRECEDENCE (live miss 2026-09-13) — see
+                // `peopleTabPrecedenceResult`. `nil` = the People tab has no
+                // exact opinion, or the tree can still offer a real choice,
+                // and the namesake which-one below runs untouched.
+                if let decided = try await peopleTabPrecedenceResult(
+                    typed: typed, payload: payload, request: request,
+                    context: context, dependencies: dependencies, graph: graph,
+                    arrangement: arrangement, queryDescription: queryDescription) {
+                    return withOwnerNote(decided)
+                }
                 let shown = arrangement.shown.map { person in
                     Candidate(
                         id: .gedcomPersonID(person.id),
@@ -2100,28 +2140,152 @@ enum HallieTurnExecutor {
             return PeopleTab.answer(profile: profile, payload: payload, context: context,
                                     queryDescription: queryDescription)
         case .ambiguous(let profiles):
-            return Result(
-                route: .graph,
-                outcome: .needsClarification,
-                prose: HallieProfileWhichOne.prose(
-                    typed: typed,
-                    choices: profiles.map {
-                        .init(name: $0.canonicalName,
-                              birthdate: $0.birthdate,
-                              fallbackDetail: $0.stableID)
-                    }),
-                basisLine: "Checked: People profiles — more than one goes by “\(typed)”; no person was selected.",
-                queryDescription: queryDescription,
-                citations: [],
-                catalogPersonName: nil,
-                clarification: Clarification(
-                    intent: request.intent,
-                    stage: .profileIdentity,
-                    candidates: PeopleTab.candidates(profiles),
-                    continuationToken: context.continuationToken))
+            return profileWhichOneResult(
+                typed: typed, profiles: profiles, request: request,
+                context: context, queryDescription: queryDescription)
         case .none:
             return nil
         }
+    }
+
+    /// PEOPLE-TAB PRECEDENCE (live miss, session 7A7B536C, 2026-09-13).
+    ///
+    ///   Rick:   very good, now tell me about beth
+    ///   Hallie: "The family tree has 2190 people named Beth (as Elizabeth)
+    ///            — which one? Add a surname or a birth year…"  (no chips)
+    ///
+    /// Beth is his SISTER, in the People tab under exactly that alias. The
+    /// People-tab answer existed but was fenced off behind
+    /// `context.graph == nil` in `executeGraphCase`, so importing one tree
+    /// silenced the People tab for every graph-route name — against Rick's
+    /// ruling of 2026-09-04.
+    ///
+    /// THE BOUNDARY, and it is the whole design. This answers ONLY when
+    /// `HallieWhichOne` has already decided it cannot offer chips: more
+    /// namesakes than the cap AND no anchor among them, so the tree's only
+    /// honest move was to hand the question back. Where the tree CAN offer a
+    /// real choice — "Which Rick — Richard Breen (b. 1931) or (b. 1962)?" —
+    /// it still does, because two pickable ancestors beat a profile with no
+    /// tree pin. A close relative must not start shadowing a legitimate
+    /// ancestor, and this condition is what stops it.
+    ///
+    /// An exact People match is then an ANCHOR of the same kind as the
+    /// tree's roots — the one `arrange` looked for and did not find —
+    /// except that it names the person instead of re-ranking strangers. A
+    /// PINNED profile still answers FROM the tree, so a People match makes
+    /// the tree answer better rather than bypassing it.
+    ///
+    /// Skipped once the user has chosen an identity: a chip is an explicit
+    /// instruction and outranks every inference. That also terminates the
+    /// re-entry below after one hop.
+    private static func peopleTabPrecedenceResult(
+        typed: String,
+        payload: ArchivistQueryAST.Graph,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies,
+        graph: GedcomFamilyGraph,
+        arrangement: HallieWhichOne.Arrangement,
+        queryDescription: String
+    ) async throws -> Result? {
+        guard !arrangement.offersChips, request.selectedIdentity == nil else { return nil }
+        switch PeopleTab.precedence(
+            typed: typed, profiles: context.profiles, graph: context.graph) {
+        case .treePerson(let personID, let profileName):
+            let treeName = graph.people[personID]?.name ?? profileName
+            let pinned = try await executeGraphCase(
+                payload,
+                request: Request(intent: request.intent,
+                                 selectedIdentity: .gedcomPersonID(personID)),
+                context: context, dependencies: dependencies)
+            return pinned.prefixingBasis(
+                "People profile “\(profileName)” is pinned to the family-tree record “\(treeName)”")
+        case .profile(let profile):
+            // `arrangement.total` is the tree's own namesake tally — the
+            // very number the which-one would have quoted, so both answers
+            // say 2190 rather than disagreeing about the crowd.
+            return PeopleTab.answer(
+                profile: profile, payload: payload, context: context,
+                typed: typed, treeNamesakes: arrangement.total,
+                queryDescription: queryDescription)
+        case .ambiguous(let claimants):
+            return profileWhichOneResult(
+                typed: typed, profiles: claimants, request: request,
+                context: context, queryDescription: queryDescription)
+        case .none:
+            return nil
+        }
+    }
+
+    /// Two typed names that are provably ONE person, collapsed to the first
+    /// of them plus the basis note that says so. `nil` — the common case —
+    /// leaves the payload alone.
+    ///
+    /// The guard is deliberately all-or-nothing: exactly two non-empty,
+    /// differently-spelled names, each an EXACT People-tab claim, both
+    /// landing on the same stable ID. A fuzzy match here would let "Beth
+    /// Breen Bess McAuliffe" silently become one person, which is the
+    /// wrong-person answer the exact rule exists to prevent.
+    static func collapsedDoubleName(
+        _ payload: ArchivistQueryAST.Graph,
+        context: Context
+    ) -> (payload: ArchivistQueryAST.Graph, note: String)? {
+        // Two operations MEAN two people — "how is Donna related to
+        // Thankful Pratt", "closest common ancestor of Rick and Donna".
+        // `.relationship` already returned before this is reached; both are
+        // excluded here so the exclusion survives a reordering.
+        guard payload.people.count == 2,
+              payload.operation != .relationship,
+              payload.operation != .commonAncestor
+        else { return nil }
+        let names = payload.people.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard names.allSatisfy({ !$0.isEmpty }),
+              PeopleTab.normalizeName(names[0]) != PeopleTab.normalizeName(names[1])
+        else { return nil }
+        let gallery = context.profiles ?? []
+        guard case .one(let first) = PeopleTab.exactClaim(names[0], in: gallery),
+              case .one(let second) = PeopleTab.exactClaim(names[1], in: gallery),
+              first.stableID == second.stableID
+        else { return nil }
+        var collapsed = payload
+        collapsed.people = [names[0]]
+        return (collapsed,
+                "reading “\(names[0]) \(names[1])” as one person — both spellings are "
+                    + "the People profile “\(first.canonicalName)”")
+    }
+
+    /// The People-side "which one?" — used both when the tree has nothing
+    /// (`peopleTabResult`) and when an exact People match outranks a tree
+    /// full of namesakes (the precedence rule, 2026-09-13). One builder, so
+    /// the two routes cannot drift into asking the question two ways.
+    private static func profileWhichOneResult(
+        typed: String,
+        profiles: [ProfileSnapshot],
+        request: Request,
+        context: Context,
+        queryDescription: String
+    ) -> Result {
+        Result(
+            route: .graph,
+            outcome: .needsClarification,
+            prose: HallieProfileWhichOne.prose(
+                typed: typed,
+                choices: profiles.map {
+                    .init(name: $0.canonicalName,
+                          birthdate: $0.birthdate,
+                          fallbackDetail: $0.stableID)
+                }),
+            basisLine: "Checked: People profiles — more than one goes by “\(typed)”; no person was selected.",
+            queryDescription: queryDescription,
+            citations: [],
+            catalogPersonName: nil,
+            clarification: Clarification(
+                intent: request.intent,
+                stage: .profileIdentity,
+                candidates: PeopleTab.candidates(profiles),
+                continuationToken: context.continuationToken))
     }
 
     /// With `resolved`, the description names the query that RAN — the
