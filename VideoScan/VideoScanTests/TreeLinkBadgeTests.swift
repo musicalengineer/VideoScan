@@ -12,6 +12,16 @@
 //                  UserDefaults
 //   5. Sensors   — memo invalidates on pinsRevision / tree generation and
 //                  NOT on a re-read with the same inputs
+//
+// KEYED BY PROFILE ID, NOT BY NAME (2026-09-15). `treeLinkBadges(for:)` and
+// `derivations` are `[String: …]` keyed by `profile.id`; production reads them
+// that way too (PersonFinderView+People: `treeLinkBadges[profile.id]`). Until
+// the UUID migration (f63f141d) the key was the lowercased name, and these
+// assertions were left behind indexing `map["rick"]`. Some then FAILED — the
+// seven-test cluster that held the nightly red on three hosts from 9/14 — and
+// some passed VACUOUSLY, because `map["tim"] == nil` is true when every name
+// lookup is nil. Look up by the profile you are asserting about; a string
+// literal here asserts nothing.
 
 import Foundation
 import Testing
@@ -183,11 +193,11 @@ struct TreeLinkBadgeMemoTests {
         await center.refresh(profiles: profiles)
         let after = center.treeLinkBadges(for: profiles)
         #expect(center.badgeComputeCount == 2, "derivation pass invalidates the memo")
-        #expect(after["rick"]?.kind == .derived)
-        #expect(after["rick"]?.tooltip.contains("GVQV-NW3") == true)
-        #expect(after["donna"]?.kind == .derived)
-        #expect(after["john breen"]?.kind == .derived)
-        #expect(after["tim"] == nil, "Tim derives to .none → no badge")
+        #expect(after[unpinnedRick.id]?.kind == .derived)
+        #expect(after[unpinnedRick.id]?.tooltip.contains("GVQV-NW3") == true)
+        #expect(after[F.donna.id]?.kind == .derived)
+        #expect(after[john.id]?.kind == .derived)
+        #expect(after[F.tim.id] == nil, "Tim derives to .none → no badge")
 
         _ = center.treeLinkBadges(for: profiles)
         _ = center.treeLinkBadges(for: profiles)
@@ -201,6 +211,11 @@ struct TreeLinkBadgeMemoTests {
         let jr = TreeIdentityCandidate(jrPerson)
         let outcome = center.pin(jr, on: unpinnedRick, among: profiles, attestation: "picked: Rick Breen, 2026-08-29")
         let savedProfile = try #require(outcome.profile)
+        // Pinning must not mint a new identity — the badge map is keyed by
+        // profile id, so a changed id here would silently orphan the badge
+        // in the People gallery. Asserted because the lookups below use
+        // savedProfile.id and would otherwise hide that.
+        #expect(savedProfile.id == unpinnedRick.id, "pinning preserves the profile id")
         _ = center.treeLinkBadges(for: profiles)
         #expect(center.badgeComputeCount == 3, "pinsRevision invalidates the memo")
 
@@ -208,16 +223,16 @@ struct TreeLinkBadgeMemoTests {
         var reloaded = profiles
         reloaded[0] = savedProfile
         let pinned = center.treeLinkBadges(for: reloaded)
-        #expect(pinned["rick"]?.kind == .pinned)
-        #expect(pinned["rick"]?.label == "GVQV-NW3")
-        #expect(pinned["rick"]?.tooltip.hasSuffix("confirmed 2026-08-29") == true)
+        #expect(pinned[savedProfile.id]?.kind == .pinned)
+        #expect(pinned[savedProfile.id]?.label == "GVQV-NW3")
+        #expect(pinned[savedProfile.id]?.tooltip.hasSuffix("confirmed 2026-08-29") == true)
     }
 
     @Test func treeGenerationInvalidatesTheMemo() {
         let (center, kinship) = makeCenter()
         let pinnedRick = F.profile("Rick", pin: "GVQV-NW3")
         kinship.install(graph: F.graph)
-        #expect(center.treeLinkBadges(for: [pinnedRick])["rick"]?.kind == .pinned)
+        #expect(center.treeLinkBadges(for: [pinnedRick])[pinnedRick.id]?.kind == .pinned)
         let builds = center.badgeComputeCount
         kinship.install(graph: F.graph)   // new generation, same content
         _ = center.treeLinkBadges(for: [pinnedRick])
@@ -232,10 +247,10 @@ struct TreeLinkBadgeMemoTests {
         let stale = F.profile("Ghost", pin: "NOPE-000")
         let out = F.profile("Tim", notInTree: true)
         let map = center.treeLinkBadges(for: [pinned, collided, stale, out])
-        #expect(map["rick"]?.kind == .pinProblem, "two profiles on one record collide")
-        #expect(map["dicky"]?.kind == .pinProblem)
-        #expect(map["ghost"]?.kind == .pinProblem)
-        #expect(map["ghost"]?.label == "fix pin")
-        #expect(map["tim"]?.kind == .notInTree)
+        #expect(map[pinned.id]?.kind == .pinProblem, "two profiles on one record collide")
+        #expect(map[collided.id]?.kind == .pinProblem)
+        #expect(map[stale.id]?.kind == .pinProblem)
+        #expect(map[stale.id]?.label == "fix pin")
+        #expect(map[out.id]?.kind == .notInTree)
     }
 }

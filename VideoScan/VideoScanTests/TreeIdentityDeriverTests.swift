@@ -596,9 +596,9 @@ struct TreeIdentityCenterTests {
         #expect(saved.map(\.name).sorted() == ["Donna", "Rick"])
         #expect(saved.first { $0.name == "Rick" }?.treeIdentityAttestation == "derived: owner setting")
         #expect(saved.first { $0.name == "Donna" }?.treeIdentityAttestation == "derived: tree root")
-        #expect(center.derivations["tim"] == TreeIdentityDerivation.none)
-        #expect(center.derivations["john breen"]?.certainCandidate?.personID == "@I6@", "proposal kept, not persisted")
-        #expect(center.derivations["rick"] == nil)
+        #expect(center.derivations[F.tim.id] == TreeIdentityDerivation.none)
+        #expect(center.derivations[john.id]?.certainCandidate?.personID == "@I6@", "proposal kept, not persisted")
+        #expect(center.derivations[F.rick.id] == nil)
         #expect(center.pinsRevision == 1)
         #expect(center.derivationRunCount == 1)
 
@@ -664,7 +664,7 @@ struct TreeIdentityCenterTests {
         kinship.install(graph: F.graph)
         await center.refresh(profiles: [F.rick, F.donna])
         #expect(writes == 0)
-        #expect(center.derivations["rick"]?.isAutoAcceptable == true)
+        #expect(center.derivations[F.rick.id]?.isAutoAcceptable == true)
     }
 
     /// SENSOR: detached work from a cleared tree must never publish its
@@ -755,7 +755,7 @@ struct TreeIdentityCenterTests {
 
         let profilesA = [F.tim]
         await center.refresh(profiles: profilesA)
-        #expect(center.derivations["tim"] == TreeIdentityDerivation.none)
+        #expect(center.derivations[F.tim.id] == TreeIdentityDerivation.none)
         #expect(center.derivationRunCount == 1)
 
         center.derivationPass = { graph, subjects, speakers in
@@ -774,8 +774,8 @@ struct TreeIdentityCenterTests {
         await gate.release()
         await staleB.value
 
-        #expect(center.derivations["tim"] == TreeIdentityDerivation.none)
-        #expect(center.derivations["rick"] == nil)
+        #expect(center.derivations[F.tim.id] == TreeIdentityDerivation.none)
+        #expect(center.derivations[F.rick.id] == nil)
         #expect(center.derivationRunCount == 1)
         #expect(center.pinsRevision == 0)
         #expect(saved.isEmpty, "superseded B must not auto-pin its owner verdict")
@@ -788,8 +788,8 @@ struct TreeIdentityCenterTests {
         center.store = { saved.append($0) }
         kinship.install(graph: F.graph)
         await center.refresh(profiles: [F.rick])
-        let oldCandidate = try #require(center.derivations["rick"]?.certainCandidate)
-        #expect(center.treeLinkBadges(for: [F.rick])["rick"]?.kind == .derived)
+        let oldCandidate = try #require(center.derivations[F.rick.id]?.certainCandidate)
+        #expect(center.treeLinkBadges(for: [F.rick])[F.rick.id]?.kind == .derived)
 
         let replacement = GedcomFamilyGraph(gedcomText: """
         0 HEAD
@@ -801,7 +801,7 @@ struct TreeIdentityCenterTests {
         """)
         kinship.install(graph: replacement)
 
-        #expect(center.treeLinkBadges(for: [F.rick])["rick"] == nil)
+        #expect(center.treeLinkBadges(for: [F.rick])[F.rick.id] == nil)
         #expect(center.showInTreeState(for: F.rick, among: [F.rick]) == ShowInTreeState.none)
         let outcome = center.pin(oldCandidate, on: F.rick, among: [F.rick], attestation: "stale")
         #expect(outcome.refusal?.contains("family tree changed") == true)
