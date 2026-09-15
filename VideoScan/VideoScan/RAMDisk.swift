@@ -1,4 +1,15 @@
 import Foundation
+import os
+
+/// This file runs on the QUIT path (VideoScanApp.applicationWillTerminate),
+/// synchronously, AFTER "app quitting" is written — and until 2026-09-14 it
+/// contained no logging at all. Both `contentsOfDirectory(/Volumes)` and
+/// `hdiutil detach -force` + `waitUntilExit()` can block indefinitely on an
+/// unresponsive mount, which reproduces the 2026-09-13 wedge signature exactly:
+/// "app quitting", then silence, forever. Rick's rule, 2026-09-14: log that you
+/// are ENTERING an operation that can block, not only that it finished.
+private let ramDiskLog = Logger(subsystem: "Rick-Breen.VideoScan",
+                                category: "ramdisk")
 
 /// Manages a macOS RAM disk for high-speed temp I/O.
 /// Uses hdiutil to create an in-memory disk image — pure RAM, no SSD wear, no latency.
@@ -112,7 +123,14 @@ actor RAMDisk {
         let prefix = "VideoScan_Temp"
         let volumesDir = "/Volumes"
         let fm = FileManager.default
+        // BEGIN line: this stat of the mount table blocks on an unresponsive
+        // network or RAID mount, and it is one of the last things the process
+        // does before exiting.
+        ramDiskLog.notice("ram disk sweep: scanning \(volumesDir, privacy: .public) for \(prefix, privacy: .public)*")
+        appLog.write("ram disk sweep: scanning \(volumesDir) for \(prefix)*")
         guard let entries = try? fm.contentsOfDirectory(atPath: volumesDir) else {
+            ramDiskLog.notice("ram disk sweep: \(volumesDir, privacy: .public) unreadable — nothing to detach")
+            appLog.write("ram disk sweep: \(volumesDir) unreadable — nothing to detach")
             return []
         }
 
@@ -125,15 +143,22 @@ actor RAMDisk {
             proc.standardOutput = Pipe()
             proc.standardError = Pipe()
             do {
+                // BEGIN line: hdiutil detach on a busy volume has no deadline
+                // here and waitUntilExit() never returns if it wedges.
+                ramDiskLog.notice("ram disk sweep: hdiutil detach -force \(mountPath, privacy: .public)")
+                appLog.write("ram disk sweep: hdiutil detach -force \(mountPath)")
                 try proc.run()
                 proc.waitUntilExit()
                 if proc.terminationStatus == 0 {
                     detached.append(mountPath)
                 }
+                appLog.write("ram disk sweep: hdiutil exited \(proc.terminationStatus) for \(mountPath)")
             } catch {
-                // ignore — best-effort
+                appLog.write("ram disk sweep: could not launch hdiutil for \(mountPath): \(error.localizedDescription)")
             }
         }
+        ramDiskLog.notice("ram disk sweep: done — detached \(detached.count)")
+        appLog.write("ram disk sweep: done — detached \(detached.count)")
         return detached
     }
 }
