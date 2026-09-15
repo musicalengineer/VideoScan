@@ -183,9 +183,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 alert.addButton(withTitle: "Quit Anyway")
                 alert.addButton(withTitle: "Keep Working")
 
+                appLog.write("quit requested with \(running) file operation(s) running — asking")
                 if alert.runModal() == .alertFirstButtonReturn {
+                    appLog.write("quit dialog: user chose Quit Anyway — cancelling \(running) operation(s)")
                     center.cancelAll()
                 } else {
+                    // Without this line, "Keep Working" is indistinguishable in
+                    // the log from a hang before willTerminate: no "app
+                    // quitting" line ever appears either way.
+                    appLog.write("quit dialog: user chose Keep Working — quit cancelled")
                     return .terminateCancel
                 }
             }
@@ -224,6 +230,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quitLine = "app quitting — \(BuildInfo.summary)"
         NSLog("VideoScan: %@", quitLine)
         appLog.write(quitLine)
+        // A non-empty list here is the signature of the 2026-09-14 kernel
+        // wedge: a publish that started and can never finish. appLog is
+        // write-through, so this survives a hang immediately after.
+        if let stuck = AtomicFilePublish.inFlightSummary() {
+            NSLog("VideoScan: publishes still in flight at quit — %@", stuck)
+            appLog.write("publishes still in flight at quit — \(stuck)")
+        }
         MainActor.assumeIsolated {
             // Belt-and-suspenders: a termination path that skipped
             // applicationShouldTerminate (rare) could still have a VLM
@@ -239,13 +252,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // Flush the catalog snapshot first so the user's records
             // survive an offline-volume relaunch.
+            //
+            // BEGIN line: saveCatalogNow blocks the MAIN THREAD inside
+            // writeQueue.sync — encode ~100k records, atomic write,
+            // F_FULLFSYNC, then a full streaming SHA-256 re-read. Any of
+            // those can block forever on a stalling volume.
+            appLog.write("shutdown step: saving catalog")
             catalogModel?.saveCatalogNow()
+            appLog.write("shutdown step: catalog saved")
         }
         // Synchronous on purpose — Cmd-Q must not return before the RAM disk
         // is gone, otherwise it survives in /Volumes. Skipped under a UI-test
         // target: the test app never creates a RAM disk, and the force-detach
         // would hit a live one owned by a concurrently running real instance.
         if !TestEnvironment.isTestHost {
+            appLog.write("shutdown step: sweeping stale RAM disks")
             let detached = RAMDisk.cleanupStaleMounts()
             if !detached.isEmpty {
                 NSLog("VideoScan: detached %d RAM disk(s) on exit", detached.count)
@@ -257,7 +278,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if mlxInferenceWasUsed() && !Self.isRunningTests {
             if !vlmDrainTimedOut {
                 // Flush queued GPU work while Metal is still healthy.
+                // BEGIN line: this blocks until ALL queued GPU work drains.
+                appLog.write("shutdown step: synchronizing MLX GPU stream")
                 synchronizeMLXForShutdown()
+                appLog.write("shutdown step: MLX GPU stream synchronized")
             }
             shutdownLogger.notice("MLX used this session — bypassing C++ static destructors via _exit(0)")
             appLog.write("app exit (clean, MLX static-dtor bypass)")

@@ -19,6 +19,7 @@
 
 import CryptoKit
 import Foundation
+import VideoScanCore
 
 struct ResearchStore: Sendable {
     /// The People directory (FamilyAssetStore.peopleDirectory in
@@ -181,12 +182,9 @@ struct ResearchStore: Sendable {
         guard values?.isDirectory == true, values?.isSymbolicLink != true else {
             throw StoreError.ioFailure("research directory is not a plain directory: \(directory.path)")
         }
-        let temp = directory.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
         do {
-            try data.write(to: temp, options: [.atomic])
-            _ = try fm.replaceItemAt(url, withItemAt: temp)
+            try AtomicFilePublish.write(data, to: url, durability: .fullFsync)
         } catch {
-            try? fm.removeItem(at: temp)
             throw StoreError.ioFailure(error.localizedDescription)
         }
     }

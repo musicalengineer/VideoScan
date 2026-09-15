@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import VideoScanCore
 @testable import VideoScan
 
 // MARK: - Signature lane planning at scale (codex #322, #324)
@@ -257,8 +258,7 @@ struct SignatureVerificationTests {
             .deletingLastPathComponent().appendingPathComponent("replacement.mov")
         FileManager.default.createFile(
             atPath: replacement.path, contents: Data(bytes))
-        _ = try FileManager.default.replaceItemAt(
-            URL(fileURLWithPath: keeper), withItemAt: replacement)
+        try AtomicFilePublish.publish(replacement, as: URL(fileURLWithPath: keeper))
 
         guard case .failure(.changedSinceVerification(let changedPath)) =
                 SignatureVerification.revalidate(proof) else {
@@ -285,8 +285,7 @@ struct SignatureVerificationTests {
             .deletingLastPathComponent().appendingPathComponent("new-target.mov")
         FileManager.default.createFile(
             atPath: replacement.path, contents: Data(bytes))
-        _ = try FileManager.default.replaceItemAt(
-            URL(fileURLWithPath: keeperTarget), withItemAt: replacement)
+        try AtomicFilePublish.publish(replacement, as: URL(fileURLWithPath: keeperTarget))
 
         guard case .failure(.changedSinceVerification(let changedPath)) =
                 SignatureVerification.revalidate(proof) else {

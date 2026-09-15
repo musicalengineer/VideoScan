@@ -80,7 +80,9 @@ func synchronizeMLXForShutdown() {
             MLX.Stream.gpu.synchronize()
         }
         let ms = (CFAbsoluteTimeGetCurrent() - started) * 1000
-        mlxShutdownLog.info("MLX GPU stream synchronized for shutdown in \(String(format: "%.0f", ms))ms")
+        // .notice: .info is memory-only in the unified log and is not
+        // guaranteed to reach disk — useless for reconstructing a hang.
+        mlxShutdownLog.notice("MLX GPU stream synchronized for shutdown in \(String(format: "%.0f", ms))ms")
     } catch {
         // Log and continue — quit must proceed; the _exit backstop
         // still prevents the static-dtor segfault.

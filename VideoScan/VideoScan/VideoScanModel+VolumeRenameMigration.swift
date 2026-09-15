@@ -556,6 +556,8 @@ extension VideoScanModel {
                 await performVolumeRenameMigrationAndNotify(for: target, candidate: cand)
                 return
             case .ask:
+                volumeRenameLog.notice("Dialog SHOWN “Was This Volume Renamed?” — \(cand.oldVolumeName, privacy: .public) → \(cand.newVolumeName, privacy: .public) (\(cand.mismatchedRecords) mismatched, drift \(cand.driftDetected))")
+                appLog.write("Volume rename dialog shown (ask): \(cand.oldVolumeName) → \(cand.newVolumeName)")
                 pendingVolumeRenameNotice = VolumeRenameNotice(
                     kind: .ask,
                     targetID: target.id,
@@ -580,6 +582,8 @@ extension VideoScanModel {
     ) async {
         let result = await migrateRenamedVolume(for: target)
         guard case .completed(let migrated, let mismatched, let snapshotPath) = result else { return }
+        volumeRenameLog.notice("Dialog SHOWN “Volume Renamed” — \(candidate.oldVolumeName, privacy: .public) → \(candidate.newVolumeName, privacy: .public); \(migrated) record(s) migrated, \(mismatched) left alone")
+        appLog.write("Volume rename dialog shown (migrated): \(candidate.oldVolumeName) → \(candidate.newVolumeName); \(migrated) migrated, \(mismatched) left alone")
         pendingVolumeRenameNotice = VolumeRenameNotice(
             kind: .migrated(undoSnapshotPath: snapshotPath),
             targetID: target.id,
@@ -792,6 +796,8 @@ extension VideoScanModel {
     /// spec: the no-UUID accept path gets the same follow-up).
     func acceptVolumeRenameAsk(_ notice: VolumeRenameNotice) async {
         guard notice.kind == .ask else { return }
+        volumeRenameLog.notice("Dialog CHOICE “Update” — \(notice.oldVolumeName, privacy: .public) → \(notice.newVolumeName, privacy: .public)")
+        appLog.write("Volume rename: user chose Update for \(notice.oldVolumeName) → \(notice.newVolumeName)")
         pendingVolumeRenameNotice = nil
         guard let target = scanTargets.first(where: { $0.id == notice.targetID }),
               let cand = volumeRenameCandidate(for: notice.oldTargetPath) else { return }
@@ -801,6 +807,8 @@ extension VideoScanModel {
     /// Ask-tier "Not Now" (and stray dismissals): never nag again this
     /// session. The row badge stays as the manual affordance.
     func dismissVolumeRenameNotice(_ notice: VolumeRenameNotice) {
+        volumeRenameLog.notice("Dialog DISMISSED (Not Now / Esc) — \(notice.oldVolumeName, privacy: .public) → \(notice.newVolumeName, privacy: .public); no further auto prompts this session")
+        appLog.write("Volume rename: user chose Not Now for \(notice.oldVolumeName) → \(notice.newVolumeName)")
         if notice.kind == .ask {
             volumeRenameAutoSuppressed.insert(PathScope.normalize(notice.oldTargetPath))
         }
@@ -851,6 +859,8 @@ extension VideoScanModel {
     /// move-identity + progress UI; no new scan machinery). Never called
     /// automatically — migration is not gated on scanning.
     func rescanAfterVolumeRename(_ notice: VolumeRenameNotice) {
+        volumeRenameLog.notice("Dialog CHOICE “\(ScanVerb.rescan, privacy: .public)” after rename — \(notice.newVolumeName, privacy: .public)")
+        appLog.write("Volume rename: user chose \(ScanVerb.rescan) after \(notice.oldVolumeName) → \(notice.newVolumeName)")
         pendingVolumeRenameNotice = nil
         guard let target = scanTargets.first(where: { $0.id == notice.targetID }) else { return }
         startTarget(target)
@@ -874,6 +884,8 @@ extension VideoScanModel {
             mountedProvider: mountedProvider,
             statProvider: statProvider)
         guard let cand else {
+            volumeRenameLog.notice("Dialog SHOWN “That Doesn't Look Like the Same Drive” — volume could not be checked")
+            appLog.write("Volume rename dialog shown (refused): volume could not be checked")
             pendingVolumeRenameNotice = VolumeRenameNotice(
                 kind: .refused(reason: "That volume couldn't be checked — it may have just disconnected, or \(VolumeReachability.volumeName(forPath: target.searchPath)) has no cataloged files to compare."),
                 targetID: target.id,
@@ -888,6 +900,7 @@ extension VideoScanModel {
             ? 0 : Double(cand.cleanCount) / Double(cand.sampledCount)
         guard fraction >= 0.8 else {
             volumeRenameLog.notice("Manual rename check refused: \(cand.targetPath, privacy: .public) vs \(cand.newVolumeRoot, privacy: .public) — \(cand.cleanCount)/\(cand.sampledCount) samples clean")
+            appLog.write("Volume rename dialog shown (refused): only \(cand.cleanCount)/\(cand.sampledCount) samples clean for \(cand.oldVolumeName) → \(cand.newVolumeName)")
             pendingVolumeRenameNotice = VolumeRenameNotice(
                 kind: .refused(reason: "Only \(cand.cleanCount) of \(cand.sampledCount) checked files from \(cand.oldVolumeName) were found on \(cand.newVolumeName) — that doesn't look like the same drive, so the catalog was left alone."),
                 targetID: target.id,

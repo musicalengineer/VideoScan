@@ -288,7 +288,12 @@ extension VideoScanModel {
         // ORIGINAL reason, batched on the ledger's off-main worker.
         let tidyBatchID = "tidy-\(UUID().uuidString.prefix(8))"
         var byReason: [String: [VideoRecord]] = [:]
-        for row in plan.rows where changed.contains(row.id) {
+        // Set, not the `changed` Array: `Array.contains` is O(n), and this
+        // loop runs once per planned row. An 80k-row Tidy was doing 80k x 80k
+        // = 6.4 BILLION UUID comparisons here — ~89 s of the 104 s that blew
+        // the 15 s budget in `hundredKMigration`. (2026-09-15)
+        let changedIDs = Set(changed)
+        for row in plan.rows where changedIDs.contains(row.id) {
             if let rec = record(forID: row.id) { byReason[row.reason.rawValue, default: []].append(rec) }
         }
         for (reason, recs) in byReason { ledgerSetAside(recs, reason: reason, by: .tidy, at: now, batchID: tidyBatchID) }

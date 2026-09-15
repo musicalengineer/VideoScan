@@ -311,155 +311,12 @@ extension PersonFinderView {
                             // Build set of all people currently being scanned across all active jobs
                             let scanningIDs = Set(model.jobs.filter { $0.status.isActive }.compactMap { $0.assignedProfile?.uuid })
                             ForEach(displayedProfiles) { profile in
-                                let isBeingScanned = scanningIDs.contains(profile.uuid)
-                                let isActive = isBeingScanned
-                                PersonCard(profile: profile,
-                                           isActive: isActive,
-                                           justSaved: justSavedProfileID == profile.id,
-                                           saveProblem: profileSaveProblem?.profileID == profile.id
-                                               ? profileSaveProblem?.message : nil,
-                                           imageSize: personImageSize,
-                                           cardWidth: personCardWidth,
-                                           nameFontSize: personNameFontSize,
-                                           relationshipsLine: kinshipCenter.relationshipsLine(
-                                               for: profile, among: model.savedProfiles),
-                                           warnings: warnings[profile.id] ?? [],
-                                           onWarningAction: { action in
-                                               performWarningAction(action, on: profile)
-                                           },
-                                           portrait: portraits[profile.id])
-                                    // Holdout Review badge — top-trailing over
-                                    // the portrait. The Button in the overlay
-                                    // wins the click over the card's
-                                    // onTapGesture below (deepest view first).
-                                    .overlay(alignment: .topTrailing) {
-                                        holdoutReviewBadge(for: profile)
-                                    }
-                                    // A green check is the only tree state shown
-                                    // in the gallery. Derived, ambiguous, broken,
-                                    // absent, and not-in-tree all appear only via
-                                    // "Show Missing GEDCOM" and editor details.
-                                    .overlay(alignment: .topLeading) {
-                                        if let badge = treeLinks[profile.id],
-                                           TreeLinkBadge.hasGEDCOMID(badge) {
-                                            GEDCOMIDCheckView(badge: badge,
-                                                              personName: profile.name) {
-                                                showInFamilyTree(profile)
-                                            }
-                                            .accessibilityIdentifier("pf.treelink.\(profile.name).\(profile.id)")
-                                        }
-                                    }
-                                    .opacity(isBeingScanned ? 0.7 : 1.0)
-                                    // Gauntlet flow 1 right-clicks the card to
-                                    // reach "Search for <name>…". Test-only.
-                                    // Name for the Gauntlet's eyes, uuid so two
-                                    // Richards are two identifiers (2026-09-12).
-                                    .accessibilityIdentifier("pf.person.\(profile.name).\(profile.id)")
-                                    // Double-click opens the editor (same
-                                    // request as the context menu's Edit —
-                                    // PeopleGalleryNavigation.swift). Declared
-                                    // BEFORE the single tap: SwiftUI still
-                                    // fires the single on the first click, so
-                                    // the card is selected, then edited.
-                                    .onTapGesture(count: 2) {
-                                        performCardClick(.double, on: profile, isBeingScanned: isBeingScanned)
-                                    }
-                                    .onTapGesture {
-                                        performCardClick(.single, on: profile, isBeingScanned: isBeingScanned)
-                                    }
-                                    // The selected card — the person whose
-                                // faces are in the strip — wears a thin
-                                // accent frame so the arrow keys have
-                                // something visible to move (2026-09-13).
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.accentColor.opacity(0.55), lineWidth: 1.5)
-                                        .opacity(model.settings.activeProfileUUID == profile.uuid ? 1 : 0)
-                                )
-                                .draggable(profile.id) {
-                                        PersonCard(profile: profile,
-                                                   isActive: false,
-                                                   imageSize: personImageSize * 0.8,
-                                                   cardWidth: personCardWidth * 0.8,
-                                                   nameFontSize: personNameFontSize)
-                                            .opacity(0.8)
-                                    }
-                                    .dropDestination(for: String.self) { items, _ in
-                                        guard let fromID = items.first else { return false }
-                                        model.reorderProfiles(fromID: fromID, toID: profile.id)
-                                        draggingProfileID = nil
-                                        return true
-                                    } isTargeted: { targeted in
-                                        if targeted { draggingProfileID = profile.id }
-                                    }
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .stroke(Color.accentColor, lineWidth: 2)
-                                            .opacity(draggingProfileID == profile.id ? 1 : 0)
-                                            .animation(.easeInOut(duration: 0.15), value: draggingProfileID)
-                                    )
-                                    .contextMenu {
-                                        Button("Search for \(profile.displayName)\u{2026}") {
-                                            addJobForPerson(profile)
-                                        }
-                                        Divider()
-                                        Button("Show \(profile.displayName) in Family Tree") {
-                                            showInFamilyTree(profile)
-                                        }
-                                        Divider()
-                                        Button("Edit \(profile.displayName)\u{2026}") {
-                                            openEditor(PersonEditRequest(profile))
-                                        }
-                                        Divider()
-                                        // ONE review entry point (unified-review
-                                        // 2026-07-27): replaces the old
-                                        // "Confirm <name>…" item. Holdout-first
-                                        // when a blind queue is pending for this
-                                        // person, straight to candidates
-                                        // otherwise — same verb as the badge.
-                                        // Holdout queues and validation labels are
-                                        // keyed by the short name: a shared name is
-                                        // refused here, not guessed (2026-09-12).
-                                        let sharedName = model.nameIsShared(profile)
-                                        Button("Review \(profile.displayName)\u{2026}") {
-                                            confirmTarget = ConfirmSheetTarget(
-                                                profile: profile,
-                                                holdoutQueue: holdoutReview.pendingQueue(for: profile.name))
-                                        }
-                                        .disabled(sharedName)
-                                        .help(sharedName
-                                              ? PersonFinderModel.sharedNameRefusal(profile, operation: "review")
-                                              : "Blind holdout review first (when one is pending), then rate catalog-flagged candidates Definitely / Likely / No. Builds the labeled set the classifier trains on.")
-                                        Button("View Confirmations\u{2026}") {
-                                            confirmationsTarget = ConfirmationsTarget(profile: profile)
-                                        }
-                                        .disabled(sharedName)
-                                        .help(sharedName
-                                              ? PersonFinderModel.sharedNameRefusal(profile, operation: "confirmations")
-                                              : "Cumulative progress: outcomes, signal precision, rounds, what remains.")
-                                        if !model.referenceFaces.isEmpty
-                                            && (model.settings.activeProfileUUID.map { $0 == profile.uuid }
-                                                ?? (model.settings.personName.lowercased() == profile.name.lowercased())) {
-                                            Divider()
-                                            Menu("Remove Low-Confidence Photos") {
-                                                let poorCount = model.referenceFaces.filter { $0.confidence < 0.60 }.count
-                                                let belowGoodCount = model.referenceFaces.filter { $0.confidence < 0.80 }.count
-                                                Button("Below Fair (< 60%) — \(poorCount) photo\(poorCount == 1 ? "" : "s")") {
-                                                    model.removeReferenceFaces(belowConfidence: 0.60)
-                                                }
-                                                .disabled(poorCount == 0)
-                                                Button("Below Good (< 80%) — \(belowGoodCount) photo\(belowGoodCount == 1 ? "" : "s")") {
-                                                    model.removeReferenceFaces(belowConfidence: 0.80)
-                                                }
-                                                .disabled(belowGoodCount == 0)
-                                            }
-                                        }
-                                        Divider()
-                                        Button("Delete \(profile.displayName)\u{2026}", role: .destructive) {
-                                            confirmDeleteProfile = profile
-                                        }
-                                        .keyboardShortcut(.delete, modifiers: .command)
-                                    }
+                                personCardEntry(
+                                    profile,
+                                    isBeingScanned: scanningIDs.contains(profile.uuid),
+                                    warnings: warnings[profile.id] ?? [],
+                                    portrait: portraits[profile.id],
+                                    treeLink: treeLinks[profile.id])
                             }
 
                             // Step 3: "Search for Family" — fan a scan across
@@ -662,6 +519,169 @@ extension PersonFinderView {
             .environmentObject(model)
             .environmentObject(catalogModel)
         }
+    }
+
+    /// One person's card and everything hung off it — drag, drop, overlays,
+    /// gestures and the context menu. Extracted from `peopleGallery` 2026-09-14:
+    /// inline, this subtree took the gallery getter to 2,045 ms of type-checking
+    /// locally (10,368 ms on the CI runner, a 12x regression the new nightly
+    /// ratchet caught the night it landed). The per-card lookups are parameters
+    /// so the caller does them once per profile and the type-checker sees a
+    /// plain call here. Pure move — no behaviour, identifiers or ordering changed.
+    @ViewBuilder
+    func personCardEntry(_ profile: POIProfile,
+                         isBeingScanned: Bool,
+                         warnings: [KinshipWarning],
+                         portrait: PersonPhotoResolution?,
+                         treeLink: TreeLinkBadge?) -> some View {
+        let isActive = isBeingScanned
+        PersonCard(profile: profile,
+                   isActive: isActive,
+                   justSaved: justSavedProfileID == profile.id,
+                   saveProblem: profileSaveProblem?.profileID == profile.id
+                       ? profileSaveProblem?.message : nil,
+                   imageSize: personImageSize,
+                   cardWidth: personCardWidth,
+                   nameFontSize: personNameFontSize,
+                   relationshipsLine: kinshipCenter.relationshipsLine(
+                       for: profile, among: model.savedProfiles),
+                   warnings: warnings,
+                   onWarningAction: { action in
+                       performWarningAction(action, on: profile)
+                   },
+                   portrait: portrait)
+            // Holdout Review badge — top-trailing over
+            // the portrait. The Button in the overlay
+            // wins the click over the card's
+            // onTapGesture below (deepest view first).
+            .overlay(alignment: .topTrailing) {
+                holdoutReviewBadge(for: profile)
+            }
+            // A green check is the only tree state shown
+            // in the gallery. Derived, ambiguous, broken,
+            // absent, and not-in-tree all appear only via
+            // "Show Missing GEDCOM" and editor details.
+            .overlay(alignment: .topLeading) {
+                if let badge = treeLink,
+                   TreeLinkBadge.hasGEDCOMID(badge) {
+                    GEDCOMIDCheckView(badge: badge,
+                                      personName: profile.name) {
+                        showInFamilyTree(profile)
+                    }
+                    .accessibilityIdentifier("pf.treelink.\(profile.name).\(profile.id)")
+                }
+            }
+            .opacity(isBeingScanned ? 0.7 : 1.0)
+            // Gauntlet flow 1 right-clicks the card to
+            // reach "Search for <name>…". Test-only.
+            // Name for the Gauntlet's eyes, uuid so two
+            // Richards are two identifiers (2026-09-12).
+            .accessibilityIdentifier("pf.person.\(profile.name).\(profile.id)")
+            // Double-click opens the editor (same
+            // request as the context menu's Edit —
+            // PeopleGalleryNavigation.swift). Declared
+            // BEFORE the single tap: SwiftUI still
+            // fires the single on the first click, so
+            // the card is selected, then edited.
+            .onTapGesture(count: 2) {
+                performCardClick(.double, on: profile, isBeingScanned: isBeingScanned)
+            }
+            .onTapGesture {
+                performCardClick(.single, on: profile, isBeingScanned: isBeingScanned)
+            }
+            // The selected card — the person whose
+        // faces are in the strip — wears a thin
+        // accent frame so the arrow keys have
+        // something visible to move (2026-09-13).
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.accentColor.opacity(0.55), lineWidth: 1.5)
+                .opacity(model.settings.activeProfileUUID == profile.uuid ? 1 : 0)
+        )
+        .draggable(profile.id) {
+                PersonCard(profile: profile,
+                           isActive: false,
+                           imageSize: personImageSize * 0.8,
+                           cardWidth: personCardWidth * 0.8,
+                           nameFontSize: personNameFontSize)
+                    .opacity(0.8)
+            }
+            .dropDestination(for: String.self) { items, _ in
+                guard let fromID = items.first else { return false }
+                model.reorderProfiles(fromID: fromID, toID: profile.id)
+                draggingProfileID = nil
+                return true
+            } isTargeted: { targeted in
+                if targeted { draggingProfileID = profile.id }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.accentColor, lineWidth: 2)
+                    .opacity(draggingProfileID == profile.id ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.15), value: draggingProfileID)
+            )
+            .contextMenu {
+                Button("Search for \(profile.displayName)\u{2026}") {
+                    addJobForPerson(profile)
+                }
+                Divider()
+                Button("Show \(profile.displayName) in Family Tree") {
+                    showInFamilyTree(profile)
+                }
+                Divider()
+                Button("Edit \(profile.displayName)\u{2026}") {
+                    openEditor(PersonEditRequest(profile))
+                }
+                Divider()
+                // ONE review entry point (unified-review
+                // 2026-07-27): replaces the old
+                // "Confirm <name>…" item. Holdout-first
+                // when a blind queue is pending for this
+                // person, straight to candidates
+                // otherwise — same verb as the badge.
+                // Holdout queues and validation labels are
+                // keyed by the short name: a shared name is
+                // refused here, not guessed (2026-09-12).
+                let sharedName = model.nameIsShared(profile)
+                Button("Review \(profile.displayName)\u{2026}") {
+                    confirmTarget = ConfirmSheetTarget(
+                        profile: profile,
+                        holdoutQueue: holdoutReview.pendingQueue(for: profile.name))
+                }
+                .disabled(sharedName)
+                .help(sharedName
+                      ? PersonFinderModel.sharedNameRefusal(profile, operation: "review")
+                      : "Blind holdout review first (when one is pending), then rate catalog-flagged candidates Definitely / Likely / No. Builds the labeled set the classifier trains on.")
+                Button("View Confirmations\u{2026}") {
+                    confirmationsTarget = ConfirmationsTarget(profile: profile)
+                }
+                .disabled(sharedName)
+                .help(sharedName
+                      ? PersonFinderModel.sharedNameRefusal(profile, operation: "confirmations")
+                      : "Cumulative progress: outcomes, signal precision, rounds, what remains.")
+                if !model.referenceFaces.isEmpty
+                    && (model.settings.activeProfileUUID.map { $0 == profile.uuid }
+                        ?? (model.settings.personName.lowercased() == profile.name.lowercased())) {
+                    Divider()
+                    Menu("Remove Low-Confidence Photos") {
+                        let poorCount = model.referenceFaces.filter { $0.confidence < 0.60 }.count
+                        let belowGoodCount = model.referenceFaces.filter { $0.confidence < 0.80 }.count
+                        Button("Below Fair (< 60%) — \(poorCount) photo\(poorCount == 1 ? "" : "s")") {
+                            model.removeReferenceFaces(belowConfidence: 0.60)
+                        }
+                        .disabled(poorCount == 0)
+                        Button("Below Good (< 80%) — \(belowGoodCount) photo\(belowGoodCount == 1 ? "" : "s")") {
+                            model.removeReferenceFaces(belowConfidence: 0.80)
+                        }
+                        .disabled(belowGoodCount == 0)
+                    }
+                }
+                Divider()
+                Button("Delete \(profile.displayName)\u{2026}", role: .destructive) {
+                    confirmDeleteProfile = profile
+                }
+                .keyboardShortcut(.delete, modifiers: .command)
+            }
     }
 }
 

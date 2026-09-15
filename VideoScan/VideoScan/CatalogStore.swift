@@ -857,6 +857,13 @@ final class CatalogStore {
         var writeError: CatalogWriteError?
         // Captured on the main actor; the closure crosses to writeQueue.
         let seam = testAfterWriteBeforeVerify
+        // BEGIN line before a synchronous, unbounded write. Everything inside
+        // writeQueue.sync — encode, atomic write, F_FULLFSYNC, SHA-256 re-read
+        // — can block forever on a stalling volume, and this call happens on
+        // the main thread during applicationWillTerminate.
+        // os.Logger's message is an autoclosure, so the capture must be explicit.
+        let destName = fileURL.lastPathComponent
+        catalogStoreLog.notice("catalog save: BEGIN \(records.count) records → \(destName, privacy: .public)")
         writeQueue.sync {
             writeError = Self.encodeAndWrite(payload: payload, to: fileURL,
                                              purpose: .liveCatalog,
@@ -1195,7 +1202,10 @@ final class CatalogStore {
             }
 
             let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-            catalogStoreLog.debug("catalog save: encode+write+verify of \(data.count) bytes took \(ms, format: .fixed(precision: 1)) ms, sha256 \(expected.prefix(12), privacy: .public)")
+            // .notice, not .debug: debug is streamed live but NOT persisted by
+            // the unified log, so it cannot be read back after a hang — which is
+            // the only time anyone wants this line.
+            catalogStoreLog.notice("catalog save: encode+write+verify of \(data.count) bytes took \(ms, format: .fixed(precision: 1)) ms, sha256 \(expected.prefix(12), privacy: .public)")
             return nil
         } catch {
             let err = CatalogWriteError.writeFailed(String(describing: error))
