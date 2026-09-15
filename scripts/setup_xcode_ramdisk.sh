@@ -1,8 +1,9 @@
 #!/bin/bash
-# setup-xcoderam.sh — create a RAM-disk-backed DerivedData volume for Xcode.
+# setup_xcode_ramdisk.sh — create a RAM-disk-backed DerivedData volume for Xcode.
 #
 # Source code stays on SSD; only the build cache lives in RAM. Re-run any time
 # /Volumes/XcodeRAM (or your chosen name) is missing — e.g. after a reboot.
+# The LaunchAgent com.rickb.xcode-ramdisk invokes this path at login.
 #
 # Defaults: 16 GB, volume name "XcodeRAM". Override with --size N (GB) and
 # --name LABEL. Idempotent: bails if the target volume is already mounted.
@@ -10,9 +11,9 @@
 # 16 GB is the standard (2026-07-02): 8 GB overflowed under parallel agent builds.
 #
 # Usage:
-#   setup-xcoderam.sh                 # 16 GB, /Volumes/XcodeRAM
-#   setup-xcoderam.sh --size 8        # 8 GB
-#   setup-xcoderam.sh --size 6 --name ProjectXRAM
+#   setup_xcode_ramdisk.sh                 # 16 GB, /Volumes/XcodeRAM
+#   setup_xcode_ramdisk.sh --size 8        # 8 GB
+#   setup_xcode_ramdisk.sh --size 6 --name ProjectXRAM
 set -euo pipefail
 
 SIZE_GB=16
@@ -23,7 +24,7 @@ while [ $# -gt 0 ]; do
         --size) SIZE_GB="$2"; shift 2 ;;
         --name) NAME="$2"; shift 2 ;;
         -h|--help)
-            sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "Unknown arg: $1" >&2; exit 2 ;;
     esac
@@ -34,9 +35,11 @@ MOUNT="/Volumes/$NAME"
 if [ -d "$MOUNT" ]; then
     echo "$NAME already mounted — skipping creation."
 else
-    # hdiutil takes sectors; 512 B each → 2 Mi sectors per GB.
+    # ram:// takes 512-byte sectors → 2 Mi sectors per GB.
+    # `diskutil image attach` replaces the deprecated `hdiutil attach -nomount`;
+    # it prints "<dev>\t<content hint>\t<mount point>", so take field 1.
     SECTORS=$(( SIZE_GB * 1024 * 1024 * 2 ))
-    DEV=$(hdiutil attach -nomount "ram://$SECTORS" | awk '{print $1}')
+    DEV=$(diskutil image attach --noMount "ram://$SECTORS" | awk 'NR==1 {print $1}')
     echo "Created ${SIZE_GB} GB RAM device: $DEV"
     diskutil erasevolume APFS "$NAME" "$DEV"
 fi

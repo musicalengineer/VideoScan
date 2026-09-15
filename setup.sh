@@ -279,11 +279,9 @@ echo "    open ${REPO_ROOT}/VideoScan/VideoScan.xcodeproj"
 echo "Then build and run (⌘R) in Xcode."
 echo
 echo "${BOLD}Optional dev-machine speedup:${RESET}"
-echo "  Mount a 32 GB RAM disk and point Xcode DerivedData at it for"
+echo "  Mount a 16 GB RAM disk and point Xcode DerivedData at it for"
 echo "  dramatically faster builds (Debug edit-build-run loop drops"
 echo "  from ~3 min to ~5 sec). On the Mac Studio M4 Max this is a"
 echo "  big win. Setup script lives at:"
-echo "    ~/bin/setup-xcoderam.sh"
-echo "  (If missing on this machine, see VideoScan's README or ask"
-echo "   Claude to recreate it — it's a 10-line shell script.)"
+echo "    ${REPO_ROOT}/scripts/setup_xcode_ramdisk.sh"
 echo
