@@ -861,7 +861,9 @@ final class CatalogStore {
         // writeQueue.sync — encode, atomic write, F_FULLFSYNC, SHA-256 re-read
         // — can block forever on a stalling volume, and this call happens on
         // the main thread during applicationWillTerminate.
-        catalogStoreLog.notice("catalog save: BEGIN \(records.count) records → \(fileURL.lastPathComponent, privacy: .public)")
+        // os.Logger's message is an autoclosure, so the capture must be explicit.
+        let destName = fileURL.lastPathComponent
+        catalogStoreLog.notice("catalog save: BEGIN \(records.count) records → \(destName, privacy: .public)")
         writeQueue.sync {
             writeError = Self.encodeAndWrite(payload: payload, to: fileURL,
                                              purpose: .liveCatalog,
