@@ -460,8 +460,7 @@ struct MediaFileOperationRow: View {
                 // (compare's pattern, extended to Find & Tag — Rick
                 // 2026-08-04). Clicks INSIDE the expanded detail below
                 // must never reach here (Bug A).
-                if job is PairCompareJob || job is FindPersonJob || job is AssessCopiesJob
-                    || job is VerifyArchiveCopiesJob || job is ArchiveAngelJob { onToggleExpand() }
+                if job.kind.hasDetailView { onToggleExpand() }
             }
 
             if isExpanded, let compare = job as? PairCompareJob {
@@ -781,6 +780,33 @@ struct MediaFileOperationBadge: View {
 }
 
 extension MediaFileOperationKind {
+
+    /// Does this row expand to show what the job actually did?
+    ///
+    /// ONE list. Until 2026-09-15 the set of expandable kinds was written
+    /// twice — as a chain of `job is PairCompareJob || …` in the row's tap
+    /// gesture, and again as the `if isExpanded, let x = job as? T` blocks
+    /// in its body. Two lists of the same thing drift, and the drift is
+    /// silent in both directions: a row that refuses to expand, or one that
+    /// expands to nothing.
+    ///
+    /// DELIBERATELY EXHAUSTIVE — no `default`. Adding an eighteenth kind
+    /// will not compile until someone decides whether it has a detail view,
+    /// which is exactly the decision that gets forgotten. The twelve `false`
+    /// cases are not an oversight; they are the backlog Rick picked up on
+    /// 2026-09-15 ("detail views for the remaining job kinds"), and they are
+    /// listed by name so that backlog is readable from the code.
+    var hasDetailView: Bool {
+        switch self {
+        case .compare, .findPerson, .assessCopies, .verifyArchive, .archiveAngel:
+            return true
+        case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
+             .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
+             .promote:
+            return false
+        }
+    }
+
     /// Badge capsule fills. Every value is a hand-darkened variant of the
     /// verb's original hue — dark enough to carry the badge's white
     /// small-caps text (Rick 2026-07-31: the system colors were too light;
