@@ -407,7 +407,14 @@ extension ArchiveView {
         let key = RecordsVersion(count: model.records.count,
                                  revision: model.volumeAggregatesRevision)
         return nudgeMemo.value(for: key) {
-            ArchiveNudge.assess(snapshot.notYetArchived)
+            // Belt and braces. `notYetArchived` already excludes anything
+            // with a master copy, so this is normally a no-op — but this
+            // list is what Rick CLICKS, and on 2026-09-16 he clicked one
+            // and got "already promoted". Nothing offered here may be
+            // something Promote will throw back. O(1) per record (one
+            // index lookup), inside the memo, never per render.
+            ArchiveNudge.assess(
+                snapshot.notYetArchived.filter { !model.promoteWouldRefusePermanently($0) })
         }
     }
 }

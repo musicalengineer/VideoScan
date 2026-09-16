@@ -82,7 +82,15 @@ extension ArchiveAngelCandidate {
         // markDerivatives is only a filename heuristic and cannot see
         // provenance; this can.
         let archived = model.isArchivedOrVersionOfArchived(r)
-        let onMaster = facts?.isMasterArchive == true || model.isInsideMasterArchive(path: r.fullPath)
+        // `promoteWouldRefusePermanently` — NOT a path test. A promoted
+        // original stays on its own volume and gains a LINKED copy, so
+        // "is this path inside the archive?" answers no for every file
+        // Rick has ever promoted, and the Angel proposed them all over
+        // again (Rick 2026-09-16: clicking one said "already promoted").
+        // Same function the promote engine refuses with; see
+        // VideoScanModel.promoteRefusal.
+        let onMaster = facts?.isMasterArchive == true
+            || model.promoteWouldRefusePermanently(r)
         let name = r.volumeName.isEmpty ? VolumeReachability.displayLabel(forPath: r.fullPath) : r.volumeName
         // A scan-target fact answers reachability without touching the
         // disk; only pathless strays pay for a stat.

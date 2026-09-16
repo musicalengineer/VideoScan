@@ -88,6 +88,16 @@ struct ArchivePromotePlan: Sendable {
         case insideArchiveRoot
         case offline
         case purged
+
+        /// True when the refusal is a settled fact about the record rather
+        /// than a condition of the moment.
+        ///
+        /// Recommendation surfaces filter on THIS. `.offline` is excluded
+        /// deliberately: a drive comes back, and testing reachability would
+        /// mean a `stat` per record in a list that can run to thousands —
+        /// the kind of O(records) work that must never reach a view body.
+        /// The permanent four cost nothing but an index lookup.
+        var isPermanent: Bool { self != .offline }
     }
     /// Archive-name overrides per record (Promote-Helper, Rick 2026-08-19):
     /// the slug used in that entry's destination filename in place of the
@@ -637,6 +647,50 @@ extension VideoScanModel {
     // MARK: Promote — plan + routing
 
     /// Build the confirmation-sheet plan for `ids` (spec §4). Runs once
+    /// THE ONE ANSWER to "would Promote refuse this record, and why?"
+    ///
+    /// Rick, 2026-09-16, after clicking a file the Archive view had just
+    /// offered him: *"make sure the AA and the other recommendation file
+    /// list in archive view does not recommend a file to promote then when
+    /// you go to promote it, it says 'already promoted'. It is that
+    /// simple."*
+    ///
+    /// It got un-simple because three surfaces each answered "is this
+    /// already archived?" their own way:
+    ///
+    ///   buildPromotePlan / Archive categories  masterArchiveCopy(of:) != nil
+    ///   ArchiveAngel.hardFloor                 isOnMasterArchive — the PATH
+    ///   ArchiveAngel `archived`                isArchiveCopy || inside || copy
+    ///
+    /// The middle one is the trap: a promoted original STAYS WHERE IT IS
+    /// and gains a linked copy, so "is this path inside the archive?"
+    /// answers *no* for every file that has ever been promoted.
+    ///
+    /// So there is now one function, and the engine that does the refusing
+    /// is the one that defines it. A recommender that forgets to call this
+    /// is offering the user something Promote will throw back at them.
+    ///
+    /// O(1) per record after the promotion index's one rebuild per version;
+    /// the only non-trivial step is the `.offline` reachability probe, which
+    /// is why callers that run over whole lists filter on `isPermanent`.
+    func promoteRefusal(_ rec: VideoRecord) -> ArchivePromotePlan.Skip? {
+        if rec.isPurged { return .purged }
+        if isArchiveCopy(rec) { return .isArchiveCopy }
+        if isInsideMasterArchive(path: rec.fullPath) { return .insideArchiveRoot }
+        if masterArchiveCopy(of: rec) != nil { return .alreadyPromoted }
+        if !VolumeReachability.isReachable(path: rec.fullPath) { return .offline }
+        return nil
+    }
+
+    /// The recommendation-surface form: would Promote refuse this for a
+    /// reason that will still be true in five minutes? Cheap — no disk.
+    func promoteWouldRefusePermanently(_ rec: VideoRecord) -> Bool {
+        if rec.isPurged { return true }
+        if isArchiveCopy(rec) { return true }
+        if isInsideMasterArchive(path: rec.fullPath) { return true }
+        return masterArchiveCopy(of: rec) != nil
+    }
+
     /// per user gesture on the main actor — O(selection), not O(records).
     func buildPromotePlan(recordIDs ids: [UUID]) -> ArchivePromotePlan? {
         guard let root = masterArchiveRootPath else { return nil }
@@ -645,20 +699,8 @@ extension VideoScanModel {
         var total: Int64 = 0
         for id in ids {
             guard let rec = record(forID: id) else { continue }
-            if rec.isPurged {
-                skipped.append((id, rec.filename, .purged)); continue
-            }
-            if isArchiveCopy(rec) {
-                skipped.append((id, rec.filename, .isArchiveCopy)); continue
-            }
-            if isInsideMasterArchive(path: rec.fullPath) {
-                skipped.append((id, rec.filename, .insideArchiveRoot)); continue
-            }
-            if masterArchiveCopy(of: rec) != nil {
-                skipped.append((id, rec.filename, .alreadyPromoted)); continue
-            }
-            if !VolumeReachability.isReachable(path: rec.fullPath) {
-                skipped.append((id, rec.filename, .offline)); continue
+            if let refusal = promoteRefusal(rec) {
+                skipped.append((id, rec.filename, refusal)); continue
             }
             let facts = ArchivePathResolver.facts(for: rec)
             entries.append(.init(recordID: rec.id,
