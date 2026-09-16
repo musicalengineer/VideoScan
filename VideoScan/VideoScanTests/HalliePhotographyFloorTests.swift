@@ -74,8 +74,26 @@ struct HalliePhotographyFloorTests {
     typealias Q = HallieLineageQuestion
     typealias Exec = HallieTurnExecutor
     let graph = GedcomFamilyGraph(gedcomText: tree)
+    /// An EMPTY scratch archive, so "do we have a photo of X?" is answered
+    /// by the fixture and not by whether /Volumes/FamilyArchive happens to
+    /// be mounted on this machine. Before 2026-09-16 these tests read the
+    /// REAL archive: green on the Mac Studio (volume mounted, no folder for
+    /// the fixture people), red on the laptop (volume absent) — and that
+    /// split was briefly mistaken for a macOS 27 regression.
+    static let scratchAssets: @Sendable () -> FamilyAssetConfiguration = {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hallie-photo-isolation", isDirectory: true)
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return FamilyAssetConfiguration(
+            roots: .init(assets: base.appendingPathComponent("40_Family_Tree", isDirectory: true),
+                         thumbnailCache: base.appendingPathComponent("thumbs", isDirectory: true)),
+            access: .readOnly,
+            legacyGEDCOMDirectory: nil)
+    }
+
     var context: Exec.Context {
         .init(profiles: [], graph: graph,
+              assetConfiguration: Self.scratchAssets,
               speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
     }
     private func pre(_ q: String) -> Exec.PreTranslation {

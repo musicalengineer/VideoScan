@@ -124,7 +124,13 @@ extension HallieLineageAnswer {
             // from the profile's reference folder; not the tree's decline.
             if HallieTurnExecutor.uniqueProfile(named: typed, in: context.profiles) != nil { return nil }
             return result
-        case .success(let person, _): return personPhoto(person: person)
+        case .success(let person, _):
+            // Hand over the context's store when there is one. nil keeps
+            // production on the published archive snapshot; tests inject a
+            // scratch root so the answer stops depending on whether
+            // /Volumes/FamilyArchive happens to be mounted.
+            return personPhoto(person: person,
+                               store: context.assetConfiguration?().makeStore())
         case .ambiguous:
             // Several namesakes: not answered here — the executor's photo
             // ask offers the chips and resumes the ask for the chosen one

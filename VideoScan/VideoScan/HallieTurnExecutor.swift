@@ -507,11 +507,28 @@ enum HallieTurnExecutor {
         /// clarification even if visible stable IDs and names are unchanged.
         fileprivate let continuationToken: UUID
 
+        /// Where the family-photo answers read from. `nil` — production —
+        /// means the published archive snapshot, exactly as before.
+        ///
+        /// A SEAM, added 2026-09-16. `HallieLineageAnswer.personPhoto`
+        /// already took a `store` and its doc says "tests pass a fixture";
+        /// the GedcomAwareness call site had no way to hand one over, so
+        /// two tests fell through to the REAL archive. They then passed or
+        /// failed depending on whether /Volumes/FamilyArchive happened to
+        /// be mounted — green on the Mac Studio, red on the laptop, and
+        /// briefly mistaken for a macOS 27 regression.
+        ///
+        /// Stored as a closure returning the CONFIGURATION, not the store:
+        /// `FamilyAssetStore` is not Sendable and `Context` is. Same idiom
+        /// as `Dependencies.assetConfiguration`.
+        let assetConfiguration: (@Sendable () -> FamilyAssetConfiguration)?
+
         init(
             presenceRecords: [ArchivistPresenceRecordSnapshot] = [],
             aggregateRecords: [ArchivistAggregateRecordSnapshot] = [],
             profiles: [ProfileSnapshot]? = [],
             graph: GedcomFamilyGraph? = nil,
+            assetConfiguration: (@Sendable () -> FamilyAssetConfiguration)? = nil,
             needsRecompile: [URL] = [],
             cyberBrain: CyberBrainIndex? = nil,
             selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot? = nil,
@@ -532,6 +549,7 @@ enum HallieTurnExecutor {
             self.speakers = speakers
             self.assumedTreeBridges = assumedTreeBridges
             self.mode = mode
+            self.assetConfiguration = assetConfiguration
             self.continuationToken = UUID()
         }
     }
