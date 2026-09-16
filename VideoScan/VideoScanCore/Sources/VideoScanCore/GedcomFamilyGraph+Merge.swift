@@ -62,6 +62,13 @@ extension GedcomFamilyGraph {
             /// (codex #780), the other is recorded here (and a second NAME
             /// survives as an alternate name).
             case fieldDisagreement
+            /// REFRESH ONLY. The same upstream was pulled again and gave a
+            /// different value, so the NEWER one replaced the older. Not a
+            /// conflict — it is the correction the user went and made. The
+            /// old value is recorded here, and an old NAME also survives as
+            /// an alternate name so the previous spelling still finds the
+            /// person.
+            case fieldRefreshed
         }
         public let kind: Kind
         /// Pointers involved: `[person]` (merged space); `[existing FAM,
@@ -98,12 +105,39 @@ extension GedcomFamilyGraph {
         public let droppedLineCount: Int
     }
 
+    /// Which side wins when both files give a different non-nil value.
+    ///
+    /// THE DISTINCTION THAT MATTERS (Rick, 2026-09-16). Merging two
+    /// DIFFERENT people's trees — his and Donna's — is a union of two
+    /// independent authorities, so the first keeps its values and a
+    /// difference is a genuine conflict for a human. Re-pulling the SAME
+    /// upstream is not that at all: the new file is a fresher snapshot of
+    /// the one authority, and its differences ARE the corrections the user
+    /// went to FamilySearch and made. Treating those as conflicts to be
+    /// refused is backwards — it preserves the stale value and demotes the
+    /// correction to a line in a report.
+    ///
+    /// Concretely: his grandmother is `G89Q-34N`, born 23 December 1904,
+    /// died 16 July 1985. The tree pulled on 2026-08-26 calls her "Mary
+    /// Catherine"; he has since corrected FamilySearch to "Mary Christina".
+    /// Under `.unionKeepingFirst` a re-pull keeps "Catherine". Under
+    /// `.refreshFromNewer` it becomes "Christina" and "Catherine" survives
+    /// as an alternate name.
+    public enum MergePolicy: String, Sendable, Equatable, CaseIterable {
+        /// Two different trees. First wins; a difference is a conflict.
+        case unionKeepingFirst
+        /// Same upstream, pulled again. Newer wins; a difference is an
+        /// update, reported as `.fieldRefreshed`.
+        case refreshFromNewer
+    }
+
     /// `self` ∪ `other`, keyed by FamilySearch ID. Pure; no I/O.
     public func merged(with other: GedcomFamilyGraph) -> GedcomFamilyGraph {
         merge(with: other).graph
     }
 
-    public func merge(with other: GedcomFamilyGraph) -> MergeOutcome {
+    public func merge(with other: GedcomFamilyGraph,
+                      policy: MergePolicy = .unionKeepingFirst) -> MergeOutcome {
         var people = self.people
         var families = self.families
         people.reserveCapacity(self.people.count + other.people.count)
@@ -216,7 +250,7 @@ extension GedcomFamilyGraph {
             let theirs = other.people[theirID]!
             let relinked = Self.relink(theirs, as: mergedID, familyMap: familyMap)
             if let mine = self.people[mergedID] {
-                let (person, disagreements) = Self.reconcile(mine, relinked)
+                let (person, disagreements) = Self.reconcile(mine, relinked, policy: policy)
                 people[mergedID] = person
                 conflicts.append(contentsOf: disagreements)
             } else {
@@ -345,28 +379,47 @@ extension GedcomFamilyGraph {
     /// filled from the second. A differing second NAME is kept as an
     /// alternate name. Links (FAMC/FAMS) are unioned, first source's
     /// order first.
-    static func reconcile(_ a: Person, _ b: Person) -> (Person, [ConflictReport]) {
+    static func reconcile(_ a: Person, _ b: Person,
+                          policy: MergePolicy = .unionKeepingFirst) -> (Person, [ConflictReport]) {
         var conflicts: [ConflictReport] = []
         let who = a.familySearchID ?? a.id
+        /// `a` is the existing record, `b` the incoming one. Both empty →
+        /// nil; one empty → the other, whatever the policy (filling a blank
+        /// is never a disagreement). Both present and different is where
+        /// the policy decides.
         func pick(_ field: String, _ x: String?, _ y: String?) -> String? {
             guard let x, !x.isEmpty else { return (y?.isEmpty ?? true) ? nil : y }
-            if let y, !y.isEmpty, y != x {
+            guard let y, !y.isEmpty, y != x else { return x }
+            switch policy {
+            case .unionKeepingFirst:
                 conflicts.append(ConflictReport(
                     kind: .fieldDisagreement, ids: [a.id],
                     resolution: "\(who) \(field): kept “\(x)” (first source); second source says “\(y)”"))
+                return x
+            case .refreshFromNewer:
+                conflicts.append(ConflictReport(
+                    kind: .fieldRefreshed, ids: [a.id],
+                    resolution: "\(who) \(field): updated to “\(y)” from the newer pull; was “\(x)”"))
+                return y
             }
-            return x
         }
         var out = Person(id: a.id, name: pick("NAME", a.name, b.name) ?? "",
                          sex: pick("SEX", a.sex, b.sex) ?? "", childOfFamily: nil)
-        out.surname = a.surname ?? b.surname
+        // Surname is silent by design (no report), but it must follow the
+        // same direction or a refreshed NAME and a stale SURNAME disagree.
+        out.surname = policy == .refreshFromNewer ? (b.surname ?? a.surname) : (a.surname ?? b.surname)
         out.birthDate = pick("BIRT DATE", a.birthDate, b.birthDate)
         out.deathDate = pick("DEAT DATE", a.deathDate, b.deathDate)
         out.birthPlace = pick("BIRT PLAC", a.birthPlace, b.birthPlace)
         out.deathPlace = pick("DEAT PLAC", a.deathPlace, b.deathPlace)
         out.familySearchID = a.familySearchID ?? b.familySearchID
-        var names = a.alternateNames
-        for n in [b.name] + b.alternateNames where n != out.name && !names.contains(n) && !n.isEmpty {
+        // The name that LOST keeps working as a search term. Under
+        // union that is b's; under refresh it is a's — "Mary Catherine"
+        // must still find her after she becomes "Mary Christina".
+        var names = policy == .refreshFromNewer ? b.alternateNames : a.alternateNames
+        let losingSide = policy == .refreshFromNewer ? a : b
+        for n in [losingSide.name] + losingSide.alternateNames
+        where n != out.name && !names.contains(n) && !n.isEmpty {
             names.append(n)
         }
         out.alternateNames = names
