@@ -452,6 +452,27 @@ struct FamilySearchPullSheet: View {
             case .ready(_, _, let current, _):
                 Button("Keep current") { coordinator.cancel() }
                 if current != nil {
+                    // THE DEFAULT for a re-pull of Rick's own line, and the
+                    // reason Refresh exists: "Add to current tree" keeps the
+                    // OLDER value on every disagreement, so re-pulling after
+                    // correcting FamilySearch would preserve exactly the
+                    // mistake you went there to fix.
+                    Button("Refresh from this download") {
+                        let task = coordinator.installRefreshed()
+                        Task {
+                            await task.value
+                            if case .installed(let url, _) = coordinator.phase {
+                                onInstalled(url)
+                            }
+                        }
+                    }
+                    .help("For re-pulling the SAME tree after correcting it on FamilySearch. "
+                          + "Where this download and the current tree disagree about a person, "
+                          + "THIS download wins — it is the newer snapshot. People it doesn't "
+                          + "mention are kept, so a short pull won't shorten your tree. Every "
+                          + "change is listed in the new file's header; both source files stay untouched.")
+                    .disabled(coordinator.isInstalling)
+
                     Button("Add to current tree") {
                         let task = coordinator.installMerged()
                         Task {
@@ -461,7 +482,10 @@ struct FamilySearchPullSheet: View {
                             }
                         }
                     }
-                    .help("Write a derived merge artifact (lossy) next to the current tree; both source files stay untouched.")
+                    .help("For adding a DIFFERENT person's tree (Donna's, a cousin's). "
+                          + "Where the two disagree the CURRENT tree keeps its value and the "
+                          + "difference is listed for you to review. Lossy; both source files "
+                          + "stay untouched.")
                     .disabled(coordinator.isInstalling)
                 }
                 Button(current == nil ? "Install family tree" : "Replace family tree") {

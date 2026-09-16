@@ -543,7 +543,9 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// for 16k + 16k people well under 200 MB, released on return. SHA-256
     /// streams the sources in 1 MB chunks.
     @discardableResult
-    func installMerged() -> Task<Void, Never> {
+    func installMerged(
+        policy: GedcomFamilyGraph.MergePolicy = .unionKeepingFirst
+    ) -> Task<Void, Never> {
         if ViewerWriteGuard.refuse("FamilySearchPull.installMerged") { return Task {} }
         if let running = installTask { return running }
         guard case .ready(let output, _, _, _) = phase else { return Task {} }
@@ -553,13 +555,29 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         stagingInFlight = staging
         let task = Task { [weak self] in
             guard let self else { return }
-            await self.performMerge(output: output, generation: generation, staging: staging)
+            await self.performMerge(output: output, generation: generation,
+                                    staging: staging, policy: policy)
         }
         installTask = task
         return task
     }
 
-    private func performMerge(output: URL, generation: Int, staging: URL) async {
+    /// "Refresh from FamilySearch": the SAME operation as Add to current
+    /// tree, with the one difference that decides whether a re-pull is
+    /// worth doing at all — where both files describe one person, the
+    /// NEWER pull's values win, because it is a fresher snapshot of the
+    /// same authority rather than a second opinion (Rick, 2026-09-16; see
+    /// GedcomFamilyGraph.MergePolicy).
+    ///
+    /// People the newer pull does not mention are kept, so a 3-generation
+    /// refresh updates the close family and leaves the deep ancestry alone.
+    @discardableResult
+    func installRefreshed() -> Task<Void, Never> {
+        installMerged(policy: .refreshFromNewer)
+    }
+
+    private func performMerge(output: URL, generation: Int, staging: URL,
+                              policy: GedcomFamilyGraph.MergePolicy = .unionKeepingFirst) async {
         defer {
             isInstalling = false
             installTask = nil
@@ -567,7 +585,8 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         let gedcomDirectory = self.gedcomDirectory
         let fileManager = self.fileManager
         let stamp = Self.timestampFormatter.string(from: Date())
-        let fileName = "familysearch-merged-\(stamp).ged"
+        let verb = policy == .refreshFromNewer ? "refreshed" : "merged"
+        let fileName = "familysearch-\(verb)-\(stamp).ged"
         // Two-case outcome (C++: a tagged union), because the failure is
         // a sentence for the sheet, not an `Error`.
         enum Staged { case written(URL, Int, GedcomFamilyGraph.MergeOutcome), failed(String) }
@@ -585,7 +604,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             let newSHA = Self.sha256Sidecar(for: output, fileManager: fileManager)
             current.sourceFingerprint = currentSHA
             new.sourceFingerprint = newSHA
-            let merge = current.merge(with: new)
+            let merge = current.merge(with: new, policy: policy)
             let provenance = Self.provenanceNote(
                 stamp: stamp, merge: merge,
                 current: (currentURL, current.people.count, currentSHA),
@@ -626,7 +645,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 var destination = gedcomDirectory.appendingPathComponent(fileName)
                 var suffix = 2
                 while fileManager.fileExists(atPath: destination.path) {
-                    destination = gedcomDirectory.appendingPathComponent("familysearch-merged-\(stamp)-\(suffix).ged")
+                    destination = gedcomDirectory.appendingPathComponent("familysearch-\(verb)-\(stamp)-\(suffix).ged")
                     suffix += 1
                 }
                 // Cross-volume copy lands under a name the loader ignores
