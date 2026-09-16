@@ -492,12 +492,32 @@ struct MasterArchivePromoteSensorTests {
     }
 
     /// path → (size, mtime) for everything under ~/Library/Application Support/VideoScan.
+    /// Subtrees of the real App Support directory that OTHER PROCESSES own,
+    /// so a change there says nothing about whether OUR flow stayed isolated.
+    ///
+    /// `team-channel/` is the local Claude/codex/Rick mailbox — a SQLite
+    /// database written by the TeamChannelMonitor menu-bar app, which polls on
+    /// a 10-second timer whenever Rick has it running.
+    ///
+    /// This sensor went red on the 2026-09-16 M4 nightly, and the whole
+    /// failure was ONE value out of 23,265: `team-channel.sqlite3-shm`, same
+    /// size, mtime +10.00s. No file was added or removed. The test window is
+    /// ~3s against a 10s poll, so it catches a tick perhaps a third of the
+    /// time — a sensor that cries wolf on a third of runs is one everybody
+    /// learns to ignore, which is worse than not having it.
+    ///
+    /// Excluding it makes the sensor STRONGER: what remains is the tree this
+    /// app actually owns, which is the only part an isolation violation could
+    /// show up in.
+    private static let foreignAppSupportSubtrees = ["team-channel/"]
+
     private static func appSupportSnapshot() -> [String: String] {
         let dir = (CatalogStore.shared.fileLocation as NSString).deletingLastPathComponent
         let fm = FileManager.default
         var out: [String: String] = [:]
         guard let e = fm.enumerator(atPath: dir) else { return out }
         for case let rel as String in e {
+            if foreignAppSupportSubtrees.contains(where: { rel.hasPrefix($0) }) { continue }
             let attrs = (try? fm.attributesOfItem(atPath: (dir as NSString).appendingPathComponent(rel))) ?? [:]
             let size = (attrs[.size] as? NSNumber)?.int64Value ?? -1
             let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
