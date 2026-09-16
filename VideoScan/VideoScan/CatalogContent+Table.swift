@@ -237,7 +237,19 @@ extension CatalogContent {
     private var tableWithTrashShortcut: some View {
         catalogTableBase
             .onKeyPress(phases: .down) { press in
-                guard press.key == .delete, press.modifiers == .command else { return .ignored }
+                // CONTAINS, not ==. Exact equality meant any stray flag
+                // macOS happened to report alongside Command made this
+                // `.ignored` with no trace at all, which is
+                // indistinguishable from the feature being gone (Rick,
+                // 2026-09-16: "what happened to cmd-delete"). Shift /
+                // Option / Control are still refused — those are other
+                // gestures, not this one.
+                guard press.key == .delete,
+                      press.modifiers.contains(.command),
+                      !press.modifiers.contains(.shift),
+                      !press.modifiers.contains(.option),
+                      !press.modifiers.contains(.control)
+                else { return .ignored }
                 trashSelectedRows()
                 return .handled
             }
@@ -1461,9 +1473,21 @@ extension CatalogContent {
     /// to Trash" calls). No selection → nothing happens. Refusals are
     /// console lines; the result is reported as the row menu reports it.
     private func trashSelectedRows() {
-        guard !selectedIDs.isEmpty else { return }
+        // BEGIN LINE. Every refusal below this point already writes a
+        // console line; the two guards did not, so an empty selection or a
+        // selection that no longer matches any row looked exactly like a
+        // dead keyboard shortcut. Say that the gesture arrived, then say
+        // why nothing followed.
+        model.log("Move to Trash (\u{2318}\u{232B}): \(selectedIDs.count) row(s) selected")
+        guard !selectedIDs.isEmpty else {
+            model.log("Move to Trash: nothing is selected — click a row first.")
+            return
+        }
         let targets = tableData.filter { selectedIDs.contains($0.id) }
-        guard !targets.isEmpty else { return }
+        guard !targets.isEmpty else {
+            model.log("Move to Trash: the \(selectedIDs.count) selected row(s) are no longer in the table — nothing to do.")
+            return
+        }
         Task { @MainActor in
             let result = await model.trashSelectedRecords(targets)
             reportDeleteResult(result, mode: .toTrash)
