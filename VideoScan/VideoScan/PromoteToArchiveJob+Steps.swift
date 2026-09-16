@@ -231,6 +231,9 @@ extension PromoteToArchiveJob {
         }
         let dest = URL(fileURLWithPath: ctx.root, isDirectory: true)
             .appendingPathComponent(row.relPath).standardizedFileURL
+        // Adoption still reads the whole file back to verify its digest, so
+        // it is every bit as silent as a copy without a begin line.
+        model.log("Promote: verifying the copy already at \(row.relPath) for \(entry.filename)…")
         do {
             guard let actual = try await Self.hashContainedOffMain(root: ctx.root, relPath: row.relPath) else {
                 appLog.write("promote reconcile: manifest lists \(entry.filename) at \(row.relPath) but the file is missing — skipped; check the archive by hand")
@@ -259,6 +262,7 @@ extension PromoteToArchiveJob {
                              model: VideoScanModel,
                              ctx: RunContext,
                              bytesDone: Int64) async throws -> FileResult {
+        let fileStart = Date()
         var facts = ArchivePathResolver.facts(for: source)
         // A date typed on the promote sheet wins over the resolver: the
         // reader was only asked because the inference found nothing.
@@ -297,6 +301,16 @@ extension PromoteToArchiveJob {
             // half of this file's share copying, the second half verifying.
             // Throttled to ~4 UI updates/s — 69 GB in 1 MB chunks would
             // otherwise post 70k main-actor hops.
+            // BEGIN LINE, before a single byte moves. Rick's rule applied
+            // literally: log that you are ENTERING the long operation.
+            // Until 2026-09-15 the normal path logged only on COMPLETION,
+            // so one 263 GB promote emitted a batch begin line and then
+            // five minutes of total log silence while a large file copied
+            // — indistinguishable, from the log alone, from the hang that
+            // cost two days that week. The window always showed live
+            // rate/ETA; it was the durable record that went quiet.
+            model.log("Promote: copying \(entry.filename) (\(Self.promoteByteText(fileBytes))) → \(choice.relPath)…")
+            promoteLog.notice("promote BEGIN \(entry.filename, privacy: .public) (\(fileBytes, privacy: .public) bytes) → \(choice.relPath, privacy: .public)")
             let reporter = PromoteProgressReporter()
             let phaseProgress: @Sendable (ArchivePromoteEngine.ProgressPhase, Int64) -> Void = { [weak self] phase, done in
                 guard let tick = reporter.tick(phase: phase, done: done, fileBytes: fileBytes) else { return }
@@ -325,10 +339,39 @@ extension PromoteToArchiveJob {
                                   relPath: choice.relPath, destURL: destURL, sha: sha,
                                   model: model, ctx: ctx, journalBase: journalEntry,
                                   readiness: entry.readiness)
-        model.log("Promote: \(entry.filename) → \(choice.relPath) (sha256 \(sha.prefix(12))…) ✓")
-        promoteLog.info("promoted \(entry.filename, privacy: .public) → \(choice.relPath, privacy: .public)")
+        let elapsed = -fileStart.timeIntervalSinceNow
+        model.log("Promote: \(entry.filename) → \(choice.relPath) (sha256 \(sha.prefix(12))…) ✓ in \(Self.promoteElapsedText(elapsed))")
+        // .notice, not .info: promote is irreversible, so its DONE line has
+        // to survive into the persisted log for post-hoc reading
+        // (docs/findings_2026_09_14_overnight.md, row 14).
+        promoteLog.notice("promote DONE \(entry.filename, privacy: .public) → \(choice.relPath, privacy: .public) in \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
         return choice.identicalExistingSHA == nil ? .promoted(relPath: choice.relPath)
                                                   : .adopted(relPath: choice.relPath)
+    }
+
+    // MARK: Text for the per-file begin/end lines
+    //
+    // `nonisolated` because both are pure functions of their argument; they
+    // inherited @MainActor from the enclosing type for no reason, which made
+    // them unusable from a plain test. Synchronous nonisolated is safe here —
+    // it is `nonisolated async` that runs on the caller's actor.
+
+    /// "18.4 GB" — the same ByteCountFormatter style the progress subtitle
+    /// uses, so the log line and the window agree about a file's size.
+    nonisolated static func promoteByteText(_ bytes: Int64) -> String {
+        let fmt = ByteCountFormatter(); fmt.countStyle = .file
+        return fmt.string(fromByteCount: bytes)
+    }
+
+    /// "33.1s" / "4m 12s". Seconds alone stop being readable for the
+    /// multi-minute copies this logging exists for.
+    nonisolated static func promoteElapsedText(_ seconds: TimeInterval) -> String {
+        // Clamped: a clock adjustment mid-copy must not put "-0.3s" in the
+        // durable record of an irreversible operation.
+        let s = max(0, seconds)
+        if s < 60 { return String(format: "%.1fs", s) }
+        let whole = Int(s.rounded())
+        return "\(whole / 60)m \(whole % 60)s"
     }
 
     // MARK: Manifest + catalog tail (shared by promote / adopt / reconcile)
