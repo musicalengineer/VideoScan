@@ -362,11 +362,17 @@ extension HallieTurnExecutor {
             case none
         }
 
+        /// `selected` is the chip the user actually picked. A
+        /// `.profileStableID` names the profile outright and SKIPS the
+        /// name claim — the user has already answered "which one?", and
+        /// re-deriving it from the spelling is how the second turn used to
+        /// walk back into the tree's namesake crowd (GH #186 finding 1).
         static func precedence(typed: String,
+                               selected: CandidateID? = nil,
                                profiles: [ProfileSnapshot]?,
                                graph: GedcomFamilyGraph?) -> Precedence {
             let gallery = profiles ?? []
-            switch exactClaim(typed, in: gallery) {
+            switch claim(typed, selected: selected, in: gallery, matching: .exact) {
             case .none:
                 return .none
             case .ambiguous(let claimants):

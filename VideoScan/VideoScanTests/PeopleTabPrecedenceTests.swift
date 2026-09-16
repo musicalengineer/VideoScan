@@ -129,6 +129,85 @@ struct PeopleTabPrecedenceTests {
             context: context)
     }
 
+    /// Second turn: continue the ACTUAL returned clarification with one of
+    /// the candidate IDs it actually offered, the way the UI does.
+    private func pick(_ candidate: Exec.Candidate,
+                      after first: Exec.Result,
+                      typed: String,
+                      in context: Exec.Context) async throws -> Exec.Result {
+        // The real continuation API the UI uses — it validates the token,
+        // the stage and that the candidate is still current, so this
+        // exercises the whole second turn rather than a hand-built Request.
+        let clarification = try #require(first.clarification)
+        return try await Exec.continue(pending: clarification,
+                                       selecting: candidate.id,
+                                       context: context)
+    }
+
+    // MARK: - GH #186: the second turn, and the corrected question
+
+    /// FINDING 1 (codex). Picking an offered PROFILE chip must land on that
+    /// profile's answer. It used to walk straight back into the tree crowd:
+    /// resolveSelectedProfile expands the profile's canonical name
+    /// ("Elizabeth") into every tree namesake, and the precedence rule then
+    /// refused to help because `selectedIdentity != nil`. "Which Beth?" →
+    /// pick Beth → "which of 2,190 Elizabeths?" — a loop that lands on the
+    /// exact question this whole rule exists to stop asking.
+    @Test func pickingAnOfferedProfileChipAnswersFromThatProfile() async throws {
+        let twin = Exec.ProfileSnapshot(
+            stableID: "beth-2", canonicalName: "Elizabeth",
+            aliases: ["beth"], birthdate: Self.date(1971, 3, 3))
+        let ctx = context(profiles: [Self.rick, Self.beth, twin], graph: graph)
+
+        let first = try await ask("beth", in: ctx)
+        #expect(first.outcome == .needsClarification, Comment(rawValue: first.prose))
+        let candidates = try #require(first.clarification?.candidates)
+        #expect(candidates.count == 2, "two profiles own the spelling")
+
+        let chosen = try #require(candidates.first)
+        let second = try await pick(chosen, after: first, typed: "beth", in: ctx)
+
+        #expect(second.outcome != .needsClarification,
+                Comment(rawValue: "asked again instead of answering: \(second.prose)"))
+        #expect(!second.prose.contains("Which Elizabeth"),
+                Comment(rawValue: second.prose))
+        #expect(!second.prose.lowercased().contains("family tree has"),
+                Comment(rawValue: "fell back into the namesake crowd: \(second.prose)"))
+    }
+
+    /// FINDING 2 (codex). "Where was Beth born?" arrives from the model as
+    /// `.birth`; ArchivistGraphQuery's field guards correct it to
+    /// `.birthPlace`. The fallback passed the RAW payload, so a birthplace
+    /// question was answered with a birthday and reported as answered —
+    /// the same class the 2026-09-07 guards were added to stop, on a path
+    /// that did not exist yet. Driven through `execute`, not the
+    /// initializer, because that is how it escaped the first time.
+    @Test func aBirthplaceQuestionMisreadAsBirthIsStillAnsweredAsAPlace() async throws {
+        let r = try await Exec.execute(
+            .init(intent: .init(
+                originalQuestion: "where was Beth born?",
+                ast: .graph(.init(people: ["beth"], operation: .birth)))),
+            context: liveContext)
+
+        // The two branches of PeopleTab.answer are unmistakable, so assert
+        // on THEM rather than on a guessed substring. An earlier version of
+        // this test looked for "1965"/"born on" — neither string appears in
+        // either branch, so it passed with the fix REMOVED. It proved
+        // nothing, which is the failure mode this whole day has been about.
+        //
+        //   .birth       → "… was born <date>, according to the People profile."
+        //   .birthPlace  → "… doesn't record a place — it only carries a birth date."
+        #expect(!r.prose.contains("was born"),
+                Comment(rawValue: "answered the birth DATE to a \"where\" question: \(r.prose)"))
+        // Plain ASCII apostrophe: unlike most prose in this file, THAT
+        // string is written with ' and not \u{2019}. Asserting the
+        // typographic one silently never matches.
+        #expect(r.prose.contains("doesn't record a place"),
+                Comment(rawValue: "expected the honest no-place answer, got: \(r.prose)"))
+        #expect(r.outcome == .declined,
+                Comment(rawValue: "a place it does not have must not report as answered"))
+    }
+
     // MARK: - 1. The live miss
 
     @Test func tellMeAboutBethNoLongerAsksWhichOfTwentyStrangers() async throws {

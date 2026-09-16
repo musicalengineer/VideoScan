@@ -1714,7 +1714,8 @@ enum HallieTurnExecutor {
                 if let decided = try await peopleTabPrecedenceResult(
                     typed: typed, payload: payload, request: request,
                     context: context, dependencies: dependencies, graph: graph,
-                    arrangement: arrangement, queryDescription: queryDescription) {
+                    arrangement: arrangement, corrected: query,
+                    queryDescription: queryDescription) {
                     return withOwnerNote(decided)
                 }
                 let shown = arrangement.shown.map { person in
@@ -2204,11 +2205,30 @@ enum HallieTurnExecutor {
         dependencies: Dependencies,
         graph: GedcomFamilyGraph,
         arrangement: HallieWhichOne.Arrangement,
+        corrected: ArchivistGraphQuery,
         queryDescription: String
     ) async throws -> Result? {
-        guard !arrangement.offersChips, request.selectedIdentity == nil else { return nil }
+        // WHICH CHIP THE USER PICKED DECIDES (GH #186 finding 1, codex).
+        // A TREE chip is an explicit pick INSIDE the tree and outranks this
+        // rule entirely. A PROFILE chip is the opposite — the user
+        // confirming the People-tab identity — so the profile must answer.
+        // Before this, both were refused by one `selectedIdentity == nil`
+        // guard, so picking "Beth" from the People chips walked straight
+        // back into "which of 2,190 Elizabeths?". A loop, landing on the
+        // exact question this rule exists to stop asking.
+        switch request.selectedIdentity {
+        case .gedcomPersonID, .cyberBrainPersonID:
+            // Both name a record OUTSIDE the People tab; the user's pick
+            // owns the turn and this rule stands aside.
+            return nil
+        case .profileStableID:
+            break
+        case nil:
+            guard !arrangement.offersChips else { return nil }
+        }
         switch PeopleTab.precedence(
-            typed: typed, profiles: context.profiles, graph: context.graph) {
+            typed: typed, selected: request.selectedIdentity,
+            profiles: context.profiles, graph: context.graph) {
         case .treePerson(let personID, let profileName):
             let treeName = graph.people[personID]?.name ?? profileName
             let pinned = try await executeGraphCase(
@@ -2222,8 +2242,18 @@ enum HallieTurnExecutor {
             // `arrangement.total` is the tree's own namesake tally — the
             // very number the which-one would have quoted, so both answers
             // say 2190 rather than disagreeing about the crowd.
+            //
+            // THE CORRECTED OPERATION, not the model's raw one (GH #186
+            // finding 2, codex). ArchivistGraphQuery.init applies the
+            // deterministic field guards — "where was Beth born?" arrives
+            // as `.birth` and is corrected to `.birthPlace` — and passing
+            // `payload` here threw that away, so a birthplace question was
+            // answered with a birthday and reported as answered. Exactly
+            // the bug the 2026-09-07 guards were added to stop, on a path
+            // that did not exist yet.
             return PeopleTab.answer(
-                profile: profile, payload: payload, context: context,
+                profile: profile, payload: payload.withOperation(of: corrected),
+                context: context,
                 typed: typed, treeNamesakes: arrangement.total,
                 queryDescription: queryDescription)
         case .ambiguous(let claimants):

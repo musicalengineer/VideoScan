@@ -243,6 +243,21 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
     }
 
     struct Graph: Codable, Equatable, Sendable {
+        /// This payload with the operation the FIELD GUARDS resolved.
+        ///
+        /// `ArchivistGraphQuery.init` corrects what the model sent — "where
+        /// was Beth born?" arrives as `.birth` and resolves to `.birthPlace`
+        /// — and any answer built from the raw payload silently answers the
+        /// uncorrected question (GH #186 finding 2). The two enums are
+        /// separate types with a shared raw vocabulary, so this maps by raw
+        /// value and keeps the original when there is no twin.
+        func withOperation(of resolved: ArchivistGraphQuery) -> Graph {
+            guard let mapped = Operation(rawValue: resolved.operation.rawValue) else { return self }
+            var copy = self
+            copy.operation = mapped
+            return copy
+        }
+
         enum Operation: String, Codable, Equatable, Sendable {
             case biography, birth, death, kinship
             /// "WHERE was Eileen Latta born / did she die / is she buried"
