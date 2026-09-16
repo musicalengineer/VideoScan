@@ -19,7 +19,7 @@ Hallie chat, the video archive, and photos from outside the house. They see only
 what Rick has explicitly marked public, never the whole catalog.
 
 This supersedes the forward references in
-[family-archivist-design.md](family-archivist-design.md), which anticipated this
+[Hallie guide](hallie.md), which anticipated this
 work from two directions:
 
 - *Vision:* "a natural-language frontend so Rick — and eventually less-technical

@@ -26,11 +26,11 @@ pipeline.
 
 ## Where it fits in the long-arc plan
 
-This is enrichment metadata in service of [Media Long-Term Plan](media_longterm_plan.md):
+This is enrichment metadata in service of [media archive guide](media-archive.md):
 the better the search, the easier it is for Rick (and family) to find
 videos worth promoting to Master / Backup / Ready-LTA. It is
 **complementary to face-ID**, not a substitute — see
-[catalog-aided-face-detection.md](catalog-aided-face-detection.md) for
+[facial recognition guide](facial-recognition.md) for
 the FD north star.
 
 ## Schema
@@ -261,10 +261,10 @@ process survives. They run on every full suite sweep (no
 
 ## References
 
-- [Media Long-Term Plan](media_longterm_plan.md) — the umbrella vision
-- [Catalog-Aided Face Detection](catalog-aided-face-detection.md) — the
+- [media archive guide](media-archive.md) — the umbrella vision
+- [Facial recognition: catalog priors](facial-recognition.md#6-unfinished-designs-and-review-priorities) — the
   FD north star captions complement
-- [Family Media Training Model](family_media_training_model.md) — long-arc
+- [Facial recognition: training directions](facial-recognition.md#6-unfinished-designs-and-review-priorities) — long-arc
   plan for family-specific recognition
 - [Features and Branches](software_dev_policy.md) — branching policy
 - `scripts/vlm_caption.py` — Python prototype that proves the captioner

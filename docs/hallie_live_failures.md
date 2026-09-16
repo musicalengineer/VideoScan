@@ -30,7 +30,7 @@ apart from the outside.
 
 | # | id | asked | what came back | root cause | status |
 |---|----|-------|----------------|-----------|--------|
-| 1 | `lv260907-002` | "in the family tree going back, find the highest level of royalty or title such as lord, prince, king, etc." | Searched **video filenames** for "royalty", "title", "king" — "found nothing in the catalog" | No title/keyword search on the tree route; question routed to catalog | **OPEN** — [design](hallie_titled_ancestors_design.md) |
+| 1 | `lv260907-002` | "in the family tree going back, find the highest level of royalty or title such as lord, prince, king, etc." | Searched **video filenames** for "royalty", "title", "king" — "found nothing in the catalog" | No title/keyword search on the tree route; question routed to catalog | **OPEN** — [design](hallie.md) |
 | 2 | `lv260907-003` | "not in videos, in family tree" | "I can't refine my last answer that way — I can only drop a person, not a topic word" | Refinement path cannot change **route** | **OPEN** |
 | 3 | `lv260907-004` | "search the family tree for a title like king" | Read **"Title like king" as a person's name**, offered to remember it | Same as #1; bare text fell to the name resolver | **OPEN** |
 | 4 | `lv260907-005` | "find the birthplaces of my **materanl** lines back to europe" | "Richard Harding Breen Jr was born 4 March 1959." | One transposed character. `HallieBirthplaceTrail.swift:69` gates on the literal token `maternal`; no cue → generic birth route | **OPEN** |

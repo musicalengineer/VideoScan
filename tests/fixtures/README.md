@@ -23,7 +23,7 @@ nightly acoustic runner, but does not enable or schedule one.
 
 **You must supply your own photos and videos.** The person-finding features
 are tested against reference photos of real people — bring 5–10 photos per
-person per decade (see `docs/donna-recipe-v1.md` for what makes a good
+person per decade (see `docs/facial-recognition.md` for what makes a good
 reference set) and your own labeled video clips, arranged as:
 
     tests/fixtures/photos/<YourPerson>/<era>/*.jpg

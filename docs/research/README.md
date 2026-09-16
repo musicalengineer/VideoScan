@@ -1,37 +1,24 @@
-# docs/research/ — Research Notes & Technology Surveys
+# Research notes
 
-Home for research deliverables that inform VideoScan but are not design docs
-or plans: state-of-the-art surveys, model/tool evaluations from external
-sources, literature findings, licensing investigations. Established by Rick's
-directive 2026-07-17.
+Research informs design; it does not authorize implementation or deployment.
+Record date, method, compared source revision and primary-source citations.
+Separate measured results from forecasts and re-check external claims before
+using an old survey to choose a model, dependency or purchase.
 
-## Conventions
+## Reading map
 
-- **Filename:** `<topic>_<YYYY-MM-DD>.md` (date = publication date of the note).
-- **Header block** in every doc: date, author/seat (e.g. `claude-cloud`,
-  `claude`, `codex`, `rick`), method (how the findings were gathered), and
-  what stack state it was compared against — so a reader in six months knows
-  how stale it is.
-- **Citations required.** Research claims link primary sources (repos, papers,
-  release notes, model cards). Uncited claims are opinions and should say so.
-- **Verdicts, not directives.** Docs here recommend; they never dispatch work.
-  Anything actionable goes through the normal channel → cycle → harness flow.
-  For recognition-adjacent claims, the person-eval harness is the arbiter.
-- **Immutable-ish:** rather than heavily rewriting an old survey, publish a
-  fresh dated doc and link back (same spirit as the team channel). Small
-  corrections in place are fine with a changelog line.
-- **Announce** new docs in `docs/team-channel/` so both managers ingest them.
+- [Facial recognition](../facial-recognition.md): consolidated Donna experiments,
+  Immich/PhotoPrism architecture lessons, evaluation boundaries, licensing
+  provenance and remaining recognition research.
+- [Hallie](../hallie.md): model/transport measurements and their limitations.
+- [Pronunciation research](../pronunciation_training_research.md): focused
+  phoneme and verification investigation.
+- [July 17 technology survey](sota_research_2026-07-17.md): historical multi-track
+  survey covering restoration, recognition, semantic search, speech and compute.
+  Its rankings and availability claims are dated research, not current advice.
 
-## Index
-
-| Date | Doc | Author | Scope |
-|---|---|---|---|
-| 2026-07-17 | [sota_research_2026-07-17.md](sota_research_2026-07-17.md) | claude-cloud | Five-track SOTA sweep: video restoration, face recognition, VLM/semantic search, speech/audio, Apple-Silicon infra. Top-10 recommendations + 8 cycle candidates. |
-
-*(Add a row per new doc.)*
-
-## Related
-
-- `docs/immich_ideas.md`, `docs/immich_reassessment_2026-06-20.md` — predate
-  this directory; left in place to avoid breaking references.
-- `docs/team-channel/` — coordination; research announcements land there.
+Update the owning theme with durable conclusions instead of accumulating
+near-duplicate surveys. Preserve exact experimental evidence where reproducibility
+requires it. Announce coordination through the [local mailbox](../team-channel/README.md),
+not new permanent chatter files. The [documentation map](../documentation-map.md)
+locates retired originals in Git and the local recovery folder.

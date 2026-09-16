@@ -115,4 +115,4 @@ User clicks "Find Person" -> adds ScanJob
 - UI tests in `VideoScanUITests/` — launch, basic navigation
 - Test host: `main.swift` provides headless entry point for CI (no `@main` app)
 - CI: GitHub Actions, macOS runner
-- See [unit_tests.md](unit_tests.md) for full test documentation
+- See [testing guide](testing.md) for full test documentation
