@@ -1,5 +1,18 @@
 # Hallie response application extraction
 
+## Status update — September 15, 2026
+
+The extraction commit `2dbc6c6f` is now an ancestor of main `e3a093eb`, merged
+via `8f209fa2`. The existing local app-host Debug nightly log
+`~/Library/Logs/VideoScan/nightly_test_20260915_020003.log` at `34aeda64`
+records all 12 response-commit tests passing (lines 13467–13492), including
+`committedMemoryIsVisibleBeforeMessageActionAndTheNextClause`.
+Thus the unmerged and integration-pending statements below describe the original
+handoff, not current status. The overall nightly had other failures; this is
+focused integration evidence, not a green full-suite result or a fresh Xcode 27 run.
+
+## Original handoff
+
 Branch: `refactor/hallie-boundaries-20260913`, based on `3e663856`.
 Worktree: `codex-worktrees/hallie-refactor-20260913`.
 Rick requested branch isolation while he and Claude finish Promote in rapid

@@ -36,6 +36,34 @@ import VideoScanCore
 @Suite
 struct AtomicFilePublishSensorTests {
 
+    /// concurrentPerform uses ordinary threads; protect the test observations
+    /// just as a C++ test would protect a shared vector with std::mutex.
+    private final class PublishObservations: @unchecked Sendable {
+        private let lock = NSLock()
+        private var successes = 0
+        private var failures: [String] = []
+
+        func record(_ operation: () throws -> Void) {
+            do {
+                try operation()
+                lock.lock(); defer { lock.unlock() }
+                successes += 1
+            } catch {
+                lock.lock(); defer { lock.unlock() }
+                failures.append(String(describing: error))
+            }
+        }
+
+        var result: (successes: Int, failures: [String]) {
+            lock.lock(); defer { lock.unlock() }
+            return (successes, failures)
+        }
+    }
+
+    private static func payload(writer: Int, iteration: Int) -> Data {
+        Data("writer=\(writer);iteration=\(iteration);\(String(repeating: String(writer), count: 256));end".utf8)
+    }
+
     private var repoRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // VideoScanTests
@@ -294,6 +322,10 @@ struct AtomicFilePublishSensorTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let dest = dir.appendingPathComponent("store.json")
+        let observations = PublishObservations()
+        let expectedPayloads = Set((0..<8).flatMap { writer in
+            (0..<250).map { Self.payload(writer: writer, iteration: $0) }
+        })
 
         // concurrentPerform, NOT withTaskGroup: these loops block in the
         // filesystem, and a blocked cooperative task does not yield its
@@ -302,16 +334,21 @@ struct AtomicFilePublishSensorTests {
         DispatchQueue.concurrentPerform(iterations: 8) { writer in
             for i in 0..<250 {
                 let tmp = dir.appendingPathComponent(".store.\(writer)-\(i).tmp")
-                try? Data("w\(writer)".utf8).write(to: tmp)
-                try? AtomicFilePublish.publish(tmp, as: dest)
+                observations.record {
+                    try Self.payload(writer: writer, iteration: i).write(to: tmp)
+                    try AtomicFilePublish.publish(tmp, as: dest)
+                }
             }
         }
 
-        let final = try String(contentsOf: dest, encoding: .utf8)
-        #expect(final.hasPrefix("w"), "the destination holds one writer's whole payload, never a shred")
+        let result = observations.result
+        #expect(result.failures.isEmpty, "every publish must succeed: \(result.failures.prefix(5))")
+        #expect(result.successes == 2_000)
+        let final = try Data(contentsOf: dest)
+        #expect(expectedPayloads.contains(final), "the destination holds one complete writer payload")
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
-            .filter { AtomicFilePublish.isTemporaryPublishArtifact($0) }
-        #expect(leftovers.isEmpty, "every temp was consumed by its rename")
+            .filter { $0 != dest.lastPathComponent }
+        #expect(leftovers.isEmpty, "every .tmp was consumed by its rename: \(leftovers.prefix(5))")
     }
 
     // MARK: - 3. The wrapper's own safeguards
@@ -376,19 +413,30 @@ struct AtomicFilePublishSensorTests {
             AtomicFilePublish.inFlight().filter { $0.destination.hasPrefix(dir.path) }
         }
         #expect(mine().isEmpty, "idle before, for this test's destinations")
+        let observations = PublishObservations()
+        let destination = dir.appendingPathComponent("shared.json")
+        let expectedPayloads = Set((0..<8).flatMap { writer in
+            (0..<100).map { Self.payload(writer: writer, iteration: $0) }
+        })
 
         DispatchQueue.concurrentPerform(iterations: 8) { w in
             for i in 0..<100 {
-                try? AtomicFilePublish.write(
-                    Data("w\(w)-\(i)".utf8),
-                    to: dir.appendingPathComponent("shared.json"))
+                observations.record {
+                    try AtomicFilePublish.write(
+                        Self.payload(writer: w, iteration: i), to: destination)
+                }
             }
         }
 
+        let result = observations.result
+        #expect(result.failures.isEmpty, "every wrapper write must succeed: \(result.failures.prefix(5))")
+        #expect(result.successes == 800)
+        #expect(expectedPayloads.contains(try Data(contentsOf: destination)),
+                "the wrapper publishes one complete payload after 800 racing writes")
         #expect(mine().isEmpty,
                 "every publish must deregister: \(mine().map(\.destination))")
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
-            .filter { AtomicFilePublish.isTemporaryPublishArtifact($0) }
+            .filter { $0 != destination.lastPathComponent }
         #expect(leftovers.isEmpty, "no temps survive 800 racing publishes")
     }
 }
