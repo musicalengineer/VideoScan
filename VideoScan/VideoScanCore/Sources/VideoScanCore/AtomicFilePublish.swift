@@ -311,8 +311,55 @@ public enum AtomicFilePublish {
     ///   semantics it does not deliver — and would collide textually with the
     ///   very API the sensors ban.
     public static func publish(_ source: URL, as destination: URL) throws {
+        try adoptExistingMode(of: destination, onto: source)
         if Darwin.rename(source.path, destination.path) != 0 {
             throw Failure(operation: "rename", path: destination.path, errnoValue: errno)
+        }
+    }
+
+    /// Give `source` the permissions the file it is about to replace already
+    /// had, so publishing never widens them.
+    ///
+    /// WHY THIS EXISTS (codex review 2026-09-15, runtime-confirmed). The API
+    /// this type replaced, `FileManager.replaceItemAt`, preserves the
+    /// destination's attributes — that is documented behaviour in
+    /// `NSFileManager.h`. We publish a FRESH inode created with `0o644 & ~umask`
+    /// and rename it over the top, so the destination's mode was silently
+    /// discarded. Reproduced: a `0600` destination, umask `022`, one
+    /// `write(_:to:durability:.fullFsync)` — the file came back **`0644`**.
+    /// Nobody lost data and no restricted sidecar is known to exist today, but
+    /// an atomic-save helper must not be a privilege-widening primitive.
+    ///
+    /// Done HERE, in the one place every publish funnels through, rather than
+    /// at each call site — the whole point of the wrapper.
+    ///
+    /// DELIBERATE SCOPE. Mode only. Owner/group cannot be restored without
+    /// privilege, and `rename(2)` keeps the temp's — which is us, the same
+    /// user who owned the destination in every path this app has. ACLs and
+    /// extended attributes are NOT carried over: this app sets neither, and
+    /// `copyfile(3)` with `COPYFILE_METADATA` would also drag the old mtime
+    /// onto a file whose whole purpose is to be new. If we ever publish over
+    /// files that carry ACLs, this is the function to revisit.
+    ///
+    /// A NEW file keeps the process umask — correct, there is no prior
+    /// intent to honour — so an absent or unreadable destination is not an
+    /// error. A FAILED chmod is: it runs BEFORE the rename, so throwing has
+    /// published nothing and the caller's existing cleanup removes the temp.
+    /// Failing loudly beats quietly widening permissions.
+    private static func adoptExistingMode(of destination: URL, onto source: URL) throws {
+        // `Darwin.stat` is ambiguous in Swift — the struct and the function
+        // share the name, and the type wins. FileManager reads the same
+        // `st_mode & 0o7777` without the dance.
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: destination.path),
+              let mode = (attrs[.posixPermissions] as? NSNumber)?.uint16Value
+        else { return }                            // absent/unreadable: umask decides
+        let current = (try? fm.attributesOfItem(atPath: source.path))
+            .flatMap { ($0[.posixPermissions] as? NSNumber)?.uint16Value }
+        if current == mode { return }
+        guard Darwin.chmod(source.path, mode_t(mode)) == 0 else {
+            throw Failure(operation: "chmod (preserving \(String(mode, radix: 8)))",
+                          path: source.path, errnoValue: errno)
         }
     }
 
