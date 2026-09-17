@@ -171,7 +171,12 @@ struct FamilyTreePersonCard: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
 
-                Text(person.surname ?? person.reference)
+                // The FamilySearch id, not the surname: the surname is
+                // already the end of the name two lines up, and the id is
+                // what actually identifies this record among the namesakes.
+                // Falls back to the surname, then the pointer, for a record
+                // that has no id.
+                Text(person.familySearchID ?? person.surname ?? person.reference)
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

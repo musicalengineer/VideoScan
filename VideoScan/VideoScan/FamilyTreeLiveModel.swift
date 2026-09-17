@@ -55,6 +55,14 @@ struct FamilyTreePersonSummary: Identifiable, Equatable {
     let surname: String?
     let years: String?
     let sex: FamilyTreeSex
+    /// The FamilySearch id, when the record has one. Shown on the card in
+    /// place of the surname (Rick, 2026-09-17: "where the last name is
+    /// currently in the person in FT view such as 'Doherty' we should have
+    /// FS ID since Doherty is already in view, why list it again in small
+    /// print under, put FSID?"). It is also the thing he searches by, the
+    /// key his People folders are named on, and the key his identity
+    /// rulings are recorded against.
+    var familySearchID: String? = nil
     /// "I123" style GEDCOM pointer for live people, a short label for demo
     /// people. Shown in monospace on the card's last line.
     let reference: String
@@ -481,6 +489,11 @@ final class FamilyTreeLiveModel: ObservableObject {
             ?? (originalsDirectory == nil && bookmarksDirectory == nil)
         self.bookmarksDirectory = bookmarksDirectory
             ?? (originalsDirectory == nil ? production.gedcomDirectory() : nil)
+        // An INJECTED originals directory reads its own rulings; production
+        // (nil) picks them up in `configure`, beside the GEDCOM. Same
+        // isolation rule as the bookmarks above: a test never reads Rick's.
+        self.identityDecisions = originalsDirectory
+            .map { FamilyIdentityDecisions.load(from: $0) } ?? FamilyIdentityDecisions()
         self.bookmarks = self.bookmarksDirectory
             .map { FamilyTreeBookmarks.load(from: $0) } ?? FamilyTreeBookmarks()
         self.noteAuthor = noteAuthor
@@ -541,6 +554,22 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     /// Keeps tree cards in step with photo writes made anywhere else.
     private var photoCenterSubscription: AnyCancellable?
+
+    /// What Rick has ruled about who is who — loaded from beside the GEDCOM,
+    /// reloaded whenever the source changes. Never consulted for anything
+    /// except hiding a record he has called a duplicate; not knowing who
+    /// someone is must never hide them.
+    private(set) var identityDecisions = FamilyIdentityDecisions()
+
+    /// True when Rick has ruled this record is a duplicate of another. The
+    /// ruling is keyed on the FamilySearch id, so it survives the re-pull
+    /// that renumbers every GEDCOM xref — a record with no id can never be
+    /// suppressed, which is the safe direction.
+    func isSuppressedRecord(_ personID: String) -> Bool {
+        guard !identityDecisions.isEmpty,
+              let fsid = graph?.people[personID]?.familySearchID else { return false }
+        return identityDecisions.isSuppressed(.familySearch(fsid))
+    }
 
     // MARK: Loading
 
@@ -1050,6 +1079,15 @@ final class FamilyTreeLiveModel: ObservableObject {
             bookmarksDirectory = directory
             bookmarks = source.access == .unavailable
                 ? FamilyTreeBookmarks() : FamilyTreeBookmarks.load(from: directory)
+        }
+        if sourceChanged {
+            identityDecisions = source.access == .unavailable
+                ? FamilyIdentityDecisions() : FamilyIdentityDecisions.load(from: directory)
+            if !identityDecisions.isEmpty {
+                let hidden = identityDecisions.decisions.values.filter { $0.duplicateOf != nil }
+                appLog.write("Family Tree: \(identityDecisions.count) identity ruling(s) loaded; "
+                    + "\(hidden.count) record(s) will be hidden as duplicates")
+            }
         }
         if sourceChanged || bookmarksChanged {
             rebuildBookmarkedPeople()
@@ -1793,6 +1831,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             surname: person.surname,
             years: years,
             sex: FamilyTreeSex(gedcom: person.sex),
+            familySearchID: person.familySearchID,
             reference: reference(for: person.id))
     }
 
@@ -1865,8 +1904,13 @@ final class FamilyTreeLiveModel: ObservableObject {
         }
         let needle = searchText.trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else {
-            filteredPeople = showsBookmarkedPeopleOnly ? bookmarkedPeopleInOrder
+            let all = showsBookmarkedPeopleOnly ? bookmarkedPeopleInOrder
                 : (isLive ? summariesInOrder : FamilyTreeDemoData.people)
+            // A record Rick has ruled a duplicate is kept out of the list he
+            // browses — "the other Mary should be ignored by the app". The
+            // list stays in `summariesInOrder` untouched, because the search
+            // index addresses it by position.
+            filteredPeople = identityDecisions.isEmpty ? all : all.filter { !isSuppressedRecord($0.id) }
             return
         }
         if let graph, isLive {
@@ -1879,6 +1923,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             let rows = graph.index.sidebarRows(containing: needle.lowercased())
             filteredPeople = rows.compactMap { row in
                 let person = summariesInOrder[Int(row)]
+                guard !isSuppressedRecord(person.id) else { return nil }
                 return !showsBookmarkedPeopleOnly || bookmarks.contains(person.id) ? person : nil
             }
             return
@@ -1935,7 +1980,8 @@ final class FamilyTreeLiveModel: ObservableObject {
                 descendantGenerations: descendantGenerations)
             scene = FamilyTreeScene(
                 cards: layout.nodes.compactMap { node in
-                    guard let person = graph.people[node.personID] else { return nil }
+                    guard let person = graph.people[node.personID],
+                          !isSuppressedRecord(node.personID) else { return nil }
                     return FamilyTreeCard(id: node.id,
                                           person: Self.summary(person),
                                           position: node.position,
