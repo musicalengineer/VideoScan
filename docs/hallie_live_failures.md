@@ -266,3 +266,41 @@ Interview-mode and composition turns ("what was your first job", "write
 something about Donna I could read out loud at a family gathering") route to
 `unknown` because they are **not built**, not because routing failed. Not
 defects; they are the interview/composition backlog.
+
+### Kin-term conflict — root cause, and one open design question (2026-09-17)
+
+`treeCues` contains `dad`, `father`, `brother`, `wedding`, `family`;
+`catalogCues` contains `video`, `videos`, `footage`. A sentence with one of
+each sets `conflicted` and returns `unknown`. That is why Rick's own spot
+test produced:
+
+| asked | routed |
+|---|---|
+| `show videos of tim` | catalog ✓ |
+| `find videos of my brother tim` | **conflict** |
+
+Same person, same intent. "my brother" breaks a query that works without it.
+
+**The rule already exists in the codebase.** `HallieMediaVocabulary`
+`.containsItemNoun` documents itself as *"the reading under which a tree
+person plus a media noun is a catalog search ('videos of nathaniel
+parker')"*, and step 4 of the classifier applies exactly that — but only
+when `subjectPhrase` resolves to a proper name the oracle knows. A person
+named by kinship never reaches it. `photoNouns` are deliberately excluded
+(a photo of a tree person is the portrait road, a TREE answer), so any fix
+must use `containsItemNoun`, not `containsMediaWord`.
+
+Extending the rule to the conflict branch fixes every retrieval ask Rick
+hit: "show me videos of my dad", "any videos of the kids at Christmas",
+"can you show me the wedding video", "do we have any video of my father
+talking about typewriters", "find videos of my brother tim".
+
+**OPEN — do not land without a ruling.** It also catches
+`"how old would my dad have been in this video"`, which is not a retrieval
+ask at all: it needs the video's date AND a birth year, i.e. both modes.
+Routing it to catalog would answer a different question **confidently**,
+which this ledger already records as the worst failure mode. `unknown` is
+wrong but honest; catalog is wrong and assured. Splitting retrieval asks
+from fact-questions-that-mention-a-video means either another heuristic
+layer on a module that is already failing from heuristic collisions, or
+the two-mode answer: let a turn consult both.
