@@ -138,7 +138,7 @@ struct FamilyGraphFileLoader {
                            needsRecompile: pending.sources)
         }
 
-        if let outcome = adoptedMultiSourceOutcome(newestFirst: newestFirst, rejected: rejected) {
+        if let outcome = adoptedMultiSourceOutcome(newestFirst: newestFirst, rejected: &rejected) {
             return outcome
         }
 
@@ -169,10 +169,13 @@ struct FamilyGraphFileLoader {
     /// listing does not scan. Adopting also repoints, so the tree heals
     /// itself instead of narrowing.
     ///
-    /// A pull genuinely installed AFTER that generation still wins, by rule
-    /// 1's own superseder test -- otherwise this rule would pin the tree to
-    /// an old generation and quietly ignore every new .ged.
-    private func adoptedMultiSourceOutcome(newestFirst: [URL], rejected: [URL]) -> Outcome? {
+    /// A pull genuinely installed AFTER that generation still wins -- but it
+    /// has to PARSE first. Releasing the recovery candidate merely because a
+    /// newer file exists let a malformed newer file authorise the narrowing
+    /// it was supposed to prevent (rule 3b review, finding 1). Rule 1 has
+    /// always tried its superseders before keeping the compiled tree; this
+    /// now does the same.
+    private func adoptedMultiSourceOutcome(newestFirst: [URL], rejected: inout [URL]) -> Outcome? {
         guard let store = compiledStore, let found = store.intactMultiSourceGeneration() else { return nil }
         func modified(_ url: URL) -> Date {
             (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
@@ -181,21 +184,40 @@ struct FamilyGraphFileLoader {
         let newer = newestFirst.filter {
             !sourcePaths.contains($0.standardizedFileURL.path) && modified($0) > found.manifest.createdAt
         }
-        guard newer.isEmpty else {
-            store.log("[family-tree] intact \(found.manifest.sources.count)-source generation \(found.generation) "
-                + "not adopted: \(newer.count) newer .ged file\(newer.count == 1 ? "" : "s") installed since it was compiled")
-            return nil
+        for url in newer {
+            if let outcome = parseAndPromote(url, store: store, rejected: rejected,
+                                             candidateCount: newestFirst.count) {
+                store.log("[family-tree] newer pull \(url.lastPathComponent) supersedes intact "
+                    + "\(found.manifest.sources.count)-source generation \(found.generation)")
+                return outcome
+            }
+            rejected.append(url)
+            store.log("[family-tree] newer .ged \(url.lastPathComponent) did not parse; "
+                + "keeping the intact \(found.manifest.sources.count)-source generation \(found.generation) in play")
         }
-        guard let graph = store.adopt(found) else { return nil }
-        store.log("[family-tree] pointer unusable; adopted intact "
-            + "\(found.manifest.sources.count)-source generation \(found.generation) "
-            + "(\(found.manifest.peopleCount) people) rather than demote to "
-            + "\(newestFirst.first?.lastPathComponent ?? "(no .ged)")")
-        return Outcome(graph: graph,
-                       selectedURL: found.manifest.sources.first.map { URL(fileURLWithPath: $0.path) },
-                       rejectedURLs: rejected,
-                       candidateCount: max(newestFirst.count, found.manifest.sources.count),
-                       compiled: true)
+        switch store.adopt(found) {
+        case .adopted(let graph):
+            store.log("[family-tree] pointer unusable; adopted intact "
+                + "\(found.manifest.sources.count)-source generation \(found.generation) "
+                + "(\(found.manifest.peopleCount) people) rather than demote to "
+                + "\(newestFirst.first?.lastPathComponent ?? "(no .ged)")")
+            return Outcome(graph: graph,
+                           selectedURL: found.manifest.sources.first.map { URL(fileURLWithPath: $0.path) },
+                           rejectedURLs: rejected,
+                           candidateCount: max(newestFirst.count, found.manifest.sources.count),
+                           compiled: true)
+        case .superseded:
+            // Something was promoted while we were recovering. It is newer
+            // than what we found, so use it rather than our stale graph.
+            guard let current = store.loadCurrent() else { return nil }
+            store.log("[family-tree] recovery superseded by \(current.manifest.generation) "
+                + "(\(current.manifest.peopleCount) people); using it")
+            return Outcome(graph: current.graph,
+                           selectedURL: current.manifest.sources.first.map { URL(fileURLWithPath: $0.path) },
+                           rejectedURLs: rejected,
+                           candidateCount: max(newestFirst.count, current.manifest.sources.count),
+                           compiled: true)
+        }
     }
 
     /// The viewer's whole load: decode the master's promoted generation

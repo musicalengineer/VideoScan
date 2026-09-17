@@ -397,9 +397,29 @@ public struct FamilyGraphCompiledStore {
         return nil
     }
 
-    /// The newest generation that records MORE THAN ONE physical source and
-    /// whose every source is still intact on disk -- whatever state the
-    /// pointer is in.
+    /// A recovery candidate: a multi-source generation that is source-intact
+    /// AND decodes, carried together with the pointer as it was when the
+    /// decision was made. That pointer is the compare-and-swap baseline --
+    /// reading it later would let an ingest that won the race in between be
+    /// overwritten by this older generation (rule 3b review, finding 3).
+    public struct RecoveryCandidate {
+        public let generation: String
+        public let manifest: Manifest
+        let graph: GedcomFamilyGraph
+        let pointerAtLookup: Pointer?
+    }
+
+    /// What adopting a candidate did. `superseded` means the pointer moved
+    /// under us: something newer was promoted between lookup and adopt, and
+    /// the caller must reload rather than use this now-stale graph.
+    public enum Adoption {
+        case adopted(GedcomFamilyGraph)
+        case superseded
+    }
+
+    /// The newest generation that records MORE THAN ONE physical source,
+    /// whose every source is still intact on disk, AND whose artifact
+    /// decodes -- whatever state the pointer is in.
     ///
     /// `multiSourceGenerationNeedingRecompile` covers exactly ONE reason a
     /// multi-source generation stops being used: a codec/schema bump. It can
@@ -414,34 +434,67 @@ public struct FamilyGraphCompiledStore {
     /// sees. Same rule as codex #826, wider trigger: never silently demote N
     /// pulls to one.
     ///
-    /// Two bounded passes, NO RECURSION: manifests first (cheap, no I/O
-    /// beyond the manifest), then hash-verify in newest-first order and stop
-    /// at the first intact generation -- so the expensive pass normally
-    /// touches exactly one generation, and only on a path that is already
-    /// broken.
-    public func intactMultiSourceGeneration() -> (generation: String, manifest: Manifest)? {
+    /// The decode happens HERE, inside the candidate loop, so a corrupt
+    /// newest generation falls through to an older healthy one instead of
+    /// authorising a narrowing (rule 3b review, finding 2).
+    ///
+    /// Two bounded passes, NO RECURSION: manifests first (cheap), then
+    /// verify-and-decode in newest-first order, stopping at the first fully
+    /// usable candidate -- so the expensive pass normally touches exactly one
+    /// generation, and only on a path that is already broken.
+    public func intactMultiSourceGeneration() -> RecoveryCandidate? {
+        let pointerAtLookup = readPointer()
         let candidates = generations()
             .compactMap { readManifest($0) }
             .filter { $0.sources.count > 1 && $0.verification.isEmpty }
             .sorted { $0.createdAt > $1.createdAt }
         for manifest in candidates where usableManifest(manifest.generation) != nil {
-            return (manifest.generation, manifest)
+            guard let graph = decode(generation: manifest.generation) else {
+                log("[family-tree] recovery candidate \(manifest.generation) will not decode; "
+                    + "trying an older multi-source generation")
+                continue
+            }
+            return RecoveryCandidate(generation: manifest.generation, manifest: manifest,
+                                     graph: graph, pointerAtLookup: pointerAtLookup)
         }
         return nil
     }
 
-    /// Self-heal: decode a generation found by `intactMultiSourceGeneration`
-    /// and leave the pointer naming it. Split from the lookup so a caller can
-    /// decide, without paying for the hash pass twice, whether adopting is
-    /// still the right thing (the loader checks for a genuinely newer pull
-    /// first). Nil when it will not decode.
-    public func adopt(_ found: (generation: String, manifest: Manifest)) -> GedcomFamilyGraph? {
-        guard let graph = decode(generation: found.generation) else { return nil }
-        if let seen = readPointer(), seen.current != found.generation {
-            repoint(from: seen, current: found.generation,
-                    sourceKeys: found.manifest.sources.map(\.key))
+    /// Self-heal: leave the pointer naming the candidate. The compare-and-swap
+    /// baseline is the pointer as it was at LOOKUP, so a competing ingest that
+    /// promoted something in between wins and we report `superseded` instead of
+    /// clobbering it. A viewer keeps the graph without writing.
+    public func adopt(_ found: RecoveryCandidate) -> Adoption {
+        guard !refusesWrites else {
+            log("\(Self.refusedWritePrefix) adopt \(found.generation) — pointer untouched")
+            return .adopted(found.graph)
         }
-        return graph
+        if let seen = found.pointerAtLookup, seen.current == found.generation {
+            return .adopted(found.graph)
+        }
+        var won = false
+        do {
+            try withLock {
+                // The pointer must still be exactly what the decision was made
+                // against -- including "there was none".
+                guard readPointer() == found.pointerAtLookup else { return }
+                var repointed = found.pointerAtLookup
+                    ?? Pointer(schema: found.manifest.schema, codec: found.manifest.codec,
+                               index: found.manifest.index, current: found.generation,
+                               previous: nil, sourceKeys: [])
+                repointed.current = found.generation
+                repointed.previous = nil
+                repointed.sourceKeys = found.manifest.sources.map(\.key)
+                try writePointer(repointed)
+                won = true
+            }
+        } catch {
+            log("[family-tree] could not repoint to \(found.generation): \(error)")
+        }
+        if !won {
+            log("[family-tree] not adopting \(found.generation): the pointer moved while it was being recovered")
+        }
+        return won ? .adopted(found.graph) : .superseded
     }
 
     /// Remote viewer (Phase 1): the pointer names a generation this build
