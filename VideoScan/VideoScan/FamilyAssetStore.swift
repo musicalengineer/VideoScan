@@ -202,7 +202,11 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
             // morning a narrowing dropped Donna's entire line, the log said
             // nothing was wrong. The count is the alarm; the names say which
             // pull went missing.
-            let sources = graph.sourceProvenance.map(\.name)
+            // effectiveProvenance, not sourceProvenance: a plain parse (no
+            // store, or a promotion that failed) has an EMPTY provenance list
+            // and its single file recorded separately, so the raw list printed
+            // "0 sources: file.ged". canonicalized() folds that one file in.
+            let sources = graph.effectiveProvenance.map(\.name)
             let named = sources.isEmpty
                 ? (outcome.selectedURL?.lastPathComponent ?? "no source")
                 : sources.joined(separator: ", ")

@@ -58,6 +58,44 @@ struct FamilyGraphLoadLoggingTests {
         #expect(line.contains("familysearch-donna.ged"),
                 "the second pull is absent from the log -- the exact blindness that hid the narrowing: \(line)")
     }
+
+    /// codex, P3 on b8c3793f: a plain parse (no compiled store, or a failed
+    /// promotion) carries an EMPTY sourceProvenance with its one file recorded
+    /// separately, so the raw list printed "0 sources: file.ged" -- a log line
+    /// claiming the tree came from nowhere.
+    @Test func aPlainParseReportsOneSourceNotZero() throws {
+        let sandbox = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("GraphLoadLog-\(UUID().uuidString)")
+        let assets = sandbox.appendingPathComponent("40_Family_Tree")
+        let gedcoms = assets.appendingPathComponent("GEDCOM")
+        try FileManager.default.createDirectory(at: gedcoms, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        var lines = ["0 HEAD"]
+        for (i, name) in ["Rick Breen", "Donna Breen"].enumerated() {
+            lines.append("0 @I\(i + 1)@ INDI")
+            lines.append("1 NAME \(name)")
+        }
+        lines.append("0 TRLR")
+        try lines.joined(separator: "\n").write(
+            to: gedcoms.appendingPathComponent("only-one.ged"), atomically: true, encoding: .utf8)
+
+        let box = LoadLogBox()
+        let cache = FamilyGraphSharedCache(log: { box.add($0) })
+        let configuration = FamilyAssetConfiguration(
+            roots: .init(assets: assets,
+                         thumbnailCache: sandbox.appendingPathComponent("thumbs")),
+            access: .readWrite,
+            legacyGEDCOMDirectory: nil)
+        // No compiled store: the parse-every-time seam.
+        _ = cache.load(for: configuration, store: nil)
+
+        let line = try #require(box.lines.first { $0.contains("family graph loaded") },
+                                "no load line was logged: \(box.lines.joined(separator: " | "))")
+        #expect(line.contains("1 source:"), "a plain parse should report one source, not zero: \(line)")
+        #expect(!line.contains("0 source"), "the load line claimed the tree came from nowhere: \(line)")
+        #expect(line.contains("only-one.ged"), "the source file was not named: \(line)")
+    }
 }
 
 /// Collects log lines so an expectation can quote the line it judged.
