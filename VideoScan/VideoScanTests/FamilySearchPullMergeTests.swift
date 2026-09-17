@@ -82,6 +82,100 @@ final class FamilySearchPullMergeTests: XCTestCase {
             parseDelay: parseDelay)
     }
 
+    // MARK: - P1 2026-09-16: a merge must never narrow a multi-source tree
+
+    /// A stand-in compiled generation that claims N sources, so the guard
+    /// can be exercised without the production store.
+    /// A GENUINELY two-source compiled generation, built the way Rick's
+    /// actually is: his pull in the GEDCOM folder, Donna's in `pulls/`
+    /// beside it. The loader scans the GEDCOM folder only, so it can never
+    /// reach the second file — which is the whole shape of the P1.
+    ///
+    /// It has to be genuine: `ingest` binds the source list to the graph's
+    /// own provenance by count, basename and hash (codex #816/#817) and
+    /// REFUSES a generation whose sources do not match. An earlier version
+    /// of this fixture claimed two sources for a one-source graph, the
+    /// store correctly threw it out, `loadCurrent()` returned nil, and the
+    /// sensor "failed" for reasons that had nothing to do with the guard.
+    private func twoSourceCompiledStore(currentFile: URL) throws -> (FamilyGraphCompiledStore, URL) {
+        let pulls = gedcomDirectory.appendingPathComponent("pulls", isDirectory: true)
+        try FileManager.default.createDirectory(at: pulls, withIntermediateDirectories: true)
+        let donna = pulls.appendingPathComponent("familysearch-donna-20generations.ged")
+        try Self.donnaPull.write(to: donna, atomically: true, encoding: .utf8)
+
+        // Parsed FROM THE FILES, so each graph carries that file's
+        // provenance and the merged graph carries both.
+        guard let mine = GedcomFamilyGraph(fileURL: currentFile),
+              let hers = GedcomFamilyGraph(fileURL: donna) else {
+            throw XCTSkip("fixture graphs did not parse")
+        }
+        let merged = mine.merge(with: hers).graph
+        let store = FamilyGraphCompiledStore(
+            root: root.appendingPathComponent("compiled-\(UUID().uuidString)", isDirectory: true))
+        XCTAssertNotNil(store.ingest(graph: merged, sources: [currentFile, donna]),
+                        "the fixture generation was refused by the store")
+        return (store, donna)
+    }
+
+    /// THE SENSOR for the P1 of 2026-09-16.
+    ///
+    /// Rick's compiled tree is TWO pulls — his and Donna's, 39,250 people.
+    /// A Refresh rebased onto the newest SINGLE .ged, so the artifact came
+    /// out with 16,383 and Donna's entire line, Edward III included, was
+    /// gone. Nothing was lost on disk; the active tree was wrong, silently.
+    ///
+    /// What actually fixes it is that the coordinator's loader now carries
+    /// the compiled store, so the BASE is the whole tree. This asserts that
+    /// directly — people from BOTH compiled sources survive into the
+    /// artifact — rather than asserting the fail-closed guard fires, which
+    /// it correctly does not when the base is already complete. (An earlier
+    /// version of this test asserted the refusal and "failed" against a
+    /// working fix; the guard is the belt, this is the braces.)
+    func testAMergeKeepsEveryPersonFromEveryCompiledSource() async throws {
+        let (coordinator, current, _) = try await readyCoordinator()
+        let (store, donnaFile) = try twoSourceCompiledStore(currentFile: current)
+        coordinator.compiledStore = { store }
+
+        let generation = try XCTUnwrap(store.loadCurrent(), "fixture generation did not load")
+        XCTAssertEqual(generation.manifest.sources.count, 2)
+        let everyone = Set(generation.graph.people.values.compactMap(\.familySearchID))
+        XCTAssertFalse(everyone.isEmpty, "fixture people need FamilySearch IDs to be traceable")
+
+        await coordinator.installMerged().value
+        if case .failed(let message) = coordinator.phase { return XCTFail("merge refused: \(message)") }
+
+        let artifact = try XCTUnwrap(
+            try gedFiles().first { $0.hasPrefix("familysearch-merged-") || $0.hasPrefix("familysearch-refreshed-") },
+            "no artifact was written")
+        let text = try String(contentsOf: gedcomDirectory.appendingPathComponent(artifact), encoding: .utf8)
+        let missing = everyone.filter { !text.contains($0) }
+        XCTAssertTrue(missing.isEmpty,
+                      "the merge DROPPED \(missing.count) of \(everyone.count) people who were in the compiled tree: \(missing.sorted())")
+        _ = donnaFile
+    }
+
+    /// The converse, so the guard cannot pass by refusing everything: when
+    /// the compiled generation has no MORE sources than the base, the merge
+    /// proceeds exactly as before.
+    /// The base being complete must not itself block a merge.
+    func testMergeProceedsWhenTheBaseCoversEveryCompiledSource() async throws {
+        let (coordinator, current, _) = try await readyCoordinator()
+        // A generation built from the SAME single file the loader reaches:
+        // nothing to narrow, so the merge must proceed.
+        guard let mine = GedcomFamilyGraph(fileURL: current) else { return XCTFail("fixture") }
+        let store = FamilyGraphCompiledStore(
+            root: root.appendingPathComponent("compiled-\(UUID().uuidString)", isDirectory: true))
+        XCTAssertNotNil(store.ingest(graph: mine, sources: [current]))
+        coordinator.compiledStore = { store }
+
+        await coordinator.installMerged().value
+
+        if case .failed(let message) = coordinator.phase {
+            return XCTFail("refused a legitimate merge: \(message)")
+        }
+        XCTAssertEqual(try gedFiles().count, 2, "the merged artifact should have been written")
+    }
+
     private func gedFiles() throws -> [String] {
         try FileManager.default.contentsOfDirectory(atPath: gedcomDirectory.path).filter { $0.hasSuffix(".ged") }.sorted()
     }

@@ -402,6 +402,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         let gedcomDirectory = self.gedcomDirectory
         let fileManager = self.fileManager
         let folderIDs = FamilyAssetConfigurationCenter.shared.snapshot().makeStore().personFolderGEDCOMIDs()
+        let summaryLoader = currentTreeLoader()
         let parsed = await Task.detached(priority: .userInitiated) {
             () -> (new: TreeSummary, current: TreeSummary?, unmatched: Int)? in
             guard let graph = GedcomFamilyGraph(fileURL: output),
@@ -409,9 +410,12 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             let new = TreeSummary(
                 fileName: output.lastPathComponent, people: graph.people.count,
                 families: graph.familyCount, generations: Self.deepestAncestorDepth(in: graph))
-            // The tree Hallie reads today: newest valid file in the archive's
-            // GEDCOM folder, exactly as the loader will choose it.
-            let outcome = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory, fileManager: fileManager).loadNewestOutcome()
+            // The tree Hallie reads today — via the STORE-AWARE loader, so
+            // the "current" people count the sheet shows is the compiled
+            // multi-source tree and not the newest single file. Before
+            // 2026-09-16 this under-reported Rick's tree as 16,383 when it
+            // is 39,250.
+            let outcome = summaryLoader.loadNewestOutcome()
             let current = outcome.graph.map {
                 TreeSummary(fileName: outcome.selectedURL?.lastPathComponent ?? "current tree",
                             people: $0.people.count, families: $0.familyCount,
@@ -521,6 +525,36 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         }
     }
 
+
+    /// The loader the MERGE and the sheet's "current tree" summary must
+    /// use — the one that can see a multi-source compiled generation.
+    ///
+    /// P1, 2026-09-16. Both sites built `FamilyGraphFileLoader` with NO
+    /// `compiledStore`, so the `if let store = compiledStore` branch never
+    /// ran and the loader fell through to parsing the newest single .ged.
+    /// Rick's compiled tree is TWO pulls — his 16,383 people and Donna's —
+    /// 39,250 together. A Refresh therefore rebased silently onto his file
+    /// alone and Donna's whole line, Edward III included, vanished from the
+    /// artifact. He noticed within minutes; nothing was lost on disk, but
+    /// the active tree was wrong.
+    ///
+    /// The loader's own doc states the rule this broke (codex #826): "the
+    /// loader never demotes an N-pull tree to the newest single file". It
+    /// cannot honour that without the store.
+    private func currentTreeLoader() -> FamilyGraphFileLoader {
+        var loader = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory,
+                                           fileManager: fileManager)
+        loader.compiledStore = compiledStore()
+        return loader
+    }
+
+    /// The compiled store the base is read through. INJECTED rather than
+    /// reaching for `.production` inline: a hardcoded production root is
+    /// the wrong store in tests and absent on a read-only viewer, and a
+    /// guard nobody can exercise is a guard nobody can trust — which is
+    /// the whole reason this P1 shipped in the first place.
+    var compiledStore: @Sendable () -> FamilyGraphCompiledStore? = { .production }
+
     /// "Add to current tree": build a DERIVED merge artifact from the
     /// verified export and the tree the loader reads today, keyed by
     /// FamilySearch ID, and activate it as a NEW file in the archive's
@@ -590,13 +624,43 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         // Two-case outcome (C++: a tagged union), because the failure is
         // a sentence for the sheet, not an `Error`.
         enum Staged { case written(URL, Int, GedcomFamilyGraph.MergeOutcome), failed(String) }
+        let loader = currentTreeLoader()
+        let compiledStore = self.compiledStore
         let staged = await Task.detached(priority: .userInitiated) { () -> Staged in
             guard var new = GedcomFamilyGraph(fileURL: output), !new.people.isEmpty else {
                 return .failed(FamilySearchPullError.downloadedFileUnreadable(output).localizedDescription)
             }
-            let outcome = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory, fileManager: fileManager).loadNewestOutcome()
+            let outcome = loader.loadNewestOutcome()
             guard var current = outcome.graph, let currentURL = outcome.selectedURL else {
                 return .failed("There is no current tree to add to — use Install family tree instead.")
+            }
+            // WHAT WE ARE REBASING ONTO — say it before a byte moves, so a
+            // surprising artifact can be explained from the log alone
+            // (Rick, 2026-09-16: "we also need good logging so we know what
+            // happened if something weird/bad shows up").
+            let baseSources = current.sourceProvenance.map(\.name).sorted()
+            appLog.write("Family Tree \(verb): base = \(currentURL.lastPathComponent) — "
+                + "\(current.people.count) people from \(baseSources.count) source(s): "
+                + "\(baseSources.joined(separator: ", "))"
+                + (outcome.compiled ? " [compiled generation]" : " [single parsed file]"))
+            appLog.write("Family Tree \(verb): incoming = \(output.lastPathComponent) — \(new.people.count) people")
+
+            // FAIL CLOSED. A base that is one parsed file while the compiled
+            // generation has more sources means the loader could not see the
+            // generation, and merging would silently narrow the tree — the
+            // P1 of 2026-09-16, where Donna's 23k people and her Edward III
+            // line disappeared from the artifact. Refuse instead.
+            if let generation = compiledStore()?.loadCurrent(),
+               generation.manifest.sources.count > baseSources.count {
+                let names = generation.manifest.sources.map(\.fileName).sorted()
+                appLog.write("Family Tree \(verb): REFUSED — the compiled tree has "
+                    + "\(generation.manifest.sources.count) sources (\(names.joined(separator: ", "))) "
+                    + "but the base only has \(baseSources.count). Merging would drop the rest.")
+                return .failed(
+                    "Your tree is built from \(generation.manifest.sources.count) files "
+                    + "(\(names.joined(separator: ", "))), but only "
+                    + "\(baseSources.count) could be loaded as the base. Merging now would "
+                    + "silently drop the others. Recompile the family tree first, then try again.")
             }
             // Sidecars beside the raw sources (never touching the sources);
             // the hashes are also the merge's source fingerprints.
