@@ -511,8 +511,21 @@ public struct FamilyGraphCompiledStore {
                 }
             }
         } catch {
-            // The lock itself failed: nobody else necessarily won.
-            attempt = .failed("\(error)")
+            // The lock itself failed, so we never read the pointer under it and
+            // cannot claim nobody won. Re-read it lock-free before deciding:
+            // unchanged means a genuine I/O failure with no competing writer,
+            // changed means we WERE superseded and must not serve this graph
+            // (rule 3b re-review, P2). The re-read is not atomic, so a
+            // promotion landing after it still yields .couldNotPersist and a
+            // slightly older verified tree -- the mildest outcome available,
+            // and strictly better than assuming.
+            if readPointer() != found.pointerAtLookup {
+                log("[family-tree] could not take the lock to adopt \(found.generation), "
+                    + "and the pointer moved meanwhile — treating as superseded")
+                attempt = .moved
+            } else {
+                attempt = .failed("\(error)")
+            }
         }
         switch attempt {
         case .won:
