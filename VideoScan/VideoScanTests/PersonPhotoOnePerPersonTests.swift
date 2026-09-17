@@ -242,8 +242,10 @@ struct PersonPhotoOnePerPersonTests {
         let peter = FamilyAssetPerson(gedcomID: "@I900@", name: "Peter Ronan",
                                       familySearchID: "LZ2P-9QT")
         let folder = try store.folderForPhotoRequest(person: peter)
-        #expect(folder.lastPathComponent == "LZ2P-9QT",
+        #expect(FamilyAssetStore.familySearchID(inFolderComponent: folder.lastPathComponent) == "LZ2P-9QT",
                 "an import for someone with a FamilySearch ID must centralise on it, not on a spelling")
+        #expect(folder.lastPathComponent.contains("Peter"),
+                "the folder must still be readable in Finder: \(folder.lastPathComponent)")
         #expect(folder.deletingLastPathComponent() == store.peopleDirectory)
 
         // Asking again — under a different spelling of the same person —
@@ -252,6 +254,28 @@ struct PersonPhotoOnePerPersonTests {
             person: FamilyAssetPerson(gedcomID: "@I900@", name: "Peter Roynane",
                                       familySearchID: "LZ2P-9QT"))
         #expect(same(again, folder), "a second spelling opened a second folder")
+    }
+
+    /// Eleven folders on the live archive are bare ids from before names
+    /// were added. Composing a fresh `Name_ID` folder for those people would
+    /// strand every photo already in them, so an existing folder carrying
+    /// the id wins in whatever shape it has.
+    @Test func anExistingBareIDFolderKeepsItsPhotosInsteadOfBeingSupersededByANamedOne() throws {
+        let box = try sandbox(withProfileCover: false)
+        defer { try? fileManager.removeItem(at: box.base) }
+        let store = box.store
+
+        // The old shape, with a photo already in it.
+        let legacy = store.peopleDirectory.appendingPathComponent("LZ2P-9QT", isDirectory: true)
+        try fileManager.createDirectory(at: legacy, withIntermediateDirectories: true)
+        try png(legacy.appendingPathComponent("old.png"), width: 4, height: 4, shade: 0.3)
+
+        let peter = FamilyAssetPerson(gedcomID: "@I900@", name: "Peter Ronan",
+                                      familySearchID: "LZ2P-9QT")
+        let folder = try store.folderForPhotoRequest(person: peter)
+        #expect(same(folder, legacy),
+                "a new Peter_Ronan_LZ2P-9QT folder would have stranded old.png in \(legacy.lastPathComponent)")
+        #expect(fileManager.fileExists(atPath: legacy.appendingPathComponent("old.png").path))
     }
 
     /// The other half of the rule. Beth is not on FamilySearch — Rick:
@@ -296,8 +320,12 @@ struct PersonPhotoOnePerPersonTests {
         let chosen = try store.choosePhoto(
             try jpegBytes(shade: 0.7), fileExtension: "jpg", for: donnaAsset,
             source: PersonPhotoChoiceSource.treePick, chosenAt: Date(timeIntervalSince1970: 1_800_000_000))
-        #expect(chosen.deletingLastPathComponent() == box.peopleDirectory.appendingPathComponent("G2CL-86B"),
-                "canonical asset lives under People/<FSID>/")
+        // Canonical folder is named for a human and KEYED on the id
+        // (Rick, 2026-09-17: "Donna_Hudson_Breen_ID"), so assert the id it
+        // carries rather than one spelling of her name.
+        #expect(FamilyAssetStore.familySearchID(
+            inFolderComponent: chosen.deletingLastPathComponent().lastPathComponent) == "G2CL-86B",
+                "canonical asset must live in the folder keyed on her FamilySearch id")
 
         let tree = try #require(resolver.treePhoto(for: donnaAsset, bridgedProfile: box.donnaProfile))
         #expect(tree.source == .chosen)
@@ -468,7 +496,8 @@ struct PersonPhotoOnePerPersonTests {
             to: &edited, previous: box.donnaProfile, profiles: box.profiles,
             graph: Self.graph, store: store, now: now)
         let copiedURL = try #require(copied)
-        #expect(copiedURL.deletingLastPathComponent().lastPathComponent == "G2CL-86B")
+        #expect(FamilyAssetStore.familySearchID(
+            inFolderComponent: copiedURL.deletingLastPathComponent().lastPathComponent) == "G2CL-86B")
         #expect(edited.photoChosenAt == now)
         #expect(try Data(contentsOf: copiedURL) == (try Data(contentsOf: box.cover)), "same bytes, one asset")
         box.profiles[0] = edited

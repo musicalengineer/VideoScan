@@ -1246,15 +1246,45 @@ struct FamilyAssetStore {
 
     static let chosenPhotoSidecarName = "chosen-photo.json"
 
-    /// `People/<FSID>/` for a record with a safe FamilySearch ID (it need
-    /// not exist yet), else nil.
+    /// The one folder for a person who has a FamilySearch ID.
+    ///
+    /// NAMED FOR A HUMAN, KEYED ON THE ID (Rick, 2026-09-17: "centralize the
+    /// folder such as Donna_Hudson_Breen_ID"). A bare `G2CL-86B` is keyed
+    /// correctly and unreadable — and this archive is browsed in Finder, so
+    /// the name has to be there. `Donna_Hudson_Breen_G2CL-86B` is both: one
+    /// folder per person however her name is spelled, and legible when Rick
+    /// opens People/ himself.
+    ///
+    /// An EXISTING folder carrying this ID always wins, in whatever shape it
+    /// has — bare `G2CL-86B` from before this rule, or a differently spelled
+    /// name with the same ID. Preferring a freshly composed name would strand
+    /// the photos already sitting in the old one.
     func familySearchIDFolder(for person: FamilyAssetPerson) -> URL? {
         guard access != .unavailable,
-              let component = Self.safeFamilySearchIDComponent(person.familySearchID) else { return nil }
+              let id = Self.safeFamilySearchIDComponent(person.familySearchID) else { return nil }
+        if let existing = safePersonFolders().first(where: {
+            Self.familySearchID(inFolderComponent: $0.lastPathComponent) == id
+        }) {
+            return existing
+        }
+        let name = Self.safePersonNameComponent(person.name)
+        let component = name.isEmpty ? id : "\(name)_\(id)"
         let folder = peopleDirectory.appendingPathComponent(component, isDirectory: true)
             .standardizedFileURL
         guard folder.deletingLastPathComponent() == peopleDirectory else { return nil }
         return folder
+    }
+
+    /// The FamilySearch ID a People/ folder name carries, if any: the whole
+    /// component (`G2CL-86B`, the shape written before names were added) or
+    /// its final underscore-separated piece (`Donna_Hudson_Breen_G2CL-86B`).
+    /// Nil when the folder is name-only, which is what a person with no ID
+    /// gets and must keep.
+    static func familySearchID(inFolderComponent component: String) -> String? {
+        if GedcomFamilyGraph.isFamilySearchID(component) { return component }
+        guard let last = component.split(separator: "_").last.map(String.init),
+              GedcomFamilyGraph.isFamilySearchID(last) else { return nil }
+        return last
     }
 
     /// Where this person's choice sidecar lives (read side).
