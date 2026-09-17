@@ -196,8 +196,18 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
             }
             let token = UUID()
             entry = (key, graph, outcome.compiled, token, outcome)
+            // Name EVERY source, not just the first. 2026-09-17: a 39,250-person
+            // two-pull tree and a 16,383-person one-pull tree logged almost
+            // identically, because this line printed only selectedURL -- so the
+            // morning a narrowing dropped Donna's entire line, the log said
+            // nothing was wrong. The count is the alarm; the names say which
+            // pull went missing.
+            let sources = graph.sourceProvenance.map(\.name)
+            let named = sources.isEmpty
+                ? (outcome.selectedURL?.lastPathComponent ?? "no source")
+                : sources.joined(separator: ", ")
             log("[hallie] family graph loaded (compiled: \(outcome.compiled), \(graph.people.count) people, "
-                + "\(outcome.selectedURL?.lastPathComponent ?? "no source"))")
+                + "\(sources.count) source\(sources.count == 1 ? "" : "s"): \(named))")
             return (outcome, Loaded(graph: graph, compiled: outcome.compiled, token: token, reused: false))
         }
     }
