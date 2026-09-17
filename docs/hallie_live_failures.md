@@ -229,3 +229,40 @@ way the product was — quietly.
 | Harvester ids restarted each run | Two different questions shared `lv260907-001` | `be0dd162` |
 | `queryDescription` named the model's operation, not the resolved one | strict-001 answered correctly and was flagged `query_description_mismatch`; a log reader could not see a guard fire | `graphQueryDescription(_:resolved:)` |
 | Unit tests exercised the guard function, not the executor path | the place guard was green for an hour while the live path never called it | strict lane (`tests/hallie_strict_regressions.json`) |
+
+---
+
+## Mode routing, 2026-09-17 (codex advisory 399 + strict 44)
+
+Observed in `[hallie-mode]` over ~400 turns. The run itself is
+**data-compromised** for tree content — the compiled pointer was on a
+test-polluted single-source generation — so answer quality is not graded
+here. Routing is independent of tree content, so these stand.
+
+### CONFIRMED in source
+
+| what | where | effect |
+|------|-------|--------|
+| `is`/`are`/`was`/`were` are in **both** `filler` (no content) and `sentenceVerbs` (proof of a standalone sentence). The `sentenceVerbs` early-return fires *before* the content-word count, so a copula alone defeats stickiness. | `HallieModeClassifier.isElliptical:287-300` | "when was this filmed" (content words: `filmed`), "how old is this tape" (`old, tape`), "which one is the oldest", "how old was Timmy in this" → all `unknown`. "and the youngest?" survives on the lead rule, "when did she die" on the pronoun rule. |
+| `this`/`that`/`it` are in `filler` and `demonstratives` but **not** in `pronouns` (= `HalliePronounContinuity.singular ∪ .plural`, which is he/she only). | `HallieModeClassifier:154-160` | Deictic reference to the selected item has no continuity path at all. Clicking a video and asking about it is the app's most natural gesture. |
+| Cues match as bare substrings with no syntactic role. | `catalogCues` / `treeCues` | "what invention had the biggest impact on your life" → **catalog** on `biggest`; "how much did things cost when you were a kid" → **tree** on `kid`; "did you ever get in trouble as a kid" → **tree**. Confident wrong answers, the class this ledger exists for. |
+| Sticky carries the previous mode into a turn that names a new subject *and* the other mode. | step 5, after cues | "show thankful pratt tree" → `mode=catalog reason=sticky` → `declined: catalog refused shape=graph`. The user typed "tree" and got a refusal. |
+
+### Observed, not yet traced
+
+- Kin term + media noun = `conflict` → `unknown`: "show me videos of my dad",
+  "find videos of my brother tim", "do we have any video of my father talking
+  about typewriters". The last is close to the reason the archive exists.
+- `rewrite:` reassigns the subject to the speaker: *read "who was my father as
+  a young man" as a family-tree question about **me***.
+- Tree mode has no `event` shape: "tell me about the move to the Berkshires"
+  and "what stories do we have about the World War Two generation" both
+  `declined: tree refused shape=event (unsupported)`.
+- A common noun reached the people slot and the strict validator caught it:
+  `anchorPeople: ["footage"]` for "how many years of footage do we have"
+  (`NLTranslatorError.badResponse`). The validator did its job.
+
+Interview-mode and composition turns ("what was your first job", "write
+something about Donna I could read out loud at a family gathering") route to
+`unknown` because they are **not built**, not because routing failed. Not
+defects; they are the interview/composition backlog.
