@@ -224,6 +224,55 @@ struct PersonPhotoOnePerPersonTests {
         #expect(!same(after.url, imported))
     }
 
+    /// Rick, 2026-09-17: "I see the people folders do not have a special ID,
+    /// so there are two people for donna, one with her maiden name and one
+    /// with her married name … IFF a person has an ID from Gedcom such as an
+    /// ID used by family search, we can use that ID and centralize the
+    /// folder … if there is no ID … you can make up a UUID."
+    ///
+    /// On the live archive this had produced THREE folders for Peter Ronan
+    /// (Peter_Roynane, peter_ronan_b1861, and his unused ID folder) and two
+    /// for Donna. The chosen-photo path already wrote to People/<FSID>/;
+    /// the import path did not, so every spelling grew its own folder.
+    @Test func anImportFolderIsTheFamilySearchIDWhenThePersonHasOne() throws {
+        let box = try sandbox(withProfileCover: false)
+        defer { try? fileManager.removeItem(at: box.base) }
+        let store = box.store
+
+        let peter = FamilyAssetPerson(gedcomID: "@I900@", name: "Peter Ronan",
+                                      familySearchID: "LZ2P-9QT")
+        let folder = try store.folderForPhotoRequest(person: peter)
+        #expect(folder.lastPathComponent == "LZ2P-9QT",
+                "an import for someone with a FamilySearch ID must centralise on it, not on a spelling")
+        #expect(folder.deletingLastPathComponent() == store.peopleDirectory)
+
+        // Asking again — under a different spelling of the same person —
+        // must land in the SAME folder. That is the whole point.
+        let again = try store.folderForPhotoRequest(
+            person: FamilyAssetPerson(gedcomID: "@I900@", name: "Peter Roynane",
+                                      familySearchID: "LZ2P-9QT"))
+        #expect(same(again, folder), "a second spelling opened a second folder")
+    }
+
+    /// The other half of the rule. Beth is not on FamilySearch — Rick:
+    /// "often time living people do not want their data in there for privacy
+    /// reasons" — so she must still get a folder, just not an ID-keyed one.
+    @Test func someoneWithNoFamilySearchIDStillGetsAFolder() throws {
+        let box = try sandbox(withProfileCover: false)
+        defer { try? fileManager.removeItem(at: box.base) }
+        let store = box.store
+
+        let beth = FamilyAssetPerson(gedcomID: nil, name: "Beth Breen")
+        let folder = try store.folderForPhotoRequest(person: beth)
+        #expect(folder.deletingLastPathComponent() == store.peopleDirectory)
+        #expect(!folder.lastPathComponent.isEmpty)
+        // Stable: she must not get a new folder every time she is asked for.
+        let again = try store.folderForPhotoRequest(
+            person: FamilyAssetPerson(gedcomID: nil, name: "Beth Breen"))
+        #expect(same(again, folder),
+                "asking twice for the same person with no id made two folders: \(folder.path) then \(again.path)")
+    }
+
     // MARK: Reproduction
 
     @Test func reproduction_providerGroupPhotoIsWhatTheCardShowedAndAnExplicitChoiceNowWinsInBothViews() throws {

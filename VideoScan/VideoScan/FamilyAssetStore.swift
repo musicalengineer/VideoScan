@@ -1041,6 +1041,25 @@ struct FamilyAssetStore {
         }
         try ensureSafeDirectory(root)
         try ensureSafeDirectory(peopleDirectory)
+        // Rick's rule, 2026-09-17: "IFF a person has an ID from Gedcom such
+        // as an ID used by family search, we can use that ID and centralize
+        // the folder … if there is no ID … you can make up a UUID."
+        //
+        // The CHOSEN-photo path already wrote to People/<FSID>/; this one —
+        // the folder Hallie's "Choose from Photos…" imports into — still
+        // resolved by NAME, so the same person accumulated a folder per
+        // spelling. Peter Ronan had three (Peter_Roynane, peter_ronan_b1861
+        // and his unused ID folder) and Donna two, maiden and married.
+        // Reads already span every folder that resolves to a person, so
+        // preferring the ID here stops new scatter without stranding what
+        // is already on disk.
+        //
+        // No ID (Beth, and anyone living who does not want to be on
+        // FamilySearch) still falls through to the name/UUID component.
+        if let byID = familySearchIDFolder(for: person) {
+            try ensureSafeDirectory(byID)
+            return byID
+        }
         if let existing = resolvedPersonFolder(for: person, creatingRequest: true) {
             return existing
         }
