@@ -195,28 +195,50 @@ struct FamilyGraphFileLoader {
             store.log("[family-tree] newer .ged \(url.lastPathComponent) did not parse; "
                 + "keeping the intact \(found.manifest.sources.count)-source generation \(found.generation) in play")
         }
+        // Once a recovery candidate exists this function must return a full
+        // tree on every path. Returning nil here releases rule 4, and rule 4
+        // is the narrowing (rule 3b re-review, finding 2).
+        func recovered(_ graph: GedcomFamilyGraph, _ manifest: FamilyGraphCompiledStore.Manifest) -> Outcome {
+            Outcome(graph: graph,
+                    selectedURL: manifest.sources.first.map { URL(fileURLWithPath: $0.path) },
+                    rejectedURLs: rejected,
+                    candidateCount: max(newestFirst.count, manifest.sources.count),
+                    compiled: true)
+        }
         switch store.adopt(found) {
         case .adopted(let graph):
             store.log("[family-tree] pointer unusable; adopted intact "
                 + "\(found.manifest.sources.count)-source generation \(found.generation) "
                 + "(\(found.manifest.peopleCount) people) rather than demote to "
                 + "\(newestFirst.first?.lastPathComponent ?? "(no .ged)")")
-            return Outcome(graph: graph,
-                           selectedURL: found.manifest.sources.first.map { URL(fileURLWithPath: $0.path) },
-                           rejectedURLs: rejected,
-                           candidateCount: max(newestFirst.count, found.manifest.sources.count),
-                           compiled: true)
+            return recovered(graph, found.manifest)
+        case .couldNotPersist(let graph):
+            // The tree is sound; only the pointer write failed. Serving a
+            // single file instead would turn a transient I/O problem into
+            // permanent data loss.
+            store.log("[family-tree] serving intact \(found.manifest.sources.count)-source generation "
+                + "\(found.generation) (\(found.manifest.peopleCount) people) without repointing")
+            return recovered(graph, found.manifest)
         case .superseded:
-            // Something was promoted while we were recovering. It is newer
-            // than what we found, so use it rather than our stale graph.
-            guard let current = store.loadCurrent() else { return nil }
-            store.log("[family-tree] recovery superseded by \(current.manifest.generation) "
-                + "(\(current.manifest.peopleCount) people); using it")
-            return Outcome(graph: current.graph,
-                           selectedURL: current.manifest.sources.first.map { URL(fileURLWithPath: $0.path) },
-                           rejectedURLs: rejected,
-                           candidateCount: max(newestFirst.count, current.manifest.sources.count),
-                           compiled: true)
+            if let current = store.loadCurrent() {
+                store.log("[family-tree] recovery superseded by \(current.manifest.generation) "
+                    + "(\(current.manifest.peopleCount) people); using it")
+                return recovered(current.graph, current.manifest)
+            }
+            // The winner will not load. Two things are forbidden here: falling
+            // through to rule 4 (that demotes to a single file), and serving
+            // the candidate we happen to hold (it is SMALLER than the tree
+            // that was deliberately promoted, so substituting it silently is
+            // the same class of wrong, just milder -- codex's contract:
+            // "an unavailable winner cannot authorize a smaller replacement").
+            // Report the tree as unavailable and say so; the pointer keeps
+            // naming the winner, so recovery is retried next launch.
+            store.log("[family-tree] recovery superseded by a generation that will not load; "
+                + "reporting the tree as UNAVAILABLE rather than serving "
+                + "\(found.manifest.peopleCount) people from \(found.generation) "
+                + "or demoting to a single file")
+            return Outcome(graph: nil, selectedURL: nil, rejectedURLs: rejected,
+                           candidateCount: newestFirst.count, compiled: false)
         }
     }
 

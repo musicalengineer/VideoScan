@@ -405,16 +405,29 @@ public struct FamilyGraphCompiledStore {
     public struct RecoveryCandidate {
         public let generation: String
         public let manifest: Manifest
-        let graph: GedcomFamilyGraph
+        /// Already decoded during lookup. Public because a caller that cannot
+        /// adopt must still be able to SERVE this rather than fall back to a
+        /// single file (rule 3b re-review, finding 2).
+        public let graph: GedcomFamilyGraph
         let pointerAtLookup: Pointer?
     }
 
-    /// What adopting a candidate did. `superseded` means the pointer moved
-    /// under us: something newer was promoted between lookup and adopt, and
-    /// the caller must reload rather than use this now-stale graph.
+    /// What adopting a candidate did.
+    ///
+    /// `superseded` and `couldNotPersist` are deliberately NOT the same
+    /// outcome (rule 3b re-review, finding 2): the first means someone else
+    /// promoted a generation and this graph is stale, the second means the
+    /// graph is sound and only the pointer write failed. Collapsing them let
+    /// a failed flock look like a competing writer and end in the
+    /// single-file fallback -- the narrowing this whole rule exists to stop.
     public enum Adoption {
+        /// The pointer names the candidate, or a viewer kept it without writing.
         case adopted(GedcomFamilyGraph)
+        /// A DIFFERENT generation is current now; reload, do not use this graph.
         case superseded
+        /// The pointer could not be written, with no competing writer. Serve
+        /// the graph; recovery will run again next launch.
+        case couldNotPersist(GedcomFamilyGraph)
     }
 
     /// The newest generation that records MORE THAN ONE physical source,
@@ -464,20 +477,25 @@ public struct FamilyGraphCompiledStore {
     /// baseline is the pointer as it was at LOOKUP, so a competing ingest that
     /// promoted something in between wins and we report `superseded` instead of
     /// clobbering it. A viewer keeps the graph without writing.
+    ///
+    /// The CAS runs even when the pointer already NAMES this generation: it
+    /// may name it with different source keys (which is why `loadCurrent`
+    /// failed and we are here at all), and something may have been promoted
+    /// since (rule 3b re-review, finding 1). Returning early there handed the
+    /// caller a stale graph while the pointer on disk said otherwise.
     public func adopt(_ found: RecoveryCandidate) -> Adoption {
         guard !refusesWrites else {
             log("\(Self.refusedWritePrefix) adopt \(found.generation) — pointer untouched")
             return .adopted(found.graph)
         }
-        if let seen = found.pointerAtLookup, seen.current == found.generation {
-            return .adopted(found.graph)
-        }
-        var won = false
+        enum Attempt { case won, moved, failed(String) }
+        var attempt = Attempt.moved
         do {
             try withLock {
-                // The pointer must still be exactly what the decision was made
-                // against -- including "there was none".
-                guard readPointer() == found.pointerAtLookup else { return }
+                guard readPointer() == found.pointerAtLookup else {
+                    attempt = .moved
+                    return
+                }
                 var repointed = found.pointerAtLookup
                     ?? Pointer(schema: found.manifest.schema, codec: found.manifest.codec,
                                index: found.manifest.index, current: found.generation,
@@ -485,16 +503,28 @@ public struct FamilyGraphCompiledStore {
                 repointed.current = found.generation
                 repointed.previous = nil
                 repointed.sourceKeys = found.manifest.sources.map(\.key)
-                try writePointer(repointed)
-                won = true
+                do {
+                    try writePointer(repointed)
+                    attempt = .won
+                } catch {
+                    attempt = .failed("\(error)")
+                }
             }
         } catch {
-            log("[family-tree] could not repoint to \(found.generation): \(error)")
+            // The lock itself failed: nobody else necessarily won.
+            attempt = .failed("\(error)")
         }
-        if !won {
+        switch attempt {
+        case .won:
+            return .adopted(found.graph)
+        case .moved:
             log("[family-tree] not adopting \(found.generation): the pointer moved while it was being recovered")
+            return .superseded
+        case .failed(let reason):
+            log("[family-tree] recovered \(found.generation) but could NOT write the pointer: \(reason) — "
+                + "serving the recovered tree; recovery will run again next launch")
+            return .couldNotPersist(found.graph)
         }
-        return won ? .adopted(found.graph) : .superseded
     }
 
     /// Remote viewer (Phase 1): the pointer names a generation this build
