@@ -403,6 +403,58 @@ final class GedcomCompiledTreeTests: XCTestCase {
         var values: [String] { lock.withLock { slots.keys.sorted().map { slots[$0]! } } }
     }
 
+    // MARK: - Retention window (the 2026-09-16 incident)
+
+    /// THE SENSOR for why recovery was a rebuild instead of an undo.
+    ///
+    /// Rick ran a buggy Refresh TWICE. The first promote pushed the good
+    /// 39,250-person generation into `previous`, where it survived; the
+    /// second pushed it out and it was deleted. By the time the narrowing
+    /// was noticed there was nothing to roll back to.
+    ///
+    /// `keepPrevious` existed but was read as a BOOLEAN — prune kept
+    /// `pointer.current` and `pointer.previous` and nothing else — so
+    /// retention was structurally two whatever the number said. This
+    /// asserts the count is now honoured: after N+2 promotes, the earliest
+    /// generation is still on disk and still decodes.
+    func testTwoMistakesInARowAreStillRecoverable() throws {
+        let box = try StoreBox(); defer { box.tearDown() }
+        var store = box.store()
+        store.keepPrevious = 5
+
+        // The generation worth keeping, then four more on top of it.
+        let good = try box.write(GedcomSyntheticPedigree.gedcom(people: 200, generations: 5), as: "good.ged")
+        XCTAssertNotNil(store.ingest(graph: try XCTUnwrap(GedcomFamilyGraph(fileURL: good)), sources: [good]))
+        let goodGeneration = try XCTUnwrap(store.readPointer()?.current)
+
+        for i in 0..<4 {
+            let f = try box.write(GedcomSyntheticPedigree.gedcom(people: 120 + i, generations: 4), as: "later\(i).ged")
+            XCTAssertNotNil(store.ingest(graph: try XCTUnwrap(GedcomFamilyGraph(fileURL: f)), sources: [f]))
+        }
+
+        XCTAssertTrue(store.generations().contains(goodGeneration),
+                      "the generation from four promotes ago was pruned — one mistake would be recoverable, two would not")
+        XCTAssertNotNil(store.readManifest(goodGeneration), "kept but unreadable is not kept")
+    }
+
+    /// The converse: retention is BOUNDED. Keeping everything forever is a
+    /// different bug — 18 MB an artifact adds up on a family archive.
+    func testRetentionStillPrunesBeyondTheWindow() throws {
+        let box = try StoreBox(); defer { box.tearDown() }
+        var store = box.store()
+        store.keepPrevious = 2
+
+        var promoted: [String] = []
+        for i in 0..<6 {
+            let f = try box.write(GedcomSyntheticPedigree.gedcom(people: 100 + i, generations: 4), as: "g\(i).ged")
+            XCTAssertNotNil(store.ingest(graph: try XCTUnwrap(GedcomFamilyGraph(fileURL: f)), sources: [f]))
+            promoted.append(try XCTUnwrap(store.readPointer()?.current))
+        }
+        XCTAssertLessThanOrEqual(store.generations().count, 3,
+                                 "current + 2 kept; got \(store.generations().sorted())")
+        XCTAssertFalse(store.generations().contains(promoted[0]), "the oldest should be gone")
+    }
+
     /// #797-6: rollback refuses a previous generation whose artifact no
     /// longer decodes; the pointer is untouched.
     func testRollbackRefusesCorruptPreviousArtifact() throws {

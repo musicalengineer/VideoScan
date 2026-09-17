@@ -68,7 +68,25 @@ public struct FamilyGraphCompiledStore {
     public let root: URL
     public var fileManager: FileManager = .default
     /// Generations kept after a promote: current + this many previous.
-    public var keepPrevious = 1
+    ///
+    /// FIVE, NOT ONE (2026-09-16). At 1, exactly one mistake was
+    /// recoverable and two in a row were not. Rick ran Refresh twice
+    /// against a bug that rebased onto a single source:
+    ///
+    ///   gen A  39,250 people, 2 sources   — the tree he wanted
+    ///   gen B  16,383, refresh #1         — A becomes `previous`, kept
+    ///   gen C  16,383, refresh #2         — B becomes `previous`, A PRUNED
+    ///
+    /// By the time the narrowing was noticed, the generation worth going
+    /// back to had been deleted, and recovery meant a full re-ingest from
+    /// the raw 70 MB + 133 MB pulls rather than a rollback. Nothing was
+    /// lost — his sources are immutable and he keeps copies on two other
+    /// machines — but that is his discipline covering for this default.
+    ///
+    /// An artifact is ~18 MB for a 39k-person tree, so five costs about
+    /// 90 MB: trivial beside the sources it protects, and it buys a
+    /// window of several mistakes instead of one.
+    public var keepPrevious = 5
     public var log: (String) -> Void = { _ in }
     /// The ingest gate. Injected so a test can force a failure.
     public var verify: (_ decoded: GedcomFamilyGraph, _ source: GedcomFamilyGraph) -> [String]
@@ -621,7 +639,19 @@ public struct FamilyGraphCompiledStore {
         var keep: Set<String> = []
         if let pointer {
             keep.insert(pointer.current)
-            if let previous = pointer.previous, keepPrevious > 0 { keep.insert(previous) }
+            if let previous = pointer.previous { keep.insert(previous) }
+        }
+        // `keepPrevious` USED TO BE READ AS A BOOLEAN (2026-09-16): the old
+        // code kept `pointer.current` and `pointer.previous` and nothing
+        // else, so retention was structurally two no matter what the number
+        // said. Raising it fixed nothing until this loop existed.
+        //
+        // Generation names are "gen-<timestamp>-<suffix>", so lexical
+        // descending IS newest-first; keep that many beyond the pointer's
+        // pair. This is what gives a window of several mistakes rather than
+        // one — see the incident in `keepPrevious`.
+        if keepPrevious > 0 {
+            for name in generations().sorted(by: >).prefix(keepPrevious) { keep.insert(name) }
         }
         for name in generations() where !keep.contains(name) {
             try? fileManager.removeItem(at: generationURL(name))
