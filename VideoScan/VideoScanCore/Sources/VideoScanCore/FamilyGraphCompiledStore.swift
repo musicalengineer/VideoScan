@@ -492,6 +492,35 @@ public struct FamilyGraphCompiledStore {
                 prune(keeping: readPointer())
                 return nil
             }
+            // INTEGRITY AUDIT (2026-09-16). Verification above proves the
+            // artifact is internally consistent; it says nothing about
+            // whether this tree is SMALLER than the one it replaces. That
+            // gap is exactly how a Refresh promoted 16,383 people over
+            // 39,250 with every step reporting success. Compare the two
+            // generations and write the answer to the log ALWAYS — a note
+            // when it grew, an alarm when a source or a tenth of the people
+            // went missing.
+            //
+            // It reports, it does not refuse: a smaller tree can be
+            // deliberate ("Replace family tree" with a shorter pull), and
+            // trading a silent loss for a silent block would be no better.
+            // The rollback the store has always had is the remedy.
+            let previousManifest = readPointer().flatMap { readManifest($0.current) }
+            let integrity = TreeIntegrityCheck.compare(incoming: manifest, against: previousManifest)
+            for finding in integrity {
+                let tag: String
+                switch finding.severity {
+                case .note:    tag = "tree integrity"
+                case .warning: tag = "tree integrity WARNING"
+                case .alarm:   tag = "tree integrity ALARM"
+                }
+                log("[family-tree] \(tag): \(finding.message)")
+            }
+            if TreeIntegrityCheck.hasAlarm(integrity) {
+                log("[family-tree] generation \(generation) is being promoted DESPITE the alarm above. "
+                    + "If this was not intended, roll back to \(previousManifest?.generation ?? "the previous generation").")
+            }
+
             try writeSidecars(sourceRecords)
             let old = readPointer()
             let pointer = Pointer(schema: Self.schemaVersion, codec: GedcomCompiledTree.codecVersion,
