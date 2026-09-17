@@ -96,6 +96,57 @@ struct FamilyGraphLoadLoggingTests {
         #expect(!line.contains("0 source"), "the load line claimed the tree came from nowhere: \(line)")
         #expect(line.contains("only-one.ged"), "the source file was not named: \(line)")
     }
+
+    /// codex also asked for the one-physical/two-logical case. It is not a
+    /// hypothetical shape: a merged tree exported to a single .ged and read
+    /// back carries `_VS_MERGED Y` plus a `_VS_SOURCE` per original pull, so
+    /// it has ONE physical source (the file) and TWO logical ones (the pulls).
+    ///
+    /// The count must follow the LOGICAL list -- that is what a narrowing
+    /// drops, and the whole point of this line -- but the log must still say
+    /// which file was actually read, or a reader cannot find it on disk.
+    @Test func aMergedExportNamesBothPullsAndTheFileItWasReadFrom() throws {
+        let sandbox = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("GraphLoadLog-\(UUID().uuidString)")
+        let assets = sandbox.appendingPathComponent("40_Family_Tree")
+        let gedcoms = assets.appendingPathComponent("GEDCOM")
+        try FileManager.default.createDirectory(at: gedcoms, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let merged = """
+        0 HEAD
+        1 _VS_MERGED Y
+        1 _VS_SOURCE familysearch-rick.ged
+        2 _VS_DROPPED 0
+        1 _VS_SOURCE familysearch-donna.ged
+        2 _VS_DROPPED 0
+        0 @I1@ INDI
+        1 NAME Rick Breen
+        0 @I2@ INDI
+        1 NAME Donna Breen
+        0 TRLR
+        """
+        try merged.write(to: gedcoms.appendingPathComponent("merged-tree.ged"),
+                         atomically: true, encoding: .utf8)
+
+        let box = LoadLogBox()
+        let cache = FamilyGraphSharedCache(log: { box.add($0) })
+        let configuration = FamilyAssetConfiguration(
+            roots: .init(assets: assets,
+                         thumbnailCache: sandbox.appendingPathComponent("thumbs")),
+            access: .readWrite,
+            legacyGEDCOMDirectory: nil)
+        _ = cache.load(for: configuration, store: nil)
+
+        let line = try #require(box.lines.first { $0.contains("family graph loaded") },
+                                "no load line was logged: \(box.lines.joined(separator: " | "))")
+        #expect(line.contains("2 sources"),
+                "the count must follow the logical pulls, which is what a narrowing drops: \(line)")
+        #expect(line.contains("familysearch-rick.ged") && line.contains("familysearch-donna.ged"),
+                "both original pulls must be named: \(line)")
+        #expect(line.contains("merged-tree.ged"),
+                "the file actually read is not named, so nobody can find it on disk: \(line)")
+    }
 }
 
 /// Collects log lines so an expectation can quote the line it judged.

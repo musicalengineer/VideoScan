@@ -210,8 +210,16 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
             let named = sources.isEmpty
                 ? (outcome.selectedURL?.lastPathComponent ?? "no source")
                 : sources.joined(separator: ", ")
+            // A merged tree exported to one .ged has ONE physical source (that
+            // file) and N logical ones (the pulls it was merged from). The
+            // count follows the LOGICAL list, because that is what a narrowing
+            // drops -- but then nothing would name the file actually read, so
+            // say that too whenever the two lists disagree.
+            let physical = graph.physicalSources.map(\.name)
+            let readFrom = (physical.isEmpty || physical == sources)
+                ? "" : " read from \(physical.joined(separator: ", "))"
             log("[hallie] family graph loaded (compiled: \(outcome.compiled), \(graph.people.count) people, "
-                + "\(sources.count) source\(sources.count == 1 ? "" : "s"): \(named))")
+                + "\(sources.count) source\(sources.count == 1 ? "" : "s"): \(named)\(readFrom))")
             return (outcome, Loaded(graph: graph, compiled: outcome.compiled, token: token, reused: false))
         }
     }
