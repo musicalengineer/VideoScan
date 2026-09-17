@@ -138,37 +138,8 @@ struct FamilyGraphFileLoader {
                            needsRecompile: pending.sources)
         }
 
-        // Rule 3b: an intact N-source generation outranks the one file that
-        // happens to be visible. Rule 3 above catches only the codec/schema
-        // case; a pointer knocked onto another generation, or an artifact
-        // that will not decode, lands here instead -- and rule 4 below would
-        // rebuild from a single .ged, silently dropping every other pull.
-        // 2026-09-17: that cost Rick's wife's entire line, because her pull
-        // lives in a subdirectory this listing does not scan. Adopting also
-        // repoints, so the tree heals itself instead of narrowing.
-        if let store = compiledStore, let found = store.intactMultiSourceGeneration() {
-            // A pull genuinely installed after that generation still wins --
-            // otherwise this rule would pin the tree to an old generation and
-            // quietly ignore a new .ged. Same superseder test rule 1 uses.
-            let sourcePaths = Set(found.manifest.sources.map { URL(fileURLWithPath: $0.path).standardizedFileURL.path })
-            let newer = newestFirst.filter {
-                !sourcePaths.contains($0.standardizedFileURL.path) && modified($0) > found.manifest.createdAt
-            }
-            if newer.isEmpty, let graph = store.adopt(found) {
-                store.log("[family-tree] pointer unusable; adopted intact "
-                    + "\(found.manifest.sources.count)-source generation \(found.generation) "
-                    + "(\(found.manifest.peopleCount) people) rather than demote to "
-                    + "\(newestFirst.first?.lastPathComponent ?? "(no .ged)")")
-                return Outcome(graph: graph,
-                               selectedURL: found.manifest.sources.first.map { URL(fileURLWithPath: $0.path) },
-                               rejectedURLs: rejected,
-                               candidateCount: max(newestFirst.count, found.manifest.sources.count),
-                               compiled: true)
-            }
-            if !newer.isEmpty {
-                store.log("[family-tree] intact \(found.manifest.sources.count)-source generation \(found.generation) "
-                    + "not adopted: \(newer.count) newer .ged file\(newer.count == 1 ? "" : "s") installed since it was compiled")
-            }
+        if let outcome = adoptedMultiSourceOutcome(newestFirst: newestFirst, rejected: rejected) {
+            return outcome
         }
 
         // Rule 4: newest valid file wins.
@@ -186,6 +157,45 @@ struct FamilyGraphFileLoader {
         return Outcome(graph: nil, selectedURL: nil,
                        rejectedURLs: rejected,
                        candidateCount: newestFirst.count)
+    }
+
+
+    /// Rule 3b: an intact N-source generation outranks the one file that
+    /// happens to be visible. Rule 3 catches only the codec/schema case; a
+    /// pointer knocked onto another generation, or an artifact that will not
+    /// decode, lands here instead -- and rule 4 would rebuild from a single
+    /// .ged, silently dropping every other pull. 2026-09-17: that cost Rick's
+    /// wife's entire line, because her pull lives in a subdirectory this
+    /// listing does not scan. Adopting also repoints, so the tree heals
+    /// itself instead of narrowing.
+    ///
+    /// A pull genuinely installed AFTER that generation still wins, by rule
+    /// 1's own superseder test -- otherwise this rule would pin the tree to
+    /// an old generation and quietly ignore every new .ged.
+    private func adoptedMultiSourceOutcome(newestFirst: [URL], rejected: [URL]) -> Outcome? {
+        guard let store = compiledStore, let found = store.intactMultiSourceGeneration() else { return nil }
+        func modified(_ url: URL) -> Date {
+            (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+        }
+        let sourcePaths = Set(found.manifest.sources.map { URL(fileURLWithPath: $0.path).standardizedFileURL.path })
+        let newer = newestFirst.filter {
+            !sourcePaths.contains($0.standardizedFileURL.path) && modified($0) > found.manifest.createdAt
+        }
+        guard newer.isEmpty else {
+            store.log("[family-tree] intact \(found.manifest.sources.count)-source generation \(found.generation) "
+                + "not adopted: \(newer.count) newer .ged file\(newer.count == 1 ? "" : "s") installed since it was compiled")
+            return nil
+        }
+        guard let graph = store.adopt(found) else { return nil }
+        store.log("[family-tree] pointer unusable; adopted intact "
+            + "\(found.manifest.sources.count)-source generation \(found.generation) "
+            + "(\(found.manifest.peopleCount) people) rather than demote to "
+            + "\(newestFirst.first?.lastPathComponent ?? "(no .ged)")")
+        return Outcome(graph: graph,
+                       selectedURL: found.manifest.sources.first.map { URL(fileURLWithPath: $0.path) },
+                       rejectedURLs: rejected,
+                       candidateCount: max(newestFirst.count, found.manifest.sources.count),
+                       compiled: true)
     }
 
     /// The viewer's whole load: decode the master's promoted generation
