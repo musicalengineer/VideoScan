@@ -1087,7 +1087,11 @@ final class FamilyTreeLiveModel: ObservableObject {
         guard id != selectedID else { return }
         let exists = isLive ? graph?.people[id] != nil
                             : FamilyTreeDemoData.person(id) != nil
-        guard exists else { return }
+        guard exists else {
+            appLog.write("Family Tree: select ignored — no person \(id) in the installed tree")
+            return
+        }
+        appLog.write("Family Tree: selected \(graph?.people[id]?.name ?? id) (\(id))")
         selectedID = id
         // Focus (Hallie / People tab / Home) lands here too, so one sensor
         // covers every relayout the user can trigger.
@@ -1580,16 +1584,36 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// icon responds; it simply will not survive a relaunch.
     @discardableResult
     func toggleBookmark(_ personID: String) -> Bool {
-        guard !bookmarkSourceTransition else { return bookmarks.contains(personID) }
+        // Was silent. A refused bookmark looked identical to a working one
+        // that simply did not stick, and Rick hit exactly that on
+        // 2026-09-17 with no way to tell which ("can't seem to bookmark
+        // people") — the log knew nothing either.
+        guard !bookmarkSourceTransition else {
+            appLog.write("Family Tree: bookmark REFUSED for \(personID) — the archive is still "
+                + "switching sources, so this id belongs to the outgoing tree")
+            return bookmarks.contains(personID)
+        }
+
         let nowMarked = bookmarks.toggle(personID)
         rebuildBookmarkedPeople()
         if showsBookmarkedPeopleOnly { refilter() }
-        if sourceAccess == .readWrite, let bookmarksDirectory {
+        if sourceAccess != .readWrite {
+            // Unchanged behaviour: the flag still flips for this session.
+            // Only the silence is fixed -- it used to look identical to a
+            // bookmark that stuck.
+            appLog.write("Family Tree: bookmarked \(personID) in memory but NOT saved — the archive is "
+                + "\(sourceAccess == .unavailable ? "unavailable" : "read-only")")
+        } else if let bookmarksDirectory {
             do {
                 try bookmarks.save(to: bookmarksDirectory)
+                appLog.write("Family Tree: \(nowMarked ? "bookmarked" : "un-bookmarked") \(personID) "
+                    + "(\(bookmarks.count) total) → \(bookmarksDirectory.lastPathComponent)")
             } catch {
                 appLog.write("Family Tree: could not save bookmarks — \(error.localizedDescription)")
             }
+        } else {
+            appLog.write("Family Tree: bookmarked \(personID) in memory but NOT saved — "
+                + "this model has no bookmarks directory")
         }
         return nowMarked
     }
@@ -1598,8 +1622,17 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     /// Archives worth a look for this person, chosen from their places.
     /// Derived per call — nothing stored, nothing fetched.
+    ///
+    /// Logged (Rick, 2026-09-17: "there should be tests for this and logging
+    /// for this, ie, right click, bookmark, research etc."): this is only
+    /// ever called while the card's context menu is being built, so a line
+    /// here is also proof that the right-click reached the card at all.
     func researchLinks(for personID: String) -> [FamilyTreeResearchLinks.Link] {
-        guard let graph, let person = graph.people[personID] else { return [] }
+        guard let graph, let person = graph.people[personID] else {
+            appLog.write("Family Tree: context menu opened on \(personID) but the tree has no such person")
+            return []
+        }
+        appLog.write("Family Tree: context menu opened on \(person.name) (\(personID))")
         return FamilyTreeResearchLinks.links(
             name: person.name,
             surname: person.surname,
