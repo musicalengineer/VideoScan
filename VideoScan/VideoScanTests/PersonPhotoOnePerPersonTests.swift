@@ -164,6 +164,66 @@ struct PersonPhotoOnePerPersonTests {
         a?.resolvingSymlinksInPath().path == b?.resolvingSymlinksInPath().path
     }
 
+    // MARK: Hallie's import reaches the Family Tree
+
+    /// Rick, 2026-09-17: "when I have hallie pick a photo for someone like
+    /// peter ronan, she doesn't put that photo into his FT entry" — then,
+    /// precisely: "next time hallie ought to make sure that photo is
+    /// available for the FT if that person does not have a photo already."
+    ///
+    /// The resolver ALREADY honours that rule: a folder photo is its last
+    /// resort. These two cases pin both halves of it, so the fix (telling
+    /// the card a photo was written) cannot later be "improved" into
+    /// overwriting a photo the person already had.
+    @Test func aPhotoImportedForSomeoneWithNoPhotoBecomesTheirTreeCard() throws {
+        let box = try sandbox(withProfileCover: false)
+        defer { try? fileManager.removeItem(at: box.base) }
+        let store = box.store
+
+        // Rick's grandfather as he actually is in the tree: no folder, no
+        // card crop, no cover, nothing.
+        let peter = FamilyAssetPerson(gedcomID: "@I900@", name: "Peter Ronan")
+        let resolver = PersonPhotoResolver(store: store)
+        #expect(resolver.treePhoto(for: peter, bridgedProfile: nil) == nil,
+                "precondition: he has no photo at all")
+
+        // Hallie's "Choose from Photos…" writes into his folder.
+        let folder = store.peopleDirectory.appendingPathComponent("Peter_Ronan", isDirectory: true)
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        let imported = try store.importPersonPhoto(
+            try jpegBytes(shade: 0.55), fileExtension: "jpg", into: folder)
+
+        let after = try #require(resolver.treePhoto(for: peter, bridgedProfile: nil),
+                                 "the imported photo never reached his card")
+        #expect(after.source == .folder)
+        #expect(same(after.url, imported))
+    }
+
+    /// The other half: someone who already has a photo keeps it. An import
+    /// is an addition, not a replacement.
+    @Test func aPhotoImportedForSomeoneWhoAlreadyHasOneDoesNotDisplaceIt() throws {
+        let box = try sandbox(withProfileCover: false)
+        defer { try? fileManager.removeItem(at: box.base) }
+        let store = box.store
+        let resolver = PersonPhotoResolver(store: store)
+
+        let chosen = try store.choosePhoto(
+            try jpegBytes(shade: 0.7), fileExtension: "jpg", for: donnaAsset,
+            source: PersonPhotoChoiceSource.treePick,
+            chosenAt: Date(timeIntervalSince1970: 1_800_000_000))
+        #expect(try #require(resolver.treePhoto(for: donnaAsset, bridgedProfile: nil)).source == .chosen)
+
+        // A later import lands in a folder of hers, and must lose.
+        let folder = store.peopleDirectory.appendingPathComponent("Donna_Elaine_Hudson", isDirectory: true)
+        let imported = try store.importPersonPhoto(
+            try jpegBytes(shade: 0.2), fileExtension: "jpg", into: folder)
+
+        let after = try #require(resolver.treePhoto(for: donnaAsset, bridgedProfile: nil))
+        #expect(after.source == .chosen, "an import displaced a photo she had already chosen")
+        #expect(same(after.url, chosen))
+        #expect(!same(after.url, imported))
+    }
+
     // MARK: Reproduction
 
     @Test func reproduction_providerGroupPhotoIsWhatTheCardShowedAndAnExplicitChoiceNowWinsInBothViews() throws {

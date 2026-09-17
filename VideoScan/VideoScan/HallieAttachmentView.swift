@@ -357,8 +357,19 @@ struct HalliePhotoRequestView: View {
                 folder: folder)
             guard !Task.isCancelled else { return }
             switch outcome {
-            case .success:
+            case .success(let url):
                 status = "Saved to the archive."
+                // Make it visible to the FAMILY TREE too, not just to
+                // Hallie (Rick, 2026-09-17: "next time hallie ought to make
+                // sure that photo is available for the FT if that person
+                // does not have a photo already"). The resolver's
+                // precedence already honours the "if": a folder photo is
+                // its last resort, so this never displaces a chosen or
+                // cover photo the person already has. The card just had no
+                // idea anything had changed.
+                appLog.write("Hallie: imported \(url.lastPathComponent) for \(name) — "
+                    + "refreshing portraits so the Family Tree card can pick it up")
+                PersonPhotoCenter.shared.invalidate()
                 // Show it now instead of making the user ask again.
                 model.archivistAskRequest = "show me a photo of \(name)"
             case .failure(let error):

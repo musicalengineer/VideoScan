@@ -520,8 +520,27 @@ final class FamilyTreeLiveModel: ObservableObject {
         // Injected models (tests) never register.
         if originalsDirectory == nil && compiledStore == nil {
             FamilyTreeRecompileCenter.shared.register(self)
+            // ONE subscription instead of a call at every writer (Rick's
+            // 2026-09-14 rule). A tree card resolves its portrait against
+            // `photoRevision`, so anything that writes a photo somewhere
+            // else — Hallie's "Choose from Photos…", the People tab, a
+            // future importer — used to leave the card showing the memoised
+            // "no photo" until the tab was rebuilt. Rick hit exactly that on
+            // 2026-09-17: Hallie saved a photo for Peter Ronan and his
+            // Family Tree card stayed blank.
+            //
+            // The precedence chain already does the right thing (a folder
+            // photo is the last resort, so it appears ONLY when the person
+            // has no chosen or cover photo — "if that person does not have a
+            // photo already"). All that was missing was being told.
+            photoCenterSubscription = PersonPhotoCenter.shared.$revision
+                .dropFirst()
+                .sink { [weak self] _ in self?.photoRevision &+= 1 }
         }
     }
+
+    /// Keeps tree cards in step with photo writes made anywhere else.
+    private var photoCenterSubscription: AnyCancellable?
 
     // MARK: Loading
 
