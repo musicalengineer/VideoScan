@@ -169,10 +169,26 @@ struct CatalogTrashShortcutTests {
     func shortcutSharesTheTrashRoutine() throws {
         let table = try productionSource("CatalogContent+Table.swift")
         let handlerRange = try #require(table.range(of: "private func trashSelectedRows()"))
-        let handler = String(table[handlerRange.lowerBound...].prefix(900))
+        // 1,800, not 900: the handler gained begin/reason logging on
+        // 2026-09-16 and the two calls this pins moved past the old window.
+        // A slice too small to reach what it asserts is a sensor that goes
+        // quiet rather than a sensor that passes.
+        let handler = String(table[handlerRange.lowerBound...].prefix(1_800))
         #expect(handler.contains("model.trashSelectedRecords(targets)"))
         #expect(handler.contains("reportDeleteResult(result, mode: .toTrash)"))
-        #expect(table.contains("press.key == .delete, press.modifiers == .command"), "⌘⌫ on the table, focus-scoped")
+        // The guard was `press.modifiers == .command` until 2026-09-16.
+        // Exact equality made any stray flag macOS reported alongside
+        // Command an `.ignored` with NO trace, which is indistinguishable
+        // from the shortcut being gone — which is exactly what Rick
+        // reported. What must stay true is the INTENT: ⌘⌫ is handled on
+        // the table (so it is focus-scoped), and the other modifiers are
+        // still refused.
+        #expect(table.contains("press.key == .delete"), "⌘⌫ on the table, focus-scoped")
+        #expect(table.contains("press.modifiers.contains(.command)"), "Command required")
+        for other in ["shift", "option", "control"] {
+            #expect(table.contains("!press.modifiers.contains(.\(other))"),
+                    "\(other) must still be refused — it is a different gesture")
+        }
         #expect(table.contains("await model.deleteConfirmedJunk(targets, mode: .toTrash)"), "the row menu's Move to Trash still exists")
 
         let plan = try productionSource("VideoScanModel+TrashSelection.swift")

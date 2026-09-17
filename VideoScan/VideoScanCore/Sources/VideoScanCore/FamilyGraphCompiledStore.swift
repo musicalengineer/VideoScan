@@ -674,24 +674,58 @@ public struct FamilyGraphCompiledStore {
     /// (bounded on disk: at most 1 + keepPrevious artifacts). A failed
     /// generation is removed as soon as it is not the pointer's.
     /// Callers hold the lock.
+    /// KEEP: the current generation, plus at most `keepPrevious` others.
+    /// Nothing else. The bound is therefore `keepPrevious + 1`, which is
+    /// what the name promises and what the sensor asserts.
+    ///
+    /// Three corrections live here, all from the 2026-09-16 incident and
+    /// codex's review of the fix:
+    ///
+    /// 1. `keepPrevious` USED TO BE A BOOLEAN. The old body kept
+    ///    `pointer.current` and `pointer.previous` and nothing else, so
+    ///    retention was structurally two whatever the number said — and
+    ///    exactly one mistake was recoverable. Rick made two.
+    /// 2. ORDER BY `createdAt`, NOT BY NAME. Names are
+    ///    "gen-<second-resolution stamp>-<RANDOM suffix>", so two ingests
+    ///    in one second sort by the random part and lexical order stops
+    ///    being chronological. codex's review saw the OLDEST generation
+    ///    retained by a name sort.
+    /// 3. CURRENT MUST NOT SPEND THE QUOTA, and `pointer.previous` must
+    ///    not be added on top of it — either mistake makes the real bound
+    ///    larger than the promise.
+    ///
+    /// Generations that FAILED verification are never kept: they can never
+    /// be promoted and must never be a rollback target.
     private func prune(keeping pointer: Pointer?) {
         var keep: Set<String> = []
-        if let pointer {
-            keep.insert(pointer.current)
-            if let previous = pointer.previous { keep.insert(previous) }
+        guard let pointer else {
+            for name in generations() { try? fileManager.removeItem(at: generationURL(name)) }
+            return
         }
-        // `keepPrevious` USED TO BE READ AS A BOOLEAN (2026-09-16): the old
-        // code kept `pointer.current` and `pointer.previous` and nothing
-        // else, so retention was structurally two no matter what the number
-        // said. Raising it fixed nothing until this loop existed.
-        //
-        // Generation names are "gen-<timestamp>-<suffix>", so lexical
-        // descending IS newest-first; keep that many beyond the pointer's
-        // pair. This is what gives a window of several mistakes rather than
-        // one — see the incident in `keepPrevious`.
-        if keepPrevious > 0 {
-            for name in generations().sorted(by: >).prefix(keepPrevious) { keep.insert(name) }
+        keep.insert(pointer.current)
+
+        // Newest verified first, current excluded — the candidates for the
+        // previous-generation quota.
+        let candidates = generations()
+            .compactMap { name -> (name: String, at: Date)? in
+                guard name != pointer.current,
+                      let m = readManifest(name), m.verification.isEmpty else { return nil }
+                return (name, m.createdAt)
+            }
+            .sorted { $0.at == $1.at ? $0.name > $1.name : $0.at > $1.at }
+            .map(\.name)
+
+        // `pointer.previous` first so rollback always has its target, then
+        // fill the rest of the quota with the newest.
+        var previousKeep: [String] = []
+        if let previous = pointer.previous, candidates.contains(previous) {
+            previousKeep.append(previous)
         }
+        for name in candidates where !previousKeep.contains(name) && previousKeep.count < keepPrevious {
+            previousKeep.append(name)
+        }
+        keep.formUnion(previousKeep.prefix(keepPrevious))
+
         for name in generations() where !keep.contains(name) {
             try? fileManager.removeItem(at: generationURL(name))
         }
@@ -714,15 +748,45 @@ public struct FamilyGraphCompiledStore {
         return formatter.string(from: Date()) + "-" + String(UInt32.random(in: 0...0xFFFF), radix: 16)
     }
 
+    /// ISO-8601 WITH FRACTIONAL SECONDS, read tolerantly.
+    ///
+    /// Plain `.iso8601` truncates to whole seconds, so a manifest's
+    /// `createdAt` came back at one-second resolution — and retention,
+    /// which orders generations by that field, could not tell apart two
+    /// ingests in the same second. The tiebreak then fell through to the
+    /// generation name, whose suffix is RANDOM, so which generation
+    /// survived a prune was non-deterministic. It surfaced as
+    /// testRetentionStillPrunesBeyondTheWindow passing alone and failing
+    /// in the full suite, where promotes land fast enough to collide.
+    ///
+    /// Writing fractional seconds fixes the ordering; the DECODER accepts
+    /// both spellings so every manifest written before today still reads.
     static let encoder: JSONEncoder = {
         let e = JSONEncoder()
-        e.dateEncodingStrategy = .iso8601
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        e.dateEncodingStrategy = .custom { date, encoder in
+            var c = encoder.singleValueContainer()
+            try c.encode(f.string(from: date))
+        }
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
         return e
     }()
     static let decoder: JSONDecoder = {
         let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
+        // Tolerant BOTH ways: fractional (written from 2026-09-17) and
+        // whole-second (every manifest before it).
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        d.dateDecodingStrategy = .custom { decoder in
+            let text = try decoder.singleValueContainer().decode(String.self)
+            if let date = withFraction.date(from: text) ?? plain.date(from: text) { return date }
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "not an ISO-8601 date: \(text)"))
+        }
         return d
     }()
 }

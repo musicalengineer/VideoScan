@@ -70,10 +70,23 @@ public enum TreeIntegrityCheck {
         }
         var findings: [Finding] = []
 
-        // 1. SOURCES. The 2026-09-16 shape, and the one that matters most:
-        // a tree built from two pulls must not quietly become one.
-        let currentNames = Set(current.sources.map(\.fileName))
-        let incomingNames = Set(incoming.sources.map(\.fileName))
+        // 1. SOURCES — LOGICAL, not physical (codex P2, 2026-09-17).
+        //
+        // `sources` is the file the generation was compiled FROM, and an
+        // app merge writes a freshly named familysearch-merged-<stamp>.ged
+        // every time. Comparing those names made every ordinary merge alarm
+        // that it had "dropped" a source it had merely repackaged — and an
+        // alarm that fires on the normal path is one everybody learns to
+        // ignore, which would have cost more than it saved.
+        //
+        // `logicalSources` is the provenance the artifact CARRIES: the
+        // original pulls, by name and hash, through any number of
+        // repackagings. That is the tree's real identity, and it still
+        // catches the 2026-09-16 incident — the narrowed artifact's
+        // provenance was tree-20generations + tree-3gen, with Donna's pull
+        // genuinely gone from the logical list too, not just the physical.
+        let currentNames = Set(current.logicalSources.map(\.fileName))
+        let incomingNames = Set(incoming.logicalSources.map(\.fileName))
         let dropped = currentNames.subtracting(incomingNames).sorted()
         if !dropped.isEmpty {
             findings.append(Finding(
@@ -129,7 +142,7 @@ public enum TreeIntegrityCheck {
     }
 
     private static func sourceList(_ m: FamilyGraphCompiledStore.Manifest) -> String {
-        let names = m.sources.map(\.fileName).sorted()
+        let names = m.logicalSources.map(\.fileName).sorted()
         return names.isEmpty ? "no named sources" : "\(names.count) source(s): \(names.joined(separator: ", "))"
     }
 }

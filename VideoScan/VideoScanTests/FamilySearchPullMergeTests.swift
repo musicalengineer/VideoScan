@@ -71,7 +71,7 @@ final class FamilySearchPullMergeTests: XCTestCase {
     private var stagingRoot: URL { root.appendingPathComponent("staging", isDirectory: true) }
 
     private func makeCoordinator(parseDelay: Duration = .zero) -> FamilySearchPullCoordinator {
-        FamilySearchPullCoordinator(
+        let c = FamilySearchPullCoordinator(
             gedcomDirectory: gedcomDirectory,
             defaultUsername: "rick@example.com",
             scriptURL: staging.appendingPathComponent("get-family-tree.command"),
@@ -80,6 +80,17 @@ final class FamilySearchPullMergeTests: XCTestCase {
             launcher: SilentLauncher(),
             pollInterval: .milliseconds(30),
             parseDelay: parseDelay)
+        // ISOLATION BELONGS IN THE FACTORY (codex #1525, 2026-09-17).
+        // Since `finish` reads the current tree through a STORE-AWARE
+        // loader, a coordinator with the default store consults
+        // `.production` — Rick's REAL compiled tree — and a temp GEDCOM
+        // root no longer isolates this path. testAddToCurrentTreeWithNo…
+        // proved it: it expected "no current tree" and instead found his
+        // 39,250-person generation and merged against it. Every
+        // coordinator this file builds starts with no store; tests that
+        // need one inject their own scratch.
+        c.compiledStore = { nil }
+        return c
     }
 
     // MARK: - P1 2026-09-16: a merge must never narrow a multi-source tree

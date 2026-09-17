@@ -44,7 +44,12 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         let fileName: String
         let people: Int
         let families: Int
-        let generations: Int
+        /// Nil when the summary came from a compiled generation's MANIFEST
+        /// rather than a parsed graph — depth needs the graph, and reading
+        /// the manifest is what keeps the sheet from promoting anything
+        /// (codex, 2026-09-17). The sheet shows "—" rather than a number
+        /// it does not have.
+        let generations: Int?
     }
 
     @Published private(set) var phase: Phase = .idle
@@ -402,7 +407,17 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         let gedcomDirectory = self.gedcomDirectory
         let fileManager = self.fileManager
         let folderIDs = FamilyAssetConfigurationCenter.shared.snapshot().makeStore().personFolderGEDCOMIDs()
-        let summaryLoader = currentTreeLoader()
+        // A SUMMARY IS A READ. It needs a count and a filename, not a
+        // graph — so take them from the compiled generation's MANIFEST,
+        // which cannot promote anything (codex, 2026-09-17: the
+        // store-aware loader narrowed a live generation 54/2 → 20/1 merely
+        // by being consulted for the sheet). `readOnly` was the wrong
+        // lever: it means "decode only a promoted generation", so with no
+        // store the sheet showed nothing at all.
+        let currentGeneration = compiledStore()?.loadCurrent()?.manifest
+        // Fallback for a tree that has never been compiled: a loader with
+        // NO store, which is inherently non-promoting.
+        let summaryLoader = currentTreeLoader(promoting: false, usingStore: false)
         let parsed = await Task.detached(priority: .userInitiated) {
             () -> (new: TreeSummary, current: TreeSummary?, unmatched: Int)? in
             guard let graph = GedcomFamilyGraph(fileURL: output),
@@ -415,11 +430,22 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             // multi-source tree and not the newest single file. Before
             // 2026-09-16 this under-reported Rick's tree as 16,383 when it
             // is 39,250.
-            let outcome = summaryLoader.loadNewestOutcome()
-            let current = outcome.graph.map {
-                TreeSummary(fileName: outcome.selectedURL?.lastPathComponent ?? "current tree",
-                            people: $0.people.count, families: $0.familyCount,
-                            generations: Self.deepestAncestorDepth(in: $0))
+            let current: TreeSummary?
+            if let g = currentGeneration {
+                // The compiled tree, from its manifest: the number Rick is
+                // actually running. Before 2026-09-16 the sheet showed the
+                // newest SINGLE file — 16,383 for a 39,250-person tree —
+                // so he decided on a wrong count.
+                current = TreeSummary(
+                    fileName: g.sources.map(\.fileName).sorted().joined(separator: " + "),
+                    people: g.peopleCount, families: g.familyCount, generations: nil)
+            } else {
+                let outcome = summaryLoader.loadNewestOutcome()
+                current = outcome.graph.map {
+                    TreeSummary(fileName: outcome.selectedURL?.lastPathComponent ?? "current tree",
+                                people: $0.people.count, families: $0.familyCount,
+                                generations: Self.deepestAncestorDepth(in: $0))
+                }
             }
             let newIDs = Set(graph.people.keys.map(Self.idKey))
             let unmatched = folderIDs.filter { !newIDs.contains($0) }.count
@@ -541,10 +567,26 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// The loader's own doc states the rule this broke (codex #826): "the
     /// loader never demotes an N-pull tree to the newest single file". It
     /// cannot honour that without the store.
-    private func currentTreeLoader() -> FamilyGraphFileLoader {
+    /// `promoting: false` is a READ. `loadNewestOutcome` can call
+    /// `parseAndPromote`, so a loader handed a store has a SIDE EFFECT —
+    /// it may compile and promote a fallback generation (codex, 2026-09-17).
+    /// Two places must never do that:
+    ///   • the sheet's "current tree" summary, which runs before the user
+    ///     has chosen anything at all;
+    ///   • any read whose result the fail-closed guard is about to compare
+    ///     against, because a promote here would narrow the tree and the
+    ///     guard would then see 1-vs-1 and wave it through — the read
+    ///     defeating the check that follows it.
+    /// A non-promoting loader decodes the promoted generation and stops.
+    private func currentTreeLoader(promoting: Bool = true,
+                                   usingStore: Bool = true) -> FamilyGraphFileLoader {
         var loader = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory,
                                            fileManager: fileManager)
-        loader.compiledStore = compiledStore()
+        loader.compiledStore = usingStore ? compiledStore() : nil
+        loader.readOnly = !promoting && usingStore
+        // The production store's logger is a no-op, so anything the loader
+        // says while compiling would vanish (codex, 2026-09-17).
+        loader.compiledStore?.log = { appLog.write($0) }
         return loader
     }
 
@@ -626,6 +668,14 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         enum Staged { case written(URL, Int, GedcomFamilyGraph.MergeOutcome), failed(String) }
         let loader = currentTreeLoader()
         let compiledStore = self.compiledStore
+        // THE BASELINE IS READ BEFORE THE LOAD (codex, 2026-09-17).
+        // `loadNewestOutcome` below may itself compile and promote a
+        // fallback when a source of a multi-source generation is missing
+        // or changed. If the guard then read the generation AFTER that, it
+        // would compare the already-narrowed tree against itself, see
+        // 1-vs-1 and pass — the read defeating the check it feeds. Take
+        // the picture first.
+        let baselineGeneration = self.compiledStore()?.loadCurrent()?.manifest
         let staged = await Task.detached(priority: .userInitiated) { () -> Staged in
             guard var new = GedcomFamilyGraph(fileURL: output), !new.people.isEmpty else {
                 return .failed(FamilySearchPullError.downloadedFileUnreadable(output).localizedDescription)
@@ -650,14 +700,14 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             // generation, and merging would silently narrow the tree — the
             // P1 of 2026-09-16, where Donna's 23k people and her Edward III
             // line disappeared from the artifact. Refuse instead.
-            if let generation = compiledStore()?.loadCurrent(),
-               generation.manifest.sources.count > baseSources.count {
-                let names = generation.manifest.sources.map(\.fileName).sorted()
+            if let generation = baselineGeneration,
+               generation.sources.count > baseSources.count {
+                let names = generation.sources.map(\.fileName).sorted()
                 appLog.write("Family Tree \(verb): REFUSED — the compiled tree has "
-                    + "\(generation.manifest.sources.count) sources (\(names.joined(separator: ", "))) "
+                    + "\(generation.sources.count) sources (\(names.joined(separator: ", "))) "
                     + "but the base only has \(baseSources.count). Merging would drop the rest.")
                 return .failed(
-                    "Your tree is built from \(generation.manifest.sources.count) files "
+                    "Your tree is built from \(generation.sources.count) files "
                     + "(\(names.joined(separator: ", "))), but only "
                     + "\(baseSources.count) could be loaded as the base. Merging now would "
                     + "silently drop the others. Recompile the family tree first, then try again.")

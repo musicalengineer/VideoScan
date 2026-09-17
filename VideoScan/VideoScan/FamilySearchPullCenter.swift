@@ -138,8 +138,16 @@ final class FamilySearchPullCenter: ObservableObject {
     /// UserNotifications in the loop (same shape as RelocateQueue's).
     nonisolated static let notificationTitle = "Family tree downloaded"
 
-    nonisolated static func notificationBody(people: Int, generations: Int) -> String {
-        "\(people) people, \(generations) generations — open the Family Tree tab to install."
+    /// `generations` is optional since 2026-09-17: a summary taken from a
+    /// compiled generation's manifest knows the counts but not the depth,
+    /// and reading the manifest instead of parsing is what stops the sheet
+    /// promoting a generation. A downloaded pull is always parsed, so in
+    /// practice this is non-nil here — but say the true thing if it is not.
+    nonisolated static func notificationBody(people: Int, generations: Int?) -> String {
+        guard let generations else {
+            return "\(people) people — open the Family Tree tab to install."
+        }
+        return "\(people) people, \(generations) generations — open the Family Tree tab to install."
     }
 
     /// Best-effort, mirrors VideoScanModel+RelocateQueue: check the existing

@@ -383,7 +383,16 @@ final class GedcomCompiledTreeTests: XCTestCase {
         let pointer = try XCTUnwrap(store.readPointer())
         let previous = try XCTUnwrap(pointer.previous)
         XCTAssertNotEqual(pointer.current, previous)
-        XCTAssertEqual(Set(store.generations()), [pointer.current, previous], "exactly current + previous on disk")
+        // RETENTION IS NOW A WINDOW, not a pair (2026-09-16: keepPrevious
+        // was read as a boolean, so two mistakes in a row were
+        // unrecoverable). What this test cares about is unchanged —
+        // serialized ingests leave a coherent pointer and every kept
+        // generation is real — so assert that, plus the bound.
+        let kept = Set(store.generations())
+        XCTAssertTrue(kept.contains(pointer.current))
+        XCTAssertTrue(kept.contains(previous))
+        XCTAssertLessThanOrEqual(kept.count, store.keepPrevious + 1,
+                                 "retention must stay bounded: \(kept.sorted())")
         for gen in [pointer.current, previous] {
             let manifest = try XCTUnwrap(store.readManifest(gen))
             XCTAssertTrue(manifest.verification.isEmpty)

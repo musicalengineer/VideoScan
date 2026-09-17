@@ -205,12 +205,17 @@ struct FamilyGraphCompiledStoreTests {
         #expect(pointer.previous == gen1)
         #expect(store.generations().count == 2)
 
-        // Edited again → oldest generation pruned (N = 2).
+        // Edited again → a third generation. RETENTION IS A WINDOW NOW
+        // (2026-09-16): keepPrevious was read as a boolean, so only ever
+        // two survived and two mistakes in a row were unrecoverable. What
+        // this test is about — an edited source recompiles and the newest
+        // generation serves — is unchanged; the count is not the point.
         _ = try box.write(GedcomSyntheticPedigree.gedcom(people: 402, generations: 8), mtime: Date(timeIntervalSince1970: 3_000))
         let third = box.loader(store).loadNewestOutcome()
         #expect(third.graph?.people.count == 402)
-        #expect(store.generations().count == 2)
-        #expect(!store.generations().contains(gen1))
+        #expect(store.generations().count <= store.keepPrevious + 1,
+                "retention must stay bounded: \(store.generations().sorted())")
+        #expect(store.readPointer()?.current != gen1, "the edited source must not still be current")
     }
 
     /// codex #792: a same-size edit in the middle of the file with the
@@ -284,6 +289,11 @@ struct FamilyGraphCompiledStoreTests {
         #expect(failing.ingest(graph: graph, sources: [source]) == nil)
         #expect(box.logLines.contains("FAILED verification"))
         #expect(good.readPointer() == before, "pointer untouched")
+        // A generation that FAILED verification is never kept, whatever
+        // the retention window is — it can never be promoted and must
+        // never be a rollback target (nightly 2026-09-17: the first
+        // version of the window kept the newest N by NAME and swept
+        // failures in with them).
         #expect(good.generations() == [before.current], "failed generation pruned, current kept")
 
         // The loader falls back to the parsed graph and still answers.

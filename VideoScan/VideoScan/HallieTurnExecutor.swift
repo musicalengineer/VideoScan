@@ -2221,9 +2221,20 @@ enum HallieTurnExecutor {
             // Both name a record OUTSIDE the People tab; the user's pick
             // owns the turn and this rule stands aside.
             return nil
-        case .profileStableID:
-            break
-        case nil:
+        case .profileStableID, nil:
+            // `!arrangement.offersChips` APPLIES TO BOTH (nightly
+            // 2026-09-17). Allowing a selected profile to skip it made the
+            // profile answer even when the tree could still put a real
+            // choice in front of Rick — it collapsed the two-stage
+            // "which Nan?" → "which Mary Smith?" into one premature answer
+            // (HallieAppV2IntegrationTests.graphTwoStageClarification…).
+            //
+            // GH #186 finding 1 is still fixed, because its case is
+            // precisely the one where the tree CANNOT offer a choice:
+            // 2,190 namesakes and no anchor, so offersChips is false, the
+            // rule fires, and the chosen profile answers instead of the
+            // crowd being asked about again. Where the tree can choose, it
+            // still chooses.
             guard !arrangement.offersChips else { return nil }
         }
         switch PeopleTab.precedence(

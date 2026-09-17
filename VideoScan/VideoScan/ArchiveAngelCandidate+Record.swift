@@ -89,8 +89,21 @@ extension ArchiveAngelCandidate {
         // again (Rick 2026-09-16: clicking one said "already promoted").
         // Same function the promote engine refuses with; see
         // VideoScanModel.promoteRefusal.
+        // The PROMOTED-ORIGINAL case only. A promoted original stays on
+        // its own volume and gains a linked copy, so the path test alone
+        // answered "no" for every file Rick has ever promoted and the
+        // Angel proposed them again (2026-09-16).
+        //
+        // Deliberately NOT the full `promoteWouldRefusePermanently`: that
+        // also covers archive copies and purged records, which hardFloor
+        // already rejects further down as `.duplicateArchived` /
+        // `.notActive`. Using it here re-labelled those rejections,
+        // because `isOnMasterArchive` is tested FIRST (nightly 2026-09-17,
+        // ArchiveAngelCandidateProjectionTests). Same files refused either
+        // way — but the reason Rick reads should stay the true one.
         let onMaster = facts?.isMasterArchive == true
-            || model.promoteWouldRefusePermanently(r)
+            || model.isInsideMasterArchive(path: r.fullPath)
+            || model.masterArchiveCopy(of: r) != nil
         let name = r.volumeName.isEmpty ? VolumeReachability.displayLabel(forPath: r.fullPath) : r.volumeName
         // A scan-target fact answers reachability without touching the
         // disk; only pathless strays pay for a stat.

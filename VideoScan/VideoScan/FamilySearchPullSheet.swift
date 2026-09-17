@@ -329,7 +329,7 @@ struct FamilySearchPullSheet: View {
                         Text("Current").font(.system(size: 12, weight: .medium))
                         Text("\(current.people)")
                         Text("\(current.families)")
-                        Text("\(current.generations)")
+                        Text(current.generations.map(String.init) ?? "—")
                         Text(current.fileName).font(.system(size: 11, design: .monospaced))
                             .lineLimit(1).truncationMode(.middle)
                     }
@@ -338,7 +338,7 @@ struct FamilySearchPullSheet: View {
                     Text("New").font(.system(size: 12, weight: .medium))
                     Text("\(new.people)").fontWeight(.semibold)
                     Text("\(new.families)").fontWeight(.semibold)
-                    Text("\(new.generations)").fontWeight(.semibold)
+                    Text(new.generations.map(String.init) ?? "—").fontWeight(.semibold)
                     Text(new.fileName).font(.system(size: 11, design: .monospaced))
                         .lineLimit(1).truncationMode(.middle)
                 }
