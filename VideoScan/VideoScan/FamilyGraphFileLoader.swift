@@ -138,6 +138,10 @@ struct FamilyGraphFileLoader {
                            needsRecompile: pending.sources)
         }
 
+        if let outcome = adoptedMultiSourceOutcome(newestFirst: newestFirst, rejected: &rejected) {
+            return outcome
+        }
+
         // Rule 4: newest valid file wins.
         for url in newestFirst {
             if let store = compiledStore, let compiled = store.load(sources: [url]) {
@@ -153,6 +157,89 @@ struct FamilyGraphFileLoader {
         return Outcome(graph: nil, selectedURL: nil,
                        rejectedURLs: rejected,
                        candidateCount: newestFirst.count)
+    }
+
+
+    /// Rule 3b: an intact N-source generation outranks the one file that
+    /// happens to be visible. Rule 3 catches only the codec/schema case; a
+    /// pointer knocked onto another generation, or an artifact that will not
+    /// decode, lands here instead -- and rule 4 would rebuild from a single
+    /// .ged, silently dropping every other pull. 2026-09-17: that cost Rick's
+    /// wife's entire line, because her pull lives in a subdirectory this
+    /// listing does not scan. Adopting also repoints, so the tree heals
+    /// itself instead of narrowing.
+    ///
+    /// A pull genuinely installed AFTER that generation still wins -- but it
+    /// has to PARSE first. Releasing the recovery candidate merely because a
+    /// newer file exists let a malformed newer file authorise the narrowing
+    /// it was supposed to prevent (rule 3b review, finding 1). Rule 1 has
+    /// always tried its superseders before keeping the compiled tree; this
+    /// now does the same.
+    private func adoptedMultiSourceOutcome(newestFirst: [URL], rejected: inout [URL]) -> Outcome? {
+        guard let store = compiledStore, let found = store.intactMultiSourceGeneration() else { return nil }
+        func modified(_ url: URL) -> Date {
+            (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+        }
+        let sourcePaths = Set(found.manifest.sources.map { URL(fileURLWithPath: $0.path).standardizedFileURL.path })
+        let newer = newestFirst.filter {
+            !sourcePaths.contains($0.standardizedFileURL.path) && modified($0) > found.manifest.createdAt
+        }
+        for url in newer {
+            if let outcome = parseAndPromote(url, store: store, rejected: rejected,
+                                             candidateCount: newestFirst.count) {
+                store.log("[family-tree] newer pull \(url.lastPathComponent) supersedes intact "
+                    + "\(found.manifest.sources.count)-source generation \(found.generation)")
+                return outcome
+            }
+            rejected.append(url)
+            store.log("[family-tree] newer .ged \(url.lastPathComponent) did not parse; "
+                + "keeping the intact \(found.manifest.sources.count)-source generation \(found.generation) in play")
+        }
+        // Once a recovery candidate exists this function must return a full
+        // tree on every path. Returning nil here releases rule 4, and rule 4
+        // is the narrowing (rule 3b re-review, finding 2).
+        func recovered(_ graph: GedcomFamilyGraph, _ manifest: FamilyGraphCompiledStore.Manifest) -> Outcome {
+            Outcome(graph: graph,
+                    selectedURL: manifest.sources.first.map { URL(fileURLWithPath: $0.path) },
+                    rejectedURLs: rejected,
+                    candidateCount: max(newestFirst.count, manifest.sources.count),
+                    compiled: true)
+        }
+        switch store.adopt(found) {
+        case .adopted(let graph):
+            store.log("[family-tree] pointer unusable; adopted intact "
+                + "\(found.manifest.sources.count)-source generation \(found.generation) "
+                + "(\(found.manifest.peopleCount) people) rather than demote to "
+                + "\(newestFirst.first?.lastPathComponent ?? "(no .ged)")")
+            return recovered(graph, found.manifest)
+        case .couldNotPersist(let graph):
+            // The tree is sound; only the pointer write failed. Serving a
+            // single file instead would turn a transient I/O problem into
+            // permanent data loss.
+            store.log("[family-tree] serving intact \(found.manifest.sources.count)-source generation "
+                + "\(found.generation) (\(found.manifest.peopleCount) people) without repointing")
+            return recovered(graph, found.manifest)
+        case .superseded:
+            if let current = store.loadCurrent() {
+                store.log("[family-tree] recovery superseded by \(current.manifest.generation) "
+                    + "(\(current.manifest.peopleCount) people); using it")
+                return recovered(current.graph, current.manifest)
+            }
+            // The winner will not load. Two things are forbidden here: falling
+            // through to rule 4 (that demotes to a single file), and serving
+            // the candidate we happen to hold (it is SMALLER than the tree
+            // that was deliberately promoted, so substituting it silently is
+            // the same class of wrong, just milder -- codex's contract:
+            // "an unavailable winner cannot authorize a smaller replacement").
+            // Report the tree as unavailable and say so; the pointer keeps
+            // naming the winner, so recovery is retried next launch.
+            store.log("[family-tree] recovery superseded by a generation that will not load; "
+                + "reporting the tree as UNAVAILABLE rather than serving "
+                + "\(found.manifest.peopleCount) people from \(found.generation) "
+                + "or demoting to a single file")
+            return Outcome(graph: nil, selectedURL: nil, rejectedURLs: rejected,
+                           candidateCount: newestFirst.count, compiled: false)
+        }
     }
 
     /// The viewer's whole load: decode the master's promoted generation

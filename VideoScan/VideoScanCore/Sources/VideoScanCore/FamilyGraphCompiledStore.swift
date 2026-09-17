@@ -397,6 +397,149 @@ public struct FamilyGraphCompiledStore {
         return nil
     }
 
+    /// A recovery candidate: a multi-source generation that is source-intact
+    /// AND decodes, carried together with the pointer as it was when the
+    /// decision was made. That pointer is the compare-and-swap baseline --
+    /// reading it later would let an ingest that won the race in between be
+    /// overwritten by this older generation (rule 3b review, finding 3).
+    public struct RecoveryCandidate {
+        public let generation: String
+        public let manifest: Manifest
+        /// Already decoded during lookup. Public because a caller that cannot
+        /// adopt must still be able to SERVE this rather than fall back to a
+        /// single file (rule 3b re-review, finding 2).
+        public let graph: GedcomFamilyGraph
+        let pointerAtLookup: Pointer?
+    }
+
+    /// What adopting a candidate did.
+    ///
+    /// `superseded` and `couldNotPersist` are deliberately NOT the same
+    /// outcome (rule 3b re-review, finding 2): the first means someone else
+    /// promoted a generation and this graph is stale, the second means the
+    /// graph is sound and only the pointer write failed. Collapsing them let
+    /// a failed flock look like a competing writer and end in the
+    /// single-file fallback -- the narrowing this whole rule exists to stop.
+    public enum Adoption {
+        /// The pointer names the candidate, or a viewer kept it without writing.
+        case adopted(GedcomFamilyGraph)
+        /// A DIFFERENT generation is current now; reload, do not use this graph.
+        case superseded
+        /// The pointer could not be written, with no competing writer. Serve
+        /// the graph; recovery will run again next launch.
+        case couldNotPersist(GedcomFamilyGraph)
+    }
+
+    /// The newest generation that records MORE THAN ONE physical source,
+    /// whose every source is still intact on disk, AND whose artifact
+    /// decodes -- whatever state the pointer is in.
+    ///
+    /// `multiSourceGenerationNeedingRecompile` covers exactly ONE reason a
+    /// multi-source generation stops being used: a codec/schema bump. It can
+    /// stop being used for others -- a pointer left on a different
+    /// generation, an artifact that will not decode -- and the loader's
+    /// rule 4 then rebuilds the tree from whatever single .ged happens to be
+    /// visible in the scanned directory.
+    ///
+    /// 2026-09-17, live: that turned Rick's 39,250-person tree into a
+    /// 16,383-person one and dropped his wife's entire line, because her
+    /// pull lives in a `pulls/` subdirectory the non-recursive listing never
+    /// sees. Same rule as codex #826, wider trigger: never silently demote N
+    /// pulls to one.
+    ///
+    /// The decode happens HERE, inside the candidate loop, so a corrupt
+    /// newest generation falls through to an older healthy one instead of
+    /// authorising a narrowing (rule 3b review, finding 2).
+    ///
+    /// Two bounded passes, NO RECURSION: manifests first (cheap), then
+    /// verify-and-decode in newest-first order, stopping at the first fully
+    /// usable candidate -- so the expensive pass normally touches exactly one
+    /// generation, and only on a path that is already broken.
+    public func intactMultiSourceGeneration() -> RecoveryCandidate? {
+        let pointerAtLookup = readPointer()
+        let candidates = generations()
+            .compactMap { readManifest($0) }
+            .filter { $0.sources.count > 1 && $0.verification.isEmpty }
+            .sorted { $0.createdAt > $1.createdAt }
+        for manifest in candidates where usableManifest(manifest.generation) != nil {
+            guard let graph = decode(generation: manifest.generation) else {
+                log("[family-tree] recovery candidate \(manifest.generation) will not decode; "
+                    + "trying an older multi-source generation")
+                continue
+            }
+            return RecoveryCandidate(generation: manifest.generation, manifest: manifest,
+                                     graph: graph, pointerAtLookup: pointerAtLookup)
+        }
+        return nil
+    }
+
+    /// Self-heal: leave the pointer naming the candidate. The compare-and-swap
+    /// baseline is the pointer as it was at LOOKUP, so a competing ingest that
+    /// promoted something in between wins and we report `superseded` instead of
+    /// clobbering it. A viewer keeps the graph without writing.
+    ///
+    /// The CAS runs even when the pointer already NAMES this generation: it
+    /// may name it with different source keys (which is why `loadCurrent`
+    /// failed and we are here at all), and something may have been promoted
+    /// since (rule 3b re-review, finding 1). Returning early there handed the
+    /// caller a stale graph while the pointer on disk said otherwise.
+    public func adopt(_ found: RecoveryCandidate) -> Adoption {
+        guard !refusesWrites else {
+            log("\(Self.refusedWritePrefix) adopt \(found.generation) — pointer untouched")
+            return .adopted(found.graph)
+        }
+        enum Attempt { case won, moved, failed(String) }
+        var attempt = Attempt.moved
+        do {
+            try withLock {
+                guard readPointer() == found.pointerAtLookup else {
+                    attempt = .moved
+                    return
+                }
+                var repointed = found.pointerAtLookup
+                    ?? Pointer(schema: found.manifest.schema, codec: found.manifest.codec,
+                               index: found.manifest.index, current: found.generation,
+                               previous: nil, sourceKeys: [])
+                repointed.current = found.generation
+                repointed.previous = nil
+                repointed.sourceKeys = found.manifest.sources.map(\.key)
+                do {
+                    try writePointer(repointed)
+                    attempt = .won
+                } catch {
+                    attempt = .failed("\(error)")
+                }
+            }
+        } catch {
+            // The lock itself failed, so we never read the pointer under it and
+            // cannot claim nobody won. Re-read it lock-free before deciding:
+            // unchanged means a genuine I/O failure with no competing writer,
+            // changed means we WERE superseded and must not serve this graph
+            // (rule 3b re-review, P2). The re-read is not atomic, so a
+            // promotion landing after it still yields .couldNotPersist and a
+            // slightly older verified tree -- the mildest outcome available,
+            // and strictly better than assuming.
+            if readPointer() != found.pointerAtLookup {
+                log("[family-tree] could not take the lock to adopt \(found.generation), "
+                    + "and the pointer moved meanwhile — treating as superseded")
+                attempt = .moved
+            } else {
+                attempt = .failed("\(error)")
+            }
+        }
+        switch attempt {
+        case .won:
+            return .adopted(found.graph)
+        case .moved:
+            log("[family-tree] not adopting \(found.generation): the pointer moved while it was being recovered")
+            return .superseded
+        case .failed(let reason):
+            log("[family-tree] recovered \(found.generation) but could NOT write the pointer: \(reason) — "
+                + "serving the recovered tree; recovery will run again next launch")
+            return .couldNotPersist(found.graph)
+        }
+    }
+
     /// Remote viewer (Phase 1): the pointer names a generation this build
     /// refuses for VERSION reasons (schema/codec/index). Unlike
     /// `multiSourceGenerationNeedingRecompile` it does not require the
