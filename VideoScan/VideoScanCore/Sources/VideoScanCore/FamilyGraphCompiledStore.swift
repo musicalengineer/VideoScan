@@ -397,6 +397,53 @@ public struct FamilyGraphCompiledStore {
         return nil
     }
 
+    /// The newest generation that records MORE THAN ONE physical source and
+    /// whose every source is still intact on disk -- whatever state the
+    /// pointer is in.
+    ///
+    /// `multiSourceGenerationNeedingRecompile` covers exactly ONE reason a
+    /// multi-source generation stops being used: a codec/schema bump. It can
+    /// stop being used for others -- a pointer left on a different
+    /// generation, an artifact that will not decode -- and the loader's
+    /// rule 4 then rebuilds the tree from whatever single .ged happens to be
+    /// visible in the scanned directory.
+    ///
+    /// 2026-09-17, live: that turned Rick's 39,250-person tree into a
+    /// 16,383-person one and dropped his wife's entire line, because her
+    /// pull lives in a `pulls/` subdirectory the non-recursive listing never
+    /// sees. Same rule as codex #826, wider trigger: never silently demote N
+    /// pulls to one.
+    ///
+    /// Two bounded passes, NO RECURSION: manifests first (cheap, no I/O
+    /// beyond the manifest), then hash-verify in newest-first order and stop
+    /// at the first intact generation -- so the expensive pass normally
+    /// touches exactly one generation, and only on a path that is already
+    /// broken.
+    public func intactMultiSourceGeneration() -> (generation: String, manifest: Manifest)? {
+        let candidates = generations()
+            .compactMap { readManifest($0) }
+            .filter { $0.sources.count > 1 && $0.verification.isEmpty }
+            .sorted { $0.createdAt > $1.createdAt }
+        for manifest in candidates where usableManifest(manifest.generation) != nil {
+            return (manifest.generation, manifest)
+        }
+        return nil
+    }
+
+    /// Self-heal: decode a generation found by `intactMultiSourceGeneration`
+    /// and leave the pointer naming it. Split from the lookup so a caller can
+    /// decide, without paying for the hash pass twice, whether adopting is
+    /// still the right thing (the loader checks for a genuinely newer pull
+    /// first). Nil when it will not decode.
+    public func adopt(_ found: (generation: String, manifest: Manifest)) -> GedcomFamilyGraph? {
+        guard let graph = decode(generation: found.generation) else { return nil }
+        if let seen = readPointer(), seen.current != found.generation {
+            repoint(from: seen, current: found.generation,
+                    sourceKeys: found.manifest.sources.map(\.key))
+        }
+        return graph
+    }
+
     /// Remote viewer (Phase 1): the pointer names a generation this build
     /// refuses for VERSION reasons (schema/codec/index). Unlike
     /// `multiSourceGenerationNeedingRecompile` it does not require the
