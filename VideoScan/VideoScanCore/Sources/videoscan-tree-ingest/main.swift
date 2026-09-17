@@ -19,13 +19,22 @@ struct Options {
     var out: URL?
     var report: URL?
     var dryRun = false
+    var writeMerged: URL?
     var sources: [URL] = []
 }
 
 func usage(_ message: String? = nil) -> Never {
     if let message { FileHandle.standardError.write(Data("error: \(message)\n".utf8)) }
     FileHandle.standardError.write(Data("""
-    usage: videoscan-tree-ingest --out <compiled-root> [--report <file.json>] [--dry-run] <pull.ged> […]
+    usage: videoscan-tree-ingest --out <compiled-root> [--report <file.json>]
+                          [--write-merged <merged.ged>] [--dry-run] <pull.ged> […]
+
+      --write-merged  Write the merged tree as ONE .ged and ingest that file
+                      instead of the inputs, exactly as the app's Refresh
+                      does. Needed when an input is itself a merged export:
+                      its logical sources come along, so N files can carry
+                      more than N provenance entries and the positional bind
+                      (codex #816/#817) correctly refuses them.
 
     """.utf8))
     exit(2)
@@ -40,6 +49,9 @@ func parseOptions() -> Options {
         case "--out": guard !args.isEmpty else { usage("--out needs a path") }; o.out = URL(fileURLWithPath: args.removeFirst())
         case "--report": guard !args.isEmpty else { usage("--report needs a path") }; o.report = URL(fileURLWithPath: args.removeFirst())
         case "--dry-run": o.dryRun = true
+        case "--write-merged":
+            guard !args.isEmpty else { usage("--write-merged needs a path") }
+            o.writeMerged = URL(fileURLWithPath: args.removeFirst())
         case "-h", "--help": usage()
         default:
             if a.hasPrefix("-") { usage("unknown option \(a)") }
@@ -133,7 +145,30 @@ if options.dryRun {
     var store = FamilyGraphCompiledStore(root: options.out!)
     store.log = { say($0) }
     let t = Date()
-    guard let promoted = store.ingest(graph: merged, sources: options.sources,
+    // `--write-merged`: publish the merged tree as a single artifact and
+    // ingest THAT, so the graph binds to its own file and its inputs stay
+    // in the logical provenance list. Re-parsed rather than reused, so the
+    // thing promoted is exactly the thing on disk.
+    var graphToIngest = merged
+    var sourcesToBind = options.sources
+    if let destination = options.writeMerged {
+        let names = options.sources.map(\.lastPathComponent).joined(separator: " + ")
+        try merged.gedcomText(provenance: names).write(to: destination, atomically: true, encoding: .utf8)
+        guard let reparsed = GedcomFamilyGraph(fileURL: destination), !reparsed.people.isEmpty else {
+            FileHandle.standardError.write(Data("error: the merged artifact did not parse back\n".utf8))
+            exit(1)
+        }
+        say("wrote merged artifact \(destination.lastPathComponent): "
+            + "\(reparsed.people.count.formatted()) people, "
+            + "\(reparsed.sourceProvenance.count) logical source(s) — \(ms(t))")
+        guard reparsed.people.count == merged.people.count else {
+            FileHandle.standardError.write(Data("error: round-trip lost people (\(merged.people.count) -> \(reparsed.people.count))\n".utf8))
+            exit(1)
+        }
+        graphToIngest = reparsed
+        sourcesToBind = [destination]
+    }
+    guard let promoted = store.ingest(graph: graphToIngest, sources: sourcesToBind,
                                       mergeReport: reportLines.joined(separator: "\n"),
                                       progress: { say("  " + $0) }) else {
         FileHandle.standardError.write(Data("error: generation not promoted (see log above)\n".utf8))
