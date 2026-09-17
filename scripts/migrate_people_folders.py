@@ -275,7 +275,14 @@ def move_folder(src_dir, dst_dir, manifest, log):
         log.write(json.dumps(entry) + "\n")
         log.flush()
         print(f"      {name}  →  {os.path.basename(dst)}")
+    # Finder leaves a .DS_Store behind, which kept every emptied source
+    # folder alive and visible — so People/ still SHOWED two Donnas even
+    # though one held nothing. macOS metadata is not content.
     if not files_in(src_dir) and os.path.isdir(src_dir):
+        for junk in ("​.DS_Store".strip("\u200b"), ".localized"):
+            path = os.path.join(src_dir, junk)
+            if os.path.exists(path):
+                os.remove(path)
         try:
             os.rmdir(src_dir)                      # only ever an EMPTY dir
             entry = {"removed_empty_dir": src_dir}
@@ -308,6 +315,11 @@ def main():
     ap.add_argument("--gedcom", default=GEDCOM)
     ap.add_argument("--archive", default=ARCHIVE,
                     help="archive root (tests point this at a sandbox)")
+    ap.add_argument("--decisions", metavar="JSON",
+                    help="answers for the flagged folders, so a run is "
+                         "repeatable and auditable instead of typed blind: "
+                         '{"Folder": {"fsid": "G2CL-86B", "name": "Donna_Hudson"}} '
+                         'or {"Folder": "skip"}')
     args = ap.parse_args()
     ARCHIVE = args.archive
     PEOPLE = os.path.join(ARCHIVE, "People")
@@ -324,9 +336,29 @@ def main():
     sure, asks = resolve(folders, people, by_name)
     print(f"{len(folders)} folders · {len(sure)} resolved · {len(asks)} need you")
 
+    answers = json.load(open(args.decisions)) if args.decisions else {}
     decided, typed_names = {}, set()
     for comp, (fs, _why) in sure.items():
         decided[comp] = (fs, target_name(people[fs]["name"], fs))
+
+    # Pre-supplied answers settle a flagged folder without a prompt.
+    remaining = []
+    for comp, count, cands, why in asks:
+        if comp not in answers:
+            remaining.append((comp, count, cands, why)); continue
+        a = answers[comp]
+        if a == "skip":
+            print(f"  (answer) {comp}: left alone"); continue
+        fs = a["fsid"]
+        if fs not in people:
+            sys.exit(f"answer for {comp} names {fs}, which is not in the tree")
+        name = a.get("name")
+        decided[comp] = (fs, target_name(name, fs) if name else
+                         target_name(people[fs]["name"], fs))
+        if name:
+            typed_names.add(comp)
+        print(f"  (answer) {comp} → {decided[comp][1]}")
+    asks = remaining
 
     if args.apply and asks:
         print("\nNow the ones I could not settle. 's' leaves a folder untouched.")
