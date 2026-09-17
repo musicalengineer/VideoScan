@@ -222,7 +222,45 @@ public struct FamilyGraphCompiledStore {
             .appendingPathComponent("compiled", isDirectory: true)
     }
 
-    public static var production: FamilyGraphCompiledStore { FamilyGraphCompiledStore(root: productionRoot) }
+    /// True when this process is a test host. Detected in Core, without
+    /// the app target's `TestEnvironment`, by the markers XCTest and Swift
+    /// Testing both set.
+    static var isRunningInATestHost: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return env["XCTestConfigurationFilePath"] != nil
+            || env["XCTestBundlePath"] != nil
+            || env["XCTestSessionIdentifier"] != nil
+            || env["SWIFT_TESTING_ENABLED"] != nil
+    }
+
+    /// THE REAL STORE IS UNREACHABLE FROM A TEST HOST (2026-09-17).
+    ///
+    /// Isolation used to be opt-OUT: every test that built something
+    /// store-aware had to remember to inject a scratch store, and any that
+    /// forgot silently read and WROTE Rick's actual family tree. That was
+    /// survivable only while nothing much was store-aware. The moment the
+    /// pull coordinator became store-aware it stopped being survivable:
+    /// three generations of two-person test fixtures — one of them named
+    /// `current.ged` — were promoted into his production compiled store in
+    /// a single morning, the pointer moved, and his 39,250-person tree was
+    /// replaced by a 16,383-person one. codex flagged the shape (#1525); it
+    /// then happened again from a file neither of us had checked.
+    ///
+    /// So a test host gets a private per-process root instead, unless it
+    /// sets `compiledRootEnvironmentKey` deliberately. Tests that want a
+    /// store still inject one; tests that forget now pollute a temp
+    /// directory instead of a family archive.
+    public static var production: FamilyGraphCompiledStore {
+        guard isRunningInATestHost,
+              ProcessInfo.processInfo.environment[compiledRootEnvironmentKey]?.isEmpty != false
+        else { return FamilyGraphCompiledStore(root: productionRoot) }
+        let sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VideoScan-test-compiled-\(ProcessInfo.processInfo.processIdentifier)",
+                                    isDirectory: true)
+        var store = FamilyGraphCompiledStore(root: sandbox)
+        store.log = { _ in }
+        return store
+    }
 
     // MARK: Read side
 
