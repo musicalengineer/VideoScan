@@ -284,6 +284,45 @@ public struct FamilyGraphCompiledStore {
     /// clean AND its sources all still match on disk, decode previous,
     /// repoint (current = previous, previous = nil, sourceKeys = that
     /// manifest's keys) and return it.
+    /// THE BOOT CHECK (Rick, 2026-09-16: "should we have a check at
+    /// boot/runtime that verifies the tree is not accidentally
+    /// compromised").
+    ///
+    /// Compares the generation currently pointed at against the one before
+    /// it and returns what changed. The promote path already does this for
+    /// a tree it is about to write; this is for a tree that is ALREADY
+    /// written — so a narrowing that happened in a previous session, or
+    /// through something other than a compile (a hand-edited pointer, a
+    /// half-finished sync, a restore from the wrong place), is still seen.
+    ///
+    /// Read-only and cheap: two manifests, no artifact decode. Safe to call
+    /// at every launch. Returns [] when there is no previous generation to
+    /// compare against — a first-ever tree cannot have lost anything.
+    public func auditCurrentGeneration() -> [TreeIntegrityCheck.Finding] {
+        guard let pointer = readPointer(),
+              let current = readManifest(pointer.current) else { return [] }
+        guard let previousName = pointer.previous,
+              let previous = readManifest(previousName) else { return [] }
+        return TreeIntegrityCheck.compare(incoming: current, against: previous)
+    }
+
+    /// `auditCurrentGeneration`, written to the log, with the rollback
+    /// target named when something alarms. One call at launch is the whole
+    /// intended use.
+    @discardableResult
+    public func logCurrentGenerationAudit() -> [TreeIntegrityCheck.Finding] {
+        let findings = auditCurrentGeneration()
+        for finding in findings where finding.severity != .note {
+            let tag = finding.severity == .alarm ? "startup tree ALARM" : "startup tree warning"
+            log("[family-tree] \(tag): \(finding.message)")
+        }
+        if TreeIntegrityCheck.hasAlarm(findings), let previous = readPointer()?.previous {
+            log("[family-tree] the tree in use is smaller than the one before it. "
+                + "If that was not intended, roll back to \(previous).")
+        }
+        return findings
+    }
+
     public func loadCurrent() -> (graph: GedcomFamilyGraph, manifest: Manifest)? {
         guard let pointer = readPointer() else { return nil }
         guard Self.versionsMatch(pointer) else {

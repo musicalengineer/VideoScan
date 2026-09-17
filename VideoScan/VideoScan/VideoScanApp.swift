@@ -114,6 +114,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("VideoScan: %@", startLine)
         appLog.write(startLine)
 
+        // THE TREE BOOT CHECK (Rick, 2026-09-16). Before anything else
+        // touches the family tree, say in the log whether the generation
+        // we are about to use is SMALLER than the one before it.
+        //
+        // On 2026-09-16 a Refresh promoted a tree with 16,383 people over
+        // one with 39,250 — Donna's entire line gone — and every step
+        // reported success because each was individually correct. Nothing
+        // compared the new tree to the old one. The promote path does that
+        // now; this covers the other half: a narrowing that happened in an
+        // earlier session, or through something that was not a compile at
+        // all. Two manifests, no decode, so it costs nothing at launch.
+        var treeStore = FamilyGraphCompiledStore.production
+        treeStore.log = { appLog.write($0) }
+        treeStore.logCurrentGenerationAudit()
+
         // Install the MLX safety net BEFORE any MLX code runs. This is
         // the belt-and-suspenders global handler — per-call runMLX
         // wrappers (see MLXSafety.swift) are the primary defense, but
