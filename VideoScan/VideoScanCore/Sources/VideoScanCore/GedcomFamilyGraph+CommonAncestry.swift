@@ -82,8 +82,9 @@ extension GedcomFamilyGraph {
         var isLowest = [Bool](repeating: false, count: count)
         for o in 0..<Int32(count) where shared[Int(o)] {
             if index.children(of: o).contains(where: { shared[Int($0)] }) { continue }
+            guard let dA = indexA.depth(ofOrdinal: o), let dB = indexB.depth(ofOrdinal: o) else { continue }
             isLowest[Int(o)] = true
-            lowest.append((o, indexA.depth(ofOrdinal: o)!, indexB.depth(ofOrdinal: o)!))
+            lowest.append((o, dA, dB))
         }
         func name(_ o: Int32) -> String { people[index.ids[Int(o)]]?.name ?? "" }
         lowest.sort { x, y in
