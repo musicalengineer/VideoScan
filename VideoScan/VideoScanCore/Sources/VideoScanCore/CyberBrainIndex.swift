@@ -41,6 +41,10 @@ public struct CyberBrainIndex: Sendable {
             for value in [person.canonicalName] + person.aliases {
                 let key = FamilyIdentityText.normalized(value)
                 names[key, default: []].insert(person.id)
+                // "Rick's dad" names the father by RICK's name; split into
+                // words it filed the father under "rick" and every "rick"
+                // question asked which one (2026-09-18). Whole match only.
+                if Self.isPossessiveAlias(key) { continue }
                 for token in Set(FamilyIdentityText.tokens(value)) {
                     tokens[token, default: []].insert(person.id)
                 }
@@ -104,6 +108,12 @@ public struct CyberBrainIndex: Sendable {
         if people.count == 1 { return .resolved(people[0]) }
         if people.isEmpty { return .notFound }
         return .ambiguous(people)
+    }
+
+    /// An alias like "Rick's dad" or "Rick’s father": it describes a person
+    /// relative to someone else, so none of its words are this person's name.
+    static func isPossessiveAlias(_ normalized: String) -> Bool {
+        normalized.contains("'s ") || normalized.contains("\u{2019}s ")
     }
 
     public func person(id: String) -> CyberBrainPerson? { peopleByID[id] }

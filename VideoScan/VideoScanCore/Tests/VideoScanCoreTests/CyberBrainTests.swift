@@ -253,6 +253,43 @@ struct CyberBrainTests {
         #expect(person.id == "person.jordan")
     }
 
+    /// Rick, 2026-09-18: "tell me about rick's brother" answered "Which rick
+    /// do you mean: Richard Harding Breen Sr, Rick Breen?". His father's
+    /// aliases "Rick's dad" / "Rick's father" were split into words, so the
+    /// token "rick" pointed at the father too. A possessive alias names the
+    /// person by someone ELSE's name; it matches whole or not at all.
+    @Test func possessiveAliasDoesNotLendItsPossessorsNameToTheRelative() throws {
+        let father = CyberBrainPerson(
+            id: "person.sam", canonicalName: "Sam River Sr",
+            aliases: ["Jordan's dad", "Jordan\u{2019}s father", "Sam"])
+        let base = archive()
+        let family = CyberBrainArchive(
+            archiveID: base.archiveID, displayName: base.displayName,
+            people: base.people + [father], sources: base.sources)
+        let index = try CyberBrainIndex(archive: family)
+
+        guard case .resolved(let jordan) = index.resolve("Jordan") else {
+            Issue.record("\"Jordan\" must resolve to Jordan alone, not ask which one")
+            return
+        }
+        #expect(jordan.id == "person.jordan")
+        // The whole phrase still finds the father.
+        guard case .resolved(let dad) = index.resolve("Jordan's dad"),
+              case .resolved(let dad2) = index.resolve("jordan\u{2019}s father") else {
+            Issue.record("A possessive alias must still match as a whole")
+            return
+        }
+        #expect(dad.id == "person.sam" && dad2.id == "person.sam")
+        // "dad" alone is relative to the speaker, so the alias must not answer it.
+        #expect(index.resolve("dad") == .notFound)
+        // The father's ordinary aliases still tokenize.
+        guard case .resolved(let sam) = index.resolve("Sam River") else {
+            Issue.record("Ordinary aliases must still resolve by token")
+            return
+        }
+        #expect(sam.id == "person.sam")
+    }
+
     @Test func validatorRejectsDanglingAndTraversalReferences() {
         let missingSource = archive(sources: [])
         #expect(throws: CyberBrainError.danglingReference("source.interview")) {

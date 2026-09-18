@@ -59,7 +59,11 @@ struct POIProfileRenameReviewProbeTests {
         let report = try #require(POIStorage.readUUIDMigrationReport())
         let skipped = report.skipped.filter { $0.reason == POIStorage.UUIDMigrationSkip.duplicateUUID }
         #expect(Set(skipped.map(\.folder)).isSuperset(of: [oldFolder.lastPathComponent, newFolder.lastPathComponent]))
-        #expect(skipped.allSatisfy { $0.detail.contains(oldFolder.lastPathComponent) && $0.detail.contains(newFolder.lastPathComponent) })
+        // The report is shared; other suites' duplicate-uuid skips can be in
+        // it (M5, 2026-09-18). Only THIS probe's two entries must name both.
+        let ours = skipped.filter { [oldFolder.lastPathComponent, newFolder.lastPathComponent].contains($0.folder) }
+        #expect(ours.count == 2)
+        #expect(ours.allSatisfy { $0.detail.contains(oldFolder.lastPathComponent) && $0.detail.contains(newFolder.lastPathComponent) })
         #expect(!report.complete)
         #expect(try Data(contentsOf: oldFolder.appendingPathComponent("portrait.jpg")) == bytes)
         #expect(try Data(contentsOf: newFolder.appendingPathComponent("portrait.jpg")) == bytes)
