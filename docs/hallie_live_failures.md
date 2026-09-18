@@ -304,3 +304,41 @@ wrong but honest; catalog is wrong and assured. Splitting retrieval asks
 from fact-questions-that-mention-a-video means either another heuristic
 layer on a module that is already failing from heuristic collisions, or
 the two-mode answer: let a turn consult both.
+
+### 2026-09-17 overnight: a hidden person leaves their FAMILY records behind
+
+Found by the overnight run (328/399 vs the 12:03 baseline's 320 — net churn,
+**not** an improvement claim: 30 newly flagged, 38 newly clean). Inside that
+churn was one cluster that is not noise: four consecutive Eileen Latta
+questions newly failing.
+
+```
+who is eileen latta's mother                          missing_required_text
+tell me about eileen latta                            missing_required_text
+who are eileen's parents                              missing_required_text
+show eileen latta's maternal line back 3 generations  missing_required_text
+```
+
+**Cause.** Mary Christina O'Connor being in FamilySearch twice propagates
+into FAMILY records. Eileen now has THREE parent families, all one marriage:
+
+| family | husband | wife |
+|---|---|---|
+| `@F3@` | David McGill Latta Sr | Mary Christina O'Connor `G89Q-34N` |
+| `@F4@` | — | Mary O'Connor `GNZ5-428` ← the duplicate |
+| `@FB3@` | — | Mary Christina O'Connor `G89Q-34N` |
+
+The refreshed pull ADDED `@FB3@`, which is why this appeared tonight and not
+this morning — the old tree had two, the corrected tree has three.
+
+**The gap.** Hiding the duplicate PERSON does not disregard the family whose
+only parent is that person. Suppression is per-person; `@F4@` survives and
+keeps Eileen attached to it.
+
+**Not fixed, deliberately.** The repair is in parent-family resolution, which
+decides who Rick's relatives' parents are. His 2026-09-02 ruling governs the
+two-FAMC case ("a family FamilySearch itself knows outranks a stray local
+one"); three links where two name the same woman under different ids is the
+case that ruling did not consider, and it is his call. Pinned as a
+`withKnownIssue` in `HiddenPersonLeavesFamilyRecordsBehindTests` so it cannot
+rot and fails loudly the day it is fixed.
