@@ -1300,8 +1300,13 @@ struct FamilyAssetStore {
         }) {
             return existing
         }
-        let name = Self.safePersonNameComponent(person.name)
-        let component = name.isEmpty ? id : "\(name)_\(id)"
+        // ONE naming rule, in Core. This used to compose the component
+        // here as well, which meant two implementations of "what is a
+        // person's folder called" — and the whole reason this scheme exists
+        // is that Rick had one person under several names. Two rules would
+        // have drifted the same way.
+        let component = FamilyPersonFolderName.component(
+            name: .init(wholeName: person.name), identity: .familySearch(id))
         let folder = peopleDirectory.appendingPathComponent(component, isDirectory: true)
             .standardizedFileURL
         guard folder.deletingLastPathComponent() == peopleDirectory else { return nil }
@@ -1314,10 +1319,9 @@ struct FamilyAssetStore {
     /// Nil when the folder is name-only, which is what a person with no ID
     /// gets and must keep.
     static func familySearchID(inFolderComponent component: String) -> String? {
-        if GedcomFamilyGraph.isFamilySearchID(component) { return component }
-        guard let last = component.split(separator: "_").last.map(String.init),
-              GedcomFamilyGraph.isFamilySearchID(last) else { return nil }
-        return last
+        guard case .familySearch(let id)? =
+            FamilyPersonFolderName.identity(inComponent: component) else { return nil }
+        return id
     }
 
     /// Where this person's choice sidecar lives (read side).
