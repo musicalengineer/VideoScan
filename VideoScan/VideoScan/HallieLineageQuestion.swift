@@ -603,7 +603,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // Hainaut instead of a decline about a man who is in neither tree. A
         // counterpart the sentence NAMES always beats whoever the conversation
         // was about. `(we)` is a placeholder the side reader maps to the owner.
-        if let m = lower.firstMatch(of: /\b(?:how|so how)\s+(?:are|were|am|is)\s+(we|us|i|me)\s+related(?:,?\s+if\s+at\s+all,?)?\s+to\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s*$/) {
+        if let m = lower.firstMatch(of: /\b(?:how|so how)\s+(?:are|were|am|is)\s+(we|us|i|me)\s+related(?:,?\s+if\s+at\s+all,?)?\s+to\s+([a-z0-9(][a-z0-9 .,'()-]*?)(?:\s+(?:by blood|at all|somehow))?\s*$/) {
             // "how am I related to King Edward III of England?" — the first
             // strict replay (2026-09-07) showed this going to the MODEL as a
             // two-person graph query and declining "which person you meant —
@@ -614,11 +614,14 @@ enum HallieLineageQuestion: Equatable, Sendable {
                 return .commonAncestor(a: nil, b: name)
             }
         }
+        // "is Donna related to me by blood" (Rick, 2026-09-18): the "related
+        // to …" forms take the same trailing qualifiers the "are A and B
+        // related" form does, so "by blood" is never read as a name.
         let patterns: [Regex<(Substring, Substring, Substring)>] = [
             /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:and|&)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:related|connected|linked|kin)\b/,
-            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+related\s+to\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s*$/,
+            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+related\s+to\s+([a-z0-9(][a-z0-9 .,'()-]*?)(?:\s+(?:by blood|at all|somehow))?\s*$/,
             /^(?:so\s+)?(?:is|are|was|were)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:and|&)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:related|connected|kin|cousins|blood relatives|relatives)(?:\s+(?:at all|somehow|by blood))?\s*$/,
-            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+related\s+to\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s*$/,
+            /^(?:so\s+)?(?:is|are|am|was|were)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+related\s+to\s+([a-z0-9(][a-z0-9 .,'()-]*?)(?:\s+(?:by blood|at all|somehow))?\s*$/,
             // "most recent" / "latest" / "recent" common ancestor, and a
             // trailing "born 1959" qualifier (Rick 2026-08-28 live).
             /\b(?:nearest|closest|common|shared|most recent|latest|recent|first)\s+(?:common\s+|shared\s+)?ancestors?\s+(?:of|between|for|shared by)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:and|&)\s+([a-z0-9(][a-z0-9 .,'()-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,

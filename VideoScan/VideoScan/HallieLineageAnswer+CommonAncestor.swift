@@ -189,11 +189,25 @@ extension HallieLineageAnswer {
                           catalogPersonName: pb.name,
                           offeredActions: pa.id == pb.id ? [chips[0]] : chips)
         }
-        let hits = graph.commonAncestors(of: pa.id, and: pb.id)
-        let possA = HallieLineageQuestion.possessive(pa.name)
-        let possB = HallieLineageQuestion.possessive(pb.name)
-        let asideSentence = affinalAside.map { " (" + $0.term + ".)" } ?? ""
-        if hits.isEmpty {
+        // Rick 2026-09-18: family members will ask this ("how is Bonnie
+        // related to Rick?") — name the nearest COUPLE, count separate
+        // lines rather than every shared ancestor, speak to the owner as
+        // "you", and say what to take with a grain of salt.
+        let ownerID: String? = {
+            if case .success(let owner, _) = resolveDetailed(nil, context: context, graph: graph) { return owner.id }
+            return nil
+        }()
+        // The owner always comes first ("how are Donna and I related" →
+        // "You and Donna Hudson … your 8th-great-grandparents and Donna
+        // Hudson's 9th"), including in the marriage aside.
+        let ownerSecond = pb.id == ownerID && pa.id != ownerID
+        let (x, y) = ownerSecond ? (pb, pa) : (pa, pb)
+        let asideTerm = ownerSecond
+            ? graph.directRelation(between: x.id, and: y.id).flatMap { affinalKinds.contains($0.kind) ? $0.term : nil }
+            : affinalAside?.term
+        guard let ancestry = graph.commonAncestry(of: x.id, and: y.id),
+              let nearest = ancestry.nearest else {
+            let asideSentence = affinalAside.map { " (" + $0.term + ".)" } ?? ""
             let dA = graph.ancestorDepth(of: pa.id), dB = graph.ancestorDepth(of: pb.id)
             let missing = [(pa, dA), (pb, dB)].filter { $0.1 == 0 }.map(\.0)
             if !missing.isEmpty {
@@ -212,34 +226,80 @@ extension HallieLineageAnswer {
                 basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
                 offeredActions: chips)
         }
-        let nearest = hits[0]
-        let z = nearest.person
-        // Rick 2026-08-28: the record's critical info on the nearest —
-        // "(b. 1633 – d. after 1717, Sudbury, Middlesex, Massachusetts Bay
-        // Colony)": year with qualifier as recorded, places when recorded.
-        let born = HalliePersonVitals.parenthetical(z, places: true)
-        let labelA = GedcomFamilyGraph.generationLabel(generations: nearest.depthA, sex: z.sex)
-        let labelB = GedcomFamilyGraph.generationLabel(generations: nearest.depthB, sex: z.sex)
-        var sentences: [String] = []
-        let n = hits.count
-        sentences.append("\(pa.name) and \(pb.name) share \(n) recorded ancestor\(n == 1 ? "" : "s"); the nearest is \(z.name)\(born) — \(possA) \(labelA) and \(possB) \(labelB), making them \(nearest.kinshipTerm).")
-        func line(_ path: [GedcomFamilyGraph.Person]) -> String {
-            path.map(\.name).joined(separator: " → ")
-        }
-        if let affinalAside { sentences.append(affinalAside.term + " — so this is the blood connection behind the marriage.") }
-        sentences.append("\(possA) line: \(line(nearest.pathA)). \(possB) line: \(line(nearest.pathB)).")
-        if n > 1 {
-            let others = hits.dropFirst().prefix(3).map { h in
-                h.person.name + HalliePersonVitals.parenthetical(h.person, places: false) + " (\(h.depthA)/\(h.depthB) generations up)"
-            }
-            sentences.append("Also shared: " + others.joined(separator: "; ") + (n - 1 > others.count ? "; and \(n - 1 - others.count) more." : "."))
-        }
+        let prose = commonAncestryProse(ancestry, nearest: nearest, a: x, b: y, ownerID: ownerID,
+                                        affinalTerm: asideTerm)
+        let z = nearest.ancestors[0]
         return Result(
             route: .graph, outcome: .answered,
-            prose: sentences.joined(separator: " "),
-            basisLine: basis + " Cousin term from the two depths (degree = nearer depth − 1, removed = the difference).",
-            queryDescription: query + " → \(z.name)",
+            prose: prose,
+            basisLine: basis + " Cousin term from the two depths (degree = nearer depth − 1, removed = the difference);"
+                + " separate lines = shared ancestors none of whose children are shared.",
+            queryDescription: query + " → " + nearest.ancestors.map(\.name).joined(separator: " and "),
             citations: [], catalogPersonName: z.name,
-            offeredActions: [.openFamilyTreePerson(personID: z.id, personName: z.name)] + chips)
+            offeredActions: nearest.ancestors.map { .openFamilyTreePerson(personID: $0.id, personName: $0.name) } + chips)
+    }
+
+    /// The answer's words, pure: same tree, same owner, same sentences.
+    static func commonAncestryProse(
+        _ ancestry: GedcomFamilyGraph.CommonAncestry,
+        nearest: GedcomFamilyGraph.AncestralMeeting,
+        a: GedcomFamilyGraph.Person, b: GedcomFamilyGraph.Person,
+        ownerID: String?, affinalTerm: String?
+    ) -> String {
+        let aIsOwner = a.id == ownerID, bIsOwner = b.id == ownerID
+        func poss(_ p: GedcomFamilyGraph.Person) -> String {
+            p.id == ownerID ? "your" : HallieLineageQuestion.possessive(p.name)
+        }
+        func capitalized(_ s: String) -> String { s.prefix(1).uppercased() + s.dropFirst() }
+        let pair = aIsOwner ? "You and \(b.name)" : bIsOwner ? "You and \(a.name)" : "\(a.name) and \(b.name)"
+        let them = (aIsOwner || bIsOwner) ? "you" : "them"
+        let n = ancestry.sharedAncestorCount, lines = ancestry.meetings.count
+        let count = n.formatted(.number.grouping(.automatic))
+        let through = lines > 1 ? " through \(lines.formatted(.number.grouping(.automatic))) separate lines" : ""
+        let couple = nearest.ancestors.count > 1
+        let who = nearest.ancestors.map { $0.name + HalliePersonVitals.parenthetical($0, places: true) }
+            .joined(separator: " and ")
+        func label(_ generations: Int) -> String {
+            couple ? GedcomFamilyGraph.generationLabel(generations: generations, sex: "") + "s"
+                : GedcomFamilyGraph.generationLabel(generations: generations, sex: nearest.ancestors[0].sex)
+        }
+        var sentences: [String] = []
+        sentences.append("\(pair) share \(count) recorded ancestor\(n == 1 ? "" : "s")\(through); the nearest \(couple ? "are" : "is") \(who) — \(poss(a)) \(label(nearest.depthA)) and \(poss(b)) \(label(nearest.depthB)), making \(them) \(nearest.kinshipTerm).")
+        if var term = affinalTerm {
+            if let ownerID, let owner = [a, b].first(where: { $0.id == ownerID }) {
+                term = term.replacingOccurrences(of: HallieLineageQuestion.possessive(owner.name), with: "your")
+            }
+            sentences.append(term + " — so this is the blood connection behind the marriage.")
+        }
+        func line(_ path: [GedcomFamilyGraph.Person], owner: Bool) -> String {
+            let head = nearest.ancestors.map(\.name).joined(separator: " and ")
+            let rest = path.dropFirst().enumerated().map { i, p in
+                owner && i == path.count - 2 ? "you" : p.name
+            }
+            return ([head] + rest).joined(separator: " → ")
+        }
+        sentences.append("\(capitalized(poss(a))) line: \(line(nearest.pathA, owner: aIsOwner)). \(capitalized(poss(b))) line: \(line(nearest.pathB, owner: bIsOwner)).")
+        if lines > 1 {
+            let next = ancestry.meetings[1]
+            sentences.append("The next nearest line is through " + next.ancestors.map(\.name).joined(separator: " and ")
+                + " — \(next.kinshipTerm).")
+        }
+        // The grain of salt (Rick: "the info must be taken with a grain of
+        // salt, but it is fun"). Far lines always; named doubts when any.
+        if max(nearest.depthA, nearest.depthB) >= 5 {
+            sentences.append("Take this with a grain of salt: lines this far back are only as good as the family tree they came from, and I haven’t checked them against original records.")
+        }
+        func named(_ people: [GedcomFamilyGraph.Person]) -> String {
+            let shown = people.prefix(3).map(\.name)
+            let more = people.count - shown.count
+            return HallieNameQualifier.joined(Array(shown) + (more > 0 ? ["\(more) more"] : []), conjunction: "and")
+        }
+        if !ancestry.undatedLinks.isEmpty {
+            sentences.append("On these lines, \(named(ancestry.undatedLinks)) \(ancestry.undatedLinks.count == 1 ? "has" : "have") no recorded birth date.")
+        }
+        if !ancestry.disputedParentLinks.isEmpty {
+            sentences.append("The tree records more than one set of parents for \(named(ancestry.disputedParentLinks)).")
+        }
+        return sentences.joined(separator: " ")
     }
 }

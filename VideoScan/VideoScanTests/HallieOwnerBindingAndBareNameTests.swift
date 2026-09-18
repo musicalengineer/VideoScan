@@ -141,7 +141,9 @@ private func expectMarthaStyleAnswer(_ r: HallieTurnExecutor.Result?, sourceLoca
     #expect(r.outcome == .answered, "got: \(r.prose)", sourceLocation: sourceLocation)
     // Either side order ("donna and me (rick)" leads with Donna).
     #expect(r.prose.contains("share 1 recorded ancestor; the nearest is Z Common"), "got: \(r.prose)", sourceLocation: sourceLocation)
-    #expect(r.prose.contains("Richard Harding Breen Jr") && r.prose.contains("Donna Hudson"), "got: \(r.prose)", sourceLocation: sourceLocation)
+    // The owner is bound: spoken to as "you" (2026-09-18), never by a namesake.
+    #expect(r.prose.hasPrefix("You and Donna Hudson share"), "got: \(r.prose)", sourceLocation: sourceLocation)
+    #expect(r.prose.contains(" → you."), "got: \(r.prose)", sourceLocation: sourceLocation)
     #expect(!r.prose.lowercased().hasPrefix("which"), sourceLocation: sourceLocation)
     #expect(!r.prose.localizedCaseInsensitiveContains("have no common ancestor"), sourceLocation: sourceLocation)
     #expect(!r.prose.localizedCaseInsensitiveContains("catalog items matching"), sourceLocation: sourceLocation)

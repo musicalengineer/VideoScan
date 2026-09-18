@@ -139,6 +139,11 @@ struct HallieCommonAncestorDetectTests {
         #expect(Q.detect("How are Rick and Donna related?") == .commonAncestor(a: "Rick", b: "Donna"))
         #expect(Q.detect("are rick and donna related") == .commonAncestor(a: "Rick", b: "Donna"))
         #expect(Q.detect("is rick related to donna hudson?") == .commonAncestor(a: "Rick", b: "Donna Hudson"))
+        // Rick 2026-09-18: "by blood" is a qualifier, never part of a name.
+        #expect(Q.detect("is Donna related to me by blood") == .commonAncestor(a: "Donna", b: nil))
+        #expect(Q.detect("how is bonnie related to rick by blood?") == .commonAncestor(a: "Bonnie", b: "Rick"))
+        #expect(Q.detect("am I related to donna at all") == .commonAncestor(a: nil, b: "Donna"))
+        #expect(Q.detect("are Donna and I cousins") == .commonAncestor(a: "Donna", b: nil))
         #expect(Q.detect("common ancestor of rick and donna") == .commonAncestor(a: "Rick", b: "Donna"))
         // Rick's exact live phrasings, 2026-08-28 spot test.
         #expect(Q.detect("show me the closest common ancestor between rick and donna") == .commonAncestor(a: "Rick", b: "Donna"))
@@ -295,8 +300,10 @@ struct HallieCommonAncestorAnswerTests {
         2 PLAC Sudbury, Middlesex, Massachusetts Bay Colony
         """)
         #expect(prose.hasPrefix("Abel Common and Beth Common share 2 recorded ancestors; the nearest is Z Common (b. about 1633, Boston, Suffolk, Massachusetts Bay Colony – d. after 1717, Sudbury, Middlesex, Massachusetts Bay Colony) — Abel Common’s grandfather and Beth Common’s grandfather, making them 1st cousins."), "got: \(prose)")
-        // "Also shared:" stays readable — years (with qualifier) only, no places.
-        #expect(prose.contains("Also shared: W Common (b. about 1602) (3/3 generations up)."), "got: \(prose)")
+        // W is Z's mother — the same line one generation up, not a second
+        // connection (2026-09-18: separate lines, not every shared ancestor).
+        #expect(!prose.contains("W Common"), "got: \(prose)")
+        #expect(!prose.contains("next nearest line"), "got: \(prose)")
         #expect(!prose.contains("Must Not Appear"))
     }
 
@@ -333,7 +340,11 @@ struct HallieCommonAncestorAnswerTests {
         #expect(r.outcome == .answered)
         // Rick 2026-08-28: in-law is the aside, the blood link is the answer.
         #expect(r.prose.contains("share 1 recorded ancestor"), "got: \(r.prose)")
-        #expect(r.prose.contains("Walter Hudson is Richard Harding Breen Jr’s father-in-law"), "got: \(r.prose)")
+        // Rick 2026-09-18: the owner is "you", in the aside too.
+        #expect(r.prose.hasPrefix("You and Walter Hudson share 1 recorded ancestor"), "got: \(r.prose)")
+        #expect(r.prose.contains("Walter Hudson is your father-in-law"), "got: \(r.prose)")
+        #expect(r.prose.contains("Your line: Z Common → "), "got: \(r.prose)")
+        #expect(r.prose.contains(" → you."), "got: \(r.prose)")
         #expect(!r.prose.hasPrefix("Walter Hudson is"))
     }
 
@@ -409,7 +420,8 @@ struct HallieCommonAncestorAnswerTests {
         // Rick 2026-08-28 overrides codex #776 for affinal kinds: a marriage
         // is an aside, the blood link is the answer to "common ancestor".
         #expect(spouse.prose.contains("share"), "blood answer first: \(spouse.prose)")
-        #expect(spouse.prose.contains("Donna Hudson is Richard Harding Breen Jr’s wife"), "marriage kept as an aside: \(spouse.prose)")
+        // The context's owner is Rick, so the aside speaks to him (2026-09-18).
+        #expect(spouse.prose.contains("Donna Hudson is your wife"), "marriage kept as an aside: \(spouse.prose)")
         #expect(!spouse.prose.hasPrefix("Donna Hudson is"))
         let great = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Donna Hudson", b: "Z Common"), context: context(graph)))
         #expect(great.prose.hasPrefix("Z Common is Donna Hudson’s great-great-grandfather."))
@@ -653,5 +665,87 @@ struct HallieTitledNameRecoveryTests {
 
     @Test func nothingMatchesNothing() {
         #expect(L.titledNameRecovery("king henry 8th", graph: graph) == nil)
+    }
+}
+
+/// Rick 2026-09-18 ("people in our family will like these kinds of queries
+/// … the info must be taken with a grain of salt"): Hugh and Wanda are the
+/// nearest COUPLE, 5 above Ann and 6 above Ben (4th cousins once removed);
+/// Otto is a second, farther line (6 and 6); Clara has no birth date and two parent
+/// families.
+@Suite("Common ancestor — told for the family")
+struct HallieCommonAncestryFamilyTellingTests {
+    static let gedcom: String = {
+        func indi(_ id: String, _ name: String, _ sex: String, birth: String? = "1700",
+                  famc: [String] = [], fams: [String] = []) -> String {
+            var l = ["0 @\(id)@ INDI", "1 NAME \(name)", "1 SEX \(sex)"]
+            if let birth { l += ["1 BIRT", "2 DATE \(birth)"] }
+            return (l + famc.map { "1 FAMC @\($0)@" } + fams.map { "1 FAMS @\($0)@" }).joined(separator: "\n")
+        }
+        func fam(_ id: String, _ husb: String?, _ wife: String?, _ kids: [String]) -> String {
+            (["0 @\(id)@ FAM"] + (husb.map { ["1 HUSB @\($0)@"] } ?? []) + (wife.map { ["1 WIFE @\($0)@"] } ?? [])
+                + kids.map { "1 CHIL @\($0)@" }).joined(separator: "\n")
+        }
+        let r = [
+            indi("H", "Hugh /Hill/", "M", fams: ["F1"]), indi("W", "Wanda /Wood/", "F", fams: ["F1"]),
+            fam("F1", "H", "W", ["C1", "C2"]),
+            indi("C1", "Carl /Hill/", "M", famc: ["F1"], fams: ["F2"]), fam("F2", "C1", "AM", ["A1"]),
+            indi("A1", "Al /Hill/", "M", famc: ["F2"], fams: ["F3"]), fam("F3", "A1", nil, ["A2"]),
+            indi("A2", "Abe /Hill/", "M", famc: ["F3"], fams: ["F4"]), fam("F4", "A2", nil, ["A3"]),
+            indi("A3", "Ada /Hill/", "F", famc: ["F4"], fams: ["F5"]), fam("F5", nil, "A3", ["A"]),
+            indi("A", "Ann /Hill/", "F", famc: ["F5"]),
+            indi("AM", "Amy /Oak/", "F", famc: ["FQ"], fams: ["F2"]), fam("FQ", "Q", nil, ["AM"]),
+            indi("Q", "Quin /Oak/", "M", famc: ["FO1"], fams: ["FQ"]), fam("FO1", "O", nil, ["Q"]),
+            indi("O", "Otto /Oak/", "M", fams: ["FO1", "FO2"]),
+            indi("Z", "Zed /Alt/", "M", fams: ["F99"]), fam("F99", "Z", nil, ["C2"]),
+            indi("C2", "Clara /Hill/", "F", birth: nil, famc: ["F1", "F99"], fams: ["F6"]), fam("F6", nil, "C2", ["B1"]),
+            indi("B1", "Bea /Bell/", "F", famc: ["F6"], fams: ["F7"]), fam("F7", "BH", "B1", ["B2"]),
+            indi("BH", "Bart /Pine/", "M", famc: ["FP"], fams: ["F7"]), fam("FP", "P", nil, ["BH"]),
+            indi("P", "Pip /Oak/", "M", famc: ["FO2"], fams: ["FP"]), fam("FO2", "O", nil, ["P"]),
+            indi("B2", "Bo /Bell/", "M", famc: ["F7"], fams: ["F8"]), fam("F8", "B2", nil, ["B3"]),
+            indi("B3", "Bud /Bell/", "M", famc: ["F8"], fams: ["F9"]), fam("F9", "B3", nil, ["B4"]),
+            indi("B4", "Bix /Bell/", "M", famc: ["F9"], fams: ["F10"]), fam("F10", "B4", nil, ["B"]),
+            indi("B", "Ben /Bell/", "M", famc: ["F10"]),
+        ]
+        return "0 HEAD\n" + r.joined(separator: "\n") + "\n0 TRLR\n"
+    }()
+
+    private func answer(owner: String) throws -> HallieTurnExecutor.Result {
+        let graph = GedcomFamilyGraph(gedcomText: Self.gedcom)
+        let ctx = HallieTurnExecutor.Context(profiles: [], graph: graph,
+                                             speakers: .init(ownerName: owner, archivistName: nil, archivistPersonName: nil))
+        return try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Ann Hill", b: "Ben Bell"), context: ctx))
+    }
+
+    @Test func namesTheCoupleCountsLinesAndSaysTheGrainOfSalt() throws {
+        let r = try answer(owner: "Nobody Here")
+        #expect(r.outcome == .answered)
+        #expect(r.prose.hasPrefix("Ann Hill and Ben Bell share 3 recorded ancestors through 2 separate lines; the nearest are Hugh Hill (b. 1700) and Wanda Wood (b. 1700) — Ann Hill’s 3rd-great-grandparents and Ben Bell’s 4th-great-grandparents, making them 4th cousins once removed."), Comment(rawValue: r.prose))
+        #expect(r.prose.contains("Ann Hill’s line: Hugh Hill and Wanda Wood → Carl Hill → Al Hill → Abe Hill → Ada Hill → Ann Hill."), Comment(rawValue: r.prose))
+        #expect(r.prose.contains("The next nearest line is through Otto Oak — 5th cousins."), Comment(rawValue: r.prose))
+        #expect(r.prose.contains("Take this with a grain of salt"), Comment(rawValue: r.prose))
+        #expect(r.prose.contains("On these lines, Clara Hill has no recorded birth date."), Comment(rawValue: r.prose))
+        #expect(r.prose.contains("The tree records more than one set of parents for Clara Hill."), Comment(rawValue: r.prose))
+        #expect(!r.prose.contains("Also shared"))
+        #expect(r.offeredActions.prefix(2) == [.openFamilyTreePerson(personID: "@H@", personName: "Hugh Hill"),
+                                               .openFamilyTreePerson(personID: "@W@", personName: "Wanda Wood")])
+    }
+
+    @Test func theOwnerComesFirstEvenWhenNamedSecond() throws {
+        // "how are Ann and I related" with Ben speaking: Ben is "you", first.
+        let graph = GedcomFamilyGraph(gedcomText: Self.gedcom)
+        let ctx = HallieTurnExecutor.Context(profiles: [], graph: graph,
+                                             speakers: .init(ownerName: "Ben Bell", archivistName: nil, archivistPersonName: nil))
+        let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Ann Hill", b: "Ben Bell"), context: ctx))
+        let swapped = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Ben Bell", b: "Ann Hill"), context: ctx))
+        #expect(r.prose == swapped.prose, Comment(rawValue: r.prose))
+        #expect(r.prose.contains("— your 4th-great-grandparents and Ann Hill’s 3rd-great-grandparents"), Comment(rawValue: r.prose))
+    }
+
+    @Test func theOwnerIsYou() throws {
+        let r = try answer(owner: "Ben Bell")
+        #expect(r.prose.hasPrefix("You and Ann Hill share 3 recorded ancestors"), Comment(rawValue: r.prose))
+        #expect(r.prose.contains("— your 4th-great-grandparents and Ann Hill’s 3rd-great-grandparents, making you 4th cousins once removed."), Comment(rawValue: r.prose))
+        #expect(r.prose.contains("Your line: Hugh Hill and Wanda Wood → Clara Hill → Bea Bell → Bo Bell → Bud Bell → Bix Bell → you."), Comment(rawValue: r.prose))
     }
 }

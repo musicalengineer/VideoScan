@@ -1427,6 +1427,34 @@
    "notes": "A person, not a surname — must fall through to the person family-tree route, not decline."
   },
   {
+   "id": "ln015",
+   "category": "lineage",
+   "text": "how are Donna and I related",
+   "expect": "kinship",
+   "mustContain": [
+    "Matthew Rice and Martha Lamson",
+    "9th cousins once removed",
+    "grain of salt"
+   ],
+   "mustMatch": [
+    "^You and Donna"
+   ],
+   "mustNotContain": [
+    "Also shared"
+   ],
+   "notes": "Rick 2026-09-18: family-connection queries are a core social function. Owner first as 'you', nearest COUPLE, separate lines, grain of salt."
+  },
+  {
+   "id": "ln016",
+   "category": "lineage",
+   "text": "are Donna and I cousins",
+   "expect": "kinship",
+   "mustContain": [
+    "9th cousins once removed"
+   ],
+   "notes": "Rick 2026-09-18: same blood-connection answer from the everyday phrasing family members will use."
+  },
+  {
    "id": "cj001",
    "category": "conjunction",
    "text": "where was Martha Lamson born and when was she born",
