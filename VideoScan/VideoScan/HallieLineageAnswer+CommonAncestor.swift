@@ -113,7 +113,15 @@ extension HallieLineageAnswer {
         // C++ readers: a two-case enum instead of std::variant — the
         // resolved person, or the answer that stops the question.
         enum Side { case ok(GedcomFamilyGraph.Person), stop(Result) }
+        // People-tab siblings with no tree record stand on a full sibling's
+        // record (Rick 2026-09-18: "Beth" asked which of 2,190 Elizabeths).
+        var proxies: [Int: SiblingProxy] = [:]
         func person(_ typed: String?, slot: Int) -> Side {
+            if let typed, !isFirstPerson(typed), pinned[slot] == nil,
+               let proxy = siblingProxy(typed, context: context, graph: graph) {
+                proxies[slot] = proxy
+                return .ok(proxy.record)
+            }
             if let choice = pinned[slot] {
                 guard case .gedcomPersonID(let id) = choice, let p = graph.people[id] else {
                     return .stop(HallieTurnExecutor.invalidContinuationResult(for: request.intent.ast))
@@ -168,6 +176,10 @@ extension HallieLineageAnswer {
             .openFamilyTreePerson(personID: pa.id, personName: pa.name),
             .openFamilyTreePerson(personID: pb.id, personName: pb.name),
         ]
+        if !proxies.isEmpty {
+            return proxyAnswer(pa, pb, proxies: proxies, context: context, graph: graph,
+                               basis: basis, query: query, chips: chips)
+        }
         // Direct kin first (codex #776): parent/child, spouses, siblings,
         // grandparents and the rest are named as such — never as cousins
         // through a shared grandparent.
@@ -226,7 +238,10 @@ extension HallieLineageAnswer {
                 basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
                 offeredActions: chips)
         }
-        let prose = commonAncestryProse(ancestry, nearest: nearest, a: x, b: y, ownerID: ownerID,
+        let prose = commonAncestryProse(ancestry, nearest: nearest,
+                                        a: x.id == ownerID ? .owner : .named(x.name),
+                                        b: y.id == ownerID ? .owner : .named(y.name),
+                                        ownerRecordName: [x, y].first { $0.id == ownerID }?.name,
                                         affinalTerm: asideTerm)
         let z = nearest.ancestors[0]
         return Result(
@@ -239,17 +254,25 @@ extension HallieLineageAnswer {
             offeredActions: nearest.ancestors.map { .openFamilyTreePerson(personID: $0.id, personName: $0.name) } + chips)
     }
 
+    /// Who a side of the answer is: the owner ("you") or someone by name —
+    /// the tree's name, or a People-tab name for a sibling standing on
+    /// another record.
+    enum Speaker: Equatable {
+        case owner
+        case named(String)
+        var name: String { if case .named(let n) = self { return n }; return "you" }
+        var possessive: String { self == .owner ? "your" : HallieLineageQuestion.possessive(name) }
+    }
+
     /// The answer's words, pure: same tree, same owner, same sentences.
     static func commonAncestryProse(
         _ ancestry: GedcomFamilyGraph.CommonAncestry,
         nearest: GedcomFamilyGraph.AncestralMeeting,
-        a: GedcomFamilyGraph.Person, b: GedcomFamilyGraph.Person,
-        ownerID: String?, affinalTerm: String?
+        a: Speaker, b: Speaker,
+        ownerRecordName: String?, affinalTerm: String?
     ) -> String {
-        let aIsOwner = a.id == ownerID, bIsOwner = b.id == ownerID
-        func poss(_ p: GedcomFamilyGraph.Person) -> String {
-            p.id == ownerID ? "your" : HallieLineageQuestion.possessive(p.name)
-        }
+        let aIsOwner = a == .owner, bIsOwner = b == .owner
+        func poss(_ s: Speaker) -> String { s.possessive }
         func capitalized(_ s: String) -> String { s.prefix(1).uppercased() + s.dropFirst() }
         let pair = aIsOwner ? "You and \(b.name)" : bIsOwner ? "You and \(a.name)" : "\(a.name) and \(b.name)"
         let them = (aIsOwner || bIsOwner) ? "you" : "them"
@@ -266,19 +289,19 @@ extension HallieLineageAnswer {
         var sentences: [String] = []
         sentences.append("\(pair) share \(count) recorded ancestor\(n == 1 ? "" : "s")\(through); the nearest \(couple ? "are" : "is") \(who) — \(poss(a)) \(label(nearest.depthA)) and \(poss(b)) \(label(nearest.depthB)), making \(them) \(nearest.kinshipTerm).")
         if var term = affinalTerm {
-            if let ownerID, let owner = [a, b].first(where: { $0.id == ownerID }) {
-                term = term.replacingOccurrences(of: HallieLineageQuestion.possessive(owner.name), with: "your")
+            if let ownerRecordName {
+                term = term.replacingOccurrences(of: HallieLineageQuestion.possessive(ownerRecordName), with: "your")
             }
             sentences.append(term + " — so this is the blood connection behind the marriage.")
         }
-        func line(_ path: [GedcomFamilyGraph.Person], owner: Bool) -> String {
+        // The last link is the person asked about, by the name they were
+        // asked by ("you", or "Beth" standing on Rick's record).
+        func line(_ path: [GedcomFamilyGraph.Person], as speaker: Speaker) -> String {
             let head = nearest.ancestors.map(\.name).joined(separator: " and ")
-            let rest = path.dropFirst().enumerated().map { i, p in
-                owner && i == path.count - 2 ? "you" : p.name
-            }
-            return ([head] + rest).joined(separator: " → ")
+            let rest = path.dropFirst().dropLast().map(\.name)
+            return ([head] + rest + (path.count > 1 ? [speaker.name] : [])).joined(separator: " → ")
         }
-        sentences.append("\(capitalized(poss(a))) line: \(line(nearest.pathA, owner: aIsOwner)). \(capitalized(poss(b))) line: \(line(nearest.pathB, owner: bIsOwner)).")
+        sentences.append("\(capitalized(poss(a))) line: \(line(nearest.pathA, as: a)). \(capitalized(poss(b))) line: \(line(nearest.pathB, as: b)).")
         if lines > 1 {
             let next = ancestry.meetings[1]
             sentences.append("The next nearest line is through " + next.ancestors.map(\.name).joined(separator: " and ")

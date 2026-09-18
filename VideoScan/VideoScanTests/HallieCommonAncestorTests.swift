@@ -749,3 +749,82 @@ struct HallieCommonAncestryFamilyTellingTests {
         #expect(r.prose.contains("Your line: Hugh Hill and Wanda Wood → Clara Hill → Bea Bell → Bo Bell → Bud Bell → Bix Bell → you."), Comment(rawValue: r.prose))
     }
 }
+
+/// Rick 2026-09-18: his siblings are in the People tab (linked to him and to
+/// both parents) but not in the tree, and "Beth" asked which of 2,190
+/// Elizabeths. A full sibling stands on Rick's record for everything ABOVE
+/// it; nothing of Rick's own marriage or children transfers.
+@Suite("Common ancestor — People-tab siblings stand on a full sibling's record")
+struct HallieCommonAncestorSiblingProxyTests {
+    typealias P = HallieTurnExecutor.ProfileSnapshot
+    static let rick = UUID(), ma = UUID(), dad = UUID(), beth = UUID(), hal = UUID(), una = UUID()
+
+    static func profiles() -> [P] {
+        func k(_ r: KinshipRelation, _ id: UUID, _ basis: SiblingBasis = .unspecified) -> Kinship {
+            Kinship(relation: r, relativeTo: .profile(id: id), basis: basis)
+        }
+        return [
+            P(stableID: "rick", canonicalName: "Richard", aliases: ["Rick"],
+              kinships: [k(.sibling, beth), k(.child, ma), k(.child, dad),
+                         k(.sibling, hal, .attestedHalf(sharedParent: .profile(id: dad)))],
+              sex: .male, uuid: rick, surname: "Breen", middleName: "Harding"),
+            P(stableID: "ma", canonicalName: "Eileen", aliases: ["Ma"],
+              kinships: [k(.parent, beth), k(.parent, una)], sex: .female, uuid: ma),
+            P(stableID: "dad", canonicalName: "Richard Sr", aliases: ["Dad Breen"],
+              kinships: [k(.parent, beth), k(.parent, hal)], sex: .male, uuid: dad),
+            P(stableID: "beth", canonicalName: "Elizabeth", aliases: ["beth"], sex: .female, uuid: beth,
+              surname: "McAuliffe", maidenName: "Breen"),
+            P(stableID: "hal", canonicalName: "Hal", sex: .male, uuid: hal),
+            P(stableID: "una", canonicalName: "Una", sex: .female, uuid: una),
+        ]
+    }
+
+    private func answer(_ a: String?, _ b: String?) throws -> HallieTurnExecutor.Result {
+        let ctx = HallieTurnExecutor.Context(profiles: Self.profiles(), graph: mergedGraph(),
+                                             speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
+        return try #require(HallieLineageAnswer.answer(.commonAncestor(a: a, b: b), context: ctx))
+    }
+
+    @Test func bethAndDonnaAreCousinsThroughRicksAncestors() throws {
+        let r = try answer("beth", "Donna Hudson")
+        #expect(r.outcome == .answered)
+        #expect(r.prose.hasPrefix("Beth isn’t in the family tree herself, but the People tab records her as your full sister, so your ancestors are hers too."), Comment(rawValue: r.prose))
+        #expect(r.prose.contains("Beth and Donna Hudson share 1 recorded ancestor; the nearest is Z Common"), Comment(rawValue: r.prose))
+        #expect(r.prose.contains("— Beth’s great-grandfather and Donna Hudson’s great-great-grandfather, making them 2nd cousins once removed."), Comment(rawValue: r.prose))
+        #expect(r.prose.contains("Beth’s line: Z Common → George Breen → Richard Harding Breen Sr → Beth."), Comment(rawValue: r.prose))
+        // Rick's marriage is not Beth's.
+        #expect(!r.prose.contains("wife") && !r.prose.contains("husband") && !r.prose.contains("marriage"), Comment(rawValue: r.prose))
+        #expect(!r.prose.contains("Richard Harding Breen Jr"), Comment(rawValue: r.prose))
+        #expect(r.basisLine.contains("People tab: Beth is a full sibling of Richard"), Comment(rawValue: r.basisLine))
+    }
+
+    @Test func ancestorsOfTheRecordAreHers() throws {
+        let father = try answer("beth", "Richard Breen Sr")
+        #expect(father.prose.hasPrefix("Richard Harding Breen Sr is Beth’s father."), Comment(rawValue: father.prose))
+        let grand = try answer("George Breen", "beth")
+        #expect(grand.prose.hasPrefix("George Breen is Beth’s grandfather. Line: Beth → Richard Harding Breen Sr → George Breen."), Comment(rawValue: grand.prose))
+    }
+
+    @Test func bethAndTheOwnerAreSiblings() throws {
+        let r = try answer("beth", nil)
+        #expect(r.prose.hasPrefix("Beth is your sister — the People tab records the same two parents for both"), Comment(rawValue: r.prose))
+    }
+
+    @Test func halfSiblingsAndOneParentLinksNeverStandIn() throws {
+        // Hal: attested HALF sibling. Una: only Ma linked. Neither may borrow
+        // Rick's whole ancestry.
+        for name in ["Hal", "Una"] {
+            let r = try answer(name, "Donna Hudson")
+            #expect(!r.prose.contains("People tab records"), Comment(rawValue: "\(name): \(r.prose)"))
+            #expect(!r.prose.contains("cousins"), Comment(rawValue: "\(name): \(r.prose)"))
+        }
+    }
+
+    @Test func fullSiblingNeedsBothParentsOrAnAttestation() {
+        let all = Self.profiles()
+        let by = Dictionary(uniqueKeysWithValues: all.map { ($0.stableID, $0) })
+        #expect(HallieLineageAnswer.areFullSiblings(by["beth"]!, by["rick"]!, among: all))
+        #expect(!HallieLineageAnswer.areFullSiblings(by["hal"]!, by["rick"]!, among: all))
+        #expect(!HallieLineageAnswer.areFullSiblings(by["una"]!, by["rick"]!, among: all))
+    }
+}
