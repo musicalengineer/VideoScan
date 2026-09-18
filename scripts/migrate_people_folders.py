@@ -294,15 +294,59 @@ def move_folder(src_dir, dst_dir, manifest, log):
 
 
 def undo(path):
+    """Put everything back, and SAY what could not be.
+
+    A manifest goes stale the moment anything moves afterwards — Rick
+    tidying a photo in Finder, or the app recording a new chosen photo. That
+    is normal, not corruption. What is not acceptable is an undo that skips
+    those quietly and still reports success: he would believe the archive
+    was restored when part of it was not.
+    """
     entries = [json.loads(l) for l in open(path) if l.strip()]
+    restored, dirs, missing, blocked = 0, 0, [], []
     for e in reversed(entries):
         if "removed_empty_dir" in e:
             os.makedirs(e["removed_empty_dir"], exist_ok=True)
-        else:
-            os.makedirs(os.path.dirname(e["from"]), exist_ok=True)
-            if os.path.exists(e["to"]):
-                shutil.move(e["to"], e["from"])
-    print(f"put back {len(entries)} item(s)")
+            dirs += 1
+            continue
+        if not os.path.exists(e["to"]):
+            missing.append(e)
+            continue
+        if os.path.exists(e["from"]):
+            # Something is already sitting where this file came from.
+            # Never overwrite it.
+            blocked.append(e)
+            continue
+        os.makedirs(os.path.dirname(e["from"]), exist_ok=True)
+        shutil.move(e["to"], e["from"])
+        restored += 1
+
+    print(f"restored {restored} file(s) and {dirs} folder(s)")
+    if missing:
+        print(f"\n{len(missing)} file(s) were NOT where the manifest left them — "
+              "moved or renamed since, so they were left alone:")
+        for e in missing:
+            print(f"  {os.path.basename(e['to'])}")
+            print(f"     expected in {os.path.basename(os.path.dirname(e['to']))}/")
+            found = _find_by_name(os.path.dirname(os.path.dirname(e["to"])),
+                                  os.path.basename(e["to"]))
+            print(f"     now in      {found or '(not found anywhere under People/)'}")
+    if blocked:
+        print(f"\n{len(blocked)} file(s) could not go back — something is already there:")
+        for e in blocked:
+            print(f"  {e['from']}")
+    if missing or blocked:
+        print("\nThe undo did what it safely could. Nothing was overwritten "
+              "and nothing was deleted.")
+
+
+def _find_by_name(root, name):
+    """Where a file ended up, so a stale manifest entry is a lead rather
+    than a dead end."""
+    for dirpath, _dirs, files in os.walk(root):
+        if name in files:
+            return os.path.relpath(os.path.join(dirpath, name), os.path.dirname(root))
+    return None
 
 
 # ---------------------------------------------------------------- main
@@ -405,7 +449,11 @@ def main():
         print("\nPlan only. Re-run with --apply to be asked about the rest and move files.")
         return
 
-    if input("\nmove these now? type yes > ").strip().lower() != "yes":
+    try:
+        answer = input("\nmove these now? type yes > ").strip().lower()
+    except EOFError:
+        answer = ""          # no tty: refuse rather than move files unasked
+    if answer != "yes":
         print("nothing moved.")
         return
 
