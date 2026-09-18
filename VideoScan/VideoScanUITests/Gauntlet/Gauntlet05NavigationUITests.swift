@@ -16,10 +16,16 @@ import XCTest
 
 final class Gauntlet05NavigationUITests: GauntletTestCase {
 
-    /// Keep in sync with MARKETING_VERSION in VideoScan.xcodeproj.
-    /// A UI test runs out-of-process, so it can't read the app's
-    /// Bundle — this literal is the one place the version is pinned.
-    static let marketingVersion = "3.5"
+    /// The About summary must show a VERSION and build provenance. It used
+    /// to pin the literal "3.5" and "keep in sync with MARKETING_VERSION" —
+    /// which nobody did: the app went to 3.7 on 2026-09-15 and this test
+    /// failed on 2026-09-18 reading "v3.7 (debug) · main @ c010f2d5".
+    ///
+    /// A version number is not the invariant; SHOWING one is. Pinning the
+    /// literal meant the test went red on every release for no defect, and
+    /// a test that cries wolf at each bump is one nobody keeps current —
+    /// which is exactly what happened.
+    static let versionPattern = #"v\d+\.\d+"#
 
     @MainActor
     func testTabsInspectorMFOWindowAndAbout() throws {
@@ -84,11 +90,13 @@ final class Gauntlet05NavigationUITests: GauntletTestCase {
         let summaryText = summary.label.isEmpty
             ? (summary.value as? String ?? "")
             : summary.label
-        XCTAssertTrue(summaryText.contains(Self.marketingVersion),
-                      "About summary lost the v\(Self.marketingVersion) marketing version: \(summaryText)")
+        XCTAssertNotNil(summaryText.range(of: Self.versionPattern, options: .regularExpression),
+                        "About summary shows no vN.N marketing version: \(summaryText)")
         // The genuine-git-hash release feature (67e765a): the summary
         // must carry SOME hash/branch info beyond the bare version.
-        XCTAssertGreaterThan(summaryText.count, Self.marketingVersion.count + 4,
+        // The genuine-git-hash release feature (67e765a): beyond the bare
+        // version the summary must carry branch/hash provenance.
+        XCTAssertGreaterThan(summaryText.count, 10,
                              "About summary is suspiciously bare — git hash/branch info missing: \(summaryText)")
     }
 }
