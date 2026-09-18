@@ -339,8 +339,40 @@ struct ArchivistTranscriptRenderSensorTests {
             #expect(Self.p95(scrollStalls) < 0.050, "scroll p95 \(ms(Self.p95(scrollStalls)))")
         }
         // No O(messages) work per update: only the changed row is rebuilt.
-        #expect((appendRows.max() ?? 0) <= 2, "append rebuilt \(appendRows.max() ?? 0) rows")
-        #expect((mutateRows.max() ?? 0) <= 1, "mutate rebuilt \(mutateRows.max() ?? 0) rows")
+        //
+        // THE ROW COUNTS ARE NOT ENVIRONMENT-INDEPENDENT, which is what this
+        // sensor assumed until 2026-09-18. Measured on one M4, same commit
+        // (060fdda6), same machine:
+        //
+        //     nightly 02:18, screen asleep : rowsRebuilt=0   append p95= 7.6 ms
+        //     interactive, screen awake    : rowsRebuilt=16  append p95=32.3 ms
+        //
+        // and across conditions the observed range was 0, 16, 18, 19, 22, 24,
+        // 30. SwiftUI coalesces differently when WindowServer is live, so
+        // more rows are attributed to one observed update. Asserting <= 2
+        // everywhere made this fail every interactive run — and a sensor that
+        // cries wolf is one Rick learns to ignore, which is how the nightly
+        // stayed red for three weeks unnoticed.
+        //
+        // So: the TIGHT bound where it means something, and a coarse ceiling
+        // everywhere else that still catches the thing this exists for. A
+        // real O(messages) regression rebuilds ~every row of a 230-message
+        // transcript; a quarter of the transcript is far above the worst
+        // coalescing seen and far below that.
+        if PerformanceLane.isAuthoritative(optInKey: Self.performanceOptIn) {
+            #expect((appendRows.max() ?? 0) <= 2, "append rebuilt \(appendRows.max() ?? 0) rows")
+            #expect((mutateRows.max() ?? 0) <= 1, "mutate rebuilt \(mutateRows.max() ?? 0) rows")
+        } else {
+            let ceiling = max(8, store.messages.count / 4)
+            #expect((appendRows.max() ?? 0) <= ceiling,
+                    "append rebuilt \(appendRows.max() ?? 0) of \(store.messages.count) rows, which is O(messages) rather than coalescing")
+            #expect((mutateRows.max() ?? 0) <= ceiling,
+                    "mutate rebuilt \(mutateRows.max() ?? 0) of \(store.messages.count) rows")
+        }
+        // This one IS environment-independent: an unrelated publish rebuilt
+        // ZERO rows in every condition measured, awake or asleep, loaded or
+        // idle. It stays ungated because it is the assertion that actually
+        // proves `.equatable()` is doing its job.
         #expect(tickRows == 0, "unrelated publishes rebuilt \(tickRows) rows")
     }
 
