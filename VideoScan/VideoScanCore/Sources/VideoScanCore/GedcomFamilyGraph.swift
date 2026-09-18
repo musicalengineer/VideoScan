@@ -664,9 +664,33 @@ public struct GedcomFamilyGraph: Sendable {
     /// answered Rick's uncle with the wrong grandmother.
     public var suppressedPersonIDs: Set<String> = []
 
+    /// Where a suppressed record's traffic goes: hidden person id → the
+    /// record a human said is the right one.
+    ///
+    /// Without this, hiding the duplicate makes the query that NAMES her
+    /// answer with nothing: the wrong Mary is called "Mary O'Connor", the
+    /// right one "Mary Christina O'Connor", and searching the first phrase
+    /// found only the record now hidden. Rick's requirement is "so we always
+    /// get the right one" — not "so we get neither".
+    public var preferredPersonID: [String: String] = [:]
+
     public func people(matching typed: String) -> [Person] {
         let found = peopleMatchingUnfiltered(typed)
-        return suppressedPersonIDs.isEmpty ? found : found.filter { !suppressedPersonIDs.contains($0.id) }
+        guard !suppressedPersonIDs.isEmpty else { return found }
+        var out: [Person] = []
+        var seen = Set<String>()
+        for person in found {
+            // A hidden record hands its traffic to the record a human said
+            // is the right one, so the phrase that names the duplicate still
+            // answers — with the right person.
+            let id = suppressedPersonIDs.contains(person.id)
+                ? preferredPersonID[person.id]
+                : person.id
+            guard let id, !suppressedPersonIDs.contains(id),
+                  let resolved = people[id], seen.insert(id).inserted else { continue }
+            out.append(resolved)
+        }
+        return out
     }
 
     private func peopleMatchingUnfiltered(_ typed: String) -> [Person] {

@@ -207,8 +207,25 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
                     }
                 }
                 graph.suppressedPersonIDs = hidden
+                // …and where each one's traffic goes, so the phrase that
+                // names the duplicate still answers with the right person.
+                var byFSID: [String: String] = [:]
+                for person in graph.people.values {
+                    if let fsid = person.familySearchID { byFSID[fsid] = person.id }
+                }
+                var redirect: [String: String] = [:]
+                for id in hidden {
+                    guard let fsid = graph.people[id]?.familySearchID else { continue }
+                    let target = rulings.preferred(.familySearch(fsid))
+                    if let targetFSID = target.familySearchID, targetFSID != fsid,
+                       let targetID = byFSID[targetFSID] {
+                        redirect[id] = targetID
+                    }
+                }
+                graph.preferredPersonID = redirect
                 log("[hallie] identity rulings: \(hidden.count) record(s) hidden as duplicates "
-                    + "(\(suppressed.sorted().joined(separator: ", ")))")
+                    + "(\(suppressed.sorted().joined(separator: ", "))); "
+                    + "\(redirect.count) redirected to the record Rick verified")
             }
             let token = UUID()
             entry = (key, graph, outcome.compiled, token, outcome)
