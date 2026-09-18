@@ -39,7 +39,8 @@ jobs:
         run: |
           python3 -m unittest \
             tests/test_person_eval_metrics.py \
-            tests/test_person_metrics_integration.py
+            tests/test_person_metrics_integration.py \
+            tests/test_ci_test_verdict.py
 
       # The Xcode selector's own regression suite. Runs here rather than on
       # the macOS job because it works entirely on fixtures — it needs no
@@ -151,7 +152,7 @@ jobs:
           # Swift Testing emits ✔/✘/◇ markers; legacy XCTest emits "Test Case ..."
           # Count both so the canary is robust to either runner being used.
           PASSED=$(grep -cE '^(✔ Test |Test Case .*passed)' test-output.log || true)
-          FAILED=$(grep -cE '^(✘ Test .*failed after|Test Case .*failed)' test-output.log | grep -cv 'Test run with' || true)
+          FAILED=$(grep -E '^(✘ Test .*failed after|Test Case .*failed)' test-output.log | grep -cv '^✘ Test run with ' || true)
           SUITES_STARTED=$(grep -cE '^(◇ Suite |Test Suite .*started)' test-output.log || true)
 
           # ── Canary verification ──
@@ -208,6 +209,10 @@ jobs:
             echo "::error::$REAL_FAILED real test failure(s)"
             exit 1
           fi
+
+          # Canaries alone do not prove completion. Reject interrupted runs,
+          # unexpected exit codes, and failures missed by the display counters.
+          python3 scripts/ci_test_verdict.py test-output.log --exit-code "${TEST_EXIT:-0}"
 
       # ── Reporting ───────────────────────────────────────────────────
 
