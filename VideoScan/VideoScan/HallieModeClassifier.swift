@@ -241,10 +241,19 @@ enum HallieModeClassifier {
     /// Verbs that make a short sentence a sentence of its own ("what do
     /// you KNOW about X"), so the ≤ 4-content-words rule does not read it
     /// as a fragment. A pronoun or a lead still makes it elliptical.
+    ///
+    /// The copulas used to be in here, and they are NOT evidence of a
+    /// standalone sentence -- they are in `filler` for exactly that reason,
+    /// so the same word was simultaneously "no content" for the word count
+    /// and "enough content to stand alone" for this check. Because this
+    /// check runs FIRST, the copula won, and every natural follow-up about
+    /// the thing on screen -- "when was this filmed", "which one is the
+    /// oldest", "how old was Timmy in this" -- was read as a fresh question
+    /// with no context and answered with nothing. 2026-09-17.
     private static let sentenceVerbs: Set<String> = [
         "know", "think", "remember", "want", "need", "mean", "say", "find",
         "search", "look", "get", "give", "count", "list", "describe", "explain",
-        "help", "make", "write", "suggest", "is", "are", "was", "were",
+        "help", "make", "write", "suggest",
     ]
 
     /// The name phrase after about/of/with/for, or a leading possessive

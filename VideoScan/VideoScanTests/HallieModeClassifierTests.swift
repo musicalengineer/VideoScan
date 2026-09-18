@@ -34,6 +34,42 @@ struct HallieModeClassifierTests {
         verdict(q, previous: previous).mode
     }
 
+
+    // MARK: The copula is not evidence of a standalone sentence
+
+    /// 2026-09-17, from Rick's live spot test and codex's 443-turn replay.
+    /// `is`/`are`/`was`/`were` sat in BOTH `filler` (declared contentless for
+    /// the word count) and `sentenceVerbs` (taken as proof the sentence stands
+    /// on its own). The `sentenceVerbs` early-return runs BEFORE the count, so
+    /// a copula alone defeated stickiness -- and a copula is in almost every
+    /// natural follow-up about the thing on screen.
+    ///
+    /// "and the youngest?" survived on the leading-conjunction rule and
+    /// "when did she die" on the pronoun rule, which is why this looked
+    /// intermittent rather than systematic.
+    @Test func aFollowUpIsNotAStandaloneSentenceJustBecauseItContainsIsOrWas() {
+        // Two content words each, and nothing that resolves on its own:
+        // these are only answerable as continuations.
+        #expect(mode("when was this filmed", previous: .catalog) == .catalog)
+        #expect(mode("how old is this tape", previous: .catalog) == .catalog)
+        #expect(mode("what year is that from", previous: .catalog) == .catalog)
+        #expect(mode("which one is the oldest", previous: .tree) == .tree)
+        #expect(mode("how old was Timmy in this", previous: .catalog) == .catalog)
+
+        // The reason each one must be sticky rather than a fresh question:
+        // it carries no cue, no subject the oracle can resolve, and too
+        // little content to stand up by itself.
+        #expect(verdict("when was this filmed", previous: .catalog).reason == .sticky(.catalog))
+    }
+
+    /// The other side of the same rule: a real verb still makes a short
+    /// sentence stand on its own, so "what do you know about X" is NOT read
+    /// as a continuation. Removing the copulas must not take these with them.
+    @Test func arealVerbStillMakesAShortSentenceStandAlone() {
+        #expect(mode("what do you know about Edward III", previous: .catalog) == .tree)
+        #expect(mode("tell me about Edward III", previous: .catalog) == .tree)
+    }
+
     // MARK: Cue tables
 
     @Test func theGuardHalvesAreDisjointAndTheClassifierTablesAreDisjoint() {
