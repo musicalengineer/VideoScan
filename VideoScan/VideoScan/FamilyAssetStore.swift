@@ -197,7 +197,8 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
             // Apply Rick's identity rulings to THE graph, once, here —
             // the one place Hallie, kinship, the People tab and the Family
             // Tree all get their tree from. "hallie needs to honor FT hide."
-            let rulings = FamilyIdentityDecisions.load(from: configuration.gedcomDirectory())
+            let rulings = FamilyIdentityDecisions.load(from: configuration.gedcomDirectory(),
+                                                       log: { log($0) })
             let suppressed = rulings.suppressedFamilySearchIDs
             if !suppressed.isEmpty {
                 var hidden: Set<String> = []

@@ -154,6 +154,72 @@ struct FamilyIdentityDecisionsTests {
                 "a verified record or a local key leaked into the hidden set")
     }
 
+    /// THE 2026-09-18 BUG, and the reason this file decodes by hand.
+    ///
+    /// `hidden` was added hours after Rick's first rulings were written. The
+    /// SYNTHESISED decoder requires every key even when the property has a
+    /// default, so his real file — written without it — failed to decode,
+    /// `load` swallowed the error as "nothing ruled yet", and his
+    /// grandmother's duplicate reappeared with no message anywhere. His
+    /// build was current; the feature was simply dead on his data.
+    ///
+    /// This is his EXACT file, byte for byte.
+    @Test func aRulingsFileWrittenBeforeAFieldExistedStillLoads() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try """
+        [
+          {
+            "decidedAt" : "2026-09-17T23:00:00Z",
+            "key" : "G89Q-34N",
+            "note" : "Mary Christina O'Connor, Rick's grandmother.",
+            "verified" : true
+          },
+          {
+            "decidedAt" : "2026-09-17T23:00:00Z",
+            "duplicateOf" : "G89Q-34N",
+            "key" : "GNZ5-428",
+            "note" : "The other Mary O'Connor.",
+            "verified" : false
+          }
+        ]
+        """.write(to: FamilyIdentityDecisions.fileURL(in: dir), atomically: true, encoding: .utf8)
+
+        let d = FamilyIdentityDecisions.load(from: dir)
+        #expect(d.count == 2, "a file missing a later field must still load")
+        #expect(d.isSuppressed(otherMary), "the duplicate Mary is loose again")
+        #expect(d.preferred(otherMary) == mary)
+        #expect(d.decision(for: otherMary)?.hidden == false, "a missing key takes its default")
+        #expect(d.suppressedFamilySearchIDs == ["GNZ5-428"])
+    }
+
+    /// Only `key` is required. Everything else is evidence that may not have
+    /// arrived yet, so a minimal hand-written entry must work.
+    @Test func aMinimalHandWrittenEntryIsEnough() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try #"[{ "key": "AAAA-111", "hidden": true }]"#
+            .write(to: FamilyIdentityDecisions.fileURL(in: dir), atomically: true, encoding: .utf8)
+        let d = FamilyIdentityDecisions.load(from: dir)
+        #expect(d.count == 1)
+        #expect(d.isSuppressed(.familySearch("AAAA-111")))
+        #expect(d.decision(for: .familySearch("AAAA-111"))?.verified == false)
+    }
+
+    /// A file that exists and will not parse must SAY so — it is a different
+    /// thing from no file at all, and the difference is Rick's rulings
+    /// quietly not applying.
+    @Test func anUnparseableFileIsReportedRatherThanTreatedAsEmpty() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data("{ not json".utf8).write(to: FamilyIdentityDecisions.fileURL(in: dir))
+        var said: [String] = []
+        let d = FamilyIdentityDecisions.load(from: dir, log: { said.append($0) })
+        #expect(d.isEmpty)
+        #expect(said.contains { $0.contains("could not be read") },
+                "a damaged rulings file loaded silently: \(said)")
+    }
+
     @Test func anUnreadableOrMissingFileMeansNothingHasBeenRuledYet() throws {
         let dir = try scratch()
         defer { try? FileManager.default.removeItem(at: dir) }

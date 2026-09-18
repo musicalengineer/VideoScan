@@ -61,6 +61,30 @@ public struct FamilyIdentityDecision: Codable, Equatable, Sendable {
         self.decidedAt = decidedAt
     }
 
+    // TOLERANT OF MISSING KEYS, and this is not decoration. Rick hand-edits
+    // this file, and the schema grows as evidence arrives — `hidden` was
+    // added hours after the first rulings were written. Swift's SYNTHESISED
+    // decoder requires every key even when the property has a default, so
+    // the first file without `hidden` failed to decode, `load` swallowed the
+    // error as "nothing ruled yet", and his grandmother's duplicate came
+    // back with no message anywhere. A silent no-op on the one file he
+    // maintains by hand is the worst shape this could take.
+    //
+    // Every field except `key` is therefore optional on the way in.
+    enum CodingKeys: String, CodingKey {
+        case key, verified, duplicateOf, hidden, note, decidedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        key = try c.decode(Key.self, forKey: .key)
+        verified = try c.decodeIfPresent(Bool.self, forKey: .verified) ?? false
+        duplicateOf = try c.decodeIfPresent(Key.self, forKey: .duplicateOf)
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        note = try c.decodeIfPresent(String.self, forKey: .note)
+        decidedAt = try c.decodeIfPresent(Date.self, forKey: .decidedAt) ?? Date()
+    }
+
     /// How a person is named durably. Two cases and no third, so a caller
     /// cannot forget the second one exists.
     public enum Key: Codable, Equatable, Hashable, Sendable, CustomStringConvertible {
@@ -175,16 +199,25 @@ public struct FamilyIdentityDecisions: Equatable, Sendable {
     /// Never throws. A missing or unreadable file means "nothing has been
     /// ruled yet", which is the correct answer and must not stop the tree
     /// from opening.
-    public static func load(from directory: URL) -> FamilyIdentityDecisions {
+    public static func load(from directory: URL,
+                            log: (String) -> Void = { _ in }) -> FamilyIdentityDecisions {
         guard let data = try? Data(contentsOf: fileURL(in: directory)) else {
             return FamilyIdentityDecisions()
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let list = try? decoder.decode([FamilyIdentityDecision].self, from: data) else {
+        do {
+            return FamilyIdentityDecisions(
+                decisions: try decoder.decode([FamilyIdentityDecision].self, from: data))
+        } catch {
+            // SAY SO. A file that exists and will not parse is a different
+            // thing from no file at all, and the difference is Rick's
+            // rulings quietly not applying. It still must not stop the tree
+            // from opening.
+            log("[family-tree] identity rulings at \(fileURL(in: directory).lastPathComponent) "
+                + "could not be read, so NO ruling is in force: \(error)")
             return FamilyIdentityDecisions()
         }
-        return FamilyIdentityDecisions(decisions: list)
     }
 
     public func save(to directory: URL) throws {

@@ -497,7 +497,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         // Rick hit exactly that: "searched for Mary O'Connor got 428,
         // that's the one should be hidden." The rulings were never read.
         self.identityDecisions = FamilyIdentityDecisions.load(
-            from: originalsDirectory ?? production.gedcomDirectory())
+            from: originalsDirectory ?? production.gedcomDirectory(),
+            log: { appLog.write($0) })
         self.bookmarks = self.bookmarksDirectory
             .map { FamilyTreeBookmarks.load(from: $0) } ?? FamilyTreeBookmarks()
         self.noteAuthor = noteAuthor
@@ -1086,7 +1087,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         }
         if sourceChanged {
             identityDecisions = source.access == .unavailable
-                ? FamilyIdentityDecisions() : FamilyIdentityDecisions.load(from: directory)
+                ? FamilyIdentityDecisions()
+                : FamilyIdentityDecisions.load(from: directory, log: { appLog.write($0) })
             if !identityDecisions.isEmpty {
                 let hidden = identityDecisions.decisions.values.filter { $0.duplicateOf != nil }
                 appLog.write("Family Tree: \(identityDecisions.count) identity ruling(s) loaded; "
