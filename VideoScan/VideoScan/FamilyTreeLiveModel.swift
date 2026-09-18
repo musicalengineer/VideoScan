@@ -489,11 +489,15 @@ final class FamilyTreeLiveModel: ObservableObject {
             ?? (originalsDirectory == nil && bookmarksDirectory == nil)
         self.bookmarksDirectory = bookmarksDirectory
             ?? (originalsDirectory == nil ? production.gedcomDirectory() : nil)
-        // An INJECTED originals directory reads its own rulings; production
-        // (nil) picks them up in `configure`, beside the GEDCOM. Same
-        // isolation rule as the bookmarks above: a test never reads Rick's.
-        self.identityDecisions = originalsDirectory
-            .map { FamilyIdentityDecisions.load(from: $0) } ?? FamilyIdentityDecisions()
+        // Load them HERE, from the directory this model actually resolved.
+        // They used to be loaded only when `configure` saw the source
+        // CHANGE — and on a normal launch it does not: init already set
+        // originalsDirectory to the production GEDCOM directory, so the
+        // first configure compares it against itself and finds no change.
+        // Rick hit exactly that: "searched for Mary O'Connor got 428,
+        // that's the one should be hidden." The rulings were never read.
+        self.identityDecisions = FamilyIdentityDecisions.load(
+            from: originalsDirectory ?? production.gedcomDirectory())
         self.bookmarks = self.bookmarksDirectory
             .map { FamilyTreeBookmarks.load(from: $0) } ?? FamilyTreeBookmarks()
         self.noteAuthor = noteAuthor
@@ -1799,6 +1803,65 @@ final class FamilyTreeLiveModel: ObservableObject {
     private var bridgeMemo: (profiles: [POIProfile], sourceKey: String?, byPersonID: [String: POIProfile?]) = ([], nil, [:])
 
     /// A photo choice was written (either view): make the cards re-read.
+    /// Rule this record out of sight, or put it back. Rick, 2026-09-17:
+    /// "we need a 'Hide this person' or something 'Duplicate Person' or
+    /// something so we always get the right one, we never want to see wrong
+    /// one 428, it's useless to show wrong one."
+    ///
+    /// Keyed on the FamilySearch id, so the ruling outlives the re-pull that
+    /// renumbers every xref. A record with NO id cannot be hidden — there is
+    /// nothing durable to hang the ruling on, and a ruling that could drift
+    /// onto a namesake is worse than a visible duplicate.
+    @discardableResult
+    func setRecordHidden(_ hidden: Bool, personID: String, note: String? = nil) -> Bool {
+        guard let person = graph?.people[personID], let fsid = person.familySearchID else {
+            appLog.write("Family Tree: cannot hide \(personID) — it has no FamilySearch id to key the ruling on")
+            return false
+        }
+        let key = FamilyIdentityDecision.Key.familySearch(fsid)
+        var updated = identityDecisions
+        if hidden {
+            let existing = updated.decision(for: key)
+            updated.record(.init(key: key, verified: existing?.verified ?? false,
+                                 duplicateOf: existing?.duplicateOf, hidden: true,
+                                 note: note ?? existing?.note))
+        } else if var existing = updated.decision(for: key) {
+            existing.hidden = false
+            existing.duplicateOf = nil
+            updated.record(existing)
+        }
+        identityDecisions = updated
+        if let directory = bookmarksDirectory ?? originalsDirectory as URL?, sourceAccess == .readWrite {
+            do {
+                try updated.save(to: directory)
+                appLog.write("Family Tree: \(hidden ? "HID" : "un-hid") \(person.name) (\(fsid)) — "
+                    + "\(updated.suppressedFamilySearchIDs.count) record(s) now hidden")
+            } catch {
+                appLog.write("Family Tree: could not save the identity ruling — \(error.localizedDescription)")
+                return false
+            }
+        } else {
+            appLog.write("Family Tree: ruling for \(fsid) kept in memory only — the archive is not writable")
+        }
+        // Copy first: `suppressedIDs(in:)` reads `graph` while the
+        // assignment needs exclusive access to it.
+        let recomputed = suppressedIDs(in: graph)
+        graph?.suppressedPersonIDs = recomputed
+        PersonPhotoCenter.shared.invalidate()
+        refilter()
+        rebuildScene()
+        return true
+    }
+
+    private func suppressedIDs(in graph: GedcomFamilyGraph?) -> Set<String> {
+        guard let graph else { return [] }
+        let ids = identityDecisions.suppressedFamilySearchIDs
+        guard !ids.isEmpty else { return [] }
+        return Set(graph.people.values.compactMap {
+            ($0.familySearchID.map(ids.contains) ?? false) ? $0.id : nil
+        })
+    }
+
     func notePhotoChoiceWritten() {
         photoRevision &+= 1
         PersonPhotoCenter.shared.invalidate()

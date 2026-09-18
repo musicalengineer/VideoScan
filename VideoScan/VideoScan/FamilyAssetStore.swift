@@ -190,9 +190,25 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
                 entry = nil
                 return (nil, nil)
             }
-            guard let graph = outcome.graph else {
+            guard var graph = outcome.graph else {
                 entry = nil
                 return (outcome, nil)
+            }
+            // Apply Rick's identity rulings to THE graph, once, here —
+            // the one place Hallie, kinship, the People tab and the Family
+            // Tree all get their tree from. "hallie needs to honor FT hide."
+            let rulings = FamilyIdentityDecisions.load(from: configuration.gedcomDirectory())
+            let suppressed = rulings.suppressedFamilySearchIDs
+            if !suppressed.isEmpty {
+                var hidden: Set<String> = []
+                for person in graph.people.values {
+                    if let fsid = person.familySearchID, suppressed.contains(fsid) {
+                        hidden.insert(person.id)
+                    }
+                }
+                graph.suppressedPersonIDs = hidden
+                log("[hallie] identity rulings: \(hidden.count) record(s) hidden as duplicates "
+                    + "(\(suppressed.sorted().joined(separator: ", ")))")
             }
             let token = UUID()
             entry = (key, graph, outcome.compiled, token, outcome)

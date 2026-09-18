@@ -55,6 +55,12 @@ struct FamilyTreePersonCard: View {
     /// revision, so a fresh choice re-reads the store at once.
     let portraitProfile: POIProfile?
     let photoRevision: Int
+    /// Only a record with a FamilySearch id can be hidden — the ruling is
+    /// keyed on it, and one that could drift onto a namesake would be worse
+    /// than the duplicate it hides.
+    var canHide: Bool = false
+    var isHidden: Bool = false
+    var onToggleHidden: () -> Void = {}
     /// Marked to come back to (Rick, 2026-08-30). A bookmark, deliberately
     /// not a heart: in a family archive a favourites list ranks relatives.
     let isBookmarked: Bool
@@ -238,6 +244,14 @@ struct FamilyTreePersonCard: View {
             Divider()
             Button("Center on \(person.name)") {
                 onSelect()
+            }
+            Divider()
+            if canHide {
+                Button(isHidden ? "Show this person again"
+                                : "Hide this person (duplicate record)…",
+                       systemImage: isHidden ? "eye" : "eye.slash") {
+                    onToggleHidden()
+                }
             }
             Divider()
             photoMenuItems

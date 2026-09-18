@@ -186,6 +186,51 @@ struct FamilyTreeIdentityRulingTests {
         #expect(FamilyTreeLiveModel.summary(without).surname == "Unknown")
     }
 
+    // MARK: Hiding from the card menu
+
+    /// Rick's actual workflow: he finds the wrong record before he can prove
+    /// which is right, so hiding must not require naming a replacement.
+    @Test @MainActor func hidingARecordFromTheMenuPersistsAndTakesEffect() async throws {
+        let dir = try treeDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let m = model(dir)
+        await m.prepareForAppearance(revision: "t-\(UUID().uuidString)")
+        try #require(m.peopleCount > 0, "the tree never loaded")
+
+        #expect(!m.isSuppressedRecord("@I5@"), "precondition: the duplicate is visible")
+        #expect(m.setRecordHidden(true, personID: "@I5@", note: "the wrong Mary"))
+        #expect(m.isSuppressedRecord("@I5@"), "hiding did not take")
+        #expect(!m.isSuppressedRecord("@I7@"), "hiding one Mary hid the other")
+
+        // It outlives the session — a fresh model reads the same file.
+        let again = model(dir)
+        #expect(again.identityDecisions.isSuppressed(.familySearch("GNZ5-428")),
+                "the ruling did not reach disk")
+
+        // And it is reversible.
+        #expect(m.setRecordHidden(false, personID: "@I5@"))
+        #expect(!m.isSuppressedRecord("@I5@"))
+    }
+
+    /// A record with no FamilySearch id cannot be hidden: there is nothing
+    /// durable to key the ruling on, and one that drifted onto a namesake
+    /// would be worse than the duplicate it hid.
+    @Test @MainActor func aRecordWithNoIDCannotBeHidden() async throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Someone /Unknown/
+        0 TRLR
+        """.write(to: dir.appendingPathComponent("tree.ged"), atomically: true, encoding: .utf8)
+        let m = model(dir)
+        await m.prepareForAppearance(revision: "t-\(UUID().uuidString)")
+        #expect(m.setRecordHidden(true, personID: "@I1@") == false,
+                "a record with no id must refuse to be hidden, and say so")
+        #expect(!m.isSuppressedRecord("@I1@"))
+    }
+
     /// A damaged rulings file must not stop the tree from opening.
     @Test @MainActor func adamagedRulingsFileIsIgnoredRatherThanFatal() throws {
         let dir = try treeDirectory()

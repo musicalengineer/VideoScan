@@ -991,6 +991,13 @@ struct FamilyTreeView: View {
                 canAdjustPhoto: model.isLive,
                 portraitProfile: model.bridgedProfile(for: card.person.id),
                 photoRevision: model.photoRevision,
+                canHide: card.person.familySearchID != nil,
+                isHidden: model.isSuppressedRecord(card.person.id),
+                onToggleHidden: {
+                    model.setRecordHidden(!model.isSuppressedRecord(card.person.id),
+                                          personID: card.person.id,
+                                          note: "Hidden from the Family Tree by Rick.")
+                },
                 isBookmarked: model.isBookmarked(card.person.id),
                 onToggleBookmark: { model.toggleBookmark(card.person.id) },
                 childrenOf: { model.children(of: card.person.id) },

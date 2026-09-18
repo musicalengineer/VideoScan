@@ -652,7 +652,24 @@ public struct GedcomFamilyGraph: Sendable {
     /// Loose name match: every typed token must appear in the person's
     /// name (case/diacritic-insensitive). "rick" won't match (nickname),
     /// but "richard" and "richard breen" will; ambiguity returns all.
+    /// Records a human has ruled should never be offered — a duplicate of
+    /// someone else in this same tree. Set from the identity rulings when
+    /// the graph is installed; empty by default, so nothing is hidden
+    /// unless somebody said so.
+    ///
+    /// It lives HERE, on the graph, because `people(matching:)` is the one
+    /// door every caller uses — Hallie, kinship, the People tab and the
+    /// Family Tree. Filtering at each of those instead would mean 25 places
+    /// to remember, and the one that got forgotten would be the one that
+    /// answered Rick's uncle with the wrong grandmother.
+    public var suppressedPersonIDs: Set<String> = []
+
     public func people(matching typed: String) -> [Person] {
+        let found = peopleMatchingUnfiltered(typed)
+        return suppressedPersonIDs.isEmpty ? found : found.filter { !suppressedPersonIDs.contains($0.id) }
+    }
+
+    private func peopleMatchingUnfiltered(_ typed: String) -> [Person] {
         // Token postings narrow the candidates (rarest token first); every
         // survivor is re-checked with the exact per-NAME-record predicates
         // below, in the same order: token-exact, then the curated

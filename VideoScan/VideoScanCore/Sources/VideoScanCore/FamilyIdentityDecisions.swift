@@ -40,6 +40,11 @@ public struct FamilyIdentityDecision: Codable, Equatable, Sendable {
     /// This record is the same human being as `key`, and should give way to
     /// it. The app shows the target and keeps this one out of the way.
     public var duplicateOf: Key?
+    /// Hidden outright, without naming which record is the right one. This
+    /// is the common case in practice: Rick recognises the wrong record long
+    /// before he has finished proving which of the others is right, and
+    /// "we never want to see wrong one 428, it's useless to show wrong one."
+    public var hidden: Bool = false
     /// Why — a bible record, a conversation with an uncle, a census. Free
     /// text on purpose: the next piece of evidence will not fit a schema we
     /// guessed today.
@@ -47,10 +52,11 @@ public struct FamilyIdentityDecision: Codable, Equatable, Sendable {
     public var decidedAt: Date
 
     public init(key: Key, verified: Bool = false, duplicateOf: Key? = nil,
-                note: String? = nil, decidedAt: Date = Date()) {
+                hidden: Bool = false, note: String? = nil, decidedAt: Date = Date()) {
         self.key = key
         self.verified = verified
         self.duplicateOf = duplicateOf
+        self.hidden = hidden
         self.note = note
         self.decidedAt = decidedAt
     }
@@ -118,7 +124,15 @@ public struct FamilyIdentityDecisions: Equatable, Sendable {
     /// True when this record should be kept out of the way: Rick has said it
     /// is a duplicate of someone else.
     public func isSuppressed(_ key: FamilyIdentityDecision.Key) -> Bool {
-        decisions[key]?.duplicateOf != nil
+        guard let d = decisions[key] else { return false }
+        return d.hidden || d.duplicateOf != nil
+    }
+
+    /// Every FamilySearch id ruled out of sight, ready to hand to a graph.
+    public var suppressedFamilySearchIDs: Set<String> {
+        Set(decisions.values.compactMap { d in
+            (d.hidden || d.duplicateOf != nil) ? d.key.familySearchID : nil
+        })
     }
 
     /// The record that should stand in for this one, following a chain of

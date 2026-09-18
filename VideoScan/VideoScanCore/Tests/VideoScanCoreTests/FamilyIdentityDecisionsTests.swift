@@ -131,6 +131,29 @@ struct FamilyIdentityDecisionsTests {
         #expect(!d.isSuppressed(son), "a namesake is not a duplicate")
     }
 
+    /// Hidden WITHOUT naming a replacement — Rick's real workflow, since he
+    /// recognises the wrong record long before he can prove which is right.
+    @Test func aRecordCanBeHiddenWithoutNamingTheRightOne() {
+        var d = FamilyIdentityDecisions()
+        d.record(.init(key: otherMary, hidden: true, note: "the wrong Mary"))
+        #expect(d.isSuppressed(otherMary))
+        #expect(d.preferred(otherMary) == otherMary, "hiding names no replacement")
+        #expect(d.suppressedFamilySearchIDs == ["GNZ5-428"])
+    }
+
+    /// The set handed to the graph must contain the hidden AND the
+    /// duplicate-of records, and nothing else — a verified record in the
+    /// same file must never leak into it.
+    @Test func theSuppressedSetIsExactlyWhatShouldBeHidden() {
+        var d = FamilyIdentityDecisions()
+        d.record(.init(key: mary, verified: true))
+        d.record(.init(key: otherMary, duplicateOf: mary))
+        d.record(.init(key: .familySearch("AAAA-111"), hidden: true))
+        d.record(.init(key: .local("beth"), hidden: true))
+        #expect(d.suppressedFamilySearchIDs == ["GNZ5-428", "AAAA-111"],
+                "a verified record or a local key leaked into the hidden set")
+    }
+
     @Test func anUnreadableOrMissingFileMeansNothingHasBeenRuledYet() throws {
         let dir = try scratch()
         defer { try? FileManager.default.removeItem(at: dir) }
