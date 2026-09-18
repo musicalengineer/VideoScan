@@ -21,6 +21,16 @@ struct FamilyTreeLaunchBundleTests {
         return index.sidebarOrder.map { frozenSummary(graph.people[index.ids[Int($0)]]!) }
     }
 
+    /// The simple reference the fast parallel `sidebarRows` is checked
+    /// against. It must carry EVERY field production's `summary` carries:
+    /// the point of the comparison is that the two builders agree, and a
+    /// field only one of them fills makes the test compare two different
+    /// shapes and fail for a reason that is not a defect.
+    ///
+    /// `familySearchID` was added on 2026-09-17 so the card could show the
+    /// id instead of repeating the surname, and the full suite caught this
+    /// the same day. If you add a field to FamilyTreePersonSummary, add it
+    /// here too.
     static func frozenSummary(_ person: GedcomFamilyGraph.Person) -> FamilyTreePersonSummary {
         FamilyTreePersonSummary(
             id: person.id,
@@ -28,6 +38,7 @@ struct FamilyTreeLaunchBundleTests {
             surname: person.surname,
             years: FamilyTreeLiveModel.years(birth: person.birthDate, death: person.deathDate),
             sex: FamilyTreeSex(gedcom: person.sex),
+            familySearchID: person.familySearchID,
             reference: person.id.trimmingCharacters(in: CharacterSet(charactersIn: "@")))
     }
 
