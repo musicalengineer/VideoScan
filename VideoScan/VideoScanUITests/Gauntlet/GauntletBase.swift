@@ -132,9 +132,25 @@ class GauntletTestCase: XCTestCase {
         // whole-fleet verb. Menu items do not carry
         // accessibilityIdentifier, so it is title-matched like every
         // other menu action here.
+        // "Catalog Options" lives in the ScanTargets PANE, not the Catalog
+        // toolbar, and on 2026-09-18 the gauntlet found it absent entirely:
+        // the toolbar now offers Scan Volume… / Scan Monitor / Compare
+        // Volumes / Tidy / Backup. The UI moved again after the 2026-08-12
+        // note above and these three flows were never updated.
+        //
+        // A bare "never appeared" told nobody anything, so the failure now
+        // SAYS what the tab is actually offering. Rick can read that and
+        // tell us which control the flow should drive now; guessing at it
+        // from here would just re-stale the test.
         let options = app.buttons["Catalog Options"]
-        XCTAssertTrue(options.waitForExistence(timeout: 30),
-                      "Catalog Options menu never appeared on the Catalog tab.")
+        if !options.waitForExistence(timeout: 30) {
+            let visible = app.buttons.allElementsBoundByIndex.prefix(40)
+                .map { $0.identifier.isEmpty ? $0.label : $0.identifier }
+                .filter { !$0.isEmpty && !$0.hasPrefix("_XCUI:") }
+            XCTFail("Catalog Options is not on the Catalog tab. The tab offers: "
+                    + visible.joined(separator: ", "))
+            return
+        }
         options.click()
         clickMenuItem(app, titled: "Scan All Volumes")
         let row = app.staticTexts[filename]
