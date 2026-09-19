@@ -271,12 +271,14 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         let encodeStart = Date()
         encodeMonitor.start()
         pauser.register(encodeMonitor)
-        let _ = await ProcessRunner.runStreaming(
+        // The exit status is the verdict's first half (2026-09-19): it
+        // used to be thrown away, so a failed encode could be published.
+        let encodeResult = await ProcessRunner.runProcess(
             executable: ffmpeg,
             arguments: args,
             environment: nil,
-            control: pauser.control,
-            stderrLine: progressUpdater
+            stderrLine: progressUpdater,
+            control: pauser.control
         )
         encodeMonitor.stop()
         encodeElapsed = Date().timeIntervalSince(encodeStart)
@@ -300,6 +302,22 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         // Verify output is non-trivial (ffmpeg occasionally returns 0 but
         // writes a header-only file when a codec library is missing or the
         // input has an unrecoverable stream).
+        // Exit code, then length, before anything is published
+        // (FFmpegEncodeCheck). A partial that failed either is deleted.
+        if FileManager.default.fileExists(atPath: partialPath),
+           let failure = await FFmpegEncodeCheck.verdict(for: encodeResult, sourcePath: inputPath,
+                                                        outputPath: partialPath) {
+            try? FileManager.default.removeItem(atPath: partialPath)
+            transcodeLog.error("transcode FAILED (encode): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
+            await finish(failed: failure.prefix(1).uppercased() + failure.dropFirst())
+            return
+        }
+        if let failure = FFmpegEncodeCheck.exitFailure(exitCode: encodeResult.exitCode, stderr: encodeResult.stderr) {
+            // No partial at all: the exit reason beats "no output file".
+            transcodeLog.error("transcode FAILED (encode, no output): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
+            await finish(failed: failure.prefix(1).uppercased() + failure.dropFirst())
+            return
+        }
         guard FileManager.default.fileExists(atPath: partialPath) else {
             await finish(failed: "ffmpeg finished but no output file was produced")
             return
