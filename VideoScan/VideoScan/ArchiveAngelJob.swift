@@ -173,6 +173,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     }
 
     private var stopRequested: Bool { state.cancelWasRequested || Task.isCancelled }
+    /// A plan.json write failed: the job is already `.failed` with the
+    /// reason, and nothing after it may run or report success (audit #5).
+    private var planSaveFailed = false
 
     // MARK: Skip one entry (Rick 2026-09-13: "just skip this file for this
     // batch is fine. skip.")
@@ -354,7 +357,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         isIndeterminateValue = false
         let total = plan.entries.count
         for idx in plan.entries.indices {
-            if stopRequested { break }
+            if stopRequested || planSaveFailed { break }
             // Only unsettled rows are prepared: a resumed batch's `.ready`
             // rows, and any row the user skipped before the loop reached
             // it, are passed over.
@@ -420,6 +423,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             _ = await savePlan()
         }
 
+        if planSaveFailed { return }   // failed with its reason; never "N ready"
         if stopRequested { _ = await savePlan(); finishCancelled(); return }
 
         plan.status = .ready
@@ -470,9 +474,12 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         var diagnosis: AudioVerifyDiagnosis?
         if rec.streamType == .videoOnly {
             step(idx, .verifyAudio, .skipped, note: "No audio track")
-        } else if !rec.audioVerifyStatus.isEmpty {
+        } else if !rec.audioVerifyStatus.isEmpty, let cached = center.verifyDiagnosis(forRecordID: rec.id) {
+            // Only with the diagnosis in hand (audit #6): it lives in an
+            // in-memory cache, so after a restart it is gone and the file
+            // is verified again below rather than assumed fine.
             step(idx, .verifyAudio, .skipped, note: "Already verified: \(rec.audioVerifyStatus)")
-            diagnosis = center.verifyDiagnosis(forRecordID: rec.id)
+            diagnosis = cached
         } else if let vj = center.startVerifyAudio(record: rec, model: model) {
             currentSubJob = vj
             await vj.task?.value
@@ -529,10 +536,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                     step(idx, .balanceAudio, .skipped, note: "A balance job for this file is already running")
                 }
             }
-        } else if rec.streamType == .videoOnly {
-            step(idx, .balanceAudio, .skipped, note: "No audio track")
         } else {
-            step(idx, .balanceAudio, .skipped, note: "Audio OK — nothing to fix")
+            step(idx, .balanceAudio, .skipped,
+                 note: Self.balanceSkipNote(hasDiagnosis: diagnosis != nil, videoOnly: rec.streamType == .videoOnly))
         }
         _ = await savePlan()
         if stopRequested || wasSkipped(idx) { return }
@@ -629,11 +635,26 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
     /// Save the plan; on failure the job fails (a batch nobody can review
     /// is not a batch). Returns false when it failed.
+    /// Why the balance step did not run, when there was nothing to balance
+    /// or nothing to go on (audit #6, 2026-09-19): "Audio OK" only when a
+    /// verify said so — a failed, unfinished or missing verify is never
+    /// reported as a clean bill of health.
+    nonisolated static func balanceSkipNote(hasDiagnosis: Bool, videoOnly: Bool) -> String {
+        if videoOnly { return "No audio track" }
+        return hasDiagnosis ? "Audio OK — nothing to fix"
+            : "Not balanced — there's no audio check result for this file"
+    }
+
     private func savePlan() async -> Bool {
         do {
             try await Self.savePlanOffMain(plan)
             return true
         } catch {
+            // Audit #5: every later step used to ignore this, keep
+            // transcoding, and end with finish(success:) over a stale
+            // plan.json. The loop stops at the next file and success can
+            // no longer overwrite the failure.
+            planSaveFailed = true
             finish(failed: "Could not write plan.json in \(plan.batchDir): \(error.localizedDescription)")
             return false
         }
@@ -654,6 +675,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     // MARK: Finish
 
     private func finish(success: String) {
+        guard !planSaveFailed else { return }
         state = .finished(summary: success)
         subtitleText = success
         fractionValue = 1

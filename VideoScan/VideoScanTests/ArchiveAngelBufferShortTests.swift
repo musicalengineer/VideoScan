@@ -68,3 +68,30 @@ struct ArchiveAngelBufferShortTests {
         #expect(ArchiveAngelPlanStore.inFlightRecordIDs(bufferRoot: root) == [ready.id])
     }
 }
+
+/// Audit #6 (2026-09-19): a verify that failed, did not finish, or whose
+/// diagnosis was lost to a restart fell through to "Audio OK — nothing to
+/// fix" — a file with a known one-sided-audio problem archived without a
+/// balanced copy, and a note saying it had been checked.
+@Suite("Archive Angel — 'Audio OK' only when a verify said so")
+struct ArchiveAngelBalanceNoteTests {
+    @Test func audioOKNeedsADiagnosis() {
+        typealias J = ArchiveAngelJob
+        #expect(J.balanceSkipNote(hasDiagnosis: true, videoOnly: false) == "Audio OK — nothing to fix")
+        #expect(J.balanceSkipNote(hasDiagnosis: false, videoOnly: false)
+                == "Not balanced — there's no audio check result for this file")
+        #expect(J.balanceSkipNote(hasDiagnosis: false, videoOnly: true) == "No audio track")
+    }
+
+    /// Sensor: the "already verified" shortcut is taken only with the
+    /// cached diagnosis in hand; without it the file is verified again.
+    @Test func sensorAlreadyVerifiedRequiresTheDiagnosis() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let job = try String(contentsOf: dir.appendingPathComponent("VideoScan/ArchiveAngelJob.swift"), encoding: .utf8)
+        #expect(job.contains("!rec.audioVerifyStatus.isEmpty, let cached = center.verifyDiagnosis(forRecordID: rec.id)"))
+        #expect(!job.contains("note: \"Audio OK — nothing to fix\")"), "the bare fallthrough is gone")
+        // Audit #5: a failed plan save stops the loop and success cannot overwrite it.
+        #expect(job.contains("if stopRequested || planSaveFailed { break }"))
+        #expect(job.contains("guard !planSaveFailed else { return }"))
+    }
+}
