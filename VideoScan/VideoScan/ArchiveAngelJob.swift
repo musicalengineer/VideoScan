@@ -353,7 +353,27 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         }
         guard await savePlan() else { return }
 
-        // ── Stage 1b: preparation, one entry at a time.
+        await prepareEntries(model: model)
+
+        if planSaveFailed { return }   // failed with its reason; never "N ready"
+        if stopRequested { _ = await savePlan(); finishCancelled(); return }
+
+        plan.status = .ready
+        plan.finishedAt = Date()
+        _ = await savePlan()
+        let ready = plan.readyCount
+        // "7 ready to review · 3 skipped · 412 rejected · 18 more would
+        // qualify" — the skips are the user's own, counted apart from
+        // rejections and never folded into failures.
+        let summary = "\(ready) ready to review\(plan.skippedClause)\(plan.bufferShortClause) · \(plan.rejectedTotal) rejected · \(plan.overflow) more would qualify"
+        model.log("Archive Angel: " + summary)
+        finish(success: summary)
+    }
+
+    /// Stage 1b: preparation, one entry at a time. Split out of run() so
+    /// each stage stays readable (and under the lint bar); it stops on a
+    /// stop request or a failed plan save, and run() decides the ending.
+    private func prepareEntries(model: VideoScanModel) async {
         isIndeterminateValue = false
         let total = plan.entries.count
         for idx in plan.entries.indices {
@@ -422,20 +442,6 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             fractionValue = Double(idx + 1) / Double(total)
             _ = await savePlan()
         }
-
-        if planSaveFailed { return }   // failed with its reason; never "N ready"
-        if stopRequested { _ = await savePlan(); finishCancelled(); return }
-
-        plan.status = .ready
-        plan.finishedAt = Date()
-        _ = await savePlan()
-        let ready = plan.readyCount
-        // "7 ready to review · 3 skipped · 412 rejected · 18 more would
-        // qualify" — the skips are the user's own, counted apart from
-        // rejections and never folded into failures.
-        let summary = "\(ready) ready to review\(plan.skippedClause)\(plan.bufferShortClause) · \(plan.rejectedTotal) rejected · \(plan.overflow) more would qualify"
-        model.log("Archive Angel: " + summary)
-        finish(success: summary)
     }
 
     /// A promote a quit left `.promoting` must not reserve its rows from
