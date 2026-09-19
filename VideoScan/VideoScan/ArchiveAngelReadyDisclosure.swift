@@ -63,7 +63,7 @@ struct ArchiveAngelReadyDisclosure: View {
         .padding(.bottom, 12)
         .onChange(of: plan) { _, new in
             // Every toggle is durable so the sheet and this row agree.
-            try? ArchiveAngelPlanStore.save(new)
+            ArchiveAngelPlanStore.saveLogged(new, context: "the Archive-tab disclosure")
         }
     }
 

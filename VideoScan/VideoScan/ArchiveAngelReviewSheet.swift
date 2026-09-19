@@ -57,7 +57,7 @@ struct ArchiveAngelReviewSheet: View {
             // Rows follow catalog renames (Rick 2026-09-10): Show in
             // Catalog → rename → back here shows the new name.
             if !ArchiveAngelPromoter.followRenames(plan: &plan, model: model).isEmpty {
-                try? ArchiveAngelPlanStore.save(plan)
+                ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
             }
         }
         .alert("Discard this batch?", isPresented: $showDiscardConfirm) {
@@ -437,14 +437,14 @@ struct ArchiveAngelReviewSheet: View {
     }
 
     private func keepAndClose() {
-        try? ArchiveAngelPlanStore.save(plan)
+        ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
         dismiss()
     }
 
     private func discard() {
         plan.status = .discarded
         plan.log.append("Discarded by the user")
-        try? ArchiveAngelPlanStore.save(plan)   // the decision is durable even if removal fails
+        ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")   // the decision is durable even if removal fails
         do {
             try ArchiveAngelPlanStore.removeBatchFolder(plan)
         } catch {
@@ -458,7 +458,14 @@ struct ArchiveAngelReviewSheet: View {
         for i in plan.entries.indices where plan.entries[i].status == .ready && plan.entries[i].selected {
             let note = plan.entries[i].userNotes.trimmingCharacters(in: .whitespacesAndNewlines)
             if !note.isEmpty, let rec = model.record(forID: plan.entries[i].id) {
-                rec.userNotes = rec.userNotes.isEmpty ? note : rec.userNotes + "\n" + note
+                // Idempotent (audit P2): a retry after "nothing to promote"
+                // used to append the same note again.
+                let merged = Self.mergedNotes(existing: rec.userNotes, adding: note)
+                if merged != rec.userNotes {
+                    rec.userNotes = merged
+                    let line = "Archive Angel: review note carried to \(rec.filename)'s catalog notes"
+                    model.log(line); appLog.write(line)
+                }
             }
         }
         var working = plan
@@ -469,6 +476,15 @@ struct ArchiveAngelReviewSheet: View {
         if job == nil {
             model.log("Archive Angel: nothing was started — " + (working.log.last ?? "see the batch log"))
         }
+    }
+
+    /// The catalog notes with `adding` appended once — never a second time.
+    static func mergedNotes(existing: String, adding: String) -> String {
+        let add = adding.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !add.isEmpty else { return existing }
+        let lines = existing.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        if existing.contains(add) || lines.contains(add) { return existing }
+        return existing.isEmpty ? add : existing + "\n" + add
     }
 
     // MARK: Bindings + text

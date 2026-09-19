@@ -146,7 +146,7 @@ struct ArchiveView: View {
                     let lines = ArchiveAngelPromoter.followRenames(plan: &ready[i], model: model)
                     if !lines.isEmpty {
                         lines.forEach { model.log($0) }
-                        try? ArchiveAngelPlanStore.save(ready[i])
+                        ArchiveAngelPlanStore.saveLogged(ready[i], context: "following a catalog rename")
                     }
                 }
                 angelReadyBatches = ready

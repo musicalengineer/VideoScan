@@ -121,8 +121,8 @@ final class ArchiveAngelPromoter: ObservableObject {
                  center: MediaFileOperationsCenter,
                  onFinished: @escaping @MainActor (ArchiveAngelPlan) -> Void) -> PromoteToArchiveJob? {
         guard model.masterArchiveRootPath != nil else {
-            plan.log.append("Promote refused: no Master Archive designated")
-            try? ArchiveAngelPlanStore.save(plan)
+            Self.note("Archive Angel: Promote refused — no Master Archive designated", plan: &plan, model: model)
+            ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
             return nil
         }
         var ids: [UUID] = []
@@ -133,15 +133,14 @@ final class ArchiveAngelPromoter: ObservableObject {
 
         // A catalog rename since preparation is followed, not refused
         // (Rick 2026-09-10); only a changed file is refused below.
-        for line in Self.followRenames(plan: &plan, model: model) { model.log(line) }
+        for line in Self.followRenames(plan: &plan, model: model) { model.log(line); appLog.write(line) }
 
         for i in plan.entries.indices where plan.entries[i].selected && plan.entries[i].status == .ready {
             let entry = plan.entries[i]
             if let problem = Self.identityProblem(for: entry, model: model) {
                 plan.entries[i].status = .failed
                 plan.entries[i].failure = problem
-                plan.log.append("refused \(entry.filename): \(problem)")
-                model.log("Archive Angel: refused \(entry.filename) — \(problem)")
+                Self.note("Archive Angel: refused \(entry.filename) — \(problem)", plan: &plan, model: model)
                 continue
             }
             ids.append(entry.id)
@@ -161,8 +160,8 @@ final class ArchiveAngelPromoter: ObservableObject {
         }
 
         guard !ids.isEmpty, var promotePlan = model.buildPromotePlan(recordIDs: ids) else {
-            plan.log.append("Promote: nothing to promote")
-            try? ArchiveAngelPlanStore.save(plan)
+            Self.note("Archive Angel: Promote — nothing to promote", plan: &plan, model: model)
+            ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
             return nil
         }
         promotePlan.archiveTitles = titles
@@ -173,8 +172,9 @@ final class ArchiveAngelPromoter: ObservableObject {
             if let i = plan.entries.firstIndex(where: { $0.id == skip.id }) {
                 plan.entries[i].status = .failed
                 plan.entries[i].failure = "Promote skipped it: \(reason)"
+                Self.note("Archive Angel: \(skip.filename) — Promote skipped it: \(reason)", plan: &plan, model: model)
             } else {
-                plan.log.append("companion \(skip.filename) skipped: \(reason)")
+                Self.note("Archive Angel: companion \(skip.filename) skipped by Promote — \(reason)", plan: &plan, model: model)
             }
         }
 
@@ -182,9 +182,8 @@ final class ArchiveAngelPromoter: ObservableObject {
         let originals = intended.count, companions = intended.values.reduce(0) { $0 + $1.count }
         let startLine = "Archive Angel: Promote started — \(originals) original(s) + \(companions) companion(s), "
             + "\(promotePlan.skipped.count) skipped by Promote, \(ByteCountFormatter.string(fromByteCount: plan.bytesToCopy, countStyle: .file)) to copy"
-        model.log(startLine); appLog.write(startLine)
-        plan.log.append(startLine)
-        try? ArchiveAngelPlanStore.save(plan)
+        Self.note(startLine, plan: &plan, model: model)
+        ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
 
         let job = center.startPromote(plan: promotePlan, model: model)
         job.ledgerActor = .angel   // Media Ledger: "archived … (Archive Angel)"
@@ -227,7 +226,7 @@ final class ArchiveAngelPromoter: ObservableObject {
             guard let rel = landed[entry.id] else {
                 let why = problems[entry.id] ?? Self.terminalReason(job)
                 plan.entries[i].failure = "Original not promoted: \(why)"
-                plan.log.append("\(entry.filename): original not promoted — \(why)")
+                Self.note("Archive Angel: \(entry.filename) — original not promoted: \(why)", plan: &plan, model: model)
                 report.failed.append(entry.filename)
                 continue
             }
@@ -250,7 +249,7 @@ final class ArchiveAngelPromoter: ObservableObject {
             plan.entries[i].promotedRelPath = rel
             let landedLine = "Archive Angel: \(entry.filename) → \(rel)"
                 + (allCompanions ? " with \(made.access + made.lossless + made.balanced) companion(s)" : " — " + (plan.entries[i].failure ?? "companion missing"))
-            model.log(landedLine); appLog.write(landedLine); plan.log.append(landedLine)
+            Self.note(landedLine, plan: &plan, model: model)
             if allCompanions {
                 plan.entries[i].status = .promoted
                 plan.entries[i].failure = nil
@@ -273,10 +272,8 @@ final class ArchiveAngelPromoter: ObservableObject {
         plan.report = report
         plan.status = plan.readyCount == 0 ? .promoted : .ready
         plan.finishedAt = Date()
-        plan.log.append(report.summary)
-        model.log("Archive Angel: " + report.summary)
-        appLog.write("Archive Angel: " + report.summary)
-        try? ArchiveAngelPlanStore.save(plan)
+        Self.note("Archive Angel: " + report.summary, plan: &plan, model: model)
+        ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
     }
 
     /// Batches left `.promoting` that nothing in this app is promoting — a
@@ -308,12 +305,20 @@ final class ArchiveAngelPromoter: ObservableObject {
             plan.finishedAt = plan.finishedAt ?? Date()
             let line = "Archive Angel: settled an interrupted promote in \((plan.batchDir as NSString).lastPathComponent) — "
                 + "\(promoted) archived, \(back) back to ready"
-            plan.log.append(line)
-            try? ArchiveAngelPlanStore.save(plan)
-            model.log(line)
+            Self.note(line, plan: &plan, model: model)
+            ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
             lines.append(line)
         }
         return lines
+    }
+
+    /// The promoter's ONE log verb (audit P2, Rick 2026-09-19 "tests and
+    /// LOGGING … for any actions"): the console, videoscan.log, and the
+    /// batch's own plan log — never one without the others.
+    static func note(_ line: String, plan: inout ArchiveAngelPlan, model: VideoScanModel) {
+        model.log(line)
+        appLog.write(line)
+        plan.log.append(line)
     }
 
     private static func terminalReason(_ job: PromoteToArchiveJob) -> String {

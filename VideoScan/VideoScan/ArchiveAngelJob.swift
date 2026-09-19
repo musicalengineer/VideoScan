@@ -176,6 +176,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     /// A plan.json write failed: the job is already `.failed` with the
     /// reason, and nothing after it may run or report success (audit #5).
     private var planSaveFailed = false
+    /// Orders this job's plan.json saves (ArchiveAngelPlanWriter).
+    private var saveGeneration: UInt64 = 0
+    private func nextSaveGeneration() -> UInt64 { saveGeneration += 1; return saveGeneration }
 
     // MARK: Skip one entry (Rick 2026-09-13: "just skip this file for this
     // batch is fine. skip.")
@@ -214,9 +217,12 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             // the decision now. Both hops are off the main actor.
             let snapshot = plan
             let entry = plan.entries[idx]
+            let generation = nextSaveGeneration()
             Task.detached(priority: .utility) {
                 ArchiveAngelPlanStore.removeEntryFolder(snapshot, entry: entry)
-                try? await Self.savePlanOffMain(snapshot)
+                do { try await Self.savePlanOffMain(snapshot, generation: generation) } catch {
+                    appLog.write("Archive Angel: could not save the skip of \(entry.filename) — \(error.localizedDescription)")
+                }
             }
         }
         return true
@@ -340,9 +346,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         }
         let walkLine = "Archive Angel: considered \(consideredCount), \(entries.count) picked, "
             + "\(selection.rejectedTotal) rejected, \(selection.overflow) more would qualify"
-        model.log(walkLine)
-        plan.log.append(walkLine)
-        angelLog.info("\(walkLine, privacy: .public)")
+        note(walkLine)   // every job line through note(): all four logs (audit P2)
 
         if entries.isEmpty {
             plan.status = .ready
@@ -366,7 +370,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         // qualify" — the skips are the user's own, counted apart from
         // rejections and never folded into failures.
         let summary = "\(ready) ready to review\(plan.skippedClause)\(plan.bufferShortClause) · \(plan.rejectedTotal) rejected · \(plan.overflow) more would qualify"
-        model.log("Archive Angel: " + summary)
+        note("Archive Angel: " + summary)
         finish(success: summary)
     }
 
@@ -403,7 +407,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                 plan.entries[idx].status = .failed
                 plan.entries[idx].failure = short
                 let line = "Archive Angel [\(idx + 1)/\(total)] \(entry.filename) — " + short
-                model.log(line); plan.log.append(line)
+                note(line)
                 _ = await savePlan()
                 continue
             }
@@ -412,12 +416,18 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             // A skip that landed during the two probes above wins: a user's
             // decision is never overwritten by a failure verdict.
             if await settleSkip(idx, total: total) { continue }
-            guard let rec = model.record(forID: entry.id), sourceExists else {
+            let rec = model.record(forID: entry.id)
+            if let reason = Self.unpreparableReason(recordPresent: rec != nil, sourceExists: sourceExists,
+                                                    sourcePath: entry.sourcePath) {
+                // Named and logged (audit P2): this used to fail silently,
+                // and said "missing" for a record that had been removed.
                 plan.entries[idx].status = .failed
-                plan.entries[idx].failure = "Source file is missing — cannot promote."
+                plan.entries[idx].failure = reason
+                note("Archive Angel [\(idx + 1)/\(total)] \(entry.filename) — not prepared: \(reason)")
                 _ = await savePlan()
                 continue
             }
+            guard let rec else { continue }
             plan.entries[idx].status = .preparing
             preparingEntryID = entry.id
             _ = await savePlan()
@@ -619,6 +629,10 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     // the batch folder tells its own story. Format:
     //   Archive Angel [3/25] 1993_CapeCod.mov — access copy: done — HEVC access copy (41.2 s, 812 MB)
 
+    /// The job's ONE log verb: the console (model), videoscan.log (appLog),
+    /// the unified log, and the batch's own plan log — so a line is never in
+    /// one place and missing from the others (the buffer-full stop of
+    /// 2026-09-19 was only in catalog.log).
     private func note(_ line: String) {
         model?.log(line)
         appLog.write(line)
@@ -641,6 +655,15 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
     /// Save the plan; on failure the job fails (a batch nobody can review
     /// is not a batch). Returns false when it failed.
+    /// Why a picked file cannot be prepared at all, or nil when it can.
+    nonisolated static func unpreparableReason(recordPresent: Bool, sourceExists: Bool, sourcePath: String) -> String? {
+        if !recordPresent { return "its catalog record was removed after it was picked — nothing to prepare." }
+        if !sourceExists {
+            return "the source file isn't at \(sourcePath) any more (moved, renamed, or its drive disconnected) — cannot promote."
+        }
+        return nil
+    }
+
     /// Why the balance step did not run, when there was nothing to balance
     /// or nothing to go on (audit #6, 2026-09-19): "Audio OK" only when a
     /// verify said so — a failed, unfinished or missing verify is never
@@ -653,7 +676,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
     private func savePlan() async -> Bool {
         do {
-            try await Self.savePlanOffMain(plan)
+            try await Self.savePlanOffMain(plan, generation: nextSaveGeneration())
             return true
         } catch {
             // Audit #5: every later step used to ignore this, keep
@@ -703,9 +726,16 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         // its rows from later batches.
         let kept = plan.settleAfterInterruption(reason: "Cancelled before it was prepared")
         let settled = plan
+        let generation = nextSaveGeneration()
         Task.detached(priority: .utility) {
-            try? await Self.savePlanOffMain(settled)
-            if !kept { try? ArchiveAngelPlanStore.removeBatchFolder(settled) }
+            do { try await Self.savePlanOffMain(settled, generation: generation) } catch {
+                appLog.write("Archive Angel: could not save the cancelled batch — \(error.localizedDescription)")
+            }
+            if !kept {
+                do { try ArchiveAngelPlanStore.removeBatchFolder(settled) } catch {
+                    appLog.write("Archive Angel: could not remove the cancelled batch's folder — \(error.localizedDescription)")
+                }
+            }
         }
         state = .cancelled
         subtitleText = kept
@@ -736,8 +766,8 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     #if compiler(>=6.2)
     @concurrent
     #endif
-    nonisolated static func savePlanOffMain(_ plan: ArchiveAngelPlan) async throws {
-        try ArchiveAngelPlanStore.save(plan)
+    nonisolated static func savePlanOffMain(_ plan: ArchiveAngelPlan, generation: UInt64) async throws {
+        try await ArchiveAngelPlanWriter.shared.write(plan, generation: generation)
     }
 
     #if compiler(>=6.2)

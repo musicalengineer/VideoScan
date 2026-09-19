@@ -346,6 +346,22 @@ enum ArchiveAngelPlanStore {
                                     durability: .fullFsync)
     }
 
+    /// `save`, logging a failure instead of swallowing it (audit P2 — Rick
+    /// 2026-09-19: "tests and LOGGING … for any actions"). `context` says
+    /// what the save was for. Returns whether it was written.
+    @discardableResult
+    nonisolated static func saveLogged(_ plan: ArchiveAngelPlan, context: String,
+                                       log: (String) -> Void = { appLog.write($0) }) -> Bool {
+        do {
+            try save(plan)
+            return true
+        } catch {
+            log("Archive Angel: could not save plan.json for \((plan.batchDir as NSString).lastPathComponent) "
+                + "(\(context)) — \(error.localizedDescription)")
+            return false
+        }
+    }
+
     nonisolated static func load(batchDir: String) throws -> ArchiveAngelPlan {
         let url = URL(fileURLWithPath: batchDir).appendingPathComponent(ArchiveAngelPlan.planFilename)
         let dec = JSONDecoder()
@@ -394,8 +410,12 @@ enum ArchiveAngelPlanStore {
         var settled: [ArchiveAngelPlan] = []
         for var plan in listBatches(bufferRoot: bufferRoot) where isInterrupted(plan, now: now, staleAfter: staleAfter, fileManager: fm) {
             let kept = plan.settleAfterInterruption(reason: "Interrupted — the app quit or the job was stopped before this row was prepared")
-            try? save(plan)
-            if !kept { try? removeBatchFolder(plan) }
+            saveLogged(plan, context: "settling an interrupted batch")
+            if !kept {
+                do { try removeBatchFolder(plan) } catch {
+                    appLog.write("Archive Angel: could not remove the discarded batch \((plan.batchDir as NSString).lastPathComponent) — \(error.localizedDescription)")
+                }
+            }
             settled.append(plan)
         }
         return settled
@@ -510,5 +530,30 @@ enum ArchiveAngelPlanStore {
     nonisolated static func freeBytes(at url: URL) -> Int64 {
         let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         return values?.volumeAvailableCapacityForImportantUsage ?? 0
+    }
+}
+
+
+/// The ONE writer of plan.json for the preparing job (audit P2, 2026-09-19).
+/// The job saves from its loop and, on Skip or Cancel, from detached tasks;
+/// those could land out of order and an OLDER snapshot overwrite a newer
+/// plan. Each save carries a generation taken on the main actor when it is
+/// requested; this actor writes in arrival order and drops a save older than
+/// the last one written for that batch. Nothing is lost by the drop: the
+/// newer save already holds the older one's change, because the plan was
+/// mutated before its snapshot was taken.
+actor ArchiveAngelPlanWriter {
+    static let shared = ArchiveAngelPlanWriter()
+    private var written: [String: UInt64] = [:]
+
+    /// Writes unless a newer generation of this batch is already on disk.
+    /// Returns false when the save was dropped as stale.
+    @discardableResult
+    func write(_ plan: ArchiveAngelPlan, generation: UInt64) throws -> Bool {
+        let key = URL(fileURLWithPath: plan.batchDir).standardizedFileURL.path
+        if let last = written[key], last >= generation { return false }
+        try ArchiveAngelPlanStore.save(plan)
+        written[key] = generation
+        return true
     }
 }
