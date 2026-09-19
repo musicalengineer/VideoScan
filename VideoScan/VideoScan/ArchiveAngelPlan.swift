@@ -11,6 +11,7 @@
 // Promote job copies originals source → archive at approval time.
 
 import Foundation
+import os
 import VideoScanCore
 
 struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
@@ -427,14 +428,71 @@ enum ArchiveAngelPlanStore {
         return ids
     }
 
-    /// Every batch under the buffer root, newest first. Unreadable plans
-    /// are skipped (a half-written folder is not a batch).
+    /// Every readable batch under the buffer root, newest first.
     nonisolated static func listBatches(bufferRoot: URL) -> [ArchiveAngelPlan] {
+        scanBatches(bufferRoot: bufferRoot).plans
+    }
+
+    /// A `batch-` folder whose plan.json cannot be read — written by a newer
+    /// build, damaged, or never written (a crash right after the folder
+    /// was made). Audit #7 (Rick 2026-09-19, option a): such a batch used
+    /// to vanish from every list SILENTLY, with its gigabytes and its row
+    /// reservations. It is now listed as unreadable, with its size, logged
+    /// once, and otherwise left alone — never settled, never deleted.
+    struct UnreadableBatch: Equatable, Sendable {
+        let batchDir: String
+        let reason: String
+        let sizeBytes: Int64
+    }
+
+    /// Readable plans (newest first) and unreadable folders. `log` gets one
+    /// line per unreadable folder per session (not on every refresh).
+    nonisolated static func scanBatches(bufferRoot: URL,
+                                        log: (String) -> Void = { appLog.write($0) })
+        -> (plans: [ArchiveAngelPlan], unreadable: [UnreadableBatch]) {
         let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: bufferRoot.path) else { return [] }
-        return names.filter { $0.hasPrefix("batch-") }
-            .compactMap { try? load(batchDir: bufferRoot.appendingPathComponent($0).path) }
-            .sorted { $0.createdAt > $1.createdAt }
+        guard let names = try? fm.contentsOfDirectory(atPath: bufferRoot.path) else { return ([], []) }
+        var plans: [ArchiveAngelPlan] = []
+        var unreadable: [UnreadableBatch] = []
+        for name in names.sorted() where name.hasPrefix("batch-") {
+            let dir = bufferRoot.appendingPathComponent(name).path
+            do {
+                plans.append(try load(batchDir: dir))
+            } catch {
+                let planPath = URL(fileURLWithPath: dir).appendingPathComponent(ArchiveAngelPlan.planFilename).path
+                let reason = fm.fileExists(atPath: planPath)
+                    ? "its plan.json can't be read (\(describe(error)))"
+                    : "it has no plan.json"
+                let batch = UnreadableBatch(batchDir: dir, reason: reason, sizeBytes: folderBytes(dir, fm: fm))
+                unreadable.append(batch)
+                if reportedUnreadable.withLock({ $0.insert(dir).inserted }) {
+                    log("Archive Angel: batch \(name) can't be read — \(reason); "
+                        + "\(ByteCountFormatter.string(fromByteCount: batch.sizeBytes, countStyle: .file)) left in place, not settled or deleted")
+                }
+            }
+        }
+        return (plans.sorted { $0.createdAt > $1.createdAt }, unreadable)
+    }
+
+    private static let reportedUnreadable = OSAllocatedUnfairLock(initialState: Set<String>())
+
+    private nonisolated static func describe(_ error: Error) -> String {
+        switch error {
+        case DecodingError.dataCorrupted(let c): return "damaged: \(c.debugDescription)"
+        case DecodingError.keyNotFound(let k, _): return "missing field \(k.stringValue)"
+        case DecodingError.valueNotFound(_, let c), DecodingError.typeMismatch(_, let c):
+            return "unexpected value at \(c.codingPath.map(\.stringValue).joined(separator: "."))"
+        default: return error.localizedDescription
+        }
+    }
+
+    private nonisolated static func folderBytes(_ dir: String, fm: FileManager) -> Int64 {
+        guard let walker = fm.enumerator(at: URL(fileURLWithPath: dir), includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        var total: Int64 = 0
+        for case let url as URL in walker {
+            total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return total
     }
 
     /// Delete a batch folder (companions + plan). Used by Discard and by

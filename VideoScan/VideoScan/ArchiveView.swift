@@ -67,6 +67,9 @@ struct ArchiveView: View {
     @State var angelStartRequest: ArchiveAngelStartRequest?
     @State var angelReviewRequest: ArchiveAngelReviewRequest?
     @State var angelReadyBatches: [ArchiveAngelPlan] = []
+    /// Batch folders whose plan can't be read (audit #7) — listed, never
+    /// touched.
+    @State var angelUnreadableBatches: [ArchiveAngelPlanStore.UnreadableBatch] = []
 
     var body: some View {
         HSplitView {
@@ -128,12 +131,14 @@ struct ArchiveView: View {
         // first (audit #3), so its batch is listed again or finished.
         ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: root, model: model)
         Task {
-            var ready = await Task.detached(priority: .utility) {
+            let (readyPlans, unreadable) = await Task.detached(priority: .utility) {
                 // GH #177: a batch left `preparing` by a quit or a stop is
                 // settled here (ready rows kept → listed; none → removed).
                 _ = ArchiveAngelPlanStore.settleInterruptedBatches(bufferRoot: root)
-                return ArchiveAngelPlanStore.listBatches(bufferRoot: root).filter { $0.status == .ready }
+                let scan = ArchiveAngelPlanStore.scanBatches(bufferRoot: root)
+                return (scan.plans.filter { $0.status == .ready }, scan.unreadable)
             }.value
+            var ready = readyPlans
             await MainActor.run {
                 // Rows follow catalog renames (Rick 2026-09-10) — the row
                 // and the sheet show the record's current name.
@@ -145,6 +150,7 @@ struct ArchiveView: View {
                     }
                 }
                 angelReadyBatches = ready
+                angelUnreadableBatches = unreadable
             }
         }
     }
@@ -421,6 +427,11 @@ struct ArchiveView: View {
                     .help("Archive Angel prepared a batch. Review the recommendations, rename or deselect, then Promote.")
                     .padding(.leading, 34)
                     .padding(.top, 6)
+                }
+                if !angelUnreadableBatches.isEmpty {
+                    ArchiveAngelUnreadableRow(batches: angelUnreadableBatches)
+                        .padding(.leading, 34)
+                        .padding(.top, 6)
                 }
             } else {
                 HStack(spacing: 6) {
