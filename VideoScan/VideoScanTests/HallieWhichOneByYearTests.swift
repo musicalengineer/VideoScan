@@ -275,7 +275,8 @@ struct HallieCommonAncestorWhichOneTests {
             pending: pending, selecting: .gedcomPersonID("@I2@"), context: ctx)
         #expect(answer.outcome == .answered, "\(answer.prose)")
         #expect(answer.prose.contains("Z Common"))
-        #expect(answer.prose.contains("Richard Harding Breen Jr") && answer.prose.contains("Donna Hudson"))
+        // The owner is "you", first (2026-09-18); the chosen Donna by name.
+        #expect(answer.prose.hasPrefix("You and Donna Hudson"), "\(answer.prose)")
         #expect(answer.clarification == nil)
     }
 

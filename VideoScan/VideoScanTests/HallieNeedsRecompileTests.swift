@@ -190,7 +190,8 @@ struct HallieOurCommonAncestorAnswerTests {
         guard case .answer(let r) = pre else { Issue.record("expected a local answer, got \(pre)"); return }
         #expect(r.outcome == .answered)
         #expect(r.prose.contains("Z Common"), "\(r.prose)")
-        #expect(r.prose.contains("Richard Harding Breen Jr") && r.prose.contains("Donna Hudson"), "\(r.prose)")
+        // The owner is "you", first (2026-09-18); Donna by name.
+        #expect(r.prose.hasPrefix("You and Donna Hudson"), "\(r.prose)")
     }
 
     @Test func withNoFocusOurFallsBackToTheOwnersSpouse() throws {
