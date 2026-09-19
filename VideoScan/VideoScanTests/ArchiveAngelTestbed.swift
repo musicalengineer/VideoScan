@@ -128,6 +128,13 @@ struct ArchiveAngelTestbed {
         let lossless = Self.env["VIDEOSCAN_ANGEL_TESTBED_LOSSLESS"] != "0"
         let lengths = (Self.csv("VIDEOSCAN_ANGEL_TESTBED_SECONDS") ?? ["30"]).compactMap(Int.init)
         let wanted = Set(Self.csv("VIDEOSCAN_ANGEL_TESTBED_FORMATS") ?? Self.formats.map(\.key))
+        // codex #1572: an empty or misspelled matrix used to run zero rows
+        // and pass. The matrix must be non-empty, known formats, ≥ 8 s clips.
+        try #require(!lengths.isEmpty && lengths.allSatisfy { $0 >= 8 },
+                     "VIDEOSCAN_ANGEL_TESTBED_SECONDS must be integers ≥ 8: \(Self.env["VIDEOSCAN_ANGEL_TESTBED_SECONDS"] ?? "")")
+        let known = Set(Self.formats.map(\.key))
+        try #require(!wanted.isEmpty && wanted.isSubset(of: known),
+                     "VIDEOSCAN_ANGEL_TESTBED_FORMATS must be a non-empty subset of \(known.sorted()): \(wanted.sorted())")
         let logs = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/VideoScan/angel-testbed")
         let out = logs.appendingPathComponent(runID, isDirectory: true)
         let fixtures = logs.appendingPathComponent("fixtures", isDirectory: true)
@@ -182,6 +189,12 @@ struct ArchiveAngelTestbed {
                         for s in entry.steps {
                             row.stepStates[s.kind.rawValue] = s.state.rawValue
                             if let t = s.seconds { row.stepSeconds[s.kind.rawValue] = t }
+                            // A done step must have left its file (codex #1572).
+                            if s.state == .done, let rel = s.outputRelPath,
+                               !fm.fileExists(atPath: URL(fileURLWithPath: job.plan.batchDir).appendingPathComponent(rel).path) {
+                                row.stepStates[s.kind.rawValue] = ArchiveAngelPlan.StepState.failed.rawValue
+                                row.failure = (row.failure ?? "") + " \(s.kind.rawValue): output missing"
+                            }
                         }
                     } else {
                         row.status = "not picked"
@@ -201,8 +214,16 @@ struct ArchiveAngelTestbed {
                              + String(format: "%.1f s (%.2f× realtime)", row.jobSeconds, row.realtimeFactor))
             }
         }
-        let failed = report.rows.filter { $0.status != AngelStatus.ready }
-        #expect(failed.isEmpty, "not ready: \(failed.map { "\($0.format): \($0.status) \($0.failure ?? "")" })")
+        #expect(report.rows.count == lengths.count * wanted.count, "every cell of the matrix ran")
+        // codex #1572: a row is only green when the row is ready AND no
+        // step failed (a failed lossless copy beside a ready original used
+        // to pass) AND every done step left a companion in the buffer.
+        let failed = report.rows.filter { row in
+            row.status != AngelStatus.ready
+                || row.stepStates.values.contains(ArchiveAngelPlan.StepState.failed.rawValue)
+                || row.stepStates.isEmpty
+        }
+        #expect(failed.isEmpty, "not ready: \(failed.map { "\($0.format): \($0.status) \($0.stepStates) \($0.failure ?? "")" })")
     }
 
     enum AngelStatus { static let ready = ArchiveAngelPlan.EntryStatus.ready.rawValue }

@@ -126,8 +126,19 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
 
     static let filename = "evidence.json"
 
-    /// App Support/VideoScan/archive-angel/ — the production home.
+    /// App Support/VideoScan/archive-angel/ — the production home. Under
+    /// a test host: a per-process scratch folder (the MediaLedger /
+    /// IgnoredContentStore discipline). Found 2026-09-19: every test that
+    /// builds a VideoScanModel enables the sweep, and a 60 s debounce or
+    /// the 15 min periodic run wrote a 1.7 KB evidence.json over Rick's
+    /// real one from inside the unit suite (CleanupIsolationTests caught
+    /// the write; the nightly had been doing it since 09-14).
     nonisolated static var defaultDirectory: URL {
+        if TestEnvironment.isTestHost {
+            return URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("VideoScan-tests/archive-angel-\(ProcessInfo.processInfo.processIdentifier)",
+                                        isDirectory: true)
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         return base.appendingPathComponent("VideoScan/archive-angel", isDirectory: true)

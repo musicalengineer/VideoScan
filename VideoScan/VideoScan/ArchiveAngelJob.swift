@@ -224,9 +224,11 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             subtitleText = "Skipping \(filename)…"
         } else {
             // Nobody is holding it: reclaim its buffer space and persist
-            // the decision now. Both hops are off the main actor.
+            // the decision now. Both hops are off the main actor. Its
+            // catalogued companions are retired first (codex #1572).
             let snapshot = plan
             let entry = plan.entries[idx]
+            model?.forgetArchiveAngelCompanions(of: [entry], in: snapshot, reason: "skipped by you", at: now)
             let generation = nextSaveGeneration()
             Task.detached(priority: .utility) {
                 ArchiveAngelPlanStore.removeEntryFolder(snapshot, entry: entry)
@@ -380,13 +382,14 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
         plan.status = .ready
         plan.finishedAt = Date()
-        _ = await savePlan()
         let ready = plan.readyCount
         // "7 ready to review · 3 skipped · 412 rejected · 18 more would
         // qualify" — the skips are the user's own, counted apart from
-        // rejections and never folded into failures.
+        // rejections and never folded into failures. Noted BEFORE the
+        // final save so plan.json carries its own summary (codex #1572).
         let summary = "\(ready) ready to review\(plan.skippedClause)\(plan.bufferShortClause) · \(plan.rejectedTotal) rejected · \(plan.overflow) more would qualify"
         note("Archive Angel: " + summary)
+        _ = await savePlan()
         finish(success: summary)
     }
 
@@ -495,6 +498,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         preparingEntryID = nil
         let entry = plan.entries[idx]
         await Self.removeEntryFolderOffMain(plan, entry: entry)
+        model?.forgetArchiveAngelCompanions(of: [entry], in: plan, reason: "skipped by you")
         fractionValue = Double(idx + 1) / Double(total)
         note("Archive Angel [\(idx + 1)/\(total)] \(entry.filename) — skipped by you; "
              + "its partial companions were removed from the buffer, the batch continues")
@@ -772,6 +776,12 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         let unfinished = plan.entries.filter { $0.status.isUnsettled }
         let kept = plan.settleAfterInterruption(reason: "Cancelled before it was prepared")
         let settled = plan
+        // The files below go; their catalog records go first (codex #1572).
+        if kept {
+            model?.forgetArchiveAngelCompanions(of: unfinished, in: settled, reason: "cancelled before the row was prepared")
+        } else {
+            model?.forgetArchiveAngelCompanions(batchDir: settled.batchDir, reason: "cancelled — nothing was prepared, batch discarded")
+        }
         let generation = nextSaveGeneration()
         Task.detached(priority: .utility) {
             do { try await Self.savePlanOffMain(settled, generation: generation) } catch {

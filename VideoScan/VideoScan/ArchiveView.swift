@@ -131,15 +131,18 @@ struct ArchiveView: View {
         // first (audit #3), so its batch is listed again or finished.
         ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: root, model: model)
         Task {
-            let (readyPlans, unreadable) = await Task.detached(priority: .utility) {
+            let (readyPlans, unreadable, settled) = await Task.detached(priority: .utility) {
                 // GH #177: a batch left `preparing` by a quit or a stop is
                 // settled here (ready rows kept → listed; none → removed).
-                _ = ArchiveAngelPlanStore.settleInterruptedBatches(bufferRoot: root)
+                let settled = ArchiveAngelPlanStore.settleInterruptedBatches(bufferRoot: root)
                 let scan = ArchiveAngelPlanStore.scanBatches(bufferRoot: root)
-                return (scan.plans.filter { $0.status == .ready }, scan.unreadable)
+                return (scan.plans.filter { $0.status == .ready }, scan.unreadable, settled)
             }.value
             var ready = readyPlans
             await MainActor.run {
+                // The settle reclaimed the unfinished rows' files; their
+                // catalogued companions are retired here (codex #1572).
+                model.forgetArchiveAngelCompanions(settled: settled)
                 // Rows follow catalog renames (Rick 2026-09-10) — the row
                 // and the sheet show the record's current name.
                 for i in ready.indices {

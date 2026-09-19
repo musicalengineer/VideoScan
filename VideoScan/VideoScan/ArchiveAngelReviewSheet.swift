@@ -449,6 +449,7 @@ struct ArchiveAngelReviewSheet: View {
         plan.status = .discarded
         plan.log.append("Discarded by the user")
         ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")   // the decision is durable even if removal fails
+        model.forgetArchiveAngelCompanions(batchDir: plan.batchDir, reason: "batch discarded by you")   // codex #1572
         do {
             try ArchiveAngelPlanStore.removeBatchFolder(plan)
         } catch {
@@ -487,11 +488,13 @@ struct ArchiveAngelReviewSheet: View {
     }
 
     /// The catalog notes with `adding` appended once — never a second time.
+    /// Line-exact (codex #1572): "Grandma birthday" inside "Not Grandma
+    /// birthday" is a different note and must still be added.
     static func mergedNotes(existing: String, adding: String) -> String {
         let add = adding.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !add.isEmpty else { return existing }
         let lines = existing.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
-        if existing.contains(add) || lines.contains(add) { return existing }
+        if lines.contains(add) { return existing }
         return existing.isEmpty ? add : existing + "\n" + add
     }
 
