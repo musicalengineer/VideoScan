@@ -243,9 +243,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         let liveDir = plan.batchDir
         ArchiveAngelLiveBatches.begin(liveDir)
         defer { ArchiveAngelLiveBatches.end(liveDir) }
-        // A promote a quit left `.promoting` must not reserve its rows from
-        // this batch (audit #3).
-        for line in ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: bufferRoot, model: model) { note(line) }
+        settleStrandedPromotions(model: model)
 
         // ── Stage 1a: pick from FRESH evidence (phase 2 sweep) or walk.
         let policy = model.duplicateKeeperPolicy()
@@ -434,6 +432,12 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         let summary = "\(ready) ready to review\(plan.skippedClause)\(plan.bufferShortClause) · \(plan.rejectedTotal) rejected · \(plan.overflow) more would qualify"
         model.log("Archive Angel: " + summary)
         finish(success: summary)
+    }
+
+    /// A promote a quit left `.promoting` must not reserve its rows from
+    /// this batch (audit #3).
+    private func settleStrandedPromotions(model: VideoScanModel) {
+        for line in ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: bufferRoot, model: model) { note(line) }
     }
 
     /// The loop's half of a skip: the row is already `.skipped` in the plan
