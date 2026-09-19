@@ -375,6 +375,8 @@ enum ArchiveAngelPlanStore {
                                           staleAfter: TimeInterval = 3600,
                                           fileManager fm: FileManager = .default) -> Bool {
         guard plan.status == .preparing else { return false }
+        // Running in this app right now: alive, however long its step.
+        guard !ArchiveAngelLiveBatches.isLive(plan.batchDir) else { return false }
         let attrs = (try? fm.attributesOfItem(atPath: plan.planURL.path)) ?? [:]
         let modified = (attrs[.modificationDate] as? Date) ?? plan.startedAt ?? plan.createdAt
         return now.timeIntervalSince(modified) > staleAfter

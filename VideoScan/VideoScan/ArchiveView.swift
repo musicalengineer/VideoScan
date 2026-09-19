@@ -124,6 +124,9 @@ struct ArchiveView: View {
 
     func refreshAngelBatches() {
         let root = ArchiveAngelPlanStore.defaultBufferRoot
+        // A promote a quit left `.promoting` is settled against the catalog
+        // first (audit #3), so its batch is listed again or finished.
+        ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: root, model: model)
         Task {
             var ready = await Task.detached(priority: .utility) {
                 // GH #177: a batch left `preparing` by a quit or a stop is

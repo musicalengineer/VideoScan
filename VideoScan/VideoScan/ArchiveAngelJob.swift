@@ -238,6 +238,14 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
     private func run() async {
         guard let model else { finish(failed: "Catalog went away."); return }
+        // Live for the whole run, whatever the exit (audit #4): the hour
+        // rule must never settle or delete a batch this app is working on.
+        let liveDir = plan.batchDir
+        ArchiveAngelLiveBatches.begin(liveDir)
+        defer { ArchiveAngelLiveBatches.end(liveDir) }
+        // A promote a quit left `.promoting` must not reserve its rows from
+        // this batch (audit #3).
+        for line in ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: bufferRoot, model: model) { note(line) }
 
         // ── Stage 1a: pick from FRESH evidence (phase 2 sweep) or walk.
         let policy = model.duplicateKeeperPolicy()

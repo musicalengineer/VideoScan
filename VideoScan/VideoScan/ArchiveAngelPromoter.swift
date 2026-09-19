@@ -22,6 +22,12 @@ final class ArchiveAngelPromoter: ObservableObject {
     @Published private(set) var job: PromoteToArchiveJob?
     private var watchers: [AnyCancellable] = []
 
+    /// Promoters with a promote in flight, kept alive until they settle
+    /// (audit #3): the view that made one can go away mid-promote — the
+    /// Archive tab's list drops a batch the moment it reads `.promoting` —
+    /// and settling must not go with it.
+    private static var inFlight: [UUID: ArchiveAngelPromoter] = [:]
+
     // MARK: Pure rules
 
     /// "1994-11-24" → .day, "1994-11"/"November 1994" → .month, "1994" → .year,
@@ -184,10 +190,15 @@ final class ArchiveAngelPromoter: ObservableObject {
         job.ledgerActor = .angel   // Media Ledger: "archived … (Archive Angel)"
         self.job = job
         var snapshot = plan
+        let planID = plan.id, liveDir = plan.batchDir
+        ArchiveAngelLiveBatches.begin(liveDir)
+        Self.inFlight[planID] = self
         watch(job) { [weak self] in
             guard let self, let job = self.job, !job.state.isActive else { return }
             self.watchers.removeAll()
             Self.settle(plan: &snapshot, job: job, intended: intended, model: model)
+            ArchiveAngelLiveBatches.end(liveDir)
+            Self.inFlight[planID] = nil
             onFinished(snapshot)
         }
         return job
@@ -266,6 +277,43 @@ final class ArchiveAngelPromoter: ObservableObject {
         model.log("Archive Angel: " + report.summary)
         appLog.write("Archive Angel: " + report.summary)
         try? ArchiveAngelPlanStore.save(plan)
+    }
+
+    /// Batches left `.promoting` that nothing in this app is promoting — a
+    /// quit or crash mid-promote (audit #3). The Promote job writes the
+    /// catalog itself, so the catalog is the truth: a row whose record is
+    /// now archived is promoted (its buffer folder removed); the rest go
+    /// back to ready, saying why, so Promote can be pressed again. Before
+    /// this they stayed `.promoting` forever: hidden from the Archive tab,
+    /// their rows reserved from every later batch, their gigabytes kept.
+    @discardableResult
+    static func settleStrandedPromotions(bufferRoot: URL, model: VideoScanModel) -> [String] {
+        var lines: [String] = []
+        for var plan in ArchiveAngelPlanStore.listBatches(bufferRoot: bufferRoot)
+            where plan.status == .promoting && !ArchiveAngelLiveBatches.isLive(plan.batchDir) {
+            var promoted = 0, back = 0
+            for i in plan.entries.indices where plan.entries[i].status == .ready {
+                let entry = plan.entries[i]
+                if let rec = model.record(forID: entry.id), model.isArchived(rec) {
+                    plan.entries[i].status = .promoted
+                    plan.entries[i].failure = nil
+                    ArchiveAngelPlanStore.removeEntryFolder(plan, entry: entry)
+                    promoted += 1
+                } else {
+                    plan.entries[i].failure = "Promote was interrupted before this file reached the archive — promote again."
+                    back += 1
+                }
+            }
+            plan.status = plan.readyCount == 0 ? .promoted : .ready
+            plan.finishedAt = plan.finishedAt ?? Date()
+            let line = "Archive Angel: settled an interrupted promote in \((plan.batchDir as NSString).lastPathComponent) — "
+                + "\(promoted) archived, \(back) back to ready"
+            plan.log.append(line)
+            try? ArchiveAngelPlanStore.save(plan)
+            model.log(line)
+            lines.append(line)
+        }
+        return lines
     }
 
     private static func terminalReason(_ job: PromoteToArchiveJob) -> String {
