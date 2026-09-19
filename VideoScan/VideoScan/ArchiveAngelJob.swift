@@ -447,6 +447,17 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             if await settleSkip(idx, total: total) { continue }
             if stopRequested { break }
 
+            // Never a false green (2026-09-19): "ready" only when every step
+            // ran to a verdict. A preparation that returned early — its
+            // operations center gone, or any future early exit — used to
+            // leave four pending steps under a "ready" row.
+            if let unfinished = Self.unfinishedStepReason(plan.entries[idx]) {
+                plan.entries[idx].status = .failed
+                plan.entries[idx].failure = unfinished
+                note("Archive Angel [\(idx + 1)/\(total)] \(entry.filename) — not ready: \(unfinished)")
+                _ = await savePlan()
+                continue
+            }
             plan.entries[idx].status = .ready
             let made = plan.entries[idx].companionsMade.map { $0.kind.label.lowercased() }
             note("Archive Angel [\(idx + 1)/\(total)] \(entry.filename) — ready to review"
@@ -480,7 +491,10 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     // MARK: Preparation of one entry
 
     private func prepare(index idx: Int, record rec: VideoRecord, entryDir: URL, position: Int, total: Int) async {
-        guard let model, let center else { return }
+        guard let model, let center else {
+            note("Archive Angel [\(position)/\(total)] \(rec.filename) — cannot prepare: the operations center or catalog went away")
+            return
+        }
         let stem = (rec.filename as NSString).deletingPathExtension
         func progress(_ step: String, _ n: Int) {
             stepStartedAt = Date()   // every step's clock starts with its progress line
@@ -664,6 +678,14 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
     /// Save the plan; on failure the job fails (a batch nobody can review
     /// is not a batch). Returns false when it failed.
+    /// Why an entry whose preparation returned is NOT ready: a step that
+    /// never reached a verdict. Nil when every step is done, skipped or
+    /// failed (a failed companion still leaves the original promotable).
+    nonisolated static func unfinishedStepReason(_ entry: ArchiveAngelPlan.Entry) -> String? {
+        guard let step = entry.steps.first(where: { $0.state == .pending }) else { return nil }
+        return "preparation stopped before \(ArchiveAngelStepPresentation.columnTitle(step.kind)) ran — nothing was checked or made after that; prepare it again in a later batch."
+    }
+
     /// Why a picked file cannot be prepared at all, or nil when it can.
     nonisolated static func unpreparableReason(recordPresent: Bool, sourceExists: Bool, sourcePath: String) -> String? {
         if !recordPresent { return "its catalog record was removed after it was picked — nothing to prepare." }

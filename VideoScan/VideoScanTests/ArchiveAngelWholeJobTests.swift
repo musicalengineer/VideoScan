@@ -147,4 +147,30 @@ struct ArchiveAngelWholeJobTests {
         #expect(job.plan.entries.filter { $0.status == .preparing || $0.status == .pending }.count >= 1,
                 "the batch stopped rather than preparing everything")
     }
+
+    /// The testbed's first run (2026-09-19) found a false green: with the
+    /// job's (weakly held) operations center gone, preparation returned at
+    /// once and the file was marked READY with four pending steps.
+    @Test func aPreparationThatNeverRanIsNeverReady() async throws {
+        let b = try bench("wholejob_nocenter"); defer { b.sb.cleanup() }
+        let a = try await clip("test_wj_nocenter.mp4", in: b.sb.sources)
+        let rec = record(a)
+        b.model.records = [rec]
+        let job = ArchiveAngelJob(model: b.model, center: MediaFileOperationsCenter(), count: 1, makeLossless: false,
+                                  bufferRoot: b.buffer, explicitRecordIDs: [rec.id])   // center released at once
+        job.start()
+        await job.task?.value
+        let entry = try #require(job.plan.entries.first)
+        #expect(entry.status == .failed, "a file with no step run was reported \(entry.status)")
+        #expect(entry.failure?.contains("preparation stopped before Verify Audio ran") == true, "\(entry.failure ?? "")")
+        #expect(job.plan.log.contains { $0.contains("cannot prepare") }, "logged")
+    }
+
+    @Test func readyNeedsEveryStepToReachAVerdict() {
+        var e = ArchiveAngelPlan.Entry(id: UUID(), sourcePath: "/v/a.mov", filename: "a.mov", sizeBytes: 1,
+                                       durationSeconds: 1, score: 1, evidence: [], proposedName: "a.mov", proposedDate: nil)
+        #expect(ArchiveAngelJob.unfinishedStepReason(e) != nil)
+        for i in e.steps.indices { e.steps[i].state = [.done, .skipped, .failed, .done][i] }
+        #expect(ArchiveAngelJob.unfinishedStepReason(e) == nil, "failed companions still leave a promotable original")
+    }
 }
