@@ -58,4 +58,15 @@ struct ArchiveAngelTableCellTests {
         #expect(Set(all.map(\.word)).count == all.count)
         #expect(Cell.failed.color == .red && Cell.done.color == .green && Cell.working.color == .orange)
     }
+
+    /// Rick 2026-09-19: review and promote from the Angel window itself —
+    /// only once the batch has finished with files ready and not promoted.
+    @Test func reviewIsOfferedOnlyWhenFinishedWithReadyFiles() {
+        typealias V = ArchiveAngelDetailView
+        #expect(V.offersReview(isActive: false, readyCount: 2, status: .ready))
+        #expect(!V.offersReview(isActive: true, readyCount: 2, status: .ready), "still preparing")
+        #expect(!V.offersReview(isActive: false, readyCount: 0, status: .ready), "nothing to review")
+        #expect(!V.offersReview(isActive: false, readyCount: 2, status: .promoting))
+        #expect(!V.offersReview(isActive: false, readyCount: 2, status: .promoted))
+    }
 }

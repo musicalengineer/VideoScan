@@ -10,6 +10,17 @@ import SwiftUI
 
 struct ArchiveAngelDetailView: View {
     @ObservedObject var job: ArchiveAngelJob
+    // Forwarded to the review sheet only (sheets on this window are given
+    // their objects explicitly, as ArchiveView does). A table of ~10 rows.
+    // vs-lint:disable-next vs-env-object-unused
+    @EnvironmentObject var model: VideoScanModel
+    // vs-lint:disable-next vs-env-object-unused
+    @EnvironmentObject var fileOpsCenter: MediaFileOperationsCenter
+    /// Rick 2026-09-19: "once we're done with all that work in that AA
+    /// screen … shouldn't there be a Promote Now button rather than
+    /// requiring going back to another screen?" The review stays (names,
+    /// dates, untick before anything reaches the archive); it opens here.
+    @State private var reviewRequest: ArchiveAngelReviewRequest?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -54,10 +65,43 @@ struct ArchiveAngelDetailView: View {
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 10)
             .fill(Color(NSColor.textBackgroundColor).opacity(0.5)))
+        .sheet(item: $reviewRequest) { req in
+            ArchiveAngelReviewSheet(plan: req.plan)
+                .environmentObject(model)
+                .environmentObject(fileOpsCenter)
+        }
+    }
+
+    /// Finished, with files ready and not yet promoted.
+    private var canReview: Bool {
+        Self.offersReview(isActive: job.state.isActive, readyCount: job.plan.readyCount, status: job.plan.status)
+    }
+
+    static func offersReview(isActive: Bool, readyCount: Int, status: ArchiveAngelPlan.Status) -> Bool {
+        !isActive && readyCount > 0 && status == .ready
+    }
+
+    private var reviewButton: some View {
+        Button {
+            // The plan on disk is the truth: it may have been promoted from
+            // the Archive tab since this job finished.
+            let fresh = (try? ArchiveAngelPlanStore.load(batchDir: job.plan.batchDir)) ?? job.plan
+            reviewRequest = ArchiveAngelReviewRequest(plan: fresh)
+        } label: {
+            Label("Review and Promote \(job.plan.readyCount)…", systemImage: "archivebox")
+                .font(.system(size: 16, weight: .bold))
+                .padding(.vertical, 5)
+                .padding(.horizontal, 6)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .help("Open the review for this batch: check names and dates, untick anything, then promote into the archive.")
+        .accessibilityIdentifier("archiveAngel.reviewAndPromote")
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if canReview { reviewButton.padding(.bottom, 4) }
             Text("\(job.plan.readyCount) ready\(job.plan.skippedClause)\(job.plan.bufferShortClause) · \(job.plan.entries.count) picked · "
                  + "\(job.plan.rejectedTotal) rejected · \(job.plan.overflow) more would qualify")
                 .font(.system(size: 15, weight: .semibold))
