@@ -118,8 +118,12 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         var rejected: [ArchiveAngelRejection: Int] = [:]
         var seen = Set<UUID>()
         for id in ids where seen.insert(id).inserted {
-            guard let candidate = project(id) else { continue }
+            guard var candidate = project(id) else { continue }
             if inFlight.contains(id) { rejected[.inAnotherBatch, default: 0] += 1; continue }
+            // The person chose this row: attention memory (resting,
+            // fatigue) does not apply to an explicit pick.
+            candidate.attention = .none
+            candidate.familySkips = 0
             switch ArchiveAngelScorer.verdict(candidate, now: now) {
             case .eligible(let score, let evidence):
                 picks.append(.init(candidate: candidate, score: score, evidence: evidence))
@@ -204,7 +208,11 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         guard let (idx, before) = plan.skipEntry(id: id, now: now, note: Self.skipNote) else { return false }
         let filename = plan.entries[idx].filename
         note("Archive Angel: you skipped \(filename) — out of this batch (it was \(before.rawValue)); "
-             + "nothing was written to the catalog, so a later batch may propose it again")
+             + "nothing was written to the catalog record; the Angel remembers the pass (ledger) and "
+             + "will rank it lower next time")
+        // Phase 1 attention memory: the pass is a ledger line, not a
+        // catalog field — the scorer reads it back as fatigue.
+        model?.ledgerAngelAttention(.angelSkipped, recordIDs: [id], batchID: plan.batchID, reason: "skip", at: now)
 
         if preparingEntryID == id {
             // The live one. Stop ONLY its sub-job; the loop notices the
@@ -276,6 +284,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             note("Archive Angel: preparing \(selection.picks.count) of \(ids.count) selected record(s)")
         } else if let fromEvidence = Self.selectFromEvidence(
             store: model.archiveAngelStore, count: requestedCount, now: Date(), excluding: inFlight,
+            attentionChangedAt: model.archiveAngelAttention.lastEventAt,
             project: { id in model.record(forID: id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
             selection = fromEvidence.selection
             consideredCount = model.archiveAngelStore.consideredCount
@@ -299,6 +308,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             }
             if stopRequested { finishCancelled(); return }
             ArchiveAngelScorer.markDerivatives(&candidates)   // T10 H3: same rule as the sweep
+            ArchiveAngelScorer.applyFamilyAttention(&candidates)   // Phase 1: same rule as the sweep
 
             // Spotlight play history for the eligible ones only, off-main.
             let eligiblePaths = candidates.filter { ArchiveAngelScorer.hardFloor($0) == nil }.map(\.fullPath)
@@ -342,6 +352,10 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         }
         plan.entries = entries
         plan.startedAt = Date()
+        // Phase 1 attention memory: every row shown is a ledger line; a
+        // later batch ranks it lower and reserves slots for files never shown.
+        model.ledgerAngelAttention(.angelProposed, recordIDs: entries.map(\.id), batchID: plan.batchID,
+                                   scores: Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0.score) }))
         for (n, pick) in selection.picks.enumerated() {
             let why = pick.evidence.prefix(3).map(\.line).joined(separator: " · ")
             note("Archive Angel pick \(n + 1)/\(entries.count) [\(pick.score)] \(pick.candidate.filename) — \(why)")

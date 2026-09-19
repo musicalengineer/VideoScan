@@ -142,7 +142,7 @@ struct ArchiveAngelEvidenceStoreTests {
         #expect(await fresh.save() == false)
     }
 
-    @Test("SENSOR (codex #1345): a v6 sidecar — versions of archived media still graded A/B — is ignored; v7 loads")
+    @Test("SENSOR (codex #1345): a v7 sidecar — graded without attention memory — is ignored; v8 loads")
     @MainActor
     func staleV6SidecarIgnored() async throws {
         let dir = tempDir("v6")
@@ -153,15 +153,15 @@ struct ArchiveAngelEvidenceStoreTests {
                                   considered: 1, eligible: 1, records: [id: rec(110)]))
         #expect(await store.save())
         var json = try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as! [String: Any]
-        #expect(json["rulesVersion"] as? Int == 7, "this sensor pins the bump; re-pin it on the next rules change")
+        #expect(json["rulesVersion"] as? Int == 8, "this sensor pins the bump; re-pin it on the next rules change")
 
-        json["rulesVersion"] = 6
+        json["rulesVersion"] = 7
         try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
         let v6 = ArchiveAngelEvidenceStore(directory: dir)
         #expect(await v6.load() == false)
-        #expect(!v6.isLoaded && v6.candidateIDs.isEmpty, "a v6 grade must never reach a badge")
+        #expect(!v6.isLoaded && v6.candidateIDs.isEmpty, "a v7 grade must never reach a badge")
 
-        json["rulesVersion"] = 7
+        json["rulesVersion"] = 8
         try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
         let v7 = ArchiveAngelEvidenceStore(directory: dir)
         #expect(await v7.load())

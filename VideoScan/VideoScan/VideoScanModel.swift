@@ -726,6 +726,9 @@ final class VideoScanModel: ObservableObject {
     /// background scoring sweep. Wiring in VideoScanModel+ArchiveAngelSweep.swift.
     let archiveAngelStore = ArchiveAngelEvidenceStore()
     lazy var archiveAngelSweep = ArchiveAngelSweep(store: archiveAngelStore)
+    /// Phase 1 attention memory — derived from the Media Ledger's
+    /// angelProposed / angelSkipped / angelCleared lines.
+    let archiveAngelAttention = ArchiveAngelAttentionStore()
 
     /// Content-keyed ignore list (2026-09-11): set-aside / removed content
     /// is never re-ingested under a new path. `var` so tests inject a

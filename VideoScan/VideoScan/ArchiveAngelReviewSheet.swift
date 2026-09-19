@@ -442,6 +442,10 @@ struct ArchiveAngelReviewSheet: View {
     }
 
     private func discard() {
+        // Phase 1 attention memory: an undecided row in a cleared batch is
+        // half a skip (ledger line; nothing on the catalog record).
+        let undecided = plan.entries.filter { $0.status == .ready }.map(\.id)
+        model.ledgerAngelAttention(.angelCleared, recordIDs: undecided, batchID: plan.batchID)
         plan.status = .discarded
         plan.log.append("Discarded by the user")
         ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")   // the decision is durable even if removal fails
@@ -468,6 +472,10 @@ struct ArchiveAngelReviewSheet: View {
                 }
             }
         }
+        // Phase 1 attention memory: a ready row left unchecked at Promote
+        // is a pass on it, the same as Skip.
+        let unchecked = plan.entries.filter { $0.status == .ready && !$0.selected }.map(\.id)
+        model.ledgerAngelAttention(.angelSkipped, recordIDs: unchecked, batchID: plan.batchID, reason: "unchecked")
         var working = plan
         let job = promoter.promote(plan: &working, model: model, center: fileOpsCenter) { settled in
             plan = settled

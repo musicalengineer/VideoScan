@@ -476,7 +476,11 @@ struct ArchiveAngelDerivativeTests {
         #expect(ArchiveAngelScorer.hardFloor(by("Starred.vs.edit.mov")) == nil, "a star is the human's word")
         let sel = ArchiveAngelScorer.select(cands, count: 20)
         #expect(sel.rejected[.derivativeOfOriginal] == 2)
-        #expect(sel.picks.map(\.candidate.filename).sorted() == ["Starred.mov", "Starred.vs.edit.mov", "Tape.mov"])
+        // Phase 1 (2026-09-19): Starred.mov and its starred export are ONE
+        // event family — one member per batch; the starred export outranks
+        // the unmarked original and the original waits for a later batch.
+        #expect(sel.picks.map(\.candidate.filename).sorted() == ["Starred.vs.edit.mov", "Tape.mov"])
+        #expect(sel.rejected[.sameFamilyAsPick] == 1)
         #expect(ArchiveAngelScorer.rulesVersion >= 6)
     }
 

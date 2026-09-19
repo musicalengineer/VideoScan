@@ -127,6 +127,32 @@ extension VideoScanModel {
         })
     }
 
+    /// Archive Angel attention memory (Phase 1, 2026-09-19) — ONE entry
+    /// point for `angelProposed` / `angelSkipped` / `angelCleared`: the
+    /// ledger line (audit), the in-memory summary the scorer reads, and a
+    /// poke to the sweep so the grades catch up (debounced). `scores` is
+    /// per record id for `angelProposed`. Records no longer in the catalog
+    /// are skipped. Returns the flush task (tests await it).
+    @discardableResult
+    func ledgerAngelAttention(_ kind: MediaLedgerEvent.Kind, recordIDs: [UUID],
+                              batchID: String?, reason: String? = nil,
+                              scores: [UUID: Int] = [:], at: Date = Date()) -> Task<Void, Never>? {
+        guard ArchiveAngelAttentionStore.attentionKinds.contains(kind) else { return nil }
+        let by: MediaLedgerEvent.Actor = kind == .angelProposed ? .angel : .rick
+        var events: [MediaLedgerEvent] = []
+        for id in recordIDs {
+            guard let rec = record(forID: id) else { continue }
+            var detail: [String: String] = [:]
+            if let reason, !reason.isEmpty { detail[MediaLedgerEvent.Detail.reason] = reason }
+            if let score = scores[id] { detail[MediaLedgerEvent.Detail.score] = String(score) }
+            events.append(ledgerEvent(kind, for: rec, by: by, at: at, batchID: batchID, detail: detail))
+        }
+        guard !events.isEmpty else { return nil }
+        archiveAngelAttention.note(events)
+        archiveAngelSweep.noteCatalogChanged()
+        return ledgerAppend(events)
+    }
+
     /// recordAttestation's ledger twin (one line per record per answer).
     func ledgerAttestationEvents(_ recs: [VideoRecord], attestation a: BackupAttestation,
                                  by: MediaLedgerEvent.Actor, batchID: String?) -> [MediaLedgerEvent] {

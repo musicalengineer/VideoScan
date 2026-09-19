@@ -60,9 +60,13 @@ struct ArchiveAngelEvidenceRecord: Codable, Sendable, Equatable {
     var lastUsed: Date?
     var computedAt: Date
     var grade: ArchiveAngelGrade
+    /// Phase 1 attention: how often the Angel has proposed this file (0 =
+    /// new to the person). Lets the evidence pick find "fresh eyes"
+    /// candidates past the score band without projecting them.
+    var timesProposed: Int
 
     init(score: Int, lines: [ArchiveAngelEvidence], rejection: ArchiveAngelRejection?,
-         useCount: Int, lastUsed: Date?, computedAt: Date) {
+         useCount: Int, lastUsed: Date?, computedAt: Date, timesProposed: Int = 0) {
         self.score = score
         self.lines = lines
         self.rejection = rejection
@@ -70,6 +74,7 @@ struct ArchiveAngelEvidenceRecord: Codable, Sendable, Equatable {
         self.lastUsed = lastUsed
         self.computedAt = computedAt
         self.grade = rejection == nil ? ArchiveAngelGrade.from(score: score) : .x
+        self.timesProposed = timesProposed
     }
 
     /// Scored (cleared the floor) — any of A–D.

@@ -37,7 +37,7 @@ struct ArchiveAngelEvidencePickTests {
         var projected: [UUID] = []
         let pick = ArchiveAngelJob.selectFromEvidence(store: s, count: 2, now: now) { id in
             projected.append(id)
-            return ArchiveAngelCandidate(id: id)
+            return ArchiveAngelCandidate(id: id, filename: "\(id).mov")
         }
         #expect(pick != nil)
         #expect(pick?.selection.picks.map(\.candidate.id) == [a, b])
@@ -57,7 +57,7 @@ struct ArchiveAngelEvidencePickTests {
         let a = UUID(), b = UUID(), c = UUID(), d = UUID()
         let s = store(records: [a: rec(150, at: now), b: rec(90, at: now), c: rec(40, at: now), d: rec(10, at: now)], now: now)
         let pick = ArchiveAngelJob.selectFromEvidence(store: s, count: 2, now: now, excluding: [a, b]) {
-            ArchiveAngelCandidate(id: $0)
+            ArchiveAngelCandidate(id: $0, filename: "\($0).mov")
         }
         #expect(pick?.selection.picks.map(\.candidate.id) == [c, d])
         #expect(pick?.selection.rejected[.inAnotherBatch] == 2)
@@ -70,7 +70,7 @@ struct ArchiveAngelEvidencePickTests {
         let a = UUID(), b = UUID(), c = UUID(), g = UUID()
         let s = store(records: [a: rec(150, at: now), b: rec(140, at: now), c: rec(40, at: now)], now: now)
         let pick = ArchiveAngelJob.selectFromEvidence(store: s, count: 2, now: now) { id in
-            ArchiveAngelCandidate(id: id, duplicateGroupID: id == c ? nil : g)   // a and b are the same tape
+            ArchiveAngelCandidate(id: id, filename: "\(id).mov", duplicateGroupID: id == c ? nil : g)   // a and b are the same tape
         }
         #expect(pick?.selection.picks.map(\.candidate.id) == [a, c])
         #expect(pick?.selection.rejected[.duplicateOfPick] == 1)
@@ -95,8 +95,8 @@ struct ArchiveAngelEvidencePickTests {
                 case dv: return ArchiveAngelCandidate(id: id, filename: "Cape98.dv", sizeBytes: 12_000_000_000, durationSeconds: 3600, inferredRecordDate: d, videoCodec: "dvvideo", duplicateGroupID: g)
                 case mp4: return ArchiveAngelCandidate(id: id, filename: "Cape98.mp4", sizeBytes: 20_000_000_000, durationSeconds: 3700, inferredRecordDate: d, videoCodec: "h264", duplicateGroupID: g)
                 case lone: return ArchiveAngelCandidate(id: id, filename: "Lone.mov", sizeBytes: 9_000_000_000, durationSeconds: 1800, inferredRecordDate: d)
-                // Ungrouped twins with identical facts never collapse.
-                case twinA, twinB: return ArchiveAngelCandidate(id: id, filename: "Part.mov", sizeBytes: 9_000_000_000, durationSeconds: 1800, inferredRecordDate: d)
+                // Ungrouped twins with identical facts (on two volumes) never collapse.
+                case twinA, twinB: return ArchiveAngelCandidate(id: id, filename: "Part.mov", fullPath: "/Volumes/\(id == twinA ? "A" : "B")/Part.mov", sizeBytes: 9_000_000_000, durationSeconds: 1800, inferredRecordDate: d)
                 default: return ArchiveAngelCandidate(id: id, filename: "Low.mov", sizeBytes: 9_000_000_000, durationSeconds: 1800, inferredRecordDate: d)
                 }
             }
@@ -119,7 +119,7 @@ struct ArchiveAngelEvidencePickTests {
         let a = UUID(), b = UUID(), c = UUID()
         let s = store(records: [a: rec(100, at: now), b: rec(100, at: now), c: rec(100, at: now)], now: now)
         let pick = ArchiveAngelJob.selectFromEvidence(store: s, count: 1, now: now) { id in
-            ArchiveAngelCandidate(id: id, filename: id == b ? "long.mov" : "short.mov", sizeBytes: 9_000_000_000, durationSeconds: id == b ? 3600 : 600)
+            ArchiveAngelCandidate(id: id, filename: id == b ? "long.mov" : "short-\(id).mov", sizeBytes: 9_000_000_000, durationSeconds: id == b ? 3600 : 600)
         }
         #expect(pick?.selection.picks.map(\.candidate.filename) == ["long.mov"])
         #expect(pick?.projections == 3)
@@ -165,7 +165,7 @@ struct ArchiveAngelEvidencePickTests {
         let s = store(records: [a: rec(150, at: now), b: rec(90, at: now), c: rec(40, at: now)], now: now)
         let pick = ArchiveAngelJob.selectFromEvidence(store: s, count: 2, now: now) { id in
             // `a` was archived since the assessment.
-            ArchiveAngelCandidate(id: id, archiveStage: id == a ? .masterAssigned : .none)
+            ArchiveAngelCandidate(id: id, filename: "\(id).mov", archiveStage: id == a ? .masterAssigned : .none)
         }
         #expect(pick?.selection.picks.map(\.candidate.id) == [b, c])
         #expect(pick?.selection.rejected[.alreadyArchived] == 1)

@@ -30,6 +30,8 @@ extension VideoScanModel {
         guard !TestEnvironment.isTestHost else { return }
         Task { [weak self] in
             guard let self else { return }
+            // Attention memory first (the scorer reads it), then the grades.
+            await self.archiveAngelAttention.load(from: self.mediaLedger)
             let loaded = await self.archiveAngelStore.load()
             // No sidecar, or one assessed under older rules: the grades
             // are needed now, not in 90 s — a pass is under 2 s.
@@ -57,6 +59,7 @@ extension VideoScanModel {
             out.append(ArchiveAngelCandidate.project(r, model: self, policy: policy))
         }
         ArchiveAngelScorer.markDerivatives(&out)   // T10 H3: needs the whole set (one O(n) pass)
+        ArchiveAngelScorer.applyFamilyAttention(&out)   // Phase 1: a variant of a skipped file is not new
         return out
     }
 }

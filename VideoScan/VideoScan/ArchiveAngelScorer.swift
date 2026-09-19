@@ -70,6 +70,27 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     /// when that original is in the catalog (set by `markDerivatives`);
     /// nil for an original, or for an export whose source is gone.
     var derivativeOfOriginal: String?
+    /// The ledger's family key for this content ("h:…" / "p:…" / "");
+    /// attention is looked up by record id AND content key.
+    var contentKey: String
+    /// Phase 1 attention memory (docs/archive_angel_curation_direction.md):
+    /// what the Angel has already shown this person about this file.
+    var attention: ArchiveAngelAttention
+    /// Effective skips of the OTHER members of this file's event family
+    /// (set by `applyFamilyAttention`, one O(n) pass); half of it counts
+    /// against this file. 0 when the pass has not run.
+    var familySkips: Double
+
+    /// The event family this file belongs to (folder + base stem, share-out
+    /// and derivative tokens stripped) — one member per batch. Filled by
+    /// `applyFamilyAttention` (one regex pass per candidate); computed on
+    /// demand when that pass has not run (the evidence path's few picks).
+    var familyKey: String
+    var resolvedFamilyKey: String {
+        familyKey.isEmpty ? ArchiveAngelFamily.key(filename: filename, fullPath: fullPath) : familyKey
+    }
+    /// "Fresh eyes": never proposed, and no variant of it was passed on.
+    var isFreshToPerson: Bool { attention.isNew && familySkips == 0 }
 
     /// A person's word on this file: a star, a confirmed person, a note they
     /// typed (machine text in userNotes is filtered by the projection) or a
@@ -106,7 +127,9 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
          isPairedHalf: Bool = false, hasArchivedDuplicate: Bool = false, isOnlyCopy: Bool = false,
          volumeRole: VolumeRole = .workspace, volumeName: String = "X", volumeOnline: Bool = true,
          isOnMasterArchive: Bool = false, useCount: Int = 0, lastUsed: Date? = nil,
-         videoCodec: String = "", duplicateGroupID: UUID? = nil, derivativeOfOriginal: String? = nil) {
+         videoCodec: String = "", duplicateGroupID: UUID? = nil, derivativeOfOriginal: String? = nil,
+         contentKey: String = "", attention: ArchiveAngelAttention = .none, familySkips: Double = 0,
+         familyKey: String = "") {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds; self.streamTypeRaw = streamTypeRaw; self.isPlayable = isPlayable
         self.starRating = starRating; self.mediaDisposition = mediaDisposition; self.archiveStage = archiveStage
@@ -121,6 +144,8 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         self.isOnMasterArchive = isOnMasterArchive; self.useCount = useCount; self.lastUsed = lastUsed
         self.videoCodec = videoCodec; self.duplicateGroupID = duplicateGroupID
         self.derivativeOfOriginal = derivativeOfOriginal
+        self.contentKey = contentKey; self.attention = attention; self.familySkips = familySkips
+        self.familyKey = familyKey
     }
 }
 
@@ -164,6 +189,14 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     case derivativeOfOriginal = "A derivative export — its original is in the catalog"
     case appCache = "An app's cache / render file (name or folder), not an original"
     case proxyStream = "Too small for its length — a thumbnail or proxy stream, not the original"
+    /// Phase 1 attention memory (2026-09-19): the person passed on this
+    /// file three times (skips, half-weight clears, old skips at half) —
+    /// it rests for 90 days from the last pass, then comes back. Explicit
+    /// "Prepare with Archive Angel" picks ignore this.
+    case resting = "Resting — you passed on it three times; it comes back 90 days after the last pass"
+    /// One member of an event family per batch: the variants of a pick
+    /// ("_fixedup", "_clip1", "part 2" beside it) wait for a later batch.
+    case sameFamilyAsPick = "A variant of another pick (same event family) — one per batch"
 }
 
 enum ArchiveAngelVerdict: Sendable, Equatable {
@@ -241,6 +274,27 @@ struct ArchiveAngelWeights: Sendable, Equatable {
     var downloadMaxKilobitsPerSecond = 4000.0
     var downloadMinimumDurationSeconds = 1200.0
     var downloadCapScore = 59
+    /// Phase 1 attention memory (docs/archive_angel_curation_direction.md,
+    /// 2026-09-19). Starting guesses; ArchiveAngelCurationSimulationTests
+    /// is the instrument that tunes them.
+    /// score × fatigueFactor^effectiveSkips. 0.5: a 200-point favourite
+    /// skipped once scores 100, twice 50 — real files get their turn.
+    var fatigueFactor = 0.5
+    /// Effective skips at which the file rests (excluded) …
+    var restAfterSkips = 3.0
+    /// … for this many days after the last pass.
+    var restDays = 90.0
+    /// A skip older than this counts `oldSkipWeight` instead of 1.
+    var oldSkipAfterDays = 90.0
+    var oldSkipWeight = 0.5
+    /// A cleared (undecided) batch counts this much of a skip per row.
+    var clearWeight = 0.5
+    /// Members of one event family carry this share of each other's skips.
+    var familySkipShare = 0.5
+    /// Share of a batch reserved for never-proposed files that clear
+    /// `freshMinimumScore` — 3 of 10.
+    var freshShare = 0.3
+    var freshMinimumScore = 25
 
     static let standard = ArchiveAngelWeights()
 }
@@ -260,14 +314,15 @@ enum ArchiveAngelScorer {
     /// for the pair, 5 was never shipped; 7 = the projection's
     /// `archivedCopyExists` follows provenance (a version of something
     /// archived is excluded, codex #1345) — v6 sidecars still grade such
-    /// versions A/B, so they must rescore.
-    static let rulesVersion = 7
+    /// versions A/B, so they must rescore; 8 = attention memory (novelty,
+    /// fatigue, resting, family share — Phase 1 of the curation plan).
+    static let rulesVersion = 8
 
     /// The verdict for one record. Pure.
     static func verdict(_ c: ArchiveAngelCandidate,
                         weights w: ArchiveAngelWeights = .standard,
                         now: Date = Date()) -> ArchiveAngelVerdict {
-        if let rejection = hardFloor(c, weights: w) { return .rejected(rejection) }
+        if let rejection = hardFloor(c, weights: w, now: now) { return .rejected(rejection) }
 
         var lines: [ArchiveAngelEvidence] = []
         func add(_ points: Int, _ line: String) { lines.append(.init(points: points, line: line)) }
@@ -338,7 +393,47 @@ enum ArchiveAngelScorer {
 
         if let cap = Self.downloadCapLine(c, lines: lines, weights: w) { lines.append(cap) }
 
+        // Attention memory (Phase 1): fatigue last, as a negative line over
+        // everything above it, so the score stays the sum of its printed
+        // reasons. Novelty is deliberately NOT points — a flat bonus shifted
+        // every new file's grade and out-scored the download cap; being
+        // new earns a reserved slot (`withFreshSlots`), not a better grade.
+        if let fatigue = Self.fatigueLine(c, lines: lines, weights: w, now: now) { lines.append(fatigue) }
+
         return .eligible(score: lines.reduce(0) { $0 + $1.points }, evidence: lines)
+    }
+
+    /// Phase 1: `score × fatigueFactor^effectiveSkips`, where the family's
+    /// skips count `familySkipShare`. Printed as one negative line
+    /// ("Skipped by you twice — score halved twice") so the person sees
+    /// why a favourite fell. nil when nothing was ever passed on.
+    static func fatigueLine(_ c: ArchiveAngelCandidate, lines: [ArchiveAngelEvidence],
+                            weights w: ArchiveAngelWeights, now: Date) -> ArchiveAngelEvidence? {
+        let own = c.attention.effectiveSkips(now: now, weights: w)
+        let shared = w.familySkipShare * c.familySkips
+        let effective = own + shared
+        guard effective > 0 else { return nil }
+        let total = lines.reduce(0) { $0 + $1.points }
+        guard total > 0 else { return nil }
+        let factor = pow(w.fatigueFactor, effective)
+        let points = Int((Double(total) * factor).rounded()) - total
+        guard points < 0 else { return nil }
+        var line: String
+        switch c.attention.timesSkipped {
+        case 0: line = "You passed on it"
+        case 1: line = "You skipped it once"
+        case 2: line = "You skipped it twice"
+        default: line = "You skipped it \(c.attention.timesSkipped) times"
+        }
+        if c.attention.timesCleared > 0 {
+            line += c.attention.timesSkipped == 0
+                ? " (a batch cleared \(c.attention.timesCleared == 1 ? "once" : "\(c.attention.timesCleared) times") undecided)"
+                : " and cleared a batch \(c.attention.timesCleared == 1 ? "once" : "\(c.attention.timesCleared) times")"
+        }
+        if shared > 0 { line += own > 0 ? ", and passed on its variants" : "'s variants" }
+        if let last = c.attention.lastSkippedAt { line += ", last on " + Self.dayFormatter.string(from: last) }
+        line += String(format: " — score × %.2f", factor)
+        return .init(points: points, line: line)
     }
 
     /// T10 H1: a download or rip can reach the top on length alone; cap it
@@ -358,7 +453,8 @@ enum ArchiveAngelScorer {
     /// Hard floor (design §3.2): the reasons a record is never a candidate.
     /// Order = the reason the user should hear first.
     static func hardFloor(_ c: ArchiveAngelCandidate,
-                          weights w: ArchiveAngelWeights = .standard) -> ArchiveAngelRejection? {
+                          weights w: ArchiveAngelWeights = .standard,
+                          now: Date = Date()) -> ArchiveAngelRejection? {
         switch c.streamTypeRaw {
         case StreamType.videoAndAudio.rawValue, StreamType.videoOnly.rawValue: break
         default: return .notVideo
@@ -384,6 +480,7 @@ enum ArchiveAngelScorer {
         }
         if c.junkScore >= w.junkFloor && c.starRating == 0 { return .suspectedJunk }
         if !c.volumeOnline { return .volumeOffline }
+        if c.attention.restingUntil(now: now, weights: w) != nil { return .resting }
         return nil
     }
 
@@ -405,8 +502,88 @@ enum ArchiveAngelScorer {
         }
         picks.sort(by: rank)
         picks = onePerDuplicateGroup(picks, rejected: &rejected)
-        let kept = Array(picks.prefix(max(0, count)))
+        picks = onePerFamily(picks, rejected: &rejected)
+        let kept = withFreshSlots(picks, count: max(0, count), weights: w)
         return .init(picks: kept, overflow: max(0, picks.count - kept.count), rejected: rejected)
+    }
+
+    /// Phase 1: one member per EVENT FAMILY per batch (the generalised
+    /// duplicateOfPick — "one Thanksgiving variant per batch"). `picks`
+    /// must be in `rank` order; the best member stays, the rest are
+    /// counted under `.sameFamilyAsPick`. Pure.
+    static func onePerFamily(_ picks: [ArchiveAngelPick],
+                             rejected: inout [ArchiveAngelRejection: Int]) -> [ArchiveAngelPick] {
+        var seen: Set<String> = []
+        return picks.filter { pick in
+            if seen.insert(pick.candidate.resolvedFamilyKey).inserted { return true }
+            rejected[.sameFamilyAsPick, default: 0] += 1
+            return false
+        }
+    }
+
+    /// Phase 1's explore arm: of `count` slots, `ceil(count × freshShare)`
+    /// go to never-proposed files scoring at least `freshMinimumScore`.
+    /// The head of `ranked` (already in `rank` order, deduplicated) is
+    /// taken; if it holds too few new files, the lowest-ranked ALREADY-
+    /// PROPOSED picks in it make room for the best new files beyond it.
+    /// When there are no such new files the head stands. The result is in
+    /// `rank` order. Pure.
+    static func withFreshSlots(_ ranked: [ArchiveAngelPick], count: Int,
+                               weights w: ArchiveAngelWeights = .standard) -> [ArchiveAngelPick] {
+        guard count > 0 else { return [] }
+        var head = Array(ranked.prefix(count))
+        let wanted = min(count, Int((Double(count) * w.freshShare).rounded(.up)))
+        let newInHead = head.filter { $0.candidate.isFreshToPerson }.count
+        if ranked.count > count, newInHead < wanted {
+            let incoming = ranked.dropFirst(count)
+                .filter { $0.candidate.isFreshToPerson && $0.score >= w.freshMinimumScore }
+                .prefix(wanted - newInHead)
+            if !incoming.isEmpty {
+                var toRemove = incoming.count
+                var i = head.count - 1
+                while toRemove > 0, i >= 0 {
+                    if !head[i].candidate.isFreshToPerson { head.remove(at: i); toRemove -= 1 }
+                    i -= 1
+                }
+                head.append(contentsOf: incoming)
+                head.sort(by: rank)
+            }
+        }
+        // The person reads why a file is here: a 0-point line, never a grade.
+        for i in head.indices where head[i].candidate.isFreshToPerson
+            && !head[i].evidence.contains(where: { $0.line == freshLine }) {
+            head[i].evidence.append(.init(points: 0, line: freshLine))
+        }
+        return head
+    }
+
+    static let freshLine = "New to you — never proposed"
+
+
+    /// Phase 1: one O(n) pass that gives every member of an event family
+    /// the OTHER members' effective skips (`familySkips`), so a variant of
+    /// a file the person passed on is not "new". Run after the projection
+    /// and before scoring, like `markDerivatives`.
+    static func applyFamilyAttention(_ candidates: inout [ArchiveAngelCandidate],
+                                     weights w: ArchiveAngelWeights = .standard,
+                                     now: Date = Date()) {
+        var own: [Double] = []
+        own.reserveCapacity(candidates.count)
+        var keys: [String] = []
+        keys.reserveCapacity(candidates.count)
+        var totals: [String: Double] = [:]
+        for c in candidates {
+            let skips = c.attention.effectiveSkips(now: now, weights: w)
+            let key = c.resolvedFamilyKey
+            own.append(skips)
+            keys.append(key)
+            if skips > 0 { totals[key, default: 0] += skips }
+        }
+        for i in candidates.indices {
+            candidates[i].familyKey = keys[i]
+            let others = (totals[keys[i]] ?? 0) - own[i]
+            candidates[i].familySkips = others > 0 ? others : 0
+        }
     }
 
     // MARK: ranking (ONE comparator — the walk and the evidence pick both use it)
@@ -505,9 +682,11 @@ enum ArchiveAngelScorer {
             ArchiveAngelNaming.derivativeBaseStem(($0.filename as NSString).deletingPathExtension)?.lowercased()
         }
         for (i, c) in candidates.enumerated() {
+            var probe = c
+            probe.attention = .none                                          // a resting original is still the original
             guard bases[i] == nil,                                           // an export is never an original
                   c.derivativeOfOriginal == nil,
-                  hardFloor(c, weights: w) == nil else { continue }          // usable NOW
+                  hardFloor(probe, weights: w) == nil else { continue }      // usable NOW
             let stem = (c.filename as NSString).deletingPathExtension.lowercased()
             let folder = (c.fullPath as NSString).deletingLastPathComponent
             add(&byFolder, folder + "|" + stem, i)

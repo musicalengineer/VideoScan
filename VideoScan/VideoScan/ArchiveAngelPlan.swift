@@ -225,6 +225,9 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
 
     static let planFilename = "plan.json"
     var planURL: URL { URL(fileURLWithPath: batchDir).appendingPathComponent(Self.planFilename) }
+    /// The ledger's batch id for this batch — the folder name
+    /// ("batch-2026-09-19T14-02-11"), stable across saves.
+    var batchID: String { (batchDir as NSString).lastPathComponent }
 
     var selectedEntries: [Entry] { entries.filter { $0.selected && $0.status == .ready } }
     var readyCount: Int { entries.filter { $0.status == .ready }.count }
@@ -581,25 +584,24 @@ actor ArchiveAngelPlanWriter {
     static let shared = ArchiveAngelPlanWriter()
     private var written: [String: UInt64] = [:]
 
-    #if DEBUG
     /// Test seam (the Angel testbed's disk-full injection): for a batch
     /// folder whose name contains `batchNameContains`, every write after
-    /// the first `afterWrites` throws "out of space". DEBUG builds only.
+    /// the first `afterWrites` throws "out of space". Always compiled —
+    /// nil in production, and Release test runs (TestDriver, the testbed)
+    /// must be able to set it (codex #1570: a DEBUG-only seam made the
+    /// whole-job suite uncompilable in Release).
     nonisolated(unsafe) static var injectedFailure: (batchNameContains: String, afterWrites: Int)?
     private var writesPerBatch: [String: Int] = [:]
-    #endif
 
     /// Writes unless a newer generation of this batch is already on disk.
     /// Returns false when the save was dropped as stale.
     @discardableResult
     func write(_ plan: ArchiveAngelPlan, generation: UInt64) throws -> Bool {
         let key = URL(fileURLWithPath: plan.batchDir).standardizedFileURL.path
-        #if DEBUG
         if let inject = Self.injectedFailure, key.contains(inject.batchNameContains) {
             writesPerBatch[key, default: 0] += 1
             if writesPerBatch[key, default: 0] > inject.afterWrites { throw CocoaError(.fileWriteOutOfSpace) }
         }
-        #endif
         if let last = written[key], last >= generation { return false }
         try ArchiveAngelPlanStore.save(plan)
         written[key] = generation

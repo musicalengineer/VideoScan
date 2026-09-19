@@ -51,6 +51,17 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         /// "Rick approved N copies to Trash" — detail: count, bytes,
         /// files (newline-separated filenames), action.
         case approval
+        /// The Archive Angel's ATTENTION MEMORY (Rick 2026-09-19: "the
+        /// Angel keeps suggesting the same N files"). The Angel put the
+        /// file in a batch — detail: score. by: angel.
+        case angelProposed
+        /// The person passed on a proposed file: Skip in the batch, or
+        /// left unchecked when the batch was promoted — detail: reason
+        /// ("skip" / "unchecked"). by: rick.
+        case angelSkipped
+        /// A prepared batch was discarded without a decision on this
+        /// row — half a skip. by: rick.
+        case angelCleared
     }
 
     /// Who did it. "rick" for a human gesture; the app's own verbs are
@@ -86,6 +97,8 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         public static let action = "action"
         public static let mode = "mode"
         public static let protection = "protection"
+        /// Angel attention: the score the file was proposed at.
+        public static let score = "score"
     }
 
     public let at: Date

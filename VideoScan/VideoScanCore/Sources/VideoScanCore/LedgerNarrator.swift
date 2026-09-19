@@ -157,6 +157,21 @@ public enum LedgerNarrator {
                 s += ": \(shown)\(more)"
             }
             return s + "."
+
+        case .angelProposed:
+            let score = detail[MediaLedgerEvent.Detail.score] ?? ""
+            let scoreText = score.isEmpty ? "" : " (score \(score))"
+            return "Archive Angel proposed it for the archive on \(d)\(scoreText)."
+
+        case .angelSkipped:
+            let reason = detail[MediaLedgerEvent.Detail.reason] ?? ""
+            if reason == "unchecked" {
+                return "\(who) left it unchecked when the batch was promoted on \(d)."
+            }
+            return "\(who) passed on it (Archive Angel skip) on \(d)."
+
+        case .angelCleared:
+            return "\(who) cleared the Archive Angel batch it was in on \(d), undecided."
         }
     }
 

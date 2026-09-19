@@ -294,9 +294,10 @@ final class ArchiveAngelSweep: ObservableObject {
             pending.reserveCapacity(slice.count)
             let now = cfg.now()
             for c in slice {
-                if let rejection = ArchiveAngelScorer.hardFloor(c, weights: cfg.weights) {
+                if let rejection = ArchiveAngelScorer.hardFloor(c, weights: cfg.weights, now: now) {
                     records[c.id] = .init(score: 0, lines: [], rejection: rejection,
-                                          useCount: 0, lastUsed: nil, computedAt: now)
+                                          useCount: 0, lastUsed: nil, computedAt: now,
+                                          timesProposed: c.attention.timesProposed)
                 } else {
                     pending.append(c)
                 }
@@ -313,12 +314,14 @@ final class ArchiveAngelSweep: ObservableObject {
                 case .eligible(let score, let lines):
                     eligible += 1
                     let rec = ArchiveAngelEvidenceRecord(score: score, lines: lines, rejection: nil,
-                                                         useCount: c.useCount, lastUsed: c.lastUsed, computedAt: now)
+                                                         useCount: c.useCount, lastUsed: c.lastUsed, computedAt: now,
+                                                         timesProposed: c.attention.timesProposed)
                     records[c.id] = rec
                     sweepLog.debug("\(c.filename, privacy: .public): \(rec.summary(), privacy: .public)")
                 case .rejected(let rejection):
                     records[c.id] = .init(score: 0, lines: [], rejection: rejection,
-                                          useCount: c.useCount, lastUsed: c.lastUsed, computedAt: now)
+                                          useCount: c.useCount, lastUsed: c.lastUsed, computedAt: now,
+                                          timesProposed: c.attention.timesProposed)
                     sweepLog.debug("\(c.filename, privacy: .public): excluded — \(rejection.rawValue, privacy: .public)")
                 }
             }

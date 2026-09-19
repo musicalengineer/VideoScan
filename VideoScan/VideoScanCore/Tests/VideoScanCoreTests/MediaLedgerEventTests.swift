@@ -22,7 +22,8 @@ final class MediaLedgerEventTests: XCTestCase {
     func testVocabularyIsFrozen() {
         XCTAssertEqual(MediaLedgerEvent.Kind.allCases.map(\.rawValue),
                        ["cataloged", "setAside", "putBack", "archived", "copyTrashed", "copyDeleted",
-                        "restored", "placeSet", "dateSet", "attestation", "approval"])
+                        "restored", "placeSet", "dateSet", "attestation", "approval",
+                        "angelProposed", "angelSkipped", "angelCleared"])
         XCTAssertEqual(MediaLedgerEvent.Actor.allCases.map(\.rawValue), ["rick", "tidy", "promote", "angel", "app"])
     }
 

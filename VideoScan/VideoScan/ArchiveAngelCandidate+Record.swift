@@ -64,7 +64,8 @@ extension ArchiveAngelCandidate {
             useCount: 0,
             lastUsed: nil,
             videoCodec: r.videoCodec,
-            duplicateGroupID: r.duplicateGroupID)
+            duplicateGroupID: r.duplicateGroupID,
+            contentKey: VideoScanModel.ledgerContentKey(for: r))
     }
 
     /// The projection the job uses: keeper policy built ONCE by the
@@ -108,9 +109,13 @@ extension ArchiveAngelCandidate {
         // A scan-target fact answers reachability without touching the
         // disk; only pathless strays pay for a stat.
         let online = facts?.isReachable ?? VolumeReachability.isReachable(path: r.fullPath)
-        return ArchiveAngelCandidate(record: r, facts: facts, readiness: readiness,
-                                     archivedCopyExists: archived, isOnMasterArchive: onMaster,
-                                     volumeName: name, volumeOnline: online)
+        var c = ArchiveAngelCandidate(record: r, facts: facts, readiness: readiness,
+                                      archivedCopyExists: archived, isOnMasterArchive: onMaster,
+                                      volumeName: name, volumeOnline: online)
+        // Phase 1 attention memory: what the Angel already showed about
+        // this file or any copy of its content.
+        c.attention = model.archiveAngelAttention.summary(recordID: r.id, contentKey: c.contentKey)
+        return c
     }
 }
 
