@@ -3,6 +3,7 @@
 # publish results to metrics/testdriver.jsonl on the metrics branch.
 #
 # Designed to run unattended via launchd. Logs to ~/Library/Logs/VideoScan/.
+# Developer-tool maintenance is manual: run scripts/dev_updater.sh as needed.
 #
 # DESIGN PRINCIPLE: NEVER SILENTLY SKIP.
 #   Between 2 AM and the time Rick wakes up, metrics/testdriver.jsonl on
@@ -62,9 +63,9 @@
 #       first (see docs / GH issue from 2026-07-07 investigation).
 #
 #   2026-08-28 (post-nightly-updates-r1):
-#     - After the result row is published or durably queued, run Homebrew,
-#       Claude, and Codex updates. Update failures remain advisory and cannot
-#       replace the already-recorded nightly verdict or its exit status.
+#     - Added Homebrew, Claude, and Codex updates after result publication.
+#       Superseded 2026-09-19: developer-tool maintenance is now manual only,
+#       at Rick's request.
 #
 #   2026-08-30 (xcodebuild-watchdog-r3):
 #     - Build and test xcodebuild invocations run in private process groups
@@ -282,26 +283,6 @@ classify_nightly_test_result() {
         STATUS="failed"
         REASON="test-rc:$test_rc"
     fi
-}
-
-# Run developer-tool maintenance only after publish_row has returned, which
-# means the result row is either on origin/metrics or in the durable local
-# pending queue. Its result is deliberately advisory: update failures are
-# logged here but never replace the night's recorded test verdict or exit code.
-run_dev_updater_if_recorded() {
-    local publish_rc="$1"
-    local rc
-    if [ "$publish_rc" -ne 0 ] && [ "$publish_rc" -ne 1 ]; then
-        log "ERROR: nightly result was neither published nor queued; post-nightly maintenance will not run."
-        return 0
-    fi
-    log "Nightly result recorded; starting post-nightly developer-tool maintenance."
-    "$REPO/scripts/dev_updater.sh"
-    rc=$?
-    if [ "$rc" -ne 0 ]; then
-        log "WARNING: post-nightly developer-tool maintenance failed (rc=$rc); nightly verdict is unchanged."
-    fi
-    return 0
 }
 
 # Refresh the privacy-safe person-recognition fields. With no app argument it
@@ -757,7 +738,6 @@ if $BUILD_TIMED_OUT; then
     log "FATAL: build timed out after ${NIGHTLY_BUILD_TIMEOUT_SECONDS}s"
     publish_row "$(with_person_metrics "$(make_status_row failed "$(nightly_timeout_reason build "$NIGHTLY_BUILD_TIMEOUT_SECONDS")" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
-    run_dev_updater_if_recorded "$PUBLISH_RC"
     exit 1
 elif [ "$BUILD_RC" -ne 0 ]; then
     log "Build failed (rc=$BUILD_RC) — wiping DerivedData and retrying once (stale-module-cache guard)"
@@ -771,13 +751,11 @@ if $BUILD_TIMED_OUT; then
     log "FATAL: clean-retry build timed out after ${NIGHTLY_BUILD_TIMEOUT_SECONDS}s"
     publish_row "$(with_person_metrics "$(make_status_row failed "$(nightly_timeout_reason build "$NIGHTLY_BUILD_TIMEOUT_SECONDS")" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
-    run_dev_updater_if_recorded "$PUBLISH_RC"
     exit 1
 elif [ "$BUILD_RC" -ne 0 ]; then
     log "FATAL: build failed after clean retry (rc=$BUILD_RC)"
     publish_row "$(with_person_metrics "$(make_status_row failed "build-rc:$BUILD_RC" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
-    run_dev_updater_if_recorded "$PUBLISH_RC"
     exit 1
 fi
 BUILD_END=$(date +%s)
@@ -968,7 +946,6 @@ classify_nightly_test_result \
 orchestrate_post_test_result "$TEST_TIMED_OUT" "$TOTAL"
 POST_TEST_ROUTE_RC=$?
 if [ "$POST_TEST_ROUTE_RC" -eq 124 ]; then
-    run_dev_updater_if_recorded "$PUBLISH_RC"
     rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
     exit 1
 fi
@@ -977,7 +954,6 @@ if [ "$POST_TEST_ROUTE_RC" -eq 2 ]; then
     log "SKIP: no tests ran (likely build issue or test discovery fail)"
     publish_row "$(with_person_metrics "$(make_status_row "$STATUS" "$REASON" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
-    run_dev_updater_if_recorded "$PUBLISH_RC"
     exit 1
 fi
 
@@ -988,7 +964,6 @@ fi
 # "failed_names" is additive; make_current_test_result_row also includes
 # coverage only when the normal, non-timeout extraction produced it.
 publish_current_test_result
-run_dev_updater_if_recorded "$PUBLISH_RC"
 
 # ── Cleanup ─────────────────────────────────────────────────────────
 rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log

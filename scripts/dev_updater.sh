@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # dev_updater.sh — Update the developer tools: Homebrew, Claude Code, Codex.
 #
-# A plain utility, runnable by hand at any time. The nightly calls it too, but
-# only after its result row has been published or queued, so a tool update can
-# never be blamed for the night's verdict. Renamed from post_nightly_updates.sh
-# on 2026-09-03: the old name described one caller rather than what it does.
+# A manual utility, runnable by hand at any time. Rick requested manual
+# tool maintenance, so nightly tests do not call it. Renamed from
+# post_nightly_updates.sh on 2026-09-03 to describe what the utility does.
 # Binary paths stay injectable so a run can be pointed at fakes.
 
 set -u

@@ -544,7 +544,7 @@ fi
 echo
 echo "== Test 11: deterministic process-group watchdog timeout =="
 WATCHDOG_LIB="$SANDBOX/watchdog_lib.sh"
-awk '/^nightly_timeout_reason\(\)/,/^# Run developer-tool maintenance/' \
+awk '/^nightly_timeout_reason\(\)/,/^# Refresh the privacy-safe person-recognition fields/' \
     "$SCRIPT_DIR/nightly_local_tests.sh" | sed '$ d' > "$WATCHDOG_LIB"
 WATCHDOG_FIXTURE="$SANDBOX/watchdog-fixture.sh"
 printf '%s\n' \
