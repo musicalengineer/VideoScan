@@ -332,9 +332,17 @@ enum ArchiveAngelPlanStore {
     /// Default buffer root: the internal SSD (design §5). Rick 9/09: "we'll
     /// try with a fast ssd" — a setting can point this elsewhere.
     static var defaultBufferRoot: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        // Isolation (audit, 2026-09-19): under the test host, never Rick's
+        // live buffer — a test that starts a job through the normal entry
+        // point would otherwise write batches (and settle his!) there. One
+        // folder per test process, like CatalogStore.shared's guard.
+        if TestEnvironment.isTestHost { return testHostBufferRoot }
+        return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Movies/VideoScan Buffer/ArchiveAngel", isDirectory: true)
     }
+
+    nonisolated static let testHostBufferRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("test_angel_buffer_pid\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
 
     nonisolated static func save(_ plan: ArchiveAngelPlan) throws {
         let enc = JSONEncoder()

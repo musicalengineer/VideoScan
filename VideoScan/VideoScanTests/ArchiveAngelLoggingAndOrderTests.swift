@@ -104,4 +104,13 @@ struct ArchiveAngelLoggingAndOrderTests {
         ArchiveAngelPlanStore.reclaimUnfinished(plan, unfinished: [untouched], log: { lines.append($0) })
         #expect(lines.count == 1 && lines[0].contains("1 unfinished row(s)"), "a row with no folder is fine: \(lines)")
     }
+
+    /// Isolation sensor: under the test host the default buffer is never
+    /// Rick's live ~/Movies/VideoScan Buffer.
+    @Test func theTestHostNeverUsesTheLiveBuffer() {
+        let root = ArchiveAngelPlanStore.defaultBufferRoot.path
+        #expect(TestEnvironment.isTestHost)
+        #expect(!root.contains("/Movies/VideoScan Buffer"), "\(root)")
+        #expect(root.hasPrefix(FileManager.default.temporaryDirectory.path))
+    }
 }
