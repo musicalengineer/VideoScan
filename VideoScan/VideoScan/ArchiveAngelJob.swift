@@ -178,6 +178,8 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     private var planSaveFailed = false
     /// Orders this job's plan.json saves (ArchiveAngelPlanWriter).
     private var saveGeneration: UInt64 = 0
+    /// When the current preparation step began (set by prepare's progress()).
+    private var stepStartedAt: Date?
     private func nextSaveGeneration() -> UInt64 { saveGeneration += 1; return saveGeneration }
 
     // MARK: Skip one entry (Rick 2026-09-13: "just skip this file for this
@@ -481,6 +483,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         guard let model, let center else { return }
         let stem = (rec.filename as NSString).deletingPathExtension
         func progress(_ step: String, _ n: Int) {
+            stepStartedAt = Date()   // every step's clock starts with its progress line
             subtitleText = "\(position) of \(total) — \(rec.filename): \(step)"
             fractionValue = (Double(position - 1) + Double(n) / 4.0) / Double(total)
         }
@@ -644,7 +647,13 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                       note text: String, output: String? = nil, startedAt: Date? = nil, outputBytes: Int64 = 0) {
         plan.entries[idx].set(kind, state, note: text, output: output)   // step-helper
         var extra: [String] = []
-        if let startedAt { extra.append(String(format: "%.1f s", Date().timeIntervalSince(startedAt))) }
+        if let started = startedAt ?? stepStartedAt {
+            let seconds = Date().timeIntervalSince(started)
+            if let i = plan.entries[idx].steps.firstIndex(where: { $0.kind == kind }) {
+                plan.entries[idx].steps[i].seconds = seconds
+            }
+            extra.append(String(format: "%.1f s", seconds))
+        }
         if outputBytes > 0 { extra.append(ByteCountFormatter.string(fromByteCount: outputBytes, countStyle: .file)) }
         let tail = extra.isEmpty ? "" : " (" + extra.joined(separator: ", ") + ")"
         note("Archive Angel [\(idx + 1)/\(plan.entries.count)] \(plan.entries[idx].filename) — "

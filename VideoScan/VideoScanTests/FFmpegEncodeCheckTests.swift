@@ -67,10 +67,15 @@ struct FFmpegEncodeFailureTests {
         return src
     }
 
-    /// A fake ffmpeg: `body` runs with $out = the last argument.
+    /// A fake ffmpeg: `body` runs with $out = the last argument — ONLY for
+    /// this suite's fixture (test_tape.mov); every other call goes to the
+    /// real ffmpeg. VS_FFMPEG_PATH is process-global and other suites run
+    /// in parallel, so a fake must never break their encodes.
     private func fakeFFmpeg(in dir: URL, _ body: String) throws -> URL {
         let url = dir.appendingPathComponent("ffmpeg")
-        try "#!/bin/sh\nfor out; do :; done\n\(body)\n".write(to: url, atomically: true, encoding: .utf8)
+        let script = "#!/bin/sh\ncase \"$*\" in *test_tape.mov*) ;; *) exec \"\(Self.realFFmpeg)\" \"$@\" ;; esac\n"
+            + "for out; do :; done\n\(body)\n"
+        try script.write(to: url, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         return url
     }

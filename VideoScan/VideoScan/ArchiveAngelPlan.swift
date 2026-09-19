@@ -55,6 +55,9 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         /// Catalog record of the companion (Transcode/Balance jobs catalog
         /// their outputs; Promote only accepts catalog record IDs).
         var recordID: UUID?
+        /// Wall-clock seconds the step took (2026-09-19, the Angel testbed
+        /// and journey audit). Additive: plans written before it decode nil.
+        var seconds: Double?
         var id: StepKind { kind }
     }
 
@@ -578,11 +581,25 @@ actor ArchiveAngelPlanWriter {
     static let shared = ArchiveAngelPlanWriter()
     private var written: [String: UInt64] = [:]
 
+    #if DEBUG
+    /// Test seam (the Angel testbed's disk-full injection): for a batch
+    /// folder whose name contains `batchNameContains`, every write after
+    /// the first `afterWrites` throws "out of space". DEBUG builds only.
+    nonisolated(unsafe) static var injectedFailure: (batchNameContains: String, afterWrites: Int)?
+    private var writesPerBatch: [String: Int] = [:]
+    #endif
+
     /// Writes unless a newer generation of this batch is already on disk.
     /// Returns false when the save was dropped as stale.
     @discardableResult
     func write(_ plan: ArchiveAngelPlan, generation: UInt64) throws -> Bool {
         let key = URL(fileURLWithPath: plan.batchDir).standardizedFileURL.path
+        #if DEBUG
+        if let inject = Self.injectedFailure, key.contains(inject.batchNameContains) {
+            writesPerBatch[key, default: 0] += 1
+            if writesPerBatch[key, default: 0] > inject.afterWrites { throw CocoaError(.fileWriteOutOfSpace) }
+        }
+        #endif
         if let last = written[key], last >= generation { return false }
         try ArchiveAngelPlanStore.save(plan)
         written[key] = generation
