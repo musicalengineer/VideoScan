@@ -409,8 +409,10 @@ enum ArchiveAngelPlanStore {
                                                      fileManager fm: FileManager = .default) -> [ArchiveAngelPlan] {
         var settled: [ArchiveAngelPlan] = []
         for var plan in listBatches(bufferRoot: bufferRoot) where isInterrupted(plan, now: now, staleAfter: staleAfter, fileManager: fm) {
+            let unfinished = plan.entries.filter { $0.status.isUnsettled }
             let kept = plan.settleAfterInterruption(reason: "Interrupted — the app quit or the job was stopped before this row was prepared")
             saveLogged(plan, context: "settling an interrupted batch")
+            if kept { reclaimUnfinished(plan, unfinished: unfinished) }
             if !kept {
                 do { try removeBatchFolder(plan) } catch {
                     appLog.write("Archive Angel: could not remove the discarded batch \((plan.batchDir as NSString).lastPathComponent) — \(error.localizedDescription)")
@@ -521,9 +523,31 @@ enum ArchiveAngelPlanStore {
         try FileManager.default.removeItem(atPath: plan.batchDir)
     }
 
-    nonisolated static func removeEntryFolder(_ plan: ArchiveAngelPlan, entry: ArchiveAngelPlan.Entry) {
+    nonisolated static func removeEntryFolder(_ plan: ArchiveAngelPlan, entry: ArchiveAngelPlan.Entry,
+                                              log: (String) -> Void = { appLog.write($0) }) {
         let dir = URL(fileURLWithPath: plan.batchDir).appendingPathComponent(entry.id.uuidString)
-        try? FileManager.default.removeItem(at: dir)
+        guard FileManager.default.fileExists(atPath: dir.path) else { return }   // nothing there: fine
+        do { try FileManager.default.removeItem(at: dir) } catch {
+            log("Archive Angel: could not remove the buffer folder of \(entry.filename) — \(error.localizedDescription)")
+        }
+    }
+
+    /// Rows a cancel or an interruption left unfinished keep their partial
+    /// companions forever once the batch survives (it has ready rows) —
+    /// audit P2. They can't be promoted, so their folders go, and the space
+    /// that comes back is logged. `unfinished` = the rows that were
+    /// unsettled before the settle.
+    nonisolated static func reclaimUnfinished(_ plan: ArchiveAngelPlan, unfinished: [ArchiveAngelPlan.Entry],
+                                              log: (String) -> Void = { appLog.write($0) }) {
+        guard !unfinished.isEmpty else { return }
+        var bytes: Int64 = 0
+        for entry in unfinished {
+            bytes += folderBytes(URL(fileURLWithPath: plan.batchDir).appendingPathComponent(entry.id.uuidString).path,
+                                 fm: .default)
+            removeEntryFolder(plan, entry: entry, log: log)
+        }
+        log("Archive Angel: removed the partial files of \(unfinished.count) unfinished row(s) in "
+            + "\((plan.batchDir as NSString).lastPathComponent) — \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) back")
     }
 
     /// Free bytes on the volume holding `url`.

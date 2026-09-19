@@ -724,6 +724,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         // kept, the rest marked failed) or gone (nothing prepared) — never a
         // `preparing` ghost that hides from the Archive tab and reserves
         // its rows from later batches.
+        let unfinished = plan.entries.filter { $0.status.isUnsettled }
         let kept = plan.settleAfterInterruption(reason: "Cancelled before it was prepared")
         let settled = plan
         let generation = nextSaveGeneration()
@@ -731,6 +732,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             do { try await Self.savePlanOffMain(settled, generation: generation) } catch {
                 appLog.write("Archive Angel: could not save the cancelled batch — \(error.localizedDescription)")
             }
+            if kept { ArchiveAngelPlanStore.reclaimUnfinished(settled, unfinished: unfinished) }
             if !kept {
                 do { try ArchiveAngelPlanStore.removeBatchFolder(settled) } catch {
                     appLog.write("Archive Angel: could not remove the cancelled batch's folder — \(error.localizedDescription)")

@@ -71,4 +71,37 @@ struct ArchiveAngelLoggingAndOrderTests {
         let job = try String(contentsOf: dir.appendingPathComponent("ArchiveAngelJob.swift"), encoding: .utf8)
         #expect(!job.contains("model.log("), "every job line goes through note()")
     }
+
+    /// A batch that survives an interruption (it has a ready row) used to
+    /// keep the unfinished rows' partial companions forever.
+    @Test func anInterruptedBatchReclaimsOnlyTheUnfinishedRowsFiles() throws {
+        let root = tempRoot("reclaim"); defer { try? FileManager.default.removeItem(at: root) }
+        func row(_ s: ArchiveAngelPlan.EntryStatus) -> ArchiveAngelPlan.Entry {
+            .init(id: UUID(), sourcePath: "/v/x.mov", filename: "x.mov", sizeBytes: 1, durationSeconds: 60,
+                  score: 1, evidence: [], proposedName: "x.mov", proposedDate: nil, status: s)
+        }
+        let ready = row(.ready), half = row(.preparing), untouched = row(.pending)
+        var plan = ArchiveAngelPlan(batchDir: root.appendingPathComponent("batch-r").path, requestedCount: 3,
+                                    makeLossless: false, entries: [ready, half, untouched])
+        plan.status = .preparing
+        try ArchiveAngelPlanStore.save(plan)
+        let fm = FileManager.default
+        for (e, bytes) in [(ready, 3_000), (half, 7_000)] {
+            let dir = URL(fileURLWithPath: plan.batchDir).appendingPathComponent(e.id.uuidString)
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data(count: bytes).write(to: dir.appendingPathComponent("companion.vs-partial"))
+        }
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: plan.planURL.path)
+
+        let settled = ArchiveAngelPlanStore.settleInterruptedBatches(bufferRoot: root)
+        #expect(settled.count == 1 && settled[0].status == .ready)
+        #expect(fm.fileExists(atPath: URL(fileURLWithPath: plan.batchDir).appendingPathComponent(ready.id.uuidString).path),
+                "the prepared row keeps its companions — it is reviewable")
+        #expect(!fm.fileExists(atPath: URL(fileURLWithPath: plan.batchDir).appendingPathComponent(half.id.uuidString).path),
+                "the half-made row's partial files are reclaimed")
+
+        var lines: [String] = []
+        ArchiveAngelPlanStore.reclaimUnfinished(plan, unfinished: [untouched], log: { lines.append($0) })
+        #expect(lines.count == 1 && lines[0].contains("1 unfinished row(s)"), "a row with no folder is fine: \(lines)")
+    }
 }
