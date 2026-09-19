@@ -128,6 +128,10 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
 
         var companionsMade: [StepOutcome] { steps.filter { $0.state == .done && $0.outputRelPath != nil } }
         var isOriginalOnly: Bool { status == .ready && companionsMade.isEmpty }
+        /// Left out of this batch for buffer space, not broken (2026-09-19).
+        var isBufferShort: Bool {
+            status == .failed && (failure ?? "").hasPrefix(ArchiveAngelPlan.bufferShortPrefix)
+        }
         func step(_ kind: StepKind) -> StepOutcome { steps.first { $0.kind == kind } ?? StepOutcome(kind: kind) }
         /// The user's skip, recorded on the row. Clears `failure` — a skip
         /// is a decision, not a breakage — and leaves the step outcomes
@@ -226,6 +230,37 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
     var skippedEntries: [Entry] { entries.filter { $0.status == .skipped } }
     /// "· 3 skipped" for a status line, or "" when nothing was skipped.
     var skippedClause: String { skippedCount > 0 ? " · \(skippedCount) skipped" : "" }
+
+    // MARK: Buffer space (Rick 2026-09-19: "archive angel does not advance
+    // files … it just shows a list"). One 42 GB tape needing 125 GB stopped
+    // the whole batch at "buffer full after 0 of 10" — silently, with nine
+    // files that would have fit. A file that does not fit is now left for
+    // a later batch, with the numbers, and the loop goes on.
+
+    /// Buffer bytes a file needs before preparation starts: the original
+    /// plus its companions (design §5 — ×3 with a lossless copy, else ×2).
+    static func bufferNeed(sizeBytes: Int64, lossless: Bool) -> Int64 {
+        sizeBytes * (lossless ? 3 : 2)
+    }
+
+    static let bufferShortPrefix = "Not prepared — needs "
+
+    /// The row's reason when it does not fit, or nil when it does.
+    static func bufferShortNote(need: Int64, free: Int64) -> String? {
+        guard free < need else { return nil }
+        let fmt = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
+        return bufferShortPrefix + "\(fmt(need)) free in the buffer, \(fmt(free)) free. "
+            + "Left for a later batch once there is room; nothing was written to the catalog."
+    }
+
+    /// Rows left out for buffer space (failed with the buffer-short reason).
+    var bufferShortCount: Int {
+        entries.filter(\.isBufferShort).count
+    }
+    /// "· 2 waiting for buffer space", or "".
+    var bufferShortClause: String {
+        bufferShortCount > 0 ? " · \(bufferShortCount) waiting for buffer space" : ""
+    }
 
     /// GH #177 (Rick 2026-09-10 evening): three cancelled batches stayed
     /// `preparing` forever — invisible in the Archive tab (only `ready`

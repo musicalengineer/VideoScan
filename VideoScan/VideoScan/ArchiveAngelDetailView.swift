@@ -58,7 +58,7 @@ struct ArchiveAngelDetailView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("\(job.plan.readyCount) ready\(job.plan.skippedClause) · \(job.plan.entries.count) picked · "
+            Text("\(job.plan.readyCount) ready\(job.plan.skippedClause)\(job.plan.bufferShortClause) · \(job.plan.entries.count) picked · "
                  + "\(job.plan.rejectedTotal) rejected · \(job.plan.overflow) more would qualify")
                 .font(.system(size: 15, weight: .semibold))
                 .fixedSize(horizontal: false, vertical: true)
@@ -171,10 +171,14 @@ struct ArchiveAngelEntryRow: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .help("\(entry.filename)\n\(entry.sourcePath)")
             HStack(spacing: 12) {
-                Label(ArchiveAngelStepPresentation.entryLabel(entry.status),
-                      systemImage: ArchiveAngelDetailView.icon(entry.status))
+                // No room right now is not a breakage: orange, a drive, and
+                // words that say it will come back (2026-09-19).
+                Label(entry.isBufferShort ? "Waiting for buffer space"
+                          : ArchiveAngelStepPresentation.entryLabel(entry.status),
+                      systemImage: entry.isBufferShort ? "externaldrive.badge.exclamationmark"
+                          : ArchiveAngelDetailView.icon(entry.status))
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(ArchiveAngelDetailView.color(entry.status))
+                    .foregroundStyle(entry.isBufferShort ? Color.orange : ArchiveAngelDetailView.color(entry.status))
                 Text("Score \(entry.score)")
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -250,7 +254,7 @@ struct ArchiveAngelEntryRow: View {
         if let failure = entry.failure {
             Text(failure)
                 .font(.system(size: 13))
-                .foregroundStyle(.red)
+                .foregroundStyle(entry.isBufferShort ? Color.orange : Color.red)
                 .fixedSize(horizontal: false, vertical: true)
         }
         // Skipped can mean disabled, already verified, or interrupted — keep

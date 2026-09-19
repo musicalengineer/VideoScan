@@ -361,15 +361,22 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             }
             let entry = plan.entries[idx]
 
-            // Free-space precheck (design §5): a stopped batch is still reviewable.
-            let need = entry.sizeBytes * (makeLossless ? 3 : 2)
+            // Free-space precheck (design §5), per FILE (2026-09-19): one
+            // file too big for the buffer used to `break` the whole batch
+            // silently. It is left for a later batch with the numbers on
+            // its row, and the loop tries the next — smaller files fit.
+            let need = ArchiveAngelPlan.bufferNeed(sizeBytes: entry.sizeBytes, lossless: makeLossless)
             let free = await Self.freeBytesOffMain(at: bufferRoot)
-            if free < need {
-                let line = "Archive Angel: buffer full after \(idx) of \(total) "
-                    + "(\(ByteCountFormatter.string(fromByteCount: free, countStyle: .file)) free, "
-                    + "need \(ByteCountFormatter.string(fromByteCount: need, countStyle: .file)))"
+            if let short = ArchiveAngelPlan.bufferShortNote(need: need, free: free) {
+                // A skip that landed during the probe wins: the user's
+                // decision is never overwritten by a verdict.
+                if await settleSkip(idx, total: total) { continue }
+                plan.entries[idx].status = .failed
+                plan.entries[idx].failure = short
+                let line = "Archive Angel [\(idx + 1)/\(total)] \(entry.filename) — " + short
                 model.log(line); plan.log.append(line)
-                break
+                _ = await savePlan()
+                continue
             }
 
             let sourceExists = await Self.fileExistsOffMain(entry.sourcePath)
@@ -416,7 +423,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         // "7 ready to review · 3 skipped · 412 rejected · 18 more would
         // qualify" — the skips are the user's own, counted apart from
         // rejections and never folded into failures.
-        let summary = "\(ready) ready to review\(plan.skippedClause) · \(plan.rejectedTotal) rejected · \(plan.overflow) more would qualify"
+        let summary = "\(ready) ready to review\(plan.skippedClause)\(plan.bufferShortClause) · \(plan.rejectedTotal) rejected · \(plan.overflow) more would qualify"
         model.log("Archive Angel: " + summary)
         finish(success: summary)
     }
