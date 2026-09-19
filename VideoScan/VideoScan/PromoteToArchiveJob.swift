@@ -75,6 +75,12 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         let kind: Kind
         /// relpath for promoted/adopted; reason for skipped / failed.
         let detail: String
+        /// The catalog record this outcome is about (2026-09-19). Filenames
+        /// collide — two `00000.MTS` from two cards, or two companions both
+        /// named `<stem>.vs.archive.mov` — so a caller settling its own
+        /// rows must match on this, never the name. Nil only for outcomes
+        /// recorded without a record (none from the promote loop).
+        var recordID: UUID? = nil
     }
     @Published private(set) var outcomes: [FileOutcome] = []
 
@@ -245,20 +251,20 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
             case .promoted(let relPath):
                 tally.promoted += 1
                 tally.bytesDone += entry.sizeBytes
-                record(.promoted, entry.filename, relPath)
+                record(.promoted, entry.filename, relPath, recordID: entry.recordID)
             case .adopted(let relPath):
                 tally.adopted += 1
                 tally.bytesDone += entry.sizeBytes
-                record(.adopted, entry.filename, relPath)
+                record(.adopted, entry.filename, relPath, recordID: entry.recordID)
                 model.log("Promote: \(entry.filename) — an identical copy already sat at \(relPath); adopted it (no second copy).")
             case .skipped(let why):
                 tally.skipped += 1
-                record(.skipped, entry.filename, why)
+                record(.skipped, entry.filename, why, recordID: entry.recordID)
                 model.log("Promote: skipped \(entry.filename) — \(why).")
             case .failed(let why):
                 tally.failed += 1
                 tally.bytesDone += entry.sizeBytes
-                record(.failed, entry.filename, why)
+                record(.failed, entry.filename, why, recordID: entry.recordID)
                 model.log("Promote: FAILED \(entry.filename) — \(why)")
                 promoteLog.error("promote FAILED \(entry.filename, privacy: .public): \(why, privacy: .public)")
             case .cancelled:
@@ -338,8 +344,8 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         return model.mediaLedger.mirror(intoArchiveRoot: root)
     }
 
-    func record(_ kind: FileOutcome.Kind, _ filename: String, _ detail: String) {
-        outcomes.append(FileOutcome(filename: filename, kind: kind, detail: detail))
+    func record(_ kind: FileOutcome.Kind, _ filename: String, _ detail: String, recordID: UUID? = nil) {
+        outcomes.append(FileOutcome(filename: filename, kind: kind, detail: detail, recordID: recordID))
     }
 
     func applyProgress(_ fraction: Double) {

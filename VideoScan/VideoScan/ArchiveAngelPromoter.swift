@@ -196,20 +196,25 @@ final class ArchiveAngelPromoter: ObservableObject {
     /// Fold the Promote job's per-file outcomes back into the plan.
     static func settle(plan: inout ArchiveAngelPlan, job: PromoteToArchiveJob,
                        intended: [UUID: [UUID]], model: VideoScanModel) {
-        var landed: [String: String] = [:]     // filename → relPath
-        var problems: [String: String] = [:]   // filename → reason
+        // Keyed by RECORD, never filename (audit P0 #2, 2026-09-19): two
+        // rows both named 00000.MTS used to take each other's outcome — a
+        // failed one marked promoted with the other's path and its buffer
+        // deleted — and same-named companions collided the same way.
+        var landed: [UUID: String] = [:]      // record → relPath
+        var problems: [UUID: String] = [:]    // record → reason
         for o in job.outcomes {
+            guard let id = o.recordID else { continue }
             switch o.kind {
-            case .promoted, .adopted: landed[o.filename] = o.detail
-            case .skipped, .failed: problems[o.filename] = o.detail
+            case .promoted, .adopted: landed[id] = o.detail
+            case .skipped, .failed: problems[id] = o.detail
             }
         }
         var report = plan.report ?? ArchiveAngelPlan.Report()
         for i in plan.entries.indices where plan.entries[i].status == .ready && plan.entries[i].selected {
             let entry = plan.entries[i]
             guard intended[entry.id] != nil else { continue }   // never enqueued
-            guard let rel = landed[entry.filename] else {
-                let why = problems[entry.filename] ?? Self.terminalReason(job)
+            guard let rel = landed[entry.id] else {
+                let why = problems[entry.id] ?? Self.terminalReason(job)
                 plan.entries[i].failure = "Original not promoted: \(why)"
                 plan.log.append("\(entry.filename): original not promoted — \(why)")
                 report.failed.append(entry.filename)
@@ -218,8 +223,8 @@ final class ArchiveAngelPromoter: ObservableObject {
             var allCompanions = true
             var made = (access: 0, lossless: 0, balanced: 0)
             for step in entry.steps where step.state == .done && step.recordID != nil {
-                let name = step.outputRelPath.map { ($0 as NSString).lastPathComponent } ?? ""
-                if landed[name] != nil {
+                guard let companionID = step.recordID else { continue }
+                if landed[companionID] != nil {
                     switch step.kind {
                     case .accessCopy: made.access += 1
                     case .losslessCopy: made.lossless += 1
@@ -228,7 +233,7 @@ final class ArchiveAngelPromoter: ObservableObject {
                     }
                 } else {
                     allCompanions = false
-                    plan.entries[i].failure = "\(step.kind.label) not promoted: \(problems[name] ?? Self.terminalReason(job))"
+                    plan.entries[i].failure = "\(step.kind.label) not promoted: \(problems[companionID] ?? Self.terminalReason(job))"
                 }
             }
             plan.entries[i].promotedRelPath = rel

@@ -187,3 +187,43 @@ struct ArchiveAngelPromoterIdentityTests {
         #expect(reloaded.entries[0].status == .failed)
     }
 }
+
+/// Audit P0 #2 (2026-09-19): `settle` matched Promote's outcomes to rows by
+/// FILENAME. Two rows both named 00000.MTS (AVCHD numbering restarts on
+/// every card) took each other's result: the failed one was marked
+/// promoted with the other's path and its buffer folder deleted.
+@Suite("Archive Angel promoter — outcomes settle by record, not filename")
+struct ArchiveAngelPromoterSameNameTests {
+    @Test @MainActor func twoRowsNamed00000MTSKeepTheirOwnOutcomes() throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("angel_samename"); defer { sb.cleanup() }
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        func row(_ path: String) -> ArchiveAngelPlan.Entry {
+            .init(id: UUID(), sourcePath: path, filename: "00000.MTS", sizeBytes: 4096, sourceModifiedAt: nil,
+                  durationSeconds: 600, score: 100, evidence: [], proposedName: "00000.MTS",
+                  proposedDate: "2009", status: .ready)
+        }
+        let a = row("/v/cardA/00000.MTS"), b = row("/v/cardB/00000.MTS")
+        var plan = ArchiveAngelPlan(batchDir: sb.root.appendingPathComponent("batch-x").path,
+                                    requestedCount: 2, makeLossless: false, entries: [a, b])
+        let bDir = URL(fileURLWithPath: plan.batchDir).appendingPathComponent(b.id.uuidString)
+        try FileManager.default.createDirectory(at: bDir, withIntermediateDirectories: true)
+        let job = PromoteToArchiveJob(plan: ArchivePromotePlan(rootPath: sb.root.path, entries: [], skipped: [],
+                                                               totalBytes: 0, freeBytesAtRoot: nil), model: model)
+        // Same filename, different records: A lands, B fails. B's outcome
+        // is recorded LAST, so a filename map would hand A's row B's
+        // failure and B's row nothing — or, the other order, A's success.
+        job.record(.promoted, "00000.MTS", "2009/2009_00000.MTS", recordID: a.id)
+        job.record(.failed, "00000.MTS", "source went offline", recordID: b.id)
+
+        ArchiveAngelPromoter.settle(plan: &plan, job: job, intended: [a.id: [], b.id: []], model: model)
+
+        let byID = Dictionary(uniqueKeysWithValues: plan.entries.map { ($0.id, $0) })
+        #expect(byID[a.id]?.status == .promoted)
+        #expect(byID[a.id]?.promotedRelPath == "2009/2009_00000.MTS")
+        #expect(byID[b.id]?.status != .promoted, "the failed card-B file was marked promoted")
+        #expect(byID[b.id]?.promotedRelPath == nil)
+        #expect(byID[b.id]?.failure?.contains("source went offline") == true, "\(String(describing: byID[b.id]?.failure))")
+        #expect(FileManager.default.fileExists(atPath: bDir.path), "the failed row keeps its buffer for a retry")
+        #expect(plan.report?.promotedOriginals == 1 && plan.report?.failed == ["00000.MTS"])
+    }
+}
