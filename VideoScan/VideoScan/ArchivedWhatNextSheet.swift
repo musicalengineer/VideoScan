@@ -10,9 +10,11 @@
 // ★★★), and the plan — keep-one-working-copy picker, count + size of the
 // copies that WOULD go to the Trash, the "not covered by the bar" line.
 //
-// Apply is DISABLED ("Dry run — Apply arrives after a few days of real
-// batches"): Rick ruled dry-run first, so the numbers can be seen on real
-// batches. "Not now" dismisses. Attestation choices DO persist — they are
+// Apply was DISABLED for the dry run Rick ruled on 9/12; on 2026-09-19,
+// after a week of real batches ("we should be deleting dups if user wants
+// once a file is promoted"), it acts: confirm → `applyPrune` (fresh plan +
+// on-disk safety in front of the ONE existing Trash routine) → the result
+// replaces the caption. "Not now" dismisses. Attestation choices DO persist — they are
 // stage 1's `recordAttestation` (catalog record + attestation journal)
 // and write a ledger `attestation` line — and the plan recomputes after
 // each answer because the bar depends on them.
@@ -45,6 +47,10 @@ struct ArchivedWhatNextSheet: View {
     @State private var planRevision = 0
     @State private var showTrashList = false
     @State private var showNotCoveredList = false
+    // Apply (2026-09-19).
+    @State private var confirmingApply = false
+    @State private var applying = false
+    @State private var applied: VideoScanModel.PruneApplyOutcome?
 
     init(request: ArchivedWhatNextRequest) {
         self.request = request
@@ -205,17 +211,59 @@ struct ArchivedWhatNextSheet: View {
         VStack(alignment: .trailing, spacing: 4) {
             HStack {
                 Spacer()
-                Button("Not now") { dismiss() }
+                Button(applied == nil ? "Not now" : "Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("whatNext.notNow")
-                Button(applyTitle) {}
-                    .disabled(true)
+                if applying { ProgressView().controlSize(.small) }
+                Button(applyTitle) { confirmingApply = true }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!Self.canApply(trashCount: plan?.trashCount ?? 0, applying: applying,
+                                             applied: applied != nil, readOnly: model.isReadOnly))
                     .accessibilityIdentifier("whatNext.apply")
             }
-            Text("Dry run — Apply arrives after a few days of real batches.")
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-                .accessibilityIdentifier("whatNext.dryRunCaption")
+            if let applied {
+                Text(applied.summary + ".")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(applied.failed.isEmpty && applied.held.isEmpty ? .secondary : .orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("whatNext.applyResult")
+            } else {
+                Text("The archive copy and any working copy you keep are never touched. Everything moved can be restored from the Trash.")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("whatNext.applyCaption")
+            }
+        }
+        .confirmationDialog(confirmTitle, isPresented: $confirmingApply) {
+            Button("Move to Trash") { runApply() }
+                .accessibilityIdentifier("whatNext.confirmApply")
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The archive copy\(keepOne ? " and one working copy" : "") stay. Anything that changed since this plan was worked out is held back, and everything moved can be restored from the Trash.")
+        }
+    }
+
+    /// Apply acts only on a computed plan with something to move, once.
+    static func canApply(trashCount: Int, applying: Bool, applied: Bool, readOnly: Bool) -> Bool {
+        trashCount > 0 && !applying && !applied && !readOnly
+    }
+
+    private var confirmTitle: String {
+        let n = plan?.trashCount ?? 0
+        return "Move \(n) extra cop\(n == 1 ? "y" : "ies") (\(MediaBytes.display(plan?.trashBytes ?? 0))) to the Trash?"
+    }
+
+    private func runApply() {
+        guard let shown = plan else { return }
+        let options = PrunePlan.Options(keepOne: keepOne, keeperVolume: keeperVolume, bar: model.importanceBar)
+        applying = true
+        Task {
+            let outcome = await model.applyPrune(shown: shown, recordIDs: request.recordIDs,
+                                                 options: options, batchID: request.batchID)
+            applied = outcome
+            applying = false
+            planRevision &+= 1   // the plan now reflects what is left
         }
     }
 
