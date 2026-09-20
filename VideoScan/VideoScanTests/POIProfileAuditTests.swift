@@ -68,4 +68,62 @@ struct POIProfileAuditTests {
         #expect(entries[0].changes.map(\.field) == ["name", "middleName", "surname", "aliases"])
         #expect(POIProfileAudit.defaultDirectory.path.contains("VideoScan-tests/people-audit-"), "never the real journal under a test host")
     }
+
+    @Test("codex 2026-09-20 #12: a changed kinship at equal count, notes AB → CD, identity notes of equal length — each is a Change, shown redacted with '(changed)'")
+    func sameSizeChangesAreChanges() {
+        let id = UUID()
+        var before = profile("Dan", aliases: ["Dan"], uuid: id)
+        before.kinships = [Kinship(relation: .sibling, relativeTo: .profile(name: "Rick"))]
+        before.notes = "AB"
+        before.identityNotes = "thin, blonde"
+        var after = before
+        after.kinships = [Kinship(relation: .child, relativeTo: .profile(name: "Rick"))]
+        after.notes = "CD"
+        after.identityNotes = "tall, blonde"   // same length
+        let diff = POIProfileAudit.changes(before: before, after: after)
+        #expect(diff == [
+            .init(field: "kinships", from: "1", to: "1 (changed)"),
+            .init(field: "notes", from: "2 chars", to: "2 chars (changed)"),
+            .init(field: "identityNotes", from: "12 chars", to: "12 chars (changed)"),
+        ], "\(diff)")
+        let line = POIProfileAudit.line(action: .edited, before: before, after: after)
+        #expect(line.contains("kinships '1' → '1 (changed)'; notes '2 chars' → '2 chars (changed)'; identityNotes '12 chars' → '12 chars (changed)'"), Comment(rawValue: line))
+        #expect(!line.contains("AB") && !line.contains("CD") && !line.contains("blonde"), "still redacted")
+        // Unchanged originals stay silent; a different count still reads as before.
+        #expect(POIProfileAudit.changes(before: before, after: before).isEmpty)
+        var longer = before
+        longer.notes = "ABC"; longer.kinships = []
+        #expect(POIProfileAudit.changes(before: before, after: longer) == [
+            .init(field: "kinships", from: "1", to: "0"), .init(field: "notes", from: "2 chars", to: "3 chars"),
+        ])
+    }
+
+    @Test("codex 2026-09-20 #12: record() — the production path — lands two rapid edits in submission order even when the first write is slow; waitForPendingWrites drains")
+    func recordLandsInSubmissionOrder() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_people_audit_order_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let id = UUID()
+        let p0 = profile("Dan", uuid: id), p1 = profile("Daniel", uuid: id), p2 = profile("Danny", uuid: id)
+        let t = Date(timeIntervalSince1970: 1_800_000_000)
+        // The first append is slow (150 ms); the second must still land second.
+        let slowFirst: POIProfileAudit.Writer = { e, directory in
+            if e.changes.first?.to == "Daniel" { Thread.sleep(forTimeInterval: 0.15) }
+            try POIProfileAudit.append(e, directory: directory)
+        }
+        POIProfileAudit.record(action: .edited, before: p0, after: p1, directory: dir, at: t, writer: slowFirst)
+        POIProfileAudit.record(action: .edited, before: p1, after: p2, directory: dir, at: t, writer: slowFirst)
+        await POIProfileAudit.waitForPendingWrites()
+        let entries = POIProfileAudit.entries(directory: dir)
+        #expect(entries.count == 2)
+        #expect(entries.map { $0.changes.first?.to } == ["Daniel", "Danny"], "file order is submission order")
+        #expect(entries.map(\.at) == [t, t], "same second on both — the order could not have been recovered from the dates")
+        // A refusing writer is logged, not thrown, and the chain goes on.
+        POIProfileAudit.record(action: .deleted, before: p2, after: nil, directory: dir, writer: { _, _ in
+            throw CocoaError(.fileWriteNoPermission)
+        })
+        POIProfileAudit.record(action: .restored, before: nil, after: p2, directory: dir, at: t)
+        await POIProfileAudit.waitForPendingWrites()
+        #expect(POIProfileAudit.entries(directory: dir).map(\.action) == [.edited, .edited, .restored])
+    }
 }

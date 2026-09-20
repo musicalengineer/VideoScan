@@ -89,6 +89,14 @@ final class ArchiveAngelSweep: ObservableObject {
         let candidates: @MainActor () -> [ArchiveAngelCandidate]
         /// Scan / Angel job / Promote running — PARK, never fight.
         let isExternallyBusy: @MainActor () -> Bool
+        /// The attention store's `revision` + `lastEventAt`, read on the
+        /// main actor right BEFORE the candidate snapshot (the projection
+        /// bakes attention into each candidate, so whatever this returns
+        /// is what the scores are built on). Stamped into the evidence
+        /// file so the Angel's pick can refuse evidence scored under an
+        /// older state than the store holds now (codex 2026-09-20 #5).
+        /// Default = "no attention store" (tests of the sweep alone).
+        var attentionState: @MainActor () -> (revision: Int, lastEventAt: Date?) = { (0, nil) }
         /// Spotlight reads for a slice, off-main. Injected so tests never
         /// touch the metadata server.
         var playHistory: @Sendable ([String]) async -> [String: ArchiveAngelPlayHistory.Reading]
@@ -262,8 +270,12 @@ final class ArchiveAngelSweep: ObservableObject {
             try? await Task.sleep(nanoseconds: UInt64(cfg.pausePollMilliseconds) * 1_000_000)
         }
 
-        // Snapshot (one main-actor pass; the projection is the cost).
+        // Snapshot (one main-actor pass; the projection is the cost). The
+        // attention state is read FIRST: it is the state the projection
+        // will bake into the candidates, and it is what the evidence file
+        // is stamped with — never the state at the finish line.
         let snapshotStart = clock.now
+        let attention = cfg.attentionState()
         let all = cfg.candidates()
         noteSlice(clock.now - snapshotStart)
         let total = all.count
@@ -297,7 +309,8 @@ final class ArchiveAngelSweep: ObservableObject {
                 if let rejection = ArchiveAngelScorer.hardFloor(c, weights: cfg.weights, now: now) {
                     records[c.id] = .init(score: 0, lines: [], rejection: rejection,
                                           useCount: 0, lastUsed: nil, computedAt: now,
-                                          timesProposed: c.attention.timesProposed)
+                                          timesProposed: c.attention.timesProposed,
+                                          familySkips: c.familySkips)
                 } else {
                     pending.append(c)
                 }
@@ -315,13 +328,15 @@ final class ArchiveAngelSweep: ObservableObject {
                     eligible += 1
                     let rec = ArchiveAngelEvidenceRecord(score: score, lines: lines, rejection: nil,
                                                          useCount: c.useCount, lastUsed: c.lastUsed, computedAt: now,
-                                                         timesProposed: c.attention.timesProposed)
+                                                         timesProposed: c.attention.timesProposed,
+                                                         familySkips: c.familySkips)
                     records[c.id] = rec
                     sweepLog.debug("\(c.filename, privacy: .public): \(rec.summary(), privacy: .public)")
                 case .rejected(let rejection):
                     records[c.id] = .init(score: 0, lines: [], rejection: rejection,
                                           useCount: c.useCount, lastUsed: c.lastUsed, computedAt: now,
-                                          timesProposed: c.attention.timesProposed)
+                                          timesProposed: c.attention.timesProposed,
+                                          familySkips: c.familySkips)
                     sweepLog.debug("\(c.filename, privacy: .public): excluded — \(rejection.rawValue, privacy: .public)")
                 }
             }
@@ -335,7 +350,9 @@ final class ArchiveAngelSweep: ObservableObject {
                 sinceCheckpoint = 0
                 cfg.log("Archive Angel Assessment: \(index.formatted()) of \(total.formatted())")
                 let checkpoint = ArchiveAngelEvidenceFile(computedAt: now, complete: false,
-                                                          considered: index, eligible: eligible, records: records)
+                                                          considered: index, eligible: eligible, records: records,
+                                                          attentionRevision: attention.revision,
+                                                          attentionLastEventAt: attention.lastEventAt)
                 _ = await ArchiveAngelEvidenceStore.saveOffMain(checkpoint, to: store.fileURL)
             }
             await Task.yield()
@@ -343,7 +360,9 @@ final class ArchiveAngelSweep: ObservableObject {
 
         let finishedAt = cfg.now()
         let file = ArchiveAngelEvidenceFile(computedAt: finishedAt, complete: true,
-                                            considered: total, eligible: eligible, records: records)
+                                            considered: total, eligible: eligible, records: records,
+                                            attentionRevision: attention.revision,
+                                            attentionLastEventAt: attention.lastEventAt)
         store.replace(with: file)
         let saved = await store.save()
         lastRunSeconds = Double((clock.now - started).components.seconds)

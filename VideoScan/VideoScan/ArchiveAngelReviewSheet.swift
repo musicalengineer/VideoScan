@@ -466,9 +466,8 @@ struct ArchiveAngelReviewSheet: View {
             }
         }
         // Phase 1 attention memory: a ready row left unchecked at Promote
-        // is a pass on it, the same as Skip.
-        let unchecked = plan.entries.filter { $0.status == .ready && !$0.selected }.map(\.id)
-        model.ledgerAngelAttention(.angelSkipped, recordIDs: unchecked, batchID: plan.batchID, reason: "unchecked")
+        // is a pass on it, the same as Skip — noted ONCE per batch and row.
+        Self.noteUncheckedAtPromote(plan: &plan, model: model)
         var working = plan
         let job = promoter.promote(plan: &working, model: model, center: fileOpsCenter) { settled in
             plan = settled
@@ -477,6 +476,29 @@ struct ArchiveAngelReviewSheet: View {
         if job == nil {
             model.log("Archive Angel: nothing was started — " + (working.log.last ?? "see the batch log"))
         }
+    }
+
+    /// The unchecked-at-Promote pass, idempotent per (batch, row): every
+    /// ready row that is not selected AND has no `uncheckedNotedAt` yet
+    /// gets one `angelSkipped` ledger line (reason "unchecked") and the
+    /// stamp; the plan is saved so the stamp outlives this sheet. A
+    /// retried Promote (identity refused, nothing to promote, a failed
+    /// job) finds the stamp and emits nothing (codex 2026-09-20 #7).
+    /// Returns the ids noted this time. Main actor; the production path.
+    @MainActor
+    @discardableResult
+    static func noteUncheckedAtPromote(plan: inout ArchiveAngelPlan, model: VideoScanModel,
+                                       at now: Date = Date()) -> [UUID] {
+        var noted: [UUID] = []
+        for i in plan.entries.indices
+        where plan.entries[i].status == .ready && !plan.entries[i].selected && plan.entries[i].uncheckedNotedAt == nil {
+            plan.entries[i].uncheckedNotedAt = now
+            noted.append(plan.entries[i].id)
+        }
+        guard !noted.isEmpty else { return [] }
+        model.ledgerAngelAttention(.angelSkipped, recordIDs: noted, batchID: plan.batchID, reason: "unchecked", at: now)
+        ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote (unchecked noted)")
+        return noted
     }
 
     /// The catalog notes with `adding` appended once — never a second time.

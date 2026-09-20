@@ -15,18 +15,23 @@ private func makeSweep(candidates: [ArchiveAngelCandidate],
                        busy: @escaping @MainActor () -> Bool = { false },
                        sliceSize: Int = 500, checkpointEvery: Int = 5_000,
                        log: @escaping @MainActor (String) -> Void = { _ in },
-                       enabled: Bool = true) -> (ArchiveAngelSweep, URL) {
+                       enabled: Bool = true,
+                       attention: ArchiveAngelAttentionStore? = nil,
+                       playHistory: (@Sendable ([String]) async -> [String: ArchiveAngelPlayHistory.Reading])? = nil,
+                       now: Date? = nil) -> (ArchiveAngelSweep, URL) {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("test_angel_sweep_\(UUID().uuidString.prefix(8))", isDirectory: true)
     let store = ArchiveAngelEvidenceStore(directory: dir)
     let sweep = ArchiveAngelSweep(store: store)
     var cfg = ArchiveAngelSweep.Configuration(candidates: { candidates }, isExternallyBusy: busy)
-    cfg.playHistory = { paths in
+    cfg.playHistory = playHistory ?? { paths in
         // Deterministic stand-in for Spotlight: every 10th file was played.
         var out: [String: ArchiveAngelPlayHistory.Reading] = [:]
         for (i, p) in paths.enumerated() where i % 10 == 0 { out[p] = .init(useCount: 3, lastUsed: nil) }
         return out
     }
+    if let attention { cfg.attentionState = { (attention.revision, attention.lastEventAt) } }
+    if let now { cfg.now = { now } }
     cfg.sliceSize = sliceSize
     cfg.checkpointEvery = checkpointEvery
     cfg.pausePollMilliseconds = 20
@@ -34,6 +39,16 @@ private func makeSweep(candidates: [ArchiveAngelCandidate],
     cfg.log = log
     sweep.configure(cfg, enabled: enabled)
     return (sweep, dir)
+}
+
+/// A latch a test holds shut while it does something, then opens.
+private final class TestGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    func open() { lock.withLock { isOpen = true } }
+    func wait() async {
+        while !(lock.withLock { isOpen }) { try? await Task.sleep(nanoseconds: 10_000_000) }
+    }
 }
 
 private func synthetic(_ n: Int) -> [ArchiveAngelCandidate] {
@@ -171,6 +186,117 @@ struct ArchiveAngelSweepTests {
         #expect(cfg.periodicSeconds == 900)
         #expect(cfg.catalogChangeDebounceSeconds == 60)
         #expect(cfg.launchDelaySeconds == 90)
+    }
+
+    @Test("codex 2026-09-20 #5: a skip recorded WHILE scoring runs makes the finished evidence stale — the pick walks; a rescore after the skip is trusted again")
+    @MainActor
+    func skipDuringScoringMakesEvidenceStale() async {
+        let attention = ArchiveAngelAttentionStore()
+        attention.replace(from: [])                       // launch: loaded, revision 1, no events
+        var candidates: [ArchiveAngelCandidate] = []
+        for i in 0..<20 {
+            candidates.append(.init(filename: "tape\(i).mov", fullPath: "/Volumes/T/tape\(i).mov",
+                                    durationSeconds: 3600 + Double(i), starRating: 2))
+        }
+        let gate = TestGate()
+        let (sweep, dir) = makeSweep(candidates: candidates, sliceSize: 5, attention: attention,
+                                     playHistory: { _ in await gate.wait(); return [:] })
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let revisionAtSnapshot = attention.revision
+        sweep.run(reason: "test")
+        for _ in 0..<200 {                                 // scoring has started and is parked on the gate
+            if case .scoring = sweep.status { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard case .scoring = sweep.status else { Issue.record("expected .scoring, got \(sweep.status)"); return }
+        // The person skips a file mid-sweep. (MediaLedgerEvent keeps `at`
+        // at millisecond resolution; the store's lastEventAt is the truth.)
+        attention.note([MediaLedgerEvent(at: Date(), event: .angelSkipped, recordID: candidates[0].id, contentKey: "",
+                                         filename: candidates[0].filename, fullPath: candidates[0].fullPath, by: .rick)])
+        let skipAt = attention.lastEventAt
+        #expect(skipAt != nil && attention.revision == revisionAtSnapshot + 1)
+        gate.open()
+        for _ in 0..<300 {                                 // the FIRST run finishes (no rerun queued)
+            if case .done = sweep.status { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard case .done = sweep.status else { Issue.record("expected .done, got \(sweep.status)"); return }
+        let store = sweep.store
+        let project: (UUID) -> ArchiveAngelCandidate? = { id in candidates.first { $0.id == id } }
+        #expect(store.attentionRevision == revisionAtSnapshot, "stamped with the revision it was scored under")
+        #expect(store.attentionLastEventAt == nil, "…and its newest event: none")
+        #expect(store.computedAt.map { $0 > skipAt! } == true, "the finish line is AFTER the skip — the old date-vs-computedAt check trusted this")
+        #expect(ArchiveAngelJob.selectFromEvidence(store: store, count: 3, now: Date(),
+                                                   attentionChangedAt: attention.lastEventAt,
+                                                   attentionRevision: attention.revision, project: project) == nil,
+                "scored under an older attention state → walk")
+        #expect(ArchiveAngelJob.selectFromEvidence(store: store, count: 3, now: Date(),
+                                                   attentionChangedAt: attention.lastEventAt, project: project) == nil,
+                "the date fallback alone (the job's old call shape) refuses it too")
+        // A rescore now (nothing new since) is trusted.
+        await sweep.runAndWait(reason: "rescore")
+        #expect(store.attentionRevision == attention.revision)
+        #expect(store.attentionLastEventAt == skipAt)
+        #expect(ArchiveAngelJob.selectFromEvidence(store: store, count: 3, now: Date(),
+                                                   attentionChangedAt: attention.lastEventAt,
+                                                   attentionRevision: attention.revision, project: project)?.selection.picks.count == 3)
+    }
+
+    @Test("codex 2026-09-20 #6: cached/walk EQUIVALENCE with a skipped file, its never-proposed sibling, and a fresh variant of a favourite — the same batch either way")
+    @MainActor
+    func cachedPickEqualsWalkWithFamilyAttention() async {
+        let now = Date()
+        let day = 86_400.0
+        var seen = ArchiveAngelAttention.none; seen.note(.angelProposed, at: now - day)
+        var skippedTwice = ArchiveAngelAttention.none
+        skippedTwice.note(.angelProposed, at: now - 3 * day)
+        skippedTwice.note(.angelSkipped, at: now - 2 * day); skippedTwice.note(.angelSkipped, at: now - day)
+        var cs: [ArchiveAngelCandidate] = []
+        for i in 0..<10 {   // proposed favourites: 3★ whole tapes, 165 each
+            cs.append(.init(filename: String(format: "fav%02d.mov", i), fullPath: "/V/F/fav\(i).mov",
+                            durationSeconds: 3600 + Double(12 - i), starRating: 3, attention: seen))
+        }
+        // Skipped twice (→ 41) and its never-proposed sibling (family share → 82, NOT fresh).
+        cs.append(.init(filename: "Thanksgiving_2009.mov", fullPath: "/V/T/Thanksgiving_2009.mov",
+                        durationSeconds: 3600, starRating: 3, attention: skippedTwice))
+        let sibling = ArchiveAngelCandidate(filename: "Thanksgiving_2009_clip1.mov", fullPath: "/V/T/Thanksgiving_2009_clip1.mov",
+                                            durationSeconds: 3600, starRating: 3)
+        cs.append(sibling)
+        // A fresh share-out of fav00 (25): one per family — fav00 wins, so it must not satisfy the fresh scan.
+        let favClip = ArchiveAngelCandidate(filename: "fav00_clip1.mov", fullPath: "/V/F/fav00_clip1.mov", durationSeconds: 900)
+        cs.append(favClip)
+        // Four genuinely fresh files, distinct scores 40 / 35 / 30 / 25.
+        var fresh: [ArchiveAngelCandidate] = []
+        for i in 0..<4 {
+            fresh.append(.init(filename: "new\(i).mov", fullPath: "/V/N/new\(i).mov", durationSeconds: 900, tagCount: 3 - i))
+        }
+        cs.append(contentsOf: fresh)
+        // Production order: projection → derivatives → the family pass → (walk | sweep).
+        ArchiveAngelScorer.markDerivatives(&cs)
+        ArchiveAngelScorer.applyFamilyAttention(&cs, now: now)
+        #expect(cs.first { $0.id == sibling.id }?.familySkips == 2)
+
+        let walk = ArchiveAngelScorer.select(cs, count: 10, now: now)
+        let walkIDs = walk.picks.map(\.candidate.id)
+        #expect(walkIDs.count == 10)
+        #expect(Set(walkIDs).intersection(fresh.prefix(3).map(\.id)).count == 3, "the three best fresh files")
+        #expect(!walkIDs.contains(sibling.id) && !walkIDs.contains(favClip.id))
+
+        let (sweep, dir) = makeSweep(candidates: cs, attention: ArchiveAngelAttentionStore(),
+                                     playHistory: { _ in [:] }, now: now)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        await sweep.runAndWait(reason: "test")
+        #expect(sweep.store.record(for: sibling.id)?.familySkips == 2, "the family pass's result is in the record")
+        let byID = Dictionary(uniqueKeysWithValues: cs.map { ($0.id, $0) })
+        let cached = ArchiveAngelJob.selectFromEvidence(store: sweep.store, count: 10, now: now) { id in
+            // The job's projection is per record: attention yes, the family pass no.
+            guard var c = byID[id] else { return nil }
+            c.familySkips = 0; c.familyKey = ""
+            return c
+        }
+        #expect(cached?.selection.picks.map(\.candidate.id) == walkIDs, "same batch from the cache as from the walk")
+        #expect(cached?.selection.picks.map(\.score) == walk.picks.map(\.score))
+        #expect(cached?.selection.picks.map { $0.evidence.map(\.line) } == walk.picks.map { $0.evidence.map(\.line) }, "same why-lines, 'New to you' included")
     }
 
     @Test("settings: missing key = ON; explicit false = OFF; save round-trips")
