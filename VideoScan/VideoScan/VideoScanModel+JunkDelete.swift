@@ -92,6 +92,34 @@ extension VideoScanModel {
         /// Surfaced in the result sheet so the user knows which files
         /// were skipped and why (permissions, locked, etc.).
         let failed: [(record: VideoRecord, error: Error)]
+        /// Records a caller's `JunkDeletionGuard` refused at the last
+        /// moment (codex follow-up 2026-09-20 #3). Nothing was moved and
+        /// the record is untouched — no purgedAt, no lifecycle change, no
+        /// ledger line. Empty for every caller that passes no guard.
+        var refused: [(record: VideoRecord, reason: String)] = []
+    }
+
+    /// A per-file guard for a caller that PROVED something about a file
+    /// before asking for its removal ("Archived — what next?" verifies a
+    /// copy byte-for-byte against its archive copy, then asks for the
+    /// Trash). A verdict from moments ago is not authority to remove
+    /// whatever sits at that pathname NOW, so the proof is re-checked
+    /// twice per file, as late as possible (codex follow-up #3):
+    ///   - `authorize` — on the main actor, per record, just before the
+    ///     off-main pass: the LIVE catalog still says what the caller
+    ///     verified (record active, same path, same family…).
+    ///   - `beforeRemoval` — off-main, immediately before THAT file's own
+    ///     trashItem / removeItem, with its path: the file (and whatever
+    ///     the proof depends on) still reproduces the proof's identity.
+    /// Either returning a reason refuses the file: it is reported in
+    /// `JunkDeletionResult.refused`, named, and nothing is moved. Missing
+    /// files are the guard's to judge too (it runs before the existence
+    /// check): a guarded file that vanished is refused, not "already
+    /// gone" — the catalog cannot know where it went.
+    /// (For Rick: two callbacks, one per thread the routine runs on.)
+    struct JunkDeletionGuard {
+        let authorize: @MainActor (VideoRecord) -> String?
+        let beforeRemoval: @Sendable (String) -> String?
     }
 
     /// Per-record decision made by the off-main FileManager pass. The
@@ -104,6 +132,8 @@ extension VideoScanModel {
         case alreadyMissing
         case skippedOffline
         case failed(Error)
+        /// The caller's guard said no (see `JunkDeletionGuard`).
+        case refused(String)
     }
 
     /// Delete (trash or hard-remove) every record in `records`, regardless
@@ -126,7 +156,8 @@ extension VideoScanModel {
     @discardableResult
     func deleteConfirmedJunk(
         _ requested: [VideoRecord],
-        mode: JunkDeletionMode
+        mode: JunkDeletionMode,
+        guard fileGuard: JunkDeletionGuard? = nil
     ) async -> JunkDeletionResult {
         // Master Archive files are never bulk-deleted (see
         // excludingMasterArchiveFiles).
@@ -209,6 +240,13 @@ extension VideoScanModel {
                 continue
             }
 
+            // The caller's live-catalog authorization, per record, on
+            // main, as the last thing before the hop (JunkDeletionGuard).
+            if let fileGuard, let why = fileGuard.authorize(rec) {
+                outcomes[i] = .refused(why)
+                continue
+            }
+
             // Eligible for the background pass — defer the existence
             // check (a stat() syscall, potentially slow on a sleeping
             // drive) and the trash/remove call to the detached task.
@@ -235,6 +273,7 @@ extension VideoScanModel {
         // the detached work is done.
         // -------------------------------------------------------------
         let mode = mode  // capture-in
+        let beforeRemoval = fileGuard?.beforeRemoval   // the only part of the guard that crosses
         let detachedResults: [(Int, JunkDeletionOutcome)] =
             await Task.detached(priority: .userInitiated) {
                 let fm = FileManager.default
@@ -243,6 +282,16 @@ extension VideoScanModel {
 
                 for item in workItems {
                     let path = item.path
+
+                    // The caller's proof, re-checked immediately before
+                    // THIS file's own disk operation — no await, no other
+                    // file's work in between (JunkDeletionGuard). Before
+                    // the existence check on purpose: a guarded file that
+                    // is gone is refused, never stamped "already gone".
+                    if let beforeRemoval, let why = beforeRemoval(path) {
+                        results.append((item.index, .refused(why)))
+                        continue
+                    }
 
                     // Missing-file branch. We do NOT pre-flight every
                     // file with fileExists() outside this loop because
@@ -302,6 +351,7 @@ extension VideoScanModel {
         var alreadyMissing = 0
         var skippedOffline = 0
         var failed: [(record: VideoRecord, error: Error)] = []
+        var refused: [(record: VideoRecord, reason: String)] = []
         var removedFromDisk: [VideoRecord] = []
 
         for (i, rec) in records.enumerated() {
@@ -311,6 +361,11 @@ extension VideoScanModel {
                 // stays tagged .confirmedJunk so a remount-then-retry
                 // pass picks it up.
                 skippedOffline += 1
+
+            case .refused(let why):
+                // Untouched, like a failure: the file is still there (or
+                // is not what was verified), the row stays active.
+                refused.append((record: rec, reason: why))
 
             case .alreadyMissing:
                 alreadyMissing += 1
@@ -366,14 +421,15 @@ extension VideoScanModel {
         ledgerCopyRemoved(removedFromDisk, permanent: mode == .permanent, by: .rick, at: now,
                           batchID: "junk-\(UUID().uuidString.prefix(8))")
 
-        log("Delete Confirmed Junk: attempted=\(records.count) succeeded=\(succeeded) missing=\(alreadyMissing) offline=\(skippedOffline) failed=\(failed.count) mode=\(mode == .toTrash ? "trash" : "permanent")")
+        log("Delete Confirmed Junk: attempted=\(records.count) succeeded=\(succeeded) missing=\(alreadyMissing) offline=\(skippedOffline) failed=\(failed.count)\(refused.isEmpty ? "" : " refused=\(refused.count)") mode=\(mode == .toTrash ? "trash" : "permanent")")
 
         return JunkDeletionResult(
             attempted: records.count,
             succeeded: succeeded,
             alreadyMissing: alreadyMissing,
             skippedOffline: skippedOffline,
-            failed: failed
+            failed: failed,
+            refused: refused
         )
     }
 

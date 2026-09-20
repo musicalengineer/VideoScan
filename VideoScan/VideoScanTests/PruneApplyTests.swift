@@ -48,8 +48,11 @@ struct PruneApplyTests {
     /// otherwise (Rick's Christmas2008 case) the bar is not met, nothing
     /// is checked by default, and both copies are checkable. `withVersion`
     /// adds a trimmed version of A (different bytes, derivedFrom = A,
-    /// kind "trim") carrying a human note.
-    private func fixture(_ label: String, attested: Bool = true, withVersion: Bool = false) async throws -> Fixture {
+    /// kind "trim") carrying a human note. `extraCopies` adds that many
+    /// MORE byte-identical copies (A3, A4…) — duplicates sharing one
+    /// archive copy (codex follow-up #6). Their ids follow A2's in `ids`.
+    private func fixture(_ label: String, attested: Bool = true, withVersion: Bool = false,
+                         extraCopies: Int = 0) async throws -> Fixture {
         let sb = try MasterArchiveTestSupport.makeSandbox(label)
         let model = MasterArchiveTestSupport.makeModel(sb)
         model.mediaLedger = MediaLedger(directory: sb.root.appendingPathComponent("ledger", isDirectory: true))
@@ -72,6 +75,14 @@ struct PruneApplyTests {
         for r in [recA, recA2, archive] { r.contentHash = "v1:test-prune-a" }
         model.records.append(recA2)
         var ids = [recA.id, recA2.id]
+        for n in 0..<extraCopies {
+            let an = dupDir.appendingPathComponent("test_prune_a_\(n + 3).mov")
+            try FileManager.default.copyItem(at: a, to: an)
+            let r = MasterArchiveTestSupport.makeRecord(path: an.path, userDate: "1992")
+            r.contentHash = "v1:test-prune-a"
+            model.records.append(r)
+            ids.append(r.id)
+        }
         var recV: VideoRecord?
         if withVersion {
             let v = try MasterArchiveTestSupport.writeBlob(at: dupDir.appendingPathComponent("test_prune_a_trimmed.mov"),
@@ -94,7 +105,7 @@ struct PruneApplyTests {
         try #require(family.archive.map(\.id) == [archive.id] && family.archiveVerified, "fixture: the archive copy is the header")
         try #require(!family.rows.contains { $0.id == archive.id }, "fixture: the archive copy is never a row")
         let candidates = family.rows.filter(\.checkable)
-        try #require(candidates.count == (withVersion ? 3 : 2), "fixture: every working copy is checkable — \(family.rows)")
+        try #require(candidates.count == (withVersion ? 3 : 2) + extraCopies, "fixture: every working copy is checkable — \(family.rows)")
         let keeper = try #require(candidates.first { $0.planKeeps == .keeper }?.copy, "fixture: a keeper is hinted")
         let dup = try #require(candidates.first { $0.id != keeper.id && !$0.kind.isVersion }?.copy)
         var version: PrunePlan.CopyRef?
@@ -105,7 +116,8 @@ struct PruneApplyTests {
             version = row.copy
         }
         if attested {
-            try #require(shown.trashCount == 1 && family.covered && family.defaultSelection == [dup.id],
+            try #require(shown.trashCount == 1 + extraCopies && family.covered
+                         && (extraCopies > 0 || family.defaultSelection == [dup.id]),
                          "fixture: keep-one keeps one, the dup is the default check — \(shown)")
         } else {
             try #require(shown.trashCount == 0 && !family.covered && family.defaultSelection.isEmpty,
@@ -114,9 +126,26 @@ struct PruneApplyTests {
         return Fixture(sb: sb, model: model, ids: ids, shown: shown, dup: dup, keeper: keeper, archive: archive, version: version)
     }
 
-    private func apply(_ f: Fixture, selected: Set<UUID>) async -> VideoScanModel.PruneApplyOutcome {
+    private func apply(_ f: Fixture, selected: Set<UUID>,
+                       hooks: VideoScanModel.PruneVerifyHooks = .live) async -> VideoScanModel.PruneApplyOutcome {
         await f.model.applyPrune(shown: f.shown, selected: selected, recordIDs: f.ids, options: .init(),
-                                 batchID: "test-batch", mode: .permanent)
+                                 batchID: "test-batch", mode: .permanent, hooks: hooks)
+    }
+
+    /// Thread-safe tally of the paths the verification opened (the hooks
+    /// fire off-main). Counts OPENS, not callback labels.
+    final class OpenCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var paths: [String] = []
+        func add(_ p: String) { lock.lock(); paths.append(p); lock.unlock() }
+        func opens(of p: String) -> Int { lock.lock(); defer { lock.unlock() }; return paths.filter { $0 == p }.count }
+        var all: [String] { lock.lock(); defer { lock.unlock() }; return paths }
+    }
+
+    /// Same byte count, different bytes — the stat-size check cannot see it.
+    private func rewriteSameSize(_ path: String, seed: UInt64) throws {
+        let size = Int((try FileManager.default.attributesOfItem(atPath: path))[.size] as? Int64 ?? 0)
+        try MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: path), bytes: size, seed: seed)
     }
 
     private func approval(_ f: Fixture) async throws -> MediaLedgerEvent {
@@ -136,15 +165,18 @@ struct PruneApplyTests {
         #expect(f.shown.selection(f.shown.defaultSelection).verifySentence == nil, "an original is not counted as a byte check")
         let out = await apply(f, selected: f.shown.defaultSelection)
         #expect(out.trashed == 1 && out.held.isEmpty && out.failed.isEmpty && out.overrideCount == 0, "\(out)")
-        #expect(out.verified == 0 && !out.summary.contains("byte-for-byte"), "\(out.summary)")
-        #expect(f.archive.contentFixity == nil, "nothing was read in full")
+        #expect(out.verified == 0 && !out.summary.contains("byte-for-byte"), "the original was not read — \(out.summary)")
+        // Codex follow-up #2: the ARCHIVE copy must present current evidence
+        // before anything goes; with no stamp yet (Promote writes none) it
+        // is read in full once, and its stamp is stored for next time.
+        #expect(out.archiveReads == 1 && f.archive.contentFixity != nil, "the archive copy read once, stamped — \(out)")
         #expect(!FileManager.default.fileExists(atPath: f.dup.fullPath))
         #expect(FileManager.default.fileExists(atPath: f.keeper.fullPath), "the working copy kept")
         #expect(FileManager.default.fileExists(atPath: f.archivePath), "the archive copy untouched")
         #expect(f.model.record(forID: f.dup.id)?.purgedAt != nil, "the catalog says it is gone")
+        let approval = try await approval(f)   // waits for pending ledger writes
         let kinds = f.model.mediaLedger.allEvents().map(\.event)
         #expect(kinds.contains(.approval) && kinds.contains(.copyDeleted), "\(kinds)")
-        let approval = try await approval(f)
         #expect(approval.by == .rick && approval.detail[MediaLedgerEvent.Detail.count] == "1")
         #expect(approval.detail[MediaLedgerEvent.Detail.barOverride] == nil, "respected the bar — no override")
     }
@@ -318,15 +350,399 @@ struct PruneApplyTests {
     func anOriginalRewrittenSinceTheReadBackIsHeld() async throws {
         let f = try await fixture("prune_origrewrite"); defer { f.sb.cleanup() }
         try #require(f.family.rows.first { $0.id == f.dup.id }?.kind == .original)
-        // Same byte count, different bytes — the stat-size check cannot see it.
-        let size = Int((try FileManager.default.attributesOfItem(atPath: f.dup.fullPath))[.size] as? Int64 ?? 0)
-        try MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: f.dup.fullPath), bytes: size, seed: 99)
+        try rewriteSameSize(f.dup.fullPath, seed: 99)
         let out = await apply(f, selected: [f.dup.id])
         #expect(out.trashed == 0 && out.held.count == 1, "\(out)")
         #expect(out.held.first?.hasSuffix("not the same bytes as the archive copy") == true, "\(out.held)")
         #expect(FileManager.default.fileExists(atPath: f.dup.fullPath), "the only copy of the new bytes stays")
         await f.model.mediaLedger.waitForPendingWrites()
         #expect(!f.model.mediaLedger.allEvents().contains { $0.event == .approval }, "nothing approved")
+    }
+
+    // MARK: Codex follow-up review of 90a54fb0 (2026-09-20) — findings #1, #2, #3, #6
+
+    @Test("PROMOTE binds the source's stat stamp (ctime included) to the promote digest on the SOURCE record; an original without that stamp is read in full")
+    func promoteStampsTheSourceAndAnUnstampedOriginalIsRead() async throws {
+        let f = try await fixture("prune_promote_stamp"); defer { f.sb.cleanup() }
+        let original = try #require(f.model.record(forID: f.dup.id))
+        try #require(f.family.rows.first { $0.id == original.id }?.kind == .original)
+        let own = try #require(original.contentFixity, "Promote wrote the source's promotion-time fixity")
+        #expect(own.digest == f.archive.archiveFixity?.digest && own.byteCount == original.sizeBytes)
+        #expect(own.stamp.hasChangeTime && own.isUsableForVerification && own.stampMatches(path: original.fullPath), "\(own)")
+        #expect(own.describesFileNow(FileIdentityStamp.capture(path: original.fullPath)), "the stamp reproduces to the ctime")
+        // An older catalog (or an adoption) carries no promotion stamp: the
+        // original is read in full like any duplicate, not trusted.
+        original.contentFixity = nil
+        let out = await apply(f, selected: [original.id])
+        #expect(out.trashed == 1 && out.verified == 1 && out.held.isEmpty, "read in full, identical, gone — \(out)")
+        #expect(!FileManager.default.fileExists(atPath: original.fullPath))
+    }
+
+    @Test("CODEX #1: an archive AUDIT after the original was edited must not make the edited original look safe — it is read, found different, and held")
+    func anArchiveAuditNeverVouchesForAnEditedOriginal() async throws {
+        let f = try await fixture("prune_codex1"); defer { f.sb.cleanup() }
+        let original = try #require(f.model.record(forID: f.dup.id))
+        try #require(f.family.rows.first { $0.id == original.id }?.kind == .original)
+        // 1. Edit the source to different bytes of the same length.
+        try rewriteSameSize(original.fullPath, seed: 101)
+        // 2. Audit the ARCHIVE copy (Verify Archive Copies' write): the
+        //    archive's verifiedAt now postdates the source's edit — the
+        //    exact date the old shortcut compared the source against.
+        let digest = try #require(f.archive.archiveFixity?.digest)
+        let write = f.model.restoreArchiveFixity(path: f.archivePath, observedDigest: digest, digest: digest,
+                                                 sizeBytes: f.archive.sizeBytes, verifiedAt: Date(),
+                                                 stampBeforeRead: FileIdentityStamp.capture(path: f.archivePath))
+        try #require(write == .written && f.archive.contentFixity != nil, "fixture: the audit refreshed the archive's fixity + stamp")
+        let edited = try #require(FileIdentityStamp.capture(path: original.fullPath))
+        let auditNs = Int64((f.archive.archiveFixity?.verifiedAt.timeIntervalSince1970 ?? 0) * 1_000_000_000)
+        try #require(edited.mtimeNs <= auditNs && edited.ctimeNs <= auditNs, "fixture: codex's timeline — the edit precedes the audit")
+        let out = await apply(f, selected: [original.id])
+        #expect(out.trashed == 0 && out.held.count == 1, "the edited original must never pass unread — \(out)")
+        #expect(out.held.first?.hasSuffix("not the same bytes as the archive copy") == true, "\(out.held)")
+        #expect(out.archiveReads == 0, "the audited archive copy stood on its stamp — \(out)")
+        #expect(FileManager.default.fileExists(atPath: original.fullPath), "the only copy of the edited bytes stays")
+        await f.model.mediaLedger.waitForPendingWrites()
+        #expect(!f.model.mediaLedger.allEvents().contains { $0.event == .approval }, "nothing approved")
+    }
+
+    @Test("CODEX #2: the archive copy rewritten to the same size after promotion authorises NOTHING — every copy (a duplicate, the original, a version) is held 'archive copy changed'")
+    func aSameSizeArchiveRewriteHoldsEveryCopy() async throws {
+        let f = try await fixture("prune_codex2", attested: false, withVersion: true); defer { f.sb.cleanup() }
+        let version = try #require(f.version)
+        try rewriteSameSize(f.archivePath, seed: 202)
+        try #require(f.archive.archiveFixity != nil, "fixture: the catalog still says fixity-verified — only the bytes lie")
+        let all: Set<UUID> = [f.dup.id, f.keeper.id, version.id]
+        let out = await apply(f, selected: all)
+        #expect(out.trashed == 0 && out.held.count == 3, "\(out)")
+        #expect(out.held.allSatisfy { $0.contains("archive copy changed") }, "\(out.held)")
+        #expect(out.archiveReads == 0 && f.archive.contentFixity == nil, "a mismatching read stores nothing")
+        for p in [f.dup.fullPath, f.keeper.fullPath, version.fullPath] {
+            #expect(FileManager.default.fileExists(atPath: p), "\(p) stays")
+        }
+        await f.model.mediaLedger.waitForPendingWrites()
+        #expect(!f.model.mediaLedger.allEvents().contains { $0.event == .approval }, "nothing approved")
+        // A stamp stored by an earlier audit does not survive the rewrite
+        // either: the stamp no longer reproduces, the re-read mismatches.
+        let f2 = try await fixture("prune_codex2_stamped"); defer { f2.sb.cleanup() }
+        let d = try #require(f2.archive.archiveFixity?.digest)
+        _ = f2.model.restoreArchiveFixity(path: f2.archivePath, observedDigest: d, digest: d, sizeBytes: f2.archive.sizeBytes,
+                                          stampBeforeRead: FileIdentityStamp.capture(path: f2.archivePath))
+        try #require(f2.archive.contentFixity?.describesFileNow(FileIdentityStamp.capture(path: f2.archivePath)) == true)
+        try rewriteSameSize(f2.archivePath, seed: 203)
+        let out2 = await apply(f2, selected: [f2.dup.id])
+        #expect(out2.trashed == 0 && out2.held.first?.contains("archive copy changed") == true, "\(out2)")
+        #expect(FileManager.default.fileExists(atPath: f2.dup.fullPath))
+    }
+
+    @Test("CODEX #3a: target A rewritten between its verdict and the mutation is held by the re-stat immediately before its Trash; B still goes")
+    func aTargetRewrittenAfterItsVerdictIsHeldAtTheMutation() async throws {
+        let f = try await fixture("prune_codex3a"); defer { f.sb.cleanup() }
+        let a = f.dup, b = f.keeper
+        let aPath = a.fullPath
+        var hooks = VideoScanModel.PruneVerifyHooks.live
+        hooks.beforeMutation = { path in
+            guard path == aPath else { return }
+            try? MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: aPath), bytes: 40 * 1024, seed: 303)
+        }
+        let out = await apply(f, selected: [a.id, b.id], hooks: hooks)
+        #expect(out.trashed == 1 && out.held.count == 1, "\(out)")
+        #expect(out.held.first?.hasPrefix(a.filename) == true && out.held.first?.contains("changed on disk since it was verified") == true, "\(out.held)")
+        #expect(FileManager.default.fileExists(atPath: aPath), "the new bytes at A's path survive")
+        #expect(!FileManager.default.fileExists(atPath: b.fullPath), "B's proof still held — it went")
+        #expect(f.model.record(forID: a.id)?.purgedAt == nil, "A's row stays active")
+        #expect(f.model.record(forID: b.id)?.purgedAt != nil)
+        await f.model.mediaLedger.waitForPendingWrites()
+        let removed = f.model.mediaLedger.allEvents().filter { $0.event == .copyDeleted }
+        #expect(removed.map(\.recordID) == [b.id], "one removal line, for B only — \(removed.map(\.filename))")
+    }
+
+    @Test("CODEX #3b: the pipeline is PER FILE — A is verified and moved before B is touched, so nothing verified earlier waits on B's read; and the archive copy rewritten WHILE B is read holds B, named")
+    func thePipelineIsPerFileAndAnArchiveRewriteDuringAReadHoldsIt() async throws {
+        let f = try await fixture("prune_codex3b"); defer { f.sb.cleanup() }
+        let a = f.dup, b = f.keeper
+        try #require(f.family.rows.first { $0.id == a.id }?.kind == .original && f.family.rows.first { $0.id == b.id }?.kind == .duplicate)
+        let aPath = a.fullPath, bPath = b.fullPath, archivePath = f.archivePath
+        let once = OpenCounter()
+        var hooks = VideoScanModel.PruneVerifyHooks.live
+        hooks.didOpen = { path in
+            // The first time B is opened for its full read: A is already
+            // gone (per-file), and the ARCHIVE copy changes under the read.
+            guard path == bPath, once.opens(of: bPath) == 0 else { return }
+            once.add(bPath)
+            once.add(FileManager.default.fileExists(atPath: aPath) ? "a-still-there" : "a-gone")
+            let size = Int((try? FileManager.default.attributesOfItem(atPath: archivePath))?[.size] as? Int64 ?? 0)
+            try? MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: archivePath), bytes: size, seed: 304)
+        }
+        let out = await apply(f, selected: [a.id, b.id], hooks: hooks)
+        #expect(once.opens(of: bPath) == 1 && once.opens(of: "a-gone") == 1, "fixture: A had already moved when B's read began — \(once.all)")
+        #expect(out.trashed == 1 && out.held.count == 1 && out.held.first?.hasPrefix(b.filename) == true, "\(out)")
+        #expect(out.held.first?.contains("changed while it was being checked against the archive copy") == true, "\(out.held)")
+        #expect(!FileManager.default.fileExists(atPath: aPath) && FileManager.default.fileExists(atPath: bPath))
+        #expect(f.model.record(forID: b.id)?.purgedAt == nil)
+    }
+
+    @Test("CODEX #3c: the archive copy removed after the batch was verified holds every remaining copy at the mutation")
+    func anArchiveRemovedBeforeTheMutationHoldsTheRest() async throws {
+        let f = try await fixture("prune_codex3c"); defer { f.sb.cleanup() }
+        let archivePath = f.archivePath, aPath = f.dup.fullPath
+        var hooks = VideoScanModel.PruneVerifyHooks.live
+        hooks.beforeMutation = { path in
+            guard path == aPath else { return }
+            try? FileManager.default.removeItem(atPath: archivePath)
+        }
+        let out = await apply(f, selected: [f.dup.id, f.keeper.id], hooks: hooks)
+        #expect(out.trashed == 0 && out.held.count == 2, "\(out)")
+        // A: the guard's re-stat of the archive copy the instant before its move. B: no archive copy to read against.
+        #expect(out.held[0].hasPrefix(f.dup.filename) && out.held[0].contains("archive copy is no longer on disk"), "\(out.held)")
+        #expect(out.held[1].hasPrefix(f.keeper.filename) && out.held[1].contains("could not be read in full"), "\(out.held)")
+        #expect(FileManager.default.fileExists(atPath: f.dup.fullPath) && FileManager.default.fileExists(atPath: f.keeper.fullPath))
+        #expect(f.model.record(forID: f.dup.id)?.purgedAt == nil && f.model.record(forID: f.keeper.id)?.purgedAt == nil)
+        await f.model.mediaLedger.waitForPendingWrites()
+        #expect(!f.model.mediaLedger.allEvents().contains { $0.event == .copyDeleted })
+    }
+
+    @Test("CODEX #3d: the live catalog is re-checked on the main actor before the hop — a row moved (or its archive copy unverified) since its verdict is held")
+    func aCatalogChangeAfterTheVerdictIsHeld() async throws {
+        let f = try await fixture("prune_codex3d"); defer { f.sb.cleanup() }
+        let moved = f.sb.sources.appendingPathComponent("elsewhere.mov").path
+        var hooks = VideoScanModel.PruneVerifyHooks.live
+        hooks.beforeMutation = { _ in f.model.record(forID: f.dup.id)?.fullPath = moved }
+        let out = await apply(f, selected: [f.dup.id], hooks: hooks)
+        #expect(out.trashed == 0 && out.held.count == 1 && out.held.first?.contains("moved in the catalog") == true, "\(out)")
+        #expect(FileManager.default.fileExists(atPath: f.dup.fullPath), "the file at the verified path is untouched")
+        #expect(f.model.record(forID: f.dup.id)?.purgedAt == nil)
+        // And the archive side: its fixity withdrawn (an audit's mismatch) between verdict and mutation.
+        f.model.record(forID: f.dup.id)?.fullPath = f.dup.fullPath
+        var hooks2 = VideoScanModel.PruneVerifyHooks.live
+        hooks2.beforeMutation = { _ in f.archive.archiveFixity = nil }
+        let out2 = await apply(f, selected: [f.dup.id], hooks: hooks2)
+        #expect(out2.trashed == 0 && out2.held.first?.contains("archive copy lost or changed its fixity") == true, "\(out2)")
+        #expect(FileManager.default.fileExists(atPath: f.dup.fullPath))
+    }
+
+    @Test("CODEX #6: three duplicates of one archive copy with no stamp yet — the archive copy is OPENED once, each duplicate once")
+    func threeDuplicatesReadTheArchiveCopyOnce() async throws {
+        let f = try await fixture("prune_codex6", extraCopies: 2); defer { f.sb.cleanup() }
+        let original = try #require(f.family.rows.first { $0.kind == .original }?.id)
+        let dups = f.family.rows.filter { $0.kind == .duplicate }
+        try #require(dups.count == 3 && f.archive.contentFixity == nil, "fixture: three duplicates, uncached archive copy")
+        let opens = OpenCounter()
+        var hooks = VideoScanModel.PruneVerifyHooks.live
+        hooks.didOpen = { opens.add($0) }
+        let out = await apply(f, selected: Set(dups.map(\.id)), hooks: hooks)
+        #expect(out.trashed == 3 && out.verified == 3 && out.archiveReads == 1 && out.held.isEmpty, "\(out)")
+        #expect(opens.opens(of: f.archivePath) == 1, "the archive copy was opened \(opens.opens(of: f.archivePath))× — \(opens.all)")
+        for d in dups {
+            #expect(opens.opens(of: d.copy.fullPath) == 1, "\(d.copy.filename) opened \(opens.opens(of: d.copy.fullPath))×")
+            #expect(!FileManager.default.fileExists(atPath: d.copy.fullPath))
+        }
+        #expect(FileManager.default.fileExists(atPath: f.archivePath) && f.model.record(forID: original)?.purgedAt == nil)
+        #expect(f.archive.contentFixity != nil, "the fresh evidence was stored")
+        // The next batch stats instead of reading: zero archive opens.
+        let g = try await fixture("prune_codex6_next", extraCopies: 1); defer { g.sb.cleanup() }
+        let gd = g.family.rows.filter { $0.kind == .duplicate }
+        let first = await g.model.applyPrune(shown: g.shown, selected: [gd[0].id], recordIDs: g.ids, options: .init(),
+                                             batchID: "b1", mode: .permanent)
+        try #require(first.archiveReads == 1 && g.archive.contentFixity != nil)
+        let again = await g.model.prunePlan(for: g.ids, options: .init(), isOnline: { _ in true })
+        let opens2 = OpenCounter()
+        var hooks2 = VideoScanModel.PruneVerifyHooks.live
+        hooks2.didOpen = { opens2.add($0) }
+        let second = await g.model.applyPrune(shown: again, selected: [gd[1].id], recordIDs: g.ids, options: .init(),
+                                              batchID: "b2", mode: .permanent, hooks: hooks2)
+        #expect(second.trashed == 1 && second.archiveReads == 0, "\(second)")
+        #expect(opens2.opens(of: g.archivePath) == 0, "stamped — never re-read: \(opens2.all)")
+    }
+
+    // MARK: The job (Rick 2026-09-20: "the app blocks when post-promote delete of big files")
+
+    /// A box so a hook can reach the job it runs inside.
+    final class JobBox: @unchecked Sendable { var job: PruneApplyJob? }
+
+    private func runJob(_ f: Fixture, selected: Set<UUID>,
+                        hooks: VideoScanModel.PruneVerifyHooks = .live) async -> PruneApplyJob {
+        let job = PruneApplyJob(model: f.model, shown: f.shown, selected: selected, recordIDs: f.ids,
+                                options: .init(), batchID: "test-job", mode: .permanent, hooks: hooks)
+        job.start()
+        await job.task?.value
+        return job
+    }
+
+    /// Poll (bounded) until `condition` holds on the main actor.
+    private func eventually(_ what: String, timeoutMs: Int = 4_000, _ condition: () -> Bool) async throws {
+        var waited = 0
+        while !condition() {
+            try #require(waited < timeoutMs, "timed out waiting for: \(what)")
+            try await Task.sleep(for: .milliseconds(20))
+            waited += 20
+        }
+    }
+
+    @Test("JOB: runs the same pipeline as applyPrune — every checked copy verified then moved, one row per copy, the approval written ONCE with the actual counts")
+    func theJobRunsThePipelineAndWritesTheApprovalOnce() async throws {
+        let f = try await fixture("prune_job", extraCopies: 1); defer { f.sb.cleanup() }
+        let all = Set(f.family.rows.filter(\.checkable).map(\.id))
+        try #require(all.count == 3)
+        let job = await runJob(f, selected: all)
+        #expect(job.state == .finished(summary: job.outcome.summary) && job.finishedAt != nil, "\(job.state)")
+        #expect(job.title == "Move 3 copies to the Trash")
+        #expect(job.outcome.trashed == 3 && job.outcome.held.isEmpty && job.outcome.failed.isEmpty, "\(job.outcome)")
+        #expect(job.outcome.verified == 2 && job.outcome.archiveReads == 1, "two duplicates read, the original on its stamp, the archive once — \(job.outcome)")
+        #expect(job.rows.count == 3 && job.rows.allSatisfy { $0.status == .trashed }, "\(job.rows)")
+        #expect(job.progress.settled == 3 && job.progress.trashed == 3 && job.fraction == 1)
+        #expect(job.subtitle.hasPrefix("Moved 3 copies to the Trash"), "\(job.subtitle)")
+        for id in all { #expect(f.model.record(forID: id)?.purgedAt != nil) }
+        #expect(FileManager.default.fileExists(atPath: f.archivePath))
+        await f.model.mediaLedger.waitForPendingWrites()
+        let approvals = f.model.mediaLedger.allEvents().filter { $0.event == .approval }
+        #expect(approvals.count == 1 && approvals.first?.detail[MediaLedgerEvent.Detail.count] == "3", "\(approvals.map(\.detail))")
+        #expect(approvals.first?.batchID == "test-job")
+        #expect(f.model.mediaLedger.allEvents().filter { $0.event == .copyDeleted }.count == 3)
+    }
+
+    @Test("JOB: held copies are named in the rows (state + reason) and in the log; no approval when nothing moved")
+    func theJobSurfacesHeldReasons() async throws {
+        let f = try await fixture("prune_job_held", attested: false, withVersion: true); defer { f.sb.cleanup() }
+        let version = try #require(f.version)
+        try rewriteSameSize(f.archivePath, seed: 505)
+        let job = await runJob(f, selected: [f.dup.id, f.keeper.id, version.id])
+        #expect(job.state == .finished(summary: job.outcome.summary), "held is not a failure of the job — \(job.state)")
+        #expect(job.outcome.trashed == 0 && job.outcome.held.count == 3, "\(job.outcome)")
+        #expect(job.rows.count == 3 && job.rows.allSatisfy { $0.status == .held && $0.note.contains("archive copy changed") }, "\(job.rows)")
+        #expect(job.subtitle.contains("3 held back"), "\(job.subtitle)")
+        await f.model.mediaLedger.waitForPendingWrites()
+        #expect(!f.model.mediaLedger.allEvents().contains { $0.event == .approval })
+        // And a copy the fresh plan holds before any byte is read is a row too.
+        let g = try await fixture("prune_job_held_plan"); defer { g.sb.cleanup() }
+        g.model.record(forID: g.dup.id)?.userNotes = "added since"
+        let job2 = await runJob(g, selected: [g.dup.id])
+        #expect(job2.rows.count == 1 && job2.rows[0].status == .held && job2.rows[0].note.contains("has your note"), "\(job2.rows)")
+        #expect(FileManager.default.fileExists(atPath: g.dup.fullPath))
+    }
+
+    @Test("JOB: Pause takes effect between files — the file in flight finishes, the next waits; Resume carries on")
+    func theJobPausesBetweenFiles() async throws {
+        let f = try await fixture("prune_job_pause", extraCopies: 1); defer { f.sb.cleanup() }
+        let dups = f.family.rows.filter { $0.kind == .duplicate }.map(\.copy)
+        try #require(dups.count == 2)
+        let first = dups[0], second = dups[1]
+        let box = JobBox()
+        var hooks = VideoScanModel.PruneVerifyHooks.live
+        hooks.beforeMutation = { path in if path == first.fullPath { box.job?.pause() } }
+        let job = PruneApplyJob(model: f.model, shown: f.shown, selected: [first.id, second.id], recordIDs: f.ids,
+                                options: .init(), batchID: "test-pause", mode: .permanent, hooks: hooks)
+        box.job = job
+        job.start()
+        try await eventually("the first file moved and the job paused before the second") {
+            job.isPaused && job.rows.first { $0.id == first.id }?.status == .trashed
+                && job.rows.first { $0.id == second.id }?.status == .pending
+        }
+        #expect(job.subtitle.contains("paused") && job.subtitle.hasPrefix("verified 1 of 2"), "\(job.subtitle)")
+        #expect(FileManager.default.fileExists(atPath: second.fullPath), "the second file waits")
+        job.resume()
+        await job.task?.value
+        #expect(job.state == .finished(summary: job.outcome.summary) && job.outcome.trashed == 2, "\(job.outcome)")
+        #expect(!FileManager.default.fileExists(atPath: second.fullPath))
+    }
+
+    @Test("JOB: Stop between a verdict and its move leaves that file and the rest; done stays done; no approval for nothing; Quit is the same Stop")
+    func theJobStopsBetweenFiles() async throws {
+        let f = try await fixture("prune_job_stop", extraCopies: 1); defer { f.sb.cleanup() }
+        let dups = f.family.rows.filter { $0.kind == .duplicate }.map(\.copy)
+        let first = dups[0], second = dups[1]
+        let box = JobBox()
+        var hooks = VideoScanModel.PruneVerifyHooks.live
+        hooks.beforeMutation = { path in if path == first.fullPath { box.job?.stopForQuit() } }
+        let job = PruneApplyJob(model: f.model, shown: f.shown, selected: [first.id, second.id], recordIDs: f.ids,
+                                options: .init(), batchID: "test-stop", mode: .permanent, hooks: hooks)
+        box.job = job
+        job.start()
+        await job.task?.value
+        #expect(job.state == .cancelled, "\(job.state)")
+        #expect(job.subtitle.hasPrefix("Stopped — 0 moved to Trash"), "\(job.subtitle)")
+        #expect(job.rows.first { $0.id == first.id }?.status == .held && job.rows.first { $0.id == first.id }?.note == "stopped before it was moved", "\(job.rows)")
+        #expect(job.rows.first { $0.id == second.id }?.status == .stopped, "\(job.rows)")
+        #expect(FileManager.default.fileExists(atPath: first.fullPath) && FileManager.default.fileExists(atPath: second.fullPath))
+        #expect(f.model.record(forID: first.id)?.purgedAt == nil && f.model.record(forID: second.id)?.purgedAt == nil)
+        await f.model.mediaLedger.waitForPendingWrites()
+        #expect(!f.model.mediaLedger.allEvents().contains { $0.event == .approval || $0.event == .copyDeleted })
+        // Done stays done: a Stop after the first file moved keeps it moved.
+        let g = try await fixture("prune_job_stop2", extraCopies: 1); defer { g.sb.cleanup() }
+        let gd = g.family.rows.filter { $0.kind == .duplicate }.map(\.copy)
+        let box2 = JobBox()
+        var hooks2 = VideoScanModel.PruneVerifyHooks.live
+        hooks2.beforeMutation = { path in if path == gd[1].fullPath { box2.job?.cancel() } }
+        let job2 = PruneApplyJob(model: g.model, shown: g.shown, selected: [gd[0].id, gd[1].id], recordIDs: g.ids,
+                                 options: .init(), batchID: "test-stop2", mode: .permanent, hooks: hooks2)
+        box2.job = job2
+        job2.start()
+        await job2.task?.value
+        #expect(job2.state == .cancelled && job2.outcome.trashed == 1, "\(job2.outcome)")
+        #expect(!FileManager.default.fileExists(atPath: gd[0].fullPath) && FileManager.default.fileExists(atPath: gd[1].fullPath))
+        await g.model.mediaLedger.waitForPendingWrites()
+        let approvals = g.model.mediaLedger.allEvents().filter { $0.event == .approval }
+        #expect(approvals.count == 1 && approvals.first?.detail[MediaLedgerEvent.Detail.count] == "1", "the approval says what actually went")
+    }
+
+    @Test("JOB: the center runs one batch at a time and refuses a second, named; the kind's chip is TRASH")
+    func theCenterRefusesASecondBatch() async throws {
+        let f = try await fixture("prune_job_center"); defer { f.sb.cleanup() }
+        let center = MediaFileOperationsCenter()
+        let first = center.startPruneApply(shown: f.shown, selected: [f.dup.id], recordIDs: f.ids, options: .init(),
+                                           batchID: "c1", model: f.model, mode: .permanent)
+        let second = center.startPruneApply(shown: f.shown, selected: [f.keeper.id], recordIDs: f.ids, options: .init(),
+                                            batchID: "c2", model: f.model, mode: .permanent)
+        #expect(second.wasRefused && !second.state.isActive, "\(second.state)")
+        #expect(center.hasActivePruneApply)
+        await first.task?.value
+        #expect(first.state == .finished(summary: first.outcome.summary) && first.outcome.trashed == 1, "\(first.outcome)")
+        #expect(FileManager.default.fileExists(atPath: f.keeper.fullPath), "the refused batch moved nothing")
+        #expect(!center.hasActivePruneApply)
+        #expect(MediaFileOperationKind.pruneCopies.badgeText == "TRASH" && MediaFileOperationKind.pruneCopies.hasDetailView)
+    }
+
+    @Test("the job's subtitle: bytes-based progress, counts that exist, the time left")
+    func theProgressSubtitle() {
+        var p = PruneApplyProgress()
+        p.total = 12; p.totalBytes = 12_000_000_000
+        #expect(p.subtitle() == "verified 0 of 12" && p.fraction == 0)
+        p.settle(bytes: 1_000_000_000, seconds: 30, result: .trashed(bytes: 1_000_000_000))
+        p.settle(bytes: 1_000_000_000, seconds: 30, result: .trashed(bytes: 1_000_000_000))
+        p.settle(bytes: 1_000_000_000, seconds: 20, result: .held("changed"))
+        #expect(p.subtitle() == "verified 3 of 12 · 2 moved to Trash · 1 held · about 4 min left", "\(p.subtitle())")
+        #expect(p.subtitle(paused: true) == "verified 3 of 12 · 2 moved to Trash · 1 held · paused")
+        #expect(p.subtitle(stopping: true).hasSuffix("stopping after this file"))
+        #expect(abs(p.fraction - 0.25) < 0.001)
+        p.settle(bytes: 9_000_000_000, seconds: 1, result: .failed("locked"))
+        #expect(p.subtitle() == "verified 4 of 12 · 2 moved to Trash · 1 held · 1 failed" && p.fraction == 1)
+    }
+
+    @Test("the Trash routine's guard: a refusal from either callback leaves the file and the row untouched, and is reported in `refused`")
+    func theJunkDeletionGuardRefusesWithoutTouchingAnything() async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("prune_guard"); defer { sb.cleanup() }
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        model.mediaLedger = MediaLedger(directory: sb.root.appendingPathComponent("ledger", isDirectory: true))
+        let file = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent("test_guard.mov"), bytes: 1024, seed: 5)
+        let rec = MasterArchiveTestSupport.makeRecord(path: file.path)
+        model.records = [rec]
+        let offDisk = await model.deleteConfirmedJunk([rec], mode: .permanent,
+                                                      guard: .init(authorize: { _ in nil }, beforeRemoval: { _ in "the proof no longer holds" }))
+        #expect(offDisk.succeeded == 0 && offDisk.alreadyMissing == 0 && offDisk.refused.count == 1 && offDisk.refused[0].reason == "the proof no longer holds")
+        #expect(FileManager.default.fileExists(atPath: file.path) && rec.purgedAt == nil && rec.lifecycleStage != .deletedPermanently)
+        let inCatalog = await model.deleteConfirmedJunk([rec], mode: .permanent,
+                                                        guard: .init(authorize: { _ in "not what was verified" }, beforeRemoval: { _ in nil }))
+        #expect(inCatalog.refused.count == 1 && inCatalog.refused[0].reason == "not what was verified" && inCatalog.succeeded == 0)
+        #expect(FileManager.default.fileExists(atPath: file.path) && rec.purgedAt == nil)
+        // A guarded file that VANISHED is refused, never "already gone".
+        try FileManager.default.removeItem(at: file)
+        let gone = await model.deleteConfirmedJunk([rec], mode: .permanent,
+                                                   guard: .init(authorize: { _ in nil }, beforeRemoval: { _ in "is not on disk" }))
+        #expect(gone.refused.count == 1 && gone.alreadyMissing == 0 && rec.purgedAt == nil)
+        await model.mediaLedger.waitForPendingWrites()
+        #expect(model.mediaLedger.allEvents().isEmpty, "nothing left the disk through the routine — no ledger line")
+        // No guard → the routine's own semantics are unchanged.
+        let plain = await model.deleteConfirmedJunk([rec], mode: .permanent)
+        #expect(plain.alreadyMissing == 1 && plain.refused.isEmpty && rec.purgedAt != nil)
     }
 
     // MARK: QA RED (2026-09-20) — a segmented-hash MATCH is a candidate, not proof
@@ -584,13 +1000,24 @@ struct PruneApplyTests {
             return try String(contentsOf: dir.appendingPathComponent("VideoScan").appendingPathComponent(name), encoding: .utf8)
         }
         let apply = try source("VideoScanModel+PruneApply.swift")
-        #expect(apply.contains("await deleteConfirmedJunk(targets, mode: mode)"), "the ONE existing Trash routine")
+        #expect(apply.contains("await deleteConfirmedJunk([rec], mode: mode, guard: fileGuard)"),
+                "the ONE existing Trash routine, one file at a time — with the file's proof re-checked at the mutation (codex follow-up #3)")
         #expect(!apply.contains("trashItem("), "no file deletion of its own")
         #expect(!apply.contains("removeItem("), "no file deletion of its own")
         #expect(apply.contains("applyHumanMetadataInheritance(from: rec, to: archive)"), "the carry-over reuses the one set of rules")
+        let verification = try source("VideoScanModel+PruneVerification.swift")
+        #expect(!verification.contains("trashItem(") && !verification.contains("removeItem("), "verification moves nothing")
+        #expect(verification.contains("SignatureVerification.verifyAgainstStoredKeeper("), "duplicates go through the one gate")
+        #expect(!apply.contains("verifiedAt"), "codex #1: an archive audit's date never vouches for the source")
         let sheet = try source("ArchivedWhatNextSheet.swift")
-        #expect(sheet.contains("model.applyPrune(shown: shown, selected: selected"), "Apply is wired to the checklist")
+        #expect(sheet.contains("fileOpsCenter.startPruneApply(shown: shown, selected: selected"),
+                "Apply hands the checklist to a Media File Operation (nothing long runs behind a modal)")
+        #expect(!sheet.contains("model.applyPrune("), "the sheet never runs the pipeline itself")
+        #expect(sheet.contains("dismiss()"), "and closes")
         #expect(!sheet.contains(".permanent"), "the sheet only ever moves to the Trash")
+        let job = try source("PruneApplyJob.swift")
+        #expect(!job.contains("trashItem(") && !job.contains("removeItem("), "the job moves nothing itself")
+        #expect(job.contains("model.pruneOneCopy(item, batch: batch, mode: mode, hooks: jobHooks)"), "the job runs the one pipeline")
         #expect(sheet.contains("minWidth: 960") && sheet.contains("minHeight: 720"), "Rick: a bigger dialog box")
     }
 }

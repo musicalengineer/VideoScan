@@ -60,6 +60,7 @@ import VideoScanCore
 
 struct ArchivedWhatNextSheet: View {
     @EnvironmentObject private var model: VideoScanModel
+    @EnvironmentObject private var fileOpsCenter: MediaFileOperationsCenter
     @Environment(\.dismiss) private var dismiss
 
     let request: ArchivedWhatNextRequest
@@ -373,18 +374,20 @@ struct ArchivedWhatNextSheet: View {
         return lines.joined(separator: "\n\n")
     }
 
+    /// Hand the plan + the person's checks to a Media File Operation and
+    /// close (Rick 2026-09-20: "the app blocks when post-promote delete of
+    /// big files" — nothing long runs behind a modal). The job runs the
+    /// same pipeline `applyPrune` runs, one file at a time, and names
+    /// every held copy in its row and in the log.
     private func runApply() {
-        guard let shown = plan, !reloading else { return }
+        guard let shown = plan, !reloading, !applying else { return }
         let options = PrunePlan.Options(keepOne: keepOne, keeperVolume: keeperVolume, bar: model.importanceBar)
         applying = true
-        Task {
-            let outcome = await model.applyPrune(shown: shown, selected: selected, recordIDs: request.recordIDs,
-                                                 options: options, batchID: request.batchID)
-            applied = outcome
-            applying = false
-            selectionTouched = false
-            planRevision &+= 1   // the plan now reflects what is left
-        }
+        let n = summary.count
+        fileOpsCenter.startPruneApply(shown: shown, selected: selected, recordIDs: request.recordIDs,
+                                      options: options, batchID: request.batchID, model: model)
+        model.log("Archived — what next?: Trashing \(n) cop\(n == 1 ? "y" : "ies") in Media File Operations — each is checked byte-for-byte against the archive first")
+        dismiss()
     }
 
     private var applyTitle: String {

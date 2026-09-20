@@ -542,6 +542,12 @@ struct MediaFileOperationRow: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
+
+            if isExpanded, let prune = job as? PruneApplyJob {
+                PruneApplyDetailView(job: prune)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
         }
         .background(rowBackground)
         .onReceive(job.objectWillChange) { _ in
@@ -826,9 +832,10 @@ struct MediaFileOperationBadge: View {
             .padding(.vertical, 2)
             .background(Capsule().fill(kind.badgeColor))
             .fixedSize()
-            // The DELETE chip is the one a UI test (and Rick's eye) must be
-            // able to find: white on red, its own identifier.
-            .accessibilityIdentifier(kind == .deleteDuplicates ? "mfo.row.deleteChip" : "mfo.row.badge")
+            // The DELETE / TRASH chips are the ones a UI test (and Rick's
+            // eye) must be able to find: white on red, their own identifiers.
+            .accessibilityIdentifier(kind == .deleteDuplicates ? "mfo.row.deleteChip"
+                                     : kind == .pruneCopies ? "mfo.row.trashChip" : "mfo.row.badge")
     }
 }
 
@@ -851,7 +858,8 @@ extension MediaFileOperationKind {
     /// listed by name so that backlog is readable from the code.
     var hasDetailView: Bool {
         switch self {
-        case .compare, .findPerson, .assessCopies, .verifyArchive, .archiveAngel, .deleteDuplicates:
+        case .compare, .findPerson, .assessCopies, .verifyArchive, .archiveAngel, .deleteDuplicates,
+             .pruneCopies:
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
@@ -932,6 +940,11 @@ extension MediaFileOperationKind {
         // this is red darkened just enough — contrast vs white ≈ 5.6, Δ
         // from Reformat's crimson ≈ 0.17, and still unmistakably RED.
         case .deleteDuplicates: return Color(red: 0.82, green: 0.04, blue: 0.06)
+        // "Move to Trash" (2026-09-20) — oxblood: the other destructive
+        // row, unmistakably red beside DELETE's brighter red (Δ ≈ 0.26)
+        // and apart from Reformat's crimson (Δ ≈ 0.14); contrast vs white
+        // ≈ 8.9.
+        case .pruneCopies: return Color(red: 0.58, green: 0.06, blue: 0.16)
         }
     }
 }
