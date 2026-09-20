@@ -109,6 +109,27 @@ struct PersonDocument: Codable, Identifiable, Equatable, Sendable {
 
 extension PersonDocument.CodingKeys: CaseIterable {}
 
+/// One inspector row: a document PLUS who it was read for. The owner
+/// travels with the row so an action taken on it (Remove) goes to the
+/// person and folder the row came from, whatever is selected by the time
+/// the confirmation lands (codex review 1593 #9, 2026-09-20: A's
+/// certificate could be removed from B's inspector and logged as B's).
+struct PersonDocumentRow: Identifiable, Equatable, Sendable {
+    let document: PersonDocument
+    /// The tree person id the row was read for.
+    let ownerID: String
+    let owner: FamilyAssetPerson
+
+    var id: UUID { document.id }
+
+    /// The People/ folder whose `Documents/documents.json` lists this row
+    /// (the file is `<folder>/Documents/<filename>`). Nil only for a row
+    /// without a resolved file, which no listing produces.
+    var personFolder: URL? {
+        document.fileURL?.deletingLastPathComponent().deletingLastPathComponent()
+    }
+}
+
 /// One line per action to the app log (Rick reads it) and the model log
 /// (os_log, name kept private). `missing(_:)` reports each vanished file
 /// ONCE per process — a listing runs on every selection change, and the

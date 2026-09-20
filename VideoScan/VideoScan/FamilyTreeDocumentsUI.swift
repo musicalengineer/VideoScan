@@ -10,6 +10,9 @@
 //   • FamilyTreeDocumentsPanel — the "Documents" section of the inspector:
 //     kind · date added · original name · note, with Open, Show in Finder
 //     and Remove (confirmed; the file goes to Documents/.trash, never rm).
+//     Every row is a `PersonDocumentRow` — the document AND the person it
+//     was read for — so Remove is bound to that owner, not to whoever is
+//     selected when the dialog is confirmed (codex 1593 #9).
 //
 // Neither view touches the store in `body`: the panel is handed
 // `model.selectedDocuments` (read once per selection), and the sheet reads
@@ -147,7 +150,10 @@ struct FamilyDocumentAddSheet: View {
     }
 }
 
-/// The inspector's "Documents" section.
+/// The inspector's "Documents" section. Rows are `PersonDocumentRow`s —
+/// each carries the person it was read for, and Remove hands THAT row (not
+/// "the selected person's document") to the model, which re-validates the
+/// owner at confirmation (codex 1593 #9).
 struct FamilyTreeDocumentsPanel: View {
     /// Same palette as the enclosing tree. Read from the environment
     /// rather than passed in: the parent sets `.preferredColorScheme`, so
@@ -157,13 +163,16 @@ struct FamilyTreeDocumentsPanel: View {
         FamilyTreePalette.palette(for: colorScheme == .dark ? .dark : .light)
     }
 
-    let documents: [PersonDocument]
+    let documents: [PersonDocumentRow]
+    /// True while the selected person's list is being read; the previous
+    /// person's rows are already gone by then.
+    let isLoading: Bool
     /// The last add/remove failure, shown under the list.
     let errorText: String?
     let onAdd: () -> Void
-    let onRemove: (PersonDocument) -> Void
+    let onRemove: (PersonDocumentRow) -> Void
 
-    @State private var removeCandidate: PersonDocument?
+    @State private var removeCandidate: PersonDocumentRow?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -183,15 +192,20 @@ struct FamilyTreeDocumentsPanel: View {
                 .accessibilityIdentifier("tree.documents.add")
             }
 
-            if documents.isEmpty {
+            if isLoading && documents.isEmpty {
+                Text("Reading documents…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("tree.documents.loading")
+            } else if documents.isEmpty {
                 Text("No documents filed yet — a birth or death certificate, a marriage record, a scanned letter.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("tree.documents.empty")
             } else {
-                ForEach(documents) { document in
-                    row(document)
+                ForEach(documents) { row in
+                    documentRow(row)
                 }
             }
 
@@ -205,26 +219,27 @@ struct FamilyTreeDocumentsPanel: View {
         }
         // `.confirmationDialog(…, presenting:)` ≈ a modal "are you sure"
         // that is shown while the optional is non-nil and hands the value
-        // to its buttons.
+        // to its buttons. The value is the whole row, owner included.
         .confirmationDialog(
-            "Remove \(removeCandidate?.kind.displayName.lowercased() ?? "document")?",
+            "Remove \(removeCandidate?.document.kind.displayName.lowercased() ?? "document")?",
             isPresented: Binding(get: { removeCandidate != nil },
                                  set: { if !$0 { removeCandidate = nil } }),
             presenting: removeCandidate
-        ) { document in
-            Button("Remove \(document.originalFilename)", role: .destructive) {
-                onRemove(document)
+        ) { row in
+            Button("Remove \(row.document.originalFilename)", role: .destructive) {
+                onRemove(row)
                 removeCandidate = nil
             }
             .accessibilityIdentifier("tree.documents.confirmRemove")
             Button("Cancel", role: .cancel) { removeCandidate = nil }
-        } message: { _ in
-            Text("The file moves to Documents/.trash beside this person’s photos. Nothing is deleted.")
+        } message: { row in
+            Text("The file moves to Documents/.trash beside \(row.owner.name)’s photos. Nothing is deleted.")
         }
     }
 
-    private func row(_ document: PersonDocument) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func documentRow(_ row: PersonDocumentRow) -> some View {
+        let document = row.document
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Image(systemName: "doc.text")
                     .foregroundStyle(.secondary)
@@ -260,7 +275,7 @@ struct FamilyTreeDocumentsPanel: View {
                 }
                 .accessibilityIdentifier("tree.documents.reveal")
                 Spacer()
-                Button("Remove…", role: .destructive) { removeCandidate = document }
+                Button("Remove…", role: .destructive) { removeCandidate = row }
                     .masterOnly()
                     .accessibilityIdentifier("tree.documents.remove")
             }

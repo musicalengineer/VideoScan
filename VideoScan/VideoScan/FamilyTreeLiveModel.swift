@@ -264,9 +264,16 @@ final class FamilyTreeLiveModel: ObservableObject {
     // MARK: Documents (2026-09-20: certificates on a person)
 
     /// The selected person's filed papers (birth/death/marriage/other),
-    /// newest first. Read ONCE per selection change off the main actor
-    /// and memoised per person id — never in `body`.
-    @Published private(set) var selectedDocuments: [PersonDocument] = []
+    /// newest first. Each row carries its OWNER (person id + People/
+    /// folder) so a Remove acts on the person the row was read for, never
+    /// on whoever is selected by the time the dialog is confirmed (codex
+    /// 1593 #9). Read ONCE per selection change off the main actor and
+    /// memoised per person id — never in `body`. Cleared the moment the
+    /// selection moves to an uncached person; `isLoadingSelectedDocuments`
+    /// covers the gap.
+    @Published private(set) var selectedDocuments: [PersonDocumentRow] = []
+    /// True from a selection change until that person's read has landed.
+    @Published private(set) var isLoadingSelectedDocuments = false
     /// Document count per person id for the card chip. Filled for the
     /// cards on the canvas by one background pass per scene rebuild; a
     /// missing key reads as 0 until that pass lands.
@@ -276,15 +283,28 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// Per-person memo behind `selectedDocuments`. Bounded: cleared when
     /// it passes `documentsCacheLimit` entries or the tree is replaced.
     /// Worst case ≈ 256 people × a few rows ≈ well under 1 MB.
-    private var documentsCache: [String: [PersonDocument]] = [:]
+    private var documentsCache: [String: [PersonDocumentRow]] = [:]
     private static let documentsCacheLimit = 256
     /// Where documents are read from. Production = the shared archive
     /// configuration; an injected (test) model gets NONE unless the test
     /// injects a store (isolation rule — never the real People/ folder).
     var documentStoreProvider: () -> FamilyAssetStore?
-    /// Stale-result guard for the background reads (a new tree or a
-    /// cleared cache bumps it; a read from before is dropped).
+    /// What a background read is for. Handed to `documentListing` so a
+    /// test can hold ONE kind of read open without stalling the other.
+    enum DocumentRead: Sendable { case selection, cardCount }
+    /// The listing itself, split out so a test can hold a read open and
+    /// choose the order reads finish in (the codex 1593 #9/#10 sensors).
+    /// Production = `store.documents(for:)`.
+    var documentListing: @Sendable (FamilyAssetStore, FamilyAssetPerson, DocumentRead) -> [PersonDocument]
+        = { store, person, _ in store.documents(for: person) }
+    /// Stale-result guards for the background reads. `documentsGeneration`
+    /// bumps when the whole cache goes (new tree, cleared cache);
+    /// `documentRevisions[id]` bumps on every add/remove for ONE person.
+    /// A read captures both when it starts and publishes only if neither
+    /// moved since — so a read from before an import can never republish
+    /// the pre-import rows over the refresh (codex 1593 #10).
     private var documentsGeneration = 0
+    private var documentRevisions: [String: Int] = [:]
 
     /// The directory the loader reads. Production = App Support; tests
     /// inject a temp directory and nothing outside it is ever consulted.
@@ -1908,11 +1928,18 @@ final class FamilyTreeLiveModel: ObservableObject {
         documentCounts[personID] ?? 0
     }
 
+    private func documentRevision(for personID: String) -> Int {
+        documentRevisions[personID] ?? 0
+    }
+
     /// Something was added or removed for this person: drop the memo,
-    /// bump the revision, re-read the selection and the chip count.
+    /// advance that person's revision (any read in flight for them is now
+    /// stale and will be dropped when it lands — codex 1593 #10), bump the
+    /// published revision, re-read the selection and the chip count.
     func noteDocumentsChanged(for personID: String) {
         documentsCache[personID] = nil
         documentCounts[personID] = nil
+        documentRevisions[personID, default: 0] &+= 1
         documentsRevision &+= 1
         if personID == selectedID {
             refreshSelectedDocuments()
@@ -1924,64 +1951,207 @@ final class FamilyTreeLiveModel: ObservableObject {
     private func clearDocumentsCache() {
         documentsCache.removeAll()
         documentCounts.removeAll()
+        documentRevisions.removeAll()
         documentsGeneration &+= 1
-        if !selectedDocuments.isEmpty { selectedDocuments = [] }
+        publishSelectedDocuments([], loading: false)
     }
 
-    /// Selection changed: serve the memo, else read off the main actor and
-    /// publish when (and only if) the same person is still selected.
+    /// Selection changed: serve the memo, else clear the rows AT ONCE and
+    /// read off the main actor, publishing only if the same person is still
+    /// selected and nothing invalidated the read while it ran.
     private func refreshSelectedDocuments() {
         guard isLive, let id = selectedID, let person = assetPerson(for: id) else {
-            if !selectedDocuments.isEmpty { selectedDocuments = [] }
+            publishSelectedDocuments([], loading: false)
             return
         }
         if let cached = documentsCache[id] {
-            selectedDocuments = cached
+            publishSelectedDocuments(cached, loading: false)
             return
         }
         guard let store = documentStoreProvider() else {
-            if !selectedDocuments.isEmpty { selectedDocuments = [] }
+            publishSelectedDocuments([], loading: false)
             return
         }
+        // The previous person's rows go NOW, before the read starts: a row
+        // left visible under the next person is a row that can be acted on
+        // under the wrong name (codex 1593 #9).
+        publishSelectedDocuments([], loading: true)
         let generation = documentsGeneration
+        let revision = documentRevision(for: id)
+        let listing = documentListing
         // `Task.detached` ≈ std::async on a background queue; the hop back
         // to `@MainActor` is the `await` below.
         Task { @MainActor [weak self] in
-            let documents = await Task.detached(priority: .userInitiated) {
-                store.documents(for: person)
+            let rows = await Task.detached(priority: .userInitiated) {
+                Self.rows(listing(store, person, .selection), ownerID: id, owner: person)
             }.value
-            guard let self, generation == self.documentsGeneration else { return }
-            self.remember(documents, for: id)
-            if self.selectedID == id { self.selectedDocuments = documents }
+            guard let self,
+                  generation == self.documentsGeneration,
+                  revision == self.documentRevision(for: id) else { return }
+            self.remember(rows, for: id)
+            if self.selectedID == id { self.publishSelectedDocuments(rows, loading: false) }
         }
     }
 
+    /// Assigns only on change: `@Published` fires on every set and the
+    /// inspector re-renders on each fire.
+    private func publishSelectedDocuments(_ rows: [PersonDocumentRow], loading: Bool) {
+        if selectedDocuments != rows { selectedDocuments = rows }
+        if isLoadingSelectedDocuments != loading { isLoadingSelectedDocuments = loading }
+    }
+
+    nonisolated private static func rows(_ documents: [PersonDocument],
+                                         ownerID: String, owner: FamilyAssetPerson) -> [PersonDocumentRow] {
+        documents.map { PersonDocumentRow(document: $0, ownerID: ownerID, owner: owner) }
+    }
+
     /// One background pass for the cards on the canvas that have no count
-    /// yet — a handful of sidecar reads, never one task per card.
+    /// yet — a handful of sidecar reads, never one task per card. Each
+    /// count lands only if that person was not invalidated meanwhile.
     private func loadDocumentCounts(for cards: [FamilyTreeCard]) {
-        let wanted = cards.compactMap { card -> (id: String, person: FamilyAssetPerson)? in
+        let wanted = cards.compactMap { card -> (id: String, person: FamilyAssetPerson, revision: Int)? in
             guard documentCounts[card.person.id] == nil, let person = card.assetPerson else { return nil }
-            return (card.person.id, person)
+            return (card.person.id, person, documentRevision(for: card.person.id))
         }
         guard !wanted.isEmpty, let store = documentStoreProvider() else { return }
         let generation = documentsGeneration
+        let listing = documentListing
         Task { @MainActor [weak self] in
-            let counts = await Task.detached(priority: .utility) { () -> [String: Int] in
-                var out: [String: Int] = [:]
-                for entry in wanted { out[entry.id] = store.documents(for: entry.person).count }
-                return out
+            let counts = await Task.detached(priority: .utility) { () -> [(id: String, count: Int, revision: Int)] in
+                wanted.map { ($0.id, listing(store, $0.person, .cardCount).count, $0.revision) }
             }.value
             guard let self, generation == self.documentsGeneration else { return }
-            for (id, count) in counts where self.documentCounts[id] == nil {
-                self.documentCounts[id] = count
+            for entry in counts
+            where self.documentCounts[entry.id] == nil && entry.revision == self.documentRevision(for: entry.id) {
+                self.documentCounts[entry.id] = entry.count
             }
         }
     }
 
-    private func remember(_ documents: [PersonDocument], for id: String) {
+    private func remember(_ rows: [PersonDocumentRow], for id: String) {
         if documentsCache.count >= Self.documentsCacheLimit { documentsCache.removeAll() }
-        documentsCache[id] = documents
-        documentCounts[id] = documents.count
+        documentsCache[id] = rows
+        documentCounts[id] = rows.count
+    }
+
+    // MARK: Documents — removal (codex 1593 #9)
+
+    /// Why a Remove was refused before anything was touched.
+    enum DocumentRemovalRefusal: Error, Equatable {
+        /// The row was read for one person and another is selected now.
+        case ownerNotSelected(ownerID: String, selectedID: String?)
+        /// The row is no longer among the rows being shown (an import or
+        /// removal replaced them since the dialog opened).
+        case notListed
+        /// The file is no longer where the row says.
+        case missingOnDisk(URL)
+
+        /// The plain words the inspector shows.
+        func message(for row: PersonDocumentRow) -> String {
+            let name = row.document.originalFilename
+            switch self {
+            case .ownerNotSelected:
+                return "Couldn’t remove \(name): it belongs to \(row.owner.name), who is no longer "
+                    + "the person shown. Select \(row.owner.name) and try again."
+            case .notListed:
+                return "\(name) is no longer listed for this person."
+            case .missingOnDisk:
+                return "\(name) is no longer on disk where it was filed — it was dropped from the list; "
+                    + "nothing was moved."
+            }
+        }
+
+        /// The log line: ids and filename only, the name goes to the
+        /// private field.
+        func logLine(for row: PersonDocumentRow, selectedID: String?) -> String {
+            let file = row.document.filename
+            switch self {
+            case .ownerNotSelected(let ownerID, let selectedID):
+                return "[tree] refused to remove \(file) — the row belongs to \(ownerID) but "
+                    + "\(selectedID ?? "no one") is selected; nothing was changed"
+            case .notListed:
+                return "[tree] refused to remove \(file) — no longer among \(row.ownerID)'s listed "
+                    + "documents; nothing was changed"
+            case .missingOnDisk(let url):
+                return "[tree] refused to remove \(file) for \(row.ownerID) — missing on disk at "
+                    + "\(url.path); dropped from the listing, nothing was moved"
+            }
+        }
+    }
+
+    /// The check a Remove makes at confirmation, before the store is
+    /// touched: the row still belongs to the selected person and is still
+    /// among the rows being shown. Main actor, no disk — the on-disk check
+    /// is inside `removeDocument(_:)`.
+    func validateDocumentRemoval(_ row: PersonDocumentRow) -> DocumentRemovalRefusal? {
+        guard row.ownerID == selectedID else {
+            return .ownerNotSelected(ownerID: row.ownerID, selectedID: selectedID)
+        }
+        guard selectedDocuments.contains(row) else { return .notListed }
+        return nil
+    }
+
+    /// Remove a document THROUGH ITS ROW: the owner and the People/ folder
+    /// come from the row (captured when it was read), never from the
+    /// selection. Refuses — and logs the mismatch — when the row's owner is
+    /// not the selected person, the row is no longer listed, or the file is
+    /// gone. Off the main actor like every store write. Returns the
+    /// plain-words error for the inspector, nil on success.
+    func removeDocument(_ row: PersonDocumentRow) async -> String? {
+        let document = row.document
+        if let refusal = validateDocumentRemoval(row) {
+            PersonDocumentLog.shared.write(refusal.logLine(for: row, selectedID: selectedID),
+                                           privateName: row.owner.name)
+            return refusal.message(for: row)
+        }
+        guard let store = documentStoreProvider() else {
+            return "Couldn’t remove \(document.originalFilename): the family archive isn’t available."
+        }
+        guard let url = document.fileURL, let folder = row.personFolder else {
+            let refusal = DocumentRemovalRefusal.notListed
+            PersonDocumentLog.shared.write(refusal.logLine(for: row, selectedID: selectedID),
+                                           privateName: row.owner.name)
+            noteDocumentsChanged(for: row.ownerID)
+            return refusal.message(for: row)
+        }
+        let owner = row.owner
+        let outcome = await Task.detached(priority: .userInitiated) { () -> Result<Void, Error> in
+            guard Self.isRegularFile(url) else {
+                return .failure(DocumentRemovalRefusal.missingOnDisk(url))
+            }
+            do {
+                try store.removeDocument(document, from: folder, for: owner)
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }.value
+        switch outcome {
+        case .success:
+            noteDocumentsChanged(for: row.ownerID)
+            return nil
+        case .failure(let refusal as DocumentRemovalRefusal):
+            PersonDocumentLog.shared.write(refusal.logLine(for: row, selectedID: selectedID),
+                                           privateName: owner.name)
+            // The listing drops a row whose file is gone; re-read so the
+            // inspector agrees with the disk.
+            noteDocumentsChanged(for: row.ownerID)
+            return refusal.message(for: row)
+        case .failure(let error):
+            return "Couldn’t remove \(document.originalFilename): \(error.localizedDescription)"
+        }
+    }
+
+    /// A FRESH URL, not the row's: Foundation caches `resourceValues` on
+    /// the URL value, and the row's `fileURL` answered "regular file" when
+    /// it was listed — it would keep saying so after the file moved away
+    /// (the store's own re-checks rebuild the URL for the same reason).
+    nonisolated private static func isRegularFile(_ url: URL) -> Bool {
+        let fresh = URL(fileURLWithPath: url.path, isDirectory: false)
+        guard let values = try? fresh.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else {
+            return false
+        }
+        return values.isRegularFile == true && values.isSymbolicLink != true
     }
 
     // MARK: Folder

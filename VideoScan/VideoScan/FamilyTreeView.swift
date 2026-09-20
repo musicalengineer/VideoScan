@@ -1833,11 +1833,12 @@ struct FamilyTreeView: View {
     // MARK: Documents (2026-09-20)
 
     /// The inspector's Documents section. Rows are `model.selectedDocuments`
-    /// (read once per selection, off the main actor); nothing here touches
-    /// the store.
+    /// (read once per selection, off the main actor, each row carrying its
+    /// owner); nothing here touches the store.
     private var documentsPanel: some View {
         FamilyTreeDocumentsPanel(
             documents: model.selectedDocuments,
+            isLoading: model.isLoadingSelectedDocuments,
             errorText: documentsError,
             onAdd: {
                 if let id = model.selectedID { presentAddDocument(for: id) }
@@ -1871,27 +1872,11 @@ struct FamilyTreeView: View {
             id: personID, personName: assetPerson.name, assetPerson: assetPerson)
     }
 
-    /// Off the main actor, like every store write here; the file goes to
-    /// Documents/.trash and the list is re-read through the model.
-    private func removeDocument(_ document: PersonDocument) {
-        guard let personID = model.selectedID, let assetPerson = model.assetPerson(for: personID) else { return }
-        let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
-        Task {
-            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<Void, Error> in
-                do {
-                    try configuration.makeStore().removeDocument(document, for: assetPerson)
-                    return .success(())
-                } catch {
-                    return .failure(error)
-                }
-            }.value
-            switch outcome {
-            case .success:
-                documentsError = nil
-                model.noteDocumentsChanged(for: personID)
-            case .failure(let error):
-                documentsError = "Couldn’t remove \(document.originalFilename): \(error.localizedDescription)"
-            }
-        }
+    /// The model does the removal THROUGH THE ROW — owner and folder as
+    /// captured when the row was read — and refuses if the row no longer
+    /// belongs to the person shown (codex 1593 #9). This only carries the
+    /// outcome to the inspector.
+    private func removeDocument(_ row: PersonDocumentRow) {
+        Task { documentsError = await model.removeDocument(row) }
     }
 }
