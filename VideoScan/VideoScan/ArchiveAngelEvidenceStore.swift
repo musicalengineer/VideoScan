@@ -64,9 +64,16 @@ struct ArchiveAngelEvidenceRecord: Codable, Sendable, Equatable {
     /// new to the person). Lets the evidence pick find "fresh eyes"
     /// candidates past the score band without projecting them.
     var timesProposed: Int
+    /// The OTHER members' effective skips in this file's event family, as
+    /// the sweep's `applyFamilyAttention` pass computed them (codex
+    /// 2026-09-20 #6): the pick's projection is per record and never runs
+    /// that pass, so without this a never-proposed variant of skipped
+    /// footage came back "New to you" from the cache. Rules v9.
+    var familySkips: Double
 
     init(score: Int, lines: [ArchiveAngelEvidence], rejection: ArchiveAngelRejection?,
-         useCount: Int, lastUsed: Date?, computedAt: Date, timesProposed: Int = 0) {
+         useCount: Int, lastUsed: Date?, computedAt: Date, timesProposed: Int = 0,
+         familySkips: Double = 0) {
         self.score = score
         self.lines = lines
         self.rejection = rejection
@@ -75,6 +82,7 @@ struct ArchiveAngelEvidenceRecord: Codable, Sendable, Equatable {
         self.computedAt = computedAt
         self.grade = rejection == nil ? ArchiveAngelGrade.from(score: score) : .x
         self.timesProposed = timesProposed
+        self.familySkips = familySkips
     }
 
     /// Scored (cleared the floor) — any of A–D.
@@ -107,14 +115,26 @@ struct ArchiveAngelEvidenceFile: Codable, Sendable, Equatable {
     var considered: Int
     var eligible: Int
     var records: [UUID: ArchiveAngelEvidenceRecord]
+    /// The attention state the sweep ACTUALLY scored with (codex
+    /// 2026-09-20 #5): `ArchiveAngelAttentionStore.revision` and
+    /// `lastEventAt`, captured at the snapshot — not when scoring finished.
+    /// A skip noted while scoring ran is older than `computedAt` but newer
+    /// than these, so the pick can tell. nil = written by something that
+    /// did not capture it (a test-built file); the pick then falls back to
+    /// `computedAt`.
+    var attentionRevision: Int?
+    var attentionLastEventAt: Date?
 
     init(computedAt: Date = Date(), complete: Bool = true, considered: Int = 0,
-         eligible: Int = 0, records: [UUID: ArchiveAngelEvidenceRecord] = [:]) {
+         eligible: Int = 0, records: [UUID: ArchiveAngelEvidenceRecord] = [:],
+         attentionRevision: Int? = nil, attentionLastEventAt: Date? = nil) {
         self.computedAt = computedAt
         self.complete = complete
         self.considered = considered
         self.eligible = eligible
         self.records = records
+        self.attentionRevision = attentionRevision
+        self.attentionLastEventAt = attentionLastEventAt
     }
 }
 
@@ -165,6 +185,9 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     // MARK: Reads (O(1))
 
     var computedAt: Date? { file?.computedAt }
+    /// The attention state the file was scored with (nil = not stamped).
+    var attentionRevision: Int? { file?.attentionRevision }
+    var attentionLastEventAt: Date? { file?.attentionLastEventAt }
     var isLoaded: Bool { file != nil }
     /// Grades A + B (the default filter).
     var candidateCount: Int { candidateIDs.count }

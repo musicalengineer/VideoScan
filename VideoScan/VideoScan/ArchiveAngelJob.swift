@@ -354,6 +354,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         } else if let fromEvidence = Self.selectFromEvidence(
             store: model.archiveAngelStore, count: requestedCount, now: Date(), excluding: inFlight,
             attentionChangedAt: model.archiveAngelAttention.lastEventAt,
+            attentionRevision: model.archiveAngelAttention.revision,
             project: { id in model.record(forID: id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
             selection = fromEvidence.selection
             consideredCount = model.archiveAngelStore.consideredCount

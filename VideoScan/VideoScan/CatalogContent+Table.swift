@@ -236,6 +236,12 @@ extension CatalogContent {
     /// the others (GH #132). `.delete` is the Backspace key.
     private var tableWithTrashShortcut: some View {
         catalogTableBase
+            // The menu route (2026-09-20): Catalog ▸ Move to Trash ⌘⌫ reads
+            // this while the table has keyboard focus — see
+            // CatalogTrashCommand.swift for why the key handler below was
+            // never reached by a Command-key gesture.
+            .focusedValue(\.catalogTrashSelection,
+                          CatalogTrashSelection(count: selectedIDs.count, perform: trashSelectedRows))
             .onKeyPress(phases: .down) { press in
                 // CONTAINS, not ==. Exact equality meant any stray flag
                 // macOS happened to report alongside Command made this

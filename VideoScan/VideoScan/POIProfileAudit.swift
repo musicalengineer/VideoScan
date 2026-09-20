@@ -15,9 +15,19 @@
 //     answer with dates.
 // The diff is PURE and table-tested; the writers are two small hops.
 //
+// Codex 2026-09-20 #12: kinships, notes and identity notes are REDACTED
+// in the line ("3 kinships", "12 chars") but compared by their ORIGINAL
+// values — a changed relationship at equal count, or notes AB → CD, is a
+// change and prints "3 → 3 (changed)". And the journal appends go through
+// ONE ordered worker chain (MediaLedger's tail-Task pattern), so two rapid
+// edits land in submission order; second-resolution JSON dates could not
+// recover the order once two detached tasks had raced.
+//
 // (For Rick: `Change` is a POD; `changes(before:after:)` is a field-by-
 // field compare over the identity fields only — thresholds, crop offsets
-// and sort order are settings, not identity, and stay out of the audit.)
+// and sort order are settings, not identity, and stay out of the audit.
+// The journal chain ≈ a single-thread work queue: each job awaits the one
+// before it, so order is submission order, whatever the scheduler does.)
 
 import Foundation
 
@@ -42,6 +52,9 @@ enum POIProfileAudit {
     }
 
     static let journalFilename = "people-audit.jsonl"
+    /// Appended to a redacted display when the values differ but the
+    /// redaction does not ("3 → 3 (changed)").
+    static let changedSuffix = " (changed)"
 
     /// App Support/VideoScan/people-audit/ — the production home. Under a
     /// test host: a per-process scratch folder (never the real journal).
@@ -65,6 +78,14 @@ enum POIProfileAudit {
             let bs = b ?? "", as_ = a ?? ""
             if bs != as_ { out.append(Change(field: name, from: bs, to: as_)) }
         }
+        /// A REDACTED field: equality is decided on the original values;
+        /// the display is the redaction, marked when it would hide the
+        /// change ("12 chars → 12 chars (changed)").
+        func redacted<V: Equatable>(_ name: String, _ b: V?, _ a: V?, show: (V) -> String) {
+            guard b != a else { return }
+            let bs = b.map(show) ?? "", as_ = a.map(show) ?? ""
+            out.append(Change(field: name, from: bs, to: bs == as_ ? as_ + changedSuffix : as_))
+        }
         func list(_ xs: [String]?) -> String? { (xs ?? []).isEmpty ? nil : (xs ?? []).joined(separator: ", ") }
         field("name", before?.name, after?.name)
         field("middleName", before?.middleName, after?.middleName)
@@ -79,9 +100,9 @@ enum POIProfileAudit {
         field("hairColor", before?.hairColor.map { String(describing: $0) }, after?.hairColor.map { String(describing: $0) })
         field("eyeColor", before?.eyeColor.map { String(describing: $0) }, after?.eyeColor.map { String(describing: $0) })
         field("notInFamilyTree", before.map { $0.notInFamilyTree ? "yes" : "no" }, after.map { $0.notInFamilyTree ? "yes" : "no" })
-        field("kinships", before.map { "\($0.kinships.count)" }, after.map { "\($0.kinships.count)" })
-        field("notes", before.map { "\($0.notes.count) chars" }, after.map { "\($0.notes.count) chars" })
-        field("identityNotes", before?.identityNotes.map { "\($0.count) chars" }, after?.identityNotes.map { "\($0.count) chars" })
+        redacted("kinships", before?.kinships, after?.kinships) { "\($0.count)" }
+        redacted("notes", before?.notes, after?.notes) { "\($0.count) chars" }
+        redacted("identityNotes", before?.identityNotes, after?.identityNotes) { "\($0.count) chars" }
         field("coverImage", before?.coverImageFilename, after?.coverImageFilename)
         return out
     }
@@ -114,17 +135,34 @@ enum POIProfileAudit {
 
     // MARK: Writers
 
+    /// The append seam: production writes the line; a test can delay or
+    /// refuse (the MediaLedger `Writer` discipline).
+    typealias Writer = @Sendable (Entry, URL) throws -> Void
+    static let liveWriter: Writer = { e, directory in try append(e, directory: directory) }
+
+    /// ONE ordered worker chain for the journal — every `record()` queues
+    /// behind the one before it, so the file order IS the submission
+    /// order. Process-wide, like the journal file itself.
+    private static let journal = OrderedWorker()
+
     /// Log + journal. Called by the model after a successful write. The
-    /// journal append hops off the main actor; the log line is immediate.
+    /// log line is immediate; the journal append is queued on the ordered
+    /// worker and lands off the main actor.
     static func record(action: Action, before: POIProfile?, after: POIProfile?,
-                       directory: URL = defaultDirectory, at: Date = Date()) {
+                       directory: URL = defaultDirectory, at: Date = Date(),
+                       writer: @escaping Writer = liveWriter) {
         appLog.write(line(action: action, before: before, after: after))
         guard let e = entry(action: action, before: before, after: after, at: at) else { return }
-        Task.detached(priority: .utility) {
-            do { try append(e, directory: directory) } catch {
+        journal.enqueue {
+            do { try writer(e, directory) } catch {
                 appLog.write("[people] audit journal not written — \(error.localizedDescription)")
             }
         }
+    }
+
+    /// Wait for every `record()` issued so far to land (tests, teardown).
+    static func waitForPendingWrites() async {
+        await journal.waitForPendingWrites()
     }
 
     nonisolated static func append(_ e: Entry, directory: URL) throws {
@@ -155,5 +193,28 @@ enum POIProfileAudit {
         f.timeZone = TimeZone(identifier: "UTC")
         f.dateFormat = "yyyy-MM-dd"
         return f.string(from: d)
+    }
+
+    /// A tail-chained task queue: each job awaits its predecessor, so
+    /// jobs run one at a time in submission order, off the caller's
+    /// actor. (MediaLedger keeps the same shape inline; this is the
+    /// reusable version for a static façade.)
+    final class OrderedWorker: @unchecked Sendable {
+        private let lock = NSLock()
+        private var tail: Task<Void, Never>?
+
+        func enqueue(_ work: @escaping @Sendable () -> Void) {
+            let previous: Task<Void, Never>? = lock.withLock { tail }
+            let task = Task.detached(priority: .utility) {
+                await previous?.value
+                work()
+            }
+            lock.withLock { tail = task }
+        }
+
+        func waitForPendingWrites() async {
+            let t: Task<Void, Never>? = lock.withLock { tail }
+            await t?.value
+        }
     }
 }

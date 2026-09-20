@@ -19,6 +19,13 @@
 //     kept (connected working volume with the most free space, original
 //     over versions, user may override), and which families are "not
 //     covered by the bar" (all copies stay until the user attests).
+//   - `PrunePlan.Family.rows` / `PrunePlan.selection` (2026-09-20) — the
+//     per-copy CHECKLIST the sheet shows since Rick's "the dialog did not
+//     let me delete any dups": the bar-respecting plan above is the
+//     DEFAULT (what is checked), the family's `advice` is the bar's
+//     shortfall in words, and the person decides. `isCandidate` still
+//     says which rows may be checked at all; `Selection` judges the
+//     choice against the bar (the `override` the ledger records).
 //
 // Rules pinned by tests:
 //   * A copy is deletable only when: not inside the archive root; its
@@ -316,6 +323,49 @@ public struct PrunePlan: Equatable, Sendable {
         public let reason: KeepReason
     }
 
+    /// One line of the sheet's checklist (Rick 2026-09-20: "I want to see
+    /// a list of dups and decide which ones to delete, maybe leave one
+    /// behind, maybe not"). Every non-purged copy in the family is a row;
+    /// the bar ADVISES (the family's `advice`), the person decides — but
+    /// the scrubbable-copy rule still says which rows may be checked at
+    /// all, and nothing is checkable without a fixity-verified archive
+    /// copy in the family.
+    public struct CopyRow: Equatable, Sendable, Identifiable {
+        public enum Role: Equatable, Sendable {
+            case archiveCopy
+            case insideArchiveRoot
+            /// Checkable: passes `isCandidate` and the family has a
+            /// verified archive copy.
+            case candidate
+            /// Never checkable — offline / pair / version / note, or a
+            /// candidate in a family with no verified archive copy.
+            case kept(KeepReason)
+        }
+        public var id: UUID { copy.id }
+        public let copy: CopyRef
+        public let role: Role
+        /// For a candidate: why the bar-respecting plan would KEEP it
+        /// (`.keeper` — the elected working copy; `.barNotMet` — the bar
+        /// is not met), nil when that plan would Trash it. nil for every
+        /// other role.
+        public let planKeeps: KeepReason?
+        /// The bar-respecting plan would Trash it (= the trash set).
+        public let defaultChecked: Bool
+
+        public var checkable: Bool { role == .candidate }
+
+        /// Why the box is disabled, or the plan's hint on a checkable row
+        /// (nil = a plain candidate).
+        public var reasonText: String? {
+            switch role {
+            case .archiveCopy:       return KeepReason.archiveCopy.displayText
+            case .insideArchiveRoot: return KeepReason.insideArchiveRoot.displayText
+            case .kept(let r):       return r.displayText
+            case .candidate:         return planKeeps == .keeper ? "the plan would keep this one" : nil
+            }
+        }
+    }
+
     public struct Family: Equatable, Sendable {
         public let key: String
         public let level: ImportanceBar.Level
@@ -334,6 +384,113 @@ public struct PrunePlan: Equatable, Sendable {
         public let extraBytes: Int64
         /// A representative name for lists ("2 files are not covered…").
         public let displayName: String
+        /// The bar for this family's level — what `selection(_:)` judges
+        /// the person's choice against.
+        public let requirement: ImportanceBar.Requirement
+        /// A cloud or off-site "yes" somewhere in the family.
+        public let cloudOrOffsiteAttested: Bool
+        /// The line under the family header when the bar is not met: the
+        /// shortfall in words, ending "You can still choose." — or, with
+        /// no verified archive copy, why nothing here may go. nil when
+        /// covered.
+        public let advice: String?
+        /// The checklist: archive copies first, then the working copies
+        /// in catalog order.
+        public let rows: [CopyRow]
+
+        /// Rows the person may check.
+        public var candidateCount: Int { rows.reduce(0) { $0 + ($1.checkable ? 1 : 0) } }
+        /// What the bar-respecting plan would Trash (= `trash`'s ids).
+        public var defaultSelection: Set<UUID> { Set(rows.lazy.filter(\.defaultChecked).map(\.id)) }
+
+        /// The person's choice in THIS family, judged against the bar.
+        public func selection(_ selected: Set<UUID>) -> Selection {
+            var count = 0
+            var bytes: Int64 = 0
+            var devicesAfter = Set<String>()
+            var archiveOnly = true
+            for row in rows {
+                switch row.role {
+                case .archiveCopy, .insideArchiveRoot:
+                    continue
+                case .kept:
+                    archiveOnly = false
+                    if !row.copy.volumeName.isEmpty { devicesAfter.insert(row.copy.volumeName) }
+                case .candidate:
+                    if selected.contains(row.id) {
+                        count += 1
+                        bytes += row.copy.sizeBytes
+                    } else {
+                        archiveOnly = false
+                        if !row.copy.volumeName.isEmpty { devicesAfter.insert(row.copy.volumeName) }
+                    }
+                }
+            }
+            guard count > 0 else { return .empty }
+            var shortfalls: [String] = []
+            if devicesAfter.count < requirement.extraDevices {
+                let missing = requirement.extraDevices - devicesAfter.count
+                shortfalls.append("needs \(missing) more device\(missing == 1 ? "" : "s")")
+            }
+            if requirement.cloudOrOffsite && !cloudOrOffsiteAttested {
+                shortfalls.append("no cloud or off-site copy attested")
+            }
+            let against = shortfalls.isEmpty ? nil : "\(level.displayName) — " + shortfalls.joined(separator: ", ")
+            return Selection(count: count, bytes: bytes,
+                             overrideCount: against == nil ? 0 : count,
+                             overrideShortfalls: against.map { [$0] } ?? [],
+                             archiveOnlyFamilies: archiveOnly ? [displayName] : [])
+        }
+    }
+
+    /// The person's checklist choice, judged against the bar: what goes,
+    /// how much of it goes AGAINST the bar (and why), and which files
+    /// would then exist only in the Master Archive. Pure; the sheet shows
+    /// it, the apply path writes it to the ledger.
+    public struct Selection: Equatable, Sendable {
+        public let count: Int
+        public let bytes: Int64
+        /// Checked copies in families whose bar is not met once they go.
+        public let overrideCount: Int
+        /// "★★★ / Important — no cloud or off-site copy attested", one per
+        /// family, deduplicated in family order.
+        public let overrideShortfalls: [String]
+        /// Display names of families that keep ONLY their archive copy.
+        public let archiveOnlyFamilies: [String]
+
+        public init(count: Int, bytes: Int64, overrideCount: Int, overrideShortfalls: [String],
+                    archiveOnlyFamilies: [String]) {
+            self.count = count; self.bytes = bytes; self.overrideCount = overrideCount
+            self.overrideShortfalls = overrideShortfalls; self.archiveOnlyFamilies = archiveOnlyFamilies
+        }
+
+        public static let empty = Selection(count: 0, bytes: 0, overrideCount: 0, overrideShortfalls: [],
+                                            archiveOnlyFamilies: [])
+
+        /// The ledger's `override` detail: "2 copies — ★★★ / Important —
+        /// no cloud or off-site copy attested". nil when nothing goes
+        /// against the bar.
+        public var overrideText: String? {
+            guard overrideCount > 0 else { return nil }
+            return "\(overrideCount) cop\(overrideCount == 1 ? "y" : "ies") — " + overrideShortfalls.joined(separator: "; ")
+        }
+
+        /// The confirmation sentence: "2 copies go against the bar you
+        /// set: ★★★ / Important — no cloud or off-site copy attested."
+        public var overrideSentence: String? {
+            guard overrideCount > 0 else { return nil }
+            return "\(overrideCount) cop\(overrideCount == 1 ? "y goes" : "ies go") against the bar you set: "
+                + overrideShortfalls.joined(separator: "; ") + "."
+        }
+
+        /// "Christmas2008.mov will exist only in the Master Archive after
+        /// this." / "Christmas2008.mov and 2 more will exist only…"
+        public var archiveOnlySentence: String? {
+            guard let first = archiveOnlyFamilies.first else { return nil }
+            let more = archiveOnlyFamilies.count - 1
+            let who = more == 0 ? first : "\(first) and \(more) more"
+            return "\(who) will exist only in the Master Archive after this."
+        }
     }
 
     public struct VolumeChoice: Equatable, Sendable, Identifiable {
@@ -359,6 +516,46 @@ public struct PrunePlan: Equatable, Sendable {
 
     public var trashFiles: [CopyRef] { families.flatMap(\.trash) }
     public var notCoveredFamilies: [Family] { families.filter { !$0.covered } }
+
+    // MARK: The checklist view (all O(rows), never O(records))
+
+    /// What the bar-respecting plan would Trash — the sheet's default
+    /// checks. Equals `trashFiles`' ids.
+    public var defaultSelection: Set<UUID> {
+        var out = Set<UUID>()
+        for f in families { for r in f.rows where r.defaultChecked { out.insert(r.id) } }
+        return out
+    }
+
+    /// Every row the person may check.
+    public var checkableIDs: Set<UUID> {
+        var out = Set<UUID>()
+        for f in families { for r in f.rows where r.checkable { out.insert(r.id) } }
+        return out
+    }
+
+    public var checkableCount: Int { families.reduce(0) { $0 + $1.candidateCount } }
+    public var rowCount: Int { families.reduce(0) { $0 + $1.rows.count } }
+
+    /// The person's choice across the batch, judged against the bar.
+    public func selection(_ selected: Set<UUID>) -> Selection {
+        guard !selected.isEmpty else { return .empty }
+        var count = 0, overrides = 0
+        var bytes: Int64 = 0
+        var shortfalls: [String] = []
+        var seen = Set<String>()
+        var archiveOnly: [String] = []
+        for f in families {
+            let s = f.selection(selected)
+            count += s.count
+            bytes += s.bytes
+            overrides += s.overrideCount
+            for text in s.overrideShortfalls where seen.insert(text).inserted { shortfalls.append(text) }
+            archiveOnly.append(contentsOf: s.archiveOnlyFamilies)
+        }
+        return Selection(count: count, bytes: bytes, overrideCount: overrides,
+                         overrideShortfalls: shortfalls, archiveOnlyFamilies: archiveOnly)
+    }
 
     public static let empty = PrunePlan(families: [], trashCount: 0, trashBytes: 0, extraCount: 0, extraBytes: 0,
                                         notCoveredCount: 0, keeperRequiredCount: 0, keeperVolumes: [],
@@ -452,18 +649,24 @@ public struct PrunePlan: Equatable, Sendable {
         let extraCount = candidates.count
         let extraBytes = candidates.reduce(Int64(0)) { $0 + $1.sizeBytes }
 
-        // No verified archive copy → nothing may go, whatever the bar.
-        if archiveCopies.isEmpty || !archiveVerified {
-            let reason: KeepReason = archiveCopies.isEmpty ? .noArchiveCopy : .archiveUnverified
-            kept.append(contentsOf: candidates.map { KeptCopy(copy: CopyRef($0), reason: reason) })
-            return Family(key: key, level: level, covered: false, shortfall: reason.displayText, keeper: nil,
-                          keeperRequired: false, trash: [], kept: kept, extraCount: extraCount,
-                          extraBytes: extraBytes, displayName: display)
-        }
-
         // Attestations: latest per kind across the family.
         let latest = BackupAttestation.latestPerKind(fam.flatMap(\.attestations))
         let cloudOrOffsite = latest[.cloud]?.answer == .yes || latest[.offsite]?.answer == .yes
+
+        // No verified archive copy → nothing may go, whatever the bar; the
+        // rows show every copy with that reason, none checkable.
+        if archiveCopies.isEmpty || !archiveVerified {
+            let reason: KeepReason = archiveCopies.isEmpty ? .noArchiveCopy : .archiveUnverified
+            kept.append(contentsOf: candidates.map { KeptCopy(copy: CopyRef($0), reason: reason) })
+            let advice = archiveCopies.isEmpty
+                ? "No archive copy yet — nothing here can go until one is promoted and verified."
+                : "The archive copy is not verified yet — nothing here can go until it reads back."
+            return Family(key: key, level: level, covered: false, shortfall: reason.displayText, keeper: nil,
+                          keeperRequired: false, trash: [], kept: kept, extraCount: extraCount,
+                          extraBytes: extraBytes, displayName: display, requirement: req,
+                          cloudOrOffsiteAttested: cloudOrOffsite, advice: advice,
+                          rows: rows(fam, candidateRole: { _ in (.kept(reason), nil, false) }))
+        }
 
         // Keeper election.
         let keeperRequired = req.extraDevices > devicesKept.count
@@ -475,21 +678,20 @@ public struct PrunePlan: Equatable, Sendable {
         if let k = keeper, !k.volumeName.isEmpty { devicesAfter.insert(k.volumeName) }
 
         // The bar.
-        var shortfalls: [String] = []
-        if devicesAfter.count < req.extraDevices {
-            let missing = req.extraDevices - devicesAfter.count
-            shortfalls.append("needs \(missing) more device\(missing == 1 ? "" : "s")")
-        }
-        if req.cloudOrOffsite && !cloudOrOffsite {
-            shortfalls.append("no cloud or off-site copy attested")
-        }
-        let covered = shortfalls.isEmpty
-        if !covered {
+        let bar = barShortfall(level: level, req: req, devicesAfter: devicesAfter.count, cloudOrOffsite: cloudOrOffsite)
+        if let shortfall = bar.shortfall {
             kept.append(contentsOf: candidates.map { KeptCopy(copy: CopyRef($0), reason: .barNotMet) })
-            return Family(key: key, level: level, covered: false,
-                          shortfall: "\(level.displayName) — " + shortfalls.joined(separator: ", "),
+            // The bar advises; every candidate is checkable, none checked.
+            // The elected keeper is still hinted so the person knows which
+            // one the plan would leave behind.
+            let keeperID = keeper?.id
+            return Family(key: key, level: level, covered: false, shortfall: shortfall,
                           keeper: nil, keeperRequired: keeperRequired, trash: [], kept: kept,
-                          extraCount: extraCount, extraBytes: extraBytes, displayName: display)
+                          extraCount: extraCount, extraBytes: extraBytes, displayName: display,
+                          requirement: req, cloudOrOffsiteAttested: cloudOrOffsite, advice: bar.advice,
+                          rows: rows(fam, candidateRole: { c in
+                              (.candidate, c.id == keeperID ? .keeper : .barNotMet, false)
+                          }))
         }
         var trash: [CopyRef] = []
         for c in candidates {
@@ -499,9 +701,71 @@ public struct PrunePlan: Equatable, Sendable {
                 trash.append(CopyRef(c))
             }
         }
+        let keeperID = keeper?.id
         return Family(key: key, level: level, covered: true, shortfall: nil, keeper: keeper.map(CopyRef.init),
                       keeperRequired: keeperRequired, trash: trash, kept: kept,
-                      extraCount: extraCount, extraBytes: extraBytes, displayName: display)
+                      extraCount: extraCount, extraBytes: extraBytes, displayName: display,
+                      requirement: req, cloudOrOffsiteAttested: cloudOrOffsite, advice: nil,
+                      rows: rows(fam, candidateRole: { c in
+                          c.id == keeperID ? (.candidate, .keeper, false) : (.candidate, nil, true)
+                      }))
+    }
+
+    /// The bar's verdict for a family, in both voices: `shortfall` (the
+    /// plan's terse line — nil when the bar is met) and `advice` (the
+    /// sheet's sentence, ending "You can still choose.").
+    static func barShortfall(level: ImportanceBar.Level, req: ImportanceBar.Requirement,
+                             devicesAfter: Int, cloudOrOffsite: Bool) -> (shortfall: String?, advice: String?) {
+        var shortfalls: [String] = []
+        var wants: [String] = [], haves: [String] = []
+        if devicesAfter < req.extraDevices {
+            let missing = req.extraDevices - devicesAfter
+            shortfalls.append("needs \(missing) more device\(missing == 1 ? "" : "s")")
+            wants.append("\(req.extraDevices) more device\(req.extraDevices == 1 ? "" : "s")")
+            haves.append("\(devicesAfter) here")
+        }
+        if req.cloudOrOffsite && !cloudOrOffsite {
+            shortfalls.append("no cloud or off-site copy attested")
+            wants.append("a cloud or off-site copy")
+            haves.append("none attested")
+        }
+        guard !shortfalls.isEmpty else { return (nil, nil) }
+        return ("\(level.displayName) — " + shortfalls.joined(separator: ", "),
+                "\(level.displayName) — the bar you set wants \(wants.joined(separator: " and ")); "
+                    + haves.joined(separator: ", ") + ". You can still choose.")
+    }
+
+    /// The checklist rows for one family: archive copies first, then the
+    /// working copies in catalog order. Locked reasons (offline / pair /
+    /// version / note) are the plan's own; `candidateRole` says what a
+    /// copy that passes `isCandidate` becomes in this family — (role,
+    /// planKeeps, defaultChecked). O(copies).
+    static func rows(_ fam: [ArchiveCopySnapshot],
+                     candidateRole: (ArchiveCopySnapshot) -> (CopyRow.Role, KeepReason?, Bool)) -> [CopyRow] {
+        var archive: [CopyRow] = [], working: [CopyRow] = []
+        for c in fam where !c.isPurged {
+            if c.isArchiveCopy {
+                archive.append(CopyRow(copy: CopyRef(c), role: .archiveCopy, planKeeps: nil, defaultChecked: false))
+            } else if c.isInsideArchiveRoot {
+                archive.append(CopyRow(copy: CopyRef(c), role: .insideArchiveRoot, planKeeps: nil, defaultChecked: false))
+            } else if let locked = lockedReason(c) {
+                working.append(CopyRow(copy: CopyRef(c), role: .kept(locked), planKeeps: nil, defaultChecked: false))
+            } else {
+                let (role, keeps, checked) = candidateRole(c)
+                working.append(CopyRow(copy: CopyRef(c), role: role, planKeeps: keeps, defaultChecked: checked))
+            }
+        }
+        return archive + working
+    }
+
+    /// Why a working copy can never be a candidate (nil = it can). The
+    /// same order as the classification in `plan`.
+    static func lockedReason(_ c: ArchiveCopySnapshot) -> KeepReason? {
+        if !c.isOnline { return .offline }
+        if c.isPairMember { return .pairMember }
+        if c.isVersion { return .version }
+        if c.hasHumanNote { return .humanNote }
+        return nil
     }
 
     /// "Keep one" picks the copy on the connected working volume with the

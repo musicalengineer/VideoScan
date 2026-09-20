@@ -142,7 +142,7 @@ struct ArchiveAngelEvidenceStoreTests {
         #expect(await fresh.save() == false)
     }
 
-    @Test("SENSOR (codex #1345): a v7 sidecar — graded without attention memory — is ignored; v8 loads")
+    @Test("SENSOR (codex #1345): a v8 sidecar — no familySkips, no attention stamp — is ignored; v9 loads")
     @MainActor
     func staleV6SidecarIgnored() async throws {
         let dir = tempDir("v6")
@@ -153,19 +153,58 @@ struct ArchiveAngelEvidenceStoreTests {
                                   considered: 1, eligible: 1, records: [id: rec(110)]))
         #expect(await store.save())
         var json = try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as! [String: Any]
-        #expect(json["rulesVersion"] as? Int == 8, "this sensor pins the bump; re-pin it on the next rules change")
-
-        json["rulesVersion"] = 7
-        try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
-        let v6 = ArchiveAngelEvidenceStore(directory: dir)
-        #expect(await v6.load() == false)
-        #expect(!v6.isLoaded && v6.candidateIDs.isEmpty, "a v7 grade must never reach a badge")
+        #expect(json["rulesVersion"] as? Int == 9, "this sensor pins the bump; re-pin it on the next rules change")
 
         json["rulesVersion"] = 8
         try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
-        let v7 = ArchiveAngelEvidenceStore(directory: dir)
-        #expect(await v7.load())
-        #expect(v7.candidateIDs == [id])
+        let v8 = ArchiveAngelEvidenceStore(directory: dir)
+        #expect(await v8.load() == false)
+        #expect(!v8.isLoaded && v8.candidateIDs.isEmpty, "a v8 grade must never reach a badge")
+
+        json["rulesVersion"] = 9
+        try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
+        let v9 = ArchiveAngelEvidenceStore(directory: dir)
+        #expect(await v9.load())
+        #expect(v9.candidateIDs == [id])
+
+        // A real v8 file (records without `familySkips`) fails to decode even
+        // with the number forged: the shape itself is the guard. (A
+        // `[UUID: Record]` encodes as a flat array of alternating key and
+        // value entries, not a JSON object.)
+        guard var records = json["records"] as? [Any] else { Issue.record("records shape: \(type(of: json["records"]))"); return }
+        var stripped = 0
+        for i in records.indices {
+            guard var r = records[i] as? [String: Any], r["familySkips"] != nil else { continue }
+            r.removeValue(forKey: "familySkips")
+            records[i] = r
+            stripped += 1
+        }
+        #expect(stripped == 1)
+        json["records"] = records
+        try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
+        #expect(await ArchiveAngelEvidenceStore(directory: dir).load() == false)
+    }
+
+    @Test("codex 2026-09-20 #5/#6: the attention stamp and familySkips round-trip through disk")
+    @MainActor
+    func attentionStampRoundTrips() async throws {
+        let dir = tempDir("stamp")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = ArchiveAngelEvidenceStore(directory: dir)
+        let id = UUID()
+        let at = Date(timeIntervalSince1970: 1_700_000_000)
+        var r = rec(80, at: at)
+        r.familySkips = 1.5
+        store.replace(with: .init(computedAt: at, complete: true, considered: 1, eligible: 1, records: [id: r],
+                                  attentionRevision: 42, attentionLastEventAt: at.addingTimeInterval(-300)))
+        #expect(store.attentionRevision == 42)
+        #expect(await store.save())
+        let again = ArchiveAngelEvidenceStore(directory: dir)
+        #expect(await again.load())
+        #expect(again.attentionRevision == 42)
+        #expect(again.attentionLastEventAt == at.addingTimeInterval(-300))
+        #expect(again.record(for: id)?.familySkips == 1.5)
+        #expect(again.file == store.file)
     }
 
     @Test("codex #1345: revision bumps when the same candidate set is republished with a different grade")

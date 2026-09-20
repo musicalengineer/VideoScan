@@ -83,6 +83,15 @@ final class LedgerNarratorTests: XCTestCase {
         XCTAssertTrue(one(e(.approval, detail: ["count": "1"])).contains("approved 1 copy to the Trash"))
     }
 
+    func testApprovalSaysWhenItWentAgainstTheBar() {
+        let d = Date(timeIntervalSince1970: 1_789_243_200)   // Sep 12, 2026 UTC
+        let against = "2 copies — ★★★ / Important — no cloud or off-site copy attested"
+        XCTAssertEqual(one(e(.approval, at: d, detail: ["count": "2", "files": "a.mov\nb.mov", "override": against])),
+                       "You approved 2 copies to the Trash on Sep 12, 2026: a.mov, b.mov — against the bar: \(against).")
+        XCTAssertEqual(MediaLedgerEvent.Detail.barOverride, "override", "the stored key")
+        XCTAssertFalse(one(e(.approval, at: d, detail: ["count": "2", "override": ""])).contains("against the bar"), "empty = respected the bar")
+    }
+
     func testNewestFirstWithStableTies() {
         let t1 = Date(timeIntervalSince1970: 1_789_000_000)
         let t2 = Date(timeIntervalSince1970: 1_789_100_000)

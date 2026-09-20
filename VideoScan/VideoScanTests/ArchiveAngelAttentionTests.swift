@@ -144,6 +144,55 @@ struct ArchiveAngelAttentionStoreTests {
         await empty.load(from: MediaLedger(directory: dir.appendingPathComponent("nope")))
         #expect(empty.isLoaded && empty.recordCount == 0)
     }
+
+    @Test("codex 2026-09-20 #8: a skip noted WHILE the launch read is open survives the load; lastEventAt never moves backward; a line seen both ways is one line")
+    func loadFoldsInEventsNotedDuringTheRead() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_angel_attention_fold_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ledger = MediaLedger(directory: dir)
+        let a = UUID(), b = UUID()
+        ledger.append([event(.angelProposed, a, at: t0, by: .angel), event(.angelSkipped, a, at: t0 + 5)])
+        await ledger.waitForPendingWrites()
+
+        let s = ArchiveAngelAttentionStore()
+        let gate = TestGate()
+        let loading = Task { @MainActor in
+            await s.load(from: ledger, reader: { l in
+                await gate.wait()
+                return await ArchiveAngelAttentionStore.readOffMain(l)
+            })
+        }
+        // The read is open. The person skips b — the production path notes
+        // it in memory AND appends the same line to the ledger.
+        let skipB = event(.angelSkipped, b, at: t0 + 100, content: "h:b")
+        s.note([skipB])
+        ledger.append([skipB])
+        await ledger.waitForPendingWrites()
+        let revisionBeforeLoad = s.revision
+        #expect(s.lastEventAt == t0 + 100)
+        #expect(!s.isLoaded)
+
+        gate.open()
+        await loading.value
+        #expect(s.isLoaded)
+        #expect(s.summary(recordID: a, contentKey: "").timesProposed == 1)
+        #expect(s.summary(recordID: a, contentKey: "").timesSkipped == 1, "the loaded lines are there")
+        #expect(s.summary(recordID: b, contentKey: "h:b").timesSkipped == 1, "the mid-read skip survived — and is ONE skip, not two")
+        #expect(s.lastEventAt == t0 + 100, "the older ledger tail did not move lastEventAt backward")
+        #expect(s.revision > revisionBeforeLoad)
+        #expect(s.recordsByContent["h:b"] == [b])
+    }
+}
+
+/// A latch a test holds shut while it does something, then opens.
+private final class TestGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    func open() { lock.withLock { isOpen = true } }
+    func wait() async {
+        while !(lock.withLock { isOpen }) { try? await Task.sleep(nanoseconds: 10_000_000) }
+    }
 }
 
 // MARK: - 3. Event families
@@ -377,6 +426,118 @@ struct ArchiveAngelAttentionEvidencePickTests {
         #expect(Set(ids).intersection(proposed) == Set(proposed.prefix(7)), "the lowest three favourites made room")
         #expect(!projected.contains { weakFresh.contains($0) }, "under the fresh floor nothing is projected")
         #expect(projected.count == 13, "10 heads + exactly 3 fresh looks")
+    }
+
+    @Test("codex 2026-09-20 #5: evidence stamped with an OLDER attention revision than the store holds now is refused, whatever computedAt says; the same revision is trusted")
+    func staleByRevision() {
+        let a = UUID(), b = UUID()
+        let s = ArchiveAngelEvidenceStore(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_angel_att_rev_\(UUID().uuidString.prefix(8))"))
+        // Scored under revision 3 with the newest event at t0 - 600; the
+        // file was WRITTEN at t0 (a skip at t0 - 60 landed while scoring).
+        s.replace(with: .init(computedAt: t0, complete: true, considered: 2, eligible: 2,
+                              records: [a: rec(150, at: t0), b: rec(90, at: t0)],
+                              attentionRevision: 3, attentionLastEventAt: t0 - 600))
+        let byRevision = ArchiveAngelJob.selectFromEvidence(store: s, count: 1, now: t0, attentionRevision: 4) { ArchiveAngelCandidate(id: $0) }
+        #expect(byRevision == nil, "revision 4 > stamped 3 → walk")
+        let byDate = ArchiveAngelJob.selectFromEvidence(store: s, count: 1, now: t0, attentionChangedAt: t0 - 60) { ArchiveAngelCandidate(id: $0) }
+        #expect(byDate == nil, "the fallback compares to the STAMPED lastEventAt, not computedAt: t0 - 60 > t0 - 600 → walk")
+        let current = ArchiveAngelJob.selectFromEvidence(store: s, count: 1, now: t0,
+                                                         attentionChangedAt: t0 - 600, attentionRevision: 3) { ArchiveAngelCandidate(id: $0) }
+        #expect(current?.selection.picks.count == 1, "same revision, same newest event → trusted")
+        // Never stamped (a pre-v9 shape) counts as revision 0: any live revision refuses it.
+        s.replace(with: .init(computedAt: t0, complete: true, considered: 2, eligible: 2,
+                              records: [a: rec(150, at: t0), b: rec(90, at: t0)]))
+        #expect(ArchiveAngelJob.selectFromEvidence(store: s, count: 1, now: t0, attentionRevision: 1) { ArchiveAngelCandidate(id: $0) } == nil)
+        #expect(ArchiveAngelJob.selectFromEvidence(store: s, count: 1, now: t0, attentionRevision: 0) { ArchiveAngelCandidate(id: $0) }?.selection.picks.count == 1)
+    }
+
+    @Test("codex 2026-09-20 #6: the record's familySkips reaches the projected candidate — a never-proposed variant of skipped footage is not 'New to you' from the cache")
+    func familySkipsTravelInEvidence() {
+        let variant = UUID(), fresh = UUID()
+        var records: [UUID: ArchiveAngelEvidenceRecord] = [:]
+        for i in 0..<3 { records[UUID()] = rec(200 - i, proposed: 1, at: t0) }
+        records[variant] = .init(score: 80, lines: [], rejection: nil, useCount: 0, lastUsed: nil, computedAt: t0,
+                                 timesProposed: 0, familySkips: 2)
+        records[fresh] = rec(30, at: t0)
+        let s = store(records: records, computedAt: t0)
+        var projected: [UUID] = []
+        let pick = ArchiveAngelJob.selectFromEvidence(store: s, count: 3, now: t0) { id in
+            projected.append(id)
+            var c = ArchiveAngelCandidate(id: id, filename: "\(id).mov", fullPath: "/V/\(id).mov")
+            if s.record(for: id)?.timesProposed == 1 { c.attention.note(.angelProposed, at: t0 - day) }
+            return c   // the projection never runs the family pass: familySkips is 0 here
+        }
+        let picks = pick?.selection.picks ?? []
+        #expect(picks.count == 3)
+        #expect(!projected.contains(variant), "past the band a variant of skipped footage is not a fresh look")
+        #expect(picks.contains { $0.candidate.id == fresh }, "the genuinely fresh file took the slot instead")
+        #expect(picks.first { $0.candidate.id == fresh }?.candidate.familySkips == 0)
+        // In the band the variant is projected — and carries its family skips.
+        let inBand = ArchiveAngelJob.selectFromEvidence(store: s, count: 5, now: t0) { id in
+            ArchiveAngelCandidate(id: id, filename: "\(id).mov", fullPath: "/V/\(id).mov")
+        }
+        let v = inBand?.selection.picks.first { $0.candidate.id == variant }
+        #expect(v?.candidate.familySkips == 2)
+        #expect(v?.candidate.isFreshToPerson == false)
+        #expect(v?.evidence.contains { $0.line == ArchiveAngelScorer.freshLine } == false)
+    }
+}
+
+// MARK: - 5b. Unchecked at Promote — once per batch and row (codex 2026-09-20 #7)
+
+@Suite("Archive Angel attention — unchecked at Promote is one decision")
+struct ArchiveAngelUncheckedAtPromoteTests {
+
+    @Test("a failed Promote retried three times with B still unchecked leaves ONE angelSkipped line for B; the stamp is in plan.json")
+    @MainActor
+    func retriedPromoteNotesOnce() async throws {
+        let sandbox = try MasterArchiveTestSupport.makeSandbox("angel_unchecked")
+        defer { sandbox.cleanup() }
+        let fileA = try MasterArchiveTestSupport.writeBlob(at: sandbox.sources.appendingPathComponent("a.mov"), bytes: 4096, seed: 7)
+        let fileB = try MasterArchiveTestSupport.writeBlob(at: sandbox.sources.appendingPathComponent("b.mov"), bytes: 4096, seed: 8)
+        let model = MasterArchiveTestSupport.makeModel(sandbox)
+        let recA = MasterArchiveTestSupport.makeRecord(path: fileA.path, starRating: 3)
+        recA.contentHash = "aaa"
+        let recB = MasterArchiveTestSupport.makeRecord(path: fileB.path, starRating: 2)
+        recB.contentHash = "bbb"
+        model.records = [recA, recB]
+        try MasterArchiveTestSupport.initialize(model, in: sandbox)
+        func entry(_ rec: VideoRecord, selected: Bool) -> ArchiveAngelPlan.Entry {
+            var e = ArchiveAngelPlan.Entry(
+                id: rec.id, sourcePath: rec.fullPath, filename: rec.filename, sizeBytes: 4096,
+                sourceContentHash: rec.contentHash, sourceModifiedAt: nil,
+                durationSeconds: 600, score: 105, evidence: [], proposedName: rec.filename,
+                proposedDate: "1993", status: .ready)
+            e.selected = selected
+            return e
+        }
+        var plan = ArchiveAngelPlan(batchDir: sandbox.root.appendingPathComponent("batch-test").path,
+                                    requestedCount: 10, makeLossless: false,
+                                    entries: [entry(recA, selected: true), entry(recB, selected: false)])
+        plan.status = .ready
+        // A's source was rewritten since preparation: Promote refuses it every time.
+        try MasterArchiveTestSupport.writeBlob(at: fileA, bytes: 1, seed: 9)
+        let promoter = ArchiveAngelPromoter()
+        let center = MediaFileOperationsCenter()
+        var notedPerClick: [Int] = []
+        for _ in 0..<3 {
+            notedPerClick.append(ArchiveAngelReviewSheet.noteUncheckedAtPromote(plan: &plan, model: model).count)
+            let job = promoter.promote(plan: &plan, model: model, center: center) { _ in }
+            #expect(job == nil, "the retry keeps failing")
+        }
+        #expect(notedPerClick == [1, 0, 0])
+        // The sheet reopened from disk: the stamp travelled with the plan.
+        var reloaded = try ArchiveAngelPlanStore.load(batchDir: plan.batchDir)
+        #expect(reloaded.entries.first { $0.id == recB.id }?.uncheckedNotedAt != nil)
+        #expect(ArchiveAngelReviewSheet.noteUncheckedAtPromote(plan: &reloaded, model: model).isEmpty)
+
+        await model.mediaLedger.waitForPendingWrites()
+        let linesForB = model.mediaLedger.allEvents().filter { $0.event == .angelSkipped && $0.recordID == recB.id }
+        #expect(linesForB.count == 1, "one decision, one line — not one per click")
+        #expect(linesForB.first?.detail[MediaLedgerEvent.Detail.reason] == "unchecked")
+        #expect(model.archiveAngelAttention.summary(recordID: recB.id, contentKey: "").timesSkipped == 1)
+        #expect(model.mediaLedger.allEvents().filter { $0.event == .angelSkipped && $0.recordID == recA.id }.isEmpty, "the checked row is never a pass")
     }
 }
 

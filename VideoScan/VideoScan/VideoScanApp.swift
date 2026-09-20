@@ -661,6 +661,10 @@ struct VideoScanApp: App {
             // untouched. The same dialog is reachable by right-clicking a
             // volume in the Volumes window (that volume pre-selected).
             CommandMenu("Catalog") {
+                // ⌘⌫ as a real key equivalent (2026-09-20) — see
+                // CatalogTrashCommand.swift.
+                CatalogTrashMenuItem()
+                Divider()
                 // Update Catalog (2026-08-17): rescan + relink after files
                 // were moved/renamed outside the app; preview, then Apply.
                 Button("Update Catalog…") {

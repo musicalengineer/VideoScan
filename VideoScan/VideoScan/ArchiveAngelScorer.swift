@@ -315,8 +315,11 @@ enum ArchiveAngelScorer {
     /// `archivedCopyExists` follows provenance (a version of something
     /// archived is excluded, codex #1345) — v6 sidecars still grade such
     /// versions A/B, so they must rescore; 8 = attention memory (novelty,
-    /// fatigue, resting, family share — Phase 1 of the curation plan).
-    static let rulesVersion = 8
+    /// fatigue, resting, family share — Phase 1 of the curation plan);
+    /// 9 = the evidence record carries `familySkips` and the file is
+    /// stamped with the attention revision it was scored under (codex
+    /// 2026-09-20 #5/#6) — a v8 sidecar lacks both, so it must rescore.
+    static let rulesVersion = 9
 
     /// The verdict for one record. Pure.
     static func verdict(_ c: ArchiveAngelCandidate,

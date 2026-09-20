@@ -21,6 +21,10 @@ extension VideoScanModel {
                 if self.isScanning || self.isCombining { return true }
                 return self.isMediaFileOperationBusyForAngel()
             },
+            attentionState: { [weak self] in
+                guard let self else { return (0, nil) }
+                return (self.archiveAngelAttention.revision, self.archiveAngelAttention.lastEventAt)
+            },
             log: { [weak self] line in
                 self?.log(line)
                 appLog.write(line)

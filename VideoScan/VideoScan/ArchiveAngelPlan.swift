@@ -129,6 +129,13 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         /// Short human line for a skipped row ("Skipped by you at 14:32 —
         /// not in this batch"). Never rendered as a failure.
         var skipNote: String?
+        /// When a ready row left UNCHECKED at Promote had its pass noted
+        /// in the ledger (`angelSkipped`, reason "unchecked"). Set once
+        /// per batch and row, so a retried Promote — three failed clicks
+        /// with B still unchecked — is one decision, not three skips and
+        /// a 90-day rest (codex 2026-09-20 #7). Optional: older batches
+        /// decode with nil = never noted.
+        var uncheckedNotedAt: Date?
 
         var companionsMade: [StepOutcome] { steps.filter { $0.state == .done && $0.outputRelPath != nil } }
         var isOriginalOnly: Bool { status == .ready && companionsMade.isEmpty }

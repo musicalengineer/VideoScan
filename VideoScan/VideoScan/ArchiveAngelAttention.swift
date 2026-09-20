@@ -220,19 +220,34 @@ final class ArchiveAngelAttentionStore: ObservableObject {
         if changed { revision &+= 1 }
     }
 
-    /// Replace everything from a full event list (launch rebuild).
+    /// Rebuild from a full event list (launch). FOLDS the loaded lines
+    /// into whatever `note()` already put here — it never assigns over
+    /// it (codex 2026-09-20 #8): the ledger read is async, and a skip
+    /// noted while it ran must survive; `lastEventAt` and the counters
+    /// never move backward. A line present both ways (noted, then read
+    /// back from the file) is one line — `merged(with:)` deduplicates at
+    /// second resolution, the same rule the content-twin union uses. On
+    /// an empty store this is a plain build.
     func replace(from events: [MediaLedgerEvent]) {
         let built = Self.build(from: events)
-        byRecord = built.byRecord
-        recordsByContent = built.recordsByContent
-        lastEventAt = built.lastEventAt
+        for (id, loaded) in built.byRecord {
+            byRecord[id] = (byRecord[id] ?? .none).merged(with: loaded)
+        }
+        for (key, ids) in built.recordsByContent {
+            recordsByContent[key, default: []].formUnion(ids)
+        }
+        if let loadedLast = built.lastEventAt, lastEventAt.map({ loadedLast > $0 }) ?? true {
+            lastEventAt = loadedLast
+        }
         isLoaded = true
         revision &+= 1
     }
 
-    /// Rebuild from the ledger file, read off the main actor.
-    func load(from ledger: MediaLedger) async {
-        let events = await Self.readOffMain(ledger)
+    /// Rebuild from the ledger file, read off the main actor. `reader` is
+    /// the seam a test uses to hold the read open while it notes events.
+    func load(from ledger: MediaLedger,
+              reader: @Sendable (MediaLedger) async -> [MediaLedgerEvent] = ArchiveAngelAttentionStore.readOffMain) async {
+        let events = await reader(ledger)
         replace(from: events)
     }
 
