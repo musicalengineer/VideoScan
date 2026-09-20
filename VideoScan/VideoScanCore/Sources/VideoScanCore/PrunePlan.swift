@@ -6,8 +6,17 @@
 //     that the protection line and the prune plan both read. The model
 //     snapshots the catalog once (cheap value capture on the main actor),
 //     then everything below runs off-main.
-//   - `ArchiveCopyFamilies.group` — same-content families keyed by the
-//     batch's records (the `protectionFamilies` algorithm, made pure).
+//   - `ArchiveCopyFamilies.group` — families keyed by CONTENT + PROVENANCE
+//     (v3, 2026-09-20): same content key, an archive copy joins its
+//     promotion source, and a VERSION (trim / balance / transcode — any
+//     `derivedFrom` chain of at most four hops that is not a repair)
+//     joins the family of the original it was cut from.
+//   - `ArchiveCopyFamilies.nameRelated` — per family, the other active
+//     records on working volumes whose NAME says "maybe a copy" (same
+//     base stem, or the same filename) but whose content does not: never
+//     hashed, or hashed differently. The sheet lists them under "Might be
+//     copies" with a Hash-to-confirm button; a matching hash joins the
+//     family on the next plan, a different one is "different footage".
 //   - `ImportanceBar` — "the user sets the bar per importance": three
 //     levels, thresholds editable in Settings, with the design's defaults:
 //         Important (★★★ / disposition Important): verified archive + 1 more device + cloud-or-off-site attestation
@@ -18,29 +27,37 @@
 //     which extra copies WOULD go to the Trash, which one working copy is
 //     kept (connected working volume with the most free space, original
 //     over versions, user may override), and which families are "not
-//     covered by the bar" (all copies stay until the user attests).
+//     covered by the bar" (the advice line; the person still decides).
 //   - `PrunePlan.Family.rows` / `PrunePlan.selection` (2026-09-20) — the
-//     per-copy CHECKLIST the sheet shows since Rick's "the dialog did not
-//     let me delete any dups": the bar-respecting plan above is the
-//     DEFAULT (what is checked), the family's `advice` is the bar's
-//     shortfall in words, and the person decides. `isCandidate` still
-//     says which rows may be checked at all; `Selection` judges the
+//     per-copy CHECKLIST the sheet shows: the bar-respecting plan above is
+//     the DEFAULT (what is checked), the family's `advice` is the bar's
+//     shortfall in words, and the person decides. `Selection` judges the
 //     choice against the bar (the `override` the ledger records).
 //
-// Rules pinned by tests:
-//   * A copy is deletable only when: not inside the archive root; its
-//     family has a FIXITY-VERIFIED archive copy; no human note; reachable
-//     (online); not a recovered A/V pair member; not a version. Offline
-//     copies are never elected and never counted as "extra" — they DO
-//     count as a device the family already has (the retired drives are
-//     insurance, scrub design §3-2-1).
-//   * Disposition Important maps to the Important LEVEL (the design's
-//     table), not to an absolute keep; a human note IS an absolute keep.
-//   * The bar is checked per family, so one batch can mix outcomes.
+// Rick's ruling (2026-09-20, after using the checklist): "allow me to
+// delete any copy or all copies on any drive EXCEPT FamilyArchive … many
+// are subsets or improvements or trimmed … don't even list [the archive]
+// as an option" — and, in the same breath, "I would rather you be
+// cautious with my family media than rampantly allowing me to delete."
+// The standing rule (feedback_delete_safety_principle): the app must never
+// let the LAST VERIFIED copy go; everything else is the person's call,
+// shown clearly, Trash only, logged and ledgered. So:
+//   * The archive copies (and anything inside the archive root) are NOT
+//     rows. The family header says "In FamilyArchive, verified (N)".
+//   * Nothing is checkable in a family without a FIXITY-VERIFIED archive
+//     copy — those rows are listed, disabled, with the reason.
+//   * Still refused, listed and disabled with the reason: an offline copy
+//     ("drive not connected") and a recovered A/V pair half.
+//   * A VERSION and a copy WITH A NOTE are checkable — unchecked by
+//     default, with the advice in words (the note is carried to the
+//     archive copy's record by the apply path before the file goes).
+//   * An attestation of "n/a for these" satisfies the bar's cloud-or-off-
+//     site want for THIS batch's advice (the ledger still records n/a).
 //
-// Worst-case memory: one snapshot (~200 bytes + strings) per catalog
-// record in the families touched — a 100k-record catalog is ~30 MB
-// transiently, released when the plan is built. Nothing is cached here.
+// Worst-case memory: one snapshot (~220 bytes + strings) per catalog
+// record in the families touched — a 100k-record catalog is ~35 MB
+// transiently, plus two id→key dictionaries (~10 MB), released when the
+// plan is built. Nothing is cached here.
 //
 // (For Rick: plain value types and static functions — no globals, every
 // rule table-testable. `Sendable` ≈ "safe to hand to another thread".)
@@ -67,7 +84,8 @@ public struct ArchiveCopySnapshot: Equatable, Sendable, Identifiable {
     public var isOnline: Bool
     public var isPairMember: Bool
     /// A balance-audio / trim / transcode of another record (repairs are
-    /// not versions) — kept, never elected, never trashed by this plan.
+    /// not versions) — never elected as the keeper, unchecked by default,
+    /// joined to its original's family through `derivedFrom`.
     public var isVersion: Bool
     public var hasHumanNote: Bool
     public var starRating: Int
@@ -78,6 +96,12 @@ public struct ArchiveCopySnapshot: Equatable, Sendable, Identifiable {
     public var volumeIsConnectedWorking: Bool
     public var volumeFreeBytes: Int64?
     public var isPurged: Bool
+    /// Provenance (v3): the record this one was derived from, for ANY
+    /// derivation (an archive copy's is its promotion source), and the
+    /// verb ("trim", "balanceAudio", "archivePromotion", …; nil for an
+    /// older transcode with no stamp).
+    public var derivedFrom: UUID?
+    public var derivationKind: String?
 
     public init(id: UUID, filename: String, fullPath: String, volumeName: String, sizeBytes: Int64,
                 contentKey: String, promotedFromID: UUID? = nil, isArchiveCopy: Bool = false,
@@ -85,7 +109,8 @@ public struct ArchiveCopySnapshot: Equatable, Sendable, Identifiable {
                 isPairMember: Bool = false, isVersion: Bool = false, hasHumanNote: Bool = false,
                 starRating: Int = 0, disposition: MediaDisposition = .unreviewed,
                 attestations: [BackupAttestation] = [], volumeIsConnectedWorking: Bool = true,
-                volumeFreeBytes: Int64? = nil, isPurged: Bool = false) {
+                volumeFreeBytes: Int64? = nil, isPurged: Bool = false,
+                derivedFrom: UUID? = nil, derivationKind: String? = nil) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.volumeName = volumeName
         self.sizeBytes = sizeBytes; self.contentKey = contentKey; self.promotedFromID = promotedFromID
         self.isArchiveCopy = isArchiveCopy; self.fixityVerified = fixityVerified
@@ -94,6 +119,8 @@ public struct ArchiveCopySnapshot: Equatable, Sendable, Identifiable {
         self.starRating = starRating; self.disposition = disposition; self.attestations = attestations
         self.volumeIsConnectedWorking = volumeIsConnectedWorking; self.volumeFreeBytes = volumeFreeBytes
         self.isPurged = isPurged
+        self.derivedFrom = derivedFrom ?? promotedFromID
+        self.derivationKind = derivationKind
     }
 
     /// The protection-line view of this copy.
@@ -103,26 +130,69 @@ public struct ArchiveCopySnapshot: Equatable, Sendable, Identifiable {
                                     fixityVerified: (isArchiveCopy || isInsideArchiveRoot) && fixityVerified,
                                     attestations: attestations)
     }
+
+    /// The archive side of a family: a promoted copy or anything inside
+    /// the archive root. Never a row.
+    public var isArchiveSide: Bool { isArchiveCopy || isInsideArchiveRoot }
+
+    /// "h" for a segmented content hash, "p" for the partial-MD5 + size
+    /// pair, nil when never hashed.
+    public var contentKeyKind: Character? { contentKey.first }
+
+    /// The filename without its extension — what name-relatedness reads.
+    public var stem: String { (filename as NSString).deletingPathExtension }
 }
 
 // MARK: - Families
 
 public enum ArchiveCopyFamilies {
 
-    /// Same-content families containing at least one `batch` record, in a
-    /// stable order. Key = content key, else identity; an archive copy
-    /// joins its promotion source's family. Purged copies are dropped.
-    /// O(snapshots) time, two dictionary passes.
+    /// A version joins its original's family through at most this many
+    /// `derivedFrom` hops (the app's `isVersionOfArchived` uses the same
+    /// bound).
+    public static let maxProvenanceHops = 4
+
+    /// Families containing at least one `batch` record, in a stable
+    /// order. Key = content key, else identity; an archive copy joins its
+    /// promotion source's family; a VERSION joins the family of the first
+    /// non-version record up its `derivedFrom` chain (≤ 4 hops — an
+    /// original, an archive copy, or a repair, which is its own thing).
+    /// Purged copies are dropped. O(snapshots) time, three dictionary
+    /// passes.
     public static func group(batch: Set<UUID>, snapshots: [ArchiveCopySnapshot]) -> [[ArchiveCopySnapshot]] {
         guard !batch.isEmpty else { return [] }
         var keyByID: [UUID: String] = [:]
+        var indexByID: [UUID: Int] = [:]
         keyByID.reserveCapacity(snapshots.count)
-        for s in snapshots {
+        indexByID.reserveCapacity(snapshots.count)
+        for (i, s) in snapshots.enumerated() {
             keyByID[s.id] = s.contentKey.isEmpty ? "i:\(s.id.uuidString)" : s.contentKey
+            indexByID[s.id] = i
         }
-        for s in snapshots where s.isArchiveCopy {
-            if let src = s.promotedFromID, let k = keyByID[src] { keyByID[s.id] = k }
+        // Pass A: archive copies take their source's key (the source may be
+        // a version — resolved in pass B, so pass A runs again after it).
+        func joinArchiveCopies() {
+            for s in snapshots where s.isArchiveCopy {
+                if let src = s.promotedFromID, let k = keyByID[src] { keyByID[s.id] = k }
+            }
         }
+        joinArchiveCopies()
+        // Pass B: versions climb to the first non-version ancestor.
+        for s in snapshots where s.isVersion && !s.isArchiveSide {
+            var cursor = s
+            var seen: Set<UUID> = [s.id]
+            for _ in 0..<maxProvenanceHops {
+                guard let parentID = cursor.derivedFrom, let pi = indexByID[parentID],
+                      seen.insert(parentID).inserted else { break }
+                let parent = snapshots[pi]
+                if !parent.isVersion || parent.isArchiveSide {
+                    if let k = keyByID[parent.id] { keyByID[s.id] = k }
+                    break
+                }
+                cursor = parent
+            }
+        }
+        joinArchiveCopies()
         var wanted: [String: Int] = [:]
         var families: [[ArchiveCopySnapshot]] = []
         for id in batch.sorted(by: { $0.uuidString < $1.uuidString }) {
@@ -141,6 +211,69 @@ public enum ArchiveCopyFamilies {
     /// The protection line for a batch, from the same families.
     public static func protection(families: [[ArchiveCopySnapshot]]) -> ProtectionSummary {
         ProtectionSummary.summarize(families: families.map { $0.map(\.copyFacts) })
+    }
+
+    /// "Might be copies" of one family: the related snapshots (capped) and
+    /// how many more there were.
+    public struct RelatedGroup: Equatable, Sendable {
+        public var members: [ArchiveCopySnapshot]
+        public var hiddenCount: Int
+        public init(members: [ArchiveCopySnapshot] = [], hiddenCount: Int = 0) {
+            self.members = members; self.hiddenCount = hiddenCount
+        }
+        public static let empty = RelatedGroup()
+    }
+
+    /// Related rows a family shows at most (a generic name like "Clip 08"
+    /// can match hundreds; the rest are counted).
+    public static let maxRelatedPerFamily = 20
+
+    /// Per family (same order), the other ACTIVE, reachable records that
+    /// are name-related to a member — the same `baseStem` (the app passes
+    /// ArchiveAngelFamily.baseStem: derivative and share-out tokens
+    /// stripped) or the same filename — but NOT in the family by content.
+    /// Archive-side, purged, offline and family members (of ANY family in
+    /// the batch) are never related rows. (Reachable, not "connected
+    /// working": a copy on a retired drive that is plugged in may be
+    /// hashed and, if it matches, offered — it is the person's call.)
+    /// O(snapshots × stem length) hash lookups; `baseStem` runs only on
+    /// the prefix hits, never on every record.
+    public static func nameRelated(families: [[ArchiveCopySnapshot]], snapshots: [ArchiveCopySnapshot],
+                                   baseStem: (String) -> String = { $0.lowercased() },
+                                   maxPerFamily: Int = maxRelatedPerFamily) -> [RelatedGroup] {
+        guard !families.isEmpty else { return [] }
+        var memberIDs = Set<UUID>()
+        var familyOfBase: [String: Int] = [:]
+        for (i, fam) in families.enumerated() {
+            for m in fam {
+                memberIDs.insert(m.id)
+                let base = baseStem(m.stem)
+                if !base.isEmpty, familyOfBase[base] == nil { familyOfBase[base] = i }
+            }
+        }
+        var out = [RelatedGroup](repeating: .empty, count: families.count)
+        guard !familyOfBase.isEmpty else { return out }
+        for s in snapshots {
+            guard !s.isPurged, !s.isArchiveSide, s.isOnline, !memberIDs.contains(s.id) else { continue }
+            let lower = s.stem.lowercased()
+            guard !lower.isEmpty else { continue }
+            // A base stem is always a prefix of the lowercased stem, so a
+            // prefix miss is a cheap "not related".
+            var hit = false
+            var prefix = ""
+            prefix.reserveCapacity(lower.count)
+            for ch in lower {
+                prefix.append(ch)
+                if familyOfBase[prefix] != nil { hit = true; break }
+            }
+            guard hit, let idx = familyOfBase[baseStem(s.stem)] else { continue }
+            if out[idx].members.count < maxPerFamily {
+                out[idx].members.append(s)
+            } else {
+                out[idx].hiddenCount += 1
+            }
+        }
+        return out
     }
 }
 
@@ -305,9 +438,9 @@ public struct PrunePlan: Equatable, Sendable {
             switch self {
             case .archiveCopy:       return "the archive copy"
             case .insideArchiveRoot: return "inside the Master Archive"
-            case .offline:           return "offline — never elected"
-            case .pairMember:        return "part of a recovered A/V pair"
-            case .version:           return "a version (balanced / trimmed / transcoded)"
+            case .offline:           return "drive not connected"
+            case .pairMember:        return "part of a recovered A/V pair Combine still needs"
+            case .version:           return "a version — the original is in the archive"
             case .humanNote:         return "has your note"
             case .keeper:            return "the working copy to keep"
             case .barNotMet:         return "not covered by the bar"
@@ -325,29 +458,63 @@ public struct PrunePlan: Equatable, Sendable {
 
     /// One line of the sheet's checklist (Rick 2026-09-20: "I want to see
     /// a list of dups and decide which ones to delete, maybe leave one
-    /// behind, maybe not"). Every non-purged copy in the family is a row;
-    /// the bar ADVISES (the family's `advice`), the person decides — but
-    /// the scrubbable-copy rule still says which rows may be checked at
-    /// all, and nothing is checkable without a fixity-verified archive
-    /// copy in the family.
+    /// behind, maybe not"). Every non-purged WORKING copy in the family is
+    /// a row (the archive copies are the header); the bar ADVISES (the
+    /// family's `advice`), the person decides — but nothing is checkable
+    /// without a fixity-verified archive copy in the family, and an
+    /// offline copy or an A/V pair half is never checkable.
     public struct CopyRow: Equatable, Sendable, Identifiable {
         public enum Role: Equatable, Sendable {
-            case archiveCopy
-            case insideArchiveRoot
             /// Checkable: passes `isCandidate` and the family has a
             /// verified archive copy.
             case candidate
-            /// Never checkable — offline / pair / version / note, or a
-            /// candidate in a family with no verified archive copy.
+            /// Never checkable — offline / pair, or any working copy in a
+            /// family with no verified archive copy.
             case kept(KeepReason)
         }
+
+        /// The chip: what this copy IS, relative to the archive copy.
+        public enum Kind: String, Equatable, Sendable {
+            case original, duplicate, balanced, trimmed, transcoded, cleaned, otherVersion
+
+            public var chip: String {
+                switch self {
+                case .original:     return "original"
+                case .duplicate:    return "duplicate"
+                case .balanced:     return "balanced"
+                case .trimmed:      return "trimmed"
+                case .transcoded:   return "transcoded"
+                case .cleaned:      return "cleaned"
+                case .otherVersion: return "other version"
+                }
+            }
+            public var isVersion: Bool { self != .original && self != .duplicate }
+
+            /// From the snapshot's provenance and whether it is the
+            /// promotion source.
+            static func of(_ c: ArchiveCopySnapshot, originalID: UUID?) -> Kind {
+                guard c.isVersion else { return c.id == originalID ? .original : .duplicate }
+                switch c.derivationKind ?? "" {
+                case "trim":         return .trimmed
+                case "balanceAudio": return .balanced
+                case "cleanup":      return .cleaned
+                case "", "transcode", "reformat": return .transcoded
+                default:             return .otherVersion
+                }
+            }
+        }
+
         public var id: UUID { copy.id }
         public let copy: CopyRef
         public let role: Role
+        public let kind: Kind
+        /// The copy carries a human note (the apply path carries it to the
+        /// archive copy; a note ADDED since the list was shown holds it).
+        public let hasNote: Bool
         /// For a candidate: why the bar-respecting plan would KEEP it
         /// (`.keeper` — the elected working copy; `.barNotMet` — the bar
-        /// is not met), nil when that plan would Trash it. nil for every
-        /// other role.
+        /// is not met; `.version` / `.humanNote` — never checked by
+        /// default), nil when that plan would Trash it. nil for a kept row.
         public let planKeeps: KeepReason?
         /// The bar-respecting plan would Trash it (= the trash set).
         public let defaultChecked: Bool
@@ -358,10 +525,36 @@ public struct PrunePlan: Equatable, Sendable {
         /// (nil = a plain candidate).
         public var reasonText: String? {
             switch role {
-            case .archiveCopy:       return KeepReason.archiveCopy.displayText
-            case .insideArchiveRoot: return KeepReason.insideArchiveRoot.displayText
-            case .kept(let r):       return r.displayText
-            case .candidate:         return planKeeps == .keeper ? "the plan would keep this one" : nil
+            case .kept(let r): return r.displayText
+            case .candidate:
+                switch planKeeps {
+                case .keeper:    return "the plan would keep this one"
+                case .version:   return "a \(kind.chip) version — the original is in the archive"
+                case .humanNote: return "has your note — it will be carried to the archive copy"
+                default:         return nil
+                }
+            }
+        }
+    }
+
+    /// One "Might be copies" line: name-related, not in the family by
+    /// content. Never checkable here — a matching hash makes it a normal
+    /// candidate on the next plan.
+    public struct RelatedRow: Equatable, Sendable, Identifiable {
+        public enum Status: Equatable, Sendable {
+            /// Never hashed (or hashed a different way than the family):
+            /// "Hash to confirm".
+            case needsHash
+            /// Hashed, and the hash differs from the family's.
+            case differentFootage
+        }
+        public var id: UUID { copy.id }
+        public let copy: CopyRef
+        public let status: Status
+        public var reasonText: String {
+            switch status {
+            case .needsHash:        return "same name — hash to confirm it is a copy"
+            case .differentFootage: return "different footage — not a copy"
             }
         }
     }
@@ -379,7 +572,8 @@ public struct PrunePlan: Equatable, Sendable {
         public let keeperRequired: Bool
         public let trash: [CopyRef]
         public let kept: [KeptCopy]
-        /// Online scrubbable copies — the "extra copies" the sheet counts.
+        /// Online checkable copies — the "extra copies" the sheet counts
+        /// (duplicates, versions and noted copies alike).
         public let extraCount: Int
         public let extraBytes: Int64
         /// A representative name for lists ("2 files are not covered…").
@@ -389,19 +583,40 @@ public struct PrunePlan: Equatable, Sendable {
         public let requirement: ImportanceBar.Requirement
         /// A cloud or off-site "yes" somewhere in the family.
         public let cloudOrOffsiteAttested: Bool
+        /// A cloud or off-site "n/a for these" somewhere in the family
+        /// (Rick's ruling: satisfies the bar's want for this batch).
+        public let cloudOrOffsiteNotApplicable: Bool
         /// The line under the family header when the bar is not met: the
         /// shortfall in words, ending "You can still choose." — or, with
         /// no verified archive copy, why nothing here may go. nil when
         /// covered.
         public let advice: String?
-        /// The checklist: archive copies first, then the working copies
-        /// in catalog order.
+        /// A quiet line under the header when the bar was satisfied by
+        /// the person's word rather than a copy ("you said cloud/off-site
+        /// don't apply to these").
+        public let note: String?
+        /// The archive side — the header, never rows.
+        public let archive: [CopyRef]
+        public let archiveVerified: Bool
+        /// The checklist: the working copies in catalog order.
         public let rows: [CopyRow]
+        /// "Might be copies" — name-related records outside the family.
+        public let related: [RelatedRow]
+        public let relatedHiddenCount: Int
+        /// Family members with no segmented content hash (online) — hashed
+        /// along with a related row so the keys can compare.
+        public let unhashedMemberIDs: [UUID]
 
         /// Rows the person may check.
         public var candidateCount: Int { rows.reduce(0) { $0 + ($1.checkable ? 1 : 0) } }
         /// What the bar-respecting plan would Trash (= `trash`'s ids).
         public var defaultSelection: Set<UUID> { Set(rows.lazy.filter(\.defaultChecked).map(\.id)) }
+        /// Every row the person may check, in row order.
+        public var checkableIDs: [UUID] { rows.filter(\.checkable).map(\.id) }
+        public var checkableBytes: Int64 { rows.reduce(0) { $0 + ($1.checkable ? $1.copy.sizeBytes : 0) } }
+        /// The bar's cloud-or-off-site want is met — by a "yes" or by
+        /// "n/a for these".
+        public var cloudOrOffsiteSatisfied: Bool { cloudOrOffsiteAttested || cloudOrOffsiteNotApplicable }
 
         /// The person's choice in THIS family, judged against the bar.
         public func selection(_ selected: Set<UUID>) -> Selection {
@@ -411,8 +626,6 @@ public struct PrunePlan: Equatable, Sendable {
             var archiveOnly = true
             for row in rows {
                 switch row.role {
-                case .archiveCopy, .insideArchiveRoot:
-                    continue
                 case .kept:
                     archiveOnly = false
                     if !row.copy.volumeName.isEmpty { devicesAfter.insert(row.copy.volumeName) }
@@ -432,7 +645,7 @@ public struct PrunePlan: Equatable, Sendable {
                 let missing = requirement.extraDevices - devicesAfter.count
                 shortfalls.append("needs \(missing) more device\(missing == 1 ? "" : "s")")
             }
-            if requirement.cloudOrOffsite && !cloudOrOffsiteAttested {
+            if requirement.cloudOrOffsite && !cloudOrOffsiteSatisfied {
                 shortfalls.append("no cloud or off-site copy attested")
             }
             let against = shortfalls.isEmpty ? nil : "\(level.displayName) — " + shortfalls.joined(separator: ", ")
@@ -440,6 +653,53 @@ public struct PrunePlan: Equatable, Sendable {
                              overrideCount: against == nil ? 0 : count,
                              overrideShortfalls: against.map { [$0] } ?? [],
                              archiveOnlyFamilies: archiveOnly ? [displayName] : [])
+        }
+
+        /// The one log line per family written when the sheet opens, so
+        /// "why couldn't I select X" can always be answered from the log:
+        /// "what-next: Christmas2008.mov — archive ✓ (1) · 3 copies on
+        /// CrucialX9, M4drive, LaCieWorkspace (2 checkable, 1 offline) ·
+        /// 2 name-related (2 unhashed)".
+        public var logLine: String {
+            var parts: [String] = []
+            parts.append("archive \(archiveVerified ? "✓" : "✗ unverified") (\(archive.count))")
+            var volumes: [String] = []
+            var seen = Set<String>()
+            var checkable = 0, offline = 0, pair = 0, locked = 0, versions = 0, noted = 0
+            for r in rows {
+                let v = r.copy.volumeName.isEmpty ? "?" : r.copy.volumeName
+                if seen.insert(v).inserted { volumes.append(v) }
+                switch r.role {
+                case .candidate:
+                    checkable += 1
+                    if r.kind.isVersion { versions += 1 }
+                    if r.hasNote { noted += 1 }
+                case .kept(.offline): offline += 1
+                case .kept(.pairMember): pair += 1
+                case .kept: locked += 1
+                }
+            }
+            var counts: [String] = ["\(checkable) checkable"]
+            if versions > 0 { counts.append("\(versions) version\(versions == 1 ? "" : "s")") }
+            if noted > 0 { counts.append("\(noted) noted") }
+            if offline > 0 { counts.append("\(offline) offline") }
+            if pair > 0 { counts.append("\(pair) pair") }
+            if locked > 0 { counts.append("\(locked) locked: \(shortfall ?? "")") }
+            parts.append(rows.isEmpty
+                         ? "no working copies"
+                         : "\(rows.count) cop\(rows.count == 1 ? "y" : "ies") on \(volumes.joined(separator: ", ")) (\(counts.joined(separator: ", ")))")
+            if !related.isEmpty || relatedHiddenCount > 0 {
+                let unhashed = related.filter { $0.status == .needsHash }.count
+                let different = related.count - unhashed
+                var r: [String] = []
+                if unhashed > 0 { r.append("\(unhashed) unhashed") }
+                if different > 0 { r.append("\(different) different") }
+                if relatedHiddenCount > 0 { r.append("\(relatedHiddenCount) more") }
+                parts.append("\(related.count + relatedHiddenCount) name-related (\(r.joined(separator: ", ")))")
+            }
+            if let advice { parts.append("advice: \(advice)") }
+            if let note { parts.append(note) }
+            return "what-next: \(displayName) — " + parts.joined(separator: " · ")
         }
     }
 
@@ -535,7 +795,9 @@ public struct PrunePlan: Equatable, Sendable {
     }
 
     public var checkableCount: Int { families.reduce(0) { $0 + $1.candidateCount } }
+    public var checkableBytes: Int64 { families.reduce(0) { $0 + $1.checkableBytes } }
     public var rowCount: Int { families.reduce(0) { $0 + $1.rows.count } }
+    public var relatedCount: Int { families.reduce(0) { $0 + $1.related.count } }
 
     /// The person's choice across the batch, judged against the bar.
     public func selection(_ selected: Set<UUID>) -> Selection {
@@ -563,13 +825,18 @@ public struct PrunePlan: Equatable, Sendable {
 
     // MARK: Compute
 
-    public static func compute(families: [[ArchiveCopySnapshot]], options: Options) -> PrunePlan {
-        // Pass 1: candidate volumes across every family (the picker).
+    /// `related` is per family (same order) from `nameRelated`; empty when
+    /// the caller did not look.
+    public static func compute(families: [[ArchiveCopySnapshot]],
+                               related: [ArchiveCopyFamilies.RelatedGroup] = [],
+                               options: Options) -> PrunePlan {
+        // Pass 1: candidate volumes across every family (the picker) —
+        // where a KEEPER may live, so plain copies only.
         var volumeFree: [String: Int64?] = [:]
         var volumeFamilies: [String: Int] = [:]
         for fam in families {
             var seen = Set<String>()
-            for c in fam where isCandidate(c) && c.volumeIsConnectedWorking && !c.volumeName.isEmpty {
+            for c in fam where isPlainCandidate(c) && c.volumeIsConnectedWorking && !c.volumeName.isEmpty {
                 let have: Int64? = volumeFree[c.volumeName].flatMap { $0 }
                 if volumeFree[c.volumeName] == nil { volumeFree[c.volumeName] = c.volumeFreeBytes }
                 else if let f = c.volumeFreeBytes, (have ?? -1) < f { volumeFree[c.volumeName] = f }
@@ -590,8 +857,9 @@ public struct PrunePlan: Equatable, Sendable {
         out.reserveCapacity(families.count)
         var trashCount = 0, extraCount = 0, notCovered = 0, keeperRequired = 0
         var trashBytes: Int64 = 0, extraBytes: Int64 = 0
-        for fam in families where !fam.isEmpty {
-            let f = plan(family: fam, options: options)
+        for (i, fam) in families.enumerated() where !fam.isEmpty {
+            let group = i < related.count ? related[i] : .empty
+            let f = plan(family: fam, related: group, options: options)
             out.append(f)
             trashCount += f.trash.count
             trashBytes += f.trash.reduce(0) { $0 + $1.sizeBytes }
@@ -608,93 +876,131 @@ public struct PrunePlan: Equatable, Sendable {
 
     /// The scrubbable-copy rule for ONE copy, ignoring the family-level
     /// archive test (applied in `plan`): not archive, not inside the root,
-    /// online, no note, not a pair member, not a version.
+    /// online, not a pair member. Versions and noted copies ARE candidates
+    /// (Rick's ruling 2026-09-20) — unchecked by default, see
+    /// `isPlainCandidate`.
     public static func isCandidate(_ c: ArchiveCopySnapshot) -> Bool {
-        !c.isPurged && !c.isArchiveCopy && !c.isInsideArchiveRoot && c.isOnline
-            && !c.hasHumanNote && !c.isPairMember && !c.isVersion
+        !c.isPurged && !c.isArchiveSide && c.isOnline && !c.isPairMember
     }
 
-    static func plan(family fam: [ArchiveCopySnapshot], options: Options) -> Family {
+    /// A candidate the bar-respecting plan may elect or Trash by default:
+    /// a plain copy — not a version, no note.
+    public static func isPlainCandidate(_ c: ArchiveCopySnapshot) -> Bool {
+        isCandidate(c) && !c.isVersion && !c.hasHumanNote
+    }
+
+    static func plan(family fam: [ArchiveCopySnapshot], related: ArchiveCopyFamilies.RelatedGroup,
+                     options: Options) -> Family {
         let key = fam.first?.contentKey ?? ""
-        let display = fam.first(where: { $0.isArchiveCopy || $0.isInsideArchiveRoot })?.filename ?? fam[0].filename
+        let display = fam.first(where: \.isArchiveSide)?.filename ?? fam[0].filename
         // Level = the strongest mark in the family (an archive copy is ★★★).
         let level = fam.map { ImportanceBar.level(starRating: $0.starRating, disposition: $0.disposition) }
             .max(by: { $0.rank < $1.rank }) ?? .ordinary
         let req = options.bar.requirement(for: level)
 
-        // Archive state.
-        let archiveCopies = fam.filter { $0.isArchiveCopy || $0.isInsideArchiveRoot }
+        // Archive state — the header, never rows.
+        let archiveCopies = fam.filter { $0.isArchiveSide && !$0.isPurged }
         let archiveVerified = archiveCopies.contains { $0.fixityVerified }
+        let archiveRefs = archiveCopies.map(CopyRef.init)
+        let originalID = archiveCopies.compactMap(\.promotedFromID).first
 
         // Classify the working copies.
         var kept: [KeptCopy] = []
-        var candidates: [ArchiveCopySnapshot] = []
+        var plain: [ArchiveCopySnapshot] = []
+        var soft: [ArchiveCopySnapshot] = []        // versions / noted: checkable, never elected
         var devicesKept = Set<String>()
         for c in fam where !c.isPurged {
             if c.isArchiveCopy { kept.append(KeptCopy(copy: CopyRef(c), reason: .archiveCopy)); continue }
             if c.isInsideArchiveRoot { kept.append(KeptCopy(copy: CopyRef(c), reason: .insideArchiveRoot)); continue }
-            let reason: KeepReason?
-            if !c.isOnline { reason = .offline }
-            else if c.isPairMember { reason = .pairMember }
-            else if c.isVersion { reason = .version }
-            else if c.hasHumanNote { reason = .humanNote }
-            else { reason = nil }
-            if let reason {
-                kept.append(KeptCopy(copy: CopyRef(c), reason: reason))
+            if let locked = lockedReason(c) {
+                kept.append(KeptCopy(copy: CopyRef(c), reason: locked))
                 if !c.volumeName.isEmpty { devicesKept.insert(c.volumeName) }
+            } else if softReason(c) != nil {
+                // Listed in `kept` below with its reason (or the family's
+                // no-archive reason); it still counts as a device.
+                if !c.volumeName.isEmpty { devicesKept.insert(c.volumeName) }
+                soft.append(c)
             } else {
-                candidates.append(c)
+                plain.append(c)
             }
         }
-        let extraCount = candidates.count
-        let extraBytes = candidates.reduce(Int64(0)) { $0 + $1.sizeBytes }
+        let extraCount = plain.count + soft.count
+        let extraBytes = (plain + soft).reduce(Int64(0)) { $0 + $1.sizeBytes }
 
-        // Attestations: latest per kind across the family.
+        // Attestations: latest per kind across the family. "n/a for these"
+        // satisfies the want for this batch (Rick's ruling); "no" does not.
         let latest = BackupAttestation.latestPerKind(fam.flatMap(\.attestations))
         let cloudOrOffsite = latest[.cloud]?.answer == .yes || latest[.offsite]?.answer == .yes
+        let notApplicable = !cloudOrOffsite
+            && (latest[.cloud]?.answer == .notApplicable || latest[.offsite]?.answer == .notApplicable)
+        let note: String? = req.cloudOrOffsite && notApplicable
+            ? "You said cloud and off-site copies don't apply to these — the bar is met on your word."
+            : nil
+
+        // Might-be-copies rows and the members that need a hash to compare.
+        let memberKinds = Set(fam.lazy.filter { !$0.isVersion && !$0.isPurged }.compactMap(\.contentKeyKind))
+        let relatedRows = related.members.map { s -> RelatedRow in
+            var status = RelatedRow.Status.needsHash
+            if let kind = s.contentKeyKind, memberKinds.contains(kind) { status = .differentFootage }
+            return RelatedRow(copy: CopyRef(s), status: status)
+        }
+        let unhashed = fam.filter { !$0.isPurged && !$0.isVersion && $0.isOnline && $0.contentKeyKind != "h" }.map(\.id)
+
+        func make(covered: Bool, shortfall: String?, keeper: CopyRef?, keeperRequired: Bool, trash: [CopyRef],
+                  kept: [KeptCopy], advice: String?, rows: [CopyRow]) -> Family {
+            Family(key: key, level: level, covered: covered, shortfall: shortfall, keeper: keeper,
+                   keeperRequired: keeperRequired, trash: trash, kept: kept, extraCount: extraCount,
+                   extraBytes: extraBytes, displayName: display, requirement: req,
+                   cloudOrOffsiteAttested: cloudOrOffsite, cloudOrOffsiteNotApplicable: notApplicable,
+                   advice: advice, note: note, archive: archiveRefs, archiveVerified: archiveVerified, rows: rows,
+                   related: relatedRows, relatedHiddenCount: related.hiddenCount, unhashedMemberIDs: unhashed)
+        }
 
         // No verified archive copy → nothing may go, whatever the bar; the
-        // rows show every copy with that reason, none checkable.
+        // rows show every copy with that reason, none checkable. THE rule
+        // the ruling keeps: the last verified copy never goes.
         if archiveCopies.isEmpty || !archiveVerified {
             let reason: KeepReason = archiveCopies.isEmpty ? .noArchiveCopy : .archiveUnverified
-            kept.append(contentsOf: candidates.map { KeptCopy(copy: CopyRef($0), reason: reason) })
+            kept.append(contentsOf: (plain + soft).map { KeptCopy(copy: CopyRef($0), reason: reason) })
             let advice = archiveCopies.isEmpty
                 ? "No archive copy yet — nothing here can go until one is promoted and verified."
                 : "The archive copy is not verified yet — nothing here can go until it reads back."
-            return Family(key: key, level: level, covered: false, shortfall: reason.displayText, keeper: nil,
-                          keeperRequired: false, trash: [], kept: kept, extraCount: extraCount,
-                          extraBytes: extraBytes, displayName: display, requirement: req,
-                          cloudOrOffsiteAttested: cloudOrOffsite, advice: advice,
-                          rows: rows(fam, candidateRole: { _ in (.kept(reason), nil, false) }))
+            return make(covered: false, shortfall: reason.displayText, keeper: nil, keeperRequired: false,
+                        trash: [], kept: kept, advice: advice,
+                        rows: rows(fam, originalID: originalID, candidateRole: { _ in (.kept(reason), nil, false) }))
         }
 
-        // Keeper election.
+        // Versions and noted copies stay by default, with their reason.
+        for c in soft { if let s = softReason(c) { kept.append(KeptCopy(copy: CopyRef(c), reason: s)) } }
+
+        // Keeper election — among the plain copies; a version or a noted
+        // copy is never elected ("original over versions").
         let keeperRequired = req.extraDevices > devicesKept.count
         var keeper: ArchiveCopySnapshot?
-        if !candidates.isEmpty, keeperRequired || options.keepOne {
-            keeper = electKeeper(candidates, devicesKept: devicesKept, preferredVolume: options.keeperVolume)
+        if !plain.isEmpty, keeperRequired || options.keepOne {
+            keeper = electKeeper(plain, devicesKept: devicesKept, preferredVolume: options.keeperVolume)
         }
         var devicesAfter = devicesKept
         if let k = keeper, !k.volumeName.isEmpty { devicesAfter.insert(k.volumeName) }
 
         // The bar.
-        let bar = barShortfall(level: level, req: req, devicesAfter: devicesAfter.count, cloudOrOffsite: cloudOrOffsite)
+        let bar = barShortfall(level: level, req: req, devicesAfter: devicesAfter.count,
+                               cloudOrOffsite: cloudOrOffsite || notApplicable)
         if let shortfall = bar.shortfall {
-            kept.append(contentsOf: candidates.map { KeptCopy(copy: CopyRef($0), reason: .barNotMet) })
+            kept.append(contentsOf: plain.map { KeptCopy(copy: CopyRef($0), reason: .barNotMet) })
             // The bar advises; every candidate is checkable, none checked.
             // The elected keeper is still hinted so the person knows which
             // one the plan would leave behind.
             let keeperID = keeper?.id
-            return Family(key: key, level: level, covered: false, shortfall: shortfall,
-                          keeper: nil, keeperRequired: keeperRequired, trash: [], kept: kept,
-                          extraCount: extraCount, extraBytes: extraBytes, displayName: display,
-                          requirement: req, cloudOrOffsiteAttested: cloudOrOffsite, advice: bar.advice,
-                          rows: rows(fam, candidateRole: { c in
-                              (.candidate, c.id == keeperID ? .keeper : .barNotMet, false)
-                          }))
+            return make(covered: false, shortfall: shortfall, keeper: nil, keeperRequired: keeperRequired,
+                        trash: [], kept: kept, advice: bar.advice,
+                        rows: rows(fam, originalID: originalID, candidateRole: { c in
+                            if let s = softReason(c) { return (.candidate, s, false) }
+                            return (.candidate, c.id == keeperID ? .keeper : .barNotMet, false)
+                        }))
         }
         var trash: [CopyRef] = []
-        for c in candidates {
+        for c in plain {
             if let k = keeper, k.id == c.id {
                 kept.append(KeptCopy(copy: CopyRef(c), reason: .keeper))
             } else {
@@ -702,13 +1008,12 @@ public struct PrunePlan: Equatable, Sendable {
             }
         }
         let keeperID = keeper?.id
-        return Family(key: key, level: level, covered: true, shortfall: nil, keeper: keeper.map(CopyRef.init),
-                      keeperRequired: keeperRequired, trash: trash, kept: kept,
-                      extraCount: extraCount, extraBytes: extraBytes, displayName: display,
-                      requirement: req, cloudOrOffsiteAttested: cloudOrOffsite, advice: nil,
-                      rows: rows(fam, candidateRole: { c in
-                          c.id == keeperID ? (.candidate, .keeper, false) : (.candidate, nil, true)
-                      }))
+        return make(covered: true, shortfall: nil, keeper: keeper.map(CopyRef.init), keeperRequired: keeperRequired,
+                    trash: trash, kept: kept, advice: nil,
+                    rows: rows(fam, originalID: originalID, candidateRole: { c in
+                        if let s = softReason(c) { return (.candidate, s, false) }
+                        return c.id == keeperID ? (.candidate, .keeper, false) : (.candidate, nil, true)
+                    }))
     }
 
     /// The bar's verdict for a family, in both voices: `shortfall` (the
@@ -735,34 +1040,39 @@ public struct PrunePlan: Equatable, Sendable {
                     + haves.joined(separator: ", ") + ". You can still choose.")
     }
 
-    /// The checklist rows for one family: archive copies first, then the
-    /// working copies in catalog order. Locked reasons (offline / pair /
-    /// version / note) are the plan's own; `candidateRole` says what a
-    /// copy that passes `isCandidate` becomes in this family — (role,
-    /// planKeeps, defaultChecked). O(copies).
-    static func rows(_ fam: [ArchiveCopySnapshot],
+    /// The checklist rows for one family: the WORKING copies in catalog
+    /// order (archive copies are the header). Locked reasons (offline /
+    /// pair) are the plan's own; `candidateRole` says what a copy that
+    /// passes `isCandidate` becomes in this family — (role, planKeeps,
+    /// defaultChecked). O(copies).
+    static func rows(_ fam: [ArchiveCopySnapshot], originalID: UUID?,
                      candidateRole: (ArchiveCopySnapshot) -> (CopyRow.Role, KeepReason?, Bool)) -> [CopyRow] {
-        var archive: [CopyRow] = [], working: [CopyRow] = []
-        for c in fam where !c.isPurged {
-            if c.isArchiveCopy {
-                archive.append(CopyRow(copy: CopyRef(c), role: .archiveCopy, planKeeps: nil, defaultChecked: false))
-            } else if c.isInsideArchiveRoot {
-                archive.append(CopyRow(copy: CopyRef(c), role: .insideArchiveRoot, planKeeps: nil, defaultChecked: false))
-            } else if let locked = lockedReason(c) {
-                working.append(CopyRow(copy: CopyRef(c), role: .kept(locked), planKeeps: nil, defaultChecked: false))
+        var working: [CopyRow] = []
+        for c in fam where !c.isPurged && !c.isArchiveSide {
+            let kind = CopyRow.Kind.of(c, originalID: originalID)
+            if let locked = lockedReason(c) {
+                working.append(CopyRow(copy: CopyRef(c), role: .kept(locked), kind: kind, hasNote: c.hasHumanNote,
+                                       planKeeps: nil, defaultChecked: false))
             } else {
                 let (role, keeps, checked) = candidateRole(c)
-                working.append(CopyRow(copy: CopyRef(c), role: role, planKeeps: keeps, defaultChecked: checked))
+                working.append(CopyRow(copy: CopyRef(c), role: role, kind: kind, hasNote: c.hasHumanNote,
+                                       planKeeps: keeps, defaultChecked: checked))
             }
         }
-        return archive + working
+        return working
     }
 
-    /// Why a working copy can never be a candidate (nil = it can). The
-    /// same order as the classification in `plan`.
+    /// Why a working copy can never be a candidate (nil = it can): not
+    /// reachable, or a recovered A/V pair half.
     static func lockedReason(_ c: ArchiveCopySnapshot) -> KeepReason? {
         if !c.isOnline { return .offline }
         if c.isPairMember { return .pairMember }
+        return nil
+    }
+
+    /// Why the bar-respecting plan leaves a candidate unchecked by
+    /// default and never elects it (nil = a plain copy).
+    static func softReason(_ c: ArchiveCopySnapshot) -> KeepReason? {
         if c.isVersion { return .version }
         if c.hasHumanNote { return .humanNote }
         return nil
@@ -773,7 +1083,7 @@ public struct PrunePlan: Equatable, Sendable {
     /// name) wins outright when the family has a copy there. Ties on free
     /// space go to a volume the family has no other copy on (a keeper on
     /// a NEW device adds protection), then to the lower path. Versions
-    /// never reach here (they are kept outright), so "original over
+    /// never reach here (they are soft candidates), so "original over
     /// versions" is already true.
     static func electKeeper(_ candidates: [ArchiveCopySnapshot], devicesKept: Set<String>,
                             preferredVolume: String?) -> ArchiveCopySnapshot? {

@@ -5,6 +5,16 @@
 // election (most free space, new device first, user override), the
 // "not covered by the bar" outcome, the counts the sheet shows, and a
 // SCALE pin (100k snapshots / 5k families under budget).
+//
+// v3 (Rick's ruling 2026-09-20 — "allow me to delete any copy or all
+// copies on any drive EXCEPT FamilyArchive … many are subsets or
+// improvements or trimmed"): a VERSION joins its original's family by
+// provenance (≤ 4 hops) and is checkable, unchecked by default; a copy
+// with a note is checkable; the archive copies are never rows; only an
+// offline copy, a pair half and a family without a verified archive copy
+// are refused; "n/a for these" satisfies the bar's cloud-or-off-site
+// want; name-related records outside the family are "might be copies"
+// until a hash says.
 
 import XCTest
 @testable import VideoScanCore
@@ -17,13 +27,15 @@ final class PrunePlanTests: XCTestCase {
                       archive: Bool = false, verified: Bool = false, inside: Bool = false, online: Bool = true,
                       pair: Bool = false, version: Bool = false, note: Bool = false, stars: Int = 0,
                       disposition: MediaDisposition = .unreviewed, attestations: [BackupAttestation] = [],
-                      working: Bool = true, free: Int64? = 100, promotedFrom: UUID? = nil, id: UUID = UUID()) -> ArchiveCopySnapshot {
+                      working: Bool = true, free: Int64? = 100, promotedFrom: UUID? = nil, id: UUID = UUID(),
+                      derivedFrom: UUID? = nil, kind: String? = nil) -> ArchiveCopySnapshot {
         ArchiveCopySnapshot(id: id, filename: name, fullPath: "/Volumes/\(vol)/\(name)", volumeName: vol, sizeBytes: size,
                             contentKey: key, promotedFromID: promotedFrom, isArchiveCopy: archive,
                             fixityVerified: verified, isInsideArchiveRoot: inside, isOnline: online,
                             isPairMember: pair, isVersion: version, hasHumanNote: note, starRating: stars,
                             disposition: disposition, attestations: attestations,
-                            volumeIsConnectedWorking: working, volumeFreeBytes: free)
+                            volumeIsConnectedWorking: working, volumeFreeBytes: free,
+                            derivedFrom: derivedFrom, derivationKind: kind)
     }
 
     private func archiveCopy(key: String = "h:v1:k", verified: Bool = true, stars: Int = 3, promotedFrom: UUID? = nil) -> ArchiveCopySnapshot {
@@ -34,6 +46,15 @@ final class PrunePlanTests: XCTestCase {
     private func plan(_ family: [ArchiveCopySnapshot], keepOne: Bool = true, keeper: String? = nil,
                       bar: ImportanceBar = .defaults) -> PrunePlan.Family {
         PrunePlan.compute(families: [family], options: .init(keepOne: keepOne, keeperVolume: keeper, bar: bar)).families[0]
+    }
+
+    /// The Angel's stem rule, in miniature: strip a trailing derivative token.
+    private func baseStem(_ stem: String) -> String {
+        var s = stem.lowercased()
+        for token in ["_trimmed", "_balanced", "_converted", " copy"] where s.hasSuffix(token) {
+            s = String(s.dropLast(token.count))
+        }
+        return s
     }
 
     // MARK: Importance bar
@@ -99,6 +120,209 @@ final class PrunePlanTests: XCTestCase {
         XCTAssertTrue(line.hasPrefix("Archive none"), "one family has no archive copy → the batch is not verified: \(line)")
     }
 
+    // MARK: v3 — family = content + provenance
+
+    func testAVersionJoinsItsArchivedOriginalsFamilyAndIsCheckableUncheckedByDefault() {
+        var bar = ImportanceBar.defaults
+        bar.important = .init(extraDevices: 0, cloudOrOffsite: false)
+        let src = copy("Christmas2008.mov", vol: "LaCie", key: "")                 // never hashed
+        let arch = archiveCopy(key: "", promotedFrom: src.id)
+        let trimmed = copy("Christmas2008_trimmed.mov", vol: "M4drive", key: "h:v1:t", version: true,
+                           derivedFrom: src.id, kind: "trim")
+        let balanced = copy("Christmas2008_balanced.mov", vol: "Projects", key: "h:v1:b", version: true,
+                            derivedFrom: src.id, kind: "balanceAudio")
+        let cleaned = copy("Christmas2008_cleaned.mov", vol: "Projects", key: "h:v1:c", version: true,
+                           derivedFrom: trimmed.id, kind: "cleanup")
+        let repair = copy("Christmas2008_fixed.mov", vol: "X9", key: "h:v1:r", version: false,
+                          derivedFrom: src.id, kind: "rebuildAudio")               // a repair is its own thing
+        let fams = ArchiveCopyFamilies.group(batch: [src.id], snapshots: [repair, cleaned, balanced, trimmed, arch, src])
+        XCTAssertEqual(fams.count, 1)
+        XCTAssertEqual(Set(fams[0].map(\.id)), [src.id, arch.id, trimmed.id, balanced.id, cleaned.id],
+                       "versions join by provenance; the repair does not")
+        let f = plan(fams[0], keepOne: true, bar: bar)
+        XCTAssertTrue(f.covered && f.archiveVerified)
+        XCTAssertEqual(f.archive.map(\.filename), ["archived.mov"], "the archive side is the header, never a row")
+        XCTAssertEqual(f.rows.map(\.copy.filename),
+                       ["Christmas2008_cleaned.mov", "Christmas2008_balanced.mov", "Christmas2008_trimmed.mov", "Christmas2008.mov"],
+                       "catalog order, no archive copy")
+        let byName = Dictionary(uniqueKeysWithValues: f.rows.map { ($0.copy.filename, $0) })
+        for name in ["Christmas2008_trimmed.mov", "Christmas2008_balanced.mov", "Christmas2008_cleaned.mov"] {
+            let row = byName[name]!
+            XCTAssertTrue(row.checkable, "\(name) is checkable")
+            XCTAssertFalse(row.defaultChecked, "\(name) is unchecked by default")
+            XCTAssertEqual(row.planKeeps, .version)
+            XCTAssertTrue(row.kind.isVersion)
+        }
+        XCTAssertEqual(byName["Christmas2008_trimmed.mov"]?.kind, .trimmed)
+        XCTAssertEqual(byName["Christmas2008_trimmed.mov"]?.reasonText, "a trimmed version — the original is in the archive")
+        XCTAssertEqual(byName["Christmas2008_balanced.mov"]?.kind, .balanced)
+        XCTAssertEqual(byName["Christmas2008_cleaned.mov"]?.kind, .cleaned)
+        XCTAssertEqual(byName["Christmas2008.mov"]?.kind, .original, "the promotion source")
+        XCTAssertEqual(byName["Christmas2008.mov"]?.planKeeps, .keeper, "original over versions — the keeper is never a version")
+        XCTAssertEqual(f.extraCount, 4, "versions count as extra copies now")
+        XCTAssertEqual(f.candidateCount, 4)
+        XCTAssertTrue(f.defaultSelection.isEmpty, "keep-one keeps the original; versions are never checked by default")
+        let reasons = Dictionary(uniqueKeysWithValues: f.kept.map { ($0.copy.filename, $0.reason) })
+        XCTAssertEqual(reasons["Christmas2008_trimmed.mov"], .version)
+        XCTAssertEqual(reasons["archived.mov"], .archiveCopy)
+        // Checking every version and the original: all four go, archive-only afterwards.
+        let all = f.selection(Set(f.checkableIDs))
+        XCTAssertEqual(all.count, 4)
+        XCTAssertEqual(all.archiveOnlyFamilies, ["archived.mov"])
+        // Without keep-one the original is the default check; versions still are not.
+        XCTAssertEqual(plan(fams[0], keepOne: false, bar: bar).defaultSelection, [src.id])
+    }
+
+    func testAFourHopProvenanceChainJoinsAFiveHopChainDoesNot() {
+        let src = copy("tape.mov", vol: "LaCie", key: "h:v1:orig")
+        let arch = archiveCopy(key: "h:v1:orig")
+        var chain: [ArchiveCopySnapshot] = []
+        var parent = src.id
+        for hop in 1...5 {
+            let v = copy("tape_v\(hop).mov", vol: "X9", key: "h:v1:h\(hop)", version: true, derivedFrom: parent, kind: "trim")
+            chain.append(v)
+            parent = v.id
+        }
+        let fams = ArchiveCopyFamilies.group(batch: [src.id], snapshots: chain.reversed() + [arch, src])
+        XCTAssertEqual(fams.count, 1)
+        let ids = Set(fams[0].map(\.id))
+        XCTAssertTrue(ids.contains(chain[3].id), "4 hops up reaches the original")
+        XCTAssertFalse(ids.contains(chain[4].id), "5 hops does not")
+        XCTAssertEqual(ids.count, 6, "src + archive + 4 versions")
+        // A cycle never loops.
+        let a = copy("a.mov", vol: "X9", key: "h:v1:a", version: true, kind: "trim")
+        var b = copy("b.mov", vol: "X9", key: "h:v1:b", version: true, derivedFrom: a.id, kind: "trim")
+        var aa = a; aa.derivedFrom = b.id
+        b.derivedFrom = aa.id
+        XCTAssertEqual(ArchiveCopyFamilies.group(batch: [aa.id], snapshots: [aa, b]).count, 1)
+    }
+
+    func testNameRelatedRecordsAreMightBeCopiesUntilAHashSays() {
+        var bar = ImportanceBar.defaults
+        bar.important = .init(extraDevices: 0, cloudOrOffsite: false)
+        let src = copy("Christmas2008.mov", vol: "LaCie", key: "h:v1:x")
+        let arch = archiveCopy(key: "h:v1:x", promotedFrom: src.id)
+        let unhashed = copy("Christmas2008 copy.mov", vol: "M4drive", key: "")               // never hashed
+        let sameName = copy("Christmas2008.mov", vol: "X9", key: "")                          // same filename, unhashed
+        let different = copy("Christmas2008_trimmed.mov", vol: "M4drive", key: "h:v1:zzz")   // hashed, differs
+        let partial = copy("Christmas2008_converted.mov", vol: "M4drive", key: "p:md5:7")    // only a partial key
+        let unrelated = copy("Thanksgiving.mov", vol: "M4drive", key: "")
+        let offline = copy("Christmas2008 copy.mov", vol: "MyBook", key: "", online: false, working: false)
+        let insideRoot = copy("Christmas2008 copy.mov", vol: "FamilyArchive", key: "", inside: true, working: false)
+        let snaps = [unrelated, different, unhashed, partial, sameName, offline, insideRoot, arch, src]
+        let fams = ArchiveCopyFamilies.group(batch: [src.id], snapshots: snaps)
+        XCTAssertEqual(fams.count, 1)
+        XCTAssertEqual(Set(fams[0].map(\.id)), [src.id, arch.id], "nothing joins by name alone")
+        let related = ArchiveCopyFamilies.nameRelated(families: fams, snapshots: snaps, baseStem: baseStem)
+        XCTAssertEqual(related.count, 1)
+        XCTAssertEqual(Set(related[0].members.map(\.id)), [unhashed.id, sameName.id, different.id, partial.id],
+                       "name-related, reachable, not in the family; never offline / inside the root / unrelated")
+        XCTAssertEqual(related[0].hiddenCount, 0)
+        let p = PrunePlan.compute(families: fams, related: related, options: .init(bar: bar))
+        let f = p.families[0]
+        XCTAssertEqual(f.rows.map(\.copy.filename), ["Christmas2008.mov"], "the related rows are not rows")
+        XCTAssertEqual(f.related.count, 4)
+        let status = Dictionary(uniqueKeysWithValues: f.related.map { ($0.copy.filename + "@" + $0.copy.volumeName, $0.status) })
+        XCTAssertEqual(status["Christmas2008 copy.mov@M4drive"], .needsHash)
+        XCTAssertEqual(status["Christmas2008.mov@X9"], .needsHash)
+        XCTAssertEqual(status["Christmas2008_trimmed.mov@M4drive"], .differentFootage, "a segmented hash that differs")
+        XCTAssertEqual(status["Christmas2008_converted.mov@M4drive"], .needsHash, "a partial key cannot compare with a segmented one")
+        XCTAssertTrue(f.unhashedMemberIDs.isEmpty, "every online member already has a segmented hash")
+        XCTAssertEqual(f.related.first { $0.status == .needsHash }?.reasonText, "same name — hash to confirm it is a copy")
+        XCTAssertEqual(f.related.first { $0.status == .differentFootage }?.reasonText, "different footage — not a copy")
+        XCTAssertEqual(p.relatedCount, 4)
+        XCTAssertFalse(p.checkableIDs.contains(unhashed.id), "never checkable without a hash match")
+        // After a MATCHING hash the copy is a normal candidate on the next plan.
+        var joined = unhashed; joined.contentKey = "h:v1:x"
+        let snaps2 = snaps.map { $0.id == unhashed.id ? joined : $0 }
+        let fams2 = ArchiveCopyFamilies.group(batch: [src.id], snapshots: snaps2)
+        XCTAssertTrue(fams2[0].contains { $0.id == unhashed.id })
+        let p2 = PrunePlan.compute(families: fams2,
+                                   related: ArchiveCopyFamilies.nameRelated(families: fams2, snapshots: snaps2, baseStem: baseStem),
+                                   options: .init(keepOne: true, bar: bar))
+        let row = p2.families[0].rows.first { $0.id == unhashed.id }
+        XCTAssertEqual(row?.role, .candidate)
+        XCTAssertEqual(row?.kind, .duplicate)
+        XCTAssertEqual(p2.families[0].related.count, 3, "it left the might-be list")
+        // After a MISMATCHING hash it stays out, named as different footage.
+        var differs = unhashed; differs.contentKey = "h:v1:nope"
+        let snaps3 = snaps.map { $0.id == unhashed.id ? differs : $0 }
+        let fams3 = ArchiveCopyFamilies.group(batch: [src.id], snapshots: snaps3)
+        XCTAssertFalse(fams3[0].contains { $0.id == unhashed.id })
+        let p3 = PrunePlan.compute(families: fams3,
+                                   related: ArchiveCopyFamilies.nameRelated(families: fams3, snapshots: snaps3, baseStem: baseStem),
+                                   options: .init(bar: bar))
+        XCTAssertEqual(p3.families[0].related.first { $0.id == unhashed.id }?.status, .differentFootage)
+        // An unhashed family member is named so "Hash to confirm" hashes both sides.
+        let srcUnhashed = copy("Christmas2008.mov", vol: "LaCie", key: "", id: src.id)
+        let archU = archiveCopy(key: "", promotedFrom: src.id)
+        let fams4 = ArchiveCopyFamilies.group(batch: [src.id], snapshots: [unhashed, archU, srcUnhashed])
+        let p4 = PrunePlan.compute(families: fams4,
+                                   related: ArchiveCopyFamilies.nameRelated(families: fams4, snapshots: [unhashed, archU, srcUnhashed], baseStem: baseStem),
+                                   options: .init(bar: bar))
+        XCTAssertEqual(Set(p4.families[0].unhashedMemberIDs), [src.id, archU.id])
+        XCTAssertEqual(p4.families[0].related.first?.status, .needsHash)
+        // The per-family cap counts the rest.
+        let many = (0..<25).map { copy("Christmas2008 copy.mov", vol: "M4drive", key: "", id: UUID(), derivedFrom: nil).with(path: "/Volumes/M4drive/\($0)/Christmas2008 copy.mov") }
+        let capped = ArchiveCopyFamilies.nameRelated(families: fams, snapshots: many + [arch, src], baseStem: baseStem)
+        XCTAssertEqual(capped[0].members.count, ArchiveCopyFamilies.maxRelatedPerFamily)
+        XCTAssertEqual(capped[0].hiddenCount, 5)
+        XCTAssertTrue(ArchiveCopyFamilies.nameRelated(families: [], snapshots: snaps).isEmpty)
+    }
+
+    func testNotApplicableAttestationSatisfiesTheAdviceForThisBatch() {
+        let arch = archiveCopy()
+        let a = copy("a.mov", vol: "LaCie", free: 500), b = copy("b.mov", vol: "Projects", free: 900)
+        let na = copy("c.mov", vol: "X9", attestations: [BackupAttestation(kind: .cloud, answer: .notApplicable, attestedAt: at)], free: 100)
+        let f = plan([arch, a, b, na])
+        XCTAssertTrue(f.covered, "n/a for these counts as met for this batch's advice")
+        XCTAssertNil(f.advice)
+        XCTAssertFalse(f.cloudOrOffsiteAttested, "the protection line still says none attested")
+        XCTAssertTrue(f.cloudOrOffsiteNotApplicable && f.cloudOrOffsiteSatisfied)
+        XCTAssertEqual(f.note, "You said cloud and off-site copies don't apply to these — the bar is met on your word.")
+        XCTAssertEqual(f.keeper?.filename, "b.mov")
+        XCTAssertEqual(Set(f.trash.map(\.filename)), ["a.mov", "c.mov"], "default checks as if attested")
+        // The selection judges the same way: no override.
+        XCTAssertEqual(f.selection(f.defaultSelection).overrideCount, 0)
+        // Off-site n/a counts the same way; a "no" still does not; a "yes" wins over n/a (no note).
+        let naOff = copy("c.mov", vol: "X9", attestations: [BackupAttestation(kind: .offsite, answer: .notApplicable, attestedAt: at)], free: 100, id: na.id)
+        XCTAssertTrue(plan([arch, a, b, naOff]).covered)
+        let no = copy("c.mov", vol: "X9", attestations: [BackupAttestation(kind: .cloud, answer: .no, attestedAt: at)], free: 100, id: na.id)
+        XCTAssertFalse(plan([arch, a, b, no]).covered)
+        let yes = copy("c.mov", vol: "X9", attestations: [BackupAttestation(kind: .cloud, answer: .yes, label: "iCloud", attestedAt: at),
+                                                          BackupAttestation(kind: .offsite, answer: .notApplicable, attestedAt: at)], free: 100, id: na.id)
+        let y = plan([arch, a, b, yes])
+        XCTAssertTrue(y.covered && y.cloudOrOffsiteAttested); XCTAssertNil(y.note)
+        // An ordinary family never wanted one — no note either.
+        var bar = ImportanceBar.defaults
+        bar.important = bar.ordinary
+        XCTAssertNil(plan([arch, a, b, na], bar: bar).note)
+    }
+
+    func testTheLogLineSaysWhyEachCopyCouldOrCouldNotBeSelected() {
+        var bar = ImportanceBar.defaults
+        bar.important = .init(extraDevices: 0, cloudOrOffsite: false)
+        let src = copy("Christmas2008.mov", vol: "CrucialX9", key: "h:v1:x")
+        let arch = archiveCopy(key: "h:v1:x", promotedFrom: src.id)
+        let dup = copy("Christmas2008.mov", vol: "M4drive", key: "h:v1:x")
+        let offline = copy("Christmas2008.mov", vol: "LaCieWorkspace", key: "h:v1:x", online: false, working: false)
+        let trimmed = copy("Christmas2008_trimmed.mov", vol: "M4drive", key: "h:v1:t", version: true, derivedFrom: src.id, kind: "trim")
+        let noted = copy("Christmas2008.mov", vol: "Projects", key: "h:v1:x", note: true)
+        let maybe = copy("Christmas2008 copy.mov", vol: "M4drive", key: "")
+        let maybe2 = copy("Christmas2008 copy.mov", vol: "Projects", key: "")
+        let snaps = [src, arch, dup, offline, trimmed, noted, maybe, maybe2]
+        let fams = ArchiveCopyFamilies.group(batch: [src.id], snapshots: snaps)
+        let p = PrunePlan.compute(families: fams,
+                                  related: ArchiveCopyFamilies.nameRelated(families: fams, snapshots: snaps, baseStem: baseStem),
+                                  options: .init(bar: bar))
+        XCTAssertEqual(p.families[0].logLine,
+                       "what-next: archived.mov — archive ✓ (1) · 5 copies on CrucialX9, M4drive, LaCieWorkspace, Projects (4 checkable, 1 version, 1 noted, 1 offline) · 2 name-related (2 unhashed)")
+        // A family with no archive copy says so, with the advice.
+        let none = plan([copy("a.mov", vol: "LaCie", stars: 1)])
+        XCTAssertEqual(none.logLine,
+                       "what-next: a.mov — archive ✗ unverified (0) · 1 copy on LaCie (0 checkable, 1 locked: no archive copy) · advice: No archive copy yet — nothing here can go until one is promoted and verified.")
+    }
+
     // MARK: The scrubbable-copy rule — every negative
 
     func testNoArchiveCopyOrUnverifiedArchiveKeepsEverything() {
@@ -108,15 +332,25 @@ final class PrunePlanTests: XCTestCase {
         XCTAssertTrue(none.trash.isEmpty); XCTAssertNil(none.keeper)
         XCTAssertEqual(none.extraCount, 2, "extras are counted even when nothing may go")
         XCTAssertEqual(Set(none.kept.map(\.reason)), [.noArchiveCopy])
+        XCTAssertTrue(none.archive.isEmpty && !none.archiveVerified)
 
         let unverified = plan([archiveCopy(verified: false, stars: 1), a, b])
         XCTAssertFalse(unverified.covered); XCTAssertEqual(unverified.shortfall, "archive copy unverified")
         XCTAssertTrue(unverified.kept.contains { $0.reason == .archiveUnverified })
         XCTAssertTrue(unverified.kept.contains { $0.reason == .archiveCopy })
+        XCTAssertEqual(unverified.archive.count, 1); XCTAssertFalse(unverified.archiveVerified)
+        // A version or a noted copy in such a family is refused like the rest — the
+        // last verified copy never goes.
+        let v = copy("a_trimmed.mov", vol: "LaCie", version: true, derivedFrom: a.id, kind: "trim")
+        let n = copy("n.mov", vol: "X9", note: true)
+        let f = plan([archiveCopy(verified: false, stars: 1), a, v, n])
+        XCTAssertEqual(f.candidateCount, 0)
+        XCTAssertTrue(f.rows.allSatisfy { $0.role == .kept(.archiveUnverified) }, "\(f.rows.map(\.role))")
+        XCTAssertEqual(f.kept.filter { $0.reason == .archiveUnverified }.count, 3)
     }
 
-    func testProtectedCopiesAreNeverElectedNorTrashed() {
-        // Low bar (★): archive alone is enough → everything scrubbable goes.
+    func testOfflineAndPairCopiesAreNeverElectedNorTrashedVersionsAndNotedCopiesAreCheckable() {
+        // Low bar (★): archive alone is enough → everything plain goes.
         let arch = archiveCopy(stars: 1)
         let offline = copy("off.mov", vol: "MyBook", online: false, stars: 1)
         let pair = copy("pair.mxf", vol: "LaCie", pair: true, stars: 1)
@@ -133,7 +367,7 @@ final class PrunePlanTests: XCTestCase {
         bar.important = .init(extraDevices: 0, cloudOrOffsite: false)
         let g = plan([arch, offline, pair, version, noted, inside, free1, free2], keepOne: false, bar: bar)
         XCTAssertTrue(g.covered)
-        XCTAssertEqual(Set(g.trash.map(\.filename)), ["free1.mov", "free2.mov"])
+        XCTAssertEqual(Set(g.trash.map(\.filename)), ["free1.mov", "free2.mov"], "versions and noted copies are never trashed by default")
         let reasons = Dictionary(uniqueKeysWithValues: g.kept.map { ($0.copy.filename, $0.reason) })
         XCTAssertEqual(reasons["off.mov"], .offline)
         XCTAssertEqual(reasons["pair.mxf"], .pairMember)
@@ -141,8 +375,10 @@ final class PrunePlanTests: XCTestCase {
         XCTAssertEqual(reasons["noted.mov"], .humanNote)
         XCTAssertEqual(reasons["inside.mov"], .insideArchiveRoot)
         XCTAssertEqual(reasons["archived.mov"], .archiveCopy)
-        XCTAssertEqual(g.extraCount, 2, "offline / pair / version / noted copies are never 'extra'")
-        XCTAssertEqual(g.extraBytes, 2_000)
+        XCTAssertEqual(g.extraCount, 4, "Rick's ruling: versions and noted copies are extra copies the person may check; offline / pair are not")
+        XCTAssertEqual(g.extraBytes, 4_000)
+        XCTAssertEqual(Set(g.checkableIDs), [free1.id, free2.id, version.id, noted.id])
+        XCTAssertEqual(PrunePlan.KeepReason.offline.displayText, "drive not connected")
     }
 
     // MARK: The bar
@@ -243,46 +479,54 @@ final class PrunePlanTests: XCTestCase {
         XCTAssertEqual(p.trashFiles.map(\.filename), ["a1.mov"])
         XCTAssertEqual(p.notCoveredFamilies.map(\.displayName), ["archived.mov"])
         XCTAssertEqual(PrunePlan.compute(families: [], options: .init()), .empty)
+        XCTAssertEqual(p.checkableBytes, 60, "a1 + b1 + a2 — fam3 has no verified archive copy")
     }
 
     // MARK: The checklist (2026-09-20 — the bar advises, the person decides)
 
-    func testRowsMirrorThePlanAndOnlyCandidatesWithAVerifiedArchiveAreCheckable() {
+    func testRowsAreTheWorkingCopiesAndOnlyCandidatesWithAVerifiedArchiveAreCheckable() {
         var bar = ImportanceBar.defaults
         bar.important = .init(extraDevices: 0, cloudOrOffsite: false)
         let arch = archiveCopy(stars: 1)
         let offline = copy("off.mov", vol: "MyBook", online: false)
         let pair = copy("pair.mxf", vol: "LaCie", pair: true)
-        let version = copy("bal.mov", vol: "LaCie", version: true)
+        let version = copy("bal.mov", vol: "LaCie", version: true, kind: "balanceAudio")
         let noted = copy("noted.mov", vol: "LaCie", note: true)
         let inside = copy("inside.mov", vol: "FamilyArchive", inside: true, working: false)
         let free1 = copy("free1.mov", vol: "LaCie", free: 900)
         let free2 = copy("free2.mov", vol: "X9", free: 100)
-        // Working copies first in the family; rows still put the archive copies first.
         let f = plan([free1, offline, pair, version, noted, inside, free2, arch], keepOne: true, bar: bar)
         XCTAssertTrue(f.covered); XCTAssertNil(f.advice)
         XCTAssertEqual(f.rows.map(\.copy.filename),
-                       ["inside.mov", "archived.mov", "free1.mov", "off.mov", "pair.mxf", "bal.mov", "noted.mov", "free2.mov"],
-                       "archive copies first, then catalog order")
+                       ["free1.mov", "off.mov", "pair.mxf", "bal.mov", "noted.mov", "free2.mov"],
+                       "working copies in catalog order — the archive side is never a row")
+        XCTAssertEqual(f.archive.map(\.filename), ["inside.mov", "archived.mov"])
+        XCTAssertTrue(f.archiveVerified)
         let byName = Dictionary(uniqueKeysWithValues: f.rows.map { ($0.copy.filename, $0) })
-        XCTAssertEqual(byName["archived.mov"]?.role, .archiveCopy)
-        XCTAssertEqual(byName["inside.mov"]?.role, .insideArchiveRoot)
         XCTAssertEqual(byName["off.mov"]?.role, .kept(.offline))
+        XCTAssertEqual(byName["off.mov"]?.reasonText, "drive not connected")
         XCTAssertEqual(byName["pair.mxf"]?.role, .kept(.pairMember))
-        XCTAssertEqual(byName["bal.mov"]?.role, .kept(.version))
-        XCTAssertEqual(byName["noted.mov"]?.role, .kept(.humanNote))
-        XCTAssertEqual(byName["noted.mov"]?.reasonText, "has your note")
+        XCTAssertEqual(byName["bal.mov"]?.role, .candidate)
+        XCTAssertEqual(byName["bal.mov"]?.planKeeps, .version)
+        XCTAssertEqual(byName["bal.mov"]?.kind, .balanced)
+        XCTAssertEqual(byName["bal.mov"]?.defaultChecked, false)
+        XCTAssertEqual(byName["noted.mov"]?.role, .candidate)
+        XCTAssertEqual(byName["noted.mov"]?.planKeeps, .humanNote)
+        XCTAssertEqual(byName["noted.mov"]?.hasNote, true)
+        XCTAssertEqual(byName["noted.mov"]?.reasonText, "has your note — it will be carried to the archive copy")
+        XCTAssertEqual(byName["noted.mov"]?.defaultChecked, false)
         XCTAssertEqual(byName["free1.mov"]?.role, .candidate)
         XCTAssertEqual(byName["free1.mov"]?.planKeeps, .keeper, "the elected keeper (most free space)")
         XCTAssertEqual(byName["free1.mov"]?.reasonText, "the plan would keep this one")
         XCTAssertEqual(byName["free1.mov"]?.defaultChecked, false)
+        XCTAssertEqual(byName["free1.mov"]?.kind, .duplicate, "no promote link in this family — nothing is 'the original'")
         XCTAssertEqual(byName["free2.mov"]?.role, .candidate)
         XCTAssertNil(byName["free2.mov"]?.planKeeps); XCTAssertNil(byName["free2.mov"]?.reasonText)
         XCTAssertEqual(byName["free2.mov"]?.defaultChecked, true)
-        XCTAssertEqual(f.candidateCount, 2, "only the two free copies are checkable")
+        XCTAssertEqual(f.candidateCount, 4, "the two free copies, the version and the noted copy")
         XCTAssertEqual(f.defaultSelection, Set(f.trash.map(\.id)), "default checks = the trash set")
-        XCTAssertEqual(Set(f.rows.filter(\.checkable).map(\.id)), [free1.id, free2.id])
-        // keep-one off: both candidates default-checked; the keeper hint is gone.
+        XCTAssertEqual(Set(f.rows.filter(\.checkable).map(\.id)), [free1.id, free2.id, version.id, noted.id])
+        // keep-one off: both plain candidates default-checked; the keeper hint is gone.
         let g = plan([arch, free1, free2], keepOne: false, bar: bar)
         XCTAssertEqual(g.defaultSelection, [free1.id, free2.id])
         XCTAssertTrue(g.rows.filter(\.checkable).allSatisfy { $0.planKeeps == nil })
@@ -290,8 +534,8 @@ final class PrunePlanTests: XCTestCase {
         let p = PrunePlan.compute(families: [[free1, offline, pair, version, noted, inside, free2, arch]],
                                   options: .init(bar: bar))
         XCTAssertEqual(p.defaultSelection, Set(p.trashFiles.map(\.id)))
-        XCTAssertEqual(p.checkableIDs, [free1.id, free2.id])
-        XCTAssertEqual(p.checkableCount, 2); XCTAssertEqual(p.rowCount, 8)
+        XCTAssertEqual(p.checkableIDs, [free1.id, free2.id, version.id, noted.id])
+        XCTAssertEqual(p.checkableCount, 4); XCTAssertEqual(p.rowCount, 6)
     }
 
     func testAdviceForAnImportantFamilyWithNoAttestationAndTheOverride() {
@@ -305,7 +549,7 @@ final class PrunePlanTests: XCTestCase {
         XCTAssertEqual(f.requirement, ImportanceBar.defaults.important)
         XCTAssertFalse(f.cloudOrOffsiteAttested)
         // Every working copy is checkable, none checked; the plan's keeper is hinted.
-        let working = f.rows.filter { $0.role != .archiveCopy }
+        let working = f.rows
         XCTAssertEqual(working.count, 3)
         XCTAssertTrue(working.allSatisfy { $0.checkable && !$0.defaultChecked })
         XCTAssertEqual(working.first { $0.planKeeps == .keeper }?.copy.volumeName, "Projects", "most free space")
@@ -352,8 +596,9 @@ final class PrunePlanTests: XCTestCase {
         XCTAssertEqual(none.advice, "No archive copy yet — nothing here can go until one is promoted and verified.")
         XCTAssertEqual(none.selection([a.id, b.id]), .empty, "checking what cannot be checked counts nothing")
         let unverified = plan([archiveCopy(verified: false, stars: 1), a, b])
-        XCTAssertEqual(unverified.rows.map(\.role), [.archiveCopy, .kept(.archiveUnverified), .kept(.archiveUnverified)])
-        XCTAssertEqual(unverified.rows[1].reasonText, "archive copy unverified")
+        XCTAssertEqual(unverified.rows.map(\.role), [.kept(.archiveUnverified), .kept(.archiveUnverified)],
+                       "the archive copy is the header, not a row")
+        XCTAssertEqual(unverified.rows[0].reasonText, "archive copy unverified")
         XCTAssertEqual(unverified.advice, "The archive copy is not verified yet — nothing here can go until it reads back.")
         XCTAssertEqual(unverified.selection([a.id]), .empty)
     }
@@ -374,7 +619,7 @@ final class PrunePlanTests: XCTestCase {
         XCTAssertEqual(s.archiveOnlyFamilies, ["archived.mov"], "f2 keeps its offline copy, so only f1 is archive-only")
         XCTAssertEqual(s.overrideText, "1 copy — ★★★ / Important — needs 1 more device")
         XCTAssertEqual(s.overrideSentence, "1 copy goes against the bar you set: ★★★ / Important — needs 1 more device.")
-        let both = PrunePlan.compute(families: [f1, f1.map { var c = $0; c.id = UUID(); c.contentKey = "h:9"; c.promotedFromID = nil; return c }],
+        let both = PrunePlan.compute(families: [f1, f1.map { var c = $0; c.id = UUID(); c.contentKey = "h:9"; c.promotedFromID = nil; c.derivedFrom = nil; return c }],
                                      options: .init(bar: bar))
         let s2 = both.selection(both.checkableIDs)
         XCTAssertEqual(s2.overrideShortfalls.count, 1, "the same shortfall is said once")
@@ -386,7 +631,7 @@ final class PrunePlanTests: XCTestCase {
     func testScale100kSnapshotsIn5kFamiliesUnderBudget() {
         let volumes = ["LaCie", "Projects", "MyBook", "X9", "X10", "Movies"]
         var snaps: [ArchiveCopySnapshot] = []
-        snaps.reserveCapacity(100_000)
+        snaps.reserveCapacity(120_000)
         var batch = Set<UUID>()
         for g in 0..<5_000 {
             var first: UUID?
@@ -403,21 +648,42 @@ final class PrunePlanTests: XCTestCase {
             snaps.append(archiveCopy(key: "", promotedFrom: first))
         }
         XCTAssertEqual(snaps.count, 100_000)
+        // v3: 10k versions (one trim per family, one two-hop cleanup per
+        // other family) join by provenance; 10k unhashed name-related
+        // records are "might be copies".
+        var versions: [ArchiveCopySnapshot] = []
+        var maybes: [ArchiveCopySnapshot] = []
+        for g in 0..<5_000 {
+            let src = snaps[g * 20]
+            let t = copy("g\(g)_c0_trimmed.mov", vol: "Projects", key: "h:v1:t\(g)", version: true, derivedFrom: src.id, kind: "trim")
+            versions.append(t)
+            versions.append(copy("g\(g)_c0_trimmed_balanced.mov", vol: "Projects", key: "h:v1:b\(g)", version: true,
+                                 derivedFrom: g % 2 == 0 ? t.id : src.id, kind: "balanceAudio"))
+            maybes.append(copy("g\(g)_c0 copy.mov", vol: "X10", key: ""))
+            maybes.append(copy("g\(g)_c0.mov", vol: "Movies", key: ""))
+        }
+        snaps += versions + maybes
+        XCTAssertEqual(snaps.count, 120_000)
         let clock = ContinuousClock()
         var families: [[ArchiveCopySnapshot]] = []
+        var related: [ArchiveCopyFamilies.RelatedGroup] = []
         var p = PrunePlan.empty
         let elapsed = clock.measure {
             families = ArchiveCopyFamilies.group(batch: batch, snapshots: snaps)
-            p = PrunePlan.compute(families: families, options: .init())
+            related = ArchiveCopyFamilies.nameRelated(families: families, snapshots: snaps, baseStem: baseStem)
+            p = PrunePlan.compute(families: families, related: related, options: .init())
         }
         XCTAssertEqual(families.count, 5_000)
+        XCTAssertEqual(families.reduce(0) { $0 + $1.count }, 110_000, "every version joined its family")
         XCTAssertEqual(p.families.count, 5_000)
+        XCTAssertEqual(p.relatedCount, 10_000, "every unhashed name-related record is a might-be row")
         XCTAssertEqual(p.notCoveredCount, 5_000 - 1_667, "only every third family attested a cloud copy")
         XCTAssertGreaterThan(p.trashCount, 0)
-        XCTAssertLessThan(elapsed, .seconds(3), "group + compute took \(elapsed) for 100k snapshots")
-        // The checklist views are O(rows): 100k rows, default checks = the
-        // trash set, a whole-batch selection judged in well under a second.
-        XCTAssertEqual(p.rowCount, 100_000)
+        XCTAssertLessThan(elapsed, .seconds(4), "group + related + compute took \(elapsed) for 120k snapshots")
+        // The checklist views are O(rows): 105k working rows, default
+        // checks = the trash set, a whole-batch selection judged in well
+        // under a second.
+        XCTAssertEqual(p.rowCount, 105_000, "19 copies + 2 versions per family; archive copies are not rows")
         var sel = PrunePlan.Selection.empty
         var dflt = Set<UUID>()
         let selElapsed = clock.measure {
@@ -427,9 +693,17 @@ final class PrunePlanTests: XCTestCase {
         XCTAssertEqual(dflt, Set(p.trashFiles.map(\.id)))
         XCTAssertEqual(sel.count, p.checkableCount)
         XCTAssertGreaterThan(sel.overrideCount, 0)
-        XCTAssertLessThan(selElapsed, .seconds(1), "selection views took \(selElapsed) for 100k rows")
+        XCTAssertLessThan(selElapsed, .seconds(1), "selection views took \(selElapsed) for 105k rows")
+        var lines = 0
+        let logElapsed = clock.measure { for f in p.families { lines += f.logLine.count } }
+        XCTAssertGreaterThan(lines, 0)
+        XCTAssertLessThan(logElapsed, .seconds(2), "log lines took \(logElapsed) for 5k families")
         let protection = ArchiveCopyFamilies.protection(families: families)
         XCTAssertEqual(protection.familyCount, 5_000)
         XCTAssertEqual(protection.archive, .verified)
     }
+}
+
+private extension ArchiveCopySnapshot {
+    func with(path: String) -> ArchiveCopySnapshot { var c = self; c.fullPath = path; return c }
 }

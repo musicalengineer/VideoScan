@@ -16,7 +16,16 @@
 //     the cooperative pool (`@concurrent`).
 //   - `batchProtection(for:)` — the protection line for a Promote batch,
 //     off-main (the completion chip and the sheet).
-//   - `prunePlan(for:options:)` — the dry-run plan for the sheet.
+//   - `prunePlan(for:options:)` — the dry-run plan for the sheet: families
+//     by content + provenance, and the "might be copies" pass (name-
+//     related records outside the family) in the same off-main call.
+//   - `hashToConfirm(recordIDs:)` (v3, 2026-09-20) — the sheet's "Hash to
+//     confirm": the segmented content hash for the records named, off-
+//     main, stored on the record and written through to the probe cache
+//     so a rescan never erases it; the sheet re-plans afterwards.
+//   - `logArchivedWhatNextPlan(_:batchID:)` — one line per family in the
+//     log when the sheet opens, so "why couldn't I select X" is always
+//     answerable.
 //   - `offerArchivedWhatNext(...)` — sets the sheet driver ONCE per batch.
 //
 // (For Rick: `Task { … }` inherits the main actor; the `@concurrent`
@@ -172,6 +181,14 @@ extension VideoScanModel {
     /// capture on the main actor (the Tidy dry-run does the same); the
     /// heavy work happens off it. `isOnline` is injectable so tests never
     /// touch a volume.
+    ///
+    /// v3 (2026-09-20): `derivedFrom` / `derivationKind` ride along so a
+    /// version can join its original's family off-main (a cleanup output
+    /// has no kind stamp — it is tagged "cleanup" from its recipe id);
+    /// `hasHumanNote` reads only lines a PERSON could have written
+    /// (ArchiveAngelCandidate.hasHumanNote — 9,977 of 13,842 records
+    /// carry ffprobe/recipe text in `userNotes` that nobody typed, and
+    /// those must not read as "has your note").
     func archiveCopySnapshots(isOnline: (VideoRecord) -> Bool = { VolumeReachability.isReachable(path: $0.fullPath) })
     -> [ArchiveCopySnapshot] {
         // Per-volume facts from the scan targets (dozens, one statfs each).
@@ -200,6 +217,7 @@ extension VideoScanModel {
             let online = isOnline(r)
             let isVersion = !archiveCopy && r.derivedFrom != nil
                 && !(r.derivationKind.map { Self.repairDerivationKinds.contains($0) } ?? false)
+            let kind = r.derivationKind ?? (r.cleanupRecipeID == nil ? nil : "cleanup")
             out.append(ArchiveCopySnapshot(
                 id: r.id, filename: r.filename, fullPath: r.fullPath, volumeName: volume,
                 sizeBytes: r.sizeBytes,
@@ -211,14 +229,16 @@ extension VideoScanModel {
                 isOnline: online,
                 isPairMember: CatalogScopePolicy.isPairProtected(r),
                 isVersion: isVersion,
-                hasHumanNote: !r.userNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                hasHumanNote: ArchiveAngelCandidate.hasHumanNote(r.userNotes),
                 starRating: r.starRating,
                 disposition: r.mediaDisposition,
                 attestations: r.backupAttestations,
                 volumeIsConnectedWorking: !(archiveCopy || inside)
                     && (facts?.connectedWorking ?? (online && volume != archiveVolume && !volume.isEmpty)),
                 volumeFreeBytes: facts?.free,
-                isPurged: r.isPurged))
+                isPurged: r.isPurged,
+                derivedFrom: r.derivedFrom,
+                derivationKind: kind))
         }
         return out
     }
@@ -245,7 +265,9 @@ extension VideoScanModel {
     /// The importance bar as Settings has it (defaults until edited).
     var importanceBar: ImportanceBar { ImportanceBar.load(defaults: .standard) }
 
-    /// The dry-run plan for the sheet.
+    /// The dry-run plan for the sheet: families by content + provenance,
+    /// and the name-related "might be copies" per family, in ONE off-main
+    /// pass over the snapshots.
     func prunePlan(for recordIDs: [UUID], options: PrunePlan.Options,
                    isOnline: (VideoRecord) -> Bool = { VolumeReachability.isReachable(path: $0.fullPath) }) async -> PrunePlan {
         let snaps = archiveCopySnapshots(isOnline: isOnline)
@@ -257,7 +279,78 @@ extension VideoScanModel {
     #endif
     nonisolated static func prunePlanOffMain(batch: Set<UUID>, snapshots: [ArchiveCopySnapshot],
                                              options: PrunePlan.Options) async -> PrunePlan {
-        PrunePlan.compute(families: ArchiveCopyFamilies.group(batch: batch, snapshots: snapshots), options: options)
+        let families = ArchiveCopyFamilies.group(batch: batch, snapshots: snapshots)
+        // Name-relatedness = the Angel's event-family stem: derivative
+        // tokens (_trimmed, _balanced, .vs.edit…) and share-out tokens
+        // (clip 1, part 2, v3) stripped, case-folded.
+        let related = ArchiveCopyFamilies.nameRelated(families: families, snapshots: snapshots,
+                                                      baseStem: ArchiveAngelFamily.baseStem)
+        return PrunePlan.compute(families: families, related: related, options: options)
+    }
+
+    /// One log line per family, written when the sheet opens (and after a
+    /// hash-to-confirm re-plan), so the log always says why a copy could
+    /// or could not be selected.
+    func logArchivedWhatNextPlan(_ plan: PrunePlan, batchID: String) {
+        log("Archived — what next? [\(batchID)]: \(plan.families.count) famil\(plan.families.count == 1 ? "y" : "ies"), "
+            + "\(plan.checkableCount) checkable cop\(plan.checkableCount == 1 ? "y" : "ies") (\(MediaBytes.display(plan.checkableBytes))), "
+            + "\(plan.relatedCount) name-related")
+        for f in plan.families { log(f.logLine) }
+    }
+
+    // MARK: Hash to confirm (v3)
+
+    /// Compute the segmented content hash for `recordIDs` that have none
+    /// (online, active), off-main, one file at a time; store it on the
+    /// record and write through to the probe cache (a rescan of an
+    /// unchanged file would otherwise hand back an empty signature and
+    /// erase it — codex #320.1). Records already hashed are left alone.
+    /// Returns the ids that gained a hash. Memory: one 1 MiB window
+    /// buffer at a time; nothing is retained.
+    @discardableResult
+    func hashToConfirm(recordIDs: [UUID]) async -> [UUID] {
+        struct Item: Sendable { let id: UUID; let path: String; let filename: String; let volume: String }
+        var items: [Item] = []
+        var seen = Set<UUID>()
+        for id in recordIDs where seen.insert(id).inserted {
+            guard let rec = record(forID: id), !rec.isPurged else { continue }
+            guard rec.contentHash.isEmpty else { continue }
+            guard VolumeReachability.isReachable(path: rec.fullPath) else {
+                log("what-next: hash skipped for \(rec.filename) — drive not connected")
+                continue
+            }
+            items.append(Item(id: rec.id, path: rec.fullPath, filename: rec.filename, volume: rec.volumeName))
+        }
+        guard !items.isEmpty else { return [] }
+        let hashed: [(UUID, String)] = await Task.detached(priority: .userInitiated) {
+            var out: [(UUID, String)] = []
+            out.reserveCapacity(items.count)
+            for item in items {
+                if Task.isCancelled { break }
+                let signature = autoreleasepool { FileHasher.segmentedHash(path: item.path) }
+                out.append((item.id, signature))
+            }
+            return out
+        }.value
+        let now = Date()
+        var changed: [UUID] = []
+        let byID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+        for (id, signature) in hashed {
+            guard let item = byID[id] else { continue }
+            guard !signature.isEmpty else {
+                log("what-next: could not hash \(item.filename) on \(item.volume) — read failed")
+                continue
+            }
+            // Never overwrite: a scan may have filled it in meanwhile.
+            guard let rec = record(forID: id), rec.contentHash.isEmpty else { continue }
+            rec.contentHash = signature
+            rec.contentHashAt = now
+            metadataCache.updateContentHash(path: rec.fullPath, hash: signature, at: now)
+            changed.append(id)
+            log("what-next: hashed \(item.filename) on \(item.volume) → \(signature.prefix(16))…")
+        }
+        if !changed.isEmpty { saveCatalogDebounced() }
+        return changed
     }
 
     // MARK: The sheet

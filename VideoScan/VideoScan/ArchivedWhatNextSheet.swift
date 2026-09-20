@@ -12,20 +12,32 @@
 // 2026-09-20, Rick: "the follow-up dialog about deleting dups did not let
 // me delete any dups … I want to see a list of dups and decide which ones
 // to delete, maybe leave one behind, maybe not." The 9/12 design let the
-// bar GATE deletion — a ★★★ family with no cloud copy attested hid its
-// three working copies behind "Not now". Now the bar ADVISES and the
-// person decides: one row per copy of every family in the batch, a
-// checkbox on each candidate (disabled with the reason on the archive
-// copy, anything inside the Master Archive, a version, a copy with a
-// note, an offline copy, a recovered A/V pair member), the family's
-// advice in orange when the bar is not met. The bar-respecting plan is
-// the DEFAULT set of checks; "Keep one working copy" + the volume picker
-// set that default (toggling them resets the checks); a manual check
-// after that wins. The attestation radios still recompute the advice.
-// The footer says "Move N to Trash — X GB", enabled iff N > 0; the
-// confirmation names the count and bytes, says in words when the choice
-// goes against the bar, and when a file will exist only in the Master
-// Archive afterwards.
+// bar GATE deletion; now the bar ADVISES and the person decides.
+//
+// v3, later the same day, after using it: "It wouldn't let me delete as
+// freely as I would have liked … a bigger dialog box, and allow me to
+// delete any copy or all copies on any drive EXCEPT FamilyArchive …
+// many are subsets or improvements or trimmed … don't even list that as
+// an option. It would not let me select M4drive at all." And: "I would
+// rather you be cautious with my family media than rampantly allowing me
+// to delete." So, per family:
+//   * the header says "✓ In FamilyArchive, verified (N files)" — the
+//     archive copies are never rows;
+//   * one row per WORKING copy: checkbox · volume · path · size · kind
+//     chip (original / duplicate / balanced / trimmed / transcoded /
+//     cleaned / other version) · advice. Versions and copies with a note
+//     are checkable (unchecked by default, the advice says why); only an
+//     offline copy, an A/V pair half, and every row of a family whose
+//     archive copy is not verified are disabled, with the reason;
+//   * "Might be copies": name-related records on working volumes that are
+//     NOT in the family by content — "Hash to confirm" (per row, or all)
+//     computes the segmented hash off-main and re-plans; a match joins the
+//     family as a normal row, a mismatch reads "different footage";
+//   * "Select all deletable" / "Select none" per family and for the batch.
+// The attestation "n/a for these" satisfies the bar's cloud-or-off-site
+// want for this batch (the ledger still records n/a). The sheet is
+// 960×720 and resizable. The plan is logged, one line per family, when
+// it is first shown (and after each hash-to-confirm re-plan).
 //
 // Apply → `applyPrune(shown:selected:…)` (fresh plan + on-disk safety in
 // front of the ONE existing Trash routine) → the result replaces the
@@ -37,7 +49,8 @@
 // SwiftUI bodies fail on the CI runner); the plan is computed off-main by
 // the model (`prunePlan(for:options:)`), never in the body; the row list
 // is derived from the plan VALUE once per reload (O(rows in the batch's
-// families), capped at 200 rows shown), never from `records`.
+// families), capped at 200 rows for families with no default check),
+// never from `records`.
 //
 // (For Rick: `@State` ≈ a member the view owns and re-renders on change;
 // a `Binding` ≈ a getter/setter pair handed to a child control.)
@@ -65,6 +78,9 @@ struct ArchivedWhatNextSheet: View {
     @State private var protection: ProtectionSummary
     /// Bumped whenever an input the plan depends on changes.
     @State private var planRevision = 0
+    /// The first plan (and every re-plan after a hash) is logged, one
+    /// line per family.
+    @State private var logPlan = true
 
     // The checklist (2026-09-20).
     /// Copy record ids the person checked. Seeded from the plan's default
@@ -77,6 +93,8 @@ struct ArchivedWhatNextSheet: View {
     /// A plan reload is in flight: the list, the count and the
     /// confirmation are stale until it lands, so Apply waits (QA MINOR).
     @State private var reloading = false
+    /// Records a hash-to-confirm is running for (buttons show a spinner).
+    @State private var hashing: Set<UUID> = []
 
     // Apply (2026-09-19).
     @State private var confirmingApply = false
@@ -95,15 +113,17 @@ struct ArchivedWhatNextSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             header
             protectionSection
             attestationSection
             planSection
+                .frame(maxHeight: .infinity)
             footer
         }
         .padding(20)
-        .frame(width: 680)
+        .frame(minWidth: 960, idealWidth: 960, maxWidth: .infinity,
+               minHeight: 720, idealHeight: 720, maxHeight: .infinity)
         .task(id: planRevision) { await reloadPlan() }
     }
 
@@ -119,7 +139,7 @@ struct ArchivedWhatNextSheet: View {
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("whatNext.headline")
-                Text("Archived — what next?")
+                Text("Archived — what next? Every copy below is outside \(request.archiveLabel); nothing here ever touches the archive.")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
             }
@@ -149,7 +169,7 @@ struct ArchivedWhatNextSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("whatNext.protectionLine")
             }
-            Text("3-2-1 tip: one more device and one copy elsewhere keeps a fire or a failed RAID from taking everything. Nothing here deletes the archive copy.")
+            Text("3-2-1 tip: one more device and one copy elsewhere keeps a fire or a failed RAID from taking everything. The bar you set advises; you decide.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -160,25 +180,29 @@ struct ArchivedWhatNextSheet: View {
 
     private var attestationSection: some View {
         GroupBox("I also have these files…") {
-            VStack(alignment: .leading, spacing: 8) {
-                AttestationAnswerRow(kind: .cloud, answer: $cloudAnswer, label: $cloudLabel,
-                                     placeholder: "in: iCloud, Backblaze…", onCommit: { apply(.cloud) })
-                AttestationAnswerRow(kind: .offsite, answer: $offsiteAnswer, label: $offsiteLabel,
-                                     placeholder: "at: Tim's house…", onCommit: { apply(.offsite) })
-                Picker("Applies to:", selection: $onlyImportant) {
-                    Text("this batch").tag(false)
-                    Text("only the ★★★ ones").tag(true)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .top, spacing: 24) {
+                    AttestationAnswerRow(kind: .cloud, answer: $cloudAnswer, label: $cloudLabel,
+                                         placeholder: "in: iCloud, Backblaze…", onCommit: { apply(.cloud) })
+                    AttestationAnswerRow(kind: .offsite, answer: $offsiteAnswer, label: $offsiteLabel,
+                                         placeholder: "at: Tim's house…", onCommit: { apply(.offsite) })
                 }
-                .pickerStyle(.radioGroup)
-                .horizontalRadioGroupLayout()
-                .font(.system(size: 11))
-                Text("Your word is remembered on each file (and in the archive's manifest). VideoScan never checks a cloud or off-site copy.")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    Picker("Applies to:", selection: $onlyImportant) {
+                        Text("this batch").tag(false)
+                        Text("only the ★★★ ones").tag(true)
+                    }
+                    .pickerStyle(.radioGroup)
+                    .horizontalRadioGroupLayout()
+                    .font(.system(size: 11))
+                    Text("Your word is remembered on each file (and in the archive's manifest); \"n/a for these\" counts as met for this batch. VideoScan never checks a cloud or off-site copy.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
+            .padding(.vertical, 2)
         }
     }
 
@@ -213,13 +237,16 @@ struct ArchivedWhatNextSheet: View {
     private var planSection: some View {
         if let plan {
             PruneChecklistSection(plan: plan, checklist: checklist, selected: selected, summary: summary,
+                                  hashing: hashing, archiveLabel: request.archiveLabel,
                                   keepOne: $keepOne, keeperVolume: $keeperVolume,
                                   onDefaultsChanged: {
                                       // The helper sets the DEFAULT checks: reset to the plan's.
                                       selectionTouched = false
                                       planRevision &+= 1
                                   },
-                                  onCheck: { id, on in setChecked(id, on) })
+                                  onCheck: { id, on in setChecked([id], on) },
+                                  onSelect: { ids, on in setChecked(ids, on) },
+                                  onHash: { ids in runHash(ids) })
         } else {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -251,13 +278,35 @@ struct ArchivedWhatNextSheet: View {
         selected = (selectionTouched ? selected.intersection(p.checkableIDs) : p.defaultSelection)
             .intersection(list.visibleIDs)
         summary = p.selection(selected)
+        if logPlan {
+            logPlan = false
+            model.logArchivedWhatNextPlan(p, batchID: request.batchID)
+        }
     }
 
-    private func setChecked(_ id: UUID, _ on: Bool) {
+    private func setChecked(_ ids: [UUID], _ on: Bool) {
         guard let plan else { return }
-        if on { selected.insert(id) } else { selected.remove(id) }
+        let allowed = plan.checkableIDs.intersection(checklist.visibleIDs)
+        for id in ids where allowed.contains(id) {
+            if on { selected.insert(id) } else { selected.remove(id) }
+        }
         selectionTouched = true
         summary = plan.selection(selected)
+    }
+
+    /// "Hash to confirm": hash the records named (a related row plus the
+    /// family members that have no hash), then re-plan; a matching hash
+    /// joins the family on that reload.
+    private func runHash(_ ids: [UUID]) {
+        let fresh = ids.filter { !hashing.contains($0) }
+        guard !fresh.isEmpty else { return }
+        hashing.formUnion(fresh)
+        Task {
+            _ = await model.hashToConfirm(recordIDs: fresh)
+            hashing.subtract(fresh)
+            logPlan = true
+            planRevision &+= 1
+        }
     }
 
     // MARK: Footer
@@ -284,7 +333,7 @@ struct ArchivedWhatNextSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("whatNext.applyResult")
             } else {
-                Text("The archive copy and every copy you leave unchecked are never touched. Everything moved can be restored from the Trash.")
+                Text("The originals in \(request.archiveLabel) and every copy you leave unchecked are never touched. Everything moved can be restored from the Trash.")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -296,7 +345,7 @@ struct ArchivedWhatNextSheet: View {
                 .accessibilityIdentifier("whatNext.confirmApply")
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(Self.confirmMessage(summary))
+            Text(Self.confirmMessage(summary, archiveLabel: request.archiveLabel))
         }
     }
 
@@ -312,11 +361,12 @@ struct ArchivedWhatNextSheet: View {
         return "Move \(n) cop\(n == 1 ? "y" : "ies") (\(MediaBytes.display(summary.bytes))) to the Trash?"
     }
 
-    /// The confirmation's body: what stays, then — in words — what goes
-    /// against the bar and which files will then exist only in the
-    /// Master Archive.
-    static func confirmMessage(_ s: PrunePlan.Selection) -> String {
-        var lines = ["The archive copy and every copy you left unchecked stay. Anything that changed since this list was worked out is held back, and everything moved can be restored from the Trash."]
+    /// The confirmation's body: the counts, what stays, then — in words —
+    /// what goes against the bar and which files will then exist only in
+    /// the Master Archive.
+    static func confirmMessage(_ s: PrunePlan.Selection, archiveLabel: String = "the Master Archive") -> String {
+        let n = s.count
+        var lines = ["\(n) cop\(n == 1 ? "y" : "ies") (\(MediaBytes.display(s.bytes))) go\(n == 1 ? "es" : "") to the Trash. The originals in \(archiveLabel) are untouched, and so is every copy you left unchecked. Anything that changed since this list was worked out is held back; everything moved can be restored from the Trash."]
         if let against = s.overrideSentence { lines.append(against) }
         if let only = s.archiveOnlySentence { lines.append(only) }
         return lines.joined(separator: "\n\n")
@@ -371,11 +421,10 @@ struct AttestationAnswerRow: View {
                 TextField(placeholder, text: $label)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
-                    .frame(maxWidth: 200)
+                    .frame(maxWidth: 180)
                     .onSubmit(onCommit)
                     .accessibilityIdentifier("whatNext.attest.\(kind.rawValue).label")
             }
-            Spacer(minLength: 0)
         }
     }
 }
@@ -383,18 +432,41 @@ struct AttestationAnswerRow: View {
 // MARK: - The checklist, as a flat list the view can walk
 
 /// The sheet's rows, derived ONCE from the plan value per reload (never in
-/// a body): a header per family, then its copies. Families with a
-/// default check are ALWAYS listed in full, first — a copy that would go
-/// must be visible and uncheckable-by-hand (QA 2026-09-20, MAJOR 3: the
-/// Tidy backlog is routinely > 200 rows); the remaining families fill up
-/// to `maxRows` copy rows, the rest counted as "… and N more". Pure;
-/// tests pin the cap and that no default check is ever hidden.
+/// a body): a header per family, its working copies, then its "might be
+/// copies". Families with a default check are ALWAYS listed in full,
+/// first — a copy that would go must be visible and uncheckable-by-hand
+/// (QA 2026-09-20, MAJOR 3: the Tidy backlog is routinely > 200 rows);
+/// the remaining families fill up to `maxRows` copy rows, the rest counted
+/// as "… and N more". Pure; tests pin the cap and that no default check
+/// is ever hidden.
 struct PruneChecklist: Equatable {
+    /// The family header line: the archive side in words, the level, the
+    /// advice (orange) and note (grey), and what the per-family buttons
+    /// act on.
+    struct FamilyHeader: Equatable {
+        let name: String
+        let key: String
+        let level: String
+        let advice: String?
+        let note: String?
+        let archiveCount: Int
+        let archiveVerified: Bool
+        /// Every checkable row, in row order.
+        let checkableIDs: [UUID]
+        let checkableBytes: Int64
+        /// "Hash all": the unhashed related rows + the family members
+        /// with no hash (so the keys can compare).
+        let hashAllIDs: [UUID]
+    }
+
     struct Item: Identifiable, Equatable {
         enum Kind: Equatable {
-            /// Family header: display name, level, advice (nil = covered).
-            case family(name: String, key: String, level: String, advice: String?)
+            case family(FamilyHeader)
             case copy(PrunePlan.CopyRow)
+            /// "Might be copies" sub-header (count listed, count hidden).
+            case relatedHeader(count: Int, hidden: Int)
+            /// One related row and what its Hash button hashes.
+            case related(PrunePlan.RelatedRow, hashIDs: [UUID])
         }
         let id: String
         let kind: Kind
@@ -409,18 +481,27 @@ struct PruneChecklist: Equatable {
     /// Copy rows not listed because of the cap (never a default check).
     let hiddenRowCount: Int
 
+    static func header(_ family: PrunePlan.Family) -> FamilyHeader {
+        let key = family.key.isEmpty ? family.displayName : family.key
+        let unhashedRelated = family.related.filter { $0.status == .needsHash }.map(\.id)
+        return FamilyHeader(name: family.displayName, key: key, level: family.level.displayName,
+                            advice: family.advice, note: family.note,
+                            archiveCount: family.archive.count, archiveVerified: family.archiveVerified,
+                            checkableIDs: family.checkableIDs, checkableBytes: family.checkableBytes,
+                            hashAllIDs: unhashedRelated.isEmpty ? [] : unhashedRelated + family.unhashedMemberIDs)
+    }
+
     static func build(_ plan: PrunePlan, maxRows: Int = maxRows) -> PruneChecklist {
         var items: [Item] = []
         var visible = Set<UUID>()
-        items.reserveCapacity(min(plan.rowCount, maxRows) + plan.families.count)
+        items.reserveCapacity(min(plan.rowCount, maxRows) + plan.families.count * 2 + plan.relatedCount)
         // `budget` is spent only by the capped (no-default-check) families,
         // so a big default set never starves them of their 200 rows.
         var budget = maxRows, hidden = 0
         func list(_ i: Int, _ family: PrunePlan.Family, capped: Bool) {
             if capped, budget <= 0 { hidden += family.rows.count; return }
-            let key = family.key.isEmpty ? family.displayName : family.key
-            items.append(Item(id: "f\(i)", kind: .family(name: family.displayName, key: key,
-                                                          level: family.level.displayName, advice: family.advice)))
+            let head = header(family)
+            items.append(Item(id: "f\(i)", kind: .family(head)))
             for row in family.rows {
                 if capped {
                     if budget <= 0 { hidden += 1; continue }
@@ -428,6 +509,14 @@ struct PruneChecklist: Equatable {
                 }
                 items.append(Item(id: row.id.uuidString, kind: .copy(row)))
                 visible.insert(row.id)
+            }
+            if !family.related.isEmpty {
+                items.append(Item(id: "f\(i)r", kind: .relatedHeader(count: family.related.count,
+                                                                     hidden: family.relatedHiddenCount)))
+                for r in family.related {
+                    let hashIDs = r.status == .needsHash ? [r.id] + family.unhashedMemberIDs : []
+                    items.append(Item(id: "r" + r.id.uuidString, kind: .related(r, hashIDs: hashIDs)))
+                }
             }
         }
         let hasDefault = plan.families.map { $0.rows.contains(where: \.defaultChecked) }
@@ -444,17 +533,23 @@ struct PruneChecklistSection: View {
     let checklist: PruneChecklist
     let selected: Set<UUID>
     let summary: PrunePlan.Selection
+    let hashing: Set<UUID>
+    let archiveLabel: String
     @Binding var keepOne: Bool
     @Binding var keeperVolume: String?
     /// The keep-one helper changed: recompute the DEFAULT checks.
     let onDefaultsChanged: () -> Void
     let onCheck: (UUID, Bool) -> Void
+    /// Select all / none over a set of checkable ids.
+    let onSelect: ([UUID], Bool) -> Void
+    /// Hash to confirm these records, then re-plan.
+    let onHash: ([UUID]) -> Void
 
     var body: some View {
         GroupBox(title) {
             VStack(alignment: .leading, spacing: 8) {
                 keeperRow
-                if plan.rowCount > 0 { list }
+                if plan.rowCount > 0 || plan.relatedCount > 0 { list }
                 summaryRow
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -495,6 +590,17 @@ struct PruneChecklistSection: View {
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
             Spacer(minLength: 0)
+            let all = Array(plan.checkableIDs.intersection(checklist.visibleIDs))
+            Button("Select all deletable copies (\(all.count), \(MediaBytes.display(plan.checkableBytes)))") {
+                onSelect(all, true)
+            }
+            .font(.system(size: 11))
+            .disabled(all.isEmpty)
+            .accessibilityIdentifier("whatNext.selectAll")
+            Button("Select none") { onSelect(all, false) }
+                .font(.system(size: 11))
+                .disabled(selected.isEmpty)
+                .accessibilityIdentifier("whatNext.selectNone")
         }
     }
 
@@ -510,10 +616,14 @@ struct PruneChecklistSection: View {
             LazyVStack(alignment: .leading, spacing: 2) {
                 ForEach(checklist.items) { item in
                     switch item.kind {
-                    case .family(let name, let key, let level, let advice):
-                        familyHeader(name: name, key: key, level: level, advice: advice)
+                    case .family(let head):
+                        familyHeader(head)
                     case .copy(let row):
                         copyRow(row)
+                    case .relatedHeader(let count, let hidden):
+                        relatedHeader(count: count, hidden: hidden)
+                    case .related(let row, let hashIDs):
+                        relatedRow(row, hashIDs: hashIDs)
                     }
                 }
                 if checklist.hiddenRowCount > 0 {
@@ -525,33 +635,64 @@ struct PruneChecklistSection: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(minHeight: 60, maxHeight: 260)
+        .frame(minHeight: 120, maxHeight: .infinity)
     }
 
-    private func familyHeader(name: String, key: String, level: String, advice: String?) -> some View {
+    private func familyHeader(_ h: PruneChecklist.FamilyHeader) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 6) {
-                Text(name)
+            HStack(spacing: 8) {
+                Text(h.name)
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text("· \(level)")
+                Text("· \(h.level)")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
+                Text(h.archiveVerified
+                     ? "✓ In \(archiveLabel), verified (\(h.archiveCount) file\(h.archiveCount == 1 ? "" : "s"))"
+                     : (h.archiveCount == 0 ? "✗ Not in \(archiveLabel)" : "✗ In \(archiveLabel), not verified"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(h.archiveVerified ? .green : .orange)
+                    .accessibilityIdentifier("whatNext.family.\(h.key).archive")
+                Spacer(minLength: 4)
+                if !h.checkableIDs.isEmpty {
+                    Button("Select all deletable") { onSelect(h.checkableIDs, true) }
+                        .font(.system(size: 10))
+                        .controlSize(.small)
+                        .accessibilityIdentifier("whatNext.family.\(h.key).selectAll")
+                    Button("Select none") { onSelect(h.checkableIDs, false) }
+                        .font(.system(size: 10))
+                        .controlSize(.small)
+                        .accessibilityIdentifier("whatNext.family.\(h.key).selectNone")
+                }
+                if !h.hashAllIDs.isEmpty {
+                    Button("Hash all to confirm") { onHash(h.hashAllIDs) }
+                        .font(.system(size: 10))
+                        .controlSize(.small)
+                        .disabled(h.hashAllIDs.contains { hashing.contains($0) })
+                        .accessibilityIdentifier("whatNext.family.\(h.key).hashAll")
+                }
             }
-            if let advice {
+            if let advice = h.advice {
                 Text(advice)
                     .font(.system(size: 11))
                     .foregroundColor(.orange)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("whatNext.family.\(key).advice")
+                    .accessibilityIdentifier("whatNext.family.\(h.key).advice")
+            }
+            if let note = h.note {
+                Text(note)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("whatNext.family.\(h.key).note")
             }
         }
-        .padding(.top, 6)
+        .padding(.top, 8)
     }
 
     private func copyRow(_ row: PrunePlan.CopyRow) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Toggle("", isOn: Binding(get: { selected.contains(row.id) }, set: { onCheck(row.id, $0) }))
                 .toggleStyle(.checkbox)
                 .labelsHidden()
@@ -560,25 +701,93 @@ struct PruneChecklistSection: View {
             Text(row.copy.volumeName.isEmpty ? "—" : row.copy.volumeName)
                 .font(.system(size: 11, weight: .medium))
                 .lineLimit(1)
-                .frame(width: 110, alignment: .leading)
-            Text(row.copy.filename)
+                .frame(width: 120, alignment: .leading)
+            Text(row.copy.fullPath)
                 .font(.system(size: 11, design: .monospaced))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundColor(row.checkable ? .primary : .secondary)
-            Spacer(minLength: 4)
-            if let reason = row.reasonText {
-                Text(reason)
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-            }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(row.copy.fullPath)
             Text(MediaBytes.display(row.copy.sizeBytes))
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .frame(width: 70, alignment: .trailing)
+            chip(row.kind.chip, tint: row.kind.isVersion ? .purple : (row.kind == .original ? .blue : .gray))
+                .frame(width: 96, alignment: .leading)
+            Text(row.reasonText ?? "")
+                .font(.system(size: 10))
+                .foregroundColor(row.checkable ? .secondary : .orange)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: 250, alignment: .leading)
+                .help(row.reasonText ?? "")
         }
         .padding(.leading, 12)
+    }
+
+    private func relatedHeader(count: Int, hidden: Int) -> some View {
+        Text("Might be copies — same name, not confirmed by content (\(count)\(hidden > 0 ? ", \(hidden) more not listed" : ""))")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(.secondary)
+            .padding(.leading, 12)
+            .padding(.top, 4)
+    }
+
+    private func relatedRow(_ row: PrunePlan.RelatedRow, hashIDs: [UUID]) -> some View {
+        HStack(spacing: 8) {
+            Toggle("", isOn: .constant(false))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .disabled(true)
+            Text(row.copy.volumeName.isEmpty ? "—" : row.copy.volumeName)
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+                .frame(width: 120, alignment: .leading)
+            Text(row.copy.fullPath)
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(row.copy.fullPath)
+            Text(MediaBytes.display(row.copy.sizeBytes))
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .frame(width: 70, alignment: .trailing)
+            chip(row.status == .needsHash ? "unhashed" : "different", tint: .gray)
+                .frame(width: 96, alignment: .leading)
+            HStack(spacing: 6) {
+                if row.status == .needsHash {
+                    if hashing.contains(row.id) {
+                        ProgressView().controlSize(.mini)
+                        Text("hashing…").font(.system(size: 10)).foregroundColor(.secondary)
+                    } else {
+                        Button("Hash to confirm") { onHash(hashIDs) }
+                            .font(.system(size: 10))
+                            .controlSize(.small)
+                            .accessibilityIdentifier("whatNext.related.\(row.id.uuidString).hash")
+                    }
+                } else {
+                    Text(row.reasonText)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(width: 250, alignment: .leading)
+        }
+        .padding(.leading, 12)
+    }
+
+    private func chip(_ text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(RoundedRectangle(cornerRadius: 4).fill(tint.opacity(0.15)))
+            .foregroundColor(tint)
+            .lineLimit(1)
     }
 
     @ViewBuilder
