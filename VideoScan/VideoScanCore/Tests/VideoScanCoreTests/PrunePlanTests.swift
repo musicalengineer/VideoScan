@@ -245,6 +245,142 @@ final class PrunePlanTests: XCTestCase {
         XCTAssertEqual(PrunePlan.compute(families: [], options: .init()), .empty)
     }
 
+    // MARK: The checklist (2026-09-20 — the bar advises, the person decides)
+
+    func testRowsMirrorThePlanAndOnlyCandidatesWithAVerifiedArchiveAreCheckable() {
+        var bar = ImportanceBar.defaults
+        bar.important = .init(extraDevices: 0, cloudOrOffsite: false)
+        let arch = archiveCopy(stars: 1)
+        let offline = copy("off.mov", vol: "MyBook", online: false)
+        let pair = copy("pair.mxf", vol: "LaCie", pair: true)
+        let version = copy("bal.mov", vol: "LaCie", version: true)
+        let noted = copy("noted.mov", vol: "LaCie", note: true)
+        let inside = copy("inside.mov", vol: "FamilyArchive", inside: true, working: false)
+        let free1 = copy("free1.mov", vol: "LaCie", free: 900)
+        let free2 = copy("free2.mov", vol: "X9", free: 100)
+        // Working copies first in the family; rows still put the archive copies first.
+        let f = plan([free1, offline, pair, version, noted, inside, free2, arch], keepOne: true, bar: bar)
+        XCTAssertTrue(f.covered); XCTAssertNil(f.advice)
+        XCTAssertEqual(f.rows.map(\.copy.filename),
+                       ["inside.mov", "archived.mov", "free1.mov", "off.mov", "pair.mxf", "bal.mov", "noted.mov", "free2.mov"],
+                       "archive copies first, then catalog order")
+        let byName = Dictionary(uniqueKeysWithValues: f.rows.map { ($0.copy.filename, $0) })
+        XCTAssertEqual(byName["archived.mov"]?.role, .archiveCopy)
+        XCTAssertEqual(byName["inside.mov"]?.role, .insideArchiveRoot)
+        XCTAssertEqual(byName["off.mov"]?.role, .kept(.offline))
+        XCTAssertEqual(byName["pair.mxf"]?.role, .kept(.pairMember))
+        XCTAssertEqual(byName["bal.mov"]?.role, .kept(.version))
+        XCTAssertEqual(byName["noted.mov"]?.role, .kept(.humanNote))
+        XCTAssertEqual(byName["noted.mov"]?.reasonText, "has your note")
+        XCTAssertEqual(byName["free1.mov"]?.role, .candidate)
+        XCTAssertEqual(byName["free1.mov"]?.planKeeps, .keeper, "the elected keeper (most free space)")
+        XCTAssertEqual(byName["free1.mov"]?.reasonText, "the plan would keep this one")
+        XCTAssertEqual(byName["free1.mov"]?.defaultChecked, false)
+        XCTAssertEqual(byName["free2.mov"]?.role, .candidate)
+        XCTAssertNil(byName["free2.mov"]?.planKeeps); XCTAssertNil(byName["free2.mov"]?.reasonText)
+        XCTAssertEqual(byName["free2.mov"]?.defaultChecked, true)
+        XCTAssertEqual(f.candidateCount, 2, "only the two free copies are checkable")
+        XCTAssertEqual(f.defaultSelection, Set(f.trash.map(\.id)), "default checks = the trash set")
+        XCTAssertEqual(Set(f.rows.filter(\.checkable).map(\.id)), [free1.id, free2.id])
+        // keep-one off: both candidates default-checked; the keeper hint is gone.
+        let g = plan([arch, free1, free2], keepOne: false, bar: bar)
+        XCTAssertEqual(g.defaultSelection, [free1.id, free2.id])
+        XCTAssertTrue(g.rows.filter(\.checkable).allSatisfy { $0.planKeeps == nil })
+        // Plan-level views.
+        let p = PrunePlan.compute(families: [[free1, offline, pair, version, noted, inside, free2, arch]],
+                                  options: .init(bar: bar))
+        XCTAssertEqual(p.defaultSelection, Set(p.trashFiles.map(\.id)))
+        XCTAssertEqual(p.checkableIDs, [free1.id, free2.id])
+        XCTAssertEqual(p.checkableCount, 2); XCTAssertEqual(p.rowCount, 8)
+    }
+
+    func testAdviceForAnImportantFamilyWithNoAttestationAndTheOverride() {
+        let arch = archiveCopy()
+        let a = copy("Christmas2008.mov", vol: "LaCie", size: 10, free: 500)
+        let b = copy("Christmas2008.mov", vol: "Projects", size: 20, free: 900)
+        let c = copy("Christmas2008.mov", vol: "X9", size: 30, free: 100)
+        let f = plan([arch, a, b, c])
+        XCTAssertFalse(f.covered)
+        XCTAssertEqual(f.advice, "★★★ / Important — the bar you set wants a cloud or off-site copy; none attested. You can still choose.")
+        XCTAssertEqual(f.requirement, ImportanceBar.defaults.important)
+        XCTAssertFalse(f.cloudOrOffsiteAttested)
+        // Every working copy is checkable, none checked; the plan's keeper is hinted.
+        let working = f.rows.filter { $0.role != .archiveCopy }
+        XCTAssertEqual(working.count, 3)
+        XCTAssertTrue(working.allSatisfy { $0.checkable && !$0.defaultChecked })
+        XCTAssertEqual(working.first { $0.planKeeps == .keeper }?.copy.volumeName, "Projects", "most free space")
+        XCTAssertEqual(working.filter { $0.planKeeps == .barNotMet }.count, 2)
+        XCTAssertTrue(f.defaultSelection.isEmpty); XCTAssertEqual(f.candidateCount, 3)
+        // Nothing chosen → nothing, no override.
+        XCTAssertEqual(f.selection([]), .empty)
+        // Two chosen → both go against the bar (no attestation), one working copy remains.
+        let two = f.selection([a.id, c.id])
+        XCTAssertEqual(two.count, 2); XCTAssertEqual(two.bytes, 40)
+        XCTAssertEqual(two.overrideCount, 2)
+        XCTAssertEqual(two.overrideShortfalls, ["★★★ / Important — no cloud or off-site copy attested"])
+        XCTAssertEqual(two.overrideText, "2 copies — ★★★ / Important — no cloud or off-site copy attested")
+        XCTAssertEqual(two.overrideSentence, "2 copies go against the bar you set: ★★★ / Important — no cloud or off-site copy attested.")
+        XCTAssertTrue(two.archiveOnlyFamilies.isEmpty); XCTAssertNil(two.archiveOnlySentence)
+        // All three → only the archive copy is left, and it says so; the
+        // device shortfall joins the attestation one.
+        let all = f.selection([a.id, b.id, c.id])
+        XCTAssertEqual(all.count, 3); XCTAssertEqual(all.overrideCount, 3)
+        XCTAssertEqual(all.overrideShortfalls, ["★★★ / Important — needs 1 more device, no cloud or off-site copy attested"])
+        XCTAssertEqual(all.archiveOnlyFamilies, ["archived.mov"])
+        XCTAssertEqual(all.archiveOnlySentence, "archived.mov will exist only in the Master Archive after this.")
+        // A "yes" recomputes the advice away: covered, keeper Projects, a + c default-checked, no override.
+        let yes = copy("Christmas2008.mov", vol: "X9", size: 30, attestations: [BackupAttestation(kind: .cloud, answer: .yes, label: "iCloud", attestedAt: at)], free: 100, id: c.id)
+        let ok = plan([arch, a, b, yes])
+        XCTAssertTrue(ok.covered); XCTAssertNil(ok.advice); XCTAssertTrue(ok.cloudOrOffsiteAttested)
+        XCTAssertEqual(ok.defaultSelection, [a.id, c.id])
+        let dflt = ok.selection(ok.defaultSelection)
+        XCTAssertEqual(dflt.count, 2); XCTAssertEqual(dflt.overrideCount, 0); XCTAssertNil(dflt.overrideText)
+        // …but checking the keeper too breaks the device rule: an override, and archive-only.
+        let keeperToo = ok.selection([a.id, b.id, c.id])
+        XCTAssertEqual(keeperToo.overrideCount, 3)
+        XCTAssertEqual(keeperToo.overrideShortfalls, ["★★★ / Important — needs 1 more device"])
+        XCTAssertEqual(keeperToo.archiveOnlyFamilies, ["archived.mov"])
+        // Ids that are not checkable rows are ignored by the count.
+        XCTAssertEqual(ok.selection([arch.id, UUID()]), .empty)
+    }
+
+    func testUnverifiedArchiveRowsAreShownButNeverCheckable() {
+        let a = copy("a.mov", vol: "LaCie", stars: 1), b = copy("b.mov", vol: "X9", stars: 1)
+        let none = plan([a, b])
+        XCTAssertEqual(none.rows.map(\.role), [.kept(.noArchiveCopy), .kept(.noArchiveCopy)])
+        XCTAssertEqual(none.candidateCount, 0); XCTAssertTrue(none.defaultSelection.isEmpty)
+        XCTAssertEqual(none.advice, "No archive copy yet — nothing here can go until one is promoted and verified.")
+        XCTAssertEqual(none.selection([a.id, b.id]), .empty, "checking what cannot be checked counts nothing")
+        let unverified = plan([archiveCopy(verified: false, stars: 1), a, b])
+        XCTAssertEqual(unverified.rows.map(\.role), [.archiveCopy, .kept(.archiveUnverified), .kept(.archiveUnverified)])
+        XCTAssertEqual(unverified.rows[1].reasonText, "archive copy unverified")
+        XCTAssertEqual(unverified.advice, "The archive copy is not verified yet — nothing here can go until it reads back.")
+        XCTAssertEqual(unverified.selection([a.id]), .empty)
+    }
+
+    func testSelectionAcrossFamiliesDeduplicatesShortfallsAndNamesEveryArchiveOnlyFile() {
+        var bar = ImportanceBar.defaults
+        bar.important = .init(extraDevices: 1, cloudOrOffsite: false)
+        let f1 = [archiveCopy(key: "h:1"), copy("a1.mov", vol: "LaCie", key: "h:1", size: 10, free: 500)]
+        let f2 = [archiveCopy(key: "h:2"), copy("a2.mov", vol: "LaCie", key: "h:2", size: 20, free: 500),
+                  copy("b2.mov", vol: "X9", key: "h:2", size: 5, online: false)]
+        let f3 = [archiveCopy(key: "h:3", verified: false), copy("a3.mov", vol: "LaCie", key: "h:3", size: 50, free: 500)]
+        let p = PrunePlan.compute(families: [f1, f2, f3], options: .init(bar: bar))
+        XCTAssertEqual(p.checkableIDs, [f1[1].id, f2[1].id], "f3 has no verified archive copy")
+        let s = p.selection([f1[1].id, f2[1].id, f3[1].id])
+        XCTAssertEqual(s.count, 2); XCTAssertEqual(s.bytes, 30)
+        XCTAssertEqual(s.overrideCount, 1, "f1 loses its only device; f2's offline MyBook-style copy still counts")
+        XCTAssertEqual(s.overrideShortfalls, ["★★★ / Important — needs 1 more device"])
+        XCTAssertEqual(s.archiveOnlyFamilies, ["archived.mov"], "f2 keeps its offline copy, so only f1 is archive-only")
+        XCTAssertEqual(s.overrideText, "1 copy — ★★★ / Important — needs 1 more device")
+        XCTAssertEqual(s.overrideSentence, "1 copy goes against the bar you set: ★★★ / Important — needs 1 more device.")
+        let both = PrunePlan.compute(families: [f1, f1.map { var c = $0; c.id = UUID(); c.contentKey = "h:9"; c.promotedFromID = nil; return c }],
+                                     options: .init(bar: bar))
+        let s2 = both.selection(both.checkableIDs)
+        XCTAssertEqual(s2.overrideShortfalls.count, 1, "the same shortfall is said once")
+        XCTAssertEqual(s2.archiveOnlySentence, "archived.mov and 1 more will exist only in the Master Archive after this.")
+    }
+
     // MARK: Scale
 
     func testScale100kSnapshotsIn5kFamiliesUnderBudget() {
@@ -279,6 +415,19 @@ final class PrunePlanTests: XCTestCase {
         XCTAssertEqual(p.notCoveredCount, 5_000 - 1_667, "only every third family attested a cloud copy")
         XCTAssertGreaterThan(p.trashCount, 0)
         XCTAssertLessThan(elapsed, .seconds(3), "group + compute took \(elapsed) for 100k snapshots")
+        // The checklist views are O(rows): 100k rows, default checks = the
+        // trash set, a whole-batch selection judged in well under a second.
+        XCTAssertEqual(p.rowCount, 100_000)
+        var sel = PrunePlan.Selection.empty
+        var dflt = Set<UUID>()
+        let selElapsed = clock.measure {
+            dflt = p.defaultSelection
+            sel = p.selection(p.checkableIDs)
+        }
+        XCTAssertEqual(dflt, Set(p.trashFiles.map(\.id)))
+        XCTAssertEqual(sel.count, p.checkableCount)
+        XCTAssertGreaterThan(sel.overrideCount, 0)
+        XCTAssertLessThan(selElapsed, .seconds(1), "selection views took \(selElapsed) for 100k rows")
         let protection = ArchiveCopyFamilies.protection(families: families)
         XCTAssertEqual(protection.familyCount, 5_000)
         XCTAssertEqual(protection.archive, .verified)

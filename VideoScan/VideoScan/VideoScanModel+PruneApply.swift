@@ -1,9 +1,19 @@
 // VideoScanModel+PruneApply.swift
 // "Archived — what next?" → Apply (promote-and-prune stage 2, turned on
 // 2026-09-19). Rick: "we should be deleting dups if user wants once a file
-// is promoted." Until today Apply was a disabled button with an empty
+// is promoted." Until then Apply was a disabled button with an empty
 // action — the dry run he ruled on 9/12 — and after a week of real batches
-// it now acts.
+// it acts.
+//
+// 2026-09-20 — the sheet became a per-copy CHECKLIST ("I want to see a
+// list of dups and decide which ones to delete, maybe leave one behind,
+// maybe not"). The bar ADVISES; the person's checks are the truth. So
+// Apply takes `selected` — the copy record ids the person checked — and
+// no longer intersects "the plan the user saw" with "the fresh plan's
+// trash": a family the bar does not cover (★★★ with no cloud copy
+// attested) used to hide its copies; now they are offered, and a choice
+// that goes against the bar is recorded as such (`override` on the
+// approval line) rather than refused.
 //
 // This is a DELETE path, so like ⌘⌫ (VideoScanModel+TrashSelection) it
 // adds NO file-deletion code of its own. It is a plan in front of the ONE
@@ -13,20 +23,31 @@
 // line per file that actually left the disk.
 //
 // What the plan adds, because this is the one delete that runs on files
-// the user did not pick one by one:
+// the user did not pick one by one in the table:
 //   1. FRESH PLAN — the plan is recomputed with the same options at the
-//      moment of Apply; only copies in BOTH the plan the user saw and the
-//      fresh one go. A note added, a drive unplugged, an attestation
-//      withdrawn since the sheet opened → that copy is held, and named.
+//      moment of Apply; a checked copy may go only if the fresh plan still
+//      offers it as CHECKABLE: `isCandidate` (online, no note, not a
+//      version or a pair member, not inside the archive) in a family with
+//      a FIXITY-VERIFIED archive copy — AND the family's bar verdict is
+//      the one the person confirmed (an override that appeared or grew
+//      since the sheet was read holds the family's checked copies). A
+//      note added, a drive unplugged, an archive copy that lost its
+//      fixity, an attestation withdrawn since the sheet opened → that
+//      copy is held, and named with the fresh reason.
 //   2. ON-DISK SAFETY, per copy, just before it goes: the family's archive
-//      copy exists at its recorded size; the kept working copy (if the
-//      user asked to keep one) exists at its recorded size; the copy
-//      itself is still its recorded size (a file rewritten in place is a
-//      different file). Any failure holds the copy, with the reason.
-//   3. An `approval` ledger line: "Rick approved N copies to Trash".
+//      copy exists at its recorded size; the working copy the plan would
+//      keep (the row hinted `.keeper`, if NOT itself checked) exists at its recorded size;
+//      the copy itself is still its recorded size (a file rewritten in
+//      place is a different file). Any failure holds the copy, with the
+//      reason.
+//   3. An `approval` ledger line: "Rick approved N copies to Trash" — with
+//      `override` when the choice went against the bar ("2 copies — ★★★ /
+//      Important — no cloud or off-site copy attested").
 // The PrunePlan rules themselves (fixity-verified archive copy, online,
 // no human note, not a pair member, not a version, never inside the
-// archive) are PrunePlan.compute's, unchanged.
+// archive) are PrunePlan.compute's, unchanged. Unchecked copies are NEVER
+// moved, even when the plan's default would have trashed them: the
+// selection is the truth.
 //
 // Memory: O(copies in the batch's families). Disk checks are stat calls
 // off the main actor; no file content is read.
@@ -41,6 +62,8 @@ extension VideoScanModel {
         var trashedBytes: Int64 = 0
         var alreadyMissing = 0
         var skippedOffline = 0
+        /// Copies that went against the bar (from the approval's `override`).
+        var overrideCount = 0
         /// "filename — reason" for copies Apply would not touch.
         var held: [String] = []
         /// "filename — error" for copies the Trash routine could not move.
@@ -48,22 +71,81 @@ extension VideoScanModel {
 
         var summary: String {
             var parts = ["Moved \(trashed) cop\(trashed == 1 ? "y" : "ies") to the Trash (\(MediaBytes.display(trashedBytes)))"]
+            if overrideCount > 0 { parts.append("\(overrideCount) against the bar you set") }
             if alreadyMissing > 0 { parts.append("\(alreadyMissing) already gone") }
             if skippedOffline > 0 { parts.append("\(skippedOffline) on a drive that isn't connected") }
-            if !held.isEmpty { parts.append("\(held.count) held back — changed since the plan was shown") }
+            if !held.isEmpty { parts.append("\(held.count) held back — changed since the list was shown") }
             if !failed.isEmpty { parts.append("\(failed.count) could not be moved") }
             return parts.joined(separator: " · ")
         }
     }
 
-    /// Which copies from the plan the user saw may go: those the fresh
-    /// plan still puts in the Trash. The rest are held.
-    nonisolated static func pruneTargets(shown: PrunePlan, fresh: PrunePlan)
-        -> (go: [PrunePlan.CopyRef], held: [PrunePlan.CopyRef]) {
-        let stillTrash = Set(fresh.trashFiles.map(\.id))
-        var go: [PrunePlan.CopyRef] = [], held: [PrunePlan.CopyRef] = []
-        for copy in shown.trashFiles {
-            if stillTrash.contains(copy.id) { go.append(copy) } else { held.append(copy) }
+    /// A copy held back, with why.
+    struct PruneHeld: Equatable {
+        let copy: PrunePlan.CopyRef
+        let reason: String
+        var line: String { "\(copy.filename) — \(reason)" }
+    }
+
+    /// Which of the copies the person checked may go: those the FRESH plan
+    /// still offers as checkable, in families whose bar VERDICT is what
+    /// the person confirmed. Order = the rows of the plan the person saw.
+    /// A checked id that the shown plan never offered (not a checkable
+    /// row) is held, not trusted; one the fresh plan no longer knows is
+    /// held too; and a family whose fresh verdict carries an override the
+    /// shown one did not (an attestation withdrawn in another window, a
+    /// device gone) holds every checked copy in it — a verdict that got
+    /// stricter since the sheet was read is a change, not a decision
+    /// (QA 2026-09-20, MAJOR 1).
+    nonisolated static func pruneTargets(shown: PrunePlan, selected: Set<UUID>, fresh: PrunePlan)
+        -> (go: [PrunePlan.CopyRef], held: [PruneHeld]) {
+        guard !selected.isEmpty else { return ([], []) }
+        var freshRows: [UUID: PrunePlan.CopyRow] = [:]
+        var freshFamilyOf: [UUID: Int] = [:]
+        for (i, family) in fresh.families.enumerated() {
+            for row in family.rows { freshRows[row.id] = row; freshFamilyOf[row.id] = i }
+        }
+        var go: [PrunePlan.CopyRef] = [], held: [PruneHeld] = []
+        /// The verdict the person confirmed, per copy (its SHOWN family).
+        var shownVerdictOf: [UUID: PrunePlan.Selection] = [:]
+        for family in shown.families {
+            var verdict: PrunePlan.Selection?
+            for row in family.rows where selected.contains(row.id) {
+                guard row.checkable else {
+                    held.append(PruneHeld(copy: row.copy, reason: "was never offered: \(row.reasonText ?? "not a candidate")"))
+                    continue
+                }
+                guard let now = freshRows[row.id] else {
+                    held.append(PruneHeld(copy: row.copy, reason: "no longer in the plan"))
+                    continue
+                }
+                if now.checkable {
+                    go.append(now.copy)
+                    if verdict == nil { verdict = family.selection(selected) }
+                    shownVerdictOf[row.id] = verdict
+                } else {
+                    held.append(PruneHeld(copy: now.copy,
+                                          reason: "changed since the list was shown: \(now.reasonText ?? "no longer a candidate")"))
+                }
+            }
+        }
+        // The bar's verdict on what would actually go, per FRESH family,
+        // against what the sheet said when it was confirmed.
+        let goIDs = Set(go.map(\.id))
+        var verdictChanged = Set<Int>()
+        for copy in go {
+            guard let i = freshFamilyOf[copy.id], !verdictChanged.contains(i) else { continue }
+            let now = fresh.families[i].selection(goIDs)
+            let then = shownVerdictOf[copy.id] ?? .empty
+            if now.overrideCount > 0, now.overrideShortfalls != then.overrideShortfalls {
+                verdictChanged.insert(i)
+            }
+        }
+        if !verdictChanged.isEmpty {
+            let kept = go.filter { freshFamilyOf[$0.id].map { !verdictChanged.contains($0) } ?? true }
+            held += go.filter { freshFamilyOf[$0.id].map(verdictChanged.contains) ?? false }
+                .map { PruneHeld(copy: $0, reason: "the bar's verdict changed since the list was shown") }
+            go = kept
         }
         return (go, held)
     }
@@ -99,23 +181,36 @@ extension VideoScanModel {
         return nil
     }
 
-    /// Apply the plan the user saw. `mode` is always `.toTrash` from the
-    /// sheet; tests pass `.permanent` so fixtures never reach the real Trash.
-    func applyPrune(shown: PrunePlan, recordIDs: [UUID], options: PrunePlan.Options,
+    /// Apply the person's checklist. `shown` is the plan the sheet listed,
+    /// `selected` the copy record ids checked in it. `mode` is always
+    /// `.toTrash` from the sheet; tests pass `.permanent` so fixtures never
+    /// reach the real Trash.
+    func applyPrune(shown: PrunePlan, selected: Set<UUID>, recordIDs: [UUID], options: PrunePlan.Options,
                     batchID: String?, mode: JunkDeletionMode = .toTrash) async -> PruneApplyOutcome {
         var outcome = PruneApplyOutcome()
         guard !isReadOnly else {
             log("Archived — what next?: Apply refused — read-only viewer mode.")
             return outcome
         }
+        guard !selected.isEmpty else {
+            log("Archived — what next?: nothing checked — nothing to move.")
+            return outcome
+        }
         let fresh = await prunePlan(for: recordIDs, options: options)
-        let (go, changed) = Self.pruneTargets(shown: shown, fresh: fresh)
-        outcome.held = changed.map { "\($0.filename) — the plan changed since it was shown" }
+        let (go, changed) = Self.pruneTargets(shown: shown, selected: selected, fresh: fresh)
+        outcome.held = changed.map(\.line)
 
-        // Family context from the FRESH plan: the keeper to protect.
+        // Family context from the FRESH plan: the working copy the plan
+        // would keep, to protect on disk — the row hinted `.keeper`, NOT
+        // `family.keeper`, which is nil in a family the bar does not
+        // cover (QA 2026-09-20, MAJOR 2) — unless the person checked it
+        // too (then there is no keeper, and the confirmation said so).
+        let goIDs = Set(go.map(\.id))
         var keeperOf: [UUID: PrunePlan.CopyRef] = [:]
         for family in fresh.families {
-            for copy in family.trash { if let keeper = family.keeper { keeperOf[copy.id] = keeper } }
+            guard let keeper = family.rows.first(where: { $0.planKeeps == .keeper })?.copy,
+                  !goIDs.contains(keeper.id) else { continue }
+            for row in family.rows where row.checkable { keeperOf[row.id] = keeper }
         }
         var checks: [PruneDiskCheck] = []
         var recordsByID: [UUID: VideoRecord] = [:]
@@ -144,14 +239,26 @@ extension VideoScanModel {
             log("Archived — what next?: " + outcome.summary)
             return outcome
         }
-        // The approval, before the files move: what Rick said yes to.
+        // The approval, before the files move: what Rick said yes to, and
+        // whether it went against the bar (judged on the FRESH plan, over
+        // the copies that actually go).
+        let judged = fresh.selection(Set(targets.map(\.id)))
+        outcome.overrideCount = judged.overrideCount
         let bytes = targets.reduce(Int64(0)) { $0 + $1.sizeBytes }
-        ledgerAppend([ledgerEvent(.approval, for: targets[0], by: .rick, batchID: batchID, detail: [
+        var detail: [String: String] = [
             MediaLedgerEvent.Detail.count: String(targets.count),
             MediaLedgerEvent.Detail.bytes: String(bytes),
             MediaLedgerEvent.Detail.files: targets.map(\.filename).joined(separator: "\n"),
             MediaLedgerEvent.Detail.action: mode == .toTrash ? "trash" : "delete",
-        ])])
+        ]
+        if let against = judged.overrideText {
+            detail[MediaLedgerEvent.Detail.barOverride] = against
+            log("Archived — what next?: against the bar — \(against)")
+        }
+        if let only = judged.archiveOnlySentence {
+            log("Archived — what next?: \(only)")
+        }
+        ledgerAppend([ledgerEvent(.approval, for: targets[0], by: .rick, batchID: batchID, detail: detail)])
 
         // The ONE existing Trash routine does every file operation.
         let result = await deleteConfirmedJunk(targets, mode: mode)
