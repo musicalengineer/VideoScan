@@ -107,6 +107,23 @@ enum DeleteDuplicatesDiskOutcome: Sendable {
     case retained(path: String, reason: String)
 }
 
+/// Phase 1's result: the outcome, plus the keeper's fresh whole-file
+/// fixity when path 1 read it — WHATEVER the verdict. A refused first
+/// pair (a look-alike) must not cost the next pair a second read of the
+/// same keeper (codex follow-up P2 #6).
+struct DeleteDuplicatesPhaseOne: Sendable {
+    let outcome: DeleteDuplicatesDiskOutcome
+    let learnedKeeperFixity: ContentFixity?
+}
+
+/// A locked slot for the fixity the gate reports from the disk thread.
+private final class FixityBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: ContentFixity?
+    var value: ContentFixity? { lock.withLock { stored } }
+    func set(_ f: ContentFixity) { lock.withLock { stored = f } }
+}
+
 enum DeleteDuplicatesDiskWorker {
     /// Phase 1, outside the main actor. With a usable stored keeper
     /// fixity: move first, hash once in quarantine (path 3). Without one:
@@ -114,7 +131,20 @@ enum DeleteDuplicatesDiskWorker {
     /// the unlink step re-reads, as before. Carries only immutable value
     /// snapshots — never VideoRecord instances.
     static func verifyAndQuarantine(_ item: DeleteDuplicatesWorkItem,
-                                    hooks: SignatureVerification.Hooks) -> DeleteDuplicatesDiskOutcome {
+                                    hooks: SignatureVerification.Hooks) -> DeleteDuplicatesPhaseOne {
+        let box = FixityBox()
+        var observing = hooks
+        let downstream = hooks.didComputeKeeperFixity
+        observing.didComputeKeeperFixity = { fixity in
+            box.set(fixity)
+            downstream?(fixity)
+        }
+        let outcome = phaseOne(item, hooks: observing)
+        return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: box.value)
+    }
+
+    private static func phaseOne(_ item: DeleteDuplicatesWorkItem,
+                                 hooks: SignatureVerification.Hooks) -> DeleteDuplicatesDiskOutcome {
         switch SignatureVerification.holdForSingleRead(keeperPath: item.keeperPath, keeperFixity: item.keeperFixity,
                                                        duplicatePath: item.path,
                                                        directoryName: item.quarantineDirectoryName, hooks: hooks) {
@@ -222,9 +252,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
 
     /// Internal so tests (and the model verb) can `await job.task?.value`.
     private(set) var task: Task<Void, Never>?
-    /// The detached disk phase of each pair in flight, so Stop / Quit can
-    /// cancel them.
-    private var workers: [UUID: Task<DeleteDuplicatesDiskOutcome, Never>] = [:]
+    /// The detached disk phase of each pair in flight (its cancel), so
+    /// Stop / Quit can cancel them.
+    private var workers: [UUID: () -> Void] = [:]
+    private var workerTokens: [UUID: UUID] = [:]
     /// The main-actor task driving each pair in flight (settle + save).
     private var pairTasks: [UUID: Task<Void, Never>] = [:]
     private var inFlight: Set<UUID> = []
@@ -261,6 +292,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// Test seam: runs just before the final save (finding #6 regression
     /// makes that save fail and checks the last good plan stays put).
     var testHookBeforeFinalSave: (@MainActor () -> Void)?
+    /// Test seam: runs right after the quarantine ticket has been saved
+    /// and BEFORE phase 2 is scheduled (codex follow-up P1 #4: a Stop /
+    /// Quit landing exactly here must put the file back, never unlink).
+    var testHookAfterQuarantineSaved: (@MainActor (DeleteDuplicatesPlan.Entry) -> Void)?
 
     var volumeName: String { URL(fileURLWithPath: volumePath).lastPathComponent }
     var title: String {
@@ -426,7 +461,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     }
 
     private func cancelWorkers() {
-        for worker in workers.values { worker.cancel() }
+        for cancel in workers.values { cancel() }
     }
 
     private func wakeAll() {
@@ -512,11 +547,22 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         settledSinceCheckpoint = 0
         batchID = "dupdelete-\(prepared.id.uuidString.prefix(8))"
 
-        // EVERY deletion is gated on a full read of the file about to go,
-        // performed in its quarantine folder immediately before the
-        // remove, against the keeper's whole-file digest (stored on first
-        // use, checked by stat stamp after that). See
-        // SignatureVerification.swift for why.
+        await dispatchPairs(model: model)
+
+        // Drain: every pair in flight settles (deleted, trashed, refused,
+        // or put back) before the run decides how it ended.
+        while let pending = pairTasks.values.first {
+            await pending.value
+        }
+        await finishRun(model: model)
+    }
+
+    /// The dispatch loop. EVERY deletion is gated on a full read of the
+    /// file about to go, performed in its quarantine folder immediately
+    /// before the remove, against the keeper's whole-file digest (stored
+    /// on first use, checked by stat stamp after that). See
+    /// SignatureVerification.swift for why.
+    private func dispatchPairs(model: VideoScanModel) async {
         var cursor = 0
         while let current = plan, cursor < current.entries.count {
             let entry = current.entries[cursor]
@@ -594,13 +640,13 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 await self?.runPair(entry: entry, record: record, keeper: keeper, item: item, weight: weight)
             }
         }
+    }
 
-        // Drain: every pair in flight settles (deleted, trashed, refused,
-        // or put back) before the run decides how it ended.
-        while let pending = pairTasks.values.first {
-            await pending.value
-        }
-
+    /// How the run ended: suspended (Quit / Stop), or completed /
+    /// discarded / stopped-by-save-failure with the summary, the log, the
+    /// plan filed under done/ (unless a row is still stranded in
+    /// quarantine — then the plan stays in place and says so).
+    private func finishRun(model: VideoScanModel) async {
         if tally.catalogMutated {
             NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
         }
@@ -674,10 +720,19 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         finalPlan.log.append(completion)
         self.plan = finalPlan
         testHookBeforeFinalSave?()
+        // A row whose file could not be put back at resume is still in a
+        // quarantine folder the plan names: such a plan is NEVER filed
+        // under done/ — it stays where the next launch and Rick can find
+        // it (codex follow-up P1 #5).
+        let stranded = finalPlan.entries.filter { $0.quarantineDirectory != nil }
         // The plan is filed under done/ ONLY when its terminal state is on
         // disk (#6). A failed final save leaves the last good plan.json
         // where it is — still discoverable — and says so.
-        if await savePlan(context: "finished", final: true) {
+        if !stranded.isEmpty {
+            _ = await savePlan(context: "finished with \(stranded.count) stranded", final: true)
+            model.log("  Delete Duplicates: \(stranded.count) file(s) are still in quarantine and could not be put back — the plan stays under \(DeleteDuplicatesPlanStore.directory(for: finalPlan.id, root: planRoot).path) and is not filed as done: "
+                      + stranded.map { "\($0.filename) in \($0.quarantineDirectory ?? "?")" }.joined(separator: "; "))
+        } else if await savePlan(context: "finished", final: true) {
             fileDone(finalPlan)
         } else {
             model.log("  Delete Duplicates: the finished plan could not be saved — the last saved plan stays in place under \(DeleteDuplicatesPlanStore.directory(for: finalPlan.id, root: planRoot).path) and is not filed as done.")
@@ -717,8 +772,16 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
 
         // Phase 1: hold + hash once (or verify twice on the first pair of
         // a keeper without a fixity) + the tier facts.
-        var outcome = await runDetached(entryID: entry.id) { [hooks] in
+        let phaseOne = await runDetached(entryID: entry.id) { [hooks] in
             DeleteDuplicatesDiskWorker.verifyAndQuarantine(item, hooks: hooks)
+        }
+        var outcome = phaseOne.outcome
+        // The keeper was read in full by this pair: publish its fixity to
+        // the catalog NOW, whatever this pair's verdict, so the next pair
+        // with this keeper only stats it (P2 #6).
+        if let learned = phaseOne.learnedKeeperFixity, keeper.contentFixity != learned,
+           model.storeContentFixity(recordID: keeper.id, path: keeper.fullPath, fixity: learned) {
+            tally.catalogMutated = true
         }
         if case .quarantined(let ticket, let facts) = outcome {
             // COPY-COUNT TIER, part 2 — with the digest in hand.
@@ -732,11 +795,21 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 $0.setTier(entry.id, decided, trashVolume: trashVolume)
             }
             await savePlan(context: "quarantined \(entry.filename)")
+            testHookAfterQuarantineSaved?(entry)
             let keeperName = keeper.filename
             if planSaveFailed {
                 // Nobody could find it after a crash: put it back and stop.
                 outcome = await runDetached(entryID: entry.id) {
                     DeleteDuplicatesDiskWorker.release(ticket, reason: "plan could not be saved after quarantine",
+                                                       keeperFilename: keeperName)
+                }
+            } else if stopRequested && !finishInFlightForQuit {
+                // A Stop / Quit landed while the ticket was being saved —
+                // no worker was running to cancel. Re-check the latch
+                // BEFORE phase 2 exists: the file goes back, never on
+                // (codex follow-up P1 #4).
+                outcome = await runDetached(entryID: entry.id) {
+                    DeleteDuplicatesDiskWorker.release(ticket, reason: "stopped after quarantine",
                                                        keeperFilename: keeperName)
                 }
             } else if let tier = decided.tier {
@@ -809,28 +882,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             tally.failed += 1
             mutatePlan { $0.set(entry.id, .failed, note: "left in quarantine (internal: phase 2 did not run)") }
         case .refused(let reason, let cancelled):
-            if cancelled && (quitRequested || stopKeepingPlan) {
-                // Suspended, not decided: back to pending for the resume.
-                let how = quitRequested ? "quit" : "Stop"
-                mutatePlan { $0.set(entry.id, .pending, note: "interrupted by \(how) — will be re-checked at resume") }
-                model.log("  \(quitRequested ? "Quit" : "Stopped") while verifying \(entry.filename) — put back; it will be re-checked at resume")
-            } else if cancelled && planSaveFailed {
-                tally.failed += 1
-                mutatePlan { $0.set(entry.id, .skipped, note: "the plan could not be saved after quarantine — put back and left alone") }
-                model.log("  Put back \(entry.filename): the plan could not be saved after quarantine — left alone")
-            } else if cancelled {
-                // Not done, not refused: the file is untouched and
-                // keeps its disposition; it counts with the rest.
-                tally.failed += 1
-                mutatePlan { $0.set(entry.id, .skipped, note: "cancelled during verification — left alone") }
-                model.log("  Stopped while verifying \(entry.filename) — left alone")
-            } else {
-                tally.refused += 1
-                let mutated = model.noteRefusedDuplicate(expectedID: entry.id, expectedPath: entry.path,
-                                                         filename: entry.filename, reason: reason)
-                tally.catalogMutated = tally.catalogMutated || mutated
-                mutatePlan { $0.set(entry.id, .refused, note: reason) }
-            }
+            settleRefused(reason: reason, cancelled: cancelled, entry: entry, model: model)
         case .leftAlone(let reason):
             tally.notArchived += 1
             mutatePlan { $0.set(entry.id, .skipped, note: reason) }
@@ -865,6 +917,31 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         }
     }
 
+    private func settleRefused(reason: String, cancelled: Bool, entry: DeleteDuplicatesPlan.Entry, model: VideoScanModel) {
+        if cancelled && (quitRequested || stopKeepingPlan) {
+            // Suspended, not decided: back to pending for the resume.
+            let how = quitRequested ? "quit" : "Stop"
+            mutatePlan { $0.set(entry.id, .pending, note: "interrupted by \(how) — will be re-checked at resume") }
+            model.log("  \(quitRequested ? "Quit" : "Stopped") while verifying \(entry.filename) — put back; it will be re-checked at resume")
+        } else if cancelled && planSaveFailed {
+            tally.failed += 1
+            mutatePlan { $0.set(entry.id, .skipped, note: "the plan could not be saved after quarantine — put back and left alone") }
+            model.log("  Put back \(entry.filename): the plan could not be saved after quarantine — left alone")
+        } else if cancelled {
+            // Not done, not refused: the file is untouched and
+            // keeps its disposition; it counts with the rest.
+            tally.failed += 1
+            mutatePlan { $0.set(entry.id, .skipped, note: "cancelled during verification — left alone") }
+            model.log("  Stopped while verifying \(entry.filename) — left alone")
+        } else {
+            tally.refused += 1
+            let mutated = model.noteRefusedDuplicate(expectedID: entry.id, expectedPath: entry.path,
+                                                     filename: entry.filename, reason: reason)
+            tally.catalogMutated = tally.catalogMutated || mutated
+            mutatePlan { $0.set(entry.id, .refused, note: reason) }
+        }
+    }
+
     private func settleRemoved(entry: DeleteDuplicatesPlan.Entry, keeper: VideoRecord, preAwait: VideoRecord,
                                proof: VerifiedDuplicate, tier: DeletionTier, decision: DeletionTierDecision?,
                                trashVolume: String?, model: VideoScanModel) {
@@ -886,13 +963,20 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     }
 
     /// One detached disk phase, tracked under the row's id so Stop / Quit
-    /// can cancel it.
-    private func runDetached(entryID: UUID,
-                             _ work: @escaping @Sendable () -> DeleteDuplicatesDiskOutcome) async -> DeleteDuplicatesDiskOutcome {
+    /// can cancel it. A worker started AFTER a Stop / Quit was asked for
+    /// (the latch is checked here too) is cancelled at birth — a detached
+    /// task inherits nothing, so the latch is carried in by hand (codex
+    /// follow-up P1 #4). "Finish this file, then quit" is the one stop
+    /// that lets the pair's workers run to their end.
+    private func runDetached<T: Sendable>(entryID: UUID,
+                                          _ work: @escaping @Sendable () -> T) async -> T {
         let worker = Task.detached(priority: .userInitiated) { work() }
-        workers[entryID] = worker
+        if stopRequested && !finishInFlightForQuit { worker.cancel() }
+        let token = UUID()
+        workers[entryID] = { worker.cancel() }
+        workerTokens[entryID] = token
         let outcome = await worker.value
-        if workers[entryID] == worker { workers[entryID] = nil }
+        if workerTokens[entryID] == token { workers[entryID] = nil; workerTokens[entryID] = nil }
         return outcome
     }
 
@@ -955,25 +1039,22 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 refusedNow += 1
                 model.noteRefusedDuplicate(expectedID: e.id, expectedPath: e.path, filename: e.filename, reason: why)
             }
-            switch model.authorizeDuplicateDeletion(entry: e, volumePath: plan.volumePath,
-                                                    crossVolumeMode: plan.crossVolumeMode, stage: "at resume") {
-            case .skip(let note, let line):
-                skip(note, log: line); continue
-            case .refuse(let note):
-                refuse(note); continue
-            case .authorized:
-                break
-            }
-            // A crash between the quarantine move and the unlink leaves the
-            // file in the folder the plan names (or the folder this plan +
-            // row would have used): put it back and let this run verify it
-            // properly. That folder is consulted FIRST — whatever now sits
-            // at the original path is not the file that was verified, and
-            // an occupied path refuses the restore rather than re-verifying
-            // the newcomer. No named folder and the file gone → it left
-            // before the crash; a decision, not a refusal, so the row is
-            // not re-marked. A same-named file in some OTHER quarantine
-            // folder is only reported — never moved, never removed.
+            // RECOVERY comes before DELETION authorization (codex follow-up
+            // P1 #5): a crash between the quarantine move and the unlink
+            // leaves the file in the folder the plan names (or the folder
+            // this plan + row would have used). It is put back FIRST,
+            // unconditionally — only the recorded folder and stamp are
+            // required — and only then does the catalog decide whether the
+            // row is still eligible. Before this, a row re-marked Keep (or
+            // whose keeper changed) while its file sat in quarantine was
+            // settled with the file stranded there. That folder is
+            // consulted first — whatever now sits at the original path is
+            // not the file that was verified, and an occupied path refuses
+            // the restore rather than re-verifying the newcomer. No named
+            // folder and the file gone → it left before the crash; a
+            // decision, not a refusal, so the row is not re-marked. A
+            // same-named file in some OTHER quarantine folder is only
+            // reported — never moved, never removed.
             if let orphan = facts.quarantined[e.path] {
                 switch Self.restoreQuarantined(orphan.url, to: e.path, expectedStamp: orphan.recordedStamp,
                                                expectedSize: e.sizeBytes) {
@@ -989,9 +1070,23 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                     plan.entries[i].remainingVerifiedCopies = nil
                     plan.entries[i].status = .pending
                 case .failure(let error):
+                    // Still in quarantine: the row keeps naming the folder,
+                    // and the plan is never filed as done with it there.
                     refuse("left in quarantine at \(orphan.url.path) — not put back: \(error.description)")
                     continue
                 }
+            }
+            switch model.authorizeDuplicateDeletion(entry: e, volumePath: plan.volumePath,
+                                                    crossVolumeMode: plan.crossVolumeMode, stage: "at resume") {
+            case .skip(let note, let line):
+                skip(note, log: line); continue
+            case .refuse(let note):
+                refuse(note); continue
+            case .authorized:
+                break
+            }
+            if facts.quarantined[e.path] != nil {
+                // Restored above and still eligible: verified again below.
             } else if facts.missingTargets.contains(e.path) {
                 if let elsewhere = facts.possibleOrphans[e.path], !elsewhere.isEmpty {
                     model.log("  \(e.filename) is gone from \(e.path); a same-named file sits in \(elsewhere.joined(separator: ", ")) — not this run's quarantine, left alone (put it back by hand if it is yours)")

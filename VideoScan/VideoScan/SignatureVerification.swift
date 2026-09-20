@@ -211,6 +211,12 @@ enum SignatureVerification {
         /// inject a move into a scratch folder so no fixture ever lands
         /// in Rick's real Trash.
         var trashItem: ((URL) throws -> URL)?
+        /// Called the moment `verify` (path 1) has hashed the KEEPER in
+        /// full and re-stat'ed it — before the pair's verdict. The job
+        /// stores that fixity on the keeper at once, so a refused first
+        /// pair (a look-alike) does not cost the next pair a second read
+        /// of the same keeper (codex follow-up P2 #6).
+        var didComputeKeeperFixity: ((ContentFixity) -> Void)?
 
         static let live = Hooks(shouldCancel: { Task.isCancelled })
     }
@@ -295,6 +301,12 @@ enum SignatureVerification {
               keeperAfter == keeperBefore else {
             return .failure(.changedSinceVerification(keeperPath))
         }
+        // The keeper's whole-file fixity is knowledge worth keeping whatever
+        // this pair's verdict turns out to be.
+        let now = Date()
+        let keeperFixity = ContentFixity(digest: keeperHash, byteCount: keeperAfter.size,
+                                         stamp: keeperAfter, computedAt: now)
+        hooks.didComputeKeeperFixity?(keeperFixity)
         guard let duplicateAfter = FileIdentityStamp.capture(path: duplicatePath),
               duplicateAfter == duplicateBefore else {
             return .failure(.changedSinceVerification(duplicatePath))
@@ -302,7 +314,6 @@ enum SignatureVerification {
 
         guard keeperHash == duplicateHash else { return .failure(.contentDiffers) }
 
-        let now = Date()
         return .success(VerifiedDuplicate(
             keeperPath: keeperPath,
             duplicatePath: duplicatePath,
@@ -310,8 +321,7 @@ enum SignatureVerification {
             verifiedAt: now,
             keeperIdentity: keeperAfter,
             duplicateIdentity: duplicateAfter,
-            keeperFixity: ContentFixity(digest: keeperHash, byteCount: keeperAfter.size,
-                                        stamp: keeperAfter, computedAt: now),
+            keeperFixity: keeperFixity,
             duplicateFixity: ContentFixity(digest: duplicateHash, byteCount: duplicateAfter.size,
                                            stamp: duplicateAfter, computedAt: now),
             keeperReadInFull: true))

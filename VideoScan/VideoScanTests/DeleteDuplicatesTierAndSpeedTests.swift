@@ -717,3 +717,199 @@ struct DeleteDuplicatesTierAndSpeedTests {
         #expect(resumed.result.deleted == 2 && resumed.plan?.outcome == "completed")
     }
 }
+
+// MARK: - Codex follow-up on 90a54fb0: P1 #4, P1 #5, P2 #6
+
+@Suite("Delete Duplicates — codex follow-up P1 #4 / P1 #5 / P2 #6", .serialized)
+@MainActor
+struct DeleteDuplicatesCodexFollowupTests {
+
+    private struct Rig {
+        let dir: URL
+        let root: URL
+        let model: VideoScanModel
+        let keeper: VideoRecord
+        let copies: [VideoRecord]
+        let bytes: [UInt8]
+        func cleanup() { try? FileManager.default.removeItem(at: dir) }
+    }
+
+    /// keeper (+ archive family) and `copyBytes` extras — each entry is the
+    /// bytes of one copy, so a look-alike can be placed anywhere.
+    private func makeRig(_ label: String, copyBytes: [[UInt8]], keeperFixity: Bool, size: Int = fileSize) -> Rig {
+        let dir = tempDir(label)
+        let root = dir.appendingPathComponent("plans", isDirectory: true)
+        let bytes = (0..<size).map { UInt8($0 % 197) }
+        let keeperURL = dir.appendingPathComponent("keeper.mov"); write(keeperURL, bytes)
+        let group = UUID()
+        let model = makeModel(dir)
+        let keeper = dupRecord(path: keeperURL.path, size: Int64(size), group: group, disposition: .keep)
+        if keeperFixity {
+            keeper.contentFixity = ContentFixity.captured(path: keeperURL.path, digest: plainSHA256(keeperURL), byteCount: Int64(size))
+        }
+        var copies: [VideoRecord] = []
+        for (i, b) in copyBytes.enumerated() {
+            let c = dir.appendingPathComponent("copy\(i + 1).mov"); write(c, b)
+            copies.append(dupRecord(path: c.path, size: Int64(b.count), group: group, disposition: .extraCopy))
+        }
+        model.records = [keeper] + copies
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
+        return Rig(dir: dir, root: root, model: model, keeper: keeper, copies: copies, bytes: bytes)
+    }
+
+    /// P1 #4: Stop lands EXACTLY between the quarantine-ticket save and
+    /// phase 2 — no worker is running to cancel. Phase 2 must not start:
+    /// the file is put back, the row is pending, nothing is unlinked.
+    @Test func stopBetweenTheTicketSaveAndPhaseTwoPutsTheFileBack() async throws {
+        for quit in [false, true] {
+            let rig = makeRig("between-\(quit)", copyBytes: [], keeperFixity: true)
+            defer { rig.cleanup() }
+            let bytes = rig.bytes
+            let c = rig.dir.appendingPathComponent("copy1.mov"); write(c, bytes)
+            let copy = dupRecord(path: c.path, size: Int64(fileSize), group: rig.keeper.duplicateGroupID!, disposition: .extraCopy)
+            rig.model.records.append(copy)
+            let probe = Probe()
+            let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: probe.hooks, planRoot: rig.root)
+            job.testHookAfterQuarantineSaved = { [weak job] _ in
+                if quit { job?.stopForQuit() } else { job?.cancel() }
+            }
+            job.start()
+            await job.task?.value
+
+            #expect(job.state == .cancelled, "\(quit ? "quit" : "stop"): \(job.state)")
+            #expect(FileManager.default.fileExists(atPath: c.path), "\(quit ? "quit" : "stop"): put back, not unlinked")
+            #expect((try? Data(contentsOf: c)) == Data(bytes))
+            #expect(quarantineFolders(in: rig.dir).isEmpty)
+            #expect(probe.blocks("quarantine") == 3, "the one read happened; phase 2 did not")
+            let plan = try #require(job.plan)
+            #expect(plan.entries[0].status == .pending, "\(plan.entries[0].status): \(plan.entries[0].note)")
+            #expect(plan.entries[0].quarantineDirectory == nil)
+            #expect(plan.isResumable && job.result.deleted == 0)
+            #expect(copy.duplicateDisposition == .extraCopy)
+            let onDisk = try DeleteDuplicatesPlanStore.load(url: DeleteDuplicatesPlanStore.planURL(for: plan.id, root: rig.root))
+            #expect(onDisk.entries[0].status == .pending && onDisk.outcome == nil)
+        }
+    }
+
+    /// P1 #5: a crash left the file in quarantine with a valid ticket;
+    /// before the resume, the pair's eligibility changed (keeper no longer
+    /// the keeper / target re-marked Keep). The file is put back FIRST,
+    /// then the row is refused / skipped — never stranded, and the plan
+    /// is filed as usual.
+    @Test func resumePutsAQuarantinedFileBackBeforeDecidingEligibility() async throws {
+        for variant in ["keeperChanged", "targetKeep"] {
+            let rig = makeRig("recover-\(variant)", copyBytes: [], keeperFixity: true)
+            defer { rig.cleanup() }
+            let c = rig.dir.appendingPathComponent("copy1.mov"); write(c, rig.bytes)
+            let target = dupRecord(path: c.path, size: Int64(fileSize), group: rig.keeper.duplicateGroupID!, disposition: .extraCopy)
+            rig.model.records.append(target)
+            var e = DeleteDuplicatesPlan.Entry(id: target.id, path: target.fullPath, filename: target.filename, sizeBytes: target.sizeBytes,
+                                               keeperID: rig.keeper.id, keeperPath: rig.keeper.fullPath, keeperFilename: rig.keeper.filename,
+                                               keeperStamp: FileIdentityStamp.capture(path: rig.keeper.fullPath))
+            var plan = DeleteDuplicatesPlan(volumePath: rig.dir.path, catalogLocation: rig.model.catalogStore.fileLocation,
+                                            crossVolumeMode: false, skippedBeforePlan: 0, summaryLine: "", entries: [e])
+            // The crash: the file sits in the folder the plan names, with the stamp the plan recorded.
+            let qdir = rig.dir.appendingPathComponent(
+                DeleteDuplicatesJob.quarantineDirectoryName(planID: plan.id, entryID: target.id), isDirectory: true)
+            try FileManager.default.createDirectory(at: qdir, withIntermediateDirectories: false)
+            try FileManager.default.moveItem(at: c, to: qdir.appendingPathComponent("copy1.mov"))
+            let stamp = try #require(FileIdentityStamp.capture(path: qdir.appendingPathComponent("copy1.mov").path))
+            plan.setQuarantined(target.id, directory: qdir.path, stamp: stamp)
+            e = plan.entries[0]
+            try DeleteDuplicatesPlanStore.save(plan, root: rig.root)
+
+            // Eligibility changes between sessions.
+            if variant == "keeperChanged" { rig.keeper.duplicateDisposition = .review } else { target.duplicateDisposition = .keep }
+
+            let job = DeleteDuplicatesJob(model: rig.model, resuming: plan, planRoot: rig.root)
+            job.start()
+            await job.task?.value
+
+            let after = try #require(job.plan)
+            #expect(FileManager.default.fileExists(atPath: c.path), "\(variant): the file is back at its original path")
+            #expect((try? Data(contentsOf: c)) == Data(rig.bytes))
+            #expect(!FileManager.default.fileExists(atPath: qdir.path), "\(variant): the quarantine folder is gone")
+            #expect(after.entries[0].quarantineDirectory == nil, "\(variant): the row no longer names a folder")
+            if variant == "keeperChanged" {
+                #expect(after.entries[0].status == .refused && after.entries[0].note.contains("no longer this file's keeper"),
+                        "\(after.entries[0].status): \(after.entries[0].note)")
+            } else {
+                #expect(after.entries[0].status == .skipped && after.entries[0].note.contains("no longer marked as an extra copy"),
+                        "\(after.entries[0].status): \(after.entries[0].note)")
+                #expect(target.duplicateDisposition == .keep, "a re-marked keeper is never touched")
+            }
+            #expect(job.result.deleted == 0)
+            #expect(FileManager.default.fileExists(
+                atPath: DeleteDuplicatesPlanStore.doneURL(for: plan.id, root: rig.root).appendingPathComponent("plan.json").path),
+                "\(variant): nothing stranded — the plan is filed as done")
+            let console = await consoleText(rig.model)
+            #expect(console.contains("Restored copy1.mov from"), variant == "keeperChanged" ? "keeperChanged" : "targetKeep")
+        }
+    }
+
+    /// P1 #5, the other half: a quarantined file that CANNOT be put back
+    /// (its stamp no longer matches the record) keeps the row naming its
+    /// folder, and the plan is never filed under done/.
+    @Test func aStrandedQuarantineKeepsThePlanOutOfDone() async throws {
+        let rig = makeRig("stranded", copyBytes: [], keeperFixity: true); defer { rig.cleanup() }
+        let c = rig.dir.appendingPathComponent("copy1.mov"); write(c, rig.bytes)
+        let target = dupRecord(path: c.path, size: Int64(fileSize), group: rig.keeper.duplicateGroupID!, disposition: .extraCopy)
+        rig.model.records.append(target)
+        let entry = DeleteDuplicatesPlan.Entry(id: target.id, path: target.fullPath, filename: target.filename, sizeBytes: target.sizeBytes,
+                                               keeperID: rig.keeper.id, keeperPath: rig.keeper.fullPath, keeperFilename: rig.keeper.filename,
+                                               keeperStamp: FileIdentityStamp.capture(path: rig.keeper.fullPath))
+        var plan = DeleteDuplicatesPlan(volumePath: rig.dir.path, catalogLocation: rig.model.catalogStore.fileLocation,
+                                        crossVolumeMode: false, skippedBeforePlan: 0, summaryLine: "", entries: [entry])
+        let qdir = rig.dir.appendingPathComponent(SignatureVerification.quarantineDirectoryPrefix + "recorded", isDirectory: true)
+        try FileManager.default.createDirectory(at: qdir, withIntermediateDirectories: false)
+        try FileManager.default.moveItem(at: c, to: qdir.appendingPathComponent("copy1.mov"))
+        // The recorded stamp is not the file's: recovery must refuse to move it.
+        plan.setQuarantined(target.id, directory: qdir.path,
+                            stamp: FileIdentityStamp(device: 1, inode: 2, size: Int64(fileSize), mtimeNs: 3, ctimeNs: 4))
+        try DeleteDuplicatesPlanStore.save(plan, root: rig.root)
+        target.duplicateDisposition = .keep     // eligibility changed too — irrelevant to recovery
+
+        let job = DeleteDuplicatesJob(model: rig.model, resuming: plan, planRoot: rig.root)
+        job.start()
+        await job.task?.value
+
+        let after = try #require(job.plan)
+        #expect(after.entries[0].status == .refused && after.entries[0].note.contains("left in quarantine"), "\(after.entries[0].note)")
+        #expect(after.entries[0].quarantineDirectory == qdir.path, "the row still names where the file is")
+        #expect(FileManager.default.fileExists(atPath: qdir.appendingPathComponent("copy1.mov").path), "left where it is, untouched")
+        #expect(!FileManager.default.fileExists(atPath: DeleteDuplicatesPlanStore.doneURL(for: plan.id, root: rig.root).path),
+                "a plan with a stranded row is never filed as done")
+        #expect(FileManager.default.fileExists(atPath: DeleteDuplicatesPlanStore.planURL(for: plan.id, root: rig.root).path))
+        let console = await consoleText(rig.model)
+        #expect(console.contains("still in quarantine and could not be put back"))
+    }
+
+    /// P2 #6: a keeper without a stored fixity is read in full by its
+    /// first pair; when that pair is REFUSED (a look-alike that differs
+    /// past the head compare), the keeper's fixity is still published, so
+    /// the next pair is single-read. N duplicates of one keeper read the
+    /// keeper at most once per run.
+    @Test func refusedFirstPairStillPublishesTheKeeperFixityForTheNext() async throws {
+        // Past the 4 MiB head compare, so the look-alike costs a FULL read
+        // of both files before it is refused (5 blocks, differing in the 5th).
+        let size = blockSize * 5
+        let bytes = (0..<size).map { UInt8($0 % 197) }
+        var lookalike = bytes; lookalike[blockSize * 4 + 500] ^= 0x5A
+        let rig = makeRig("refusedfirst", copyBytes: [lookalike, bytes, bytes], keeperFixity: false, size: size)
+        defer { rig.cleanup() }
+        let probe = Probe()
+        let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: probe.hooks, planRoot: rig.root)
+        job.start(); await job.task?.value
+
+        let plan = try #require(job.plan)
+        #expect(plan.entries.map(\.status) == [.refused, .deleted, .deleted], "\(plan.entries.map(\.status))")
+        #expect(probe.blocks("keeper") == 5, "the keeper is read exactly once — \(probe.blocks("keeper")) blocks")
+        #expect(probe.opens(of: rig.keeper.fullPath) == 2, "head compare + one full read, both in the refused first pair — \(probe.opens(of: rig.keeper.fullPath))")
+        #expect(probe.blocks("duplicate") == 5, "only the first pair read its file at its path")
+        #expect(probe.blocks("quarantine") == 10, "the two identical copies were single-read")
+        #expect(plan.entries[1].keeperMatchedByStoredFixity == true && plan.entries[2].keeperMatchedByStoredFixity == true)
+        let fixity = try #require(rig.keeper.contentFixity, "published by the refused pair")
+        #expect(fixity.stampMatches(path: rig.keeper.fullPath))
+        #expect(rig.copies[0].duplicateDisposition == .review)
+    }
+}
