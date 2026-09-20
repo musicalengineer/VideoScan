@@ -27,6 +27,7 @@ struct DuplicateKeeperPrecedenceSheet: View {
             list
             addAndResetBar
             crossVolumeToggle
+            preferTrashToggle
             footer
         }
         .padding(22)
@@ -151,6 +152,28 @@ struct DuplicateKeeperPrecedenceSheet: View {
             }
             .accessibilityIdentifier("dupKeeper.workingCopyCleanupToggle")
             Text(WorkingCopyCleanupText.caption(volume: "the drive you pick"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: Trash-for-every-duplicate toggle (copy-count tiering, 2026-09-20)
+
+    private var preferTrashToggle: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(
+                get: { model.duplicateKeeperSettings.preferTrashForEveryDuplicate },
+                set: { on in
+                    model.duplicateKeeperSettings.preferTrashForEveryDuplicate = on
+                    model.saveDuplicateKeeperSettings()
+                })) {
+                Text(DeletionTierText.preferTrashToggleLabel)
+            }
+            .accessibilityIdentifier("dupKeeper.preferTrashToggle")
+            Text(DeletionTierText.preferTrashCaption)
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

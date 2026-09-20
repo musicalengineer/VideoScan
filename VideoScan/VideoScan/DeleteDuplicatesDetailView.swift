@@ -2,7 +2,7 @@
 // The expanded Delete Duplicates row in Media File Operations (Rick
 // 2026-09-20: "clicking on the row reveals a list of files"). A header
 // with the counts, the rate and the time left, then one line per file:
-// file · size · status chip · keeper (volume: name). Read-only —
+// file · size · status chip · tier · keeper (volume: name). Read-only —
 // presentation over the job's published plan. No catalog lookup, no media
 // work; the only O(n) here is the plan's own rows, capped at
 // `visibleCap` with "… and N more".
@@ -76,7 +76,7 @@ struct DeleteDuplicatesDetailView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            Text("Every file removed is read in full and compared with its keeper's whole-file digest at the moment of deletion. The keeper is read once; after that its stored fixity stands in, checked by stat.")
+            Text("Every file removed is moved aside, read in full once there, and compared with its keeper's whole-file digest at the moment of deletion. The keeper is read once; after that its stored fixity stands in, checked by stat. Tier, on the count of verified copies left behind (keeper, archive copy, siblings whose stored fixity reproduces): three or more → gone now; exactly two → the drive's Trash; fewer → left alone. An archive copy counts but is not required.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -89,6 +89,8 @@ struct DeleteDuplicatesDetailView: View {
         case .verifying: return ("Verifying…", .orange)
         case .verified: return ("Verified", .blue)
         case .deleted: return ("Deleted", .green)
+        case .trashed:
+            return (entry.trashedOnVolume.map { "In the Trash of \($0)" } ?? "In the Trash", .green)
         case .refused: return ("Refused: \(entry.note)", .red)
         case .failed: return ("Failed: \(entry.note)", .red)
         case .skipped: return ("Skipped: \(entry.note)", .secondary)
@@ -99,6 +101,7 @@ struct DeleteDuplicatesDetailView: View {
 enum DeleteDuplicatesTableLayout {
     static let sizeWidth: CGFloat = 84
     static let statusWidth: CGFloat = 220
+    static let tierWidth: CGFloat = 120
     static let keeperWidth: CGFloat = 240
     static let rowPadding: CGFloat = 10
 }
@@ -110,6 +113,7 @@ struct DeleteDuplicatesTableHeader: View {
             Text("Size").frame(width: DeleteDuplicatesTableLayout.sizeWidth, alignment: .trailing)
             Text("Status").frame(width: DeleteDuplicatesTableLayout.statusWidth, alignment: .leading)
                 .padding(.leading, 12)
+            Text("Tier").frame(width: DeleteDuplicatesTableLayout.tierWidth, alignment: .leading)
             Text("Keeper").frame(width: DeleteDuplicatesTableLayout.keeperWidth, alignment: .leading)
         }
         .font(.system(size: 12, weight: .semibold))
@@ -145,6 +149,15 @@ struct DeleteDuplicatesEntryRow: View {
                 .frame(width: DeleteDuplicatesTableLayout.statusWidth, alignment: .leading)
                 .padding(.leading, 12)
                 .help(entry.note.isEmpty ? chip.label : entry.note)
+            Text(entry.tierLabel)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: DeleteDuplicatesTableLayout.tierWidth, alignment: .leading)
+                .help(entry.tierReason.map { r in
+                    entry.remainingVerifiedCopies.map { "\(r) (\($0) verified copies remain)" } ?? r
+                } ?? "Decided when the file is reached")
             Text(entry.keeperPath.isEmpty ? "—" : "\(entry.keeperVolumeName): \(entry.keeperFilename)")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)

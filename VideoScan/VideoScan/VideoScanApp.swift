@@ -186,6 +186,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // lets us touch the MainActor-bound center and NSAlert without
         // an async hop (same pattern as applicationWillTerminate).
         return MainActor.assumeIsolated {
+            // A Delete Duplicates run PAUSED at a safe boundary (nothing in
+            // flight, plan on disk) is not a reason to warn: quitting just
+            // leaves the plan unfinished, and the next launch offers it
+            // (Rick 2026-09-20 evening test drive).
+            if let center = fileOpsCenter {
+                for job in center.quiescentDeleteDuplicates {
+                    appLog.write(job.pausedForQuitLogLine)
+                }
+            }
             if let center = fileOpsCenter, center.runningCount > 0 {
                 let running = center.runningCount
 
@@ -196,16 +205,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     : "\(running) file operations are still running"
                 // A live Delete Duplicates run is SUSPENDED by a quit, not
                 // abandoned: its plan stays resumable and the dialog says
-                // so (codex 1593 #5).
+                // so (codex 1593 #5). Mid-pair it is offered a chance to
+                // land the file first — never a bare "Quit Anyway".
                 let suspending = center.hasActiveDeleteDuplicates
+                let midPair = center.hasDeleteDuplicatesMidPair
                 alert.informativeText = MediaFileOperationsCenter.quitInformativeText(
-                    running: running, deleteDuplicatesActive: suspending)
-                alert.addButton(withTitle: "Quit Anyway")
-                alert.addButton(withTitle: "Keep Working")
+                    running: running, deleteDuplicatesActive: suspending, midPair: midPair)
+                if midPair {
+                    alert.addButton(withTitle: "Finish this file, then quit")
+                    alert.addButton(withTitle: "Stop now")
+                    alert.addButton(withTitle: "Keep working")
+                } else {
+                    alert.addButton(withTitle: "Quit Anyway")
+                    alert.addButton(withTitle: "Keep Working")
+                }
 
-                appLog.write("quit requested with \(running) file operation(s) running — asking")
-                if alert.runModal() == .alertFirstButtonReturn {
-                    appLog.write("quit dialog: user chose Quit Anyway — stopping \(running) operation(s)"
+                appLog.write("quit requested with \(running) file operation(s) running — asking"
+                             + (midPair ? " (Delete Duplicates mid-file)" : ""))
+                let response = alert.runModal()
+                if midPair, response == .alertFirstButtonReturn {
+                    appLog.write("quit dialog: user chose Finish this file, then quit — waiting up to \(Int(Self.deleteDuplicatesFinishDeadline))s")
+                    center.finishInFlightThenSuspendForQuit()
+                    Task { @MainActor [weak self] in
+                        let settled = await center.waitForDeleteDuplicatesToSettle(deadline: Self.deleteDuplicatesFinishDeadline)
+                        appLog.write(settled
+                            ? "quit: Delete Duplicates finished its file and suspended (plan kept for resume)"
+                            : "quit: Delete Duplicates did not finish in time — file put back, plan kept for resume")
+                        self?.captionOrchestrator?.beginShutdown()
+                        await self?.drainVLMForShutdownIfActive()
+                        NSApp.reply(toApplicationShouldTerminate: true)
+                    }
+                    return .terminateLater
+                } else if (midPair && response == .alertSecondButtonReturn)
+                            || (!midPair && response == .alertFirstButtonReturn) {
+                    appLog.write("quit dialog: user chose \(midPair ? "Stop now" : "Quit Anyway") — stopping \(running) operation(s)"
                                  + (suspending ? " (Delete Duplicates suspended, plan kept for resume)" : ""))
                     center.stopAllForQuit()
                 } else {
@@ -232,19 +265,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // (crash variant VideoScan-2026-06-11-232946.ips).
             if let orch = captionOrchestrator, orch.currentStatus.isActive {
                 shutdownLogger.notice("quit requested with VLM batch active — draining (max \(Self.vlmDrainDeadline, format: .fixed(precision: 1))s)")
-                appLog.write("shutdown: cancelling dossier/VLM batch, draining in-flight inference")
                 Task { @MainActor [weak self] in
-                    let drained = await orch.drainForShutdown(deadline: Self.vlmDrainDeadline)
-                    self?.vlmDrainTimedOut = !drained
-                    appLog.write(drained
-                        ? "shutdown: VLM drain completed"
-                        : "shutdown: VLM drain deadline expired — proceeding, _exit backstop covers teardown")
+                    await self?.drainVLMForShutdownIfActive()
                     NSApp.reply(toApplicationShouldTerminate: true)
                 }
                 return .terminateLater
             }
             return .terminateNow
         }
+    }
+
+    /// Max seconds the quit path waits for Delete Duplicates to land the
+    /// file in flight after "Finish this file, then quit". A 50 GB tape
+    /// at 200 MB/s is ~4 min; past this the file is put back instead.
+    static let deleteDuplicatesFinishDeadline: TimeInterval = 15 * 60
+
+    /// The VLM drain, shared by the immediate quit path and the
+    /// finish-this-file-first path. No-op when no batch is active.
+    @MainActor
+    private func drainVLMForShutdownIfActive() async {
+        guard let orch = captionOrchestrator, orch.currentStatus.isActive else { return }
+        appLog.write("shutdown: cancelling dossier/VLM batch, draining in-flight inference")
+        let drained = await orch.drainForShutdown(deadline: Self.vlmDrainDeadline)
+        vlmDrainTimedOut = !drained
+        appLog.write(drained
+            ? "shutdown: VLM drain completed"
+            : "shutdown: VLM drain deadline expired — proceeding, _exit backstop covers teardown")
     }
 
     func applicationWillTerminate(_ notification: Notification) {

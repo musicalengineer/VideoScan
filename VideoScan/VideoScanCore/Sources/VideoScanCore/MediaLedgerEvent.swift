@@ -105,6 +105,11 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         /// Swift because `override` is a keyword; the stored key is
         /// "override".)
         public static let barOverride = "override"
+        /// Delete Duplicates copy-count tier (2026-09-20 evening):
+        /// "permanent" / "trash", and how many verified copies of the
+        /// family remain after the file left.
+        public static let tier = "tier"
+        public static let remainingVerifiedCopies = "remainingVerifiedCopies"
     }
 
     public let at: Date

@@ -19,38 +19,48 @@
 //     segmented hash equal   → CANDIDATE      (cheap, fleet-wide)
 //     full hash equal        → VerifiedDuplicate (expensive, per pair)
 //
-// TWO WAYS TO EARN THE PROOF (Rick 2026-09-20 — "Delete 2,992 files"
-// read BOTH files of every pair in full, hours with nothing to look at):
+// THREE WAYS TO EARN THE PROOF:
 //
 //   1. `verify(keeperPath:duplicatePath:)` — the original two-file path.
-//      Both sides are read in full and hashed fresh.
+//      Both sides are read in full and hashed fresh. Used ONCE per keeper,
+//      the first time it is met without a stored fixity; the proof carries
+//      the keeper's fresh fixity for the caller to store.
 //   2. `verifyAgainstStoredKeeper(...)` — the keeper is NOT read. Its
 //      stored `ContentFixity` (whole-file digest + stat stamp from the
 //      one time it was read) must reproduce under a fresh `stat`; then
-//      only the DUPLICATE is read in full and its digest compared. If
-//      the keeper has no fixity, or its stamp changed, this falls back to
-//      path 1 ONCE and hands back the keeper's fresh fixity to be stored,
-//      so the next pair with that keeper takes path 2.
+//      only the DUPLICATE is read in full, at its public path, and its
+//      digest compared. Kept for callers without a plan; the job no
+//      longer uses it (see 3).
+//   3. SINGLE READ — `holdForSingleRead` + `verifyHeld` (Rick 2026-09-20
+//      evening: "implement the single-read design"). Until then a deleted
+//      file was read TWICE: once to verify it at its public path, once
+//      more after the move into quarantine (codex 1593 blocker 1 — a
+//      same-length rewrite through an open descriptor between the two
+//      could not otherwise be seen). Reordered, one read suffices: the
+//      duplicate is MOVED FIRST into its owner-only quarantine folder,
+//      its full identity (ctime included) is captured there as the
+//      baseline, and THEN it is hashed once in full in quarantine. A
+//      write before the move is in the bytes hashed; a write after the
+//      baseline changes the kernel ctime and is refused by the re-stat.
+//      The keeper is never read — its stored fixity must reproduce at the
+//      hold and again after the hash. Net: one full read of the file that
+//      goes, zero of the file that stays.
 //
 // THE DELETE ITSELF IS TWO STEPS (codex review 1593, blocker 1):
 //
-//   a. `quarantine(proof)` — the verified inode is renamed into a fresh
-//      owner-only sibling directory, and its FULL identity (device, inode,
-//      size, mtime AND kernel ctime) is captured immediately after the
-//      rename. That stamp is the baseline every later check compares to.
-//   b. `deleteQuarantined(ticket)` — the quarantined file is read in full
-//      AGAIN and its digest must equal the proof's; then the baseline must
-//      reproduce to the ctime, the keeper must be unchanged, the original
-//      pathname must still be empty; only then is it unlinked.
-//
-//   Why both: the rename bumps ctime, so a comparison across the move used
-//   to drop ctime — and a writer holding an open descriptor could rewrite
-//   the quarantined inode to the same length, put the mtime back, and the
-//   four remaining fields still matched. Codex reproduced that deleting
-//   newly unique bytes. Now any write after the baseline changes ctime
-//   (kernel-set, not user-settable) and is refused; any write before it is
-//   in the re-read and refused by the digest. The file being deleted is
-//   read twice; the keeper is never read here.
+//   a. `quarantine(proof)` (paths 1 and 2) or `holdForSingleRead` (path 3)
+//      — the directory entry is renamed into a fresh owner-only sibling
+//      directory, and its FULL identity (device, inode, size, mtime AND
+//      kernel ctime) is captured immediately after the rename. That stamp
+//      is the baseline every later check compares to.
+//   b. `deleteQuarantined(ticket, disposal:)` — unless the ticket says the
+//      file was already hashed in quarantine (path 3), the quarantined
+//      file is read in full again and its digest must equal the proof's;
+//      then the baseline must reproduce to the ctime, the keeper must be
+//      unchanged, the original pathname must still be empty; only then is
+//      it unlinked — or, with `.trash`, moved into the volume's Trash
+//      (the copy-count tier's cautious rung: "exactly the archive copy
+//      and the keeper remain → the Trash, not gone").
 //
 //   The two steps exist as separate calls so the job can WRITE the
 //   quarantine location into its plan between them — a crash between the
@@ -70,10 +80,10 @@ import VideoScanCore
 /// Proof that two paths hold byte-identical content.
 ///
 /// Deliberately has no public initializer: the ONLY ways to hold one are
-/// `SignatureVerification.verify` and `verifyAgainstStoredKeeper`, both of
-/// which read the duplicate in full. A deletion API that takes this type
-/// cannot be called on unverified candidates, which is the point — the
-/// compiler enforces what a comment could only request.
+/// `SignatureVerification.verify`, `verifyAgainstStoredKeeper` and
+/// `verifyHeld`, all of which read the duplicate in full. A deletion API
+/// that takes this type cannot be called on unverified candidates, which
+/// is the point — the compiler enforces what a comment could only request.
 struct VerifiedDuplicate: Equatable, Sendable {
     let keeperPath: String
     let duplicatePath: String
@@ -114,9 +124,9 @@ struct VerifiedDuplicate: Equatable, Sendable {
 }
 
 /// A verified duplicate that has been moved out of its public name and
-/// not yet removed. Only `SignatureVerification.quarantine` makes one.
-/// (For Rick: a receipt — the proof, where the file went, and the stat
-/// stamp taken the instant it landed there.)
+/// not yet removed. Only `SignatureVerification.quarantine` and
+/// `verifyHeld` make one. (For Rick: a receipt — the proof, where the file
+/// went, and the stat stamp taken the instant it landed there.)
 struct QuarantineTicket: Equatable, Sendable {
     let proof: VerifiedDuplicate
     /// The original public path the file will be put back to if the
@@ -129,14 +139,52 @@ struct QuarantineTicket: Equatable, Sendable {
     /// FULL identity (ctime included) captured immediately after the
     /// rename. The unlink requires it to reproduce exactly.
     let baseline: FileIdentityStamp
+    /// True when the proof's full read happened IN quarantine, after the
+    /// baseline (the single-read path): the unlink step then re-stats
+    /// only. False when the read happened at the public path before the
+    /// move: the unlink step reads the file once more.
+    let hashedInQuarantine: Bool
 
     fileprivate init(proof: VerifiedDuplicate, originalPath: String, quarantineDirectory: String,
-                     quarantinedPath: String, baseline: FileIdentityStamp) {
+                     quarantinedPath: String, baseline: FileIdentityStamp, hashedInQuarantine: Bool) {
         self.proof = proof
         self.originalPath = originalPath
         self.quarantineDirectory = quarantineDirectory
         self.quarantinedPath = quarantinedPath
         self.baseline = baseline
+        self.hashedInQuarantine = hashedInQuarantine
+    }
+}
+
+/// A duplicate moved into quarantine BEFORE it has been read (the
+/// single-read path). It authorises nothing: only `verifyHeld` can turn it
+/// into a `QuarantineTicket`, and only by hashing the held file in full.
+/// (For Rick: the receipt for the move, not for the identity.)
+struct QuarantineHold: Equatable, Sendable {
+    let keeperPath: String
+    /// The stored keeper fixity that stood at the hold; the held file's
+    /// digest must equal its digest.
+    let keeperFixity: ContentFixity
+    let originalPath: String
+    let quarantineDirectory: String
+    let quarantinedPath: String
+    /// FULL identity (ctime included) captured immediately after the
+    /// rename — BEFORE the read. Any write after this changes the ctime.
+    let baseline: FileIdentityStamp
+    fileprivate let keeperIdentity: FileIdentityStamp
+    fileprivate let duplicateIdentityBeforeMove: FileIdentityStamp
+
+    fileprivate init(keeperPath: String, keeperFixity: ContentFixity, originalPath: String,
+                     quarantineDirectory: String, quarantinedPath: String, baseline: FileIdentityStamp,
+                     keeperIdentity: FileIdentityStamp, duplicateIdentityBeforeMove: FileIdentityStamp) {
+        self.keeperPath = keeperPath
+        self.keeperFixity = keeperFixity
+        self.originalPath = originalPath
+        self.quarantineDirectory = quarantineDirectory
+        self.quarantinedPath = quarantinedPath
+        self.baseline = baseline
+        self.keeperIdentity = keeperIdentity
+        self.duplicateIdentityBeforeMove = duplicateIdentityBeforeMove
     }
 }
 
@@ -145,8 +193,9 @@ enum SignatureVerification {
     struct Hooks: @unchecked Sendable {
         var shouldCancel: () -> Bool
         /// Called once per block read, with "keeper", "duplicate" or
-        /// "quarantine" (the post-move re-read of the duplicate) — the
-        /// seam tests use to count WHICH files were read.
+        /// "quarantine" (a read of the duplicate in its quarantine folder
+        /// — the single-read path's ONLY read, or the two-file path's
+        /// re-read) — the seam tests use to count WHICH files were read.
         var didReadBlock: ((String) -> Void)?
         /// Called with the path of EVERY file the gate opens for reading
         /// — the head compare and the full hashes alike — so a test can
@@ -156,6 +205,18 @@ enum SignatureVerification {
         var didOpen: ((String) -> Void)?
         var didQuarantine: ((String) -> Void)?
         var removeQuarantineDirectory: ((URL) throws -> Void)?
+        /// The Trash step of the `.trash` disposal: move the quarantined
+        /// file into the Trash and return where it went. nil → the live
+        /// `FileManager.trashItem` (the volume's own .Trashes). Tests
+        /// inject a move into a scratch folder so no fixture ever lands
+        /// in Rick's real Trash.
+        var trashItem: ((URL) throws -> URL)?
+        /// Called the moment `verify` (path 1) has hashed the KEEPER in
+        /// full and re-stat'ed it — before the pair's verdict. The job
+        /// stores that fixity on the keeper at once, so a refused first
+        /// pair (a look-alike) does not cost the next pair a second read
+        /// of the same keeper (codex follow-up P2 #6).
+        var didComputeKeeperFixity: ((ContentFixity) -> Void)?
 
         static let live = Hooks(shouldCancel: { Task.isCancelled })
     }
@@ -186,7 +247,7 @@ enum SignatureVerification {
     /// trusting anything stored: a signature computed last month says
     /// nothing about the bytes on disk right now, and the window between
     /// "decided to delete" and "deleted" is the one that matters. (The
-    /// stored-fixity path below is the ONE exception, and it is guarded by
+    /// stored-fixity paths are the ONE exception, and they are guarded by
     /// a fresh stat stamp of the keeper.)
     static func verify(keeperPath: String, duplicatePath: String,
                        hooks: Hooks = .live)
@@ -240,6 +301,12 @@ enum SignatureVerification {
               keeperAfter == keeperBefore else {
             return .failure(.changedSinceVerification(keeperPath))
         }
+        // The keeper's whole-file fixity is knowledge worth keeping whatever
+        // this pair's verdict turns out to be.
+        let now = Date()
+        let keeperFixity = ContentFixity(digest: keeperHash, byteCount: keeperAfter.size,
+                                         stamp: keeperAfter, computedAt: now)
+        hooks.didComputeKeeperFixity?(keeperFixity)
         guard let duplicateAfter = FileIdentityStamp.capture(path: duplicatePath),
               duplicateAfter == duplicateBefore else {
             return .failure(.changedSinceVerification(duplicatePath))
@@ -247,7 +314,6 @@ enum SignatureVerification {
 
         guard keeperHash == duplicateHash else { return .failure(.contentDiffers) }
 
-        let now = Date()
         return .success(VerifiedDuplicate(
             keeperPath: keeperPath,
             duplicatePath: duplicatePath,
@@ -255,8 +321,7 @@ enum SignatureVerification {
             verifiedAt: now,
             keeperIdentity: keeperAfter,
             duplicateIdentity: duplicateAfter,
-            keeperFixity: ContentFixity(digest: keeperHash, byteCount: keeperAfter.size,
-                                        stamp: keeperAfter, computedAt: now),
+            keeperFixity: keeperFixity,
             duplicateFixity: ContentFixity(digest: duplicateHash, byteCount: duplicateAfter.size,
                                            stamp: duplicateAfter, computedAt: now),
             keeperReadInFull: true))
@@ -340,6 +405,118 @@ enum SignatureVerification {
             keeperReadInFull: false))
     }
 
+    // MARK: Path 3 — single read: move first, hash once in quarantine
+
+    /// The outcome of the hold: the file is in quarantine unread, or the
+    /// keeper's stored fixity cannot stand in (no fixity / not sha256 /
+    /// pre-ctime / stamp changed — the caller takes path 1 once and
+    /// stores the fresh fixity), or nothing was moved.
+    enum HoldOutcome: Equatable {
+        case held(QuarantineHold)
+        case keeperFixityUnusable
+        case refused(Failure)
+        case failed(String)
+        case retainedQuarantine(path: String, reason: String)
+    }
+
+    /// Step (a) of the single-read path. Stats both files, requires the
+    /// keeper's stored fixity to describe the keeper NOW (verification
+    /// grade, ctime included) and the sizes to agree, then moves the
+    /// duplicate into its owner-only quarantine folder and captures its
+    /// full identity there. Nothing is read. The keeper is never read.
+    static func holdForSingleRead(keeperPath: String, keeperFixity: ContentFixity?,
+                                  duplicatePath: String, directoryName: String? = nil,
+                                  hooks: Hooks = .live) -> HoldOutcome {
+        guard keeperPath != duplicatePath else { return .refused(.samePath) }
+        guard let keeperBefore = FileIdentityStamp.capture(path: keeperPath)
+        else { return .refused(.unreadable(keeperPath)) }
+        guard let duplicateBefore = FileIdentityStamp.capture(path: duplicatePath)
+        else { return .refused(.unreadable(duplicatePath)) }
+        guard !keeperBefore.isSameFile(as: duplicateBefore) else { return .refused(.samePath) }
+        guard let fixity = keeperFixity,
+              fixity.isUsableForVerification,
+              fixity.describesFileNow(keeperBefore) else {
+            return .keeperFixityUnusable
+        }
+        // Different sizes can never be identical bytes — refuse before
+        // moving anything.
+        guard duplicateBefore.size == fixity.byteCount else { return .refused(.contentDiffers) }
+        guard !hooks.shouldCancel() else { return .refused(.cancelled) }
+
+        switch moveIntoQuarantine(originalPath: duplicatePath, directoryName: directoryName,
+                                  expected: duplicateBefore, hooks: hooks) {
+        case .moved(let directory, let file, let baseline):
+            return .held(QuarantineHold(keeperPath: keeperPath, keeperFixity: fixity,
+                                        originalPath: duplicatePath, quarantineDirectory: directory.path,
+                                        quarantinedPath: file.path, baseline: baseline,
+                                        keeperIdentity: keeperBefore,
+                                        duplicateIdentityBeforeMove: duplicateBefore))
+        case .refused(let failure): return .refused(failure)
+        case .failed(let reason): return .failed(reason)
+        case .retainedQuarantine(let path, let reason): return .retainedQuarantine(path: path, reason: reason)
+        }
+    }
+
+    enum HeldVerification: Equatable {
+        case verified(QuarantineTicket)
+        /// Refused and put back at its original path.
+        case refused(Failure)
+        /// Refused but could not be put back — left where it is, named.
+        case retainedQuarantine(path: String, reason: String)
+    }
+
+    /// Step (e)–(f) of the single-read path: hash the held file ONCE in
+    /// full, in quarantine; require the digest to equal the keeper's
+    /// stored one, the keeper's stamp to still reproduce, and the held
+    /// file's full identity (ctime included) to equal the post-move
+    /// baseline. Any doubt puts the file back at its public path.
+    static func verifyHeld(_ hold: QuarantineHold, hooks: Hooks = .live) -> HeldVerification {
+        let quarantined = URL(fileURLWithPath: hold.quarantinedPath)
+        let original = URL(fileURLWithPath: hold.originalPath)
+        let directory = URL(fileURLWithPath: hold.quarantineDirectory, isDirectory: true)
+        func putBack(_ failure: Failure, reason: String) -> HeldVerification {
+            switch restoreOrRetain(quarantined: quarantined, original: original, quarantineDirectory: directory,
+                                   reason: reason, failure: failure) {
+            case .refused(let f): return .refused(f)
+            case .retainedQuarantine(let path, let why): return .retainedQuarantine(path: path, reason: why)
+            case .failed(let why): return .retainedQuarantine(path: quarantined.path, reason: why)
+            case .deleted, .trashed: return .retainedQuarantine(path: quarantined.path, reason: "unreachable")
+            }
+        }
+
+        guard !hooks.shouldCancel() else { return putBack(.cancelled, reason: "cancelled after quarantine") }
+        // THE read: once, in full, in quarantine, after the baseline.
+        let digest = cancellableFullHash(path: quarantined.path, label: "quarantine", hooks: hooks)
+        guard !hooks.shouldCancel() else { return putBack(.cancelled, reason: "cancelled after quarantine") }
+        guard !digest.isEmpty else {
+            return putBack(.unreadable(hold.originalPath), reason: "quarantined file could not be read")
+        }
+        guard digest == hold.keeperFixity.digest else {
+            return putBack(.contentDiffers, reason: "content differs from the keeper")
+        }
+        // The keeper must still be the file the fixity describes.
+        guard let keeperNow = FileIdentityStamp.capture(path: hold.keeperPath), keeperNow == hold.keeperIdentity else {
+            return putBack(.changedSinceVerification(hold.keeperPath), reason: "keeper changed during verification")
+        }
+        // The held file must be exactly what was baselined — a write
+        // during the read moved the kernel ctime.
+        guard let heldNow = FileIdentityStamp.capture(path: quarantined.path), heldNow == hold.baseline,
+              heldNow.size == hold.keeperFixity.byteCount else {
+            return putBack(.changedSinceVerification(hold.originalPath), reason: "quarantined file identity changed")
+        }
+        let now = Date()
+        let proof = VerifiedDuplicate(
+            keeperPath: hold.keeperPath, duplicatePath: hold.originalPath, fullHash: digest, verifiedAt: now,
+            keeperIdentity: keeperNow, duplicateIdentity: hold.duplicateIdentityBeforeMove,
+            keeperFixity: hold.keeperFixity,
+            duplicateFixity: ContentFixity(digest: digest, byteCount: heldNow.size, stamp: heldNow, computedAt: now),
+            keeperReadInFull: false)
+        return .verified(QuarantineTicket(proof: proof, originalPath: hold.originalPath,
+                                          quarantineDirectory: hold.quarantineDirectory,
+                                          quarantinedPath: hold.quarantinedPath, baseline: hold.baseline,
+                                          hashedInQuarantine: true))
+    }
+
     /// Revalidate the exact path identities captured by `verify`. This must
     /// be called immediately before a destructive action; a matching digest
     /// from moments ago is not authority to delete after either path changed.
@@ -355,8 +532,17 @@ enum SignatureVerification {
         return .success(())
     }
 
+    /// What happens to a verified file at the end: gone now, or into the
+    /// volume's Trash (the copy-count tier's cautious rung).
+    enum Disposal: String, Equatable, Sendable {
+        case permanent
+        case trash
+    }
+
     enum DeletionResult: Equatable {
         case deleted(bytes: Int64)
+        /// Moved into the Trash; `location` is where it sits now.
+        case trashed(bytes: Int64, location: String)
         case refused(Failure)
         case failed(String)
         case retainedQuarantine(path: String, reason: String)
@@ -394,8 +580,33 @@ enum SignatureVerification {
         if case .failure(let failure) = revalidate(proof) {
             return .refused(failure)
         }
+        switch moveIntoQuarantine(originalPath: proof.duplicatePath, directoryName: directoryName,
+                                  expected: proof.duplicateIdentity, hooks: hooks) {
+        case .moved(let directory, let file, let baseline):
+            return .quarantined(QuarantineTicket(proof: proof, originalPath: proof.duplicatePath,
+                                                 quarantineDirectory: directory.path,
+                                                 quarantinedPath: file.path, baseline: baseline,
+                                                 hashedInQuarantine: false))
+        case .refused(let failure): return .refused(failure)
+        case .failed(let reason): return .failed(reason)
+        case .retainedQuarantine(let path, let reason): return .retainedQuarantine(path: path, reason: reason)
+        }
+    }
 
-        let original = URL(fileURLWithPath: proof.duplicatePath)
+    private enum MoveOutcome {
+        case moved(directory: URL, file: URL, baseline: FileIdentityStamp)
+        case refused(Failure)
+        case failed(String)
+        case retainedQuarantine(path: String, reason: String)
+    }
+
+    /// The rename shared by `quarantine` and `holdForSingleRead`: a fresh
+    /// owner-only sibling folder, the move, and the post-rename baseline,
+    /// which must still be `expected` in every field a rename cannot
+    /// change (device, inode, size, mtime).
+    private static func moveIntoQuarantine(originalPath: String, directoryName: String?,
+                                           expected: FileIdentityStamp, hooks: Hooks) -> MoveOutcome {
+        let original = URL(fileURLWithPath: originalPath)
         let name = directoryName ?? (quarantineDirectoryPrefix + UUID().uuidString)
         let quarantineDirectory = original.deletingLastPathComponent()
             .appendingPathComponent(name, isDirectory: true)
@@ -420,31 +631,32 @@ enum SignatureVerification {
         // The baseline: stat the moved file NOW. The rename bumped its
         // ctime; that new ctime is what the unlink step must see again.
         // Device / inode / size / mtime — the fields a rename cannot
-        // change — must still be the verified file's.
+        // change — must still be the expected file's.
         let baseline = FileIdentityStamp.capture(path: quarantined.path)
         hooks.didQuarantine?(quarantined.path)
-        guard let baseline, baseline.matchesIgnoringChangeTime(proof.duplicateIdentity) else {
+        guard let baseline, baseline.matchesIgnoringChangeTime(expected) else {
             switch restoreOrRetain(quarantined: quarantined, original: original,
                                    quarantineDirectory: quarantineDirectory,
                                    reason: "quarantined file identity changed") {
             case .refused(let failure): return .refused(failure)
             case .retainedQuarantine(let path, let reason): return .retainedQuarantine(path: path, reason: reason)
             case .failed(let reason): return .failed(reason)
-            case .deleted: return .failed("unreachable")
+            case .deleted, .trashed: return .failed("unreachable")
             }
         }
-        return .quarantined(QuarantineTicket(proof: proof, originalPath: original.path,
-                                             quarantineDirectory: quarantineDirectory.path,
-                                             quarantinedPath: quarantined.path, baseline: baseline))
+        return .moved(directory: quarantineDirectory, file: quarantined, baseline: baseline)
     }
 
-    // MARK: Step (b) — re-read, re-check, unlink
+    // MARK: Step (b) — (re-read,) re-check, unlink or trash
 
-    /// Read the quarantined file in full again, require its digest to be
-    /// the proof's, require the baseline (ctime included) and the keeper
-    /// to reproduce and the original name to be empty, then unlink. Any
-    /// doubt puts the file back (or retains it in place, named).
+    /// Unless the ticket's read already happened in quarantine, read the
+    /// quarantined file in full again and require its digest to be the
+    /// proof's; then require the baseline (ctime included) and the keeper
+    /// to reproduce and the original name to be empty; then unlink — or,
+    /// with `.trash`, move into the volume's Trash. Any doubt puts the
+    /// file back (or retains it in place, named).
     static func deleteQuarantined(_ ticket: QuarantineTicket,
+                                  disposal: Disposal = .permanent,
                                   hooks: Hooks = .live) -> DeletionResult {
         let proof = ticket.proof
         let quarantined = URL(fileURLWithPath: ticket.quarantinedPath)
@@ -457,20 +669,22 @@ enum SignatureVerification {
                                    reason: "cancelled after quarantine", cancelled: true)
         }
 
-        // The second full read: the only thing that can see a rewrite
-        // that landed between the verification read and the baseline.
-        let rehash = cancellableFullHash(path: quarantined.path, label: "quarantine", hooks: hooks)
-        guard !hooks.shouldCancel() else {
-            return restoreOrRetain(quarantined: quarantined, original: original,
-                                   quarantineDirectory: quarantineDirectory,
-                                   reason: "cancelled after quarantine", cancelled: true)
-        }
-        guard !rehash.isEmpty, rehash == proof.fullHash else {
-            return restoreOrRetain(quarantined: quarantined, original: original,
-                                   quarantineDirectory: quarantineDirectory,
-                                   reason: rehash.isEmpty
-                                       ? "quarantined file could not be re-read before removal"
-                                       : "quarantined file content no longer matches what was verified")
+        if !ticket.hashedInQuarantine {
+            // The second full read: the only thing that can see a rewrite
+            // that landed between the verification read and the baseline.
+            let rehash = cancellableFullHash(path: quarantined.path, label: "quarantine", hooks: hooks)
+            guard !hooks.shouldCancel() else {
+                return restoreOrRetain(quarantined: quarantined, original: original,
+                                       quarantineDirectory: quarantineDirectory,
+                                       reason: "cancelled after quarantine", cancelled: true)
+            }
+            guard !rehash.isEmpty, rehash == proof.fullHash else {
+                return restoreOrRetain(quarantined: quarantined, original: original,
+                                       quarantineDirectory: quarantineDirectory,
+                                       reason: rehash.isEmpty
+                                           ? "quarantined file could not be re-read before removal"
+                                           : "quarantined file content no longer matches what was verified")
+            }
         }
 
         // FULL identity — ctime included — against the post-rename
@@ -497,21 +711,57 @@ enum SignatureVerification {
                 cancelled: cancelledAfterQuarantine)
         }
 
-        do {
-            // No await or callback precedes this removal after the identity
-            // check. The entry is isolated in a fresh owner-only directory.
-            try FileManager.default.removeItem(at: quarantined)
-        } catch {
-            return .retainedQuarantine(
-                path: quarantined.path,
-                reason: "verified file retained because final removal failed: \(error.localizedDescription)")
+        switch disposal {
+        case .permanent:
+            do {
+                // No await or callback precedes this removal after the identity
+                // check. The entry is isolated in a fresh owner-only directory.
+                try FileManager.default.removeItem(at: quarantined)
+            } catch {
+                return .retainedQuarantine(
+                    path: quarantined.path,
+                    reason: "verified file retained because final removal failed: \(error.localizedDescription)")
+            }
+            // Empty-directory cleanup is housekeeping, not part of the media
+            // deletion transaction. Once the quarantined file is gone, report
+            // success so the catalog cannot retain a row for nonexistent media.
+            // The directory is removed ONLY if empty (rmdir, never recursive):
+            // anything else that ended up in there is not ours to delete.
+            removeQuarantineDirectoryQuietly(quarantineDirectory, hooks: hooks, after: "removed verified duplicate")
+            return .deleted(bytes: proof.duplicateSize)
+        case .trash:
+            // The file goes back to its PUBLIC path first and is handed to the
+            // Trash from there: Finder's "Put Back" then restores it to where
+            // it lived (QA #4), and a Trash step that fails — SMB and some
+            // externals have no usable .Trashes — leaves the file at home,
+            // never parked in a hidden folder (QA #1). The identity checks
+            // above still cover it: nothing else can have the original name
+            // (checked empty an instant ago) and the move is a rename.
+            do {
+                try FileManager.default.moveItem(at: quarantined, to: original)
+            } catch {
+                return .retainedQuarantine(
+                    path: quarantined.path,
+                    reason: "verified file retained because it could not be put back before the move to the Trash: \(error.localizedDescription)")
+            }
+            removeQuarantineDirectoryQuietly(quarantineDirectory, hooks: hooks, after: "put back before the Trash")
+            do {
+                let destination: URL
+                if let trash = hooks.trashItem {
+                    destination = try trash(original)
+                } else {
+                    var resulting: NSURL?
+                    try FileManager.default.trashItem(at: original, resultingItemURL: &resulting)
+                    destination = (resulting as URL?) ?? original
+                }
+                return .trashed(bytes: proof.duplicateSize, location: destination.path)
+            } catch {
+                return .failed("the move to the Trash failed: \(error.localizedDescription) — the file is back at \(original.path), untouched")
+            }
         }
+    }
 
-        // Empty-directory cleanup is housekeeping, not part of the media
-        // deletion transaction. Once the quarantined file is gone, report
-        // success so the catalog cannot retain a row for nonexistent media.
-        // The directory is removed ONLY if empty (rmdir, never recursive):
-        // anything else that ended up in there is not ours to delete.
+    private static func removeQuarantineDirectoryQuietly(_ quarantineDirectory: URL, hooks: Hooks, after what: String) {
         do {
             if let removeDirectory = hooks.removeQuarantineDirectory {
                 try removeDirectory(quarantineDirectory)
@@ -519,14 +769,14 @@ enum SignatureVerification {
                 try removeEmptyDirectory(quarantineDirectory)
             }
         } catch {
-            NSLog("VideoScan: deleted verified duplicate but could not remove quarantine directory %@ (left in place): %@",
-                  quarantineDirectory.path, error.localizedDescription)
+            NSLog("VideoScan: %@ but could not remove quarantine directory %@ (left in place): %@",
+                  what, quarantineDirectory.path, error.localizedDescription)
         }
-        return .deleted(bytes: proof.duplicateSize)
     }
 
     /// Put a quarantined file back without deleting it — the caller could
-    /// not record the quarantine (plan save failed) or is stopping.
+    /// not record the quarantine (plan save failed), is stopping, or the
+    /// copy-count tier said "not below the archive copy".
     static func releaseQuarantine(_ ticket: QuarantineTicket, reason: String,
                                   cancelled: Bool = true) -> DeletionResult {
         restoreOrRetain(quarantined: URL(fileURLWithPath: ticket.quarantinedPath),
@@ -558,11 +808,15 @@ enum SignatureVerification {
     /// Put the quarantined file back. A Stop that landed after the move is
     /// reported as `.cancelled` once the file is restored (QA MINOR 3) —
     /// it is not a changed file, and the row must not be re-marked Review.
-    /// The quarantine directory is removed only if it is empty afterwards.
+    /// `failure` names what the refusal IS (a content mismatch on the
+    /// single-read path is `.contentDiffers`, not "changed"); nil → the
+    /// path changed. The quarantine directory is removed only if it is
+    /// empty afterwards.
     private static func restoreOrRetain(quarantined: URL, original: URL,
                                         quarantineDirectory: URL,
                                         reason: String,
-                                        cancelled: Bool = false) -> DeletionResult {
+                                        cancelled: Bool = false,
+                                        failure: Failure? = nil) -> DeletionResult {
         guard !FileManager.default.fileExists(atPath: original.path) else {
             return .retainedQuarantine(
                 path: quarantined.path,
@@ -581,6 +835,7 @@ enum SignatureVerification {
             NSLog("VideoScan: restored %@ but could not remove quarantine directory %@ (left in place): %@",
                   original.lastPathComponent, quarantineDirectory.path, error.localizedDescription)
         }
+        if let failure { return .refused(failure) }
         return .refused(cancelled ? .cancelled : .changedSinceVerification(original.path))
     }
 
@@ -623,8 +878,9 @@ enum SignatureVerification {
     /// "full:<size>:", which made it incomparable with every other sha256
     /// in the app; the size is compared separately by every caller.)
     /// Streams in `blockSize` blocks — bounded memory regardless of file
-    /// size (worst case: one 1 MiB buffer). Returns "" on any I/O error,
-    /// cancellation, or a size change mid-read.
+    /// size (worst case: one 1 MiB buffer per concurrent read; the job
+    /// runs at most two). Returns "" on any I/O error, cancellation, or a
+    /// size change mid-read.
     private static func cancellableFullHash(path: String, label: String,
                                             hooks: Hooks,
                                             blockSize: Int = FileHasher.segmentSize) -> String {

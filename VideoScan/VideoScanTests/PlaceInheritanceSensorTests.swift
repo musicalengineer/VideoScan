@@ -196,13 +196,14 @@ struct PlaceInheritanceSensorTests {
         extra.userPlace = "Cape Cod"; extra.userPlaceConfidence = "known"   // only the extra carries it
         extra.backupAttestations = familyWord                                // ...and the family's word
         model.records = [keeper, extra]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
 
         model.searchIndex.rebuild(records: model.records)   // keeper indexed WITHOUT a place
         #expect(model.searchIndex.filter(records: [keeper], query: "cape").isEmpty)
 
         let result = await model.deleteDuplicates(onVolume: dir.path)
         #expect(result.deleted == 1)
-        #expect(model.records.count == 1 && model.records.first === keeper)
+        #expect(model.records.count == 3 && model.records.first === keeper)
         #expect(keeper.userPlace == "Cape Cod", "the deleted extra's place folds into the keeper")
         #expect(keeper.userPlaceConfidence == "known")
         #expect(keeper.backupAttestations == familyWord, "twin: the deleted extra's attestations fold into the keeper")

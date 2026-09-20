@@ -188,13 +188,13 @@ struct MediaFileOperationsWindow: View {
 
             Spacer()
 
-            if center.runningCount > 0 {
+            if center.activeCount > 0 {
                 HStack(spacing: 6) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(center.runningCount == 1
+                    Text(center.activeCount == 1
                          ? "1 operation running"
-                         : "\(center.runningCount) operations running")
+                         : "\(center.activeCount) operations running")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -216,7 +216,7 @@ struct MediaFileOperationsWindow: View {
                 .controlSize(.small)
             }
 
-            if center.runningCount > 0 || model.isCombining {
+            if center.activeCount > 0 || model.isCombining {
                 Button("Cancel All", role: .destructive) {
                     center.cancelAll()
                     if model.isCombining { model.stopCombine() }
@@ -440,6 +440,9 @@ struct MediaFileOperationRow: View {
     /// after live-reload identity churn). Mirrors the findOnlineNotice
     /// pattern in CatalogHelpers.
     @State private var showInCatalogNotice: String?
+    /// The Stop button's confirm for a Delete Duplicates row (keep vs
+    /// discard the remaining work).
+    @State private var confirmStopDeleteDuplicates = false
 
     var body: some View {
         // Referencing `heartbeat` ties this view's identity to the
@@ -589,11 +592,28 @@ struct MediaFileOperationRow: View {
                 // In flight the button reads the state's own badge label
                 // ("Cancelling…") so button, row and log agree on one word.
                 Button(job.state == .cancelling ? job.state.badge.label : "Stop") {
-                    job.cancel()
+                    // Delete Duplicates keeps the rest for later by
+                    // default (Rick 2026-09-20 evening); discarding it
+                    // is the explicit, destructive choice.
+                    if job is DeleteDuplicatesJob {
+                        confirmStopDeleteDuplicates = true
+                    } else {
+                        job.cancel()
+                    }
                 }
                 .font(.system(size: 11))
                 .buttonStyle(.bordered)
                 .disabled(job.state == .cancelling)
+                .confirmationDialog("Stop deleting duplicates?",
+                                    isPresented: $confirmStopDeleteDuplicates, titleVisibility: .visible) {
+                    Button("Stop, keep the rest for later") { job.cancel() }
+                    Button("Stop and discard the rest", role: .destructive) {
+                        (job as? DeleteDuplicatesJob)?.cancel(discardingRemaining: true)
+                    }
+                    Button("Keep going", role: .cancel) {}
+                } message: {
+                    Text("The file being checked is put back either way. “Keep the rest for later” leaves the run resumable — it is offered again right away and at the next launch. “Discard” files it as cancelled; what is left stays on disk untouched.")
+                }
             case .finished(let summary):
                 if let compare = job as? PairCompareJob,
                    let verdict = compare.comparator.verdict {

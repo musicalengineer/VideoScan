@@ -238,6 +238,7 @@ struct DuplicateCrossVolumeDeleteTests {
         extra.userNotes = "from the SSD"
         extra.confirmedByUserPeople = [ConfirmedTag(name: "Donna", confirmedAt: Date())]
         rig.model.records = [keeper, extra]
+        addVerifiedArchiveFamily(to: rig.model, keeper: keeper)
 
         let sel = rig.model.duplicateDeletionSelection(onVolume: rig.extraVol.path)
         #expect(sel.targets.count == 1 && sel.crossVolumeCount == 1 && sel.sameVolumeCount == 0)
@@ -254,7 +255,7 @@ struct DuplicateCrossVolumeDeleteTests {
         #expect(keeper.starRating == 3)
         #expect(keeper.userNotes == "from the SSD")
         #expect(keeper.confirmedByUserPeople.map(\.name) == ["Donna"])
-        #expect(rig.model.records.count == 1)
+        #expect(rig.model.records.count == 3, "keeper + its archive copy + the verified sibling")
     }
 
     /// ON but the pair is NOT identical: refused, nothing deleted, nothing
@@ -270,6 +271,7 @@ struct DuplicateCrossVolumeDeleteTests {
         let extra = dupRecord(path: e.path, size: 4_000, group: g, disposition: .extraCopy)
         extra.starRating = 3
         rig.model.records = [keeper, extra]
+        addVerifiedArchiveFamily(to: rig.model, keeper: keeper)
 
         let result = await rig.model.deleteDuplicates(onVolume: rig.extraVol.path)
         #expect(result.deleted == 0)
@@ -346,6 +348,7 @@ struct DuplicateCrossVolumeDeleteTests {
         let g = UUID()
         rig.model.records = [dupRecord(path: k.path, size: 8_000, group: g, disposition: .keep),
                              dupRecord(path: e.path, size: 8_000, group: g, disposition: .extraCopy)]
+        addVerifiedArchiveFamily(to: rig.model, keeper: rig.model.records[0])
 
         let result = await rig.model.deleteDuplicates(onVolume: rig.extraVol.path)
         #expect(result.deleted == 1)
@@ -373,6 +376,10 @@ struct DuplicateCrossVolumeDeleteTests {
             dupRecord(path: sameK.path, size: 8_000, group: g2, disposition: .keep),
             dupRecord(path: sameE.path, size: 8_000, group: g2, disposition: .extraCopy),
         ]
+        // The archive families live on the KEEPER drive so the extra drive
+        // keeps 3 records and the 1-of-3 cross batch stays over the 20% tripwire.
+        addVerifiedArchiveFamily(to: rig.model, keeper: rig.model.records[0], in: rig.keeperVol)
+        addVerifiedArchiveFamily(to: rig.model, keeper: rig.model.records[2], in: rig.keeperVol)
         let sel = rig.model.duplicateDeletionSelection(onVolume: rig.extraVol.path)
         #expect(sel.crossVolumeCount == 1 && sel.sameVolumeCount == 1)
 
@@ -418,6 +425,7 @@ struct DuplicateCrossVolumeDeleteTests {
         let extra = dupRecord(path: e.path, size: 8_000, group: g, disposition: .extraCopy)
         extra.starRating = 3
         rig.model.records = [keeper, extra]
+        addVerifiedArchiveFamily(to: rig.model, keeper: keeper)
         let sel = rig.model.duplicateDeletionSelection(onVolume: rig.extraVol.path)
         #expect(sel.targets.count == 1)
         // Planning is done and says "eligible"; now the master goes unreadable.
