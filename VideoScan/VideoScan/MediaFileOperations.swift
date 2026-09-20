@@ -400,6 +400,11 @@ where ObjectWillChangePublisher == ObservableObjectPublisher, ID == UUID {
     /// — the compiler forces every future verb to carry the stamp.
     var finishedAt: Date? { get }
     func cancel()
+    /// The app is quitting. Most jobs simply cancel; a job with a saved
+    /// plan (Delete Duplicates) SUSPENDS instead — leaves the plan
+    /// resumable rather than filing it as abandoned (codex 1593 #5).
+    /// Defaulted to `cancel()` below.
+    func stopForQuit()
 
     // Optional pause capability — defaulted off below.
     var canPause: Bool { get }
@@ -435,6 +440,7 @@ extension MediaFileOperationJob {
     func resume() {}
     var wasRefused: Bool { false }
     var vanishesWhenCancelled: Bool { false }
+    func stopForQuit() { cancel() }
 }
 
 /// Shared pause plumbing for ffmpeg-backed jobs (GH #150 — MFO Pause All).
@@ -763,6 +769,16 @@ final class MediaFileOperationsCenter: ObservableObject {
         guard !active.isEmpty else { return }
         fileOpsLog.info("cancelAll: stopping \(active.count) running operation(s)")
         for job in active { job.cancel() }
+    }
+
+    /// The quit guard's version of `cancelAll`: every live job gets
+    /// `stopForQuit()` — a cancel for most, a suspension for jobs that
+    /// keep a resumable plan (codex 1593 #5).
+    func stopAllForQuit() {
+        let active = jobs.filter { $0.state.isActive }
+        guard !active.isEmpty else { return }
+        fileOpsLog.info("stopAllForQuit: stopping \(active.count) running operation(s) for quit")
+        for job in active { job.stopForQuit() }
     }
 
     /// Pause every live job that supports it (header "Pause All").

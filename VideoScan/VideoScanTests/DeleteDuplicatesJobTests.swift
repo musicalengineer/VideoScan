@@ -49,17 +49,24 @@ private func dupRecord(id: UUID = UUID(), path: String, size: Int64, group: UUID
     return r
 }
 
-/// Counts reads by label; optionally blocks the first duplicate block
-/// until released (the existing DeleteDuplicatesSafetyTests pattern).
+/// Counts reads by label and EVERY open by path (the head compare and
+/// the full hashes alike — codex 1593: full-hash blocks alone undercount
+/// keeper reads); optionally blocks the first duplicate block until
+/// released (the existing DeleteDuplicatesSafetyTests pattern).
 private final class Probe: @unchecked Sendable {
     private let lock = NSLock()
     private var counts: [String: Int] = [:]
+    private var opens: [String: Int] = [:]
+    /// For each open of a path, how many quarantines had happened by then.
+    private var quarantinesAtOpen: [String: [Int]] = [:]
     private var quarantines = 0
     var onQuarantine: ((Int) -> Void)?
     var onFirstDuplicateBlock: (() -> Void)?
     private var firstDuplicateBlockSeen = false
 
     func blocks(_ label: String) -> Int { lock.withLock { counts[label] ?? 0 } }
+    func opens(of path: String) -> Int { lock.withLock { opens[path] ?? 0 } }
+    func quarantinesBeforeEachOpen(of path: String) -> [Int] { lock.withLock { quarantinesAtOpen[path] ?? [] } }
     var quarantineCount: Int { lock.withLock { quarantines } }
 
     var hooks: SignatureVerification.Hooks {
@@ -73,6 +80,12 @@ private final class Probe: @unchecked Sendable {
                     return true
                 }
                 if first { onFirstDuplicateBlock?() }
+            },
+            didOpen: { [self] path in
+                lock.withLock {
+                    opens[path, default: 0] += 1
+                    quarantinesAtOpen[path, default: []].append(quarantines)
+                }
             },
             didQuarantine: { [self] _ in
                 let n: Int = lock.withLock { quarantines += 1; return quarantines }
@@ -141,9 +154,20 @@ struct DeleteDuplicatesJobTests {
         #expect(rig.different.duplicateDisposition == .review)
 
         // The keeper was read ONCE (three blocks) across three pairs; every
-        // duplicate was read in full.
+        // duplicate was read in full — and each DELETED one once more in
+        // quarantine before its unlink (codex 1593 #1).
         #expect(probe.blocks("keeper") == 3, "keeper read \(probe.blocks("keeper")) blocks — expected exactly one full read")
         #expect(probe.blocks("duplicate") == 9)
+        #expect(probe.blocks("quarantine") == 6, "two deleted files × three blocks re-read in quarantine")
+        // The metric that matters is OPENS of the keeper path, whatever the
+        // read: exactly two — the 4 MiB head compare and the full hash —
+        // both in the first pair, i.e. before any quarantine; never again.
+        #expect(probe.opens(of: rig.keeper.fullPath) == 2,
+                "keeper opened \(probe.opens(of: rig.keeper.fullPath)) times — expected head compare + one full read")
+        #expect(probe.quarantinesBeforeEachOpen(of: rig.keeper.fullPath) == [0, 0], "no keeper open after the first pair")
+        #expect(probe.opens(of: rig.copies[0].fullPath) == 2, "first duplicate: head compare + full hash at its path")
+        #expect(probe.opens(of: rig.copies[1].fullPath) == 1, "stored-keeper path: full hash only")
+        #expect(probe.opens(of: rig.different.fullPath) == 1)
         let fixity = try #require(rig.keeper.contentFixity, "the keeper's fixity is stored after its one read")
         #expect(fixity.stampMatches(path: rig.keeper.fullPath))
         #expect(fixity.digest == (try CatalogStore.sha256HexStreaming(fileURL: URL(fileURLWithPath: rig.keeper.fullPath))))
@@ -446,10 +470,12 @@ struct DeleteDuplicatesJobTests {
         #expect(await DeleteDuplicatesPlanWriter.shared.lastGeneration(for: plan.id) > 7)
     }
 
-    /// QA MINOR 6: a crash between the quarantine move and the unlink. At
-    /// resume the orphaned file is put back and verified again; a target
-    /// that is simply gone is skipped ("gone before the crash"), never
-    /// re-marked Review.
+    /// QA MINOR 6 (+ codex 1593 #2): a crash between the quarantine move
+    /// and the unlink. The plan on disk names the quarantine folder and the
+    /// file's stamp there (saved before the unlink); at resume the file is
+    /// put back from THAT folder and verified again; a target that is
+    /// simply gone is skipped ("gone before the crash"), never re-marked
+    /// Review.
     @Test func resumeRestoresAnOrphanedQuarantineAndSkipsWhatIsGone() async throws {
         let dir = tempDir("orphan"); defer { try? FileManager.default.removeItem(at: dir) }
         let root = dir.appendingPathComponent("plans", isDirectory: true)
@@ -463,10 +489,12 @@ struct DeleteDuplicatesJobTests {
         let orphan = dupRecord(path: q.path, size: Int64(fileSize), group: group, disposition: .extraCopy)
         let vanished = dupRecord(path: gone.path, size: Int64(fileSize), group: group, disposition: .extraCopy)
         model.records = [keeper, orphan, vanished]
-        // Simulate the crash: the file sits in a sibling quarantine folder.
+        // Simulate the crash: the file sits in the quarantine folder the
+        // plan recorded, with the stamp the plan recorded.
         let qdir = dir.appendingPathComponent(DeleteDuplicatesJob.quarantinePrefix + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: qdir, withIntermediateDirectories: false)
         try FileManager.default.moveItem(at: q, to: qdir.appendingPathComponent(q.lastPathComponent))
+        let quarantinedStamp = try #require(FileIdentityStamp.capture(path: qdir.appendingPathComponent(q.lastPathComponent).path))
         func entry(_ rec: VideoRecord) -> DeleteDuplicatesPlan.Entry {
             DeleteDuplicatesPlan.Entry(id: rec.id, path: rec.fullPath, filename: rec.filename, sizeBytes: rec.sizeBytes,
                                        keeperID: keeper.id, keeperPath: keeper.fullPath, keeperFilename: keeper.filename,
@@ -475,7 +503,8 @@ struct DeleteDuplicatesJobTests {
         var plan = DeleteDuplicatesPlan(volumePath: dir.path, catalogLocation: model.catalogStore.fileLocation,
                                         crossVolumeMode: false, skippedBeforePlan: 0, summaryLine: "",
                                         entries: [entry(orphan), entry(vanished)])
-        plan.entries[0].status = .verified   // the crash landed mid-delete
+        plan.setQuarantined(orphan.id, directory: qdir.path, stamp: quarantinedStamp)   // the crash landed mid-delete
+        #expect(plan.entries[0].status == .verified)
         try DeleteDuplicatesPlanStore.save(plan, root: root)
 
         let job = DeleteDuplicatesJob(model: model, resuming: plan, planRoot: root)
