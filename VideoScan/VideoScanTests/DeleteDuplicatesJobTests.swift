@@ -133,6 +133,7 @@ struct DeleteDuplicatesJobTests {
         let copies = [c1, c2].map { dupRecord(path: $0.path, size: Int64(fileSize), group: group, disposition: .extraCopy) }
         let different = dupRecord(path: d.path, size: Int64(fileSize), group: group, disposition: .extraCopy)
         model.records = [keeper] + copies + [different]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
         return Rig(dir: dir, root: root, model: model, keeper: keeper, copies: copies, different: different)
     }
 
@@ -153,12 +154,15 @@ struct DeleteDuplicatesJobTests {
         #expect(FileManager.default.fileExists(atPath: rig.keeper.fullPath))
         #expect(rig.different.duplicateDisposition == .review)
 
-        // The keeper was read ONCE (three blocks) across three pairs; every
-        // duplicate was read in full — and each DELETED one once more in
-        // quarantine before its unlink (codex 1593 #1).
+        // The keeper was read ONCE (three blocks) across three pairs. The
+        // FIRST pair (no stored fixity yet) read its duplicate at its path
+        // and once more in quarantine — the two-read shape. Every later
+        // pair is SINGLE-READ (Rick 2026-09-20 evening): moved into
+        // quarantine first, hashed there once, never read at its path —
+        // the look-alike included, which was put back after its one read.
         #expect(probe.blocks("keeper") == 3, "keeper read \(probe.blocks("keeper")) blocks — expected exactly one full read")
-        #expect(probe.blocks("duplicate") == 9)
-        #expect(probe.blocks("quarantine") == 6, "two deleted files × three blocks re-read in quarantine")
+        #expect(probe.blocks("duplicate") == 3, "only the first pair reads its duplicate at its path")
+        #expect(probe.blocks("quarantine") == 9, "first pair re-read + two single-read pairs × three blocks")
         // The metric that matters is OPENS of the keeper path, whatever the
         // read: exactly two — the 4 MiB head compare and the full hash —
         // both in the first pair, i.e. before any quarantine; never again.
@@ -166,8 +170,10 @@ struct DeleteDuplicatesJobTests {
                 "keeper opened \(probe.opens(of: rig.keeper.fullPath)) times — expected head compare + one full read")
         #expect(probe.quarantinesBeforeEachOpen(of: rig.keeper.fullPath) == [0, 0], "no keeper open after the first pair")
         #expect(probe.opens(of: rig.copies[0].fullPath) == 2, "first duplicate: head compare + full hash at its path")
-        #expect(probe.opens(of: rig.copies[1].fullPath) == 1, "stored-keeper path: full hash only")
-        #expect(probe.opens(of: rig.different.fullPath) == 1)
+        #expect(probe.opens(of: rig.copies[1].fullPath) == 0, "single-read path: never opened at its public path")
+        #expect(probe.opens(of: rig.different.fullPath) == 0, "the look-alike was read once, in quarantine, then put back")
+        #expect(probe.quarantineCount == 3, "every pair after the first is moved before it is read")
+        #expect(job.peakInFlight == 1, "an unclassified volume is treated as HDD: one pair at a time")
         let fixity = try #require(rig.keeper.contentFixity, "the keeper's fixity is stored after its one read")
         #expect(fixity.stampMatches(path: rig.keeper.fullPath))
         #expect(fixity.digest == (try CatalogStore.sha256HexStreaming(fileURL: URL(fileURLWithPath: rig.keeper.fullPath))))
@@ -194,7 +200,7 @@ struct DeleteDuplicatesJobTests {
         #expect(console.contains("Deleted (verified identical to keeper.mov): copy1.mov [keeper read in full, fixity stored]"))
         #expect(console.contains("Deleted (verified identical to keeper.mov): copy2.mov [keeper matched by stored fixity, not re-read]"))
         #expect(console.contains("REFUSED lookalike.mov: content differs from keeper keeper.mov — NOT a duplicate"))
-        #expect(rig.model.records.count == 2 && !rig.model.isDeletingDuplicates)
+        #expect(rig.model.records.count == 4 && !rig.model.isDeletingDuplicates, "keeper + look-alike + archive copy + verified sibling")
     }
 
     @Test func pauseHoldsBetweenPairsAndResumeContinues() async throws {
@@ -213,7 +219,7 @@ struct DeleteDuplicatesJobTests {
         #expect(job.isPaused && job.state == .running)
         #expect(job.plan?.counts.deleted == 1, "nothing moves while paused")
         #expect(FileManager.default.fileExists(atPath: rig.copies[1].fullPath))
-        #expect(job.subtitle.contains("paused"), Comment(rawValue: job.subtitle))
+        #expect(job.subtitle.localizedCaseInsensitiveContains("paused"), Comment(rawValue: job.subtitle))
 
         job.resume()
         await job.task?.value
@@ -222,6 +228,9 @@ struct DeleteDuplicatesJobTests {
         #expect(!FileManager.default.fileExists(atPath: rig.copies[1].fullPath))
     }
 
+    /// Stop AND discard the rest (the explicit destructive choice): the
+    /// old abandon — the plan is filed as cancelled. A plain Stop keeps
+    /// the plan resumable (DeleteDuplicatesTierAndSpeedTests).
     @Test func cancelLeavesTheRestAndFilesTheCancelledPlan() async throws {
         let rig = makeRig("cancel"); defer { rig.cleanup() }
         let probe = Probe()
@@ -238,7 +247,7 @@ struct DeleteDuplicatesJobTests {
         while ContinuousClock.now < deadline, !lock.withLock({ started }) { await Task.yield() }
         #expect(lock.withLock { started })
 
-        job.cancel()
+        job.cancel(discardingRemaining: true)
         #expect(job.state == .cancelling)
         release.signal()
         await job.task?.value
@@ -250,7 +259,7 @@ struct DeleteDuplicatesJobTests {
             #expect(FileManager.default.fileExists(atPath: r.fullPath))
             #expect(r.duplicateDisposition == .extraCopy, "a cancel never re-marks a row")
         }
-        #expect(rig.model.records.count == 4)
+        #expect(rig.model.records.count == 6)
         let plan = try #require(job.plan)
         #expect(plan.entries.allSatisfy { $0.status == .skipped })
         #expect(plan.outcome == "cancelled")
@@ -304,6 +313,8 @@ struct DeleteDuplicatesJobTests {
         let regrouped = dupRecord(path: file("regrouped copy.mov").path, size: Int64(fileSize), group: group, disposition: .extraCopy)
         let alreadyDone = dupRecord(path: dir.appendingPathComponent("done copy.mov").path, size: Int64(fileSize), group: group, disposition: .extraCopy)
         model.records = [keeperA, good, keeperB, underB, purged, regrouped]
+        addVerifiedArchiveFamily(to: model, keeper: keeperA)
+        addVerifiedArchiveFamily(to: model, keeper: keeperB)
 
         func entry(_ rec: VideoRecord, keeper: VideoRecord, status: DeleteDuplicatesPlan.EntryStatus = .pending) -> DeleteDuplicatesPlan.Entry {
             var e = DeleteDuplicatesPlan.Entry(id: rec.id, path: rec.fullPath, filename: rec.filename, sizeBytes: rec.sizeBytes,
@@ -407,6 +418,7 @@ struct DeleteDuplicatesJobTests {
         let keeper = dupRecord(path: k.path, size: Int64(fileSize), group: group, disposition: .keep)
         let copy = dupRecord(path: c.path, size: Int64(fileSize), group: group, disposition: .extraCopy)
         model.records = [keeper, copy]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
         #expect(model.saveCatalogNow(), "a catalog file must exist for the staleness rule")
         let catalogDir = (model.catalogStore.fileLocation as NSString).deletingLastPathComponent
         let stale = (catalogDir as NSString).appendingPathComponent("catalog.pre-dup-crossvolume.old.json")
@@ -450,6 +462,7 @@ struct DeleteDuplicatesJobTests {
         let keeper = dupRecord(path: k.path, size: Int64(fileSize), group: group, disposition: .keep)
         let copy = dupRecord(path: c.path, size: Int64(fileSize), group: group, disposition: .extraCopy)
         model.records = [keeper, copy]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
         let plan = DeleteDuplicatesPlan(volumePath: dir.path, catalogLocation: model.catalogStore.fileLocation,
                                         crossVolumeMode: false, skippedBeforePlan: 0, summaryLine: "",
                                         entries: [DeleteDuplicatesPlan.Entry(id: copy.id, path: copy.fullPath, filename: "c.mov",
@@ -489,6 +502,7 @@ struct DeleteDuplicatesJobTests {
         let orphan = dupRecord(path: q.path, size: Int64(fileSize), group: group, disposition: .extraCopy)
         let vanished = dupRecord(path: gone.path, size: Int64(fileSize), group: group, disposition: .extraCopy)
         model.records = [keeper, orphan, vanished]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
         // Simulate the crash: the file sits in the quarantine folder the
         // plan recorded, with the stamp the plan recorded.
         let qdir = dir.appendingPathComponent(DeleteDuplicatesJob.quarantinePrefix + UUID().uuidString, isDirectory: true)

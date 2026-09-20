@@ -405,6 +405,13 @@ where ObjectWillChangePublisher == ObservableObjectPublisher, ID == UUID {
     /// resumable rather than filing it as abandoned (codex 1593 #5).
     /// Defaulted to `cancel()` below.
     func stopForQuit()
+    /// True when the job is active but holds NO in-flight work and can be
+    /// left exactly as it is by a quit — a Delete Duplicates run paused at
+    /// a safe boundary with its plan on disk (Rick 2026-09-20 evening:
+    /// "pausing … should allow quitting when paused, not requiring
+    /// stop"). Such a job does not count as "running" for the quit
+    /// dialog. Defaulted false below.
+    var isQuiescentForQuit: Bool { get }
 
     // Optional pause capability — defaulted off below.
     var canPause: Bool { get }
@@ -441,6 +448,7 @@ extension MediaFileOperationJob {
     var wasRefused: Bool { false }
     var vanishesWhenCancelled: Bool { false }
     func stopForQuit() { cancel() }
+    var isQuiescentForQuit: Bool { false }
 }
 
 /// Shared pause plumbing for ffmpeg-backed jobs (GH #150 — MFO Pause All).
@@ -643,7 +651,16 @@ final class MediaFileOperationsCenter: ObservableObject {
     /// per job) down to one pending state check at a time.
     private var terminalCheckScheduled: Set<UUID> = []
 
+    /// Live jobs the quit guard must ask about. A job paused at a safe
+    /// boundary with its plan saved (`isQuiescentForQuit`) is active for
+    /// the window — its row shows "Paused at N of M" — but not a reason
+    /// to warn on quit.
     var runningCount: Int {
+        jobs.filter { $0.state.isActive && !$0.isQuiescentForQuit }.count
+    }
+
+    /// Every live job, quiescent ones included (the window header).
+    var activeCount: Int {
         jobs.filter { $0.state.isActive }.count
     }
 

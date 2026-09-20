@@ -362,6 +362,7 @@ struct DeleteDuplicatesRecoveryCodex1593Tests {
         let orphanQ = orphanDir.appendingPathComponent("orphan copy.mov"); write(orphanQ, bytes)
 
         model.records = [keeper, good, wrong, occupied, orphan]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
         var e1 = entry(good, keeper: keeper, status: .verified)
         e1.quarantineDirectory = goodDir.path; e1.quarantinedStamp = goodStamp
         var e2 = entry(wrong, keeper: keeper, status: .verified)
@@ -418,6 +419,7 @@ struct DeleteDuplicatesRecoveryCodex1593Tests {
         let keeper = dupRecord(path: k.path, size: Int64(fileSize), group: group, disposition: .keep)
         let copy = dupRecord(path: dir.appendingPathComponent("copy.mov").path, size: Int64(fileSize), group: group, disposition: .extraCopy)
         model.records = [keeper, copy]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
         let plan = planFor(model, dir: dir, entries: [entry(copy, keeper: keeper, status: .verifying)])
         let derived = dir.appendingPathComponent(
             DeleteDuplicatesJob.quarantineDirectoryName(planID: plan.id, entryID: copy.id), isDirectory: true)
@@ -468,6 +470,7 @@ struct DeleteDuplicatesJobCodex1593Tests {
         let copies = [c1, c2].map { dupRecord(path: $0.path, size: Int64(fileSize), group: group, disposition: .extraCopy) }
         let different = dupRecord(path: d.path, size: Int64(fileSize), group: group, disposition: .extraCopy)
         model.records = [keeper] + copies + [different]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
         return Rig(dir: dir, root: root, model: model, keeper: keeper, copies: copies, different: different)
     }
 
@@ -518,6 +521,7 @@ struct DeleteDuplicatesJobCodex1593Tests {
         let keeper = dupRecord(path: k.path, size: Int64(fileSize), group: group, disposition: .keep)
         let target = dupRecord(path: c.path, size: Int64(fileSize), group: group, disposition: .extraCopy)
         model.records = [keeper, target]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
         let gate = Gate()
         gate.onFirstDuplicateBlock = { gate.release.wait() }
 
@@ -533,7 +537,7 @@ struct DeleteDuplicatesJobCodex1593Tests {
 
         #expect(result.deleted == 1)
         #expect(!FileManager.default.fileExists(atPath: c.path), "the verified bytes at the old path are gone")
-        #expect(model.records.count == 2, "the moved row is retained")
+        #expect(model.records.count == 4, "the moved row is retained (plus the archive copy and the verified sibling)")
         #expect(model.records.contains { $0 === target })
         #expect(target.lifecycleStage == .cataloged, "never tombstoned — codex 1593 #4")
         #expect(target.purgedAt == nil)
@@ -591,13 +595,14 @@ struct DeleteDuplicatesJobCodex1593Tests {
         #expect(!MediaFileOperationsCenter.quitInformativeText(running: 1, deleteDuplicatesActive: false)
                     .contains("Delete Duplicates"))
         let console = await consoleText(rig.model)
-        #expect(console.contains("Quit while verifying copy1.mov — left alone"))
+        #expect(console.contains("Quit while verifying copy1.mov — put back"))
         #expect(console.contains("suspended for quit: 0 deleted, 3 remaining"))
     }
 
-    /// An explicit Stop still abandons (files the cancelled plan) — the
-    /// two verbs must not be confused.
-    @Test func explicitStopStillFilesTheCancelledPlan() async throws {
+    /// Stop + "discard the rest" still abandons (files the cancelled
+    /// plan) — the two verbs must not be confused. A plain Stop keeps the
+    /// plan (Rick 2026-09-20 evening; DeleteDuplicatesTierAndSpeedTests).
+    @Test func explicitStopWithDiscardStillFilesTheCancelledPlan() async throws {
         let rig = makeRig("stop"); defer { rig.cleanup() }
         let gate = Gate()
         gate.onFirstDuplicateBlock = { gate.release.wait() }
@@ -605,7 +610,7 @@ struct DeleteDuplicatesJobCodex1593Tests {
         job.start()
         let deadline = ContinuousClock.now + .seconds(10)
         while ContinuousClock.now < deadline, !gate.hasStarted { await Task.yield() }
-        job.cancel()
+        job.cancel(discardingRemaining: true)
         gate.release.signal()
         await job.task?.value
         let plan = try #require(job.plan)

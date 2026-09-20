@@ -85,7 +85,8 @@ struct DeleteDuplicatesRateTests {
     @Test func subtitleOmitsWhatIsNotKnownYetAndSaysPaused() {
         var c = DeleteDuplicatesPlan.Counts(); c.total = 10
         #expect(DeleteDuplicatesRate.subtitle(counts: c, rate: DeleteDuplicatesRate()) == "verified 0 of 10")
-        #expect(DeleteDuplicatesRate.subtitle(counts: c, rate: DeleteDuplicatesRate(), paused: true) == "verified 0 of 10 · paused")
+        // Rick 2026-09-20 evening: a paused run says where it holds.
+        #expect(DeleteDuplicatesRate.subtitle(counts: c, rate: DeleteDuplicatesRate(), paused: true) == "Paused at 0 of 10")
     }
 }
 

@@ -96,6 +96,7 @@ struct DeleteDuplicatesSafetyTests {
         let copy = dupRecord(path: copyURL.path, size: Int64(size),
                              md5: "same", group: group, disposition: .extraCopy)
         model.records = [keeper, copy]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
 
         let result = await model.deleteDuplicates(onVolume: dir.path)
 
@@ -128,6 +129,7 @@ struct DeleteDuplicatesSafetyTests {
             dupRecord(path: copyURL.path, size: 200_000, md5: "m",
                       group: group, disposition: .extraCopy),
         ]
+        addVerifiedArchiveFamily(to: model, keeper: model.records[0])
 
         let result = await model.deleteDuplicates(onVolume: dir.path)
 
@@ -157,6 +159,7 @@ struct DeleteDuplicatesSafetyTests {
             dupRecord(path: copyURL.path, size: 5_000, md5: "x",
                       group: group, disposition: .extraCopy),
         ]
+        addVerifiedArchiveFamily(to: model, keeper: model.records[0])
 
         let result = await model.deleteDuplicates(onVolume: dir.path)
         #expect(result.deleted == 0)
@@ -180,6 +183,7 @@ struct DeleteDuplicatesSafetyTests {
             dupRecord(path: copyURL.path, size: 1_000, md5: "y",
                       group: group, disposition: .extraCopy),
         ]
+        addVerifiedArchiveFamily(to: model, keeper: model.records[0])
 
         let result = await model.deleteDuplicates(onVolume: dir.path)
         #expect(result.deleted == 0)
@@ -203,6 +207,7 @@ struct DeleteDuplicatesSafetyTests {
                                 group: group, disposition: .extraCopy)
         let model = makeModel(dir)
         model.records = [keeper, missing]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
 
         let result = await model.deleteDuplicates(onVolume: dir.path)
 
@@ -286,6 +291,7 @@ struct DeleteDuplicatesSafetyTests {
             dupRecord(id: targetID, path: copyURL.path, size: 2_097_152, md5: "same",
                       group: group, disposition: .extraCopy),
         ]
+        addVerifiedArchiveFamily(to: model, keeper: model.records[0])
         let allowHashing = DispatchSemaphore(value: 0)
         let gate = NSLock()
         var paused = false
@@ -347,6 +353,7 @@ struct DeleteDuplicatesSafetyTests {
             dupRecord(path: copyURL.path, size: Int64(bytes.count), md5: "same",
                       group: group, disposition: .extraCopy),
         ]
+        addVerifiedArchiveFamily(to: model, keeper: model.records[0])
         let release = DispatchSemaphore(value: 0)
         let lock = NSLock()
         var started = false
@@ -378,7 +385,7 @@ struct DeleteDuplicatesSafetyTests {
 
         #expect(result.deleted == 0)
         #expect(FileManager.default.fileExists(atPath: copyURL.path))
-        #expect(model.records.count == 2)
+        #expect(model.records.count == 4)
     }
 
     @Test("100k deletion planning stays linear and under budget",
@@ -439,6 +446,7 @@ struct DeleteDuplicatesSafetyTests {
             dupRecord(path: copyURL.path, size: size, md5: "matrix",
                       group: group, disposition: .extraCopy),
         ]
+        addVerifiedArchiveFamily(to: model, keeper: model.records[0])
 
         let result = await model.deleteDuplicates(onVolume: dir.path)
 

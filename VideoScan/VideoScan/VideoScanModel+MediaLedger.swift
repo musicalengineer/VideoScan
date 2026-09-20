@@ -126,13 +126,18 @@ extension VideoScanModel {
     }
 
     /// A copy left the disk: to the Trash (`permanent == false`) or gone.
+    /// `extraDetail` rides along on every line (Delete Duplicates adds
+    /// its copy-count tier and the remaining verified copies).
     @discardableResult
     func ledgerCopyRemoved(_ recs: [VideoRecord], permanent: Bool, by: MediaLedgerEvent.Actor,
-                           at: Date = Date(), batchID: String? = nil) -> Task<Void, Never>? {
+                           at: Date = Date(), batchID: String? = nil,
+                           extraDetail: [String: String] = [:]) -> Task<Void, Never>? {
         ledgerAppend(recs.map {
-            ledgerEvent(permanent ? .copyDeleted : .copyTrashed, for: $0, by: by, at: at, batchID: batchID,
-                        detail: [MediaLedgerEvent.Detail.volume: $0.volumeName,
-                                 MediaLedgerEvent.Detail.mode: permanent ? "permanent" : "trash"])
+            var detail = extraDetail
+            detail[MediaLedgerEvent.Detail.volume] = $0.volumeName
+            detail[MediaLedgerEvent.Detail.mode] = permanent ? "permanent" : "trash"
+            return ledgerEvent(permanent ? .copyDeleted : .copyTrashed, for: $0, by: by, at: at, batchID: batchID,
+                               detail: detail)
         })
     }
 

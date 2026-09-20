@@ -164,6 +164,7 @@ struct DuplicateEnrichmentInheritanceTests {
         extra.audioTranscript = "the transcript"
         extra.starRating = 2
         model.records = [master, extra]
+        addVerifiedArchiveFamily(to: model, keeper: master)
         let result = await model.deleteDuplicates(onVolume: dir.path)
         #expect(result.deleted == 1)
         #expect(master.audioTranscript == "the transcript")
@@ -367,6 +368,8 @@ struct DuplicateSnapshotFailureAccountingTests {
             dupRecord(path: sameK.path, size: 6_000, group: g2, disposition: .keep),
             dupRecord(path: sameE.path, size: 6_000, group: g2, disposition: .extraCopy),
         ]
+        addVerifiedArchiveFamily(to: model, keeper: model.records[0])
+        addVerifiedArchiveFamily(to: model, keeper: model.records[3])
         let sel = model.duplicateDeletionSelection(onVolume: extraVol.path)
         #expect(sel.crossVolumeCount == 2 && sel.sameVolumeCount == 1 && sel.skippedCount == 0)
 
@@ -425,6 +428,7 @@ struct DuplicateWorkingCopyMediaMatrixTests {
         let copy = dupRecord(path: copyURL.path, size: size, group: g, disposition: .extraCopy)
         copy.audioTranscript = "matrix transcript"
         model.records = [master, copy]
+        addVerifiedArchiveFamily(to: model, keeper: master)
 
         let result = await model.deleteDuplicates(onVolume: extraVol.path)
         #expect(result.deleted == 1, "\(testCase.label): working copy survived")
@@ -462,6 +466,7 @@ struct DuplicateCarryOverLiveRowGuardTests {
         extra.duplicateGroupID = group; extra.duplicateDisposition = .extraCopy; extra.duplicateConfidence = .high
         extra.starRating = 3; extra.userNotes = "stale human"; extra.audioTranscript = "stale transcript"
         model.records = [master, extra]
+        addVerifiedArchiveFamily(to: model, keeper: master)
 
         let allowHashing = DispatchSemaphore(value: 0)
         let gate = NSLock()

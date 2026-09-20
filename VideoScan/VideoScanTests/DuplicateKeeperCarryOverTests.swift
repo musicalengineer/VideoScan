@@ -99,13 +99,14 @@ struct DuplicateKeeperCarryOverTests {
         extra.audioVerifyStatus = "damaged"
 
         model.records = [keeper, extra]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
 
         let result = await model.deleteDuplicates(onVolume: dir.path)
 
         #expect(result.deleted == 1)
         #expect(!FileManager.default.fileExists(atPath: extraURL.path))
         #expect(FileManager.default.fileExists(atPath: keeperURL.path))
-        #expect(model.records.count == 1 && model.records.first === keeper)
+        #expect(model.records.count == 3 && model.records.first === keeper, "keeper + its archive copy + the verified sibling")
 
         // Union rules.
         #expect(keeper.starRating == 3, "star rating = max")
@@ -142,6 +143,7 @@ struct DuplicateKeeperCarryOverTests {
         extra.starRating = 3
         extra.userNotes = "not a duplicate at all"
         model.records = [keeper, extra]
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
 
         let result = await model.deleteDuplicates(onVolume: dir.path)
 

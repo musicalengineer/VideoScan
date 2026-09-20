@@ -457,12 +457,19 @@ extension VideoScanModel {
     /// the disk is the one at `expectedPath` (codex 1593 #4 — the old
     /// fallback stamped the captured live instance, which tombstoned a row
     /// that had merely been moved during the await).
+    ///
+    /// `tier` says how the file left (unlinked, or into the Trash of
+    /// `trashVolume`); `remainingVerifiedCopies` is the count the tier was
+    /// decided on. Both go on the ledger line (copy-count tiering,
+    /// 2026-09-20 evening).
     @discardableResult
     func settleDeletedDuplicate(expectedID: UUID, expectedPath: String,
                                 preAwait record: VideoRecord,
                                 keeperID: UUID, keeperPath: String, keeperFilename: String,
                                 isWorkingCopy: Bool, batchID: String,
-                                keeperMatchedByStoredFixity: Bool) -> Bool {
+                                keeperMatchedByStoredFixity: Bool,
+                                tier: DeletionTier = .permanent, remainingVerifiedCopies: Int? = nil,
+                                trashVolume: String? = nil) -> Bool {
         var catalogMutated = false
         let currentRecord = records.first { $0.id == expectedID && $0.fullPath == expectedPath }
         let liveInstances = Set(records.map(ObjectIdentifier.init))
@@ -532,18 +539,77 @@ extension VideoScanModel {
         let removed = currentRecord ?? snapshot
         assert(!liveInstances.contains(ObjectIdentifier(removed)) || currentRecord != nil,
                "a retained live row must never be stamped as deleted")
-        removed.lifecycleStage = .deletedPermanently
+        let permanent = tier == .permanent
+        removed.lifecycleStage = permanent ? .deletedPermanently : .trashed
         removed.purgedAt = Date()
-        ledgerCopyRemoved([removed], permanent: true, by: .rick, batchID: batchID)
+        var detail = [MediaLedgerEvent.Detail.tier: tier.rawValue]
+        if let remainingVerifiedCopies {
+            detail[MediaLedgerEvent.Detail.remainingVerifiedCopies] = String(remainingVerifiedCopies)
+        }
+        ledgerCopyRemoved([removed], permanent: permanent, by: .rick, batchID: batchID, extraDetail: detail)
         let how = keeperMatchedByStoredFixity
             ? "keeper matched by stored fixity, not re-read"
             : "keeper read in full, fixity stored"
+        let where_ = permanent
+            ? "Deleted"
+            : "Moved to the Trash of \(trashVolume ?? VolumeReachability.volumeName(forPath: expectedPath))"
+        let copies = remainingVerifiedCopies.map { " — \($0) verified copies remain" } ?? ""
         if isWorkingCopy {
-            log("  " + WorkingCopyCleanupText.logRemoved(path: expectedPath, masterPath: keeperPath) + " [\(how)]")
+            log("  " + WorkingCopyCleanupText.logRemoved(path: expectedPath, masterPath: keeperPath)
+                + " [\(how)]" + (permanent ? "" : " (to the Trash)") + copies)
         } else {
-            log("  Deleted (verified identical to \(keeperFilename)): \(record.filename) [\(how)]")
+            log("  \(where_) (verified identical to \(keeperFilename)): \(record.filename) [\(how)]\(copies)")
         }
         return catalogMutated
+    }
+
+    /// The family's copies the copy-count tier will ask the disk about,
+    /// from the FRESH catalog, right before the pair is dispatched: every
+    /// fixity-verified Master Archive copy of any member (the promote
+    /// link, or an archive copy grouped in by content), and every other
+    /// active member with whatever fixity it carries. The keeper and the
+    /// duplicate itself are not listed — the keeper is counted by the
+    /// worker as "verified this pair". Sendable value: paths + fixities.
+    func deletionTierCandidates(record: VideoRecord, keeper: VideoRecord) -> DeletionTierCandidates {
+        var out = DeletionTierCandidates()
+        var seenArchive = Set<UUID>()
+        var members: [VideoRecord] = [keeper]
+        if let group = record.duplicateGroupID {
+            for r in records where !r.isPurged && r.id != record.id && r.id != keeper.id && r.duplicateGroupID == group {
+                members.append(r)
+            }
+        }
+        func noteArchive(_ copy: VideoRecord) {
+            guard !copy.isPurged, !seenArchive.contains(copy.id), let fixity = copy.archiveFixity else { return }
+            seenArchive.insert(copy.id)
+            out.archiveCopies.append(.init(path: copy.fullPath, digest: fixity.digest, sizeBytes: fixity.sizeBytes))
+        }
+        // The keeper is counted once by the worker, as the keeper. When it
+        // IS the archive copy it is not listed again as an archive copy —
+        // the count stays honest ("only the archive copy would remain")
+        // and the tier only knows the family HAS a verified archive copy.
+        if isArchiveCopy(keeper), keeper.archiveFixity != nil {
+            out.keeperIsVerifiedArchive = true
+            seenArchive.insert(keeper.id)
+        }
+        for member in members + [record] {
+            if isArchiveCopy(member), member.id != record.id { noteArchive(member) }
+            if let copy = masterArchiveCopy(of: member) { noteArchive(copy) }
+        }
+        for member in members where member.id != keeper.id && !seenArchive.contains(member.id) {
+            out.otherCopies.append(.init(path: member.fullPath, fixity: member.contentFixity))
+        }
+        return out
+    }
+
+    /// The user's media-tech classification for the volume holding
+    /// `path` (longest matching scan-target prefix); `.unknown` when no
+    /// target matches. Same rule as the MFO center's gate wiring.
+    func mediaTech(forPath path: String) -> VolumeMediaTech {
+        scanTargets
+            .filter { !$0.searchPath.isEmpty && PathScope.contains(path, within: $0.searchPath) }
+            .max(by: { $0.searchPath.count < $1.searchPath.count })?
+            .mediaTech ?? .unknown
     }
 
     /// A pair the gate refused: the live row (same id AND path) is marked

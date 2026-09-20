@@ -384,6 +384,14 @@ struct DuplicateKeeperSettings: Equatable, Sendable {
     /// carry-over are unchanged either way. Strings: WorkingCopyCleanupText.
     var alsoCleanUpWorkingCopies: Bool = false
 
+    /// "Prefer the Trash for every duplicate" (Rick 2026-09-20 evening,
+    /// the copy-count tiering). DEFAULT OFF: a verified duplicate leaving
+    /// three or more verified copies behind is deleted outright, one
+    /// leaving exactly the archive copy and the keeper goes to the drive's
+    /// Trash. ON: every duplicate goes to the Trash, whatever the count.
+    /// Neither setting ever removes a file below the archive copy.
+    var preferTrashForEveryDuplicate: Bool = false
+
     /// `DuplicateKeeperPolicy.electionDescriptor` of the policy the LAST
     /// full Find Duplicates pass elected under (codex review B). nil =
     /// never stamped ⇒ next pass re-elects everything. Catalog-level, not
@@ -393,6 +401,7 @@ struct DuplicateKeeperSettings: Equatable, Sendable {
     static let precedenceKey = "dupKeep_volumePrecedence"
     static let workingCopyCleanupKey = "dupKeep_alsoCleanUpWorkingCopies"
     static let lastElectionKey = "dupKeep_lastElectionDescriptor"
+    static let preferTrashKey = "dupKeep_preferTrashForEveryDuplicate"
 
     static func restored(from defaults: UserDefaults) -> DuplicateKeeperSettings {
         var s = DuplicateKeeperSettings()
@@ -404,6 +413,9 @@ struct DuplicateKeeperSettings: Equatable, Sendable {
         if defaults.object(forKey: workingCopyCleanupKey) != nil {
             s.alsoCleanUpWorkingCopies = defaults.bool(forKey: workingCopyCleanupKey)
         }
+        if defaults.object(forKey: preferTrashKey) != nil {
+            s.preferTrashForEveryDuplicate = defaults.bool(forKey: preferTrashKey)
+        }
         s.lastElectionDescriptor = defaults.string(forKey: lastElectionKey)
         return s
     }
@@ -411,6 +423,7 @@ struct DuplicateKeeperSettings: Equatable, Sendable {
     func save(to defaults: UserDefaults) {
         defaults.set(volumePrecedence, forKey: Self.precedenceKey)
         defaults.set(alsoCleanUpWorkingCopies, forKey: Self.workingCopyCleanupKey)
+        defaults.set(preferTrashForEveryDuplicate, forKey: Self.preferTrashKey)
         defaults.set(lastElectionDescriptor, forKey: Self.lastElectionKey)
     }
 }
