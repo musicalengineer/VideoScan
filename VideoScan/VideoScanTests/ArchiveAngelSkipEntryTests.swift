@@ -39,6 +39,21 @@ struct ArchiveAngelSkipEntryTests {
 
     // MARK: - 1. Logic — the state transitions
 
+    @Test("a row waiting for buffer space is skippable right away (Rick 2026-09-19); a genuinely failed row is not")
+    func bufferShortRowIsSkippable() {
+        var waiting = entry(.failed, "big.mxf")
+        waiting.failure = ArchiveAngelPlan.bufferShortNote(need: 50_000_000_000, free: 10_000_000_000)
+        var broken = entry(.failed, "bad.mov")
+        broken.failure = "Transcode failed: exit code 69"
+        #expect(waiting.isBufferShort && waiting.isSkippable)
+        #expect(!broken.isBufferShort && !broken.isSkippable)
+        var p = plan("/tmp/x", [waiting, broken])
+        #expect(p.skipEntry(id: waiting.id, note: note)?.previous == .failed)
+        #expect(p.entries[0].status == .skipped && p.entries[0].failure == nil, "the waiting note is cleared by the skip")
+        #expect(p.skipEntry(id: broken.id, note: note) == nil)
+        #expect(p.entries[1].status == .failed)
+    }
+
     @Test("skip is accepted from pending, preparing and ready; refused once the row is settled")
     func skippableStates() {
         for from in [ArchiveAngelPlan.EntryStatus.pending, .preparing, .ready] {

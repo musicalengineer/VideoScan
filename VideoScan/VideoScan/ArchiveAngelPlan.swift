@@ -136,6 +136,11 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         var isBufferShort: Bool {
             status == .failed && (failure ?? "").hasPrefix(ArchiveAngelPlan.bufferShortPrefix)
         }
+        /// The ROW's skippability (Rick 2026-09-19: "can't I skip a file
+        /// right off the bat?"): every status the state machine allows,
+        /// plus a row waiting for buffer space — it is parked, not broken,
+        /// and a decision against it needs no buffer at all.
+        var isSkippable: Bool { status.isSkippable || isBufferShort }
         func step(_ kind: StepKind) -> StepOutcome { steps.first { $0.kind == kind } ?? StepOutcome(kind: kind) }
         /// The user's skip, recorded on the row. Clears `failure` — a skip
         /// is a decision, not a breakage — and leaves the step outcomes
@@ -311,7 +316,7 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
                             note: (EntryStatus, Date) -> String) -> (index: Int, previous: EntryStatus)? {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return nil }
         let previous = entries[i].status
-        guard previous.isSkippable else { return nil }
+        guard entries[i].isSkippable else { return nil }
         entries[i].markSkippedByUser(at: now, note: note(previous, now))
         return (i, previous)
     }

@@ -205,7 +205,16 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     func skip(entryID id: UUID, now: Date = Date()) -> Bool {
         // The transition itself lives on the plan (pure, unit-tested); the
         // job only does the side effects.
-        guard let (idx, before) = plan.skipEntry(id: id, now: now, note: Self.skipNote) else { return false }
+        // A row parked for buffer space reads "waiting", never "failed".
+        let wasWaiting = plan.entries.first(where: { $0.id == id })?.isBufferShort == true
+        func noteMaker(_ was: ArchiveAngelPlan.EntryStatus, _ when: Date) -> String {
+            if wasWaiting {
+                return Self.skipNote(was: .pending, at: when)
+                    .replacingOccurrences(of: "while it was pending", with: "while it was waiting for buffer space")
+            }
+            return Self.skipNote(was: was, at: when)
+        }
+        guard let (idx, before) = plan.skipEntry(id: id, now: now, note: noteMaker) else { return false }
         let filename = plan.entries[idx].filename
         note("Archive Angel: you skipped \(filename) — out of this batch (it was \(before.rawValue)); "
              + "nothing was written to the catalog record; the Angel remembers the pass (ledger) and "

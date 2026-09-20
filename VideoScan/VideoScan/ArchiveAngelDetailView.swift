@@ -46,7 +46,7 @@ struct ArchiveAngelDetailView: View {
                                     // loop's predicate and excludes .ready.
                                     guard job.state.isActive,
                                           let current = job.plan.entries.first(where: { $0.id == entry.id }),
-                                          current.status.isSkippable else { return }
+                                          current.isSkippable else { return }
                                     job.skip(entryID: entry.id)
                                 }
                                 Divider()
@@ -227,7 +227,7 @@ struct ArchiveAngelEntryRow: View {
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
-            if canSkip && entry.status.isSkippable {
+            if canSkip && entry.isSkippable {   // incl. rows waiting for buffer space
                 skipButton
             }
         }
