@@ -338,6 +338,12 @@ extension VideoScanModel {
             log("  (Skipping \(skippedCount) file(s) — \(skippedNote))")
         }
 
+        // Keeper stamps (the resume re-check's "keeper unchanged since the
+        // plan" reference) in ONE detached pass — never a stat per target
+        // on the main actor (QA MINOR 5). Keepers repeat across targets, so
+        // the set is small.
+        let keeperPaths = Set(targets.compactMap { rec in rec.duplicateGroupID.flatMap { keepers[$0]?.fullPath } })
+        let keeperStamps = await Self.captureStamps(paths: Array(keeperPaths))
         var entries: [DeleteDuplicatesPlan.Entry] = []
         entries.reserveCapacity(targets.count)
         for rec in targets {
@@ -348,12 +354,25 @@ extension VideoScanModel {
                 id: rec.id, path: rec.fullPath, filename: rec.filename, sizeBytes: rec.sizeBytes,
                 keeperID: keeper?.id ?? UUID(), keeperPath: keeper?.fullPath ?? "",
                 keeperFilename: keeper?.filename ?? "",
-                keeperStamp: keeper.flatMap { FileIdentityStamp.capture(path: $0.fullPath) },
+                keeperStamp: keeper.flatMap { keeperStamps[$0.fullPath] },
                 isWorkingCopy: isWorkingCopy(rec)))
         }
         return DeleteDuplicatesPlan(volumePath: volumePath, catalogLocation: catalogStore.fileLocation,
                                     crossVolumeMode: selection.crossVolumeMode, skippedBeforePlan: skippedCount,
                                     summaryLine: summaryLine, snapshotPath: snapshotPath, entries: entries)
+    }
+
+    /// One stat per path, off the main actor. Unreachable paths are absent
+    /// from the result.
+    nonisolated static func captureStamps(paths: [String]) async -> [String: FileIdentityStamp] {
+        guard !paths.isEmpty else { return [:] }
+        return await Task.detached(priority: .userInitiated) {
+            var out: [String: FileIdentityStamp] = [:]
+            for path in paths {
+                if let stamp = FileIdentityStamp.capture(path: path) { out[path] = stamp }
+            }
+            return out
+        }.value
     }
 
     /// A plan with no rows — the job finishes at once with the old
@@ -478,21 +497,26 @@ extension VideoScanModel {
 
     /// Look for unfinished plans at launch (called from VideoScanApp's
     /// onAppear, where the other launch settlements happen) and EXPOSE the
-    /// newest one for this catalog — never start it. The MFO window and
-    /// the main window offer "Resume / Discard". Plans made from another
-    /// catalog are left alone (they would re-validate to nothing anyway).
+    /// OLDEST one for this catalog — never start it. The MFO window and
+    /// the main window offer "Resume / Discard"; once that plan is settled
+    /// (resumed to the end, or discarded) the next check offers the next
+    /// one, oldest first, one at a time (QA MINOR 7). Plans made from
+    /// another catalog are left alone (they would re-validate to nothing
+    /// anyway).
     func checkForUnfinishedDeleteDuplicatesPlans(root: URL = DeleteDuplicatesPlanStore.defaultRoot) {
         guard !isReadOnly, !isDeletingDuplicates else { return }
         let plans = DeleteDuplicatesPlanStore.unfinishedPlans(root: root, log: { [weak self] in self?.log($0) })
         let mine = plans.filter { $0.catalogLocation == catalogStore.fileLocation }
-        guard let newest = mine.first else {
+        guard let oldest = mine.last else {   // unfinishedPlans is newest-first
             pendingDeleteDuplicatesResume = nil
             return
         }
-        pendingDeleteDuplicatesResume = newest
-        log("\nDelete Duplicates: an unfinished run on \(newest.volumeName) was found — "
-            + "\(newest.remainingCount) of \(newest.entries.count) still to do. Nothing resumes on its own; "
-            + "use Resume or Discard in Media File Operations.")
+        pendingDeleteDuplicatesResume = oldest
+        let others = mine.count - 1
+        log("\nDelete Duplicates: an unfinished run on \(oldest.volumeName) was found — "
+            + "\(oldest.remainingCount) of \(oldest.entries.count) still to do. Nothing resumes on its own; "
+            + "use Resume or Discard in Media File Operations."
+            + (others > 0 ? " \(others) more unfinished run\(others == 1 ? "" : "s") will be offered after it, oldest first." : ""))
     }
 
     /// The user chose Discard: the plan is settled (remaining rows skipped,

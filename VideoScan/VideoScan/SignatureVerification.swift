@@ -138,6 +138,10 @@ enum SignatureVerification {
         else { return .failure(.unreadable(keeperPath)) }
         guard let duplicateBefore = FileIdentityStamp.capture(path: duplicatePath)
         else { return .failure(.unreadable(duplicatePath)) }
+        // Two names, one inode (hard link, or two spellings of one path on
+        // a case-insensitive volume): "the duplicate" IS the keeper. Refuse
+        // before any read or move — QA MAJOR 2 on 462b034b.
+        guard !keeperBefore.isSameFile(as: duplicateBefore) else { return .failure(.samePath) }
 
         // Refusal accelerators (Rick 2026-08-17: a LaCie pass with ~1,400
         // name-alike NON-duplicates was paying two full 50 GB reads per
@@ -219,16 +223,23 @@ enum SignatureVerification {
         guard keeperPath != duplicatePath else { return .failure(.samePath) }
         guard let keeperBefore = FileIdentityStamp.capture(path: keeperPath)
         else { return .failure(.unreadable(keeperPath)) }
+        guard let duplicateBefore = FileIdentityStamp.capture(path: duplicatePath)
+        else { return .failure(.unreadable(duplicatePath)) }
+        // Same inode as the keeper: nothing to free, and unlinking it
+        // would be unlinking the keeper's own name. Before any read.
+        guard !keeperBefore.isSameFile(as: duplicateBefore) else { return .failure(.samePath) }
 
-        // No usable stored fixity → the two-file path, once.
+        // No usable stored fixity → the two-file path, once. "Usable" is
+        // the VERIFICATION-GRADE check (`describesFileNow`): sha256, a
+        // ctime-bearing stamp, and device/inode/size/mtime/ctime all
+        // reproducing under a fresh stat. mtime alone is user-settable
+        // (QA MAJOR 1); ctime is the kernel's and is not.
         guard let fixity = keeperFixity,
-              fixity.algorithm == ContentFixity.sha256,
-              fixity.stampMatches(keeperBefore) else {
+              fixity.isUsableForVerification,
+              fixity.describesFileNow(keeperBefore) else {
             return verify(keeperPath: keeperPath, duplicatePath: duplicatePath, hooks: hooks)
         }
 
-        guard let duplicateBefore = FileIdentityStamp.capture(path: duplicatePath)
-        else { return .failure(.unreadable(duplicatePath)) }
         // Different sizes can never be identical bytes — refuse before
         // reading anything.
         guard duplicateBefore.size == fixity.byteCount else {
@@ -319,15 +330,20 @@ enum SignatureVerification {
 
         hooks.didQuarantine?(quarantined.path)
 
-        let quarantineMatches = FileIdentityStamp.capture(path: quarantined.path)
-            == proof.duplicateIdentity
+        // The quarantine MOVE itself bumps the inode's ctime (a rename is
+        // an inode change), so the moved file is compared on device /
+        // inode / size / mtime — everything the move cannot change. The
+        // keeper, which was not moved, must still match to the ctime.
+        let quarantineMatches = FileIdentityStamp.capture(path: quarantined.path)?
+            .matchesIgnoringChangeTime(proof.duplicateIdentity) ?? false
         let keeperMatches = FileIdentityStamp.capture(path: proof.keeperPath)
             == proof.keeperIdentity
         let originalOccupied = FileManager.default.fileExists(atPath: original.path)
+        let cancelledAfterQuarantine = hooks.shouldCancel()
         guard quarantineMatches, keeperMatches, !originalOccupied,
-              !hooks.shouldCancel() else {
+              !cancelledAfterQuarantine else {
             let reason: String
-            if hooks.shouldCancel() {
+            if cancelledAfterQuarantine {
                 reason = "cancelled after quarantine"
             } else if !quarantineMatches {
                 reason = "quarantined file identity changed"
@@ -338,7 +354,8 @@ enum SignatureVerification {
             }
             return restoreOrRetain(
                 quarantined: quarantined, original: original,
-                quarantineDirectory: quarantineDirectory, reason: reason)
+                quarantineDirectory: quarantineDirectory, reason: reason,
+                cancelled: cancelledAfterQuarantine)
         }
 
         do {
@@ -367,9 +384,13 @@ enum SignatureVerification {
         return .deleted(bytes: proof.duplicateSize)
     }
 
+    /// Put the quarantined file back. A Stop that landed after the move is
+    /// reported as `.cancelled` once the file is restored (QA MINOR 3) —
+    /// it is not a changed file, and the row must not be re-marked Review.
     private static func restoreOrRetain(quarantined: URL, original: URL,
                                         quarantineDirectory: URL,
-                                        reason: String) -> DeletionResult {
+                                        reason: String,
+                                        cancelled: Bool = false) -> DeletionResult {
         guard !FileManager.default.fileExists(atPath: original.path) else {
             return .retainedQuarantine(
                 path: quarantined.path,
@@ -378,7 +399,7 @@ enum SignatureVerification {
         do {
             try FileManager.default.moveItem(at: quarantined, to: original)
             try FileManager.default.removeItem(at: quarantineDirectory)
-            return .refused(.changedSinceVerification(original.path))
+            return .refused(cancelled ? .cancelled : .changedSinceVerification(original.path))
         } catch {
             return .retainedQuarantine(
                 path: quarantined.path,

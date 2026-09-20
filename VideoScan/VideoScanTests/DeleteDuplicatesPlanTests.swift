@@ -200,6 +200,18 @@ struct DeleteDuplicatesPlanStoreTests {
         #expect(back.log == ["gen 2"])
     }
 
+    /// QA MINOR 4: the writer remembers the last generation per plan id, so
+    /// a same-process resume can seed its counter and never be dropped.
+    @Test func orderedWriterExposesLastGeneration() async throws {
+        let root = tempRoot("lastgen"); defer { try? FileManager.default.removeItem(at: root) }
+        let p = plan([entry("a")])
+        let writer = DeleteDuplicatesPlanWriter()
+        #expect(await writer.lastGeneration(for: p.id) == 0)
+        _ = try await writer.write(p, root: root, generation: 7)
+        #expect(await writer.lastGeneration(for: p.id) == 7)
+        #expect(await writer.lastGeneration(for: UUID()) == 0)
+    }
+
     /// Isolation: under the test host the store root is per-process scratch,
     /// never Rick's App Support — so a job started through the normal entry
     /// point in any test cannot write (or offer) real plans.

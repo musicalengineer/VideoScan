@@ -557,6 +557,10 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             return true
         }
         let actualOrNil: String?
+        // Stamp BEFORE the read (off-main, one stat), so the general
+        // fixity written on a match is bound to the bytes that were hashed.
+        let hashedPath = item.fullPath
+        let stampBefore = await Task.detached { FileIdentityStamp.capture(path: hashedPath) }.value
         do {
             let reporter = PromoteProgressReporter()
             let fileBytes = max(1, item.expectedBytes)
@@ -614,7 +618,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
 
         if let expected = item.manifestSHA {
             if actual == expected {
-                applyMatch(item: item, digest: actual, model: model, name: name)
+                applyMatch(item: item, digest: actual, model: model, name: name, stampBefore: stampBefore)
             } else {
                 flagMismatch(item: item, name: name, expected: expected, actual: actual,
                              reference: "manifest", model: model)
@@ -628,7 +632,8 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
                 let write = model.restoreArchiveFixity(path: item.fullPath,
                                                        observedDigest: item.recordDigest,
                                                        digest: actual,
-                                                       sizeBytes: item.expectedBytes)
+                                                       sizeBytes: item.expectedBytes,
+                                                       stampBeforeRead: stampBefore)
                 if write == .changedUnderVerify {
                     noteChangedUnderVerify(name: name, verdict: "bytes match the catalog's fixity record (no manifest row)",
                                            expected: recorded, actual: actual)
@@ -681,12 +686,14 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     }
 
     private func applyMatch(item: VerifyArchivePlan.Item, digest: String,
-                            model: VideoScanModel, name: String) {
+                            model: VideoScanModel, name: String,
+                            stampBefore: FileIdentityStamp? = nil) {
         let hadFixity = item.recordDigest != nil
         let write = model.restoreArchiveFixity(path: item.fullPath,
                                                observedDigest: item.recordDigest,
                                                digest: digest,
-                                               sizeBytes: item.manifestBytes ?? item.expectedBytes)
+                                               sizeBytes: item.manifestBytes ?? item.expectedBytes,
+                                               stampBeforeRead: stampBefore)
         if write == .changedUnderVerify {
             noteChangedUnderVerify(name: name, verdict: "bytes match the manifest",
                                    expected: digest, actual: digest)
@@ -946,7 +953,8 @@ extension VideoScanModel {
                               observedDigest: String?,
                               digest: String,
                               sizeBytes: Int64,
-                              verifiedAt: Date = Date()) -> ArchiveFixityWrite {
+                              verifiedAt: Date = Date(),
+                              stampBeforeRead: FileIdentityStamp? = nil) -> ArchiveFixityWrite {
         guard !isReadOnly else { return .refused }
         guard let rec = liveRecordForFixityWrite(path: path, observedDigest: observedDigest) else {
             return .changedUnderVerify
@@ -954,9 +962,13 @@ extension VideoScanModel {
         rec.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: verifiedAt,
                                           sizeBytes: sizeBytes)
         // The whole file was just read: keep the general fixity too (the
-        // Delete Duplicates keeper path stats it instead of re-reading).
-        if let general = ContentFixity.captured(path: path, digest: digest, byteCount: sizeBytes,
-                                                computedAt: verifiedAt) {
+        // Delete Duplicates keeper path stats it instead of re-reading) —
+        // but only with a stamp taken BEFORE the read that the after-stat
+        // reproduces, like SignatureVerification.verify (QA NIT 8). No
+        // before-stamp → no general fixity.
+        if let before = stampBeforeRead,
+           let general = ContentFixity.captured(path: path, digest: digest, byteCount: sizeBytes,
+                                                before: before, computedAt: verifiedAt) {
             rec.contentFixity = general
         }
         noteCatalogRecordsMutated()

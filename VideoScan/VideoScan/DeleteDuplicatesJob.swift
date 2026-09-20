@@ -249,6 +249,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         plan.startedAt = plan.startedAt ?? Date()
         self.plan = plan
         isIndeterminateValue = false
+        // The ordered writer remembers the last generation it wrote for
+        // this plan id for the life of the process; a same-process resume
+        // must continue from there or every save would be dropped as
+        // stale (QA MINOR 4).
+        saveGeneration = await DeleteDuplicatesPlanWriter.shared.lastGeneration(for: plan.id)
 
         guard !plan.entries.isEmpty else {
             // The old "(0, 0, skipped, 0)" — nothing to run, nothing to save.
@@ -432,15 +437,20 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         let now = Date()
         var refusedNow = 0
         var skippedNow = 0
+        // Every stat and directory listing in ONE detached pass (QA MINOR
+        // 5): keeper stamps, which targets are gone, and any quarantine
+        // folder a crash left beside a target (QA MINOR 6).
+        let unsettled = plan.entries.filter { !$0.status.isSettled }
+        let facts = await Self.resumeDiskFacts(targetPaths: unsettled.map(\.path),
+                                               keeperPaths: unsettled.map(\.keeperPath))
         for i in plan.entries.indices where !plan.entries[i].status.isSettled {
             let e = plan.entries[i]
-            guard let rec = model.record(forID: e.id), !rec.isPurged, rec.fullPath == e.path else {
+            func skip(_ why: String, log line: String) {
                 plan.entries[i].status = .skipped
-                plan.entries[i].note = "record is no longer in the catalog at this path — skipped at resume"
+                plan.entries[i].note = why
                 plan.entries[i].settledAt = now
                 skippedNow += 1
-                model.log("  Skipped \(e.filename): no longer in the catalog at \(e.path)")
-                continue
+                model.log("  " + line)
             }
             func refuse(_ why: String) {
                 plan.entries[i].status = .refused
@@ -448,6 +458,32 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 plan.entries[i].settledAt = now
                 refusedNow += 1
                 model.noteRefusedDuplicate(expectedID: e.id, expectedPath: e.path, filename: e.filename, reason: why)
+            }
+            guard let rec = model.record(forID: e.id), !rec.isPurged, rec.fullPath == e.path else {
+                skip("record is no longer in the catalog at this path — skipped at resume",
+                     log: "Skipped \(e.filename): no longer in the catalog at \(e.path)")
+                continue
+            }
+            // The file itself is gone. A crash between the quarantine move
+            // and the unlink leaves it in a sibling
+            // `.videoscan-quarantine-<uuid>/`: put it back and let this
+            // run verify it properly. No quarantine → it left before the
+            // crash; a decision, not a refusal, so the row is not re-marked.
+            if facts.missingTargets.contains(e.path) {
+                if let orphan = facts.quarantined[e.path] {
+                    switch Self.restoreQuarantined(orphan, to: e.path) {
+                    case .success:
+                        model.log("  Restored \(e.filename) from \(orphan.deletingLastPathComponent().lastPathComponent) (a crash left it in quarantine) — it will be verified again before anything is removed")
+                        plan.log.append("Restored \(e.filename) from quarantine at resume")
+                    case .failure(let error):
+                        refuse("left in quarantine at \(orphan.path) — could not put it back: \(error.localizedDescription)")
+                        continue
+                    }
+                } else {
+                    skip("gone before the crash — nothing on disk at this path",
+                         log: "Skipped \(e.filename): gone before the crash — nothing on disk at \(e.path)")
+                    continue
+                }
             }
             guard rec.duplicateDisposition == .extraCopy, let group = rec.duplicateGroupID else {
                 refuse("no longer marked as an extra copy — refused at resume"); continue
@@ -460,7 +496,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             guard model.excludingMasterArchiveFiles([rec], verb: "Delete Duplicates").count == 1 else {
                 refuse("now lives in the Master Archive — refused at resume"); continue
             }
-            guard let stamp = FileIdentityStamp.capture(path: keeper.fullPath) else {
+            guard let stamp = facts.keeperStamps[keeper.fullPath] else {
                 refuse("keeper \(keeper.filename) is not reachable — refused at resume"); continue
             }
             if let planned = e.keeperStamp, planned != stamp {
@@ -496,6 +532,64 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             }
         }
         return plan
+    }
+
+    /// What the resume re-check needs from disk, gathered off the main
+    /// actor in one pass: a stamp per reachable keeper, the targets that
+    /// are no longer at their path, and — for those — a same-named file
+    /// in a sibling `.videoscan-quarantine-*` folder (the crash window
+    /// between quarantine move and unlink).
+    struct ResumeDiskFacts: Sendable {
+        var keeperStamps: [String: FileIdentityStamp] = [:]
+        var missingTargets: Set<String> = []
+        var quarantined: [String: URL] = [:]
+    }
+
+    static let quarantinePrefix = ".videoscan-quarantine-"
+
+    nonisolated static func resumeDiskFacts(targetPaths: [String], keeperPaths: [String]) async -> ResumeDiskFacts {
+        await Task.detached(priority: .userInitiated) {
+            var facts = ResumeDiskFacts()
+            let fm = FileManager.default
+            for path in Set(keeperPaths) where !path.isEmpty {
+                if let stamp = FileIdentityStamp.capture(path: path) { facts.keeperStamps[path] = stamp }
+            }
+            var listed: [String: [String]] = [:]   // parent dir → quarantine folder names
+            for path in targetPaths where !fm.fileExists(atPath: path) {
+                facts.missingTargets.insert(path)
+                let parent = (path as NSString).deletingLastPathComponent
+                let name = (path as NSString).lastPathComponent
+                let folders = listed[parent] ?? {
+                    let names = ((try? fm.contentsOfDirectory(atPath: parent)) ?? [])
+                        .filter { $0.hasPrefix(quarantinePrefix) }
+                    listed[parent] = names
+                    return names
+                }()
+                for folder in folders {
+                    let candidate = URL(fileURLWithPath: parent).appendingPathComponent(folder, isDirectory: true)
+                        .appendingPathComponent(name)
+                    if fm.fileExists(atPath: candidate.path) { facts.quarantined[path] = candidate; break }
+                }
+            }
+            return facts
+        }.value
+    }
+
+    /// Move an orphaned quarantined file back to its original path and
+    /// drop the (then empty) quarantine folder. Never overwrites: an
+    /// occupied original path is an error.
+    nonisolated static func restoreQuarantined(_ quarantined: URL, to originalPath: String) -> Result<Void, Error> {
+        let fm = FileManager.default
+        guard !fm.fileExists(atPath: originalPath) else {
+            return .failure(CocoaError(.fileWriteFileExists))
+        }
+        do {
+            try fm.moveItem(at: quarantined, to: URL(fileURLWithPath: originalPath))
+            try? fm.removeItem(at: quarantined.deletingLastPathComponent())
+            return .success(())
+        } catch {
+            return .failure(error)
+        }
     }
 
     /// True when the snapshot is missing or older than the catalog file's

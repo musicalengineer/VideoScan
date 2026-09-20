@@ -411,6 +411,116 @@ struct DeleteDuplicatesJobTests {
         #expect(after.entries[0].status == .deleted && job.result.deleted == 1)
     }
 
+    /// QA MINOR 4: the shared writer already wrote generation 7 for this
+    /// plan in this process; a resumed job must continue past it, or every
+    /// one of its saves is dropped and the plan filed under done/ is the
+    /// stale unfinished one.
+    @Test func sameProcessResumeIsNotDroppedAsStale() async throws {
+        let dir = tempDir("samegen"); defer { try? FileManager.default.removeItem(at: dir) }
+        let root = dir.appendingPathComponent("plans", isDirectory: true)
+        let bytes = (0..<fileSize).map { UInt8($0 % 107) }
+        let model = makeModel(dir)
+        let group = UUID()
+        let k = dir.appendingPathComponent("k.mov"); write(k, bytes)
+        let c = dir.appendingPathComponent("c.mov"); write(c, bytes)
+        let keeper = dupRecord(path: k.path, size: Int64(fileSize), group: group, disposition: .keep)
+        let copy = dupRecord(path: c.path, size: Int64(fileSize), group: group, disposition: .extraCopy)
+        model.records = [keeper, copy]
+        let plan = DeleteDuplicatesPlan(volumePath: dir.path, catalogLocation: model.catalogStore.fileLocation,
+                                        crossVolumeMode: false, skippedBeforePlan: 0, summaryLine: "",
+                                        entries: [DeleteDuplicatesPlan.Entry(id: copy.id, path: copy.fullPath, filename: "c.mov",
+                                                                             sizeBytes: Int64(fileSize), keeperID: keeper.id,
+                                                                             keeperPath: keeper.fullPath, keeperFilename: "k.mov",
+                                                                             keeperStamp: FileIdentityStamp.capture(path: k.path))])
+        _ = try await DeleteDuplicatesPlanWriter.shared.write(plan, root: root, generation: 7)
+
+        let job = DeleteDuplicatesJob(model: model, resuming: plan, planRoot: root)
+        job.start()
+        await job.task?.value
+
+        #expect(job.result.deleted == 1)
+        let done = try DeleteDuplicatesPlanStore.load(
+            url: DeleteDuplicatesPlanStore.doneURL(for: plan.id, root: root).appendingPathComponent("plan.json"))
+        #expect(done.outcome == "completed" && done.entries[0].status == .deleted,
+                "the finished plan on disk must be the job's, not the stale generation-7 one")
+        #expect(await DeleteDuplicatesPlanWriter.shared.lastGeneration(for: plan.id) > 7)
+    }
+
+    /// QA MINOR 6: a crash between the quarantine move and the unlink. At
+    /// resume the orphaned file is put back and verified again; a target
+    /// that is simply gone is skipped ("gone before the crash"), never
+    /// re-marked Review.
+    @Test func resumeRestoresAnOrphanedQuarantineAndSkipsWhatIsGone() async throws {
+        let dir = tempDir("orphan"); defer { try? FileManager.default.removeItem(at: dir) }
+        let root = dir.appendingPathComponent("plans", isDirectory: true)
+        let bytes = (0..<fileSize).map { UInt8($0 % 109) }
+        let model = makeModel(dir)
+        let group = UUID()
+        let k = dir.appendingPathComponent("k.mov"); write(k, bytes)
+        let q = dir.appendingPathComponent("quarantined copy.mov"); write(q, bytes)
+        let gone = dir.appendingPathComponent("gone copy.mov")
+        let keeper = dupRecord(path: k.path, size: Int64(fileSize), group: group, disposition: .keep)
+        let orphan = dupRecord(path: q.path, size: Int64(fileSize), group: group, disposition: .extraCopy)
+        let vanished = dupRecord(path: gone.path, size: Int64(fileSize), group: group, disposition: .extraCopy)
+        model.records = [keeper, orphan, vanished]
+        // Simulate the crash: the file sits in a sibling quarantine folder.
+        let qdir = dir.appendingPathComponent(DeleteDuplicatesJob.quarantinePrefix + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: qdir, withIntermediateDirectories: false)
+        try FileManager.default.moveItem(at: q, to: qdir.appendingPathComponent(q.lastPathComponent))
+        func entry(_ rec: VideoRecord) -> DeleteDuplicatesPlan.Entry {
+            DeleteDuplicatesPlan.Entry(id: rec.id, path: rec.fullPath, filename: rec.filename, sizeBytes: rec.sizeBytes,
+                                       keeperID: keeper.id, keeperPath: keeper.fullPath, keeperFilename: keeper.filename,
+                                       keeperStamp: FileIdentityStamp.capture(path: k.path))
+        }
+        var plan = DeleteDuplicatesPlan(volumePath: dir.path, catalogLocation: model.catalogStore.fileLocation,
+                                        crossVolumeMode: false, skippedBeforePlan: 0, summaryLine: "",
+                                        entries: [entry(orphan), entry(vanished)])
+        plan.entries[0].status = .verified   // the crash landed mid-delete
+        try DeleteDuplicatesPlanStore.save(plan, root: root)
+
+        let job = DeleteDuplicatesJob(model: model, resuming: plan, planRoot: root)
+        job.start()
+        await job.task?.value
+
+        let after = try #require(job.plan)
+        #expect(after.entries[0].status == .deleted, "restored from quarantine, re-verified, then deleted")
+        #expect(!FileManager.default.fileExists(atPath: q.path))
+        #expect(!FileManager.default.fileExists(atPath: qdir.path), "the orphaned quarantine folder is gone")
+        #expect(after.entries[1].status == .skipped && after.entries[1].note.hasPrefix("gone before the crash"))
+        #expect(vanished.duplicateDisposition == .extraCopy, "a gone file is not a refusal — the row is not re-marked")
+        #expect(job.result.deleted == 1 && job.result.failed == 0)
+        let console = await consoleText(model)
+        #expect(console.contains("Restored quarantined copy.mov from"))
+        #expect(console.contains("Skipped gone copy.mov: gone before the crash"))
+    }
+
+    /// QA MINOR 7: with several unfinished plans, the OLDEST is offered
+    /// first; the newer ones wait their turn.
+    @Test func offersOldestUnfinishedPlanFirst() async throws {
+        let dir = tempDir("oldest"); defer { try? FileManager.default.removeItem(at: dir) }
+        let root = dir.appendingPathComponent("plans", isDirectory: true)
+        let model = makeModel(dir)
+        func plan(_ name: String, age: TimeInterval) -> DeleteDuplicatesPlan {
+            var p = DeleteDuplicatesPlan(volumePath: "/Volumes/\(name)", catalogLocation: model.catalogStore.fileLocation,
+                                         crossVolumeMode: false, skippedBeforePlan: 0, summaryLine: "",
+                                         entries: [DeleteDuplicatesPlan.Entry(id: UUID(), path: "/Volumes/\(name)/x.mov", filename: "x.mov",
+                                                                              sizeBytes: 1, keeperID: UUID(), keeperPath: "/k", keeperFilename: "k",
+                                                                              keeperStamp: nil)])
+            p.createdAt = Date().addingTimeInterval(-age)
+            return p
+        }
+        let older = plan("Older", age: 7_200), newer = plan("Newer", age: 60)
+        try DeleteDuplicatesPlanStore.save(older, root: root)
+        try DeleteDuplicatesPlanStore.save(newer, root: root)
+        model.checkForUnfinishedDeleteDuplicatesPlans(root: root)
+        #expect(model.pendingDeleteDuplicatesResume?.id == older.id)
+        model.discardPendingDeleteDuplicatesPlan(root: root)
+        model.checkForUnfinishedDeleteDuplicatesPlans(root: root)
+        #expect(model.pendingDeleteDuplicatesResume?.id == newer.id, "the next one is offered after the first is settled")
+        let console = await consoleText(model)
+        #expect(console.contains("1 more unfinished run will be offered after it, oldest first"))
+    }
+
     @Test func centerRefusesASecondConcurrentRun() async throws {
         let dir = tempDir("second"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)

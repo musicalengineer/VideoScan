@@ -360,6 +360,12 @@ actor DeleteDuplicatesPlanWriter {
     static let shared = DeleteDuplicatesPlanWriter()
     private var written: [UUID: UInt64] = [:]
 
+    /// The last generation written for `planID` in this process (0 when
+    /// none). A job that resumes a plan in the SAME process seeds its
+    /// counter from this, so its saves are never dropped as stale (QA
+    /// MINOR 4 on 462b034b).
+    func lastGeneration(for planID: UUID) -> UInt64 { written[planID] ?? 0 }
+
     @discardableResult
     func write(_ plan: DeleteDuplicatesPlan, root: URL, generation: UInt64) throws -> Bool {
         if let last = written[plan.id], last >= generation { return false }

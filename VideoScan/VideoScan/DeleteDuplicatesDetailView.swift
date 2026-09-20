@@ -62,7 +62,7 @@ struct DeleteDuplicatesDetailView: View {
                     .foregroundColor(.white)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(Capsule().fill(Color.red))
+                    .background(Capsule().fill(MediaFileOperationKind.deleteDuplicates.badgeColor))
                 Text(job.volumeName)
                     .font(.system(size: 15, weight: .semibold))
             }

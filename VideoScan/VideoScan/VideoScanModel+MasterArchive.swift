@@ -833,11 +833,12 @@ extension VideoScanModel {
         // `contentHash` (the segmented candidate signature).
         copy.archiveFixity = ArchiveFixity(digest: sha256, verifiedAt: promotedAt,
                                            sizeBytes: copy.sizeBytes)
-        // General whole-file fixity (2026-09-20): the read-back already
-        // hashed every byte, so the copy can serve as a stat-checked
-        // keeper in Delete Duplicates without another read.
-        copy.contentFixity = ContentFixity.captured(path: copy.fullPath, digest: sha256,
-                                                    byteCount: copy.sizeBytes, computedAt: promotedAt)
+        // No `contentFixity` here (QA NIT 8, 2026-09-20): the read-back
+        // hashed the `.partial` BEFORE the rename into place, and a rename
+        // changes the inode's ctime, so no stat taken before that read can
+        // equal one taken now. Verify Archive Copies writes it properly
+        // (stat before and after its own read); until then the first
+        // Delete Duplicates pair with this copy as keeper reads it once.
         copy.archivedAt = promotedAt
         copy.starRating = max(source.starRating, 3)
         copy.archiveStage = .masterAssigned
@@ -940,8 +941,7 @@ extension VideoScanModel {
         copy.originalFullPath = sourcePath
         copy.originVolume = VolumeReachability.volumeName(forPath: sourcePath)
         copy.archiveFixity = ArchiveFixity(digest: sha256, verifiedAt: promotedAt, sizeBytes: copy.sizeBytes)
-        copy.contentFixity = ContentFixity.captured(path: copy.fullPath, digest: sha256,
-                                                    byteCount: copy.sizeBytes, computedAt: promotedAt)
+        // No contentFixity at promote time — see registerPromotedCopy.
         copy.archivedAt = promotedAt
         copy.starRating = 3
         copy.archiveStage = .masterAssigned
