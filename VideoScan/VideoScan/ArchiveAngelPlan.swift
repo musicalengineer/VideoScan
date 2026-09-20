@@ -527,7 +527,9 @@ enum ArchiveAngelPlanStore {
         }
     }
 
-    private nonisolated static func folderBytes(_ dir: String, fm: FileManager) -> Int64 {
+    /// Bytes under a folder (companions + plan.json). Internal since the
+    /// buffer-hygiene report (2026-09-19) measures batches with it.
+    nonisolated static func folderBytes(_ dir: String, fm: FileManager) -> Int64 {
         guard let walker = fm.enumerator(at: URL(fileURLWithPath: dir), includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
         var total: Int64 = 0
         for case let url as URL in walker {

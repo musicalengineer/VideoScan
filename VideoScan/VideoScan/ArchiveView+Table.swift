@@ -50,6 +50,15 @@ extension ArchiveView {
             // (Rick 2026-08-21). O(1) per render: both inputs are memoized.
             if selectedCategory == .archived {
                 ArchiveProgressBar(progress: archiveProgress)
+                // Buffer hygiene (curation Phase 2, Rick 2026-09-19): when
+                // prepared batches are waiting in the buffer, or finished
+                // ones still hold files, ask "What next?" before anything.
+                if !angelHygiene.isEmpty {
+                    ArchiveAngelBufferHygieneCard(
+                        report: angelHygiene,
+                        openReview: { angelReviewRequest = ArchiveAngelReviewRequest(plan: $0) },
+                        batchesChanged: { refreshAngelBatches() })
+                }
                 // Archive Angel's PREPARED batch sits above the loose nudge
                 // (Rick 2026-09-09: "10 are actually preprocessed and really
                 // ready" must catch the eye before "it looks like 598…").

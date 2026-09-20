@@ -442,20 +442,12 @@ struct ArchiveAngelReviewSheet: View {
     }
 
     private func discard() {
-        // Phase 1 attention memory: an undecided row in a cleared batch is
-        // half a skip (ledger line; nothing on the catalog record).
-        let undecided = plan.entries.filter { $0.status == .ready }.map(\.id)
-        model.ledgerAngelAttention(.angelCleared, recordIDs: undecided, batchID: plan.batchID)
-        plan.status = .discarded
-        plan.log.append("Discarded by the user")
-        ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")   // the decision is durable even if removal fails
-        model.forgetArchiveAngelCompanions(batchDir: plan.batchDir, reason: "batch discarded by you")   // codex #1572
-        do {
-            try ArchiveAngelPlanStore.removeBatchFolder(plan)
-        } catch {
-            model.log("Archive Angel: could not remove the buffer folder — \(error.localizedDescription)")
-        }
-        model.log("Archive Angel: batch \(Self.dateText(plan.createdAt)) discarded")
+        // ONE clear verb (curation Phase 2, 2026-09-19): the angelCleared
+        // ledger lines for the undecided rows (half a skip), the plan saved
+        // .discarded before anything is deleted, the catalogued companions
+        // retired (codex #1572), the folder removed, the log line.
+        let outcome = model.clearArchiveAngelBatch(plan, reason: "discarded by you in the review sheet")
+        if outcome.refusal == nil { plan.status = .discarded }
         dismiss()
     }
 

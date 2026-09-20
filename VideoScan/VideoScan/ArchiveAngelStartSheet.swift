@@ -21,6 +21,14 @@ struct ArchiveAngelStartSheet: View {
     @AppStorage("archiveAngel.count") private var count: Int = 25
     @AppStorage("archiveAngel.makeLossless") private var makeLossless: Bool = false
 
+    /// Buffer hygiene (curation Phase 2, Rick 2026-09-19): what is already
+    /// waiting in the buffer. When it is not empty a banner above Start
+    /// says so — a new batch would only park most of its rows "waiting
+    /// for buffer space". `revealHygiene` closes this sheet and lands on
+    /// the card in the Archive tab.
+    var hygiene: ArchiveAngelBufferHygiene.Report = .empty
+    var revealHygiene: (() -> Void)? = nil
+
     static let choices = [10, 25, 35, 50]
 
     private var bufferRoot: URL { ArchiveAngelPlanStore.defaultBufferRoot }
@@ -84,6 +92,10 @@ struct ArchiveAngelStartSheet: View {
                     .foregroundStyle(Color.yellow)
             }
 
+            if !hygiene.isEmpty {
+                hygieneBanner
+            }
+
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
@@ -96,6 +108,30 @@ struct ArchiveAngelStartSheet: View {
         }
         .padding(20)
         .frame(width: 520)
+    }
+
+    /// "3 batches (74 GB) are waiting in the buffer — clear or promote
+    /// them first?  [Show them]"
+    private var hygieneBanner: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "internaldrive.fill")
+                .foregroundStyle(Color.orange)
+            Text(hygiene.bannerText)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("archiveAngel.hygieneBanner")
+            Spacer(minLength: 4)
+            Button("Show them") {
+                dismiss()
+                revealHygiene?()
+            }
+            .controlSize(.small)
+            .accessibilityIdentifier("archiveAngel.hygieneBanner.show")
+            .help("Closes this sheet and shows the waiting batches in the Archive tab, where each can be reviewed, cleared or put off.")
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.10)))
     }
 
     private func start() {

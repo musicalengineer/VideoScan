@@ -70,6 +70,11 @@ struct ArchiveView: View {
     /// Batch folders whose plan can't be read (audit #7) — listed, never
     /// touched.
     @State var angelUnreadableBatches: [ArchiveAngelPlanStore.UnreadableBatch] = []
+    /// Buffer hygiene (curation Phase 2, 2026-09-19): what is waiting in
+    /// the buffer and what finished batches still hold. Computed with the
+    /// scan, off the main actor; drives the card above the disclosure and
+    /// the start sheet's banner.
+    @State var angelHygiene: ArchiveAngelBufferHygiene.Report = .empty
 
     var body: some View {
         HSplitView {
@@ -99,7 +104,7 @@ struct ArchiveView: View {
             ArchiveDetailSheet(record: rec, allRecords: model.records)
         }
         .sheet(item: $angelStartRequest) { _ in
-            ArchiveAngelStartSheet()
+            ArchiveAngelStartSheet(hygiene: angelHygiene, revealHygiene: { revealAngelHygiene() })
                 .environmentObject(model)
                 .environmentObject(fileOpsCenter)
         }
@@ -131,12 +136,18 @@ struct ArchiveView: View {
         // first (audit #3), so its batch is listed again or finished.
         ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: root, model: model)
         Task {
-            let (readyPlans, unreadable, settled) = await Task.detached(priority: .utility) {
+            let (readyPlans, unreadable, settled, hygiene) = await Task.detached(priority: .utility) {
                 // GH #177: a batch left `preparing` by a quit or a stop is
                 // settled here (ready rows kept → listed; none → removed).
                 let settled = ArchiveAngelPlanStore.settleInterruptedBatches(bufferRoot: root)
                 let scan = ArchiveAngelPlanStore.scanBatches(bufferRoot: root)
-                return (scan.plans.filter { $0.status == .ready }, scan.unreadable, settled)
+                // Folder sizes are disk walks — here, never in body.
+                let hygiene = ArchiveAngelBufferHygiene.report(
+                    plans: scan.plans,
+                    bytesOf: { ArchiveAngelPlanStore.folderBytes($0.batchDir, fm: .default) },
+                    modifiedAt: ArchiveAngelBufferHygiene.planModifiedAt,
+                    diskFree: ArchiveAngelBufferHygiene.diskFree(bufferRoot: root))
+                return (scan.plans.filter { $0.status == .ready }, scan.unreadable, settled, hygiene)
             }.value
             var ready = readyPlans
             await MainActor.run {
@@ -154,8 +165,18 @@ struct ArchiveView: View {
                 }
                 angelReadyBatches = ready
                 angelUnreadableBatches = unreadable
+                angelHygiene = hygiene
             }
         }
+    }
+
+    /// The start sheet's banner button: close the sheet, land on the
+    /// Archived column (where the card lives) and un-hide anything put
+    /// off with Later so the whole picture is on screen.
+    func revealAngelHygiene() {
+        ArchiveAngelHygieneSession.shared.laterBatchIDs.removeAll()
+        model.focusedMediaIDs = []
+        apply(ArchiveHomeState.sidebarPick(.archived, viewMode: ArchiveViewMode(rawValue: archiveViewMode) ?? .timeline))
     }
 
     func openNewestAngelBatch() {
