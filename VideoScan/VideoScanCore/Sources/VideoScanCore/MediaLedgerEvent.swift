@@ -99,6 +99,12 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         public static let protection = "protection"
         /// Angel attention: the score the file was proposed at.
         public static let score = "score"
+        /// An `approval` that went against the importance bar: "2 copies —
+        /// ★★★ / Important — no cloud or off-site copy attested". Absent
+        /// when the choice respected the bar. (Named `barOverride` in
+        /// Swift because `override` is a keyword; the stored key is
+        /// "override".)
+        public static let barOverride = "override"
     }
 
     public let at: Date

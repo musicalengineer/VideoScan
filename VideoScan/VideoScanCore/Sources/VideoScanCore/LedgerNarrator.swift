@@ -156,6 +156,9 @@ public enum LedgerNarrator {
                 let more = files.count > 5 ? " and \(files.count - 5) more" : ""
                 s += ": \(shown)\(more)"
             }
+            if let against = detail[MediaLedgerEvent.Detail.barOverride], !against.isEmpty {
+                s += " — against the bar: \(against)"
+            }
             return s + "."
 
         case .angelProposed:
