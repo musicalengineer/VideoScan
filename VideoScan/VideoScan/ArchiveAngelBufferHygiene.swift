@@ -41,6 +41,9 @@ enum ArchiveAngelBufferHygiene {
     /// purpose. Anything above it is companion files left behind.
     static let leftoverFloorBytes: Int64 = 1_000_000
 
+    /// A batch with this many files or fewer opens expanded on the card.
+    static let expandedByDefaultUpTo = 12
+
     // MARK: - What a batch row IS
 
     enum Kind: Equatable, Sendable {
@@ -60,6 +63,24 @@ enum ArchiveAngelBufferHygiene {
         case inProgress(what: String)
     }
 
+    /// One file of a batch as the card lists it (Rick 2026-09-20: "I can't
+    /// see what it is, no file names … I can't tell for sure if it has
+    /// been promoted or skipped or what"). Pure data, built with the report
+    /// off the main actor; the card only renders it.
+    struct EntryLine: Identifiable, Equatable, Sendable {
+        let id: UUID
+        let filename: String
+        /// Plain words: "Ready to review" / "Skipped by you" / "Promoted" /
+        /// "Waiting for buffer space" / "Failed: …" / "Pending".
+        let statusText: String
+        let status: ArchiveAngelPlan.EntryStatus
+        let isBufferShort: Bool
+        let sizeBytes: Int64
+        /// Companions that exist in the buffer: "access" / "lossless" /
+        /// "balanced" (steps `.done` with an output path).
+        let companions: [String]
+    }
+
     struct BatchRow: Identifiable, Equatable, Sendable {
         let plan: ArchiveAngelPlan
         let bytes: Int64
@@ -68,8 +89,21 @@ enum ArchiveAngelBufferHygiene {
         /// finishedAt, else createdAt).
         let untouchedDays: Int
         let isLive: Bool
+        /// Every entry of the plan, in plan order.
+        let entries: [EntryLine]
+        /// "6 ready · 4 skipped · 0 promoted" — visible while collapsed.
+        let summary: String
+
+        init(plan: ArchiveAngelPlan, bytes: Int64, kind: Kind, untouchedDays: Int, isLive: Bool) {
+            self.plan = plan; self.bytes = bytes; self.kind = kind
+            self.untouchedDays = untouchedDays; self.isLive = isLive
+            self.entries = ArchiveAngelBufferHygiene.entryLines(plan)
+            self.summary = ArchiveAngelBufferHygiene.summaryText(plan)
+        }
 
         var id: String { plan.batchID }
+        /// Expanded by default when the list is short enough to take in.
+        var expandsByDefault: Bool { entries.count <= ArchiveAngelBufferHygiene.expandedByDefaultUpTo }
         var isStale: Bool { untouchedDays >= ArchiveAngelBufferHygiene.staleAfterDays }
 
         /// Clear is offered for anything no job is touching. A promoting
@@ -218,6 +252,67 @@ enum ArchiveAngelBufferHygiene {
             return .leftover(status: plan.status,
                              rowsLeft: plan.entries.filter { $0.status != .promoted }.count)
         }
+    }
+
+    // MARK: - The entry list
+
+    static func entryLines(_ plan: ArchiveAngelPlan) -> [EntryLine] {
+        plan.entries.map { e in
+            EntryLine(id: e.id, filename: e.filename, statusText: statusText(e), status: e.status,
+                      isBufferShort: e.isBufferShort, sizeBytes: e.sizeBytes, companions: companionChips(e))
+        }
+    }
+
+    /// The row's state in plain words — a skip is never a failure, and
+    /// "waiting for buffer space" is never a failure either.
+    static func statusText(_ e: ArchiveAngelPlan.Entry) -> String {
+        switch e.status {
+        case .ready: return "Ready to review"
+        case .skipped: return "Skipped by you"
+        case .promoted: return "Promoted"
+        case .pending: return "Pending"
+        case .preparing: return "Preparing"
+        case .failed:
+            if e.isBufferShort { return "Waiting for buffer space" }
+            return "Failed: " + shortReason(e.failure ?? e.steps.first { $0.state == .failed }?.note ?? "")
+        }
+    }
+
+    /// The first sentence of a failure, capped, or "no reason recorded".
+    static func shortReason(_ reason: String) -> String {
+        let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "no reason recorded" }
+        let first = trimmed.split(whereSeparator: { $0 == "." || $0 == "\n" || $0 == "—" }).first.map(String.init) ?? trimmed
+        let sentence = first.trimmingCharacters(in: .whitespaces)
+        return sentence.count > 60 ? String(sentence.prefix(57)).trimmingCharacters(in: .whitespaces) + "…" : sentence
+    }
+
+    /// "access" / "lossless" / "balanced" for every companion that was
+    /// made — a done step with an output path. Verify leaves no file.
+    static func companionChips(_ e: ArchiveAngelPlan.Entry) -> [String] {
+        e.steps.compactMap { step in
+            guard step.state == .done, let rel = step.outputRelPath, !rel.isEmpty else { return nil }
+            switch step.kind {
+            case .accessCopy: return "access"
+            case .losslessCopy: return "lossless"
+            case .balanceAudio: return "balanced"
+            case .verifyAudio: return nil
+            }
+        }
+    }
+
+    /// "6 ready · 4 skipped · 0 promoted", plus " · 2 waiting for buffer
+    /// space" and " · 1 failed" only when there are any.
+    static func summaryText(_ plan: ArchiveAngelPlan) -> String {
+        let promoted = plan.entries.filter { $0.status == .promoted }.count
+        let waiting = plan.bufferShortCount
+        let failed = plan.entries.filter { $0.status == .failed }.count - waiting
+        let pending = plan.entries.filter { $0.status.isUnsettled }.count
+        var s = "\(plan.readyCount) ready · \(plan.skippedCount) skipped · \(promoted) promoted"
+        if waiting > 0 { s += " · \(waiting) waiting for buffer space" }
+        if failed > 0 { s += " · \(failed) failed" }
+        if pending > 0 { s += " · \(pending) pending" }
+        return s
     }
 
     // MARK: - Text

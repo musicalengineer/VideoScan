@@ -447,7 +447,10 @@ struct ArchiveAngelReviewSheet: View {
         // .discarded before anything is deleted, the catalogued companions
         // retired (codex #1572), the folder removed, the log line.
         let outcome = model.clearArchiveAngelBatch(plan, reason: "discarded by you in the review sheet")
-        if outcome.refusal == nil { plan.status = .discarded }
+        // `cleared`, not `refusal == nil`: a failed plan save is an error
+        // with no refusal, and the sheet's copy must not claim a decision
+        // that did not persist (codex review 2026-09-20 #2).
+        if outcome.cleared { plan.status = .discarded }
         dismiss()
     }
 

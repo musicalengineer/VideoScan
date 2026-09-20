@@ -164,6 +164,43 @@ struct ArchiveAngelBufferHygieneReportTests {
         #expect(H.untouchedText(0) == "untouched today" && H.untouchedText(1) == "untouched 1 day")
     }
 
+    @Test("the card's file list (Rick 2026-09-20): every entry with a plain-words status, its size, the companions that exist; the summary line; ≤ 12 files opens by default")
+    func entryListAndSummary() {
+        var ready = entry(.ready); ready.sizeBytes = 4_200_000_000
+        ready.set(.verifyAudio, .done); ready.set(.balanceAudio, .done, output: "x/b.mov")
+        ready.set(.accessCopy, .done, output: "x/a.mov"); ready.set(.losslessCopy, .skipped, note: "off")
+        var readyOriginalOnly = entry(.ready); readyOriginalOnly.set(.verifyAudio, .done)
+        var doneButNoPath = entry(.ready); doneButNoPath.set(.accessCopy, .done)   // no output: not a companion
+        let skipped = entry(.skipped), promoted = entry(.promoted), pending = entry(.pending)
+        let waiting = entry(.failed, failure: ArchiveAngelPlan.bufferShortNote(need: 100, free: 10))
+        let broken = entry(.failed, failure: "Transcode failed: exit code 69. Invalid data found when processing input")
+        var brokenStep = entry(.failed); brokenStep.set(.accessCopy, .failed, note: "ffmpeg exit 1")
+        let unexplained = entry(.failed)
+        let p = plan("batch-list", .ready, rows: [ready, readyOriginalOnly, doneButNoPath, skipped, promoted, pending, waiting, broken, brokenStep, unexplained],
+                     createdDaysAgo: 1)
+
+        let lines = H.entryLines(p)
+        #expect(lines.map(\.id) == p.entries.map(\.id), "plan order, every entry")
+        #expect(lines[0].statusText == "Ready to review" && lines[0].sizeBytes == 4_200_000_000)
+        #expect(lines[0].companions == ["balanced", "access"], "\(lines[0].companions)")
+        #expect(lines[1].companions.isEmpty, "verify leaves no file")
+        #expect(lines[2].companions.isEmpty, "a done step with no output path is not a file in the buffer")
+        #expect(lines[3].statusText == "Skipped by you" && lines[4].statusText == "Promoted" && lines[5].statusText == "Pending")
+        #expect(lines[6].statusText == "Waiting for buffer space" && lines[6].isBufferShort)
+        #expect(lines[7].statusText == "Failed: Transcode failed: exit code 69", "\(lines[7].statusText)")
+        #expect(lines[8].statusText == "Failed: ffmpeg exit 1", "a step's note when the row has no reason")
+        #expect(lines[9].statusText == "Failed: no reason recorded")
+        #expect(H.shortReason(String(repeating: "x", count: 80)).count == 58 && H.shortReason("  ") == "no reason recorded")
+        #expect(H.summaryText(p) == "3 ready · 1 skipped · 1 promoted · 1 waiting for buffer space · 3 failed · 1 pending")
+        #expect(H.summaryText(plan("batch-plain", .ready, rows: [ready, ready, skipped], createdDaysAgo: 1)) == "2 ready · 1 skipped · 0 promoted")
+
+        let r = H.report(plans: [p], bytesOf: { _ in 1 }, isLive: { _ in false }, now: now)
+        #expect(r.batches[0].entries == lines && r.batches[0].summary == H.summaryText(p))
+        #expect(r.batches[0].expandsByDefault, "10 files: open")
+        let big = plan("batch-big", .ready, rows: (0..<13).map { _ in entry(.ready) }, createdDaysAgo: 1)
+        #expect(!H.report(plans: [big], bytesOf: { _ in 1 }, isLive: { _ in false }, now: now).batches[0].expandsByDefault, "13 files: closed")
+    }
+
     @Test("#9 a report carries the refresh that made it; an older scan never publishes over a newer one")
     func generationGuard() {
         var first = H.report(plans: [], bytesOf: { _ in 0 }, isLive: { _ in false }, now: now)

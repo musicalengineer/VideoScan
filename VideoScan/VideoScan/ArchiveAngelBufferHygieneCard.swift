@@ -29,6 +29,9 @@ struct ArchiveAngelBufferHygieneCard: View {
 
     @ObservedObject private var session = ArchiveAngelHygieneSession.shared
     @State private var pendingClear: ClearRequest?
+    /// Batches the person opened or closed by hand; anything else follows
+    /// `BatchRow.expandsByDefault` (≤ 12 files → open).
+    @State private var expandedOverrides: [String: Bool] = [:]
     /// The clock the row lines are written against — fixed per render.
     private let now = Date()
 
@@ -113,7 +116,86 @@ struct ArchiveAngelBufferHygieneCard: View {
 
     // MARK: Rows
 
+    private func isExpanded(_ row: ArchiveAngelBufferHygiene.BatchRow) -> Binding<Bool> {
+        Binding(get: { expandedOverrides[row.id] ?? row.expandsByDefault },
+                set: { expandedOverrides[row.id] = $0 })
+    }
+
+    /// The batch line, its summary, and (open) every file in it — names,
+    /// a plain-words status, the size, the companions that exist (Rick
+    /// 2026-09-20). Read-only; the lines were built with the report.
     private func batchRow(_ row: ArchiveAngelBufferHygiene.BatchRow) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DisclosureGroup(isExpanded: isExpanded(row)) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(row.entries) { entry in
+                        entryLine(entry, batchID: row.id)
+                    }
+                }
+                .padding(.leading, 26)
+                .padding(.bottom, 6)
+                .accessibilityIdentifier("archive.angelHygiene.row.\(row.id).entries")
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    batchHeader(row)
+                    Text(row.summary)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 24)
+                        .accessibilityIdentifier("archive.angelHygiene.row.\(row.id).summary")
+                }
+            }
+            .disclosureGroupStyle(.automatic)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .accessibilityIdentifier("archive.angelHygiene.row.\(row.id)")
+    }
+
+    private func entryLine(_ entry: ArchiveAngelBufferHygiene.EntryLine, batchID: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(entry.filename)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(entry.filename)
+            Text(entry.statusText)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(statusColor(entry))
+                .padding(.horizontal, 6).padding(.vertical, 1)
+                .background(Capsule().fill(statusColor(entry).opacity(0.14)))
+                .lineLimit(1)
+                .accessibilityIdentifier("archive.angelHygiene.row.\(batchID).entry.\(entry.id).status")
+            Text(MediaBytes.display(entry.sizeBytes))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+            ForEach(entry.companions, id: \.self) { chip in
+                Text(chip)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().strokeBorder(Color.secondary.opacity(0.4)))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(entry.filename), \(entry.statusText), \(MediaBytes.display(entry.sizeBytes))"
+                            + (entry.companions.isEmpty ? "" : ", companions: " + entry.companions.joined(separator: ", ")))
+        .accessibilityIdentifier("archive.angelHygiene.row.\(batchID).entry.\(entry.id)")
+    }
+
+    private func statusColor(_ entry: ArchiveAngelBufferHygiene.EntryLine) -> Color {
+        if entry.isBufferShort { return .orange }
+        switch entry.status {
+        case .ready: return .green
+        case .promoted: return .blue
+        case .failed: return .red
+        case .skipped, .pending, .preparing: return .secondary
+        }
+    }
+
+    private func batchHeader(_ row: ArchiveAngelBufferHygiene.BatchRow) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: rowSymbol(row))
                 .foregroundStyle(row.isLeftover ? Color.secondary : Color.orange)
@@ -152,9 +234,6 @@ struct ArchiveAngelBufferHygieneCard: View {
                 .help("Hides this batch from the card until the app is next opened. Nothing is deleted.")
         }
         .controlSize(.small)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .accessibilityIdentifier("archive.angelHygiene.row.\(row.id)")
     }
 
     private func rowSymbol(_ row: ArchiveAngelBufferHygiene.BatchRow) -> String {
