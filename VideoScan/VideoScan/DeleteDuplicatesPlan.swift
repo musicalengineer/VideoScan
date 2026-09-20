@@ -68,6 +68,17 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         /// True when the keeper was matched by its stored fixity (not
         /// re-read) for this row. nil until verified.
         var keeperMatchedByStoredFixity: Bool?
+        /// WHERE the file is while it sits in quarantine (status
+        /// `.verified`): the exact owner-only folder the job moved it into,
+        /// written to disk BEFORE the unlink. A crash between the move and
+        /// the unlink leaves a plan that names the folder to put the file
+        /// back from — recovery never guesses from a basename (codex 1593
+        /// blocker 2). Cleared once the row settles.
+        var quarantineDirectory: String?
+        /// The file's full stat stamp (ctime included) the instant it
+        /// landed in quarantine. Recovery restores only a file that still
+        /// reproduces it.
+        var quarantinedStamp: FileIdentityStamp?
 
         var keeperVolumeName: String { VolumeReachability.volumeName(forPath: keeperPath) }
     }
@@ -90,8 +101,10 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
     var entries: [Entry]
     var startedAt: Date?
     var finishedAt: Date?
-    /// Why the run ended: "completed", "cancelled", "quit" (settled at
-    /// the next launch by a Discard).
+    /// Why the run ended: "completed", "cancelled", "discarded", "stopped
+    /// (plan not saved)". nil while the plan is still resumable — including
+    /// after a Quit, which suspends the run and leaves the plan in place
+    /// for the next launch's offer (codex 1593 #5).
     var outcome: String?
     var log: [String] = []
     /// How many times this plan has been resumed.
@@ -167,6 +180,22 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         if !note.isEmpty { entries[i].note = note }
         if status.isSettled { entries[i].settledAt = now }
         if let k = keeperMatchedByStoredFixity { entries[i].keeperMatchedByStoredFixity = k }
+    }
+
+    /// The row is in quarantine: record exactly where, and the file's
+    /// stamp there, so the plan on disk can name it (status `.verified`).
+    mutating func setQuarantined(_ id: UUID, directory: String, stamp: FileIdentityStamp) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[i].status = .verified
+        entries[i].quarantineDirectory = directory
+        entries[i].quarantinedStamp = stamp
+    }
+
+    /// The row left quarantine (deleted, or put back): forget the folder.
+    mutating func clearQuarantine(_ id: UUID) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[i].quarantineDirectory = nil
+        entries[i].quarantinedStamp = nil
     }
 
     /// Rows still unsettled become `skipped` with `reason` (cancel / quit).

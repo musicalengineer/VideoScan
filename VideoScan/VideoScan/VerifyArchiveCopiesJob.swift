@@ -983,6 +983,13 @@ extension VideoScanModel {
     /// just failed either must stop carrying one. Nothing is written in
     /// its place: only a byte-for-byte match ever writes fixity.
     /// Path-conditional (see `liveRecordForFixityWrite`).
+    ///
+    /// The general `contentFixity` goes with it (codex 1593 #7): it is
+    /// Delete Duplicates' cached authority to NOT re-read this file as a
+    /// keeper, and an authoritative audit just found the bytes wrong or
+    /// gone. Without the clear, a mismatch that left the stat stamp intact
+    /// would let the stale digest vouch for deleting the intact copy. A
+    /// keeper without fixity is simply read again on its next pair.
     @discardableResult
     func invalidateArchiveFixity(path: String,
                                  observedDigest: String?) -> ArchiveFixityWrite {
@@ -990,8 +997,9 @@ extension VideoScanModel {
         guard let rec = liveRecordForFixityWrite(path: path, observedDigest: observedDigest) else {
             return .changedUnderVerify
         }
-        guard rec.archiveFixity != nil else { return .nothingToClear }
+        guard rec.archiveFixity != nil || rec.contentFixity != nil else { return .nothingToClear }
         rec.archiveFixity = nil
+        rec.contentFixity = nil
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
         return .written

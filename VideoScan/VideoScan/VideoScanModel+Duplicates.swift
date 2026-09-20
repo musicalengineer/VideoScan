@@ -384,11 +384,79 @@ extension VideoScanModel {
                              summaryLine: summaryLine, entries: [])
     }
 
+    /// What the catalog says about one plan row RIGHT NOW. Asked
+    /// immediately before every pair is dispatched (and by the resume
+    /// re-check), never cached across a pause, a resume or a preflight
+    /// (codex 1593 #3): the row must still be an active record at its
+    /// path, still an extra copy in a group whose keeper is the plan's
+    /// keeper (same id, same path, still `.keep`), not a Master Archive
+    /// file, and — for a working copy — still eligible under the LIVE
+    /// cross-volume policy.
+    enum DuplicateDeletionAuthorization {
+        case authorized(record: VideoRecord, keeper: VideoRecord)
+        /// The catalog decided differently (record gone / moved / no
+        /// longer an extra copy): left alone, not a refusal — the row is
+        /// NOT re-marked Review.
+        case skip(note: String, log: String)
+        /// The pair no longer lines up (keeper / group / archive /
+        /// eligibility): refused, and the extra copy is marked Review.
+        case refuse(note: String)
+    }
+
+    func authorizeDuplicateDeletion(entry e: DeleteDuplicatesPlan.Entry, volumePath: String,
+                                    crossVolumeMode: Bool, stage: String) -> DuplicateDeletionAuthorization {
+        guard let rec = record(forID: e.id), !rec.isPurged, rec.fullPath == e.path else {
+            return .skip(note: "record is no longer in the catalog at this path — skipped \(stage)",
+                         log: "Skipped \(e.filename): no longer in the catalog at \(e.path)")
+        }
+        guard !e.keeperPath.isEmpty else {
+            return .refuse(note: "no keeper to verify against")
+        }
+        guard rec.duplicateDisposition == .extraCopy, let group = rec.duplicateGroupID else {
+            // Re-elected, decided by hand, or re-analysed: the catalog's
+            // call. Touching its disposition here could turn a keeper
+            // into Review.
+            return .skip(note: "no longer marked as an extra copy — skipped \(stage)",
+                         log: "Skipped \(e.filename): no longer marked as an extra copy")
+        }
+        guard let keeper = record(forID: e.keeperID), !keeper.isPurged,
+              keeper.duplicateDisposition == .keep, keeper.duplicateGroupID == group,
+              keeper.fullPath == e.keeperPath else {
+            return .refuse(note: "keeper \(e.keeperFilename) is no longer this file's keeper — refused \(stage)")
+        }
+        guard excludingMasterArchiveFiles([rec], verb: "Delete Duplicates").count == 1 else {
+            return .refuse(note: "now lives in the Master Archive — refused \(stage)")
+        }
+        if !PathScope.contains(keeper.fullPath, within: volumePath) {
+            // A working copy: the keeper is on another drive. The policy
+            // is re-read live — the toggle, the drive list, reachability
+            // and retirement can all have changed since the plan.
+            guard crossVolumeMode, duplicateKeeperSettings.alsoCleanUpWorkingCopies else {
+                return .refuse(note: "keeper \(keeper.filename) is on another drive and working-copy cleanup is off — refused \(stage)")
+            }
+            let verdict = duplicateKeeperPolicy().crossVolumeVerdict(
+                extraPath: volumePath, volumeRoot: volumeRoot(for: volumePath),
+                keeperPath: keeper.fullPath, keeperRoot: volumeRoot(for: keeper.fullPath))
+            guard verdict.isEligible else {
+                return .refuse(note: "\(verdict.reason) — refused \(stage)")
+            }
+        }
+        return .authorized(record: rec, keeper: keeper)
+    }
+
     /// The catalog side of ONE verified-and-removed pair, exactly as the
     /// old loop did it: fold the extra's human metadata and enrichment into
     /// the live master, drop the extra's row (by id AND path — a row
     /// replaced during the disk work is left alone), write the ledger line,
     /// and say what happened. Returns whether the catalog changed.
+    ///
+    /// `preAwait` is an IMMUTABLE snapshot (`snapshotClone`) of the row
+    /// taken before the disk work — never the live instance. When the live
+    /// row no longer matches by id AND path it is retained untouched, and
+    /// the ledger line is written from the snapshot: the file that left
+    /// the disk is the one at `expectedPath` (codex 1593 #4 — the old
+    /// fallback stamped the captured live instance, which tombstoned a row
+    /// that had merely been moved during the await).
     @discardableResult
     func settleDeletedDuplicate(expectedID: UUID, expectedPath: String,
                                 preAwait record: VideoRecord,
@@ -397,6 +465,11 @@ extension VideoScanModel {
                                 keeperMatchedByStoredFixity: Bool) -> Bool {
         var catalogMutated = false
         let currentRecord = records.first { $0.id == expectedID && $0.fullPath == expectedPath }
+        let liveInstances = Set(records.map(ObjectIdentifier.init))
+        // The snapshot must be detached from the catalog: if a caller
+        // handed us a live row by mistake, clone it now rather than stamp
+        // a retained record.
+        let snapshot = liveInstances.contains(ObjectIdentifier(record)) ? record.snapshotClone() : record
         // Metadata carry-over (2026-08-18). The bytes are gone —
         // verified identical to the keeper — but the ROW still
         // holds whatever Rick put on this copy (stars, people,
@@ -453,7 +526,12 @@ extension VideoScanModel {
         // batch-keyed to the plan so the run reads as one decision. The
         // removed row is stamped so the ledger line carries its final
         // state; it is no longer in `records`, so nothing else sees it.
-        let removed = currentRecord ?? record
+        // When the live row was retained (id/path mismatch), the line is
+        // written from the pre-await SNAPSHOT — the retained row is never
+        // stamped deleted.
+        let removed = currentRecord ?? snapshot
+        assert(!liveInstances.contains(ObjectIdentifier(removed)) || currentRecord != nil,
+               "a retained live row must never be stamped as deleted")
         removed.lifecycleStage = .deletedPermanently
         removed.purgedAt = Date()
         ledgerCopyRemoved([removed], permanent: true, by: .rick, batchID: batchID)
@@ -520,7 +598,9 @@ extension VideoScanModel {
     }
 
     /// The user chose Discard: the plan is settled (remaining rows skipped,
-    /// outcome "discarded") and moved to done/ — kept for the log.
+    /// outcome "discarded") and moved to done/ — kept for the log. The
+    /// NEXT unfinished plan, if any, is offered right away (codex 1593 #8
+    /// — it used to take another launch).
     func discardPendingDeleteDuplicatesPlan(root: URL = DeleteDuplicatesPlanStore.defaultRoot) {
         guard var plan = pendingDeleteDuplicatesResume else { return }
         pendingDeleteDuplicatesResume = nil
@@ -534,7 +614,12 @@ extension VideoScanModel {
             log("Delete Duplicates: discarded the unfinished run on \(plan.volumeName) (\(skipped) file(s) left alone).")
         } catch {
             log("Delete Duplicates: could not file the discarded plan for \(plan.volumeName) — \(error.localizedDescription)")
+            // Left in place and unfinished: the next check would offer it
+            // again, which is the honest outcome — but not this instant,
+            // or Discard would appear to do nothing.
+            return
         }
+        checkForUnfinishedDeleteDuplicatesPlans(root: root)
     }
 
     /// Human-readable reason a verified deletion was refused.

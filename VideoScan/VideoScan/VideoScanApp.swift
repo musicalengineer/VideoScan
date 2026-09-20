@@ -194,14 +194,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 alert.messageText = running == 1
                     ? "A file operation is still running"
                     : "\(running) file operations are still running"
-                alert.informativeText = "Quitting now will stop the work in progress. Anything already finished is safe."
+                // A live Delete Duplicates run is SUSPENDED by a quit, not
+                // abandoned: its plan stays resumable and the dialog says
+                // so (codex 1593 #5).
+                let suspending = center.hasActiveDeleteDuplicates
+                alert.informativeText = MediaFileOperationsCenter.quitInformativeText(
+                    running: running, deleteDuplicatesActive: suspending)
                 alert.addButton(withTitle: "Quit Anyway")
                 alert.addButton(withTitle: "Keep Working")
 
                 appLog.write("quit requested with \(running) file operation(s) running — asking")
                 if alert.runModal() == .alertFirstButtonReturn {
-                    appLog.write("quit dialog: user chose Quit Anyway — cancelling \(running) operation(s)")
-                    center.cancelAll()
+                    appLog.write("quit dialog: user chose Quit Anyway — stopping \(running) operation(s)"
+                                 + (suspending ? " (Delete Duplicates suspended, plan kept for resume)" : ""))
+                    center.stopAllForQuit()
                 } else {
                     // Without this line, "Keep Working" is indistinguishable in
                     // the log from a hang before willTerminate: no "app
