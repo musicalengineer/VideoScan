@@ -48,8 +48,10 @@ struct ArchiveAngelBufferHygieneCard: View {
             rows.count == 1 ? "Clear this batch from the buffer?" : "Clear \(rows.count) batches from the buffer?"
         }
         var message: String {
-            var s = "\(MediaBytes.display(bytes)) of the Angel's prepared copies are deleted. "
-                + "The original videos on their volumes are untouched, and the Angel can prepare them again."
+            var s = bytes > 0
+                ? "\(MediaBytes.display(bytes)) of the Angel's prepared copies are deleted. "
+                : "Nothing was prepared in \(rows.count == 1 ? "this batch" : "these batches") — only the plan is removed. "
+            s += "The original videos on their volumes are untouched, and the Angel can prepare them again."
             if undecided > 0 {
                 s += " \(undecided) undecided row\(undecided == 1 ? " returns" : "s return") to the pool (counted as half a skip)."
             }
@@ -81,7 +83,7 @@ struct ArchiveAngelBufferHygieneCard: View {
             .alert(pendingClear?.title ?? "",
                    isPresented: Binding(get: { pendingClear != nil }, set: { if !$0 { pendingClear = nil } }),
                    presenting: pendingClear) { req in
-                Button("Clear \(MediaBytes.display(req.bytes))", role: .destructive) { perform(req) }
+                Button(req.bytes > 0 ? "Clear \(MediaBytes.display(req.bytes))" : "Clear (nothing prepared)", role: .destructive) { perform(req) }
                 Button("Keep", role: .cancel) {}
             } message: { req in
                 Text(req.message)
@@ -168,7 +170,10 @@ struct ArchiveAngelBufferHygieneCard: View {
 
     private func perform(_ req: ClearRequest) {
         let reason = req.rows.count == 1 ? "cleared from the buffer card" : "Clear all from the buffer card"
-        model.clearArchiveAngelBatches(req.rows.map(\.plan), reason: reason)
+        // The rows' measured sizes go along — no re-walk on the main actor.
+        model.clearArchiveAngelBatches(req.rows.map(\.plan),
+                                       bytes: Dictionary(uniqueKeysWithValues: req.rows.map { ($0.id, $0.bytes) }),
+                                       reason: reason)
         pendingClear = nil
         batchesChanged()
     }

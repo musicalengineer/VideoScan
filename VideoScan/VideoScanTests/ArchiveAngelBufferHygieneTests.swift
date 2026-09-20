@@ -129,7 +129,8 @@ struct ArchiveAngelBufferHygieneReportTests {
         #expect(rows["batch-p"]?.kind == .inProgress(what: "promoting") && rows["batch-p"]?.canClear == false)
         #expect(rows["batch-q"]?.kind == .parked(ready: 0, unfinished: 2))
         #expect(rows["batch-q"]?.canClear == true && rows["batch-q"]?.canReview == false)
-        #expect(rows["batch-r"]?.kind == .parked(ready: 1, unfinished: 1) && rows["batch-r"]?.canReview == true)
+        #expect(rows["batch-r"]?.kind == .parked(ready: 1, unfinished: 1) && rows["batch-r"]?.canReview == false,
+                "a parked batch offers Clear only — the sheet is never handed unsettled rows")
         #expect(rows["batch-s"]?.kind == .inProgress(what: "promoting"), "a ready batch that is live is being promoted")
         #expect(r.waitingCount == 2, "parked batches are waiting; in-progress ones are not")
         #expect(H.detailText(.parked(ready: 1, unfinished: 1)) == "interrupted while preparing — 1 ready, 1 unfinished")
@@ -253,7 +254,9 @@ struct ArchiveAngelBufferHygieneClearTests {
         #expect(out.cleared && out.refusal == nil && out.error == nil)
         #expect(out.rowsReturned == 2, "the two undecided rows")
         #expect(out.companionsRetired == 2)
-        #expect(out.bytesFreed >= 5 * 2_048, "five row folders plus plan.json: \(out.bytesFreed)")
+        #expect(out.bytesFreed >= 5 * 2_048, "five row folders plus plan.json (walked — no bytes handed in): \(out.bytesFreed)")
+        #expect(await out.removal?.value == true, "the detached removal succeeded")
+        #expect(!ArchiveAngelLiveBatches.isLive(plan.batchDir))
         #expect(!FileManager.default.fileExists(atPath: plan.batchDir))
         #expect(compA.isPurged && compB.isPurged)
         #expect(!elsewhere.isPurged && !a.isPurged, "originals and other batches untouched")
@@ -277,7 +280,9 @@ struct ArchiveAngelBufferHygieneClearTests {
         model.records = [a]
         struct Boom: Error {}
         let out = model.clearArchiveAngelBatch(plan, reason: "test", remove: { _ in throw Boom() })
-        #expect(!out.cleared && out.folderRemoved == false && out.error != nil && out.refusal == nil)
+        #expect(out.cleared && out.refusal == nil, "scheduled — the failure is reported by the task")
+        #expect(await out.removal?.value == false, "the removal failed")
+        #expect(FileManager.default.fileExists(atPath: plan.batchDir))
         #expect(out.rowsReturned == 1)
         let onDisk = try ArchiveAngelPlanStore.load(batchDir: plan.batchDir)
         #expect(onDisk.status == .discarded)
@@ -296,8 +301,10 @@ struct ArchiveAngelBufferHygieneClearTests {
         let leftover = companion(plan.batchDir + "/\(f.id.uuidString)/f.mov.vs.archive.mov", of: f)
         model.records = [p, f, leftover]
 
-        let out = model.clearArchiveAngelBatch(plan, reason: "free the leftovers")
+        let out = model.clearArchiveAngelBatch(plan, reason: "free the leftovers", bytes: 3_700_000_000)
         #expect(out.cleared && out.rowsReturned == 0 && out.companionsRetired == 1)
+        #expect(out.bytesFreed == 3_700_000_000, "the caller's measurement is used, not a re-walk")
+        #expect(await out.removal?.value == true)
         #expect(!FileManager.default.fileExists(atPath: plan.batchDir))
         #expect(leftover.isPurged)
         #expect(await clearedLines(model).isEmpty, "SENSOR: no half-skip for a decided batch")
@@ -324,7 +331,9 @@ struct ArchiveAngelBufferHygieneClearTests {
         #expect(await clearedLines(model).isEmpty)
 
         // Once the job has let go, the same batch clears.
-        #expect(model.clearArchiveAngelBatch(live, reason: "test").cleared)
+        let out3 = model.clearArchiveAngelBatch(live, reason: "test")
+        #expect(out3.cleared)
+        #expect(await out3.removal?.value == true)
     }
 
     @Test("Clear all: every batch handed over is tried; a refusal does not stop the rest")
@@ -337,12 +346,103 @@ struct ArchiveAngelBufferHygieneClearTests {
         let one = try makeBatch(sb, name: "batch-1", status: .ready, rows: [entry(a, .ready)])
         let two = try makeBatch(sb, name: "batch-2", status: .promoting, rows: [entry(b, .ready)])
         let three = try makeBatch(sb, name: "batch-3", status: .discarded, rows: [entry(c, .failed)])
-        let outs = model.clearArchiveAngelBatches([one, two, three], reason: "Clear all")
+        let outs = model.clearArchiveAngelBatches([one, two, three], bytes: [one.batchID: 10, three.batchID: 20], reason: "Clear all")
         #expect(outs.map(\.cleared) == [true, false, true])
         #expect(outs[1].refusal == .promoting)
+        #expect(outs[0].bytesFreed == 10 && outs[2].bytesFreed == 20)
+        for out in outs { _ = await out.removal?.value }
         #expect(!FileManager.default.fileExists(atPath: one.batchDir) && FileManager.default.fileExists(atPath: two.batchDir)
                 && !FileManager.default.fileExists(atPath: three.batchDir))
         #expect(await clearedLines(model).map(\.recordID) == [a.id])
+    }
+
+    // MARK: - QA RED tests (2026-09-19 review of feature/angel-buffer-hygiene)
+
+    @Test("QA RED: clearing the same plan snapshot twice writes ONE angelCleared line per row, not two (VideoScanModel+ArchiveAngelBufferHygiene.swift:80-90)")
+    func secondClearOfAStaleSnapshotIsIdempotent() async throws {
+        // The card keeps showing a cleared row until refreshAngelBatches() lands;
+        // a second Clear (or the review sheet's Discard) hands the verb the SAME
+        // .ready snapshot. The verb trusts it: lines again, and saveLogged →
+        // AtomicFilePublish.write(createIntermediates: true) resurrects the
+        // batch folder just to remove it again — and reports `cleared == true`.
+        let sb = try MasterArchiveTestSupport.makeSandbox("hygtwice")
+        defer { sb.cleanup() }
+        let model = try makeModel(sb)
+        let a = original("a.mov")
+        let plan = try makeBatch(sb, name: "batch-twice", status: .ready, rows: [entry(a, .ready)])
+        model.records = [a]
+
+        let first = model.clearArchiveAngelBatch(plan, reason: "first")
+        #expect(first.cleared && first.rowsReturned == 1)
+
+        // Before the removal lands the batch is busy (live); a tiny folder may
+        // already be gone by now — either way nothing is written.
+        let during = model.clearArchiveAngelBatch(plan, reason: "again — removal in flight")
+        #expect(during.refusal == .live || during.refusal == .gone, "\(String(describing: during.refusal))")
+        #expect(during.rowsReturned == 0 && !during.cleared && during.removal == nil)
+
+        #expect(await first.removal?.value == true)
+        #expect(!FileManager.default.fileExists(atPath: plan.batchDir))
+
+        let second = model.clearArchiveAngelBatch(plan, reason: "second — stale snapshot")
+        #expect(second.refusal == .gone)
+        #expect(second.rowsReturned == 0, "a row already returned to the pool must not be returned again")
+        #expect(second.cleared == false, "nothing was there to clear")
+        #expect(second.removal == nil)
+        #expect(!FileManager.default.fileExists(atPath: plan.batchDir), "the folder must not be resurrected")
+
+        // A stale .ready snapshot of a batch whose plan.json already says
+        // .discarded (an earlier removal failed): folder only, no second half-skip.
+        let again = try makeBatch(sb, name: "batch-stale", status: .ready, rows: [entry(a, .ready)])
+        var onDisk = again; onDisk.status = .discarded
+        try ArchiveAngelPlanStore.save(onDisk)
+        let third = model.clearArchiveAngelBatch(again, reason: "stale snapshot, decided on disk")
+        #expect(third.cleared && third.rowsReturned == 0)
+        #expect(await third.removal?.value == true)
+
+        let lines = await clearedLines(model)
+        #expect(lines.count == 1, "SENSOR: one half-skip per clear, got \(lines.count)")
+        #expect(model.archiveAngelAttention.summary(recordID: a.id, contentKey: "").timesCleared == 1)
+    }
+
+    @Test("QA RED: the verb refuses a plan whose batchDir is not a batch-… folder (defense for the ONE delete entry point; ArchiveAngelPlan.swift:543)")
+    func refusesAFolderThatIsNotABatch() throws {
+        // No production caller builds such a plan today (scanBatches only yields
+        // bufferRoot/batch-*), but this is THE entry point that deletes, and
+        // removeBatchFolder is a bare removeItem(atPath:) with no guard.
+        let sb = try MasterArchiveTestSupport.makeSandbox("hygguard")
+        defer { sb.cleanup() }
+        let model = try makeModel(sb)
+        let stranger = sb.root.appendingPathComponent("not-a-batch", isDirectory: true)
+        try FileManager.default.createDirectory(at: stranger, withIntermediateDirectories: true)
+        let keep = stranger.appendingPathComponent("family-tape.mov")
+        try Data(count: 4_096).write(to: keep)
+        var plan = ArchiveAngelPlan(batchDir: stranger.path, requestedCount: 0, makeLossless: false, entries: [])
+        plan.status = .promoted   // a "leftover": the verb goes straight to remove
+
+        let out = model.clearArchiveAngelBatch(plan, reason: "test")
+        #expect(out.removalScheduled == false && out.removal == nil && out.cleared == false)
+        if case .notABatchFolder(let why)? = out.refusal { #expect(why.contains("not a batch-… folder")) } else { Issue.record("\(String(describing: out.refusal))") }
+        #expect(FileManager.default.fileExists(atPath: keep.path), "a folder that is not batch-… must never be removed")
+
+        // The store's guard on its own: name and parent both matter.
+        let root = sb.root.appendingPathComponent("buffer", isDirectory: true)
+        #expect(throws: ArchiveAngelPlanStore.BatchFolderError.self) {
+            try ArchiveAngelPlanStore.checkBatchFolder(root.appendingPathComponent("elsewhere/batch-x").path, bufferRoot: root)
+        }
+        #expect(throws: ArchiveAngelPlanStore.BatchFolderError.self) {
+            try ArchiveAngelPlanStore.checkBatchFolder("/", bufferRoot: root)
+        }
+        #expect(throws: Never.self) {
+            try ArchiveAngelPlanStore.checkBatchFolder(root.appendingPathComponent("batch-2026-09-15T18-18-14/").path, bufferRoot: root)
+        }
+        var lines: [String] = []
+        var bad = ArchiveAngelPlan(batchDir: root.appendingPathComponent("photos").path, requestedCount: 0, makeLossless: false)
+        bad.status = .promoted
+        #expect(throws: ArchiveAngelPlanStore.BatchFolderError.self) {
+            try ArchiveAngelPlanStore.removeBatchFolder(bad, bufferRoot: root, log: { lines.append($0) })
+        }
+        #expect(lines.count == 1 && lines[0].contains("refused to remove"), "\(lines)")
     }
 
     @Test("ISOLATION: the sandbox batches live under the temp dir, never the real buffer; the session 'Later' set is process memory only")

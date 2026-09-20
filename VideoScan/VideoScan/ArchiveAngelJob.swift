@@ -792,13 +792,14 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             model?.forgetArchiveAngelCompanions(batchDir: settled.batchDir, reason: "cancelled — nothing was prepared, batch discarded")
         }
         let generation = nextSaveGeneration()
+        let root = bufferRoot   // the delete guard: only <root>/batch-… may go
         Task.detached(priority: .utility) {
             do { try await Self.savePlanOffMain(settled, generation: generation) } catch {
                 appLog.write("Archive Angel: could not save the cancelled batch — \(error.localizedDescription)")
             }
             if kept { ArchiveAngelPlanStore.reclaimUnfinished(settled, unfinished: unfinished) }
             if !kept {
-                do { try ArchiveAngelPlanStore.removeBatchFolder(settled) } catch {
+                do { try ArchiveAngelPlanStore.removeBatchFolder(settled, bufferRoot: root) } catch {
                     appLog.write("Archive Angel: could not remove the cancelled batch's folder — \(error.localizedDescription)")
                 }
             }

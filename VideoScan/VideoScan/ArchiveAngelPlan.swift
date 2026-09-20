@@ -433,7 +433,7 @@ enum ArchiveAngelPlanStore {
             saveLogged(plan, context: "settling an interrupted batch")
             if kept { reclaimUnfinished(plan, unfinished: unfinished) }
             if !kept {
-                do { try removeBatchFolder(plan) } catch {
+                do { try removeBatchFolder(plan, bufferRoot: bufferRoot) } catch {
                     appLog.write("Archive Angel: could not remove the discarded batch \((plan.batchDir as NSString).lastPathComponent) — \(error.localizedDescription)")
                 }
             }
@@ -538,9 +538,45 @@ enum ArchiveAngelPlanStore {
         return total
     }
 
-    /// Delete a batch folder (companions + plan). Used by Discard and by
-    /// per-entry cleanup after a successful promote.
-    nonisolated static func removeBatchFolder(_ plan: ArchiveAngelPlan) throws {
+    /// Why `removeBatchFolder` refused (QA 2026-09-19: the one delete
+    /// entry point had no path guard).
+    enum BatchFolderError: Error, LocalizedError, Equatable {
+        case notABatchFolder(String)
+        case outsideBufferRoot(String, root: String)
+        var errorDescription: String? {
+            switch self {
+            case .notABatchFolder(let p): return "\(p) is not a batch-… folder — refusing to delete it"
+            case .outsideBufferRoot(let p, let root): return "\(p) is not directly under the buffer \(root) — refusing to delete it"
+            }
+        }
+    }
+
+    /// The guard: the folder must be `<bufferRoot>/batch-…` — a direct
+    /// child, name prefixed `batch-`. Throws otherwise. Pure path work.
+    nonisolated static func checkBatchFolder(_ dir: String, bufferRoot: URL) throws {
+        let url = URL(fileURLWithPath: dir).standardizedFileURL
+        let path = url.path
+        guard path != "/", url.lastPathComponent.hasPrefix("batch-") else {
+            throw BatchFolderError.notABatchFolder(path)
+        }
+        let root = bufferRoot.standardizedFileURL.path
+        guard url.deletingLastPathComponent().path == root else {
+            throw BatchFolderError.outsideBufferRoot(path, root: root)
+        }
+    }
+
+    /// Delete a batch folder (companions + plan) — THE delete entry point
+    /// for whole batches (the clear verb, the settle, the job's cancel).
+    /// Refuses, with a typed and logged error, anything that is not
+    /// `<bufferRoot>/batch-…`.
+    nonisolated static func removeBatchFolder(_ plan: ArchiveAngelPlan, bufferRoot: URL = defaultBufferRoot,
+                                              log: (String) -> Void = { appLog.write($0) }) throws {
+        do {
+            try checkBatchFolder(plan.batchDir, bufferRoot: bufferRoot)
+        } catch {
+            log("Archive Angel: refused to remove \(plan.batchDir) — \(error.localizedDescription)")
+            throw error
+        }
         try FileManager.default.removeItem(atPath: plan.batchDir)
     }
 

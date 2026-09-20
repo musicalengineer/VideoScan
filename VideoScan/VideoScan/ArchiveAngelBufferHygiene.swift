@@ -81,13 +81,12 @@ enum ArchiveAngelBufferHygiene {
         }
 
         /// Review & Promote opens the existing review sheet — for a
-        /// waiting batch, or a parked one that has rows ready to look at.
+        /// waiting batch only. A parked batch still has unsettled rows the
+        /// sheet must not be handed (QA 2026-09-19); the hour rule settles
+        /// it on a later refresh, and then it is a waiting batch here.
         var canReview: Bool {
-            switch kind {
-            case .waiting: return true
-            case .parked(let ready, _): return ready > 0
-            case .leftover, .inProgress: return false
-            }
+            if case .waiting = kind { return true }
+            return false
         }
 
         var isWaiting: Bool {
