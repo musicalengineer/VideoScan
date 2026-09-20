@@ -16,13 +16,16 @@
 // the keeper just verified, and any other online copy whose stored fixity
 // reproduces and whose digest is this one's:
 //     ≥ 3 remaining → PERMANENT   (space back now)
-//     = 2 remaining → TRASH       (the archive copy + the keeper: to the
-//                                  volume's Trash, not gone)
-//     < 2 remaining → LEFT ALONE  (never below the archive copy)
-//     no verified archive copy   → LEFT ALONE, before a byte is read
-// "Prefer the Trash for every duplicate" (Settings) forces TRASH for all
-// tiers. The tier and its reason are on the row; the ledger line carries
-// them too. Old plans decode with `tier == nil` and are decided afresh.
+//     = 2 remaining → TRASH       (to the volume's Trash, not gone)
+//     < 2 remaining → LEFT ALONE  (put back untouched)
+// Purely the count — the archive is NOT required (Rick, late 2026-09-20:
+// "the low-hanging fruit is a file with ten copies regardless of
+// promotion"); an archive copy counts like any verified copy, and the
+// row says "not yet archived" for information only. "Prefer the Trash
+// for every duplicate" (Settings) forces TRASH for all tiers. The tier,
+// its reason (who counted, who did not and why) and the count are on the
+// row; the ledger line carries them too. Old plans decode with
+// `tier == nil` and are decided afresh.
 //
 // Same shape as ArchiveAngelPlan (plan.json + store + ordered writer), not
 // the same files: a deletion plan has no buffer, no companions, no review.
@@ -61,11 +64,24 @@ struct DeletionTierCandidates: Sendable, Equatable {
         /// The archive's own whole-file digest (lowercase hex) + size.
         let digest: String
         let sizeBytes: Int64
+        /// "archive copy on FamilyArchive" — for the row's reason.
+        var label: String = "archive copy"
     }
     struct OtherCopy: Sendable, Equatable {
         let path: String
         let fixity: ContentFixity?
+        /// "sibling copy.mov on M4drive" — for the row's reason.
+        var label: String = "sibling"
     }
+    /// "keeper on LaCieWorkspace".
+    var keeperLabel = "keeper"
+    /// The keeper's path, so a candidate that is the SAME inode (a hard
+    /// link, two spellings of one name) is never counted twice (QA #2).
+    var keeperPath = ""
+    /// Family members that are themselves rows of THIS run still to be
+    /// decided — they may go too, so they never count (QA #3); named
+    /// for the reason.
+    var alsoInThisRun: [String] = []
     /// Fixity-verified Master Archive copies of any family member.
     var archiveCopies: [ArchiveCopy] = []
     /// Every other active family member except the keeper and the
@@ -77,18 +93,34 @@ struct DeletionTierCandidates: Sendable, Equatable {
 }
 
 /// What the disk said about the candidates, once the duplicate's digest
-/// was known. The keeper is counted here (it was just verified).
+/// was known. The keeper is counted here (it was just verified). The
+/// DUPLICATE is never counted — "remaining" means after it goes.
 struct DeletionTierFacts: Sendable, Equatable {
     /// Verified copies that remain after this deletion: keeper + archive
     /// copies that reproduce + other copies whose fixity reproduces and
     /// whose digest is this one's.
     var remainingVerifiedCopies: Int = 1
-    /// At least one archive copy is online, its size and digest are this
-    /// file's.
+    /// INFORMATIONAL (Rick 2026-09-20, late: "the archive is NOT
+    /// required"): at least one archive copy is online with this file's
+    /// size and digest. The detail row says "not yet archived" when
+    /// false; the tier does not care.
     var hasVerifiedArchive: Bool = false
     /// Family copies that exist but could not be counted (no fixity,
     /// stamp changed, offline, or a different digest).
     var unverifiedCopies: Int = 0
+    /// Who counted, in words ("keeper on LaCieWorkspace", "archive copy
+    /// on FamilyArchive").
+    var counted: [String] = []
+    /// Who did not, and why ("sibling b.mov on M4drive not verified yet").
+    var notCounted: [String] = []
+
+    /// "2 verified remain: keeper on LaCieWorkspace, archive copy on
+    /// FamilyArchive; sibling b.mov on M4drive not verified yet".
+    var summary: String {
+        var text = "\(remainingVerifiedCopies) verified remain: " + counted.joined(separator: ", ")
+        if !notCounted.isEmpty { text += "; " + notCounted.joined(separator: ", ") }
+        return text
+    }
 
     /// Stat + compare every candidate. Off the main actor (called from the
     /// disk worker); one `stat` per candidate, no reads. `digest` is the
@@ -98,29 +130,69 @@ struct DeletionTierFacts: Sendable, Equatable {
         var facts = DeletionTierFacts()
         let wanted = digest.lowercased()
         facts.hasVerifiedArchive = candidates.keeperIsVerifiedArchive
+        facts.counted.append(candidates.keeperLabel + (candidates.keeperIsVerifiedArchive ? " (the archive copy)" : ""))
+        // One inode counts once: a hard link (or a second spelling of one
+        // name on a case-insensitive volume) is the same bytes on the same
+        // platter, not another copy.
+        var seenInodes: Set<String> = []
+        func key(_ s: FileIdentityStamp) -> String { "\(s.device):\(s.inode)" }
+        if !candidates.keeperPath.isEmpty, let k = FileIdentityStamp.capture(path: candidates.keeperPath) {
+            seenInodes.insert(key(k))
+        }
+        func alreadyCounted(_ stamp: FileIdentityStamp, _ label: String) -> Bool {
+            guard seenInodes.contains(key(stamp)) else { seenInodes.insert(key(stamp)); return false }
+            facts.unverifiedCopies += 1
+            facts.notCounted.append("\(label) is the same file as one already counted (hard link)")
+            return true
+        }
         for archive in candidates.archiveCopies {
-            if let stamp = FileIdentityStamp.capture(path: archive.path),
-               stamp.size == archive.sizeBytes, archive.digest.lowercased() == wanted {
-                facts.remainingVerifiedCopies += 1
-                facts.hasVerifiedArchive = true
-            } else {
+            guard let stamp = FileIdentityStamp.capture(path: archive.path) else {
                 facts.unverifiedCopies += 1
+                facts.notCounted.append("\(archive.label) offline")
+                continue
             }
+            guard stamp.size == archive.sizeBytes, archive.digest.lowercased() == wanted else {
+                facts.unverifiedCopies += 1
+                facts.notCounted.append("\(archive.label) holds different bytes")
+                continue
+            }
+            if alreadyCounted(stamp, archive.label) { continue }
+            facts.remainingVerifiedCopies += 1
+            facts.hasVerifiedArchive = true
+            facts.counted.append(archive.label)
         }
         for copy in candidates.otherCopies {
-            if let fixity = copy.fixity, fixity.isUsableForVerification,
-               fixity.digest == wanted,
-               fixity.describesFileNow(FileIdentityStamp.capture(path: copy.path)) {
-                facts.remainingVerifiedCopies += 1
-            } else {
+            guard let fixity = copy.fixity, fixity.isUsableForVerification else {
                 facts.unverifiedCopies += 1
+                facts.notCounted.append("\(copy.label) not verified yet")
+                continue
             }
+            guard fixity.digest == wanted else {
+                facts.unverifiedCopies += 1
+                facts.notCounted.append("\(copy.label) holds different bytes")
+                continue
+            }
+            let now = FileIdentityStamp.capture(path: copy.path)
+            guard fixity.describesFileNow(now), let stamp = now else {
+                facts.unverifiedCopies += 1
+                facts.notCounted.append("\(copy.label) \(now == nil ? "offline" : "changed since it was verified")")
+                continue
+            }
+            if alreadyCounted(stamp, copy.label) { continue }
+            facts.remainingVerifiedCopies += 1
+            facts.counted.append(copy.label)
+        }
+        for label in candidates.alsoInThisRun {
+            facts.unverifiedCopies += 1
+            facts.notCounted.append("\(label) still to be decided in this run")
         }
         return facts
     }
 }
 
-/// The tier rule, pure and table-testable.
+/// The tier rule, pure and table-testable. Purely the COUNT (Rick
+/// 2026-09-20, late): the archive is not required — "the low-hanging
+/// fruit is a file with ten copies regardless of promotion".
 struct DeletionTierDecision: Equatable, Sendable {
     /// nil → left alone (not deleted, not refused as "not identical").
     let tier: DeletionTier?
@@ -132,31 +204,29 @@ struct DeletionTierDecision: Equatable, Sendable {
 
     static func decide(facts: DeletionTierFacts, preferTrash: Bool) -> DeletionTierDecision {
         let n = facts.remainingVerifiedCopies
-        guard facts.hasVerifiedArchive else {
-            return DeletionTierDecision(tier: nil, remainingVerifiedCopies: n, reason: DeletionTierText.noVerifiedArchive)
-        }
+        let who = facts.counted.isEmpty ? "\(n) verified remain" : facts.summary
         guard n >= minimumForTrash else {
             return DeletionTierDecision(tier: nil, remainingVerifiedCopies: n,
-                                        reason: "only \(n) verified cop\(n == 1 ? "y" : "ies") would remain — never below the archive copy")
+                                        reason: "only \(n) verified cop\(n == 1 ? "y" : "ies") would remain — left alone (\(who))")
         }
         if preferTrash {
             return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
-                                        reason: "\(n) verified copies remain — to the Trash by your setting")
+                                        reason: "to the Trash by your setting (\(who))")
         }
         if n >= minimumForPermanent {
             return DeletionTierDecision(tier: .permanent, remainingVerifiedCopies: n,
-                                        reason: "\(n) verified copies remain — space back now")
+                                        reason: "space back now (\(who))")
         }
         return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
-                                    reason: "only the archive copy and the keeper remain — to the Trash, not gone")
+                                    reason: "only two verified copies would remain — to the Trash, not gone (\(who))")
     }
 }
 
 /// The words of the tier, in one place.
 enum DeletionTierText {
-    static let noVerifiedArchive = "no verified Master Archive copy of this family yet — left alone, never below the archive copy"
+    static let notYetArchived = "not yet archived"
     static let preferTrashToggleLabel = "Prefer the Trash for every duplicate"
-    static let preferTrashCaption = "Off: a duplicate with three or more verified copies left behind is deleted outright; with exactly the archive copy and the keeper left, it goes to the drive's Trash instead. On: every duplicate goes to the Trash, whatever the count. Nothing is ever removed below the archive copy."
+    static let preferTrashCaption = "Off: a duplicate with three or more verified copies left behind (the keeper, an archive copy, siblings whose stored fixity still reproduces) is deleted outright; with exactly two left, it goes to the drive's Trash instead; with fewer, it is left alone. On: every duplicate goes to the Trash, whatever the count. An archive copy counts but is not required."
     static func inTheTrashOf(_ volume: String) -> String { "in the Trash of \(volume)" }
 }
 
@@ -234,16 +304,24 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         var remainingVerifiedCopies: Int?
         /// For `.trashed`: the volume whose Trash holds the file now.
         var trashedOnVolume: String?
+        /// Informational: the family has a fixity-verified archive copy
+        /// of these bytes (nil until decided). The detail row says
+        /// "not yet archived" when false; the tier does not care.
+        var hasVerifiedArchive: Bool?
 
         var keeperVolumeName: String { VolumeReachability.volumeName(forPath: keeperPath) }
 
-        /// "Permanent" / "Trash of SanDisk" / "—" for the detail view.
+        /// "Permanent" / "Trash of SanDisk" / "—" for the detail view,
+        /// with " · not yet archived" when the family has no verified
+        /// archive copy (informational only).
         var tierLabel: String {
+            let base: String
             switch tier {
-            case .none: return "—"
-            case .permanent: return "Permanent"
-            case .trash: return trashedOnVolume.map { "Trash of \($0)" } ?? "Trash"
+            case .none: base = "—"
+            case .permanent: base = "Permanent"
+            case .trash: base = trashedOnVolume.map { "Trash of \($0)" } ?? "Trash"
             }
+            return hasVerifiedArchive == false ? base + " · \(DeletionTierText.notYetArchived)" : base
         }
     }
 
@@ -371,12 +449,14 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
     }
 
     /// The tier decided for the row (recorded before the unlink / move).
-    mutating func setTier(_ id: UUID, _ decision: DeletionTierDecision, trashVolume: String? = nil) {
+    mutating func setTier(_ id: UUID, _ decision: DeletionTierDecision, trashVolume: String? = nil,
+                          hasVerifiedArchive: Bool? = nil) {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
         entries[i].tier = decision.tier
         entries[i].tierReason = decision.reason
         entries[i].remainingVerifiedCopies = decision.remainingVerifiedCopies
         entries[i].trashedOnVolume = decision.tier == .trash ? trashVolume : nil
+        if let hasVerifiedArchive { entries[i].hasVerifiedArchive = hasVerifiedArchive }
     }
 
     /// The row left quarantine (deleted, or put back): forget the folder.

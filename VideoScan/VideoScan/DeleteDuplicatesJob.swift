@@ -25,11 +25,12 @@
 //     the duplicate's fresh digest against the stored one;
 //   • there is NO both-sides-stored, nothing-read path — `contentHash` and
 //     `partialMD5` never authorise a delete (design #320);
-//   • COPY-COUNT TIER, decided per pair from the fresh catalog: a family
-//     with no fixity-verified Master Archive copy is left alone before a
-//     byte is read; with the archive copy + the keeper + one more verified
-//     copy remaining the file is unlinked; with exactly the archive copy
-//     and the keeper remaining it goes to the drive's Trash instead;
+//   • COPY-COUNT TIER, decided per pair from the fresh catalog on the
+//     COUNT alone (the archive is not required — Rick, late 2026-09-20):
+//     with three or more verified copies remaining (the keeper just
+//     verified, archive copies online with this digest, siblings whose
+//     stored fixity reproduces) the file is unlinked; with exactly two it
+//     goes to the drive's Trash; with fewer it is put back untouched.
 //     "Prefer the Trash for every duplicate" forces the Trash.
 //
 // ONE PAIR, TWO DISK PHASES. Phase 1 (detached): hold — move the file
@@ -99,10 +100,10 @@ enum DeleteDuplicatesDiskOutcome: Sendable {
     case deleted(bytes: Int64, proof: VerifiedDuplicate)
     case trashed(bytes: Int64, location: String, proof: VerifiedDuplicate)
     case refused(reason: String, cancelled: Bool)
-    /// Verified identical, but the tier said "not below the archive
-    /// copy": put back untouched, not a refusal, the row keeps its
-    /// disposition.
-    case leftAlone(reason: String)
+    /// The tier said too few verified copies would remain: put back
+    /// untouched (or never moved), not a refusal, the row keeps its
+    /// disposition. `facts` carry the count for the row.
+    case leftAlone(reason: String, facts: DeletionTierFacts)
     case failed(reason: String)
     case retained(path: String, reason: String)
 }
@@ -145,6 +146,18 @@ enum DeleteDuplicatesDiskWorker {
 
     private static func phaseOne(_ item: DeleteDuplicatesWorkItem,
                                  hooks: SignatureVerification.Hooks) -> DeleteDuplicatesDiskOutcome {
+        // Before moving or reading anything: with the keeper's digest
+        // already known (a usable stored fixity), the family's other copies
+        // can be stat'ed now. If fewer than two verified copies could
+        // remain, the file is left where it is — no move, no read (QA #5:
+        // an offline archive copy is found out here, not after a hash).
+        // The decision after the hash is still the one that counts.
+        if let fixity = item.keeperFixity, fixity.isUsableForVerification {
+            let pre = DeletionTierFacts.gather(item.tierCandidates, digest: fixity.digest)
+            if pre.remainingVerifiedCopies < DeletionTierDecision.minimumForTrash {
+                return .leftAlone(reason: DeletionTierDecision.decide(facts: pre, preferTrash: false).reason, facts: pre)
+            }
+        }
         switch SignatureVerification.holdForSingleRead(keeperPath: item.keeperPath, keeperFixity: item.keeperFixity,
                                                        duplicatePath: item.path,
                                                        directoryName: item.quarantineDirectoryName, hooks: hooks) {
@@ -196,10 +209,10 @@ enum DeleteDuplicatesDiskWorker {
     /// Put a quarantined file back without deleting it (the plan could not
     /// record the quarantine, the run is stopping, or the tier said no).
     static func release(_ ticket: QuarantineTicket, reason: String, keeperFilename: String,
-                        leftAlone: Bool = false) -> DeleteDuplicatesDiskOutcome {
+                        leftAlone facts: DeletionTierFacts? = nil) -> DeleteDuplicatesDiskOutcome {
         let outcome = map(SignatureVerification.releaseQuarantine(ticket, reason: reason),
                           proof: ticket.proof, keeper: keeperFilename)
-        if leftAlone, case .refused(_, true) = outcome { return .leftAlone(reason: reason) }
+        if let facts, case .refused(_, true) = outcome { return .leftAlone(reason: reason, facts: facts) }
         return outcome
     }
 
@@ -608,19 +621,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 continue
             }
 
-            // COPY-COUNT TIER, part 1 — before a byte is read: a family
-            // with no fixity-verified Master Archive copy is left alone.
-            // Not a refusal: the bytes were never in question, the row
-            // keeps its disposition.
-            let candidates = model.deletionTierCandidates(record: record, keeper: keeper)
-            if candidates.archiveCopies.isEmpty && !candidates.keeperIsVerifiedArchive {
-                tally.notArchived += 1
-                mutatePlan { $0.set(entry.id, .skipped, note: DeletionTierText.noVerifiedArchive) }
-                model.log("  Left alone \(entry.filename): \(DeletionTierText.noVerifiedArchive)")
-                releaseSlots(weight)
-                publishProgress()
-                continue
-            }
+            // COPY-COUNT TIER: the family's other copies, from the fresh
+            // catalog; the disk is asked about them once the digest is in
+            // hand. The archive is not required (Rick, late 2026-09-20).
+            let alsoPending = Set(current.entries.filter { !$0.status.isSettled && $0.id != entry.id }.map(\.id))
+            let candidates = model.deletionTierCandidates(record: record, keeper: keeper, excluding: alsoPending)
 
             mutatePlan { $0.set(entry.id, .verifying) }
             model.duplicateStatus = "Verifying duplicate \((plan?.counts.settled ?? 0) + 1) of \(current.entries.count)…"
@@ -661,7 +666,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             finalPlan.log.append("Suspended by \(how) with \(remaining) remaining — offered to resume "
                                  + (quitRequested ? "at the next launch" : "now, or at the next launch"))
             self.plan = finalPlan
-            result = (tally.removed, tally.failed, finalPlan.skippedBeforePlan + tally.notArchived, tally.bytesFreed)
+            result = (tally.removed, tally.failed, finalPlan.skippedBeforePlan + tally.leftAlone, tally.bytesFreed)
             let freed = DeleteDuplicatesRate.freedText(counts: finalPlan.counts, trashVolumes: finalPlan.trashVolumes)
             model.log("\nDelete Duplicates on \(volumeName) suspended for \(how): \(tally.removed) deleted, \(remaining) remaining — "
                       + (quitRequested ? "the run will be offered to resume at the next launch."
@@ -689,14 +694,14 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         }
 
         let counts = finalPlan.counts
-        let (deleted, trashed, failed, refused, notArchived) =
-            (tally.deleted, tally.trashed, tally.failed, tally.refused, tally.notArchived)
+        let (deleted, trashed, failed, refused, leftAlone) =
+            (tally.deleted, tally.trashed, tally.failed, tally.refused, tally.leftAlone)
         let freedNow = ByteCountFormatter.string(fromByteCount: tally.bytesFreed, countStyle: .file)
         let freedText = DeleteDuplicatesRate.freedText(counts: counts, trashVolumes: finalPlan.trashVolumes)
         var completion = "\(deleted) deleted, "
         if trashed > 0 { completion += "\(trashed) to the Trash, " }
         completion += "\(failed) failed, \(refused) refused by verification, \(finalPlan.skippedBeforePlan) skipped, "
-        if notArchived > 0 { completion += "\(notArchived) not archived yet (left alone), " }
+        if leftAlone > 0 { completion += "\(leftAlone) left alone (too few verified copies would remain), " }
         completion += (freedText.isEmpty ? "\(freedNow) freed" : freedText) + " (\(finalPlan.summaryLine))"
         if finalPlan.crossVolumeMode {
             model.log("\n" + WorkingCopyCleanupText.logSummary(volume: volumeName, detail: "complete — " + completion))
@@ -707,13 +712,13 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             model.log("  \(refused) file(s) were NOT identical to their keeper despite matching "
                 + "on hash/name/duration — they are marked Review and left on disk.")
         }
-        if notArchived > 0 {
-            model.log("  \(notArchived) file(s) were left alone because their family has no verified Master Archive copy yet — promote the keeper first, then run again.")
+        if leftAlone > 0 {
+            model.log("  \(leftAlone) file(s) were left alone because fewer than two verified copies would remain — verify or archive another copy of the family first, then run again.")
         }
         model.duplicateStatus = trashed > 0
             ? "\(deleted + trashed) deleted, \(freedText)"
             : "\(deleted) deleted, \(freedNow) freed"
-        result = (deleted + trashed, failed, finalPlan.skippedBeforePlan + notArchived, tally.bytesFreed)
+        result = (deleted + trashed, failed, finalPlan.skippedBeforePlan + leftAlone, tally.bytesFreed)
 
         finalPlan.finishedAt = Date()
         finalPlan.outcome = planSaveFailed ? "stopped (plan not saved)" : (stopRequested ? "cancelled" : "completed")
@@ -743,7 +748,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         summaryParts.append(freedText.isEmpty ? "\(freedNow) freed" : freedText)
         if refused > 0 { summaryParts.append("\(refused) refused") }
         if failed > 0 { summaryParts.append("\(failed) not done") }
-        if notArchived > 0 { summaryParts.append("\(notArchived) not archived yet") }
+        if leftAlone > 0 { summaryParts.append("\(leftAlone) left alone") }
         let summary = summaryParts.joined(separator: " · ")
         if planSaveFailed {
             finish(failed: "Stopped after \(deleted + trashed) deleted — the plan could not be saved (\(summary))")
@@ -792,7 +797,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // removed (#2).
             mutatePlan {
                 $0.setQuarantined(entry.id, directory: ticket.quarantineDirectory, stamp: ticket.baseline)
-                $0.setTier(entry.id, decided, trashVolume: trashVolume)
+                $0.setTier(entry.id, decided, trashVolume: trashVolume, hasVerifiedArchive: facts.hasVerifiedArchive)
             }
             await savePlan(context: "quarantined \(entry.filename)")
             testHookAfterQuarantineSaved?(entry)
@@ -820,13 +825,19 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                                                                  keeperFilename: keeperName, hooks: hooks)
                 }
             } else {
-                // Never below the archive copy: put it back, untouched.
+                // Too few verified copies would remain: put it back, untouched.
                 let reason = decided.reason
                 outcome = await runDetached(entryID: entry.id) {
-                    DeleteDuplicatesDiskWorker.release(ticket, reason: reason, keeperFilename: keeperName, leftAlone: true)
+                    DeleteDuplicatesDiskWorker.release(ticket, reason: reason, keeperFilename: keeperName, leftAlone: facts)
                 }
             }
-            mutatePlan { $0.clearQuarantine(entry.id) }
+            // A RETAINED file is still in the folder the plan names: keep
+            // naming it, so the plan is never filed as done with it there
+            // (QA #1). Anything else has left the folder (gone, trashed, or
+            // put back at its path).
+            if case .retained = outcome {} else {
+                mutatePlan { $0.clearQuarantine(entry.id) }
+            }
         }
         let seconds = Date().timeIntervalSince(pairStarted)
         let concurrency = inFlight.count
@@ -864,7 +875,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         var trashed = 0
         var failed = 0
         var refused = 0
-        var notArchived = 0
+        var leftAlone = 0
         var bytesFreed: Int64 = 0
         var bytesTrashed: Int64 = 0
         var catalogMutated = false
@@ -883,10 +894,14 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             mutatePlan { $0.set(entry.id, .failed, note: "left in quarantine (internal: phase 2 did not run)") }
         case .refused(let reason, let cancelled):
             settleRefused(reason: reason, cancelled: cancelled, entry: entry, model: model)
-        case .leftAlone(let reason):
-            tally.notArchived += 1
-            mutatePlan { $0.set(entry.id, .skipped, note: reason) }
-            model.log("  Left alone \(entry.filename) (verified identical to \(keeper.filename)): \(reason)")
+        case .leftAlone(let reason, let facts):
+            tally.leftAlone += 1
+            mutatePlan {
+                $0.set(entry.id, .skipped, note: reason)
+                $0.setTier(entry.id, DeletionTierDecision(tier: nil, remainingVerifiedCopies: facts.remainingVerifiedCopies, reason: reason),
+                           hasVerifiedArchive: facts.hasVerifiedArchive)
+            }
+            model.log("  Left alone \(entry.filename): \(reason)")
         case .failed(let reason):
             tally.failed += 1
             model.log("  FAILED to delete \(entry.filename): \(reason)")

@@ -149,24 +149,29 @@ struct DeletionTierRuleTests {
         DeletionTierFacts(remainingVerifiedCopies: remaining, hasVerifiedArchive: archive, unverifiedCopies: 0)
     }
 
+    /// Purely the count (Rick, late 2026-09-20: the archive is NOT
+    /// required). The `archive` column only says whether the family has
+    /// one — it must never change the verdict.
     @Test(arguments: [
         (3, true, false, DeletionTier?.some(.permanent)),
-        (4, true, false, DeletionTier?.some(.permanent)),
+        (3, false, false, DeletionTier?.some(.permanent)),
+        (4, false, false, DeletionTier?.some(.permanent)),
         (2, true, false, DeletionTier?.some(.trash)),
+        (2, false, false, DeletionTier?.some(.trash)),
         (1, true, false, DeletionTier?.none),
-        (3, false, false, DeletionTier?.none),
-        (2, false, false, DeletionTier?.none),
-        (3, true, true, DeletionTier?.some(.trash)),
+        (1, false, false, DeletionTier?.none),
+        (3, false, true, DeletionTier?.some(.trash)),
         (2, true, true, DeletionTier?.some(.trash)),
-        (1, true, true, DeletionTier?.none),
+        (1, false, true, DeletionTier?.none),
     ])
     func tierTable(remaining: Int, archive: Bool, preferTrash: Bool, expected: DeletionTier?) {
         let d = DeletionTierDecision.decide(facts: facts(remaining, archive: archive), preferTrash: preferTrash)
         #expect(d.tier == expected, "\(remaining) remaining, archive \(archive), preferTrash \(preferTrash) → \(d.reason)")
         #expect(d.remainingVerifiedCopies == remaining)
-        if !archive { #expect(d.reason == DeletionTierText.noVerifiedArchive) }
-        if archive, remaining == 2, !preferTrash { #expect(d.reason.contains("only the archive copy and the keeper remain")) }
-        if archive, remaining < 2 { #expect(d.reason.contains("never below the archive copy")) }
+        if remaining < 2 { #expect(d.reason.hasPrefix("only \(remaining) verified copy would remain — left alone")) }
+        if remaining == 2, !preferTrash { #expect(d.reason.hasPrefix("only two verified copies would remain — to the Trash")) }
+        if remaining >= 3, !preferTrash { #expect(d.reason.hasPrefix("space back now")) }
+        if preferTrash, remaining >= 2 { #expect(d.reason.hasPrefix("to the Trash by your setting")) }
     }
 
     /// The disk side: an archive copy counts only when it is there with
@@ -186,22 +191,54 @@ struct DeletionTierRuleTests {
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_000_000)], ofItemAtPath: copyStale.path)
 
         var c = DeletionTierCandidates()
-        c.archiveCopies = [.init(path: archiveOK.path, digest: digest.uppercased(), sizeBytes: 4_096),
-                           .init(path: archiveOther.path, digest: plainSHA256(archiveOther), sizeBytes: 4_096),
-                           .init(path: dir.appendingPathComponent("offline.mov").path, digest: digest, sizeBytes: 4_096)]
-        c.otherCopies = [.init(path: copyOK.path, fixity: ContentFixity.captured(path: copyOK.path, digest: digest, byteCount: 4_096)),
-                         .init(path: copyStale.path, fixity: staleFixity),
-                         .init(path: dir.appendingPathComponent("nofixity.mov").path, fixity: nil)]
+        c.keeperLabel = "keeper on LaCieWorkspace"
+        c.archiveCopies = [.init(path: archiveOK.path, digest: digest.uppercased(), sizeBytes: 4_096, label: "archive copy on FamilyArchive"),
+                           .init(path: archiveOther.path, digest: plainSHA256(archiveOther), sizeBytes: 4_096, label: "archive copy on Projects"),
+                           .init(path: dir.appendingPathComponent("offline.mov").path, digest: digest, sizeBytes: 4_096, label: "archive copy on MyBook")]
+        c.otherCopies = [.init(path: copyOK.path, fixity: ContentFixity.captured(path: copyOK.path, digest: digest, byteCount: 4_096), label: "sibling copy.mov on SanDisk"),
+                         .init(path: copyStale.path, fixity: staleFixity, label: "sibling stale.mov on SanDisk"),
+                         .init(path: dir.appendingPathComponent("nofixity.mov").path, fixity: nil, label: "sibling nofixity.mov on M4drive")]
         let f = DeletionTierFacts.gather(c, digest: digest)
         #expect(f.hasVerifiedArchive)
         #expect(f.remainingVerifiedCopies == 3, "keeper + the one good archive copy + the one good copy")
         #expect(f.unverifiedCopies == 4)
+        #expect(f.counted == ["keeper on LaCieWorkspace", "archive copy on FamilyArchive", "sibling copy.mov on SanDisk"])
+        #expect(f.notCounted == ["archive copy on Projects holds different bytes", "archive copy on MyBook offline",
+                                 "sibling stale.mov on SanDisk changed since it was verified", "sibling nofixity.mov on M4drive not verified yet"])
+        #expect(f.summary == "3 verified remain: keeper on LaCieWorkspace, archive copy on FamilyArchive, sibling copy.mov on SanDisk; archive copy on Projects holds different bytes, archive copy on MyBook offline, sibling stale.mov on SanDisk changed since it was verified, sibling nofixity.mov on M4drive not verified yet")
+        let d = DeletionTierDecision.decide(facts: f, preferTrash: false)
+        #expect(d.tier == .permanent && d.reason == "space back now (\(f.summary))")
 
         var keeperIsArchive = DeletionTierCandidates()
         keeperIsArchive.keeperIsVerifiedArchive = true
         let g = DeletionTierFacts.gather(keeperIsArchive, digest: digest)
         #expect(g.hasVerifiedArchive && g.remainingVerifiedCopies == 1, "the keeper is counted once")
+        #expect(g.counted == ["keeper (the archive copy)"])
         #expect(DeletionTierDecision.decide(facts: g, preferTrash: false).tier == nil, "only the archive copy would remain")
+        // QA #2: a sibling that is a HARD LINK of the keeper is the same
+        // inode — named, never counted.
+        let keeperFile = dir.appendingPathComponent("keeper.mov"); write(keeperFile, bytes)
+        let linked = dir.appendingPathComponent("linked.mov")
+        try FileManager.default.linkItem(at: keeperFile, to: linked)
+        var hardLink = DeletionTierCandidates()
+        hardLink.keeperPath = keeperFile.path
+        hardLink.otherCopies = [.init(path: linked.path, fixity: ContentFixity.captured(path: linked.path, digest: digest, byteCount: 4_096), label: "sibling linked.mov on X"),
+                                .init(path: copyOK.path, fixity: ContentFixity.captured(path: copyOK.path, digest: digest, byteCount: 4_096), label: "sibling copy.mov on X")]
+        let l = DeletionTierFacts.gather(hardLink, digest: digest)
+        #expect(l.remainingVerifiedCopies == 2, "keeper + copy.mov; the link is the keeper")
+        #expect(l.notCounted == ["sibling linked.mov on X is the same file as one already counted (hard link)"])
+        // QA #3: a family member that is itself a row of this run is named, never counted.
+        var inRun = DeletionTierCandidates()
+        inRun.alsoInThisRun = ["sibling copy2.mov on SanDisk"]
+        let r = DeletionTierFacts.gather(inRun, digest: digest)
+        #expect(r.remainingVerifiedCopies == 1 && r.notCounted == ["sibling copy2.mov on SanDisk still to be decided in this run"])
+        // No archive anywhere, two verified siblings: the count alone decides.
+        var noArchive = DeletionTierCandidates()
+        noArchive.otherCopies = [.init(path: copyOK.path, fixity: ContentFixity.captured(path: copyOK.path, digest: digest, byteCount: 4_096), label: "sibling a"),
+                                 .init(path: archiveOK.path, fixity: ContentFixity.captured(path: archiveOK.path, digest: digest, byteCount: 4_096), label: "sibling b")]
+        let h = DeletionTierFacts.gather(noArchive, digest: digest)
+        #expect(!h.hasVerifiedArchive && h.remainingVerifiedCopies == 3)
+        #expect(DeletionTierDecision.decide(facts: h, preferTrash: false).tier == .permanent, "an archive copy counts but is not required")
     }
 
     @Test func subtitleAndSummaryNameTheTrash() {
@@ -444,8 +481,10 @@ struct DeleteDuplicatesTierAndSpeedTests {
         #expect(job.result.deleted == 1 && job.result.bytesFreed == Int64(fileSize))
         let plan = try #require(job.plan)
         #expect(plan.entries[0].status == .deleted && plan.entries[0].tier == .permanent)
-        #expect(plan.entries[0].remainingVerifiedCopies == 3)
-        #expect(plan.entries[0].tierReason?.contains("space back now") == true)
+        #expect(plan.entries[0].remainingVerifiedCopies == 3 && plan.entries[0].hasVerifiedArchive == true)
+        let reason = try #require(plan.entries[0].tierReason)
+        #expect(reason.hasPrefix("space back now (3 verified remain: keeper on ") && reason.contains("archive copy on ")
+                && reason.contains("sibling verified-sibling-of-keeper.mov on "), Comment(rawValue: reason))
         #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
         #expect(!FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash").path), "nothing went to a Trash")
         #expect(probe.blocks("keeper") == 0 && probe.blocks("quarantine") == 3 && probe.blocks("duplicate") == 0,
@@ -492,23 +531,64 @@ struct DeleteDuplicatesTierAndSpeedTests {
         #expect(console.contains("Moved to the Trash of \(volume) (verified identical to keeper.mov): copy1.mov"))
     }
 
-    @Test func noVerifiedArchiveCopyIsLeftAloneBeforeAByteIsRead() async throws {
-        let rig = makeRig("noarchive", copies: 1, keeperFixity: true); defer { rig.cleanup() }
+    /// Only the keeper would remain: read once, put back, left alone —
+    /// not a refusal. "not yet archived" is said, not enforced.
+    @Test func onlyTheKeeperRemainingIsLeftAloneAfterTheHashAndPutBack() async throws {
+        let rig = makeRig("keeperonly", copies: 1, keeperFixity: true); defer { rig.cleanup() }
         let probe = Probe()
         let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: probe.hooks, planRoot: rig.root)
         job.start(); await job.task?.value
 
         let plan = try #require(job.plan)
-        #expect(plan.entries[0].status == .skipped && plan.entries[0].note == DeletionTierText.noVerifiedArchive)
-        #expect(plan.entries[0].tier == nil)
-        #expect(FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
+        let keeperVolume = VolumeReachability.volumeName(forPath: rig.keeper.fullPath)
+        #expect(plan.entries[0].status == .skipped, "\(plan.entries[0].status)")
+        #expect(plan.entries[0].note == "only 1 verified copy would remain — left alone (1 verified remain: keeper on \(keeperVolume))",
+                Comment(rawValue: plan.entries[0].note))
+        #expect(plan.entries[0].tier == nil && plan.entries[0].remainingVerifiedCopies == 1)
+        #expect(plan.entries[0].hasVerifiedArchive == false && plan.entries[0].tierLabel == "— · not yet archived")
+        #expect(FileManager.default.fileExists(atPath: rig.copies[0].fullPath), "put back at its path")
+        #expect((try? Data(contentsOf: URL(fileURLWithPath: rig.copies[0].fullPath))) == Data(rig.bytes))
+        #expect(quarantineFolders(in: rig.dir).isEmpty)
         #expect(rig.copies[0].duplicateDisposition == .extraCopy, "not a refusal — the row is not re-marked Review")
-        #expect(probe.blocks("quarantine") == 0 && probe.blocks("duplicate") == 0 && probe.quarantineCount == 0, "nothing read, nothing moved")
+        #expect(probe.blocks("quarantine") == 0 && probe.quarantineCount == 0,
+                "the keeper's digest was known: the count was settled by stat alone, nothing moved or read (QA #5)")
         #expect(job.result.deleted == 0 && job.result.skipped == 1)
-        #expect(job.state == .finished(summary: "0 deleted · Zero KB freed · 1 not archived yet"), "\(job.state)")
+        #expect(job.state == .finished(summary: "0 deleted · Zero KB freed · 1 left alone"), "\(job.state)")
         let console = await consoleText(rig.model)
-        #expect(console.contains("Left alone copy1.mov: \(DeletionTierText.noVerifiedArchive)"))
-        #expect(console.contains("promote the keeper first, then run again"))
+        #expect(console.contains("Left alone copy1.mov: only 1 verified copy would remain"))
+        #expect(console.contains("fewer than two verified copies would remain"))
+    }
+
+    /// The archive is not required: a keeper + one verified sibling is
+    /// two remaining → the Trash; + two verified siblings → permanent.
+    /// An unverified sibling is named and does not count.
+    @Test func verifiedSiblingsWithoutAnyArchiveCopyDecideTheTier() async throws {
+        for (verifiedSiblings, expected) in [(1, DeletionTier.trash), (2, DeletionTier.permanent)] {
+            let rig = makeRig("nosiblings-\(verifiedSiblings)", copies: 1, keeperFixity: true); defer { rig.cleanup() }
+            let group = rig.keeper.duplicateGroupID!
+            for i in 0..<verifiedSiblings {
+                let url = rig.dir.appendingPathComponent("sibling\(i).mov"); write(url, rig.bytes)
+                let s = dupRecord(path: url.path, size: Int64(fileSize), group: group, disposition: .review)
+                s.contentFixity = ContentFixity.captured(path: url.path, digest: plainSHA256(url), byteCount: Int64(fileSize))
+                rig.model.records.append(s)
+            }
+            let unverified = rig.dir.appendingPathComponent("unverified.mov"); write(unverified, rig.bytes)
+            rig.model.records.append(dupRecord(path: unverified.path, size: Int64(fileSize), group: group, disposition: .review))
+            let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path,
+                                          hooks: SignatureVerification.Hooks.live.withScratchTrash(in: rig.dir), planRoot: rig.root)
+            job.start(); await job.task?.value
+
+            let plan = try #require(job.plan)
+            let row = plan.entries[0]
+            #expect(row.tier == expected, "\(verifiedSiblings) verified siblings: \(row.status) — \(row.tierReason ?? "")")
+            #expect(row.remainingVerifiedCopies == 1 + verifiedSiblings)
+            #expect(row.hasVerifiedArchive == false && row.tierLabel.hasSuffix(" · not yet archived"))
+            let reason = try #require(row.tierReason)
+            #expect(reason.contains("keeper on ") && reason.contains("sibling sibling0.mov on ") && reason.contains("sibling unverified.mov on "))
+            #expect(reason.contains("unverified.mov on") && reason.hasSuffix("not verified yet)"), Comment(rawValue: reason))
+            #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
+            #expect(FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/copy1.mov").path) == (expected == .trash))
+        }
     }
 
     @Test func archiveCopyHoldingDifferentBytesIsLeftAloneAfterTheHashAndPutBack() async throws {
@@ -524,13 +604,59 @@ struct DeleteDuplicatesTierAndSpeedTests {
 
         let plan = try #require(job.plan)
         #expect(plan.entries[0].status == .skipped, "\(plan.entries[0].status): \(plan.entries[0].note)")
-        #expect(plan.entries[0].note == DeletionTierText.noVerifiedArchive)
-        #expect(plan.entries[0].tier == nil && plan.entries[0].remainingVerifiedCopies == 1)
+        #expect(plan.entries[0].note.hasPrefix("only 1 verified copy would remain — left alone"), Comment(rawValue: plan.entries[0].note))
+        #expect(plan.entries[0].note.contains("archive copy on ") && plan.entries[0].note.hasSuffix("holds different bytes)"))
+        #expect(plan.entries[0].tier == nil && plan.entries[0].remainingVerifiedCopies == 1 && plan.entries[0].hasVerifiedArchive == false)
         #expect(FileManager.default.fileExists(atPath: rig.copies[0].fullPath), "put back at its path")
         #expect((try? Data(contentsOf: URL(fileURLWithPath: rig.copies[0].fullPath))) == Data(rig.bytes))
         #expect(quarantineFolders(in: rig.dir).isEmpty)
         #expect(rig.copies[0].duplicateDisposition == .extraCopy)
-        #expect(probe.blocks("quarantine") == 3, "the file was read once — the tier is decided with the digest in hand")
+        #expect(probe.blocks("quarantine") == 0 && probe.quarantineCount == 0,
+                "found out by stat before the hold — the archive's digest is not the keeper's")
+    }
+
+    /// QA #3: two pairs of ONE family in flight together must not count
+    /// each other — both may go, so each sees archive + keeper = 2 → the
+    /// Trash, never both permanent.
+    @Test func twoPairsOfOneFamilyDoNotCountEachOther() async throws {
+        let rig = makeRig("twopairs", copies: 2, keeperFixity: true); defer { rig.cleanup() }
+        addVerifiedArchiveFamily(to: rig.model, keeper: rig.keeper, withSibling: false)
+        for c in rig.copies {
+            c.contentFixity = ContentFixity.captured(path: c.fullPath, digest: plainSHA256(URL(fileURLWithPath: c.fullPath)),
+                                                     byteCount: Int64(fileSize))
+        }
+        let probe = Probe()
+        probe.quarantineHold = 0.3
+        let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path,
+                                      hooks: probe.hooks.withScratchTrash(in: rig.dir), planRoot: rig.root)
+        job.mediaTechForPath = { _ in .ssd }
+        job.start(); await job.task?.value
+
+        #expect(job.peakInFlight == 2, "both were in flight together")
+        let plan = try #require(job.plan)
+        #expect(plan.entries.map(\.status) == [.trashed, .trashed], "\(plan.entries.map(\.status))")
+        #expect(plan.entries.allSatisfy { $0.tier == .trash && $0.remainingVerifiedCopies == 2 })
+        #expect(plan.entries[0].tierReason?.contains("sibling copy2.mov on ") == true
+                && plan.entries[0].tierReason?.contains("still to be decided in this run") == true,
+                Comment(rawValue: plan.entries[0].tierReason ?? ""))
+        #expect(FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/copy1.mov").path))
+        #expect(FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/copy2.mov").path))
+    }
+
+    /// QA #4: the Trash rung moves the file from its ORIGINAL path (put
+    /// back first), so Finder's Put Back lands it where it lived; the
+    /// scratch Trash sees the public path, not a quarantine path.
+    @Test func trashRungHandsTheOriginalPathToTheTrash() async throws {
+        let rig = makeRig("putback", copies: 1, keeperFixity: true); defer { rig.cleanup() }
+        addVerifiedArchiveFamily(to: rig.model, keeper: rig.keeper, withSibling: false)
+        let seen = NSLock(); var handed: [String] = []
+        var hooks = SignatureVerification.Hooks.live
+        let scratch = scratchTrash(in: rig.dir)
+        hooks.trashItem = { url in seen.withLock { handed.append(url.path) }; return try scratch(url) }
+        let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: hooks, planRoot: rig.root)
+        job.start(); await job.task?.value
+        #expect(seen.withLock { handed } == [rig.copies[0].fullPath], "the Trash is handed the public path")
+        #expect(job.plan?.entries[0].status == .trashed && quarantineFolders(in: rig.dir).isEmpty)
     }
 
     @Test func preferTrashToggleSendsEveryTierToTheTrash() async throws {

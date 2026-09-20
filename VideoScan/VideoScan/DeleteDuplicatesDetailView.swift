@@ -76,7 +76,7 @@ struct DeleteDuplicatesDetailView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            Text("Every file removed is moved aside, read in full once there, and compared with its keeper's whole-file digest at the moment of deletion. The keeper is read once; after that its stored fixity stands in, checked by stat. Tier: three or more verified copies left → gone now; only the archive copy and the keeper left → the drive's Trash; no verified archive copy → left alone.")
+            Text("Every file removed is moved aside, read in full once there, and compared with its keeper's whole-file digest at the moment of deletion. The keeper is read once; after that its stored fixity stands in, checked by stat. Tier, on the count of verified copies left behind (keeper, archive copy, siblings whose stored fixity reproduces): three or more → gone now; exactly two → the drive's Trash; fewer → left alone. An archive copy counts but is not required.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

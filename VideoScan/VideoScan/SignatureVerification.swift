@@ -711,7 +711,6 @@ enum SignatureVerification {
                 cancelled: cancelledAfterQuarantine)
         }
 
-        let result: DeletionResult
         switch disposal {
         case .permanent:
             do {
@@ -723,30 +722,46 @@ enum SignatureVerification {
                     path: quarantined.path,
                     reason: "verified file retained because final removal failed: \(error.localizedDescription)")
             }
-            result = .deleted(bytes: proof.duplicateSize)
+            // Empty-directory cleanup is housekeeping, not part of the media
+            // deletion transaction. Once the quarantined file is gone, report
+            // success so the catalog cannot retain a row for nonexistent media.
+            // The directory is removed ONLY if empty (rmdir, never recursive):
+            // anything else that ended up in there is not ours to delete.
+            removeQuarantineDirectoryQuietly(quarantineDirectory, hooks: hooks, after: "removed verified duplicate")
+            return .deleted(bytes: proof.duplicateSize)
         case .trash:
+            // The file goes back to its PUBLIC path first and is handed to the
+            // Trash from there: Finder's "Put Back" then restores it to where
+            // it lived (QA #4), and a Trash step that fails — SMB and some
+            // externals have no usable .Trashes — leaves the file at home,
+            // never parked in a hidden folder (QA #1). The identity checks
+            // above still cover it: nothing else can have the original name
+            // (checked empty an instant ago) and the move is a rename.
             do {
-                let destination: URL
-                if let trash = hooks.trashItem {
-                    destination = try trash(quarantined)
-                } else {
-                    var resulting: NSURL?
-                    try FileManager.default.trashItem(at: quarantined, resultingItemURL: &resulting)
-                    destination = (resulting as URL?) ?? quarantined
-                }
-                result = .trashed(bytes: proof.duplicateSize, location: destination.path)
+                try FileManager.default.moveItem(at: quarantined, to: original)
             } catch {
                 return .retainedQuarantine(
                     path: quarantined.path,
-                    reason: "verified file retained because the move to the Trash failed: \(error.localizedDescription)")
+                    reason: "verified file retained because it could not be put back before the move to the Trash: \(error.localizedDescription)")
+            }
+            removeQuarantineDirectoryQuietly(quarantineDirectory, hooks: hooks, after: "put back before the Trash")
+            do {
+                let destination: URL
+                if let trash = hooks.trashItem {
+                    destination = try trash(original)
+                } else {
+                    var resulting: NSURL?
+                    try FileManager.default.trashItem(at: original, resultingItemURL: &resulting)
+                    destination = (resulting as URL?) ?? original
+                }
+                return .trashed(bytes: proof.duplicateSize, location: destination.path)
+            } catch {
+                return .failed("the move to the Trash failed: \(error.localizedDescription) — the file is back at \(original.path), untouched")
             }
         }
+    }
 
-        // Empty-directory cleanup is housekeeping, not part of the media
-        // deletion transaction. Once the quarantined file is gone, report
-        // success so the catalog cannot retain a row for nonexistent media.
-        // The directory is removed ONLY if empty (rmdir, never recursive):
-        // anything else that ended up in there is not ours to delete.
+    private static func removeQuarantineDirectoryQuietly(_ quarantineDirectory: URL, hooks: Hooks, after what: String) {
         do {
             if let removeDirectory = hooks.removeQuarantineDirectory {
                 try removeDirectory(quarantineDirectory)
@@ -754,10 +769,9 @@ enum SignatureVerification {
                 try removeEmptyDirectory(quarantineDirectory)
             }
         } catch {
-            NSLog("VideoScan: removed verified duplicate but could not remove quarantine directory %@ (left in place): %@",
-                  quarantineDirectory.path, error.localizedDescription)
+            NSLog("VideoScan: %@ but could not remove quarantine directory %@ (left in place): %@",
+                  what, quarantineDirectory.path, error.localizedDescription)
         }
-        return result
     }
 
     /// Put a quarantined file back without deleting it — the caller could

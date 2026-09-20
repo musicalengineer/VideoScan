@@ -570,8 +570,12 @@ extension VideoScanModel {
     /// active member with whatever fixity it carries. The keeper and the
     /// duplicate itself are not listed — the keeper is counted by the
     /// worker as "verified this pair". Sendable value: paths + fixities.
-    func deletionTierCandidates(record: VideoRecord, keeper: VideoRecord) -> DeletionTierCandidates {
+    /// `excluding` are the ids of THIS run's rows still to be decided —
+    /// they may go too, so they are named but never counted (QA #3).
+    func deletionTierCandidates(record: VideoRecord, keeper: VideoRecord,
+                                excluding: Set<UUID> = []) -> DeletionTierCandidates {
         var out = DeletionTierCandidates()
+        out.keeperPath = keeper.fullPath
         var seenArchive = Set<UUID>()
         var members: [VideoRecord] = [keeper]
         if let group = record.duplicateGroupID {
@@ -579,10 +583,13 @@ extension VideoScanModel {
                 members.append(r)
             }
         }
+        func volume(_ r: VideoRecord) -> String { VolumeReachability.volumeName(forPath: r.fullPath) }
+        out.keeperLabel = "keeper on \(volume(keeper))"
         func noteArchive(_ copy: VideoRecord) {
             guard !copy.isPurged, !seenArchive.contains(copy.id), let fixity = copy.archiveFixity else { return }
             seenArchive.insert(copy.id)
-            out.archiveCopies.append(.init(path: copy.fullPath, digest: fixity.digest, sizeBytes: fixity.sizeBytes))
+            out.archiveCopies.append(.init(path: copy.fullPath, digest: fixity.digest, sizeBytes: fixity.sizeBytes,
+                                           label: "archive copy on \(volume(copy))"))
         }
         // The keeper is counted once by the worker, as the keeper. When it
         // IS the archive copy it is not listed again as an archive copy —
@@ -597,7 +604,12 @@ extension VideoScanModel {
             if let copy = masterArchiveCopy(of: member) { noteArchive(copy) }
         }
         for member in members where member.id != keeper.id && !seenArchive.contains(member.id) {
-            out.otherCopies.append(.init(path: member.fullPath, fixity: member.contentFixity))
+            let label = "sibling \(member.filename) on \(volume(member))"
+            if excluding.contains(member.id) {
+                out.alsoInThisRun.append(label)
+            } else {
+                out.otherCopies.append(.init(path: member.fullPath, fixity: member.contentFixity, label: label))
+            }
         }
         return out
     }
