@@ -102,6 +102,8 @@ struct CatalogTrashShortcutTests {
         let recPair = MasterArchiveTestSupport.makeRecord(path: pairFile.path, streamType: .videoOnly)
         recPair.pairGroupID = UUID()
         let recArchived = MasterArchiveTestSupport.makeRecord(path: archiveFile.path)
+        // The ignore list is content-keyed (partial MD5 + size).
+        for (r, md5) in [(recA, "md5a"), (recB, "md5b"), (recPair, "md5p"), (recArchived, "md5x")] { r.partialMD5 = md5 }
         model.records = [recA, recB, recPair, recArchived]
         #expect(model.isInsideMasterArchive(path: archiveFile.path), "sandbox archive root is the model's Master Archive")
 
@@ -129,6 +131,15 @@ struct CatalogTrashShortcutTests {
         #expect(trashed.allSatisfy { $0.detail[MediaLedgerEvent.Detail.mode] == "trash" })
         #expect(events.filter { $0.recordID == recPair.id || $0.recordID == recArchived.id }.isEmpty,
                 "a refused row is not 'what happened to the file'")
+
+        // "I don't wanna see it again" (Rick 2026-09-20): the trashed rows'
+        // content is on the ignore list; the refused rows' is not.
+        let store = model.ignoredContentStore
+        #expect(store.contains(partialMD5: recA.partialMD5, sizeBytes: recA.sizeBytes, filename: recA.filename))
+        #expect(store.contains(partialMD5: recB.partialMD5, sizeBytes: recB.sizeBytes, filename: recB.filename))
+        #expect(!store.contains(partialMD5: recPair.partialMD5, sizeBytes: recPair.sizeBytes, filename: recPair.filename))
+        #expect(!store.contains(partialMD5: recArchived.partialMD5, sizeBytes: recArchived.sizeBytes, filename: recArchived.filename))
+        #expect(store.entry(id: store.entries.first { $0.filename == recA.filename }?.id ?? UUID())?.reason == "trashed-by-user")
     }
 
     @Test("no selection, a fully refused selection, and read-only mode never reach the disk")
@@ -190,6 +201,22 @@ struct CatalogTrashShortcutTests {
                     "\(other) must still be refused — it is a different gesture")
         }
         #expect(table.contains("await model.deleteConfirmedJunk(targets, mode: .toTrash)"), "the row menu's Move to Trash still exists")
+
+        // 2026-09-20 (Rick's second "why can't I hit cmd-delete"): a Command
+        // key is a KEY EQUIVALENT the menu bar sees first, so the table's
+        // onKeyPress was never reached. The gesture must ALSO be a real
+        // menu item (Catalog ▸ Move to Trash ⌘⌫) whose target is the
+        // FOCUSED table's selection — never a scene-wide value, or a
+        // search field's ⌘⌫ would trash rows.
+        #expect(table.contains("focusedValue(\\.catalogTrashSelection"), "the table publishes its selection to the menu while focused")
+        #expect(!table.contains("focusedSceneValue(\\.catalogTrashSelection"), "focus-scoped, never scene-scoped")
+        #expect(table.contains("perform: trashSelectedRows"), "the menu ends in the same handler")
+        let command = try productionSource("CatalogTrashCommand.swift")
+        #expect(command.contains(".keyboardShortcut(.delete, modifiers: .command)"), "⌘⌫ as the key equivalent")
+        #expect(command.contains("@FocusedValue(\\.catalogTrashSelection)"))
+        #expect(!command.contains("FileManager"), "no file deletion of its own")
+        let app = try productionSource("VideoScanApp.swift")
+        #expect(app.contains("CatalogTrashMenuItem()"), "the item is in the Catalog menu")
 
         let plan = try productionSource("VideoScanModel+TrashSelection.swift")
         #expect(plan.contains("await deleteConfirmedJunk(targets, mode: .toTrash)"), "the ONE existing Trash routine")
