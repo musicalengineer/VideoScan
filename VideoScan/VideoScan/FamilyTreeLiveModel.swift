@@ -261,6 +261,31 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// re-read the store at once (and the People tab, via PersonPhotoCenter).
     @Published private(set) var photoRevision = 0
 
+    // MARK: Documents (2026-09-20: certificates on a person)
+
+    /// The selected person's filed papers (birth/death/marriage/other),
+    /// newest first. Read ONCE per selection change off the main actor
+    /// and memoised per person id — never in `body`.
+    @Published private(set) var selectedDocuments: [PersonDocument] = []
+    /// Document count per person id for the card chip. Filled for the
+    /// cards on the canvas by one background pass per scene rebuild; a
+    /// missing key reads as 0 until that pass lands.
+    @Published private(set) var documentCounts: [String: Int] = [:]
+    /// Bumps on every add/remove so anything keyed on it re-reads.
+    @Published private(set) var documentsRevision = 0
+    /// Per-person memo behind `selectedDocuments`. Bounded: cleared when
+    /// it passes `documentsCacheLimit` entries or the tree is replaced.
+    /// Worst case ≈ 256 people × a few rows ≈ well under 1 MB.
+    private var documentsCache: [String: [PersonDocument]] = [:]
+    private static let documentsCacheLimit = 256
+    /// Where documents are read from. Production = the shared archive
+    /// configuration; an injected (test) model gets NONE unless the test
+    /// injects a store (isolation rule — never the real People/ folder).
+    var documentStoreProvider: () -> FamilyAssetStore?
+    /// Stale-result guard for the background reads (a new tree or a
+    /// cleared cache bumps it; a read from before is dropped).
+    private var documentsGeneration = 0
+
     /// The directory the loader reads. Production = App Support; tests
     /// inject a temp directory and nothing outside it is ever consulted.
     private(set) var originalsDirectory: URL
@@ -469,8 +494,13 @@ final class FamilyTreeLiveModel: ObservableObject {
          bookmarksDirectory: URL? = nil,
          bookmarksFollowSource: Bool? = nil,
          photoProvider: @escaping (GedcomFamilyGraph.Person) -> NSImage? = { _ in nil },
-         profilesProvider: (() -> [POIProfile])? = nil) {
+         profilesProvider: (() -> [POIProfile])? = nil,
+         documentStoreProvider: (() -> FamilyAssetStore?)? = nil) {
         let production = FamilyAssetConfigurationCenter.shared.snapshot()
+        self.documentStoreProvider = documentStoreProvider
+            ?? (originalsDirectory == nil
+                ? { FamilyAssetConfigurationCenter.shared.snapshot().makeStore() }
+                : { nil })
         self.focusDefaults = focusDefaults
             ?? (originalsDirectory == nil ? UserDefaults.standard : nil)
         self.rememberedFocusKey = self.focusDefaults?.string(forKey: Self.lastFocusDefaultsKey)
@@ -945,6 +975,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             photoOverrides.removeAll()
             photoOverrideSources.removeAll()
             installedSourceKey = sourceKey
+            clearDocumentsCache()
         }
         graph = newGraph
         bookmarkSourceTransition = false
@@ -1114,6 +1145,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         selectedPerson = nil
         selectedRelatives = FamilyTreeRelatives()
         scene = .empty
+        clearDocumentsCache()
         loadWarning = nil
         needsRecompile = []
         loadState = .unavailable
@@ -1869,6 +1901,89 @@ final class FamilyTreeLiveModel: ObservableObject {
         PersonPhotoCenter.shared.invalidate()
     }
 
+    // MARK: Documents
+
+    /// Count for the card chip: a dictionary hit, never disk.
+    func documentCount(for personID: String) -> Int {
+        documentCounts[personID] ?? 0
+    }
+
+    /// Something was added or removed for this person: drop the memo,
+    /// bump the revision, re-read the selection and the chip count.
+    func noteDocumentsChanged(for personID: String) {
+        documentsCache[personID] = nil
+        documentCounts[personID] = nil
+        documentsRevision &+= 1
+        if personID == selectedID {
+            refreshSelectedDocuments()
+        } else if let card = scene.cards.first(where: { $0.person.id == personID }) {
+            loadDocumentCounts(for: [card])
+        }
+    }
+
+    private func clearDocumentsCache() {
+        documentsCache.removeAll()
+        documentCounts.removeAll()
+        documentsGeneration &+= 1
+        if !selectedDocuments.isEmpty { selectedDocuments = [] }
+    }
+
+    /// Selection changed: serve the memo, else read off the main actor and
+    /// publish when (and only if) the same person is still selected.
+    private func refreshSelectedDocuments() {
+        guard isLive, let id = selectedID, let person = assetPerson(for: id) else {
+            if !selectedDocuments.isEmpty { selectedDocuments = [] }
+            return
+        }
+        if let cached = documentsCache[id] {
+            selectedDocuments = cached
+            return
+        }
+        guard let store = documentStoreProvider() else {
+            if !selectedDocuments.isEmpty { selectedDocuments = [] }
+            return
+        }
+        let generation = documentsGeneration
+        // `Task.detached` ≈ std::async on a background queue; the hop back
+        // to `@MainActor` is the `await` below.
+        Task { @MainActor [weak self] in
+            let documents = await Task.detached(priority: .userInitiated) {
+                store.documents(for: person)
+            }.value
+            guard let self, generation == self.documentsGeneration else { return }
+            self.remember(documents, for: id)
+            if self.selectedID == id { self.selectedDocuments = documents }
+        }
+    }
+
+    /// One background pass for the cards on the canvas that have no count
+    /// yet — a handful of sidecar reads, never one task per card.
+    private func loadDocumentCounts(for cards: [FamilyTreeCard]) {
+        let wanted = cards.compactMap { card -> (id: String, person: FamilyAssetPerson)? in
+            guard documentCounts[card.person.id] == nil, let person = card.assetPerson else { return nil }
+            return (card.person.id, person)
+        }
+        guard !wanted.isEmpty, let store = documentStoreProvider() else { return }
+        let generation = documentsGeneration
+        Task { @MainActor [weak self] in
+            let counts = await Task.detached(priority: .utility) { () -> [String: Int] in
+                var out: [String: Int] = [:]
+                for entry in wanted { out[entry.id] = store.documents(for: entry.person).count }
+                return out
+            }.value
+            guard let self, generation == self.documentsGeneration else { return }
+            for (id, count) in counts where self.documentCounts[id] == nil {
+                self.documentCounts[id] = count
+            }
+        }
+    }
+
+    private func remember(_ documents: [PersonDocument], for id: String) {
+        if documentsCache.count >= Self.documentsCacheLimit { documentsCache.removeAll() }
+        documentsCache[id] = documents
+        documentCounts[id] = documents.count
+    }
+
     // MARK: Folder
 
     /// Create the originals folder if needed and show it in Finder so the
@@ -2004,6 +2119,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     private func rebuildSelection() {
         defer { refreshSelectedNotes() }
         defer { refreshLineOptions() }
+        defer { refreshSelectedDocuments() }
         rememberFocus()
         if let graph, let id = selectedID, let person = graph.people[id] {
             selectedPerson = Self.summary(person)
@@ -2056,6 +2172,7 @@ final class FamilyTreeLiveModel: ObservableObject {
                 },
                 edges: layout.edges,
                 size: layout.size)
+            loadDocumentCounts(for: scene.cards)
         } else if !isLive {
             scene = FamilyTreeDemoData.scene(photos: photoOverrides)
         } else {

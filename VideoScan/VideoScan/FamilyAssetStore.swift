@@ -611,7 +611,10 @@ struct FamilyAssetStore {
     let root: URL
     let cacheRoot: URL
     let access: Access
-    private let fileManager: FileManager
+    /// Internal (not private) since 2026-09-20: `FamilyAssetStore+Documents`
+    /// reuses the same file manager, safety checks and descriptor-anchored
+    /// writer rather than carrying a second copy of the hardening.
+    let fileManager: FileManager
     /// Optional identity-aware attribution for group folders. Nil keeps the
     /// name-only rule (`groupFolderMatches(_:person:)`).
     var identity: FamilyAssetIdentityDirectory? = nil
@@ -1013,7 +1016,7 @@ struct FamilyAssetStore {
         return sidecar
     }
 
-    private static let sidecarDecoder: JSONDecoder = {
+    static let sidecarDecoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
@@ -1478,9 +1481,11 @@ struct FamilyAssetStore {
     }
 
     /// Descriptor-anchored, never-overwrite write of validated image bytes
-    /// into a live People/ folder. Shared by Photos import and card save.
-    private func writePersonPhotoData(_ data: Data, stem: String, ext: String,
-                                      into target: URL) throws -> URL {
+    /// into a live People/ folder. Shared by Photos import, card save and
+    /// (2026-09-20) the person-document import, which writes one level
+    /// deeper (`People/<person>/Documents/`) through the same walk.
+    func writePersonPhotoData(_ data: Data, stem: String, ext: String,
+                              into target: URL) throws -> URL {
         // Anchor on descriptors, not paths (codex #675: the folder could be
         // swapped for a symlink between `revalidatedPhotoRequestFolder`
         // and the write). Root is opened O_DIRECTORY|O_NOFOLLOW, every
@@ -1655,7 +1660,7 @@ struct FamilyAssetStore {
             options: [.skipsHiddenFiles])) ?? []
     }
 
-    private func isSafeDirectory(_ url: URL) -> Bool {
+    func isSafeDirectory(_ url: URL) -> Bool {
         let fresh = URL(fileURLWithPath: url.path, isDirectory: true)
         guard let values = try? fresh.resourceValues(
             forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return false }
@@ -1666,7 +1671,7 @@ struct FamilyAssetStore {
         FamilyAssetImageValidator.revalidatedURL(url) != nil
     }
 
-    private func ensureSafeDirectory(_ directory: URL) throws {
+    func ensureSafeDirectory(_ directory: URL) throws {
         var isDirectory: ObjCBool = false
         if fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory) {
             guard isDirectory.boolValue, isSafeDirectory(directory) else {
@@ -1682,7 +1687,7 @@ struct FamilyAssetStore {
         }
     }
 
-    private func requireWriteAccess() throws {
+    func requireWriteAccess() throws {
         switch access {
         case .readWrite: return
         case .readOnly: throw StoreError.readOnly
