@@ -406,9 +406,11 @@ struct ArchiveAngelReviewSheet: View {
                 } else {
                     // Rick 2026-09-09: "Cancel makes me feel like it might
                     // undo what just happened" — it never did; it is Close.
+                    // Never modal over a running promote (Rick 2026-09-20):
+                    // the job lives in Media File Operations; Close only
+                    // closes the sheet.
                     Button("Close") { keepAndClose() }
                         .keyboardShortcut(.cancelAction)
-                        .disabled(isPromoting)
                         .help("Closes the sheet and keeps the batch — nothing is undone. The remaining rows stay ready under the Archive tab.")
                     if selectedCount == 0 && !isPromoting {
                         // A greyed "Promote 0" after a promote reads as stuck.
@@ -478,7 +480,16 @@ struct ArchiveAngelReviewSheet: View {
         plan = working
         if job == nil {
             model.log("Archive Angel: nothing was started — " + (working.log.last ?? "see the batch log"))
+            return
         }
+        // Rick 2026-09-20: "while a promotion is ongoing, the app is locked
+        // up in a modal block … there should be a way for this to be in
+        // the MFO window." The promote IS an MFO job; the promoter saves
+        // the plan at every step and the model offers "Archived — what
+        // next?" when it lands, so this sheet has no job left here.
+        model.log("Archive Angel: Promote is running in Media File Operations — closing the review; "
+                  + "the batch returns to the Archive tab when it lands")
+        dismiss()
     }
 
     /// The unchecked-at-Promote pass, idempotent per (batch, row): every
