@@ -171,10 +171,19 @@ struct ArchiveAngelBufferHygieneCard: View {
     private func perform(_ req: ClearRequest) {
         let reason = req.rows.count == 1 ? "cleared from the buffer card" : "Clear all from the buffer card"
         // The rows' measured sizes go along — no re-walk on the main actor.
-        model.clearArchiveAngelBatches(req.rows.map(\.plan),
-                                       bytes: Dictionary(uniqueKeysWithValues: req.rows.map { ($0.id, $0.bytes) }),
-                                       reason: reason)
+        let all = model.clearArchiveAngelBatches(req.rows.map(\.plan),
+                                                 bytes: Dictionary(uniqueKeysWithValues: req.rows.map { ($0.id, $0.bytes) }),
+                                                 reason: reason)
         pendingClear = nil
+        // Now: the rows read "in progress" while their removals run. Then
+        // again when every removal has landed and the companion pass is
+        // done (codex review 2026-09-20 #9) — a slow removal used to leave
+        // the row busy until the next unrelated refresh. The view's
+        // generation guard keeps an older scan from overwriting this one.
         batchesChanged()
+        Task {
+            _ = await all.finished.value
+            batchesChanged()
+        }
     }
 }

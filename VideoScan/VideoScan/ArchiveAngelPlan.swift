@@ -497,6 +497,16 @@ enum ArchiveAngelPlanStore {
         var unreadable: [UnreadableBatch] = []
         for name in names.sorted() where name.hasPrefix("batch-") {
             let dir = bufferRoot.appendingPathComponent(name).path
+            // An alias is not a batch (codex review 2026-09-20 #3): it would
+            // carry a second liveness key and a second path to the same
+            // plan.json, or reach a folder outside the buffer. Skipped, and
+            // said once.
+            if isSymlink(dir, fm: fm) {
+                if reportedSymlinks.withLock({ $0.insert(dir).inserted }) {
+                    log("Archive Angel: \(name) in the buffer is a symlink, not a batch — ignored, never read or deleted through")
+                }
+                continue
+            }
             do {
                 plans.append(try load(batchDir: dir))
             } catch {
@@ -516,6 +526,7 @@ enum ArchiveAngelPlanStore {
     }
 
     private static let reportedUnreadable = OSAllocatedUnfairLock(initialState: Set<String>())
+    private static let reportedSymlinks = OSAllocatedUnfairLock(initialState: Set<String>())
 
     private nonisolated static func describe(_ error: Error) -> String {
         switch error {
@@ -543,16 +554,30 @@ enum ArchiveAngelPlanStore {
     enum BatchFolderError: Error, LocalizedError, Equatable {
         case notABatchFolder(String)
         case outsideBufferRoot(String, root: String)
+        /// The folder is a symlink (codex review 2026-09-20 #3): an alias
+        /// to a live or external batch must never be read, written or
+        /// deleted through — the real folder has its own name and key.
+        case isASymlink(String)
         var errorDescription: String? {
             switch self {
             case .notABatchFolder(let p): return "\(p) is not a batch-… folder — refusing to delete it"
             case .outsideBufferRoot(let p, let root): return "\(p) is not directly under the buffer \(root) — refusing to delete it"
+            case .isASymlink(let p): return "\(p) is a symlink, not a batch folder — refusing to touch it"
             }
         }
     }
 
+    /// True when `path` itself is a symbolic link (lstat, not stat — a
+    /// dangling alias counts too). False for a missing path.
+    nonisolated static func isSymlink(_ path: String, fm: FileManager = .default) -> Bool {
+        let type = (try? fm.attributesOfItem(atPath: path))?[.type] as? FileAttributeType
+        return type == .typeSymbolicLink
+    }
+
     /// The guard: the folder must be `<bufferRoot>/batch-…` — a direct
-    /// child, name prefixed `batch-`. Throws otherwise. Pure path work.
+    /// child, name prefixed `batch-` — lexically AND canonically (symlinks
+    /// resolved on both sides), and must not itself be a symlink. Throws
+    /// otherwise. Path work plus one lstat.
     nonisolated static func checkBatchFolder(_ dir: String, bufferRoot: URL) throws {
         let url = URL(fileURLWithPath: dir).standardizedFileURL
         let path = url.path
@@ -562,6 +587,17 @@ enum ArchiveAngelPlanStore {
         let root = bufferRoot.standardizedFileURL.path
         guard url.deletingLastPathComponent().path == root else {
             throw BatchFolderError.outsideBufferRoot(path, root: root)
+        }
+        if isSymlink(path) { throw BatchFolderError.isASymlink(path) }
+        // Canonical identity: a parent that is itself an alias must resolve
+        // to the buffer, and the real folder must be a batch-… child of it.
+        let canonical = url.resolvingSymlinksInPath()
+        let canonicalRoot = bufferRoot.standardizedFileURL.resolvingSymlinksInPath().path
+        guard canonical.lastPathComponent.hasPrefix("batch-") else {
+            throw BatchFolderError.notABatchFolder(canonical.path)
+        }
+        guard canonical.deletingLastPathComponent().path == canonicalRoot else {
+            throw BatchFolderError.outsideBufferRoot(canonical.path, root: canonicalRoot)
         }
     }
 

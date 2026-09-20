@@ -36,7 +36,11 @@ struct ArchiveAngelDetailView: View {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                         Section(header: ArchiveAngelTableHeader()) {
                             ForEach(job.plan.entries) { entry in
-                                ArchiveAngelEntryRow(entry: entry, canSkip: job.state.isActive) {
+                                // A row waiting for buffer space stays skippable
+                                // after the job is over (codex review 2026-09-20
+                                // #11): the job routes it to the plan on disk.
+                                ArchiveAngelEntryRow(entry: entry,
+                                                     canSkip: Self.offersSkip(isActive: job.state.isActive, entry: entry)) {
                                     // Recheck at the click: preparation may have finished
                                     // since SwiftUI rendered this row.
                                     // isSkippable, NOT isUnsettled: `.ready` is
@@ -44,9 +48,8 @@ struct ArchiveAngelDetailView: View {
                                     // file about to be promoted and says "skip
                                     // that one". isUnsettled is the preparation
                                     // loop's predicate and excludes .ready.
-                                    guard job.state.isActive,
-                                          let current = job.plan.entries.first(where: { $0.id == entry.id }),
-                                          current.isSkippable else { return }
+                                    guard let current = job.plan.entries.first(where: { $0.id == entry.id }),
+                                          Self.offersSkip(isActive: job.state.isActive, entry: current) else { return }
                                     job.skip(entryID: entry.id)
                                 }
                                 Divider()
@@ -79,6 +82,13 @@ struct ArchiveAngelDetailView: View {
 
     static func offersReview(isActive: Bool, readyCount: Int, status: ArchiveAngelPlan.Status) -> Bool {
         !isActive && readyCount > 0 && status == .ready
+    }
+
+    /// While the job runs: every skippable row. After it: only a row still
+    /// waiting for buffer space (#11) — the others are decided in the review.
+    static func offersSkip(isActive: Bool, entry: ArchiveAngelPlan.Entry) -> Bool {
+        guard entry.isSkippable else { return false }
+        return isActive || entry.isBufferShort
     }
 
     private var reviewButton: some View {

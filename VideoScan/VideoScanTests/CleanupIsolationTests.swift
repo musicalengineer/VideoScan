@@ -26,32 +26,10 @@ struct CleanupIsolationTests {
 
     // MARK: Real-state snapshot helpers
 
-    private var realAppSupportVideoScan: URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory,
-                                 in: .userDomainMask)
-            .first?.appendingPathComponent("VideoScan", isDirectory: true)
-    }
-
-    /// path → "size@mtime" for everything under the real VideoScan
-    /// Application Support tree (empty when absent — also a valid state).
-    private func appSupportSnapshot() -> [String: String] {
-        guard let root = realAppSupportVideoScan,
-              let e = FileManager.default.enumerator(atPath: root.path) else { return [:] }
-        var snap: [String: String] = [:]
-        for case let rel as String in e {
-            // Product state only: the team-channel mailbox, the channel
-            // watcher and the gh-codex relay are written by OTHER processes
-            // (codex, hooks) at any moment — nightly 2026-09-20 failed on
-            // team-channel/team-channel.sqlite3-shm alone (codex #1585).
-            if rel.hasPrefix("team-channel") || rel.hasPrefix("channel-watcher") || rel.hasPrefix("gh-codex") { continue }
-            let full = root.appendingPathComponent(rel).path
-            let attrs = (try? FileManager.default.attributesOfItem(atPath: full)) ?? [:]
-            let size = (attrs[.size] as? NSNumber)?.int64Value ?? -1
-            let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
-            snap[rel] = "\(size)@\(mtime)"
-        }
-        return snap
-    }
+    /// rel-path → "size@mtime" for the real VideoScan Application Support
+    /// tree — the shared AppSupportSnapshot (exact-component exclusions,
+    /// positive controls in AppSupportSnapshotTests).
+    private func appSupportSnapshot() -> [String: String] { AppSupportSnapshot.take() }
 
     /// The UserDefaults keys the cleanup path could plausibly touch.
     private func defaultsSnapshot() -> [String: String] {

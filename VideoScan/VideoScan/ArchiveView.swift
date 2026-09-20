@@ -75,6 +75,9 @@ struct ArchiveView: View {
     /// scan, off the main actor; drives the card above the disclosure and
     /// the start sheet's banner.
     @State var angelHygiene: ArchiveAngelBufferHygiene.Report = .empty
+    /// Refreshes are stamped when requested; a scan publishes only if it
+    /// is newer than what is on screen (codex review 2026-09-20 #9).
+    @State var angelRefreshGeneration = 0
 
     var body: some View {
         HSplitView {
@@ -135,6 +138,8 @@ struct ArchiveView: View {
         // A promote a quit left `.promoting` is settled against the catalog
         // first (audit #3), so its batch is listed again or finished.
         ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: root, model: model)
+        angelRefreshGeneration += 1
+        let generation = angelRefreshGeneration
         Task {
             let (readyPlans, unreadable, settled, hygiene) = await Task.detached(priority: .utility) {
                 // GH #177: a batch left `preparing` by a quit or a stop is
@@ -142,18 +147,24 @@ struct ArchiveView: View {
                 let settled = ArchiveAngelPlanStore.settleInterruptedBatches(bufferRoot: root)
                 let scan = ArchiveAngelPlanStore.scanBatches(bufferRoot: root)
                 // Folder sizes are disk walks — here, never in body.
-                let hygiene = ArchiveAngelBufferHygiene.report(
+                var hygiene = ArchiveAngelBufferHygiene.report(
                     plans: scan.plans,
                     bytesOf: { ArchiveAngelPlanStore.folderBytes($0.batchDir, fm: .default) },
                     modifiedAt: ArchiveAngelBufferHygiene.planModifiedAt,
                     diskFree: ArchiveAngelBufferHygiene.diskFree(bufferRoot: root))
+                hygiene.generation = generation
                 return (scan.plans.filter { $0.status == .ready }, scan.unreadable, settled, hygiene)
             }.value
             var ready = readyPlans
             await MainActor.run {
                 // The settle reclaimed the unfinished rows' files; their
-                // catalogued companions are retired here (codex #1572).
+                // catalogued companions are retired here (codex #1572) —
+                // after the settle's removals, reconciled against the disk.
                 model.forgetArchiveAngelCompanions(settled: settled)
+                // An older scan that finished late must not overwrite a
+                // newer one (#9): its side effects above are idempotent,
+                // its picture of the buffer is stale.
+                guard hygiene.isNewer(than: angelHygiene) else { return }
                 // Rows follow catalog renames (Rick 2026-09-10) — the row
                 // and the sheet show the record's current name.
                 for i in ready.indices {

@@ -198,23 +198,23 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     // Scope: THIS batch only. No disposition, tag or catalog field is
     // written — a later batch may propose the file again.
 
+    /// The detached half of the last non-live skip or the cancel settle
+    /// (removal → plan save → companion reconciliation). Internal so
+    /// tests can await it; production never needs to.
+    private(set) var cleanupTask: Task<Void, Never>?
+
     /// Skip `id` for this batch. Valid from `.pending`, `.preparing` and
     /// `.ready`; anything else (already promoted, failed or skipped) is
-    /// refused and returns false.
+    /// refused and returns false. Once the job is over, only a row still
+    /// WAITING for buffer space may be skipped (codex review 2026-09-20
+    /// #11): it never needed the job, and the batch it sits in is the one
+    /// on disk.
     @discardableResult
     func skip(entryID id: UUID, now: Date = Date()) -> Bool {
+        guard state.isActive else { return skipAfterFinish(entryID: id, now: now) }
         // The transition itself lives on the plan (pure, unit-tested); the
         // job only does the side effects.
-        // A row parked for buffer space reads "waiting", never "failed".
-        let wasWaiting = plan.entries.first(where: { $0.id == id })?.isBufferShort == true
-        func noteMaker(_ was: ArchiveAngelPlan.EntryStatus, _ when: Date) -> String {
-            if wasWaiting {
-                return Self.skipNote(was: .pending, at: when)
-                    .replacingOccurrences(of: "while it was pending", with: "while it was waiting for buffer space")
-            }
-            return Self.skipNote(was: was, at: when)
-        }
-        guard let (idx, before) = plan.skipEntry(id: id, now: now, note: noteMaker) else { return false }
+        guard let (idx, before) = plan.skipEntry(id: id, now: now, note: Self.skipNoteMaker(for: plan, id: id)) else { return false }
         let filename = plan.entries[idx].filename
         note("Archive Angel: you skipped \(filename) — out of this batch (it was \(before.rawValue)); "
              + "nothing was written to the catalog record; the Angel remembers the pass (ledger) and "
@@ -234,16 +234,74 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         } else {
             // Nobody is holding it: reclaim its buffer space and persist
             // the decision now. Both hops are off the main actor. Its
-            // catalogued companions are retired first (codex #1572).
+            // catalogued companions are retired AFTER the removal, and
+            // only when their files are confirmed gone (codex #1572;
+            // review 2026-09-20 #4).
             let snapshot = plan
             let entry = plan.entries[idx]
-            model?.forgetArchiveAngelCompanions(of: [entry], in: snapshot, reason: "skipped by you", at: now)
             let generation = nextSaveGeneration()
-            Task.detached(priority: .utility) {
+            cleanupTask = Task.detached(priority: .utility) { [weak self] in
                 ArchiveAngelPlanStore.removeEntryFolder(snapshot, entry: entry)
                 do { try await Self.savePlanOffMain(snapshot, generation: generation) } catch {
                     appLog.write("Archive Angel: could not save the skip of \(entry.filename) — \(error.localizedDescription)")
                 }
+                await MainActor.run {
+                    self?.model?.forgetArchiveAngelCompanions(of: [entry], in: snapshot, reason: "skipped by you", at: now)
+                }
+            }
+        }
+        return true
+    }
+
+    /// A row parked for buffer space reads "waiting", never "failed".
+    private static func skipNoteMaker(for plan: ArchiveAngelPlan, id: UUID)
+    -> (ArchiveAngelPlan.EntryStatus, Date) -> String {
+        let wasWaiting = plan.entries.first(where: { $0.id == id })?.isBufferShort == true
+        return { was, when in
+            if wasWaiting {
+                return Self.skipNote(was: .pending, at: when)
+                    .replacingOccurrences(of: "while it was pending", with: "while it was waiting for buffer space")
+            }
+            return Self.skipNote(was: was, at: when)
+        }
+    }
+
+    /// Skip after the job finished or was cancelled (#11): the batch on
+    /// disk is the truth now — it may have been promoted or cleared from
+    /// the Archive tab since — so it is reloaded, the row must still be
+    /// waiting for buffer space there, and the batch must be `.ready` and
+    /// not in another job's hands. The transition, the save and the
+    /// ledger line all still happen; there is no sub-job to cancel and no
+    /// folder to reclaim (a waiting row never wrote one).
+    private func skipAfterFinish(entryID id: UUID, now: Date) -> Bool {
+        let filename = plan.entries.first(where: { $0.id == id })?.filename ?? id.uuidString
+        guard !ArchiveAngelLiveBatches.isLive(plan.batchDir) else {
+            note("Archive Angel: can't skip \(filename) — a job in this app is working on the batch"); return false
+        }
+        var fresh: ArchiveAngelPlan
+        do { fresh = try ArchiveAngelPlanStore.load(batchDir: plan.batchDir) } catch {
+            note("Archive Angel: can't skip \(filename) — the batch's plan.json can't be read (\(error.localizedDescription))")
+            return false
+        }
+        guard fresh.status == .ready else {
+            note("Archive Angel: can't skip \(filename) — the batch is \(fresh.status.rawValue) now, not open for decisions")
+            return false
+        }
+        guard let current = fresh.entries.first(where: { $0.id == id }), current.isBufferShort else {
+            note("Archive Angel: can't skip \(filename) — the job is over and the row is not waiting for buffer space; decide it in the review")
+            return false
+        }
+        guard fresh.skipEntry(id: id, now: now, note: Self.skipNoteMaker(for: fresh, id: id)) != nil else { return false }
+        plan = fresh   // the published copy follows the disk
+        note("Archive Angel: you skipped \(filename) — out of this batch (it was waiting for buffer space); "
+             + "nothing was written to the catalog record; the Angel remembers the pass (ledger) and "
+             + "will rank it lower next time")
+        model?.ledgerAngelAttention(.angelSkipped, recordIDs: [id], batchID: fresh.batchID, reason: "skip", at: now)
+        let generation = nextSaveGeneration()
+        let snapshot = fresh
+        cleanupTask = Task.detached(priority: .utility) {
+            do { try await Self.savePlanOffMain(snapshot, generation: generation) } catch {
+                appLog.write("Archive Angel: could not save the skip of \(filename) — \(error.localizedDescription)")
             }
         }
         return true
@@ -785,15 +843,11 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         let unfinished = plan.entries.filter { $0.status.isUnsettled }
         let kept = plan.settleAfterInterruption(reason: "Cancelled before it was prepared")
         let settled = plan
-        // The files below go; their catalog records go first (codex #1572).
-        if kept {
-            model?.forgetArchiveAngelCompanions(of: unfinished, in: settled, reason: "cancelled before the row was prepared")
-        } else {
-            model?.forgetArchiveAngelCompanions(batchDir: settled.batchDir, reason: "cancelled — nothing was prepared, batch discarded")
-        }
         let generation = nextSaveGeneration()
         let root = bufferRoot   // the delete guard: only <root>/batch-… may go
-        Task.detached(priority: .utility) {
+        // The files below go; their catalog records go AFTER them, and
+        // only for files confirmed gone (codex #1572; review 2026-09-20 #4).
+        cleanupTask = Task.detached(priority: .utility) { [weak self] in
             do { try await Self.savePlanOffMain(settled, generation: generation) } catch {
                 appLog.write("Archive Angel: could not save the cancelled batch — \(error.localizedDescription)")
             }
@@ -801,6 +855,14 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             if !kept {
                 do { try ArchiveAngelPlanStore.removeBatchFolder(settled, bufferRoot: root) } catch {
                     appLog.write("Archive Angel: could not remove the cancelled batch's folder — \(error.localizedDescription)")
+                }
+            }
+            await MainActor.run {
+                guard let model = self?.model else { return }
+                if kept {
+                    model.forgetArchiveAngelCompanions(of: unfinished, in: settled, reason: "cancelled before the row was prepared")
+                } else {
+                    model.forgetArchiveAngelCompanions(batchDir: settled.batchDir, reason: "cancelled — nothing was prepared, batch discarded")
                 }
             }
         }

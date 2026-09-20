@@ -43,7 +43,11 @@ enum ArchiveAngelLiveBatches {
         return live.withLock { $0[key] != nil }
     }
 
+    /// The CANONICAL folder (symlinks resolved): an alias to a live batch
+    /// reads as live too (codex review 2026-09-20 #3). A path that does
+    /// not exist yet resolves lexically, so begin/end before and after the
+    /// folder is made agree.
     private nonisolated static func normalized(_ path: String) -> String {
-        URL(fileURLWithPath: path).standardizedFileURL.path
+        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
     }
 }

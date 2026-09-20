@@ -130,8 +130,16 @@ enum ArchiveAngelBufferHygiene {
         var leftoverCount = 0
         var leftoverBytes: Int64 = 0
         var diskFreeBytes: Int64?
+        /// The refresh that produced this report (codex review 2026-09-20
+        /// #9): the Archive tab stamps each scan when it is REQUESTED and
+        /// publishes a result only if it is newer than the one on screen,
+        /// so a slow older scan never overwrites a newer one.
+        var generation: Int = 0
 
         static let empty = Report()
+
+        /// Would publishing `self` over `current` move the tab backwards?
+        func isNewer(than current: Report) -> Bool { generation > current.generation }
 
         /// Nothing to ask about — the card stays hidden.
         var isEmpty: Bool { waitingCount == 0 && leftoverCount == 0 }

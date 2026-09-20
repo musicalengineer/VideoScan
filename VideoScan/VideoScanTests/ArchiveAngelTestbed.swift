@@ -39,6 +39,19 @@ struct ArchiveAngelTestbed {
         let audio: [String]
         var audioFilter: [String] = []
         var catalogCodec: String
+        /// The Balance step must DO work on this fixture (one-sided audio).
+        var expectsBalance: Bool = false
+
+        /// The steps a green row must have completed (`.done`), for this
+        /// fixture and the run's lossless setting. Verify and the access
+        /// copy always; the lossless copy when it is on; Balance when the
+        /// fixture's audio is one-sided.
+        func expectedDoneSteps(lossless: Bool) -> [ArchiveAngelPlan.StepKind] {
+            var steps: [ArchiveAngelPlan.StepKind] = [.verifyAudio, .accessCopy]
+            if lossless { steps.append(.losslessCopy) }
+            if expectsBalance { steps.append(.balanceAudio) }
+            return steps
+        }
     }
 
     static let formats: [Format] = [
@@ -60,7 +73,7 @@ struct ArchiveAngelTestbed {
         // Left channel only — the Angel's Balance step has real work.
         .init(key: "mp4-leftonly", ext: "mp4", size: "1920x1080", rate: "30",
               video: ["-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p"], audio: ["-c:a", "aac"],
-              audioFilter: ["-af", "pan=stereo|c0=c0|c1=0*c0"], catalogCodec: "h264"),
+              audioFilter: ["-af", "pan=stereo|c0=c0|c1=0*c0"], catalogCodec: "h264", expectsBalance: true),
     ]
 
     struct Row: Codable {
@@ -69,6 +82,10 @@ struct ArchiveAngelTestbed {
         var sizeBytes: Int64
         var status: String
         var failure: String?
+        /// The JOB's terminal state ("finished" / "failed: …" / "cancelled"):
+        /// a ready row under a failed job — the final plan save failed —
+        /// is not green (codex review 2026-09-20, test integrity).
+        var jobState: String = "not run"
         var stepSeconds: [String: Double] = [:]
         var stepStates: [String: String] = [:]
         var jobSeconds: Double = 0
@@ -117,7 +134,7 @@ struct ArchiveAngelTestbed {
         return url
     }
 
-    enum TestbedError: Error { case fixture(String) }
+    enum TestbedError: Error, Equatable { case fixture(String), badLength(String) }
 
     @Test("Angel steps timed across the media matrix",
           .enabled(if: ProcessInfo.processInfo.environment["VIDEOSCAN_ANGEL_TESTBED"] == "1"))
@@ -126,12 +143,12 @@ struct ArchiveAngelTestbed {
         let runID = Self.env["VIDEOSCAN_ANGEL_TESTBED_RUN_ID"]
             ?? ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let lossless = Self.env["VIDEOSCAN_ANGEL_TESTBED_LOSSLESS"] != "0"
-        let lengths = (Self.csv("VIDEOSCAN_ANGEL_TESTBED_SECONDS") ?? ["30"]).compactMap(Int.init)
+        let lengthTokens = Self.csv("VIDEOSCAN_ANGEL_TESTBED_SECONDS") ?? ["30"]
+        let lengths = try Self.parseLengths(lengthTokens)
         let wanted = Set(Self.csv("VIDEOSCAN_ANGEL_TESTBED_FORMATS") ?? Self.formats.map(\.key))
         // codex #1572: an empty or misspelled matrix used to run zero rows
         // and pass. The matrix must be non-empty, known formats, ≥ 8 s clips.
-        try #require(!lengths.isEmpty && lengths.allSatisfy { $0 >= 8 },
-                     "VIDEOSCAN_ANGEL_TESTBED_SECONDS must be integers ≥ 8: \(Self.env["VIDEOSCAN_ANGEL_TESTBED_SECONDS"] ?? "")")
+        try #require(!lengths.isEmpty, "VIDEOSCAN_ANGEL_TESTBED_SECONDS is empty")
         let known = Set(Self.formats.map(\.key))
         try #require(!wanted.isEmpty && wanted.isSubset(of: known),
                      "VIDEOSCAN_ANGEL_TESTBED_FORMATS must be a non-empty subset of \(known.sorted()): \(wanted.sorted())")
@@ -183,17 +200,20 @@ struct ArchiveAngelTestbed {
                     let elapsed = clock.now - started
                     row.jobSeconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
                     row.realtimeFactor = row.jobSeconds > 0 ? Double(seconds) / row.jobSeconds : 0
+                    row.jobState = Self.stateText(job.state)
                     if let entry = job.plan.entries.first {
                         row.status = entry.status.rawValue
                         row.failure = entry.failure
                         for s in entry.steps {
                             row.stepStates[s.kind.rawValue] = s.state.rawValue
                             if let t = s.seconds { row.stepSeconds[s.kind.rawValue] = t }
-                            // A done step must have left its file (codex #1572).
-                            if s.state == .done, let rel = s.outputRelPath,
-                               !fm.fileExists(atPath: URL(fileURLWithPath: job.plan.batchDir).appendingPathComponent(rel).path) {
+                            // A done step must have left a real, nonempty file
+                            // (codex #1572; review 2026-09-20: not a symlink, not
+                            // empty, and never "done" with no output at all).
+                            if s.state == .done,
+                               let why = Self.outputProblem(s, batchDir: job.plan.batchDir, fm: fm) {
                                 row.stepStates[s.kind.rawValue] = ArchiveAngelPlan.StepState.failed.rawValue
-                                row.failure = (row.failure ?? "") + " \(s.kind.rawValue): output missing"
+                                row.failure = (row.failure ?? "") + " \(s.kind.rawValue): \(why)"
                             }
                         }
                     } else {
@@ -215,18 +235,70 @@ struct ArchiveAngelTestbed {
             }
         }
         #expect(report.rows.count == lengths.count * wanted.count, "every cell of the matrix ran")
-        // codex #1572: a row is only green when the row is ready AND no
-        // step failed (a failed lossless copy beside a ready original used
-        // to pass) AND every done step left a companion in the buffer.
+        // codex #1572 + review 2026-09-20: a row is only green when the JOB
+        // finished, the row is ready, EVERY expected step is done (a
+        // skipped access copy or a pending lossless copy is not a pass),
+        // no step failed, and every done step left a real companion.
+        let byKey = Dictionary(uniqueKeysWithValues: Self.formats.map { ($0.key, $0) })
         let failed = report.rows.filter { row in
-            row.status != AngelStatus.ready
-                || row.stepStates.values.contains(ArchiveAngelPlan.StepState.failed.rawValue)
-                || row.stepStates.isEmpty
+            guard let f = byKey[row.format] else { return true }
+            return Self.rowProblem(row, expected: f.expectedDoneSteps(lossless: lossless)) != nil
         }
-        #expect(failed.isEmpty, "not ready: \(failed.map { "\($0.format): \($0.status) \($0.stepStates) \($0.failure ?? "")" })")
+        let reasons = failed.map { row -> String in
+            let why = byKey[row.format].map { Self.rowProblem(row, expected: $0.expectedDoneSteps(lossless: lossless)) ?? "" } ?? "unknown format"
+            return "\(row.format): \(why) — job \(row.jobState), row \(row.status) \(row.stepStates) \(row.failure ?? "")"
+        }
+        #expect(failed.isEmpty, "not green: \(reasons)")
     }
 
     enum AngelStatus { static let ready = ArchiveAngelPlan.EntryStatus.ready.rawValue }
+
+    /// Why a row is not green, or nil. Pure, so the rule itself is tested.
+    static func rowProblem(_ row: Row, expected: [ArchiveAngelPlan.StepKind]) -> String? {
+        if row.jobState != "finished" { return "job \(row.jobState)" }
+        if row.status != AngelStatus.ready { return "row \(row.status)" }
+        if row.stepStates.isEmpty { return "no steps recorded" }
+        let failedSteps = row.stepStates.filter { $0.value == ArchiveAngelPlan.StepState.failed.rawValue }.keys.sorted()
+        if !failedSteps.isEmpty { return "failed: \(failedSteps.joined(separator: ", "))" }
+        let notDone = expected.filter { row.stepStates[$0.rawValue] != ArchiveAngelPlan.StepState.done.rawValue }
+        if !notDone.isEmpty {
+            return "expected done but " + notDone.map { "\($0.rawValue)=\(row.stepStates[$0.rawValue] ?? "absent")" }.joined(separator: ", ")
+        }
+        return nil
+    }
+
+    /// Why a done step's output is not acceptable, or nil. Verify leaves
+    /// no file; every other done step must name a nonempty REGULAR file.
+    static func outputProblem(_ step: ArchiveAngelPlan.StepOutcome, batchDir: String, fm: FileManager) -> String? {
+        guard step.kind != .verifyAudio else { return nil }
+        guard let rel = step.outputRelPath, !rel.isEmpty else { return "done with no output path" }
+        let path = URL(fileURLWithPath: batchDir).appendingPathComponent(rel).path
+        guard let attrs = try? fm.attributesOfItem(atPath: path) else { return "output missing" }
+        guard (attrs[.type] as? FileAttributeType) == .typeRegular else { return "output is not a regular file" }
+        guard ((attrs[.size] as? NSNumber)?.int64Value ?? 0) > 0 else { return "output is empty" }
+        return nil
+    }
+
+    static func stateText(_ state: MediaFileOperationState) -> String {
+        switch state {
+        case .finished: return "finished"
+        case .failed(let message): return "failed: \(message)"
+        case .cancelled: return "cancelled"
+        case .cancelling: return "cancelling"
+        case .running: return "running"
+        }
+    }
+
+    /// Every token must be an integer ≥ 8; one bad token rejects the whole
+    /// list (review 2026-09-20: `compactMap` used to drop it silently).
+    static func parseLengths(_ tokens: [String]) throws -> [Int] {
+        var out: [Int] = []
+        for t in tokens {
+            guard let n = Int(t), n >= 8 else { throw TestbedError.badLength(t) }
+            out.append(n)
+        }
+        return out
+    }
 
     /// The table Rick reads: one row per fixture, seconds per step.
     static func markdown(_ r: Report) -> String {
@@ -249,6 +321,57 @@ struct ArchiveAngelTestbed {
                 + " | \(row.status)\(row.failure.map { " — \($0)" } ?? "") |\n"
         }
         return s
+    }
+
+    @Test("a duration list with one bad token is rejected whole — never silently thinned")
+    func badDurationTokenRejectsTheList() throws {
+        #expect(try Self.parseLengths(["30", "120"]) == [30, 120])
+        #expect(throws: TestbedError.badLength("abc")) { try Self.parseLengths(["30", "abc", "120"]) }
+        #expect(throws: TestbedError.badLength("4")) { try Self.parseLengths(["4", "30"]) }
+        #expect(throws: TestbedError.badLength("")) { try Self.parseLengths([""]) }
+    }
+
+    @Test("green needs a finished job, a ready row, every expected step done, nothing failed")
+    func greenRuleIsStrict() {
+        let expected: [ArchiveAngelPlan.StepKind] = [.verifyAudio, .accessCopy, .losslessCopy]
+        var row = Row(format: "mov", mediaSeconds: 30, sizeBytes: 1, status: "ready", jobState: "finished",
+                      stepStates: ["verifyAudio": "done", "balanceAudio": "skipped", "accessCopy": "done", "losslessCopy": "done"])
+        #expect(Self.rowProblem(row, expected: expected) == nil)
+        row.jobState = "failed: Could not write plan.json"
+        #expect(Self.rowProblem(row, expected: expected)?.hasPrefix("job failed") == true, "a ready row under a failed job is red")
+        row.jobState = "finished"; row.stepStates["accessCopy"] = "skipped"
+        #expect(Self.rowProblem(row, expected: expected)?.contains("accessCopy=skipped") == true, "a skipped expected step is red")
+        row.stepStates["accessCopy"] = "done"; row.stepStates["losslessCopy"] = "pending"
+        #expect(Self.rowProblem(row, expected: expected)?.contains("losslessCopy=pending") == true)
+        row.stepStates["losslessCopy"] = "done"; row.stepStates.removeValue(forKey: "verifyAudio")
+        #expect(Self.rowProblem(row, expected: expected)?.contains("verifyAudio=absent") == true)
+        row.stepStates["verifyAudio"] = "done"; row.status = "failed"
+        #expect(Self.rowProblem(row, expected: expected) == "row failed")
+        row.status = "ready"; row.stepStates["balanceAudio"] = "failed"
+        #expect(Self.rowProblem(row, expected: expected) == "failed: balanceAudio")
+        #expect(Self.rowProblem(Row(format: "x", mediaSeconds: 1, sizeBytes: 1, status: "ready", jobState: "finished"), expected: []) == "no steps recorded")
+        #expect(Self.formats.first { $0.key == "mp4-leftonly" }?.expectedDoneSteps(lossless: false).contains(.balanceAudio) == true)
+        #expect(Self.formats.first { $0.key == "mp4" }?.expectedDoneSteps(lossless: true) == [.verifyAudio, .accessCopy, .losslessCopy])
+    }
+
+    @Test("a done step's output must be a nonempty regular file — not missing, empty or a symlink")
+    func outputRuleRejectsEmptyAndSymlinks() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("test_angel_testbed_out_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        try Data(count: 10).write(to: dir.appendingPathComponent("real.mov"))
+        try Data().write(to: dir.appendingPathComponent("empty.mov"))
+        try fm.createSymbolicLink(at: dir.appendingPathComponent("alias.mov"), withDestinationURL: dir.appendingPathComponent("real.mov"))
+        func step(_ kind: ArchiveAngelPlan.StepKind, _ out: String?) -> ArchiveAngelPlan.StepOutcome {
+            ArchiveAngelPlan.StepOutcome(kind: kind, state: .done, note: "", outputRelPath: out)
+        }
+        #expect(Self.outputProblem(step(.accessCopy, "real.mov"), batchDir: dir.path, fm: fm) == nil)
+        #expect(Self.outputProblem(step(.verifyAudio, nil), batchDir: dir.path, fm: fm) == nil, "verify leaves no file")
+        #expect(Self.outputProblem(step(.accessCopy, nil), batchDir: dir.path, fm: fm) == "done with no output path")
+        #expect(Self.outputProblem(step(.accessCopy, "empty.mov"), batchDir: dir.path, fm: fm) == "output is empty")
+        #expect(Self.outputProblem(step(.accessCopy, "alias.mov"), batchDir: dir.path, fm: fm) == "output is not a regular file")
+        #expect(Self.outputProblem(step(.losslessCopy, "gone.mov"), batchDir: dir.path, fm: fm) == "output missing")
     }
 
     @Test func theTableHasOneRowPerFixtureAndMarksUnfinishedSteps() {
