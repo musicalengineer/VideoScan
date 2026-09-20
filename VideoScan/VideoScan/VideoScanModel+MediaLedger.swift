@@ -215,8 +215,9 @@ extension VideoScanModel {
             let volume = r.volumeName
             let facts = volumes[volume]
             let online = isOnline(r)
+            // The ONE repair-kinds set (VideoScanCore) — QA MINOR 4.
             let isVersion = !archiveCopy && r.derivedFrom != nil
-                && !(r.derivationKind.map { Self.repairDerivationKinds.contains($0) } ?? false)
+                && !(r.derivationKind.map { VideoRecord.repairDerivationKinds.contains($0) } ?? false)
             let kind = r.derivationKind ?? (r.cleanupRecipeID == nil ? nil : "cleanup")
             out.append(ArchiveCopySnapshot(
                 id: r.id, filename: r.filename, fullPath: r.fullPath, volumeName: volume,
@@ -382,12 +383,17 @@ extension VideoScanModel {
     @concurrent
     #endif
     nonisolated static func backlogOffMain(snapshots: [ArchiveCopySnapshot]) async -> ([UUID], Int64, ProtectionSummary) {
-        // Content keys that have a fixity-verified archive copy.
+        // Content keys that have a fixity-verified archive copy, and the
+        // NON-version sources of one: a promoted trimmed version proves
+        // nothing for its original (QA 2026-09-20 BLOCKER — the same rule
+        // as PrunePlan's proof).
+        var versionIDs = Set<UUID>()
+        for s in snapshots where s.isVersion && !s.isArchiveSide { versionIDs.insert(s.id) }
         var verifiedKeys = Set<String>()
         var verifiedSources = Set<UUID>()
-        for s in snapshots where (s.isArchiveCopy || s.isInsideArchiveRoot) && s.fixityVerified {
+        for s in snapshots where s.isArchiveSide && s.fixityVerified {
             if !s.contentKey.isEmpty { verifiedKeys.insert(s.contentKey) }
-            if let src = s.promotedFromID { verifiedSources.insert(src) }
+            if let src = s.promotedFromID, !versionIDs.contains(src) { verifiedSources.insert(src) }
         }
         var ids: [UUID] = []
         var bytes: Int64 = 0

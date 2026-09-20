@@ -333,7 +333,7 @@ struct ArchivedWhatNextSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("whatNext.applyResult")
             } else {
-                Text("The originals in \(request.archiveLabel) and every copy you leave unchecked are never touched. Everything moved can be restored from the Trash.")
+                Text("The originals in \(request.archiveLabel) and every copy you leave unchecked are never touched. A duplicate is read byte-for-byte against the archive before it goes; a version goes on its provenance. Everything moved can be restored from the Trash.")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -367,6 +367,7 @@ struct ArchivedWhatNextSheet: View {
     static func confirmMessage(_ s: PrunePlan.Selection, archiveLabel: String = "the Master Archive") -> String {
         let n = s.count
         var lines = ["\(n) cop\(n == 1 ? "y" : "ies") (\(MediaBytes.display(s.bytes))) go\(n == 1 ? "es" : "") to the Trash. The originals in \(archiveLabel) are untouched, and so is every copy you left unchecked. Anything that changed since this list was worked out is held back; everything moved can be restored from the Trash."]
+        if let verify = s.verifySentence { lines.append(verify) }
         if let against = s.overrideSentence { lines.append(against) }
         if let only = s.archiveOnlySentence { lines.append(only) }
         return lines.joined(separator: "\n\n")
@@ -451,6 +452,8 @@ struct PruneChecklist: Equatable {
         let note: String?
         let archiveCount: Int
         let archiveVerified: Bool
+        /// Archive copies of VERSIONS in the family — a note, never proof.
+        let versionArchiveCount: Int
         /// Every checkable row, in row order.
         let checkableIDs: [UUID]
         let checkableBytes: Int64
@@ -487,6 +490,7 @@ struct PruneChecklist: Equatable {
         return FamilyHeader(name: family.displayName, key: key, level: family.level.displayName,
                             advice: family.advice, note: family.note,
                             archiveCount: family.archive.count, archiveVerified: family.archiveVerified,
+                            versionArchiveCount: family.versionArchive.count,
                             checkableIDs: family.checkableIDs, checkableBytes: family.checkableBytes,
                             hashAllIDs: unhashedRelated.isEmpty ? [] : unhashedRelated + family.unhashedMemberIDs)
     }
@@ -654,6 +658,14 @@ struct PruneChecklistSection: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(h.archiveVerified ? .green : .orange)
                     .accessibilityIdentifier("whatNext.family.\(h.key).archive")
+                if h.versionArchiveCount > 0 {
+                    Text(h.archiveCount == 0
+                         ? "(only a version is archived — not the original)"
+                         : "(+ \(h.versionArchiveCount) version\(h.versionArchiveCount == 1 ? "" : "s") archived)")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .accessibilityIdentifier("whatNext.family.\(h.key).versionArchive")
+                }
                 Spacer(minLength: 4)
                 if !h.checkableIDs.isEmpty {
                     Button("Select all deletable") { onSelect(h.checkableIDs, true) }

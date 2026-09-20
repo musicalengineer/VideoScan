@@ -424,8 +424,12 @@ public struct PrunePlan: Equatable, Sendable {
         public let fullPath: String
         public let volumeName: String
         public let sizeBytes: Int64
+        /// An archive-side copy with a read-back fixity record (false for
+        /// every working copy).
+        public let fixityVerified: Bool
         init(_ s: ArchiveCopySnapshot) {
             id = s.id; filename = s.filename; fullPath = s.fullPath; volumeName = s.volumeName; sizeBytes = s.sizeBytes
+            fixityVerified = s.isArchiveSide && s.fixityVerified
         }
     }
 
@@ -595,9 +599,20 @@ public struct PrunePlan: Equatable, Sendable {
         /// the person's word rather than a copy ("you said cloud/off-site
         /// don't apply to these").
         public let note: String?
-        /// The archive side — the header, never rows.
+        /// The archive side that PROVES this family's content is archived
+        /// — the header, never rows: archive copies promoted from a
+        /// NON-version member, or whose content key equals a non-version
+        /// member's. (QA 2026-09-20 BLOCKER: the archive copy of a
+        /// trimmed VERSION is not an archive copy of the original — it
+        /// lives in `versionArchive`, never here.)
         public let archive: [CopyRef]
         public let archiveVerified: Bool
+        /// The first proof copy with a read-back fixity — what the apply
+        /// path checks on disk and verifies duplicates against.
+        public let verifiedArchive: CopyRef?
+        /// Archive copies of VERSIONS in this family ("the trimmed version
+        /// is archived too") — a header note, never proof for the original.
+        public let versionArchive: [CopyRef]
         /// The checklist: the working copies in catalog order.
         public let rows: [CopyRow]
         /// "Might be copies" — name-related records outside the family.
@@ -620,7 +635,7 @@ public struct PrunePlan: Equatable, Sendable {
 
         /// The person's choice in THIS family, judged against the bar.
         public func selection(_ selected: Set<UUID>) -> Selection {
-            var count = 0
+            var count = 0, verify = 0
             var bytes: Int64 = 0
             var devicesAfter = Set<String>()
             var archiveOnly = true
@@ -633,6 +648,7 @@ public struct PrunePlan: Equatable, Sendable {
                     if selected.contains(row.id) {
                         count += 1
                         bytes += row.copy.sizeBytes
+                        if row.kind == .duplicate { verify += 1 }
                     } else {
                         archiveOnly = false
                         if !row.copy.volumeName.isEmpty { devicesAfter.insert(row.copy.volumeName) }
@@ -652,7 +668,8 @@ public struct PrunePlan: Equatable, Sendable {
             return Selection(count: count, bytes: bytes,
                              overrideCount: against == nil ? 0 : count,
                              overrideShortfalls: against.map { [$0] } ?? [],
-                             archiveOnlyFamilies: archiveOnly ? [displayName] : [])
+                             archiveOnlyFamilies: archiveOnly ? [displayName] : [],
+                             verifyCount: verify)
         }
 
         /// The one log line per family written when the sheet opens, so
@@ -662,7 +679,8 @@ public struct PrunePlan: Equatable, Sendable {
         /// 2 name-related (2 unhashed)".
         public var logLine: String {
             var parts: [String] = []
-            parts.append("archive \(archiveVerified ? "✓" : "✗ unverified") (\(archive.count))")
+            parts.append("archive \(archiveVerified ? "✓" : "✗ unverified") (\(archive.count))"
+                         + (versionArchive.isEmpty ? "" : " + \(versionArchive.count) version\(versionArchive.count == 1 ? "" : "s") archived"))
             var volumes: [String] = []
             var seen = Set<String>()
             var checkable = 0, offline = 0, pair = 0, locked = 0, versions = 0, noted = 0
@@ -717,15 +735,28 @@ public struct PrunePlan: Equatable, Sendable {
         public let overrideShortfalls: [String]
         /// Display names of families that keep ONLY their archive copy.
         public let archiveOnlyFamilies: [String]
+        /// Checked `.duplicate` rows — the ones that claim byte identity
+        /// with the archive copy and are read in full against it before
+        /// they go (QA 2026-09-20 MAJOR: a segmented-hash match is a
+        /// candidate, never proof). Versions go on provenance.
+        public let verifyCount: Int
 
         public init(count: Int, bytes: Int64, overrideCount: Int, overrideShortfalls: [String],
-                    archiveOnlyFamilies: [String]) {
+                    archiveOnlyFamilies: [String], verifyCount: Int = 0) {
             self.count = count; self.bytes = bytes; self.overrideCount = overrideCount
             self.overrideShortfalls = overrideShortfalls; self.archiveOnlyFamilies = archiveOnlyFamilies
+            self.verifyCount = verifyCount
         }
 
         public static let empty = Selection(count: 0, bytes: 0, overrideCount: 0, overrideShortfalls: [],
                                             archiveOnlyFamilies: [])
+
+        /// "2 copies will be checked byte-for-byte against the archive
+        /// before they go." nil when no duplicate is checked.
+        public var verifySentence: String? {
+            guard verifyCount > 0 else { return nil }
+            return "\(verifyCount) cop\(verifyCount == 1 ? "y" : "ies") will be checked byte-for-byte against the archive before \(verifyCount == 1 ? "it goes" : "they go")."
+        }
 
         /// The ledger's `override` detail: "2 copies — ★★★ / Important —
         /// no cloud or off-site copy attested". nil when nothing goes
@@ -802,7 +833,7 @@ public struct PrunePlan: Equatable, Sendable {
     /// The person's choice across the batch, judged against the bar.
     public func selection(_ selected: Set<UUID>) -> Selection {
         guard !selected.isEmpty else { return .empty }
-        var count = 0, overrides = 0
+        var count = 0, overrides = 0, verify = 0
         var bytes: Int64 = 0
         var shortfalls: [String] = []
         var seen = Set<String>()
@@ -812,11 +843,12 @@ public struct PrunePlan: Equatable, Sendable {
             count += s.count
             bytes += s.bytes
             overrides += s.overrideCount
+            verify += s.verifyCount
             for text in s.overrideShortfalls where seen.insert(text).inserted { shortfalls.append(text) }
             archiveOnly.append(contentsOf: s.archiveOnlyFamilies)
         }
         return Selection(count: count, bytes: bytes, overrideCount: overrides,
-                         overrideShortfalls: shortfalls, archiveOnlyFamilies: archiveOnly)
+                         overrideShortfalls: shortfalls, archiveOnlyFamilies: archiveOnly, verifyCount: verify)
     }
 
     public static let empty = PrunePlan(families: [], trashCount: 0, trashBytes: 0, extraCount: 0, extraBytes: 0,
@@ -898,10 +930,25 @@ public struct PrunePlan: Equatable, Sendable {
             .max(by: { $0.rank < $1.rank }) ?? .ordinary
         let req = options.bar.requirement(for: level)
 
-        // Archive state — the header, never rows.
-        let archiveCopies = fam.filter { $0.isArchiveSide && !$0.isPurged }
+        // Archive state — the header, never rows. PROOF that THIS content
+        // is archived: an archive copy promoted from a NON-version member,
+        // or one whose content key equals a non-version member's. The
+        // archive copy of a trimmed VERSION (which pass B joined to the
+        // original's family) proves nothing for the original — the only
+        // archived bytes are the trimmed ones (QA 2026-09-20 BLOCKER).
+        let originalMemberIDs = Set(fam.lazy.filter { !$0.isPurged && !$0.isArchiveSide && !$0.isVersion }.map(\.id))
+        let originalKeys = Set(fam.lazy.filter { !$0.isPurged && !$0.isArchiveSide && !$0.isVersion && !$0.contentKey.isEmpty }.map(\.contentKey))
+        var archiveCopies: [ArchiveCopySnapshot] = []
+        var versionArchiveCopies: [ArchiveCopySnapshot] = []
+        for c in fam where c.isArchiveSide && !c.isPurged {
+            let bySource = c.promotedFromID.map(originalMemberIDs.contains) ?? false
+            let byContent = !c.contentKey.isEmpty && originalKeys.contains(c.contentKey)
+            if bySource || byContent { archiveCopies.append(c) } else { versionArchiveCopies.append(c) }
+        }
         let archiveVerified = archiveCopies.contains { $0.fixityVerified }
         let archiveRefs = archiveCopies.map(CopyRef.init)
+        let verifiedArchive = archiveCopies.first { $0.fixityVerified }.map(CopyRef.init)
+        let versionArchiveRefs = versionArchiveCopies.map(CopyRef.init)
         let originalID = archiveCopies.compactMap(\.promotedFromID).first
 
         // Classify the working copies.
@@ -952,7 +999,8 @@ public struct PrunePlan: Equatable, Sendable {
                    keeperRequired: keeperRequired, trash: trash, kept: kept, extraCount: extraCount,
                    extraBytes: extraBytes, displayName: display, requirement: req,
                    cloudOrOffsiteAttested: cloudOrOffsite, cloudOrOffsiteNotApplicable: notApplicable,
-                   advice: advice, note: note, archive: archiveRefs, archiveVerified: archiveVerified, rows: rows,
+                   advice: advice, note: note, archive: archiveRefs, archiveVerified: archiveVerified,
+                   verifiedArchive: verifiedArchive, versionArchive: versionArchiveRefs, rows: rows,
                    related: relatedRows, relatedHiddenCount: related.hiddenCount, unhashedMemberIDs: unhashed)
         }
 
@@ -962,9 +1010,14 @@ public struct PrunePlan: Equatable, Sendable {
         if archiveCopies.isEmpty || !archiveVerified {
             let reason: KeepReason = archiveCopies.isEmpty ? .noArchiveCopy : .archiveUnverified
             kept.append(contentsOf: (plain + soft).map { KeptCopy(copy: CopyRef($0), reason: reason) })
-            let advice = archiveCopies.isEmpty
-                ? "No archive copy yet — nothing here can go until one is promoted and verified."
-                : "The archive copy is not verified yet — nothing here can go until it reads back."
+            let advice: String
+            if !archiveCopies.isEmpty {
+                advice = "The archive copy is not verified yet — nothing here can go until it reads back."
+            } else if !versionArchiveCopies.isEmpty {
+                advice = "Only a version of this is archived (\(versionArchiveCopies.map(\.filename).joined(separator: ", "))) — the original must be promoted and verified before anything here can go."
+            } else {
+                advice = "No archive copy yet — nothing here can go until one is promoted and verified."
+            }
             return make(covered: false, shortfall: reason.displayText, keeper: nil, keeperRequired: false,
                         trash: [], kept: kept, advice: advice,
                         rows: rows(fam, originalID: originalID, candidateRole: { _ in (.kept(reason), nil, false) }))

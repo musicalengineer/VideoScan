@@ -128,8 +128,16 @@ struct PruneApplyTests {
 
     @Test func theCheckedDupGoesTheArchiveAndTheKeeperStay() async throws {
         let f = try await fixture("prune_ok"); defer { f.sb.cleanup() }
+        // The tie on free space goes to the lower path — `copies/…` — so the
+        // default-trashed row is the promotion ORIGINAL: trusted by its stamp
+        // (unchanged since the archive copy read back), not re-read.
+        try #require(f.family.rows.first { $0.id == f.dup.id }?.kind == .original)
+        #expect(f.archive.contentFixity == nil, "fixture: no stored whole-file fixity on the archive copy yet")
+        #expect(f.shown.selection(f.shown.defaultSelection).verifySentence == nil, "an original is not counted as a byte check")
         let out = await apply(f, selected: f.shown.defaultSelection)
         #expect(out.trashed == 1 && out.held.isEmpty && out.failed.isEmpty && out.overrideCount == 0, "\(out)")
+        #expect(out.verified == 0 && !out.summary.contains("byte-for-byte"), "\(out.summary)")
+        #expect(f.archive.contentFixity == nil, "nothing was read in full")
         #expect(!FileManager.default.fileExists(atPath: f.dup.fullPath))
         #expect(FileManager.default.fileExists(atPath: f.keeper.fullPath), "the working copy kept")
         #expect(FileManager.default.fileExists(atPath: f.archivePath), "the archive copy untouched")
@@ -207,8 +215,9 @@ struct PruneApplyTests {
         let version = try #require(f.version)
         #expect(f.family.rows.first { $0.id == version.id }?.reasonText == "a trimmed version — the original is in the archive")
         #expect(f.archive.userNotes.isEmpty, "fixture: the archive copy has no note yet")
+        #expect(f.shown.selection([version.id]).verifyCount == 0, "a version goes on provenance — it never claimed identical bytes")
         let out = await apply(f, selected: [version.id])
-        #expect(out.trashed == 1 && out.held.isEmpty && out.failed.isEmpty && out.carried == 1, "\(out)")
+        #expect(out.trashed == 1 && out.held.isEmpty && out.failed.isEmpty && out.carried == 1 && out.verified == 0, "\(out)")
         #expect(out.summary.contains("notes and marks from 1 carried to the archive copy"), "\(out.summary)")
         #expect(!FileManager.default.fileExists(atPath: version.fullPath), "the version left the disk")
         #expect(FileManager.default.fileExists(atPath: f.dup.fullPath) && FileManager.default.fileExists(atPath: f.keeper.fullPath),
@@ -286,6 +295,93 @@ struct PruneApplyTests {
                 "different bytes stay out, and say so")
         #expect(f1.unhashedMemberIDs.isEmpty)
         #expect(f1.logLine.contains("1 name-related (1 different)"), "\(f1.logLine)")
+    }
+
+    // MARK: Byte-for-byte before the Trash (QA 2026-09-20 MAJOR 2)
+
+    @Test("DUPLICATE: a checked duplicate is read in full against the archive copy before it goes; the archive copy's fresh fixity is stored")
+    func aDuplicateIsReadByteForByteAgainstTheArchiveBeforeItGoes() async throws {
+        let f = try await fixture("prune_bytecheck"); defer { f.sb.cleanup() }
+        let dup = try #require(f.family.rows.first { $0.kind == .duplicate })
+        try #require(dup.id == f.keeper.id, "fixture: the copy is the hinted keeper; the person swaps")
+        #expect(f.shown.selection([dup.id]).verifySentence == "1 copy will be checked byte-for-byte against the archive before it goes.")
+        #expect(f.archive.contentFixity == nil)
+        let out = await apply(f, selected: [dup.id])
+        #expect(out.trashed == 1 && out.held.isEmpty && out.verified == 1, "\(out)")
+        #expect(out.summary.contains("1 checked byte-for-byte against the archive"), "\(out.summary)")
+        #expect(!FileManager.default.fileExists(atPath: dup.copy.fullPath))
+        #expect(FileManager.default.fileExists(atPath: f.dup.fullPath) && FileManager.default.fileExists(atPath: f.archivePath))
+        #expect(f.archive.contentFixity != nil, "the archive copy was read in full once — its fixity stands in next time")
+    }
+
+    @Test("ORIGINAL: the promotion source rewritten in place (same size) after the archive copy read back is read in full and held")
+    func anOriginalRewrittenSinceTheReadBackIsHeld() async throws {
+        let f = try await fixture("prune_origrewrite"); defer { f.sb.cleanup() }
+        try #require(f.family.rows.first { $0.id == f.dup.id }?.kind == .original)
+        // Same byte count, different bytes — the stat-size check cannot see it.
+        let size = Int((try FileManager.default.attributesOfItem(atPath: f.dup.fullPath))[.size] as? Int64 ?? 0)
+        try MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: f.dup.fullPath), bytes: size, seed: 99)
+        let out = await apply(f, selected: [f.dup.id])
+        #expect(out.trashed == 0 && out.held.count == 1, "\(out)")
+        #expect(out.held.first?.hasSuffix("not the same bytes as the archive copy") == true, "\(out.held)")
+        #expect(FileManager.default.fileExists(atPath: f.dup.fullPath), "the only copy of the new bytes stays")
+        await f.model.mediaLedger.waitForPendingWrites()
+        #expect(!f.model.mediaLedger.allEvents().contains { $0.event == .approval }, "nothing approved")
+    }
+
+    // MARK: QA RED (2026-09-20) — a segmented-hash MATCH is a candidate, not proof
+
+    @Test("QA RED: a 'might be copy' whose bytes differ outside the three sampled windows hashes equal, joins as a duplicate, and Apply trashes it with no full-byte verification (SignatureVerification.swift:19-20: segmented equal ⇒ CANDIDATE only)")
+    func aSegmentedHashCollisionIsNeverTrashedAsACopy() async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("prune_hash_collision"); defer { sb.cleanup() }
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        model.mediaLedger = MediaLedger(directory: sb.root.appendingPathComponent("ledger", isDirectory: true))
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        // > 3 MiB so segmentedHash SAMPLES (head / middle / tail, 1 MiB each) instead of reading in full.
+        let size = 4 * FileHasher.segmentSize
+        let a = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent("test_prune_hc.mov"), bytes: size, seed: 31)
+        let recA = MasterArchiveTestSupport.makeRecord(path: a.path, userDate: "1992")
+        model.records = [recA]
+        let job = try #require(await MasterArchiveTestSupport.promote(model, ids: [recA.id]))
+        await job.completionTask?.value
+        let archive = try #require(model.archivedCopy(of: recA))
+        try #require(archive.archiveFixity != nil, "fixture: the archive copy is fixity-verified")
+        let dir = sb.sources.appendingPathComponent("M4drive", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let same = dir.appendingPathComponent("test_prune_hc copy.mov")
+        try FileManager.default.copyItem(at: a, to: same)
+        // Flip one byte at 1.25 MiB: past the head window, before the middle one (starts at 1.5 MiB).
+        let fh = try FileHandle(forUpdating: same)
+        let offset = UInt64(FileHasher.segmentSize + FileHasher.segmentSize / 4)
+        try fh.seek(toOffset: offset)
+        let orig = try #require(fh.read(upToCount: 1)?.first)
+        try fh.seek(toOffset: offset)
+        try fh.write(contentsOf: Data([orig ^ 0xFF]))
+        try fh.close()
+        try #require(!FileManager.default.contentsEqual(atPath: a.path, andPath: same.path), "fixture: the bytes DIFFER")
+        let recSame = MasterArchiveTestSupport.makeRecord(path: same.path, userDate: "1992")
+        for r in [recA, archive, recSame] { r.contentHash = "" }
+        model.records += [recSame]
+        var bar = ImportanceBar.defaults
+        bar.important = .init(extraDevices: 0, cloudOrOffsite: false)
+
+        let before = await model.prunePlan(for: [recA.id], options: .init(bar: bar), isOnline: { _ in true })
+        try #require(before.families.count == 1 && before.families[0].related.map(\.id) == [recSame.id])
+        _ = await model.hashToConfirm(recordIDs: [recSame.id, recA.id, archive.id])
+        try #require(!recA.contentHash.isEmpty && recA.contentHash == recSame.contentHash,
+                     "fixture: the segmented hashes COLLIDE — that is exactly why the segmented hash is only a candidate")
+
+        let shown = await model.prunePlan(for: [recA.id], options: .init(bar: bar), isOnline: { _ in true })
+        let row = try #require(shown.families[0].rows.first { $0.id == recSame.id })
+        // Pins PrunePlan.swift:162-209 (join by contentKey) → the hash match makes it a plain "duplicate".
+        try #require(row.checkable && row.kind == .duplicate, "fixture: the collision joined as a normal candidate — \(row)")
+
+        let out = await model.applyPrune(shown: shown, selected: [recSame.id], recordIDs: [recA.id],
+                                         options: .init(bar: bar), batchID: "qa-collision", mode: .permanent)
+        // Pins VideoScanModel+PruneApply.swift:190-205 (pruneDiskProblem: size only) and :309 (straight to deleteConfirmedJunk).
+        #expect(out.trashed == 0, "a file whose bytes are NOT the archive copy's went to the Trash as a 'copy' — \(out)")
+        #expect(FileManager.default.fileExists(atPath: same.path), "the only copy of those different bytes is gone")
+        #expect(out.held.count == 1, "it should be held, named, with why — \(out.held)")
     }
 
     // MARK: Held back — the fresh plan
@@ -376,6 +472,10 @@ struct PruneApplyTests {
                                                         archiveOnlyFamilies: ["Christmas2008.mov"]),
                                     archiveLabel: "FamilyArchive")
         #expect(loud.hasPrefix("2 copies (1 B) go to the Trash. The originals in FamilyArchive are untouched"), "\(loud)")
+        #expect(!loud.contains("byte-for-byte"), "no duplicate checked → no verify sentence")
+        let checked = S.confirmMessage(PrunePlan.Selection(count: 3, bytes: 1, overrideCount: 0, overrideShortfalls: [],
+                                                           archiveOnlyFamilies: [], verifyCount: 2))
+        #expect(checked.contains("2 copies will be checked byte-for-byte against the archive before they go."), "\(checked)")
         #expect(loud.contains("2 copies go against the bar you set: ★★★ / Important — no cloud or off-site copy attested."))
         #expect(loud.hasSuffix("Christmas2008.mov will exist only in the Master Archive after this."))
     }

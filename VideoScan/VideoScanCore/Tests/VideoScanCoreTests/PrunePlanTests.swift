@@ -323,6 +323,66 @@ final class PrunePlanTests: XCTestCase {
                        "what-next: a.mov — archive ✗ unverified (0) · 1 copy on LaCie (0 checkable, 1 locked: no archive copy) · advice: No archive copy yet — nothing here can go until one is promoted and verified.")
     }
 
+    // MARK: QA RED (2026-09-20) — the archive copy of a VERSION is not an archive copy of the ORIGINAL
+
+    /// Pins PrunePlan.swift:174-195 (group: pass A → pass B → pass A again)
+    /// and :902-905 (plan: `archiveVerified` = ANY archive-side member).
+    /// Rick trims tape.mov → tape_trimmed.mov and promotes only the TRIM.
+    /// The original was never promoted; the only verified bytes in the
+    /// archive are the trimmed ones. The second joinArchiveCopies pass
+    /// pulls the trim's archive copy into the ORIGINAL's family, the
+    /// family reads "In FamilyArchive, verified (1)", and the full-length
+    /// original becomes a plain checkable "duplicate" — default-checked
+    /// with keep-one off. "The last verified copy must never go."
+    func testQARedAnArchivedVersionNeverMakesTheUnarchivedOriginalCheckable() {
+        var bar = ImportanceBar.defaults
+        bar.important = .init(extraDevices: 0, cloudOrOffsite: false)
+        let original = copy("tape.mov", vol: "LaCie", key: "h:v1:full", size: 9_000)
+        let trimmed = copy("tape_trimmed.mov", vol: "M4drive", key: "h:v1:trim", size: 2_000, version: true,
+                           derivedFrom: original.id, kind: "trim")
+        let archivedTrim = archiveCopy(key: "h:v1:trim", verified: true, promotedFrom: trimmed.id)
+        let snaps = [original, trimmed, archivedTrim]
+        let fams = ArchiveCopyFamilies.group(batch: [original.id], snapshots: snaps)
+        XCTAssertEqual(fams.count, 1)
+        let f = plan(fams[0], keepOne: false, bar: bar)
+        let row = f.rows.first { $0.id == original.id }
+        XCTAssertNotNil(row, "the original is listed")
+        XCTAssertFalse(row?.checkable ?? true,
+                       "tape.mov has NO verified archive copy of ITS content — only its trim is archived — yet it is checkable: \(String(describing: row))")
+        XCTAssertFalse(f.defaultSelection.contains(original.id),
+                       "the full-length original would go to the Trash by default while only the trimmed bytes are in the archive")
+        XCTAssertFalse(f.trash.contains { $0.id == original.id })
+        // The fix: the trim's archive copy is a header NOTE, never proof.
+        XCTAssertTrue(f.archive.isEmpty && !f.archiveVerified && f.verifiedArchive == nil)
+        XCTAssertEqual(f.versionArchive.map(\.id), [archivedTrim.id])
+        XCTAssertEqual(f.advice, "Only a version of this is archived (archived.mov) — the original must be promoted and verified before anything here can go.")
+        XCTAssertTrue(f.logLine.contains("archive ✗ unverified (0) + 1 version archived"), f.logLine)
+        XCTAssertEqual(f.candidateCount, 0, "the trimmed row is locked with the rest")
+        // Promote the ORIGINAL too and everything is as before: proof by
+        // the promote link, the trim checkable on provenance.
+        let archivedOriginal = archiveCopy(key: "h:v1:full", verified: true, promotedFrom: original.id)
+        let both = plan(ArchiveCopyFamilies.group(batch: [original.id], snapshots: snaps + [archivedOriginal])[0], keepOne: false, bar: bar)
+        XCTAssertEqual(both.archive.map(\.id), [archivedOriginal.id]); XCTAssertTrue(both.archiveVerified)
+        XCTAssertEqual(both.verifiedArchive?.id, archivedOriginal.id)
+        XCTAssertTrue(both.verifiedArchive?.fixityVerified ?? false)
+        XCTAssertEqual(both.versionArchive.map(\.id), [archivedTrim.id])
+        XCTAssertEqual(both.defaultSelection, [original.id])
+        XCTAssertTrue(both.rows.first { $0.id == trimmed.id }?.checkable ?? false)
+        // An archive copy that matches a NON-version member by CONTENT is proof
+        // even without a promote link; one matching only a version's key is not.
+        let byKey = plan([original, trimmed, archiveCopy(key: "h:v1:full", verified: true)], keepOne: false, bar: bar)
+        XCTAssertTrue(byKey.archiveVerified && byKey.defaultSelection == [original.id])
+        let byTrimKey = plan([original, trimmed, archiveCopy(key: "h:v1:trim", verified: true)], keepOne: false, bar: bar)
+        XCTAssertFalse(byTrimKey.archiveVerified); XCTAssertEqual(byTrimKey.candidateCount, 0)
+        // The selection counts what will be read byte-for-byte: duplicates only.
+        let dup = copy("tape.mov", vol: "X9", key: "h:v1:full", size: 9_000)
+        let three = plan([original, trimmed, dup, archivedOriginal], keepOne: false, bar: bar)
+        let s = three.selection([original.id, trimmed.id, dup.id])
+        XCTAssertEqual(s.count, 3); XCTAssertEqual(s.verifyCount, 1, "the original goes on its promote link, the trim on provenance, the dup must earn it")
+        XCTAssertEqual(s.verifySentence, "1 copy will be checked byte-for-byte against the archive before it goes.")
+        XCTAssertNil(PrunePlan.Selection.empty.verifySentence)
+    }
+
     // MARK: The scrubbable-copy rule — every negative
 
     func testNoArchiveCopyOrUnverifiedArchiveKeepsEverything() {

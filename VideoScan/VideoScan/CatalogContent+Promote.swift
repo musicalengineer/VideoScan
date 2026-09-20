@@ -145,10 +145,11 @@ extension VideoScanModel {
     }
 
     /// Derivation kinds that FIX damaged media rather than re-express
-    /// good media; these never inherit "archived" from their source.
-    static let repairDerivationKinds: Set<String> = [
-        ExternalRepairAdoption.derivationKind, RebuildAudioFix.derivationKind,
-    ]
+    /// good media; these never inherit "archived" from their source. THE
+    /// set lives in VideoScanCore (`VideoRecord.repairDerivationKinds`,
+    /// lock-step with the writers); this is a view onto it so the three
+    /// readers cannot drift (QA 2026-09-20 MINOR 4).
+    static var repairDerivationKinds: Set<String> { VideoRecord.repairDerivationKinds }
 
     /// True when `rec` derives (balanceAudio, trim, an older transcode with
     /// no kind stamp…) from a record that is archived, following at most
