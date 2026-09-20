@@ -74,6 +74,9 @@ struct ArchivedWhatNextSheet: View {
     @State private var selectionTouched = false
     @State private var checklist = PruneChecklist.empty
     @State private var summary = PrunePlan.Selection.empty
+    /// A plan reload is in flight: the list, the count and the
+    /// confirmation are stale until it lands, so Apply waits (QA MINOR).
+    @State private var reloading = false
 
     // Apply (2026-09-19).
     @State private var confirmingApply = false
@@ -229,6 +232,8 @@ struct ArchivedWhatNextSheet: View {
     }
 
     private func reloadPlan() async {
+        reloading = true
+        defer { reloading = false }
         let options = PrunePlan.Options(keepOne: keepOne, keeperVolume: keeperVolume, bar: model.importanceBar)
         let ids = request.recordIDs
         async let computed = model.prunePlan(for: ids, options: options)
@@ -237,10 +242,14 @@ struct ArchivedWhatNextSheet: View {
         guard !Task.isCancelled else { return }
         plan = p
         protection = prot
-        checklist = PruneChecklist.build(p)
+        let list = PruneChecklist.build(p)
+        checklist = list
         // Manual checks survive a reload (minus anything no longer
-        // checkable); otherwise the plan's default is the selection.
-        selected = selectionTouched ? selected.intersection(p.checkableIDs) : p.defaultSelection
+        // checkable); otherwise the plan's default is the selection. Only
+        // LISTED rows may be selected — nothing the person cannot see and
+        // uncheck is ever counted or moved.
+        selected = (selectionTouched ? selected.intersection(p.checkableIDs) : p.defaultSelection)
+            .intersection(list.visibleIDs)
         summary = p.selection(selected)
     }
 
@@ -264,7 +273,8 @@ struct ArchivedWhatNextSheet: View {
                 Button(applyTitle) { confirmingApply = true }
                     .buttonStyle(.borderedProminent)
                     .disabled(!Self.canApply(selectedCount: summary.count, applying: applying,
-                                             applied: applied != nil, readOnly: model.isReadOnly))
+                                             applied: applied != nil, readOnly: model.isReadOnly,
+                                             reloading: reloading))
                     .accessibilityIdentifier("whatNext.apply")
             }
             if let applied {
@@ -290,9 +300,11 @@ struct ArchivedWhatNextSheet: View {
         }
     }
 
-    /// Apply acts only on a non-empty selection, once.
-    static func canApply(selectedCount: Int, applying: Bool, applied: Bool, readOnly: Bool) -> Bool {
-        selectedCount > 0 && !applying && !applied && !readOnly
+    /// Apply acts only on a non-empty selection, once, and never while
+    /// the plan it would act on is being recomputed.
+    static func canApply(selectedCount: Int, applying: Bool, applied: Bool, readOnly: Bool,
+                         reloading: Bool = false) -> Bool {
+        selectedCount > 0 && !applying && !applied && !readOnly && !reloading
     }
 
     private var confirmTitle: String {
@@ -311,7 +323,7 @@ struct ArchivedWhatNextSheet: View {
     }
 
     private func runApply() {
-        guard let shown = plan else { return }
+        guard let shown = plan, !reloading else { return }
         let options = PrunePlan.Options(keepOne: keepOne, keeperVolume: keeperVolume, bar: model.importanceBar)
         applying = true
         Task {
@@ -371,8 +383,12 @@ struct AttestationAnswerRow: View {
 // MARK: - The checklist, as a flat list the view can walk
 
 /// The sheet's rows, derived ONCE from the plan value per reload (never in
-/// a body): a header per family, then its copies, capped at `maxRows`
-/// copy rows with "… and N more". Pure; tests pin the cap.
+/// a body): a header per family, then its copies. Families with a
+/// default check are ALWAYS listed in full, first — a copy that would go
+/// must be visible and uncheckable-by-hand (QA 2026-09-20, MAJOR 3: the
+/// Tidy backlog is routinely > 200 rows); the remaining families fill up
+/// to `maxRows` copy rows, the rest counted as "… and N more". Pure;
+/// tests pin the cap and that no default check is ever hidden.
 struct PruneChecklist: Equatable {
     struct Item: Identifiable, Equatable {
         enum Kind: Equatable {
@@ -385,28 +401,39 @@ struct PruneChecklist: Equatable {
     }
 
     static let maxRows = 200
-    static let empty = PruneChecklist(items: [], hiddenRowCount: 0)
+    static let empty = PruneChecklist(items: [], visibleIDs: [], hiddenRowCount: 0)
 
     let items: [Item]
-    /// Copy rows not listed because of the cap.
+    /// The copy rows listed — the only ids a selection may hold.
+    let visibleIDs: Set<UUID>
+    /// Copy rows not listed because of the cap (never a default check).
     let hiddenRowCount: Int
 
     static func build(_ plan: PrunePlan, maxRows: Int = maxRows) -> PruneChecklist {
         var items: [Item] = []
+        var visible = Set<UUID>()
         items.reserveCapacity(min(plan.rowCount, maxRows) + plan.families.count)
-        var shown = 0, hidden = 0
-        for (i, family) in plan.families.enumerated() {
-            if shown >= maxRows { hidden += family.rows.count; continue }
+        // `budget` is spent only by the capped (no-default-check) families,
+        // so a big default set never starves them of their 200 rows.
+        var budget = maxRows, hidden = 0
+        func list(_ i: Int, _ family: PrunePlan.Family, capped: Bool) {
+            if capped, budget <= 0 { hidden += family.rows.count; return }
             let key = family.key.isEmpty ? family.displayName : family.key
             items.append(Item(id: "f\(i)", kind: .family(name: family.displayName, key: key,
                                                           level: family.level.displayName, advice: family.advice)))
             for row in family.rows {
-                if shown >= maxRows { hidden += 1; continue }
+                if capped {
+                    if budget <= 0 { hidden += 1; continue }
+                    budget -= 1
+                }
                 items.append(Item(id: row.id.uuidString, kind: .copy(row)))
-                shown += 1
+                visible.insert(row.id)
             }
         }
-        return PruneChecklist(items: items, hiddenRowCount: hidden)
+        let hasDefault = plan.families.map { $0.rows.contains(where: \.defaultChecked) }
+        for (i, family) in plan.families.enumerated() where hasDefault[i] { list(i, family, capped: false) }
+        for (i, family) in plan.families.enumerated() where !hasDefault[i] { list(i, family, capped: true) }
+        return PruneChecklist(items: items, visibleIDs: visible, hiddenRowCount: hidden)
     }
 }
 
@@ -478,7 +505,9 @@ struct PruneChecklistSection: View {
 
     private var list: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
+            // Lazy: every family with a default check is listed in full,
+            // so a big Tidy backlog can be thousands of rows.
+            LazyVStack(alignment: .leading, spacing: 2) {
                 ForEach(checklist.items) { item in
                     switch item.kind {
                     case .family(let name, let key, let level, let advice):
@@ -488,9 +517,10 @@ struct PruneChecklistSection: View {
                     }
                 }
                 if checklist.hiddenRowCount > 0 {
-                    Text("… and \(checklist.hiddenRowCount) more")
+                    Text("… and \(checklist.hiddenRowCount) more (none checked; nothing unlisted is ever moved)")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
+                        .accessibilityIdentifier("whatNext.moreRows")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

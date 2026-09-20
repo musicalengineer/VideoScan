@@ -28,12 +28,15 @@
 //      moment of Apply; a checked copy may go only if the fresh plan still
 //      offers it as CHECKABLE: `isCandidate` (online, no note, not a
 //      version or a pair member, not inside the archive) in a family with
-//      a FIXITY-VERIFIED archive copy. A note added, a drive unplugged,
-//      an archive copy that lost its fixity since the sheet opened → that
+//      a FIXITY-VERIFIED archive copy — AND the family's bar verdict is
+//      the one the person confirmed (an override that appeared or grew
+//      since the sheet was read holds the family's checked copies). A
+//      note added, a drive unplugged, an archive copy that lost its
+//      fixity, an attestation withdrawn since the sheet opened → that
 //      copy is held, and named with the fresh reason.
 //   2. ON-DISK SAFETY, per copy, just before it goes: the family's archive
-//      copy exists at its recorded size; the plan's kept working copy (if
-//      one is kept and NOT itself checked) exists at its recorded size;
+//      copy exists at its recorded size; the working copy the plan would
+//      keep (the row hinted `.keeper`, if NOT itself checked) exists at its recorded size;
 //      the copy itself is still its recorded size (a file rewritten in
 //      place is a different file). Any failure holds the copy, with the
 //      reason.
@@ -85,17 +88,28 @@ extension VideoScanModel {
     }
 
     /// Which of the copies the person checked may go: those the FRESH plan
-    /// still offers as checkable. Order = the rows of the plan the person
-    /// saw. A checked id that the shown plan never offered (not a
-    /// checkable row) is held, not trusted; one the fresh plan no longer
-    /// knows is held too.
+    /// still offers as checkable, in families whose bar VERDICT is what
+    /// the person confirmed. Order = the rows of the plan the person saw.
+    /// A checked id that the shown plan never offered (not a checkable
+    /// row) is held, not trusted; one the fresh plan no longer knows is
+    /// held too; and a family whose fresh verdict carries an override the
+    /// shown one did not (an attestation withdrawn in another window, a
+    /// device gone) holds every checked copy in it — a verdict that got
+    /// stricter since the sheet was read is a change, not a decision
+    /// (QA 2026-09-20, MAJOR 1).
     nonisolated static func pruneTargets(shown: PrunePlan, selected: Set<UUID>, fresh: PrunePlan)
         -> (go: [PrunePlan.CopyRef], held: [PruneHeld]) {
         guard !selected.isEmpty else { return ([], []) }
         var freshRows: [UUID: PrunePlan.CopyRow] = [:]
-        for family in fresh.families { for row in family.rows { freshRows[row.id] = row } }
+        var freshFamilyOf: [UUID: Int] = [:]
+        for (i, family) in fresh.families.enumerated() {
+            for row in family.rows { freshRows[row.id] = row; freshFamilyOf[row.id] = i }
+        }
         var go: [PrunePlan.CopyRef] = [], held: [PruneHeld] = []
+        /// The verdict the person confirmed, per copy (its SHOWN family).
+        var shownVerdictOf: [UUID: PrunePlan.Selection] = [:]
         for family in shown.families {
+            var verdict: PrunePlan.Selection?
             for row in family.rows where selected.contains(row.id) {
                 guard row.checkable else {
                     held.append(PruneHeld(copy: row.copy, reason: "was never offered: \(row.reasonText ?? "not a candidate")"))
@@ -107,11 +121,31 @@ extension VideoScanModel {
                 }
                 if now.checkable {
                     go.append(now.copy)
+                    if verdict == nil { verdict = family.selection(selected) }
+                    shownVerdictOf[row.id] = verdict
                 } else {
                     held.append(PruneHeld(copy: now.copy,
                                           reason: "changed since the list was shown: \(now.reasonText ?? "no longer a candidate")"))
                 }
             }
+        }
+        // The bar's verdict on what would actually go, per FRESH family,
+        // against what the sheet said when it was confirmed.
+        let goIDs = Set(go.map(\.id))
+        var verdictChanged = Set<Int>()
+        for copy in go {
+            guard let i = freshFamilyOf[copy.id], !verdictChanged.contains(i) else { continue }
+            let now = fresh.families[i].selection(goIDs)
+            let then = shownVerdictOf[copy.id] ?? .empty
+            if now.overrideCount > 0, now.overrideShortfalls != then.overrideShortfalls {
+                verdictChanged.insert(i)
+            }
+        }
+        if !verdictChanged.isEmpty {
+            let kept = go.filter { freshFamilyOf[$0.id].map { !verdictChanged.contains($0) } ?? true }
+            held += go.filter { freshFamilyOf[$0.id].map(verdictChanged.contains) ?? false }
+                .map { PruneHeld(copy: $0, reason: "the bar's verdict changed since the list was shown") }
+            go = kept
         }
         return (go, held)
     }
@@ -166,13 +200,16 @@ extension VideoScanModel {
         let (go, changed) = Self.pruneTargets(shown: shown, selected: selected, fresh: fresh)
         outcome.held = changed.map(\.line)
 
-        // Family context from the FRESH plan: the kept working copy to
-        // protect on disk — unless the person checked it too (then there
-        // is no keeper, and the confirmation said so in words).
+        // Family context from the FRESH plan: the working copy the plan
+        // would keep, to protect on disk — the row hinted `.keeper`, NOT
+        // `family.keeper`, which is nil in a family the bar does not
+        // cover (QA 2026-09-20, MAJOR 2) — unless the person checked it
+        // too (then there is no keeper, and the confirmation said so).
         let goIDs = Set(go.map(\.id))
         var keeperOf: [UUID: PrunePlan.CopyRef] = [:]
         for family in fresh.families {
-            guard let keeper = family.keeper, !goIDs.contains(keeper.id) else { continue }
+            guard let keeper = family.rows.first(where: { $0.planKeeps == .keeper })?.copy,
+                  !goIDs.contains(keeper.id) else { continue }
             for row in family.rows where row.checkable { keeperOf[row.id] = keeper }
         }
         var checks: [PruneDiskCheck] = []

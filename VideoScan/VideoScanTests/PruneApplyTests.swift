@@ -162,6 +162,10 @@ struct PruneApplyTests {
         let approval = try await approval(f)
         #expect(approval.detail[MediaLedgerEvent.Detail.barOverride]?.hasPrefix("2 copies — ★★★ / Important — needs 1 more device") == true,
                 "\(approval.detail)")
+        // One removal line per copy that left the disk (copyDeleted here —
+        // the tests' `.permanent`; the sheet's `.toTrash` writes copyTrashed).
+        let removed = f.model.mediaLedger.allEvents().filter { $0.event == .copyDeleted }
+        #expect(Set(removed.map(\.recordID)) == all && removed.count == 2, "\(removed.map(\.filename))")
     }
 
     // MARK: Held back — the fresh plan
@@ -232,6 +236,8 @@ struct PruneApplyTests {
         #expect(!S.canApply(selectedCount: 2, applying: true, applied: false, readOnly: false))
         #expect(!S.canApply(selectedCount: 2, applying: false, applied: true, readOnly: false))
         #expect(!S.canApply(selectedCount: 2, applying: false, applied: false, readOnly: true))
+        #expect(!S.canApply(selectedCount: 2, applying: false, applied: false, readOnly: false, reloading: true),
+                "never on a plan that is being recomputed")
         // The confirmation says the override and the archive-only sentence in words, when they apply.
         let plain = S.confirmMessage(.empty)
         #expect(!plain.contains("against the bar") && !plain.contains("only in the Master Archive"))
@@ -248,6 +254,7 @@ struct PruneApplyTests {
         let list = PruneChecklist.build(f.shown)
         #expect(list.hiddenRowCount == 0)
         #expect(list.items.count == 1 + f.family.rows.count)
+        #expect(list.visibleIDs == Set(f.family.rows.map(\.id)))
         guard case .family(let name, _, let level, let advice) = list.items[0].kind else {
             Issue.record("first item is the family header"); return
         }
@@ -257,6 +264,83 @@ struct PruneApplyTests {
         let capped = PruneChecklist.build(f.shown, maxRows: 1)
         #expect(capped.items.count == 2 && capped.hiddenRowCount == f.family.rows.count - 1)
         #expect(PruneChecklist.build(.empty) == .empty)
+    }
+
+    // MARK: QA RED tests (2026-09-20 review of 91390deb) — green since the fix commit
+
+    @Test("QA RED: an attestation withdrawn since the list was shown must HOLD the checked copy, not quietly record an override the person never confirmed")
+    func attestationWithdrawnSinceTheListWasShownHoldsTheCopy() async throws {
+        let f = try await fixture("prune_withdrawn"); defer { f.sb.cleanup() }
+        // The sheet the person confirmed: covered, no override sentence.
+        #expect(f.shown.selection([f.dup.id]).overrideCount == 0)
+        // Another window withdraws the cloud attestation before Apply.
+        await f.model.recordAttestation(kind: .cloud, answer: .no, for: f.ids).flush?.value
+        let out = await apply(f, selected: [f.dup.id])
+        // Pins VideoScanModel+PruneApply.swift:98-113 (pruneTargets) / :208-218 (judged on fresh only).
+        #expect(out.trashed == 0 && out.overrideCount == 0, "a bar verdict that got STRICTER since the sheet was shown is a change, not a decision — \(out)")
+        #expect(out.held.count == 1 && out.held[0].hasPrefix(f.dup.filename), "the held copy is named — \(out.held)")
+        #expect(FileManager.default.fileExists(atPath: f.dup.fullPath))
+        await f.model.mediaLedger.waitForPendingWrites()
+        #expect(!f.model.mediaLedger.allEvents().contains { $0.event == .approval }, "nothing approved")
+    }
+
+    @Test("QA RED: in a not-covered family the hinted keeper (left unchecked) is still checked on disk before the dup goes")
+    func theHintedKeeperIsCheckedOnDiskInANotCoveredFamily() async throws {
+        let f = try await fixture("prune_override_keeper", attested: false); defer { f.sb.cleanup() }
+        try #require(f.family.keeper == nil, "fixture: the not-covered branch elects no keeper (PrunePlan.swift:689)")
+        try #require(f.family.rows.contains { $0.planKeeps == .keeper && $0.id == f.keeper.id })
+        // The working copy the plan hinted it would keep is rewritten in place.
+        try Data(count: 10).write(to: URL(fileURLWithPath: f.keeper.fullPath))
+        let out = await apply(f, selected: [f.dup.id])
+        // Pins VideoScanModel+PruneApply.swift:173-177 (keeperOf built from family.keeper, nil here).
+        #expect(out.trashed == 0 && out.held.first?.contains("working copy to keep") == true,
+                "the only other working copy is not what the catalog recorded — \(out)")
+        #expect(FileManager.default.fileExists(atPath: f.dup.fullPath))
+    }
+
+    @Test("QA RED: the 200-row cap must never hide a row that is checked by default (Tidy backlog is routinely > 200 rows)")
+    func defaultChecksNeverHideBehindTheCap() {
+        // Fixture amended by feature-dev with QA's assertions kept intact:
+        // the fix lists every default-checked family in full, so for the
+        // cap to bite at all the batch needs families WITHOUT a default
+        // check — ★★★ with no attestation (not covered: checkable, unchecked).
+        // They come FIRST in plan order, so the test also proves the
+        // default-checked families are listed wherever they sit.
+        var families: [[ArchiveCopySnapshot]] = []
+        let n = PruneChecklist.maxRows / 2 + 5
+        for i in 0..<n {
+            let key = "h:u\(i)"
+            let arch = ArchiveCopySnapshot(id: UUID(), filename: "u\(i).mov", fullPath: "/A/u\(i).mov", volumeName: "FamilyArchive",
+                                           sizeBytes: 10, contentKey: key, isArchiveCopy: true, fixityVerified: true,
+                                           starRating: 3, volumeIsConnectedWorking: false)
+            let dup = ArchiveCopySnapshot(id: UUID(), filename: "u\(i).mov", fullPath: "/W/u\(i).mov", volumeName: "LaCie",
+                                          sizeBytes: 10, contentKey: key, starRating: 3, volumeFreeBytes: 100)
+            families.append([arch, dup])
+        }
+        for i in 0..<n {
+            let key = "h:\(i)"
+            let arch = ArchiveCopySnapshot(id: UUID(), filename: "a\(i).mov", fullPath: "/A/a\(i).mov", volumeName: "FamilyArchive",
+                                           sizeBytes: 10, contentKey: key, isArchiveCopy: true, fixityVerified: true,
+                                           starRating: 1, volumeIsConnectedWorking: false)
+            let dup = ArchiveCopySnapshot(id: UUID(), filename: "a\(i).mov", fullPath: "/W/a\(i).mov", volumeName: "LaCie",
+                                          sizeBytes: 10, contentKey: key, starRating: 1, volumeFreeBytes: 100)
+            families.append([arch, dup])
+        }
+        let plan = PrunePlan.compute(families: families, options: .init(keepOne: false))
+        #expect(plan.defaultSelection.count == n && plan.checkableCount == 2 * n, "fixture: half the dups are default checks")
+        let list = PruneChecklist.build(plan)
+        try? #require(list.hiddenRowCount > 0, "fixture: the cap bites")
+        let visible = Set(list.items.compactMap { if case .copy(let r) = $0.kind { return r.id } else { return nil } })
+        let hiddenButChecked = plan.defaultSelection.subtracting(visible)
+        // Pins ArchivedWhatNextSheet.swift:242 (selected = p.defaultSelection) vs :395-404 (the cap).
+        #expect(hiddenButChecked.isEmpty,
+                "\(hiddenButChecked.count) copies would go to the Trash that the person could not see or uncheck")
+        #expect(list.visibleIDs == visible, "visibleIDs is what the list shows — the sheet seeds its checks from it")
+        #expect(visible.count == 2 * n + PruneChecklist.maxRows && list.hiddenRowCount == 2 * n - PruneChecklist.maxRows,
+                "default-checked families in full (\(2 * n) rows), then the cap on the rest")
+        // The default-checked families are listed first, whatever their plan order.
+        guard case .family(let name, _, _, _) = list.items[0].kind else { Issue.record("a header first"); return }
+        #expect(name.hasPrefix("a"), "the ★ family with a default check leads, not the ★★★ one that came first: \(name)")
     }
 
     /// Sensor: Apply is a plan in front of the ONE Trash routine — it owns
