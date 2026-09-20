@@ -39,6 +39,11 @@ struct CleanupIsolationTests {
               let e = FileManager.default.enumerator(atPath: root.path) else { return [:] }
         var snap: [String: String] = [:]
         for case let rel as String in e {
+            // Product state only: the team-channel mailbox, the channel
+            // watcher and the gh-codex relay are written by OTHER processes
+            // (codex, hooks) at any moment — nightly 2026-09-20 failed on
+            // team-channel/team-channel.sqlite3-shm alone (codex #1585).
+            if rel.hasPrefix("team-channel") || rel.hasPrefix("channel-watcher") || rel.hasPrefix("gh-codex") { continue }
             let full = root.appendingPathComponent(rel).path
             let attrs = (try? FileManager.default.attributesOfItem(atPath: full)) ?? [:]
             let size = (attrs[.size] as? NSNumber)?.int64Value ?? -1
