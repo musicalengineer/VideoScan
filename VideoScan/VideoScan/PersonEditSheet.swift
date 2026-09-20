@@ -327,9 +327,15 @@ struct PersonEditSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("pf.edit.maidenname")
                         .help("Optional. The family tree files many women under their birth name, so both the married and maiden forms find this person.")
-                    TextField("Aliases (comma-separated)", text: $aliasText)
+                    // The FIRST family name is what the People tab shows
+                    // (Rick 2026-09-12 / 2026-09-19: no separate display
+                    // field — one source of truth, said out loud here).
+                    TextField("Family names, comma-separated — the first is shown", text: $aliasText)
                         .textFieldStyle(.roundedBorder)
-                        .help("Alternate names that might appear in video filenames or metadata")
+                        .help("What the family calls this person. The FIRST one is the display name in the People tab; all of them are names Hallie and Find Person answer to.")
+                    Text("Shows as: " + POIProfile.displayName(name: name, aliases: aliasText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("person-edit-shows-as")
                     TextField("Titles (comma-separated)", text: $titleText)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("pf.edit.titles")

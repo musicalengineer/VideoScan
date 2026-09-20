@@ -543,8 +543,10 @@ extension PersonFinderView {
                    imageSize: personImageSize,
                    cardWidth: personCardWidth,
                    nameFontSize: personNameFontSize,
-                   relationshipsLine: kinshipCenter.relationshipsLine(
-                       for: profile, among: model.savedProfiles),
+                   // No relationship caption under the name (Rick 2026-09-19:
+                   // "we all know each other in the family"). The line still
+                   // exists for the edit sheet and Hallie; the card stays quiet.
+                   relationshipsLine: nil,
                    warnings: warnings,
                    onWarningAction: { action in
                        performWarningAction(action, on: profile)

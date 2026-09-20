@@ -749,6 +749,8 @@ final class PersonFinderModel: ObservableObject {
     @discardableResult
     func updateProfile(_ updated: POIProfile, oldName: String? = nil) -> ProfileSaveOutcome {
         let outcome = ProfileSaveOutcome.saved
+        // Audit (Rick 2026-09-19): what the profile said BEFORE this write.
+        let before = savedProfiles.first(where: { $0.uuid == updated.uuid })
         do {
             // Folders are keyed by uuid (2026-09-12): a rename is this one
             // JSON write. `oldName` only tells us which settings / jobs to
@@ -763,6 +765,7 @@ final class PersonFinderModel: ObservableObject {
 
         // Editor snapshots may carry a stale photo path. Refresh every consumer.
         let updated = savedProfiles.first(where: { $0.uuid == updated.uuid }) ?? updated
+        POIProfileAudit.record(action: before == nil ? .added : .edited, before: before, after: updated)
 
         // If the edited person is the currently active one, sync settings —
         // by uuid; by (pre-edit) name only for settings written before the
@@ -882,6 +885,7 @@ final class PersonFinderModel: ObservableObject {
         }
         osLog.info("deletePOI: moved \(name, privacy: .public) (\(profile.id, privacy: .public)) → \(dest.path, privacy: .public)")
         appLog.write("[people] deleted '\(name)' \(profile.id) → \(dest.path)")
+        POIProfileAudit.record(action: .deleted, before: profile, after: nil)
 
         // 3. Refresh in-memory gallery. Clear active selection / loaded
         //    reference faces if this was the person being inspected, so the
@@ -949,6 +953,11 @@ final class PersonFinderModel: ObservableObject {
         case .restored(let dest):
             osLog.info("undoLastDelete: restored \(snap.name, privacy: .public) ← \(dest.path, privacy: .public)")
             savedProfiles = POIProfile.listAll()
+            if let back = savedProfiles.first(where: { $0.uuid == snap.uuid }) {
+                POIProfileAudit.record(action: .restored, before: nil, after: back)
+            } else {
+                appLog.write("[people] restored '\(snap.name)' \(snap.uuid.uuidString) ← \(dest.path)")
+            }
             lastDeletedPOI = nil
             lastUndoError = nil
             return true
