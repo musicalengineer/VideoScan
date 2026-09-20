@@ -14,6 +14,11 @@
 // lifting the inspector out, which is a real change to how state is
 // threaded rather than a move. Left deliberately for a session with
 // someone reviewing.
+//
+// 2026-09-20: "Add document…" joined the card's context menu and a small
+// doc.text chip (with the count) appears lower-left when a person has
+// papers filed — birth/death/marriage certificates, Rick's ask after
+// finding Mary C O'Connor's birth certificate from Ireland.
 
 import SwiftUI
 import AppKit
@@ -83,6 +88,11 @@ struct FamilyTreePersonCard: View {
     /// Research Person… (2026-08-29): sourced dossier for a deceased
     /// tree person, told to Hallie once confirmed.
     let onResearch: () -> Void
+    /// Papers filed for this person (2026-09-20). The count is a dictionary
+    /// hit on the model — never a disk read per card — and the chip is
+    /// drawn only when ≥ 1, like the bookmark.
+    var documentCount: Int = 0
+    var onAddDocument: () -> Void = {}
 
     private var person: FamilyTreePersonSummary { card.person }
     private var accent: Color { person.sex.accent }
@@ -216,6 +226,28 @@ struct FamilyTreePersonCard: View {
                     .accessibilityAddTraits(.isButton)
             }
         }
+        .overlay(alignment: .bottomLeading) {
+            // Lower-left, opposite the bookmark: "this person has papers".
+            // Same rule as the bookmark — drawn only when there is
+            // something to say, so a bare canvas stays bare.
+            if documentCount > 0 {
+                HStack(spacing: 3) {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("\(documentCount)")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(palette.overlayInk.opacity(0.10))
+                .clipShape(Capsule())
+                .padding(8)
+                .help("\(documentCount) document\(documentCount == 1 ? "" : "s") filed — see the Documents section")
+                .accessibilityLabel("\(documentCount) documents")
+                .accessibilityIdentifier("tree.person.documentChip")
+            }
+        }
         .shadow(color: .black.opacity(0.35), radius: 10, y: 6)
         .contentShape(Rectangle())
         // Order matters: SwiftUI gives the earlier `count: 2` recognizer
@@ -255,6 +287,11 @@ struct FamilyTreePersonCard: View {
             }
             Divider()
             photoMenuItems
+            Button("Add document…", systemImage: "doc.badge.plus") {
+                onSelect()
+                onAddDocument()
+            }
+            .accessibilityIdentifier("tree.person.addDocument")
             Divider()
             if let record = detailedRecordText() {
                 Button("Copy person's detailed record", systemImage: "doc.on.doc") {

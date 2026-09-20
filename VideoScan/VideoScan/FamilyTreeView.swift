@@ -83,6 +83,10 @@ struct FamilyTreeView: View {
     /// goes to the alert instead.
     @State private var researchTarget: ResearchTarget?
     @State private var researchRefusal: String?
+    /// Add document… (2026-09-20): the person the sheet is for, and the
+    /// last add/remove failure shown under the inspector's Documents list.
+    @State private var documentAddTarget: FamilyDocumentAddTarget?
+    @State private var documentsError: String?
 
     // Cross-tab navigation. Both tabs share state via @AppStorage so a
     // right-click in either place can drop the other a hint.
@@ -348,6 +352,7 @@ struct FamilyTreeView: View {
             } message: {
                 Text(researchRefusal ?? "")
             }
+            .sheet(item: $documentAddTarget) { target in documentAddSheet(target) }
             .sheet(item: $identityPickTarget) { target in
                 TreeIdentityPickerSheet(target: target, center: identityCenter,
                                         profiles: POIProfile.cachedSnapshot(),
@@ -1011,7 +1016,9 @@ struct FamilyTreeView: View {
                     showInPeopleTab(named: name)
                 },
                 detailedRecordText: { model.metadataText(for: card.person.id) },
-                onResearch: { presentResearch(for: card.person.id) }
+                onResearch: { presentResearch(for: card.person.id) },
+                documentCount: model.documentCount(for: card.person.id),
+                onAddDocument: { presentAddDocument(for: card.person.id) }
             )
     }
 
@@ -1247,6 +1254,7 @@ struct FamilyTreeView: View {
 
                 if model.isLive, model.selectedPerson != nil {
                     archivistNotesPanel
+                    documentsPanel
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -1639,6 +1647,9 @@ struct FamilyTreeView: View {
             }
             Button("Adjust Photo…") { presentAdjustPhoto(for: person) }
                 .disabled(!model.isLive)
+            Divider()
+            Button("Add document…") { presentAddDocument(for: person.id) }
+                .disabled(!model.isLive)
         } label: {
             Image(systemName: "camera")
         }
@@ -1817,5 +1828,70 @@ struct FamilyTreeView: View {
     private func showInPeopleTab(named name: String) {
         UserDefaults.standard.set(name, forKey: "peopleHighlightedPOIName")
         selectedTab = 0
+    }
+
+    // MARK: Documents (2026-09-20)
+
+    /// The inspector's Documents section. Rows are `model.selectedDocuments`
+    /// (read once per selection, off the main actor); nothing here touches
+    /// the store.
+    private var documentsPanel: some View {
+        FamilyTreeDocumentsPanel(
+            documents: model.selectedDocuments,
+            errorText: documentsError,
+            onAdd: {
+                if let id = model.selectedID { presentAddDocument(for: id) }
+            },
+            onRemove: { removeDocument($0) })
+        .padding(14)
+        .background(panelBackground)
+    }
+
+    /// The Add document… sheet body; a success drops the model's memo for
+    /// that person so the list and the card chip re-read at once.
+    private func documentAddSheet(_ target: FamilyDocumentAddTarget) -> some View {
+        FamilyDocumentAddSheet(
+            target: target,
+            onAdded: { _ in
+                documentsError = nil
+                model.noteDocumentsChanged(for: target.id)
+                documentAddTarget = nil
+            },
+            onCancel: { documentAddTarget = nil })
+    }
+
+    private func presentAddDocument(for personID: String) {
+        model.select(personID)
+        guard let assetPerson = model.assetPerson(for: personID) else {
+            documentsError = "Documents can be added to people from your GEDCOM."
+            return
+        }
+        documentsError = nil
+        documentAddTarget = FamilyDocumentAddTarget(
+            id: personID, personName: assetPerson.name, assetPerson: assetPerson)
+    }
+
+    /// Off the main actor, like every store write here; the file goes to
+    /// Documents/.trash and the list is re-read through the model.
+    private func removeDocument(_ document: PersonDocument) {
+        guard let personID = model.selectedID, let assetPerson = model.assetPerson(for: personID) else { return }
+        let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
+        Task {
+            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<Void, Error> in
+                do {
+                    try configuration.makeStore().removeDocument(document, for: assetPerson)
+                    return .success(())
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+            switch outcome {
+            case .success:
+                documentsError = nil
+                model.noteDocumentsChanged(for: personID)
+            case .failure(let error):
+                documentsError = "Couldn’t remove \(document.originalFilename): \(error.localizedDescription)"
+            }
+        }
     }
 }
