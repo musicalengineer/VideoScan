@@ -13,66 +13,67 @@
 // documentation gets forgotten by whoever writes the dedup UI in three
 // weeks — possibly me. So the rule is a TYPE: to delete a duplicate you
 // must hold a `VerifiedDuplicate`, and the only way to obtain one is to
-// have compared every byte.
+// have compared every byte of the file about to be deleted against a
+// whole-file digest of its keeper.
 //
 //     segmented hash equal   → CANDIDATE      (cheap, fleet-wide)
 //     full hash equal        → VerifiedDuplicate (expensive, per pair)
 //
-// The asymmetry is deliberate: candidates are generated in minutes
-// across a whole catalog, and verification is paid only on the handful
-// of pairs a human is actually about to act on. That is the entire
-// reason for having two hashes.
+// TWO WAYS TO EARN THE PROOF (Rick 2026-09-20 — "Delete 2,992 files"
+// read BOTH files of every pair in full, hours with nothing to look at):
+//
+//   1. `verify(keeperPath:duplicatePath:)` — the original two-file path.
+//      Both sides are read in full and hashed fresh.
+//   2. `verifyAgainstStoredKeeper(...)` — the keeper is NOT read. Its
+//      stored `ContentFixity` (whole-file digest + stat stamp from the
+//      one time it was read) must reproduce under a fresh `stat`; then
+//      only the DUPLICATE is read in full and its digest compared. If
+//      the keeper has no fixity, or its stamp changed, this falls back to
+//      path 1 ONCE and hands back the keeper's fresh fixity to be stored,
+//      so the next pair with that keeper takes path 2.
+//
+// Either way the file that gets deleted is read end to end at the moment
+// of deletion. Nothing stored — not `contentHash`, not `partialMD5`, not
+// a fixity — ever authorises a delete on its own.
 
 import Foundation
 import Darwin
 import CryptoKit
-
-/// Filesystem identity and mutation stamp captured with one `stat` call.
-/// Device + inode detects path replacement; size + nanosecond mtime detects
-/// an in-place rewrite. The verification gate samples both before and after
-/// hashing, then the deletion path samples once more immediately before
-/// unlinking the duplicate. `stat` deliberately follows symlinks, matching
-/// FileHasher's open/read behavior so the identity describes the bytes hashed.
-fileprivate struct VerifiedFileIdentity: Equatable {
-    let device: UInt64
-    let inode: UInt64
-    let size: Int64
-    let modifiedSeconds: Int64
-    let modifiedNanoseconds: Int64
-
-    static func capture(path: String) -> VerifiedFileIdentity? {
-        var info = stat()
-        guard stat(path, &info) == 0 else { return nil }
-        return VerifiedFileIdentity(
-            device: UInt64(info.st_dev),
-            inode: UInt64(info.st_ino),
-            size: Int64(info.st_size),
-            modifiedSeconds: Int64(info.st_mtimespec.tv_sec),
-            modifiedNanoseconds: Int64(info.st_mtimespec.tv_nsec))
-    }
-}
+import VideoScanCore
 
 /// Proof that two paths hold byte-identical content.
 ///
-/// Deliberately has no public initializer: the ONLY way to hold one is
-/// `SignatureVerification.verify`, which reads both files in full. A
-/// deletion API that takes this type cannot be called on unverified
-/// candidates, which is the point — the compiler enforces what a comment
-/// could only request.
-struct VerifiedDuplicate: Equatable {
+/// Deliberately has no public initializer: the ONLY ways to hold one are
+/// `SignatureVerification.verify` and `verifyAgainstStoredKeeper`, both of
+/// which read the duplicate in full. A deletion API that takes this type
+/// cannot be called on unverified candidates, which is the point — the
+/// compiler enforces what a comment could only request.
+struct VerifiedDuplicate: Equatable, Sendable {
     let keeperPath: String
     let duplicatePath: String
-    /// Full-file digest both sides produced.
+    /// Whole-file SHA-256 (lowercase hex) both sides produced.
     let fullHash: String
     let verifiedAt: Date
     let duplicateSize: Int64
-    fileprivate let keeperIdentity: VerifiedFileIdentity
-    fileprivate let duplicateIdentity: VerifiedFileIdentity
+    /// The keeper's whole-file fixity: freshly computed when
+    /// `keeperReadInFull`, otherwise the stored one that stood in for
+    /// the read. Callers store it on the keeper record when it is fresh.
+    let keeperFixity: ContentFixity
+    /// The duplicate's fixity — moot once the file is gone, harmless to
+    /// keep for the log.
+    let duplicateFixity: ContentFixity
+    /// True when this proof cost a full read of the keeper (path 1).
+    let keeperReadInFull: Bool
+    fileprivate let keeperIdentity: FileIdentityStamp
+    fileprivate let duplicateIdentity: FileIdentityStamp
 
     fileprivate init(keeperPath: String, duplicatePath: String,
                      fullHash: String, verifiedAt: Date,
-                     keeperIdentity: VerifiedFileIdentity,
-                     duplicateIdentity: VerifiedFileIdentity) {
+                     keeperIdentity: FileIdentityStamp,
+                     duplicateIdentity: FileIdentityStamp,
+                     keeperFixity: ContentFixity,
+                     duplicateFixity: ContentFixity,
+                     keeperReadInFull: Bool) {
         self.keeperPath = keeperPath
         self.duplicatePath = duplicatePath
         self.fullHash = fullHash
@@ -80,6 +81,9 @@ struct VerifiedDuplicate: Equatable {
         self.duplicateSize = duplicateIdentity.size
         self.keeperIdentity = keeperIdentity
         self.duplicateIdentity = duplicateIdentity
+        self.keeperFixity = keeperFixity
+        self.duplicateFixity = duplicateFixity
+        self.keeperReadInFull = keeperReadInFull
     }
 }
 
@@ -87,6 +91,8 @@ enum SignatureVerification {
 
     struct Hooks: @unchecked Sendable {
         var shouldCancel: () -> Bool
+        /// Called once per block read, with "keeper" or "duplicate" — the
+        /// seam tests use to count WHICH files were read.
         var didReadBlock: ((String) -> Void)?
         var didQuarantine: ((String) -> Void)?
         var removeQuarantineDirectory: ((URL) throws -> Void)?
@@ -109,6 +115,8 @@ enum SignatureVerification {
         case cancelled
     }
 
+    // MARK: Path 1 — both files read in full
+
     /// Compare two files byte-for-byte, via full-file digests.
     ///
     /// Expensive on purpose. Reads every byte of both files, so it is
@@ -117,16 +125,18 @@ enum SignatureVerification {
     /// Both sides are hashed FRESH at verification time rather than
     /// trusting anything stored: a signature computed last month says
     /// nothing about the bytes on disk right now, and the window between
-    /// "decided to delete" and "deleted" is the one that matters.
+    /// "decided to delete" and "deleted" is the one that matters. (The
+    /// stored-fixity path below is the ONE exception, and it is guarded by
+    /// a fresh stat stamp of the keeper.)
     static func verify(keeperPath: String, duplicatePath: String,
                        hooks: Hooks = .live)
         -> Result<VerifiedDuplicate, Failure> {
 
         guard keeperPath != duplicatePath else { return .failure(.samePath) }
 
-        guard let keeperBefore = VerifiedFileIdentity.capture(path: keeperPath)
+        guard let keeperBefore = FileIdentityStamp.capture(path: keeperPath)
         else { return .failure(.unreadable(keeperPath)) }
-        guard let duplicateBefore = VerifiedFileIdentity.capture(path: duplicatePath)
+        guard let duplicateBefore = FileIdentityStamp.capture(path: duplicatePath)
         else { return .failure(.unreadable(duplicatePath)) }
 
         // Refusal accelerators (Rick 2026-08-17: a LaCie pass with ~1,400
@@ -162,35 +172,112 @@ enum SignatureVerification {
 
         guard !hooks.shouldCancel() else { return .failure(.cancelled) }
 
-        guard let keeperAfter = VerifiedFileIdentity.capture(path: keeperPath),
+        guard let keeperAfter = FileIdentityStamp.capture(path: keeperPath),
               keeperAfter == keeperBefore else {
             return .failure(.changedSinceVerification(keeperPath))
         }
-        guard let duplicateAfter = VerifiedFileIdentity.capture(path: duplicatePath),
+        guard let duplicateAfter = FileIdentityStamp.capture(path: duplicatePath),
               duplicateAfter == duplicateBefore else {
             return .failure(.changedSinceVerification(duplicatePath))
         }
 
         guard keeperHash == duplicateHash else { return .failure(.contentDiffers) }
 
+        let now = Date()
         return .success(VerifiedDuplicate(
             keeperPath: keeperPath,
             duplicatePath: duplicatePath,
             fullHash: keeperHash,
-            verifiedAt: Date(),
+            verifiedAt: now,
             keeperIdentity: keeperAfter,
-            duplicateIdentity: duplicateAfter))
+            duplicateIdentity: duplicateAfter,
+            keeperFixity: ContentFixity(digest: keeperHash, byteCount: keeperAfter.size,
+                                        stamp: keeperAfter, computedAt: now),
+            duplicateFixity: ContentFixity(digest: duplicateHash, byteCount: duplicateAfter.size,
+                                           stamp: duplicateAfter, computedAt: now),
+            keeperReadInFull: true))
+    }
+
+    // MARK: Path 2 — keeper by stored fixity, duplicate read in full
+
+    /// Verify a duplicate against a keeper WITHOUT re-reading the keeper,
+    /// when the keeper's stored whole-file fixity still describes the
+    /// file on disk (fresh `stat` reproduces the stamp). The duplicate is
+    /// read in full, its identity checked before and after the read, and
+    /// its digest must equal the stored one with equal sizes.
+    ///
+    /// Falls back to `verify` (both files read) when there is no fixity,
+    /// the fixity is not sha256, or the keeper's stamp changed — the
+    /// returned proof then carries the keeper's FRESH fixity
+    /// (`keeperReadInFull == true`) for the caller to store.
+    static func verifyAgainstStoredKeeper(keeperPath: String,
+                                          keeperFixity: ContentFixity?,
+                                          duplicatePath: String,
+                                          hooks: Hooks = .live)
+        -> Result<VerifiedDuplicate, Failure> {
+
+        guard keeperPath != duplicatePath else { return .failure(.samePath) }
+        guard let keeperBefore = FileIdentityStamp.capture(path: keeperPath)
+        else { return .failure(.unreadable(keeperPath)) }
+
+        // No usable stored fixity → the two-file path, once.
+        guard let fixity = keeperFixity,
+              fixity.algorithm == ContentFixity.sha256,
+              fixity.stampMatches(keeperBefore) else {
+            return verify(keeperPath: keeperPath, duplicatePath: duplicatePath, hooks: hooks)
+        }
+
+        guard let duplicateBefore = FileIdentityStamp.capture(path: duplicatePath)
+        else { return .failure(.unreadable(duplicatePath)) }
+        // Different sizes can never be identical bytes — refuse before
+        // reading anything.
+        guard duplicateBefore.size == fixity.byteCount else {
+            return .failure(.contentDiffers)
+        }
+
+        guard !hooks.shouldCancel() else { return .failure(.cancelled) }
+        let duplicateHash = cancellableFullHash(
+            path: duplicatePath, label: "duplicate", hooks: hooks)
+        guard !hooks.shouldCancel() else { return .failure(.cancelled) }
+        guard !duplicateHash.isEmpty else { return .failure(.unreadable(duplicatePath)) }
+
+        // Identity re-check on BOTH sides after the read: the keeper must
+        // still be the file the fixity describes, the duplicate the one
+        // just hashed.
+        guard let keeperAfter = FileIdentityStamp.capture(path: keeperPath),
+              keeperAfter == keeperBefore else {
+            return .failure(.changedSinceVerification(keeperPath))
+        }
+        guard let duplicateAfter = FileIdentityStamp.capture(path: duplicatePath),
+              duplicateAfter == duplicateBefore else {
+            return .failure(.changedSinceVerification(duplicatePath))
+        }
+
+        guard duplicateHash == fixity.digest else { return .failure(.contentDiffers) }
+
+        let now = Date()
+        return .success(VerifiedDuplicate(
+            keeperPath: keeperPath,
+            duplicatePath: duplicatePath,
+            fullHash: duplicateHash,
+            verifiedAt: now,
+            keeperIdentity: keeperAfter,
+            duplicateIdentity: duplicateAfter,
+            keeperFixity: fixity,
+            duplicateFixity: ContentFixity(digest: duplicateHash, byteCount: duplicateAfter.size,
+                                           stamp: duplicateAfter, computedAt: now),
+            keeperReadInFull: false))
     }
 
     /// Revalidate the exact path identities captured by `verify`. This must
     /// be called immediately before a destructive action; a matching digest
     /// from moments ago is not authority to delete after either path changed.
     static func revalidate(_ proof: VerifiedDuplicate) -> Result<Void, Failure> {
-        guard VerifiedFileIdentity.capture(path: proof.keeperPath)
+        guard FileIdentityStamp.capture(path: proof.keeperPath)
                 == proof.keeperIdentity else {
             return .failure(.changedSinceVerification(proof.keeperPath))
         }
-        guard VerifiedFileIdentity.capture(path: proof.duplicatePath)
+        guard FileIdentityStamp.capture(path: proof.duplicatePath)
                 == proof.duplicateIdentity else {
             return .failure(.changedSinceVerification(proof.duplicatePath))
         }
@@ -232,9 +319,9 @@ enum SignatureVerification {
 
         hooks.didQuarantine?(quarantined.path)
 
-        let quarantineMatches = VerifiedFileIdentity.capture(path: quarantined.path)
+        let quarantineMatches = FileIdentityStamp.capture(path: quarantined.path)
             == proof.duplicateIdentity
-        let keeperMatches = VerifiedFileIdentity.capture(path: proof.keeperPath)
+        let keeperMatches = FileIdentityStamp.capture(path: proof.keeperPath)
             == proof.keeperIdentity
         let originalOccupied = FileManager.default.fileExists(atPath: original.path)
         guard quarantineMatches, keeperMatches, !originalOccupied,
@@ -329,6 +416,15 @@ enum SignatureVerification {
         return a == b
     }
 
+    /// Whole-file SHA-256 as lowercase hex — the SAME value
+    /// `CatalogStore.sha256HexStreaming` and the archive manifest carry, so
+    /// a fixity written by Promote / Verify Archive is comparable here and
+    /// vice versa. (Until 2026-09-20 this seeded the digest with
+    /// "full:<size>:", which made it incomparable with every other sha256
+    /// in the app; the size is compared separately by every caller.)
+    /// Streams in `blockSize` blocks — bounded memory regardless of file
+    /// size (worst case: one 1 MiB buffer). Returns "" on any I/O error,
+    /// cancellation, or a size change mid-read.
     private static func cancellableFullHash(path: String, label: String,
                                             hooks: Hooks,
                                             blockSize: Int = FileHasher.segmentSize) -> String {
@@ -342,7 +438,6 @@ enum SignatureVerification {
               info.st_size > 0 else { return "" }
         let expectedSize = Int(info.st_size)
         var sha = SHA256()
-        sha.update(data: Data("full:\(expectedSize):".utf8))
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: blockSize, alignment: 16)
         defer { buffer.deallocate() }
         var total = 0
@@ -360,7 +455,7 @@ enum SignatureVerification {
             }
         }
         guard !hooks.shouldCancel(), total == expectedSize else { return "" }
-        return "full:" + sha.finalize().map { String(format: "%02x", $0) }.joined()
+        return sha.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// Human-facing description of what a matching signature does and

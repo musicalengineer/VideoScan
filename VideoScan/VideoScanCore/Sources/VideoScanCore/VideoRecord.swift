@@ -562,6 +562,15 @@ public class VideoRecord: Identifiable, Decodable {
     /// nil, the DTO encodes the key only when present, old catalog.json
     /// files round-trip byte-identical.
     public var archiveFixity: ArchiveFixity?
+    /// Whole-file fixity for ANY record (2026-09-20, ContentFixity.swift):
+    /// set whenever this app has read the file end to end — a duplicate
+    /// keeper on its first verification, an archive copy at promotion or
+    /// audit. Digest + the stat stamp of the file it describes, so a later
+    /// verification can stat the keeper instead of re-reading it. NEVER an
+    /// authority to delete on its own: the file being deleted is always
+    /// read in full (design #320). Additive optional — older catalogs
+    /// decode nil and round-trip byte-identical.
+    public var contentFixity: ContentFixity?
     /// When this record landed in the Master Archive (Promote's stamp). Set
     /// ONLY by Promote on the archive copy; never overwritten by Verify
     /// (whose re-read refreshes `archiveFixity.verifiedAt`). Rick 2026-09-09:
@@ -754,6 +763,8 @@ public class VideoRecord: Identifiable, Decodable {
         repairConfirmedDate         = try c.decodeIfPresent(Date.self, forKey: .repairConfirmedDate)
         // Master Archive fixity (2026-08-15) — additive optional.
         archiveFixity               = try c.decodeIfPresent(ArchiveFixity.self, forKey: .archiveFixity)
+        // Whole-file fixity for any record (2026-09-20) — additive optional.
+        contentFixity               = try c.decodeIfPresent(ContentFixity.self, forKey: .contentFixity)
         archivedAt                  = try c.decodeIfPresent(Date.self, forKey: .archivedAt)
         // Relocate provenance. Legacy catalogs (no keys) decode as nil and
         // remain treated as "never relocated." Once set on first migration

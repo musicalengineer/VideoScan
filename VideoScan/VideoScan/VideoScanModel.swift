@@ -108,6 +108,11 @@ final class VideoScanModel: ObservableObject {
     @Published var isCorrelating: Bool = false
     @Published var isAnalyzingDuplicates: Bool = false
     @Published var isDeletingDuplicates: Bool = false
+    /// An unfinished Delete Duplicates plan found at launch (Rick
+    /// 2026-09-20: quit + resume). Set by
+    /// `checkForUnfinishedDeleteDuplicatesPlans`; the MFO window and the
+    /// main window OFFER Resume / Discard. Never resumed automatically.
+    @Published var pendingDeleteDuplicatesResume: DeleteDuplicatesPlan?
     /// Scan-target IDs currently undergoing a Verify pass. Verify uses
     /// `target.status = .scanning` for its lifecycle plumbing, so this set
     /// is the only way to distinguish a verify from a fresh scan in the UI.

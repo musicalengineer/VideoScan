@@ -365,6 +365,9 @@ struct CatalogView: View {
     /// copies" mode) — see WorkingCopyCleanupText.confirmation.
     @State private var deleteTargetSummary: String = ""
     @State private var deleteTargetCrossMode: Bool = false
+    /// "Not Now" on the resume offer: the alert stays down for this
+    /// session; the MFO window's banner still offers Resume / Discard.
+    @State private var dismissedResumeOffer = false
     // showVolumeCompare retired 2026-06-07 — Compare moved from a
     // modal sheet to its own Window scene (id: "compare") to eliminate
     // beachballing during multi-hour rescue copies. Button now calls
@@ -978,12 +981,30 @@ struct CatalogView: View {
         }
         .alert("Delete Duplicates", isPresented: $showDeleteDuplicatesConfirm) {
             Button("Delete \(deleteTargetCount) Files", role: .destructive) {
-                Task { await model.deleteDuplicates(onVolume: deleteTargetVolume) }
+                // A Media File Operation since 2026-09-20: DELETE row,
+                // progress in bytes, rate + ETA, Pause/Stop, a saved plan
+                // for resume, and the file list on click.
+                fileOpsCenter.startDeleteDuplicates(onVolume: deleteTargetVolume, model: model)
+                MediaFileOperationsWindowOpener.openInFront(openWindow)
             }
             .disabled(model.isReadOnly || model.isDeletingDuplicates)
             Button("Cancel", role: .cancel) { }
         } message: {
             Text(deleteDuplicatesConfirmMessage)
+        }
+        .alert("Resume Deleting Duplicates?",
+               isPresented: Binding(
+                   get: { model.pendingDeleteDuplicatesResume != nil && !dismissedResumeOffer },
+                   set: { shown in if !shown { dismissedResumeOffer = true } }),
+               presenting: model.pendingDeleteDuplicatesResume) { plan in
+            Button("Resume") {
+                fileOpsCenter.resumeDeleteDuplicates(plan: plan, model: model)
+                MediaFileOperationsWindowOpener.openInFront(openWindow)
+            }
+            Button("Discard", role: .destructive) { model.discardPendingDeleteDuplicatesPlan() }
+            Button("Not Now", role: .cancel) { dismissedResumeOffer = true }
+        } message: { plan in
+            Text(plan.resumeOffer + "\n\nA run was interrupted (quit or crash). Nothing resumes on its own: every remaining file is re-checked against the catalog and its keeper before anything is read or removed. Not Now keeps the offer in the Media File Operations window.")
         }
         .alert("Clear & Re-correlate All", isPresented: $showClearRecorrelateConfirm) {
             Button("Clear All Pairs & Re-correlate", role: .destructive) {

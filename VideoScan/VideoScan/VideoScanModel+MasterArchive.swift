@@ -833,6 +833,11 @@ extension VideoScanModel {
         // `contentHash` (the segmented candidate signature).
         copy.archiveFixity = ArchiveFixity(digest: sha256, verifiedAt: promotedAt,
                                            sizeBytes: copy.sizeBytes)
+        // General whole-file fixity (2026-09-20): the read-back already
+        // hashed every byte, so the copy can serve as a stat-checked
+        // keeper in Delete Duplicates without another read.
+        copy.contentFixity = ContentFixity.captured(path: copy.fullPath, digest: sha256,
+                                                    byteCount: copy.sizeBytes, computedAt: promotedAt)
         copy.archivedAt = promotedAt
         copy.starRating = max(source.starRating, 3)
         copy.archiveStage = .masterAssigned
@@ -935,6 +940,8 @@ extension VideoScanModel {
         copy.originalFullPath = sourcePath
         copy.originVolume = VolumeReachability.volumeName(forPath: sourcePath)
         copy.archiveFixity = ArchiveFixity(digest: sha256, verifiedAt: promotedAt, sizeBytes: copy.sizeBytes)
+        copy.contentFixity = ContentFixity.captured(path: copy.fullPath, digest: sha256,
+                                                    byteCount: copy.sizeBytes, computedAt: promotedAt)
         copy.archivedAt = promotedAt
         copy.starRating = 3
         copy.archiveStage = .masterAssigned

@@ -125,6 +125,15 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// on the fast SSD, and stops for review. Never touches the archive
     /// itself — Stage 2 hands the selected rows to Promote.
     case archiveAngel
+    /// "Delete Duplicates" — the verified removal of extra copies on one
+    /// volume as a job (Rick 2026-09-20: "MFO window should show DELETE in
+    /// clear high contrast color, with progress 2 of N, 3 of N deleted,
+    /// and clicking on the row reveals a list of files"). Every file
+    /// deleted is read in full against its keeper's whole-file digest at
+    /// the moment of deletion; the keeper is read at most once ever.
+    /// Pause/Resume between pairs, a saved plan for resume after a quit.
+    /// DeleteDuplicatesJob.
+    case deleteDuplicates
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -149,6 +158,10 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .assessCopies: return "Assess"
         case .verifyArchive: return "Fixity"
         case .archiveAngel: return "Angel"
+        // Upper-case on purpose (the badge is small caps, so "Delete"
+        // would read like every other verb): the one destructive row in
+        // the list must be unmistakable at a glance.
+        case .deleteDuplicates: return "DELETE"
         }
     }
 
@@ -176,6 +189,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .assessCopies: return "assess copies"
         case .verifyArchive: return "verify archive"
         case .archiveAngel: return "archive angel"
+        case .deleteDuplicates: return "delete duplicates"
         }
     }
 }

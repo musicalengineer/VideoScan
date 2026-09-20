@@ -487,6 +487,17 @@ struct VideoScanApp: App {
                         // NOW the daemon may activate: master spawns/
                         // ingests, a viewer stays inert (codex #277 B).
                         catalogModel.activateFindTagBackground()
+                        // Delete Duplicates (2026-09-20): an unfinished
+                        // plan from a quit or crash is OFFERED — never
+                        // resumed — once the catalog is loaded. Off the
+                        // first paint: it reads a few small JSON files.
+                        // Not on a test host: the store root is per-process
+                        // scratch there anyway.
+                        if !TestEnvironment.isTestHost {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak catalogModel] in
+                                catalogModel?.checkForUnfinishedDeleteDuplicatesPlans()
+                            }
+                        }
                         // Archive Angel phase 2: the scoring sweep parks
                         // while an Angel or Promote job is active.
                         catalogModel.isMediaFileOperationBusyForAngel = { [weak fileOpsCenter] in

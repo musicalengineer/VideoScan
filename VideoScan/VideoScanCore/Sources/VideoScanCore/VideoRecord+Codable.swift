@@ -83,6 +83,7 @@ extension VideoRecord {
         case supersededByID
         case repairConfirmedDate
         case archiveFixity
+        case contentFixity
         case archivedAt
     }
 }

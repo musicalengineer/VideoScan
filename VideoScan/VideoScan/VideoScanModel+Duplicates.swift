@@ -1,59 +1,5 @@
 import Foundation
-
-private struct DuplicateDeletionWorkItem: Sendable {
-    let path: String
-    let keeperPath: String
-    let keeperFilename: String
-}
-
-private enum DuplicateDeletionDiskOutcome: Sendable {
-    case deleted(bytes: Int64)
-    case refused(reason: String)
-    case failed(reason: String)
-    case retained(path: String, reason: String)
-}
-
-private enum DuplicateDeletionDiskWorker {
-    /// Full verification and removal run outside the main actor. The worker
-    /// carries only immutable value snapshots — never VideoRecord instances.
-    static func run(_ item: DuplicateDeletionWorkItem,
-                    hooks: SignatureVerification.Hooks)
-        -> DuplicateDeletionDiskOutcome {
-        switch SignatureVerification.verify(keeperPath: item.keeperPath,
-                                             duplicatePath: item.path,
-                                             hooks: hooks) {
-        case .failure(let failure):
-            return .refused(reason: duplicateRefusalNote(
-                failure, keeper: item.keeperFilename))
-        case .success(let proof):
-            switch SignatureVerification.quarantineAndDelete(proof, hooks: hooks) {
-            case .deleted(let bytes): return .deleted(bytes: bytes)
-            case .refused(let failure):
-                return .refused(reason: duplicateRefusalNote(
-                    failure, keeper: item.keeperFilename))
-            case .failed(let reason): return .failed(reason: reason)
-            case .retainedQuarantine(let path, let reason):
-                return .retained(path: path, reason: reason)
-            }
-        }
-    }
-}
-
-private func duplicateRefusalNote(_ failure: SignatureVerification.Failure,
-                                  keeper: String) -> String {
-    switch failure {
-    case .contentDiffers:
-        return "content differs from keeper \(keeper) — NOT a duplicate"
-    case .unreadable(let path):
-        return "could not read \(URL(fileURLWithPath: path).lastPathComponent) to verify"
-    case .samePath:
-        return "keeper and copy are the same file"
-    case .changedSinceVerification(let path):
-        return "\(URL(fileURLWithPath: path).lastPathComponent) changed during verification"
-    case .cancelled:
-        return "verification was cancelled"
-    }
-}
+import VideoScanCore
 
 // MARK: - Duplicate Analysis + Same-Volume Deletion
 //
@@ -63,6 +9,18 @@ private func duplicateRefusalNote(_ failure: SignatureVerification.Failure,
 // surviving copy lives on a different (e.g. backup) volume. The keeper
 // lookup + volumeRoot helpers stay alongside the delete because they're
 // the policy that makes the deletion safe.
+//
+// 2026-09-20 (Rick: "Verifying 1 of 2,992 … hours, nothing to look at"):
+// the verify-and-remove LOOP moved out of this file into
+// DeleteDuplicatesJob — an MFO job with a DELETE chip, bytes-based
+// progress, a rate + ETA, Pause/Resume, Stop, a saved plan that can be
+// offered for resume after a quit, and a detail view listing every file.
+// What stays here is the POLICY the job runs under: the selection, the
+// Master Archive exclusion, the cross-volume safety-snapshot tripwire, the
+// per-pair catalog settlement (carry-over, row removal, ledger, log) and
+// the model verb `deleteDuplicates(onVolume:)` that starts the job and
+// waits for it — same signature and same result tuple as before, so every
+// existing caller and test keeps working.
 
 extension VideoScanModel {
 
@@ -267,26 +225,45 @@ extension VideoScanModel {
             facts: facts)
     }
 
+    // MARK: - Delete Duplicates (the verb — runs a DeleteDuplicatesJob)
+
     /// Delete high-confidence duplicate files on a given volume, but ONLY when
     /// the keeper (the `.keep` file in the same duplicate group) is also on the
-    /// same volume.  This prevents deleting a file whose only surviving copy
-    /// lives on a different (e.g. backup) volume.
+    /// same volume (or, with "Also clean up working copies" ON, on a
+    /// higher-ranked online drive). This prevents deleting a file whose only
+    /// surviving copy lives on a different (e.g. backup) volume.
+    ///
+    /// Since 2026-09-20 the work is a `DeleteDuplicatesJob`: this verb
+    /// builds one WITHOUT registering it in the Media File Operations
+    /// window (the window's Delete button goes through
+    /// `MediaFileOperationsCenter.startDeleteDuplicates` instead), runs it
+    /// to completion and returns the same tuple as before. Cancelling the
+    /// calling Task cancels the job, exactly as cancelling the old loop did.
     @discardableResult
     func deleteDuplicates(onVolume volumePath: String,
                           verificationHooks: SignatureVerification.Hooks = .live) async
         -> (deleted: Int, failed: Int, skipped: Int, bytesFreed: Int64) {
-        guard !isReadOnly else {
-            duplicateStatus = "Deletion unavailable in viewer mode"
-            log("\nREFUSED duplicate deletion on \(volumePath): this Mac is in read-only viewer mode.")
-            return (0, 0, 0, 0)
+        let job = DeleteDuplicatesJob(model: self, volumePath: volumePath, hooks: verificationHooks)
+        job.start()
+        // `withTaskCancellationHandler` ≈ a scope guard whose cleanup runs
+        // the moment the enclosing Task is cancelled — the hop through a
+        // main-actor Task is needed because the handler itself is not
+        // isolated.
+        await withTaskCancellationHandler {
+            await job.task?.value
+        } onCancel: {
+            Task { @MainActor in job.cancel() }
         }
-        guard !isDeletingDuplicates else {
-            log("\nREFUSED duplicate deletion on \(volumePath): another duplicate deletion is already running.")
-            return (0, 0, 0, 0)
-        }
-        isDeletingDuplicates = true
-        defer { isDeletingDuplicates = false }
+        return job.result
+    }
 
+    /// Everything that happens before the first byte is read, in the
+    /// order the old loop did it: selection, Master Archive exclusion, the
+    /// cross-volume safety-snapshot tripwire, the console summary. Returns
+    /// the plan the job will run, or nil when there is nothing to do (the
+    /// reason is already logged). Same log lines as before, so the
+    /// existing sensors keep matching.
+    func prepareDuplicateDeletion(onVolume volumePath: String) async -> DeleteDuplicatesPlan? {
         let selection = duplicateDeletionSelection(onVolume: volumePath)
         // Master Archive files are never bulk-deleted, even as "extras".
         var targets = excludingMasterArchiveFiles(selection.targets, verb: "Delete Duplicates")
@@ -299,14 +276,12 @@ extension VideoScanModel {
             .map { "\($0.count) file(s): \($0.reason)" }
             .joined(separator: "; ")
         let volumeName = URL(fileURLWithPath: volumePath).lastPathComponent
-        // Which of the targets are working copies (master on another
-        // drive) — drives the per-file [WORKING-COPY] log line.
-        let workingCopyIDs: Set<UUID> = selection.crossVolumeMode
-            ? Set(targets.compactMap { rec -> UUID? in
-                guard let g = rec.duplicateGroupID, let k = keepers[g] else { return nil }
-                return PathScope.contains(k.fullPath, within: volumePath) ? nil : rec.id
-              })
-            : []
+        var snapshotPath: String?
+
+        func isWorkingCopy(_ rec: VideoRecord) -> Bool {
+            guard selection.crossVolumeMode, let g = rec.duplicateGroupID, let k = keepers[g] else { return false }
+            return !PathScope.contains(k.fullPath, within: volumePath)
+        }
 
         guard !targets.isEmpty else {
             if skippedCount > 0 {
@@ -314,7 +289,8 @@ extension VideoScanModel {
             } else {
                 log("\nNo high-confidence duplicates to delete on \(volumePath)")
             }
-            return (0, 0, skippedCount, 0)
+            return emptyDeletionPlan(volumePath: volumePath, selection: selection,
+                                     skippedCount: skippedCount, summaryLine: summaryLine)
         }
 
         // Cross-volume tripwire (2026-08-18): a big cross-drive batch
@@ -330,6 +306,7 @@ extension VideoScanModel {
                 // nothing is unlinked until the snapshot has landed (or
                 // failed) — codex review D.
                 if let snap = await snapshotCatalogAsync(prefix: "pre-dup-crossvolume") {
+                    snapshotPath = snap
                     log("\nPre-delete safety snapshot (\(selection.crossVolumeCount) working copies): \(snap)")
                 } else {
                     let before = targets.count
@@ -343,7 +320,10 @@ extension VideoScanModel {
                         + " (\(dropped) working cop\(dropped == 1 ? "y" : "ies") left alone — no safety snapshot)"
                     skippedNote += (skippedNote.isEmpty ? "" : "; ") + "\(dropped) file(s): safety snapshot could not be written"
                     log("\n⚠️ Could not write the pre-delete safety snapshot — leaving the \(dropped) working cop\(dropped == 1 ? "y" : "ies") alone; only same-drive extras will be removed.")
-                    guard !targets.isEmpty else { return (0, 0, skippedCount, 0) }
+                    guard !targets.isEmpty else {
+                        return emptyDeletionPlan(volumePath: volumePath, selection: selection,
+                                                 skippedCount: skippedCount, summaryLine: summaryLine)
+                    }
                 }
             }
         }
@@ -358,169 +338,179 @@ extension VideoScanModel {
             log("  (Skipping \(skippedCount) file(s) — \(skippedNote))")
         }
 
-        var deleted = 0
-        var failed = 0
-        var refused = 0
-        var bytesFreed: Int64 = 0
+        var entries: [DeleteDuplicatesPlan.Entry] = []
+        entries.reserveCapacity(targets.count)
+        for rec in targets {
+            // A target without a keeper is still listed — the job refuses
+            // it with the same "no keeper to verify against" line as before.
+            let keeper = rec.duplicateGroupID.flatMap { keepers[$0] }
+            entries.append(DeleteDuplicatesPlan.Entry(
+                id: rec.id, path: rec.fullPath, filename: rec.filename, sizeBytes: rec.sizeBytes,
+                keeperID: keeper?.id ?? UUID(), keeperPath: keeper?.fullPath ?? "",
+                keeperFilename: keeper?.filename ?? "",
+                keeperStamp: keeper.flatMap { FileIdentityStamp.capture(path: $0.fullPath) },
+                isWorkingCopy: isWorkingCopy(rec)))
+        }
+        return DeleteDuplicatesPlan(volumePath: volumePath, catalogLocation: catalogStore.fileLocation,
+                                    crossVolumeMode: selection.crossVolumeMode, skippedBeforePlan: skippedCount,
+                                    summaryLine: summaryLine, snapshotPath: snapshotPath, entries: entries)
+    }
+
+    /// A plan with no rows — the job finishes at once with the old
+    /// "(0, 0, skipped, 0)" result and nothing is written to disk.
+    private func emptyDeletionPlan(volumePath: String, selection: DuplicateDeletionSelection,
+                                   skippedCount: Int, summaryLine: String) -> DeleteDuplicatesPlan {
+        DeleteDuplicatesPlan(volumePath: volumePath, catalogLocation: catalogStore.fileLocation,
+                             crossVolumeMode: selection.crossVolumeMode, skippedBeforePlan: skippedCount,
+                             summaryLine: summaryLine, entries: [])
+    }
+
+    /// The catalog side of ONE verified-and-removed pair, exactly as the
+    /// old loop did it: fold the extra's human metadata and enrichment into
+    /// the live master, drop the extra's row (by id AND path — a row
+    /// replaced during the disk work is left alone), write the ledger line,
+    /// and say what happened. Returns whether the catalog changed.
+    @discardableResult
+    func settleDeletedDuplicate(expectedID: UUID, expectedPath: String,
+                                preAwait record: VideoRecord,
+                                keeperID: UUID, keeperPath: String, keeperFilename: String,
+                                isWorkingCopy: Bool, batchID: String,
+                                keeperMatchedByStoredFixity: Bool) -> Bool {
         var catalogMutated = false
-
-        // EVERY deletion is gated on a full byte-for-byte comparison,
-        // performed HERE, immediately before the remove.
-        //
-        // WHY THIS GATE EXISTS (codex #333, 2026-08-12). Until tonight
-        // this loop deleted whatever the scorer marked `.extraCopy`, and
-        // the scorer's strongest signal is `partialMD5` + size — a
-        // 64 KB HEAD-AND-TAIL hash that never looks at the middle of a
-        // file. Two Avid MXF essence files from one session share a
-        // wrapper header and can be padded to the same length; add a
-        // matching filename stem (3) and duration (3) to the hash's 8
-        // and they reach 14, past the high-confidence threshold of 12.
-        // Two DISTINCT family videos, permanently removed, silently.
-        //
-        // The comparison is deliberately fresh rather than trusting any
-        // stored signature: a hash computed last month says nothing
-        // about the bytes on disk now, and the gap between "decided to
-        // delete" and "deleted" is exactly the window that matters.
-        //
-        // This is slow — it reads both files in full — and that is correct.
-        // The disk work is not allowed to freeze SwiftUI, however. Each pair
-        // is verified and removed in a detached task; the main actor awaits
-        // it and remains responsive, updating progress between pairs.
-        for (offset, record) in targets.enumerated() {
-            guard !Task.isCancelled else {
-                failed += targets.count - offset
-                log("  Duplicate deletion cancelled before verification completed")
-                break
+        let currentRecord = records.first { $0.id == expectedID && $0.fullPath == expectedPath }
+        // Metadata carry-over (2026-08-18). The bytes are gone —
+        // verified identical to the keeper — but the ROW still
+        // holds whatever Rick put on this copy (stars, people,
+        // notes, tags, provenance stamp). Fold it into the
+        // keeper before the row leaves the catalog, using the
+        // SAME union rules as repair adoption
+        // (applyHumanMetadataInheritance): never clobber a
+        // judgment already on the keeper, never touch machine
+        // metadata.
+        // QA minor 3: re-resolve the master in `records` by id AFTER
+        // the await (mirrors the extra's currentRecord check) — a
+        // catalog replacement during the disk work must not send
+        // the merge to a detached object.
+        // Codex follow-up MAJOR 1: BOTH merges require the extra's
+        // LIVE row (same id AND path after the await). If the
+        // catalog changed during verification, the pre-await
+        // `record` is detached — merging its fields into the master
+        // would carry stale metadata. Skip, and say so.
+        if currentRecord == nil {
+            log("  catalog changed during verification — carry-over skipped for \(record.filename) (file already verified and removed)")
+        } else if let extraRow = currentRecord,
+                  let liveMaster = records.first(where: { $0.id == keeperID }) {
+            let carried = applyHumanMetadataInheritance(from: extraRow, to: liveMaster)
+            if !carried.isEmpty {
+                log("  Carried over to master \(liveMaster.filename) from \(record.filename): "
+                    + carried.joined(separator: ", "))
             }
-            guard let groupID = record.duplicateGroupID,
-                  let keeper = keepers[groupID] else {
-                refused += 1
-                log("  REFUSED \(record.filename): no keeper to verify against")
-                continue
+            // Codex review A: enrichment the master lacks
+            // (transcript, captions, dossier, detected people,
+            // inferred date, Avid identity) + a provenance line.
+            let enriched = applyEnrichmentInheritance(from: extraRow, to: liveMaster)
+            if !enriched.isEmpty {
+                log("  Enrichment carried to master \(liveMaster.filename): "
+                    + enriched.joined(separator: ", "))
             }
-
-            duplicateStatus = "Verifying duplicate \(offset + 1) of \(targets.count)…"
-            let item = DuplicateDeletionWorkItem(
-                path: record.fullPath,
-                keeperPath: keeper.fullPath,
-                keeperFilename: keeper.filename)
-            let expectedID = record.id
-            let expectedPath = record.fullPath
-            let worker = Task.detached(priority: .userInitiated) {
-                DuplicateDeletionDiskWorker.run(item, hooks: verificationHooks)
-            }
-            let outcome = await withTaskCancellationHandler {
-                await worker.value
-            } onCancel: {
-                worker.cancel()
-            }
-            let currentRecord = records.first {
-                $0.id == expectedID && $0.fullPath == expectedPath
-            }
-
-            switch outcome {
-            case .refused(let reason):
-                refused += 1
-                currentRecord?.duplicateDisposition = .review
-                currentRecord?.duplicateReasons = reason
-                catalogMutated = catalogMutated || currentRecord != nil
-                log("  REFUSED \(record.filename): \(reason)")
-            case .failed(let reason):
-                failed += 1
-                log("  FAILED to delete \(record.filename): \(reason)")
-            case .deleted(let bytes):
-                bytesFreed += bytes
-                deleted += 1
-                // Metadata carry-over (2026-08-18). The bytes are gone —
-                // verified identical to the keeper — but the ROW still
-                // holds whatever Rick put on this copy (stars, people,
-                // notes, tags, provenance stamp). Fold it into the
-                // keeper before the row leaves the catalog, using the
-                // SAME union rules as repair adoption
-                // (applyHumanMetadataInheritance): never clobber a
-                // judgment already on the keeper, never touch machine
-                // metadata. Uses the live keeper object from `keepers`
-                // (a `records` member), so the merge lands in the
-                // catalog, not on a clone.
-                // QA minor 3: re-resolve the master in `records` by id AFTER
-                // the await (mirrors the extra's currentRecord check) — a
-                // catalog replacement during the disk work must not send
-                // the merge to a detached object.
-                // Codex follow-up MAJOR 1: BOTH merges require the extra's
-                // LIVE row (same id AND path after the await). If the
-                // catalog changed during verification, the pre-await
-                // `record` is detached — merging its fields into the master
-                // would carry stale metadata. Skip, and say so.
-                if currentRecord == nil {
-                    log("  catalog changed during verification — carry-over skipped for \(record.filename) (file already verified and removed)")
-                } else if let extraRow = currentRecord,
-                          let liveMaster = records.first(where: { $0.id == keeper.id }) {
-                    let carried = applyHumanMetadataInheritance(from: extraRow, to: liveMaster)
-                    if !carried.isEmpty {
-                        log("  Carried over to master \(liveMaster.filename) from \(record.filename): "
-                            + carried.joined(separator: ", "))
-                    }
-                    // Codex review A: enrichment the master lacks
-                    // (transcript, captions, dossier, detected people,
-                    // inferred date, Avid identity) + a provenance line.
-                    let enriched = applyEnrichmentInheritance(from: extraRow, to: liveMaster)
-                    if !enriched.isEmpty {
-                        log("  Enrichment carried to master \(liveMaster.filename): "
-                            + enriched.joined(separator: ", "))
-                    }
-                    // The keeper's haystack changed (place, tags, notes,
-                    // people…): re-index it NOW, not on the next rebuild —
-                    // the checkpoint notification below is record-less
-                    // (codex #1380).
-                    searchIndex.update(liveMaster)
-                    catalogMutated = true
-                } else {
-                    log("  master row gone — carry-over skipped for \(record.filename) (file already verified and removed)")
-                }
-                if let index = records.firstIndex(where: {
-                    $0.id == expectedID && $0.fullPath == expectedPath
-                }) {
-                    records.remove(at: index)
-                    catalogMutated = true
-                } else {
-                    log("  Catalog changed while deleting \(record.filename); current row retained")
-                }
-                if workingCopyIDs.contains(expectedID) {
-                    log("  " + WorkingCopyCleanupText.logRemoved(path: expectedPath, masterPath: keeper.fullPath))
-                } else {
-                    log("  Deleted (verified identical to \(keeper.filename)): \(record.filename)")
-                }
-                // QA minor 4: checkpoint every N successful removals so a
-                // crash mid-batch loses at most N carry-overs (the
-                // notification drives the debounced save).
-                if catalogMutated, deleted % Self.deletionCheckpointEvery == 0 {
-                    NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
-                }
-            case .retained(let path, let reason):
-                failed += 1
-                log("  RETAINED safely at \(path): \(reason)")
-            }
-        }
-
-        if catalogMutated {
-            NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
-        }
-
-        let freed = ByteCountFormatter.string(fromByteCount: bytesFreed, countStyle: .file)
-        let completion = "\(deleted) deleted, \(failed) failed, \(refused) refused by verification, "
-            + "\(skippedCount) skipped, \(freed) freed (\(summaryLine))"
-        if selection.crossVolumeMode {
-            log("\n" + WorkingCopyCleanupText.logSummary(volume: volumeName, detail: "complete — " + completion))
+            // The keeper's haystack changed (place, tags, notes,
+            // people…): re-index it NOW, not on the next rebuild —
+            // the checkpoint notification below is record-less
+            // (codex #1380).
+            searchIndex.update(liveMaster)
+            catalogMutated = true
         } else {
-            log("\nDuplicate deletion complete: " + completion)
+            log("  master row gone — carry-over skipped for \(record.filename) (file already verified and removed)")
         }
-        if refused > 0 {
-            log("  \(refused) file(s) were NOT identical to their keeper despite matching "
-                + "on hash/name/duration — they are marked Review and left on disk.")
+        if let index = records.firstIndex(where: {
+            $0.id == expectedID && $0.fullPath == expectedPath
+        }) {
+            records.remove(at: index)
+            catalogMutated = true
+        } else {
+            log("  Catalog changed while deleting \(record.filename); current row retained")
         }
-        duplicateStatus = "\(deleted) deleted, \(freed) freed"
+        // Media Ledger: one copyDeleted line per file that left the disk,
+        // batch-keyed to the plan so the run reads as one decision. The
+        // removed row is stamped so the ledger line carries its final
+        // state; it is no longer in `records`, so nothing else sees it.
+        let removed = currentRecord ?? record
+        removed.lifecycleStage = .deletedPermanently
+        removed.purgedAt = Date()
+        ledgerCopyRemoved([removed], permanent: true, by: .rick, batchID: batchID)
+        let how = keeperMatchedByStoredFixity
+            ? "keeper matched by stored fixity, not re-read"
+            : "keeper read in full, fixity stored"
+        if isWorkingCopy {
+            log("  " + WorkingCopyCleanupText.logRemoved(path: expectedPath, masterPath: keeperPath) + " [\(how)]")
+        } else {
+            log("  Deleted (verified identical to \(keeperFilename)): \(record.filename) [\(how)]")
+        }
+        return catalogMutated
+    }
 
-        return (deleted, failed, skippedCount, bytesFreed)
+    /// A pair the gate refused: the live row (same id AND path) is marked
+    /// Review with the reason, as before. Returns whether the catalog changed.
+    @discardableResult
+    func noteRefusedDuplicate(expectedID: UUID, expectedPath: String, filename: String,
+                              reason: String) -> Bool {
+        let currentRecord = records.first { $0.id == expectedID && $0.fullPath == expectedPath }
+        currentRecord?.duplicateDisposition = .review
+        currentRecord?.duplicateReasons = reason
+        log("  REFUSED \(filename): \(reason)")
+        return currentRecord != nil
+    }
+
+    /// Store a whole-file fixity on the live record at `path` (id AND path
+    /// must still match — a row replaced meanwhile gets nothing). Called
+    /// for a keeper the moment it was read in full, so every later pair
+    /// with that keeper is verified one-sided. Returns whether it was
+    /// written.
+    @discardableResult
+    func storeContentFixity(recordID: UUID, path: String, fixity: ContentFixity) -> Bool {
+        guard !isReadOnly,
+              let rec = record(forID: recordID), rec.fullPath == path else { return false }
+        rec.contentFixity = fixity
+        return true
+    }
+
+    // MARK: - Resume after a quit
+
+    /// Look for unfinished plans at launch (called from VideoScanApp's
+    /// onAppear, where the other launch settlements happen) and EXPOSE the
+    /// newest one for this catalog — never start it. The MFO window and
+    /// the main window offer "Resume / Discard". Plans made from another
+    /// catalog are left alone (they would re-validate to nothing anyway).
+    func checkForUnfinishedDeleteDuplicatesPlans(root: URL = DeleteDuplicatesPlanStore.defaultRoot) {
+        guard !isReadOnly, !isDeletingDuplicates else { return }
+        let plans = DeleteDuplicatesPlanStore.unfinishedPlans(root: root, log: { [weak self] in self?.log($0) })
+        let mine = plans.filter { $0.catalogLocation == catalogStore.fileLocation }
+        guard let newest = mine.first else {
+            pendingDeleteDuplicatesResume = nil
+            return
+        }
+        pendingDeleteDuplicatesResume = newest
+        log("\nDelete Duplicates: an unfinished run on \(newest.volumeName) was found — "
+            + "\(newest.remainingCount) of \(newest.entries.count) still to do. Nothing resumes on its own; "
+            + "use Resume or Discard in Media File Operations.")
+    }
+
+    /// The user chose Discard: the plan is settled (remaining rows skipped,
+    /// outcome "discarded") and moved to done/ — kept for the log.
+    func discardPendingDeleteDuplicatesPlan(root: URL = DeleteDuplicatesPlanStore.defaultRoot) {
+        guard var plan = pendingDeleteDuplicatesResume else { return }
+        pendingDeleteDuplicatesResume = nil
+        let skipped = plan.skipRemaining(reason: "discarded by you at the next launch")
+        plan.finishedAt = Date()
+        plan.outcome = "discarded"
+        plan.log.append("Discarded at launch: \(skipped) row(s) never reached")
+        do {
+            try DeleteDuplicatesPlanStore.save(plan, root: root)
+            try DeleteDuplicatesPlanStore.moveToDone(plan, root: root)
+            log("Delete Duplicates: discarded the unfinished run on \(plan.volumeName) (\(skipped) file(s) left alone).")
+        } catch {
+            log("Delete Duplicates: could not file the discarded plan for \(plan.volumeName) — \(error.localizedDescription)")
+        }
     }
 
     /// Human-readable reason a verified deletion was refused.
@@ -676,6 +666,24 @@ extension VideoScanModel {
             }
         }
         return (path as NSString).deletingLastPathComponent
+    }
+}
+
+/// Human-readable reason a verified deletion was refused (shared by the
+/// job's worker and `VideoScanModel.refusalNote`).
+func duplicateRefusalNote(_ failure: SignatureVerification.Failure,
+                          keeper: String) -> String {
+    switch failure {
+    case .contentDiffers:
+        return "content differs from keeper \(keeper) — NOT a duplicate"
+    case .unreadable(let path):
+        return "could not read \(URL(fileURLWithPath: path).lastPathComponent) to verify"
+    case .samePath:
+        return "keeper and copy are the same file"
+    case .changedSinceVerification(let path):
+        return "\(URL(fileURLWithPath: path).lastPathComponent) changed during verification"
+    case .cancelled:
+        return "verification was cancelled"
     }
 }
 

@@ -953,6 +953,12 @@ extension VideoScanModel {
         }
         rec.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: verifiedAt,
                                           sizeBytes: sizeBytes)
+        // The whole file was just read: keep the general fixity too (the
+        // Delete Duplicates keeper path stats it instead of re-reading).
+        if let general = ContentFixity.captured(path: path, digest: digest, byteCount: sizeBytes,
+                                                computedAt: verifiedAt) {
+            rec.contentFixity = general
+        }
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
         return .written

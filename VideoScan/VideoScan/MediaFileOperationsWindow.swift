@@ -144,6 +144,12 @@ struct MediaFileOperationsWindow: View {
         VStack(spacing: 0) {
             headerBar
             Divider()
+            if let pending = model.pendingDeleteDuplicatesResume {
+                DeleteDuplicatesResumeBanner(plan: pending,
+                                             onResume: { center.resumeDeleteDuplicates(plan: pending, model: model) },
+                                             onDiscard: { model.discardPendingDeleteDuplicatesPlan() })
+                Divider()
+            }
             if center.jobs.isEmpty && !combineSectionVisible {
                 emptyState
             } else {
@@ -370,6 +376,44 @@ struct MediaFileOperationsWindow: View {
     }
 }
 
+// MARK: - Resume offer (Delete Duplicates, 2026-09-20)
+
+/// "Resume deleting duplicates on SanDisk — 1,203 of 2,992 remaining?"
+/// with Resume / Discard. Shown while the model holds an unfinished plan
+/// found at launch; NEVER acts on its own.
+struct DeleteDuplicatesResumeBanner: View {
+    let plan: DeleteDuplicatesPlan
+    let onResume: () -> Void
+    let onDiscard: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.clockwise.circle.fill")
+                .foregroundColor(.red)
+                .font(.system(size: 18))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(plan.resumeOffer)
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Every remaining file is re-checked against the catalog and its keeper before anything is read or removed.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Button("Discard", role: .destructive, action: onDiscard)
+                .controlSize(.small)
+                .accessibilityIdentifier("mfo.deleteDuplicates.discard")
+            Button("Resume", action: onResume)
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("mfo.deleteDuplicates.resume")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.red.opacity(0.08))
+        .accessibilityIdentifier("mfo.deleteDuplicates.resumeBanner")
+    }
+}
+
 // MARK: - Generic operation row
 
 /// One new-style job row: verb badge, file names, live subtitle, thin
@@ -489,6 +533,12 @@ struct MediaFileOperationRow: View {
 
             if isExpanded, let angel = job as? ArchiveAngelJob {
                 ArchiveAngelDetailView(job: angel)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
+
+            if isExpanded, let deletion = job as? DeleteDuplicatesJob {
+                DeleteDuplicatesDetailView(job: deletion)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
@@ -776,6 +826,9 @@ struct MediaFileOperationBadge: View {
             .padding(.vertical, 2)
             .background(Capsule().fill(kind.badgeColor))
             .fixedSize()
+            // The DELETE chip is the one a UI test (and Rick's eye) must be
+            // able to find: white on red, its own identifier.
+            .accessibilityIdentifier(kind == .deleteDuplicates ? "mfo.row.deleteChip" : "mfo.row.badge")
     }
 }
 
@@ -798,7 +851,7 @@ extension MediaFileOperationKind {
     /// listed by name so that backlog is readable from the code.
     var hasDetailView: Bool {
         switch self {
-        case .compare, .findPerson, .assessCopies, .verifyArchive, .archiveAngel:
+        case .compare, .findPerson, .assessCopies, .verifyArchive, .archiveAngel, .deleteDuplicates:
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
@@ -873,6 +926,12 @@ extension MediaFileOperationKind {
         // precedes Promote's bronze; apart from assessCopies' plum by
         // leaning blue.
         case .archiveAngel: return Color(red: 0.70, green: 0.30, blue: 0.05)   // dark amber — the Angel's orange; Δ≥0.14 from every other fill (nightly sensor 9/10)
+        // Delete Duplicates (2026-09-20) — Rick asked for "DELETE in clear
+        // high contrast color": white on a strong, saturated red. System
+        // `.red` fails the white-text legibility sensor (contrast < 3), so
+        // this is red darkened just enough — contrast vs white ≈ 5.6, Δ
+        // from Reformat's crimson ≈ 0.17, and still unmistakably RED.
+        case .deleteDuplicates: return Color(red: 0.82, green: 0.04, blue: 0.06)
         }
     }
 }

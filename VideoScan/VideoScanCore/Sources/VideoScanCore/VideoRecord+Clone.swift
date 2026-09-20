@@ -154,6 +154,7 @@ extension VideoRecord {
         c.supersededByID = supersededByID
         c.repairConfirmedDate = repairConfirmedDate
         c.archiveFixity = archiveFixity
+        c.contentFixity = contentFixity
         c.scanContext = scanContext
         return c
     }
