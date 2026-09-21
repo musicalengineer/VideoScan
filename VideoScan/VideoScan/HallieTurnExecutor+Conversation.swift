@@ -1920,6 +1920,38 @@ extension HallieTurnExecutor {
 extension HallieTurnExecutor.Result {
     /// The same result with a note in front of the basis line ("Basis: reading
     /// “ricks” as “rick’s”; …"). Used for local rewrites so they are visible.
+    /// The same answer, read in `mode` (design §3.2). Used by the temporal
+    /// route when the mode gate KEPT a tree-mode session on an age
+    /// question ("how old was dad breen when he passed", 2026-09-21): with
+    /// `mode` nil, conversation memory derives catalog from the route and
+    /// the session silently leaves the tree the gate said it stayed in.
+    func inMode(_ mode: HallieMode) -> HallieTurnExecutor.Result {
+        HallieTurnExecutor.Result(
+            route: route,
+            outcome: outcome,
+            prose: prose,
+            basisLine: basisLine,
+            queryDescription: queryDescription,
+            citations: citations,
+            knowledgeCitations: knowledgeCitations,
+            catalogPersonName: catalogPersonName,
+            clarification: clarification,
+            matchCount: matchCount,
+            mediaAction: mediaAction,
+            offeredActions: offeredActions,
+            answerPlan: answerPlan,
+            composedBy: composedBy,
+            transcriptText: transcriptText,
+            attachments: attachments,
+            performsFirstOfferedAction: performsFirstOfferedAction,
+            immediateOfferedAction: immediateOfferedAction,
+            subjectLifeStatus: subjectLifeStatus,
+            refinableQuery: refinableQuery,
+            retryOffer: retryOffer,
+            mode: mode,
+            modeForce: modeForce)
+    }
+
     func prefixingBasis(_ note: String) -> HallieTurnExecutor.Result {
         var basis = basisLine
         var prefixed = false

@@ -254,6 +254,8 @@ enum ArchivistTemporalDecline: Sendable, Equatable {
     case resolutionMismatch
     case invalidSubject
     case missingBirthdate
+    /// An age-at-death ask about someone with no recorded death.
+    case missingDeathdate
     case missingReference
     case referenceBeforeBirth
     case invalidDate
@@ -786,6 +788,9 @@ enum ArchivistTemporalExecutor {
         case .missingBirthdate:
             prose = "I don't have a birthdate for \(name ?? "that person")."
             basis = "Basis: the canonical POI profile has no birthdate."
+        case .missingDeathdate:
+            prose = "I don't have a death date for \(name ?? "that person") — nothing on file says \(name ?? "that person") has passed on."
+            basis = "Basis: no death is recorded on the People profile or in the family tree; no age at death was computed."
         case .missingReference:
             prose = "I need a dated video to count from — select one in the Catalog and ask again, or give me a year (“how old was \(name ?? "Donna") in 1995?”)."
             basis = "Basis: the selected catalog record has no dated evidence."
@@ -826,6 +831,12 @@ extension ArchivistTemporalExecutor {
         /// "how old would … have been" — an age, said as a would-have-been
         /// (with the death year) for someone who had passed on by then.
         case wouldHaveBeen
+        /// "how old was … when he passed / died", "… at her death" — the
+        /// age at the recorded death, counted from the person's own dates;
+        /// no reference date is needed or used (live 2026-09-21: "how old
+        /// was dad breen when he passed?" was read as a plain age and
+        /// answered against a year the translator invented).
+        case ageAtDeath
     }
 
     /// Deterministic read of the ORIGINAL question. Born-yet wording wins
@@ -846,7 +857,127 @@ extension ArchivistTemporalExecutor {
                            options: .regularExpression) != nil {
             return .wouldHaveBeen
         }
+        if isAgeAtDeath(collapsed) { return .ageAtDeath }
         return .age
+    }
+
+    /// Age-at-death wording, read from the whole (lowercased, whitespace-
+    /// collapsed) question. Deliberately narrow: the one who died must be
+    /// the SUBJECT — a pronoun in a "when he/she/they passed|died" clause,
+    /// "at his/her/their death", the literal "age at death", or "what age
+    /// did X pass/die" (bare verb). "how old was Donna when my dad died"
+    /// names a DIFFERENT person's death and stays a plain age ask (pinned
+    /// by ArchivistTemporalExecutorTests, turnExecutorResolvesTheBoys…).
+    private static func isAgeAtDeath(_ collapsed: String) -> Bool {
+        let deathWord = #"(?:pass(?:ed)?(?:\s+(?:away|on))?|die[ds]?)"#
+        let patterns = [
+            #"\b(?:when|after|before|as|by the time)\s+(?:he|she|they)\s+(?:had\s+)?"# + deathWord + #"\b"#,
+            #"\bat\s+(?:his|her|their|the time of (?:his|her|their))\s+death\b"#,
+            #"\bage at death\b"#,
+            #"\b(?:what|which) age did\b[^.?!]{0,40}?\b(?:pass(?:\s+(?:away|on))?|die)\b"#,
+        ]
+        return patterns.contains { collapsed.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    /// "today" / "now" / "this year": a would-have-been ask that counts to
+    /// the present ("how old would Dad Breen be today").
+    static func asksAboutToday(_ question: String) -> Bool {
+        let lowered = question.lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
+        let collapsed = lowered.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return collapsed.range(
+            of: #"\b(?:today|now|nowadays|currently|this year|these days|at present)\b"#,
+            options: .regularExpression) != nil
+    }
+
+    /// Did the question itself say `year`? The translator sometimes
+    /// invents one (live 2026-09-21: "how old was dad breen when he
+    /// passed?" arrived as explicitYear(1994)); a year the user never
+    /// spoke is not a reference. "1994", "'94" and a spelled-out year
+    /// ("nineteen ninety-four") all count as supplied.
+    static func questionSuppliesYear(_ year: Int, in question: String) -> Bool {
+        let lowered = question.lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
+        if lowered.contains(String(year)) { return true }
+        let twoDigit = String(format: "%02d", year % 100)
+        if lowered.contains("'" + twoDigit) { return true }
+        let spelled = ["nineteen", "twenty", "eighteen", "seventeen", "sixteen"]
+        return spelled.contains { lowered.range(of: #"\b"# + $0 + #"\b"#, options: .regularExpression) != nil }
+    }
+
+    /// The age at the recorded death, from the person's own two dates.
+    /// No death on file → an honest decline, never an age today.
+    static func ageAtDeath(_ subject: ArchivistTemporalSubjectSnapshot) -> ArchivistTemporalResult {
+        let name = subject.canonicalName
+        let he = pronoun(for: subject.sex)
+        guard let rawDeath = subject.deathdate, let deathDay = canonicalDay(rawDeath) else {
+            return ArchivistTemporalResult(
+                value: nil, decline: .missingDeathdate,
+                prose: "I don't have a death date for \(name) — nothing on file says \(he) \(he == "they" ? "have" : "has") passed on.",
+                basisLine: "Basis: no death is recorded for \(name) on the People profile or in the family tree; no age at death was computed.",
+                evidence: nil)
+        }
+        guard let rawBirth = subject.birthdate, let birthdate = canonicalDay(rawBirth) else {
+            return ArchivistTemporalResult(
+                value: nil, decline: .missingBirthdate,
+                prose: "I don't have a birthdate for \(name), so I can't work out an age at death — \(he) passed on \(longDayString(deathDay)).",
+                basisLine: "Basis: recorded death \(dayString(deathDay))\(otherStore(subject.deathdateProvenance, name: name)); no birthdate on file.",
+                evidence: nil)
+        }
+        guard deathDay >= birthdate,
+              let age = calendar.dateComponents([.year], from: birthdate, to: deathDay).year,
+              age >= 0 else {
+            return decline(.invalidDate, name: name)
+        }
+        return ArchivistTemporalResult(
+            value: .exactAge(age), decline: nil,
+            prose: "\(name) was \(age) when \(he) passed on, on \(longDayString(deathDay)).",
+            basisLine: "Basis: from \(subject.birthdateProvenance.basisNoun(canonicalName: name)) "
+                + "birthdate \(dayString(birthdate)) and recorded death \(dayString(deathDay))"
+                + otherStore(subject.deathdateProvenance, name: name) + "; no video selected.",
+            evidence: ArchivistTemporalEvidence(
+                subjectID: subject.stableID, canonicalName: name,
+                birthdate: birthdate, birthdateProvenance: subject.birthdateProvenance,
+                reference: .death(deathDay)))
+    }
+
+    /// "Richard would be 97 today — he passed on in 2008 at 79." Nil for
+    /// someone with no death on or before `today` (the plain present-age
+    /// sentence applies).
+    private static func wouldBeToday(
+        _ subject: ArchivistTemporalSubjectSnapshot, birthdate: Date, today: Date
+    ) -> String? {
+        guard let rawDeath = subject.deathdate, let deathDay = canonicalDay(rawDeath),
+              deathDay <= today, deathDay >= birthdate,
+              let ageToday = calendar.dateComponents([.year], from: birthdate, to: today).year,
+              let ageAtDeath = calendar.dateComponents([.year], from: birthdate, to: deathDay).year
+        else { return nil }
+        let name = subject.canonicalName
+        let deathYear = calendar.component(.year, from: deathDay)
+        return "\(name) would be \(ageToday) today — \(pronoun(for: subject.sex)) passed on in \(deathYear) at \(ageAtDeath)."
+    }
+
+    /// "Richard 1929-02-21 (died 2008-06-25)" for the group basis line.
+    private static func vitalDatesLine(
+        _ subject: ArchivistTemporalSubjectSnapshot, silent: Bool
+    ) -> String {
+        let name = subject.canonicalName
+        var line: String
+        if let rawBirth = subject.birthdate, let birthdate = canonicalDay(rawBirth) {
+            line = "\(name) \(dayString(birthdate))" + storeClause(subject.birthdateProvenance, name, silent: silent)
+        } else {
+            line = "no birthdate for \(name)"
+        }
+        if let rawDeath = subject.deathdate, let deathDay = canonicalDay(rawDeath) {
+            line += " (died \(dayString(deathDay))" + storeClause(subject.deathdateProvenance, name, silent: silent) + ")"
+        }
+        return line
+    }
+
+    private static func pronoun(for sex: PersonSex?) -> String {
+        switch sex {
+        case .male?: return "he"
+        case .female?: return "she"
+        case nil: return "they"
+        }
     }
 
     /// The point in time the group answer counts to.
@@ -855,11 +986,18 @@ extension ArchivistTemporalExecutor {
         case selection(ArchivistTemporalSelectionDateSnapshot)
         /// Present tense with nothing selected ("how old are the boys now").
         case today(Date)
+        /// "how old was … when he passed": each person's OWN recorded death
+        /// date. No shared reference exists, so the lead-in is empty and
+        /// every verdict is a whole sentence (2026-09-21).
+        case death
     }
 
     /// One person's verdict against the reference, before phrasing.
     private enum GroupVerdict {
         case age(text: String, wouldHaveBeen: Bool, deathYear: Int?)
+        /// A definite answer that is already a whole sentence (age at
+        /// death, would-be-today). Counted as answered.
+        case sentence(prose: String)
         case notYetBorn(birthYear: Int)
         case bornThatPeriod(birthYear: Int)
         case wasBorn
@@ -929,6 +1067,13 @@ extension ArchivistTemporalExecutor {
             leadIn = "Today"
             byLabel = "by today"
             referenceBasisText = "counted to today (\(dayString(day))); no video selected"
+        case .death:
+            referenceDay = nil
+            referenceYear = 0
+            precision = .day
+            leadIn = ""
+            byLabel = "by their death"
+            referenceBasisText = "counted to each person's recorded death date; no video selected"
         }
 
         // Per-subject provenance (review finding, 2026-09-04): the group
@@ -950,6 +1095,15 @@ extension ArchivistTemporalExecutor {
         var birthLines: [String] = []
         for subject in subjects {
             let name = subject.canonicalName
+            if case .death = reference {
+                // Age at death needs no shared reference: one whole
+                // sentence per person, from that person's own two dates.
+                let single = ageAtDeath(subject)
+                birthLines.append(vitalDatesLine(subject, silent: allFromProfiles))
+                verdicts.append((name, single.value != nil
+                    ? .sentence(prose: single.prose) : .other(prose: single.prose)))
+                continue
+            }
             guard let rawBirth = subject.birthdate, let birthdate = canonicalDay(rawBirth) else {
                 verdicts.append((name, .noBirthdate))
                 birthLines.append("no birthdate for \(name)")
@@ -1004,8 +1158,18 @@ extension ArchivistTemporalExecutor {
                 result = execute(single, subject: resolution, currentSelection: nil)
             case .selection(let selection):
                 result = execute(single, subject: resolution, currentSelection: selection)
+            case .death:
+                // Handled at the top of the loop; never reached.
+                result = ageAtDeath(subject)
             }
-            if case .today = reference {
+            if case .today(let todayDate) = reference {
+                // "how old would Dad be today" about someone who has passed
+                // on: the counted age, then the fact (2026-09-21).
+                if ask == .wouldHaveBeen, let today = canonicalDay(todayDate),
+                   let would = wouldBeToday(subject, birthdate: birthdate, today: today) {
+                    verdicts.append((name, .sentence(prose: would)))
+                    continue
+                }
                 // The present-tense path already phrases death correctly
                 // ("Dad passed on in 1977 at 41").
                 verdicts.append((name, .other(prose: result.prose)))
@@ -1052,7 +1216,7 @@ extension ArchivistTemporalExecutor {
         let answered = verdicts.filter {
             switch $0.verdict {
             case .noBirthdate, .other: return false
-            case .age, .notYetBorn, .bornThatPeriod, .wasBorn: return true
+            case .age, .notYetBorn, .bornThatPeriod, .wasBorn, .sentence: return true
             }
         }.count
         // The caller prefixes how the people were found ("'the boys' =
@@ -1102,6 +1266,7 @@ extension ArchivistTemporalExecutor {
             case .wasBorn: break
             case .noBirthdate: others.append("I don't have a birthdate for \(name).")
             case .other(let prose): others.append(prose)
+            case .sentence(let prose): sentences.append(prose)
             }
         }
         if !agedClauses.isEmpty {
@@ -1143,7 +1308,7 @@ extension ArchivistTemporalExecutor {
             case .bornThatPeriod(let year): thatPeriod.append((name, year))
             case .noBirthdate: others.append("I don't have a birthdate for \(name).")
             case .other(let prose): others.append(prose)
-            case .age: break
+            case .age, .sentence: break
             }
         }
         let known = yes.count + no.count + thatPeriod.count

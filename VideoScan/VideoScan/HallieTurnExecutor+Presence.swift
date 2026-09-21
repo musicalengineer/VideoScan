@@ -358,23 +358,91 @@ extension HallieTurnExecutor {
         for typed in people {
             let key = PersonResolver.normalize(typed)
             guard !key.isEmpty else { continue }
-            let byName = profiles.filter { PersonResolver.normalize($0.canonicalName) == key }
-            let matches = byName.isEmpty
-                ? profiles.filter { $0.aliases.contains { PersonResolver.normalize($0) == key } }
-                : byName
-            guard matches.count == 1, let profile = matches.first else { continue }
+            // Live 2026-09-21 ("find videos of tim" → "I don't have any
+            // videos tagged with Timothy yet"): Rick renamed his People
+            // profiles to legal given names on 2026-09-19/20, so TWO
+            // profiles are named Timothy and Dad's is named Richard, while
+            // the catalog tags still say "Tim", "Timmy" and "Dad" — the
+            // strings captured when the videos were tagged. The typed
+            // spelling resolves to ONE profile (by name, alias, full-name
+            // form, kin-word alias or pinned tree name), and that profile
+            // is searched under every string it has been known by.
+            guard let profile = uniqueProfile(spelling: key, profiles: profiles, graph: context.graph)
+            else { continue }
             let othersClaim = Set(profiles.lazy
                 .filter { $0.stableID != profile.stableID }
-                .flatMap { [$0.canonicalName] + $0.aliases + $0.fullNameForms }
+                .flatMap { knownSpellings(of: $0, graph: context.graph) }
                 .map(PersonResolver.normalize))
-            let spellings = ([profile.canonicalName] + profile.aliases + profile.fullNameForms)
-                .filter {
-                    let k = PersonResolver.normalize($0)
-                    return k != key && !othersClaim.contains(k)
-                }
+            var seen: Set<String> = [key]
+            let spellings = knownSpellings(of: profile, graph: context.graph).filter {
+                let k = PersonResolver.normalize($0)
+                return !othersClaim.contains(k) && seen.insert(k).inserted
+            }
             if !spellings.isEmpty { out[key] = spellings }
         }
         return out
+    }
+
+    /// Every string this person has been known by: the profile's name,
+    /// its aliases, the full-name forms the family-name fields imply, the
+    /// bare kin word of a "Dad Breen"-shaped alias ("Dad"), and the name
+    /// of the tree person the profile is pinned to. Order is stable
+    /// (name, aliases, forms, kin words, tree name) and duplicates are
+    /// removed on the normalized key. Tags keyed by POI UUID would make
+    /// this unnecessary; until then this is the join.
+    static func knownSpellings(of profile: ProfileSnapshot, graph: GedcomFamilyGraph?) -> [String] {
+        var out: [String] = [profile.canonicalName] + profile.aliases + profile.fullNameForms
+        out.append(profile.displayFullName)
+        for alias in profile.aliases {
+            if let kin = bareKinWord(inAlias: alias, of: profile) { out.append(kin) }
+        }
+        if case .familySearchID(let id)? = profile.treeIdentity,
+           let person = graph?.person(familySearchID: id) {
+            out.append(person.name)
+        }
+        var seen: Set<String> = []
+        return out.filter {
+            let k = PersonResolver.normalize($0)
+            return !k.isEmpty && seen.insert(k).inserted
+        }
+    }
+
+    /// "Dad Breen" → "Dad", "Gramma Breen" → "Gramma": a two-word alias
+    /// whose second word is one of the profile's own family names and
+    /// whose first is a kin term. Nothing else is derived.
+    private static let kinTerms: Set<String> = [
+        "dad", "daddy", "father", "pop", "papa", "pa", "pops",
+        "mom", "mommy", "mother", "mum", "mama", "ma",
+        "grampa", "grandpa", "gramps", "grampy", "granddad", "grandad", "grandfather",
+        "gramma", "grandma", "granny", "gran", "nana", "nanna", "grandmother",
+        "uncle", "aunt", "auntie",
+    ]
+
+    private static func bareKinWord(inAlias alias: String, of profile: ProfileSnapshot) -> String? {
+        let words = alias.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard words.count == 2 else { return nil }
+        let family = Set([profile.surname, profile.maidenName].compactMap { $0 }.map(PersonResolver.normalize))
+        guard family.contains(PersonResolver.normalize(words[1])),
+              kinTerms.contains(PersonResolver.normalize(words[0])) else { return nil }
+        return words[0]
+    }
+
+    /// The ONE profile a normalized spelling names: by its own name first
+    /// (exact-name-wins, 2026-09-03), then by alias, then by any other
+    /// known spelling. Two profiles answering at the same tier → nil.
+    private static func uniqueProfile(
+        spelling key: String, profiles: [ProfileSnapshot], graph: GedcomFamilyGraph?
+    ) -> ProfileSnapshot? {
+        let byName = profiles.filter { PersonResolver.normalize($0.canonicalName) == key }
+        if byName.count == 1 { return byName[0] }
+        if byName.count > 1 { return nil }
+        let byAlias = profiles.filter { $0.aliases.contains { PersonResolver.normalize($0) == key } }
+        if byAlias.count == 1 { return byAlias[0] }
+        if byAlias.count > 1 { return nil }
+        let byAny = profiles.filter {
+            knownSpellings(of: $0, graph: graph).contains { PersonResolver.normalize($0) == key }
+        }
+        return byAny.count == 1 ? byAny[0] : nil
     }
 
     private struct PresencePeopleRecovery {
@@ -399,7 +467,10 @@ extension HallieTurnExecutor {
         let candidates = profiles.map { profile -> (
             identity: String, canonical: String, spellings: [String]
         ) in
-            let profileSpellings = [profile.canonicalName] + profile.aliases
+            // Every spelling the person is known by (2026-09-21), so a
+            // typed "Dad" is the profile aliased "Dad Breen" exactly,
+            // never a fuzzy match on a namesake.
+            let profileSpellings = knownSpellings(of: profile, graph: context.graph)
             let profileKeys = Set(profileSpellings.map(PersonResolver.normalize))
             let linkedSpellings = cyberPeople.filter { person in
                 let personKeys = Set(
@@ -455,8 +526,20 @@ extension HallieTurnExecutor {
                 result.append(typed)
                 continue
             }
+            // A canonical name two profiles share ("Timothy" ×2 since the
+            // 2026-09-19 renames) names nobody in particular: the typed
+            // spelling that DID pick one profile stays the search identity,
+            // and presenceAliases widens it to that profile's other names.
+            let canonicalKey = PersonResolver.normalize(match.canonical)
+            let canonicalShared = candidates.filter {
+                PersonResolver.normalize($0.canonical) == canonicalKey
+            }.count > 1
+            if canonicalShared, canonicalKey != key {
+                result.append(typed)
+                continue
+            }
             result.append(match.canonical)
-            if PersonResolver.normalize(match.canonical) != key {
+            if canonicalKey != key {
                 corrections.append((typed: typed, canonical: match.canonical))
             }
         }

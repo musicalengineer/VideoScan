@@ -88,6 +88,7 @@ struct HallieResultCopyRoundTripTests {
             ("carryingProvenance(_:)", { $0.carryingProvenance(" (taking Dad as Richard Breen Sr)") }),
             ("applying(_:)", { $0.applying(.template(plan, note: "template: fixture")) }),
             ("prefixingBasis(_:)", { $0.prefixingBasis("reading “ricks” as “rick’s”") }),
+            ("inMode(_:)", { $0.inMode($0.mode ?? .tree) }),
             ("FamilyKnowledgeSupplement.notFoundOffer", {
                 HallieTurnExecutor.FamilyKnowledgeSupplement.notFoundOffer($0, typed: "nobody", graph: nil)
             }),

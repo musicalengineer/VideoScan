@@ -997,7 +997,11 @@ struct FamilyKinshipOverlay: Sendable {
                  "Alias '\(alias)' on \(snapshot.canonicalName) looks relational — use a Relationship row instead",
                  nodes: [node])
         }
-        for spelling in [snapshot.canonicalName] + snapshot.aliases {
+        // Every EXACT spelling the profile owns — name, aliases and the
+        // full-name forms its family-name fields imply — so a typed
+        // spelling can pick one node out of several that share a canonical
+        // name (2026-09-21: two profiles named "Richard").
+        for spelling in [snapshot.canonicalName] + snapshot.aliases + snapshot.fullNameForms {
             let key = PersonResolver.normalize(spelling)
             guard !key.isEmpty else { continue }
             if !(nodesBySpelling[key]?.contains(node) ?? false) {
@@ -1271,9 +1275,9 @@ struct FamilyKinshipOverlay: Sendable {
     func nodes(claiming typed: String, ownerName: String? = nil) -> [Node] {
         switch resolver.resolve(typed) {
         case .resolved(let canonical):
-            return nodes(canonicalName: canonical)
+            return narrowedByExactSpelling(nodes(canonicalName: canonical), typed: typed)
         case .ambiguous(let candidates):
-            return candidates.flatMap(nodes(canonicalName:))
+            return narrowedByExactSpelling(candidates.flatMap(nodes(canonicalName:)), typed: typed)
         case .unknown:
             break
         }
@@ -1287,6 +1291,22 @@ struct FamilyKinshipOverlay: Sendable {
             if people.count == 1 { return [.tree(gedcomID: people[0].id)] }
         }
         return []
+    }
+
+    /// PersonResolver identifies a person by CANONICAL NAME, so since Rick
+    /// renamed his profiles to legal given names (2026-09-19/20) "Rick
+    /// Breen" resolves to "Richard" — and "Richard" is two nodes, Dad and
+    /// Rick. The overlay then saw an ambiguous owner, skipped the People
+    /// tab and bound "my dad" from the tree (live 2026-09-21: "I don't have
+    /// any videos tagged with Richard Harding Breen Sr yet"). When several
+    /// nodes share the canonical, the ONE whose own exact spellings carry
+    /// the typed string is meant; none or several → unchanged.
+    private func narrowedByExactSpelling(_ hits: [Node], typed: String) -> [Node] {
+        guard hits.count > 1 else { return hits }
+        let key = PersonResolver.normalize(typed)
+        guard let owners = nodesBySpelling[key] else { return hits }
+        let exact = hits.filter(owners.contains)
+        return exact.count == 1 ? exact : hits
     }
 
     /// The vertices behind a resolver verdict: the verbatim canonical

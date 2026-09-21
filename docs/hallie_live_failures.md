@@ -433,11 +433,28 @@ WRONG PERSON — not a decline, not a clarify. A cousin would not know Matthew
 Rice is nobody's dad. Same family as the 9/07 ledger finding ("fallback
 answers a DIFFERENT question confidently") and the 9/17 kin-term collision.
 
-**Not yet traced** (bug-fix lane `fix/hallie-dad-breen-age-at-death`):
-why "dad breen" reached the graph as a person named something else — alias
-lookup missed on the two-word alias with a surname? the age-at-death
-temporal shape has no executor and fell through to a biography of the
-translator's guess? Trace, fix, pin, then add `strict-045`.
+**Traced (2026-09-21, lane `fix/hallie-dad-breen-age-at-death`).** The
+Matthew Rice row was NOT Rick's turn: the transcript file is shared, and
+row 813 (`1603DC26`, `client=shell`, "tell me about Matthew Rice") is
+codex's replay interleaved between Rick's question (row 812, `7B52B1A4`,
+`client=app`) and Rick's answer (row 816). What Rick actually heard, 7.3 s
+of audio: *"Richard was 64–65 years old during 1994, depending on the
+date"* — `route=temporal shape=temporal operation=age subject=dad breen`,
+basis *"the question supplied year 1994 without a month/day"*. The alias
+"Dad Breen" DID resolve to Richard Breen Sr. Two defects, both in the
+temporal lane: (1) there was no age-at-death ask — "when he passed" was
+read as a plain age needing a reference date; (2) the translator invented
+`explicitYear(1994)` (the question has no year) and the executor trusted
+it. Fixed: `ArchivistTemporalExecutor.Ask.ageAtDeath` + `GroupReference
+.death` count from the person's own People-profile dates ("Richard was 79
+when he passed on, on 25 June 2008"); `questionSuppliesYear` drops a year
+the question never said and says so in the basis; a bare "dad" subject in
+Rick's session binds like "my dad"; "how old would X be today" counts to
+today and says he passed. Also found on the way (same lane): the
+transcript recorded `mode=catalog` for the turn because a temporal
+result carried no mode and memory derived it from the route — the gate
+had KEPT tree mode; the answer now says `.tree`. Pinned by
+`HallieDadBreenAgeAtDeathTests`; strict-045.
 
 **Variations to cover** (advisory corpus, `lv260921-*`): "how old was Dad
 when he died", "what age did Ma Breen pass", "how old was my dad breen when
@@ -451,3 +468,29 @@ related to edward iii of england?", "who in the family was in the us marine
 corps?", "The US Marine Corps" (a bare topic follow-up, sent to the general
 lane), "tell me about rick" / "tell me about dicky" (template on model
 timeout — codex's replay had the M4 brain busy).
+
+### Same day, 13:54 — "find videos of tim" → "I took “tim” to mean Timothy. I don't have any videos tagged with Timothy yet."
+
+Nine replay misses since 2026-09-18 of the same shape (cs029, tm002,
+ft013, lv260901-001, lv260906-002, lv260902-023, ft005; "my dad" → *"tagged
+with Richard Harding Breen Sr"* in cc015, cs023). Cause: on 2026-09-19/20
+Rick renamed his People profiles to legal given names — two profiles are
+now NAMED "Timothy" (aliases Tim / Timmy) and Dad is "Richard" (alias
+"Dad Breen") — while catalog person tags are the plain strings captured
+when the video was tagged (live catalog.json: Dad 10, Tim 6, Timmy 2).
+Traced to three places: `recoverPresencePeople` rewrote "tim" to the
+shared canonical "Timothy", so `presenceAliases` (keyed by that string)
+saw two profiles and gave up; `presenceAliases` matched only names and
+aliases, never full-name forms, so the bound "Richard Harding Breen Sr"
+had no alias set; and `FamilyKinshipOverlay.nodes(claiming:)` returned
+BOTH Richards for the owner "Rick Breen" — `PersonResolver` identifies a
+person by canonical-name STRING, so "Rick Breen" resolves to "Richard",
+which is two nodes — and the People-tab path for "my dad" was skipped for
+the tree. Fixed additively (`knownSpellings(of:)`: name + aliases +
+full-name forms + the bare kin word of a "Dad Breen" alias + the pinned
+tree name; the typed alias stays the search identity when the canonical
+is shared; the overlay narrows same-canonical nodes by the typed exact
+spelling). Pinned by `HalliePresenceRenamedProfileTagsTests`. The proper
+fix — tags keyed by POI UUID — is a separate job; until then two
+profiles with the same canonical name are one identity to
+`PersonResolver` everywhere it is used.

@@ -759,6 +759,28 @@
     "graph-query validation only"
    ],
    "notes": "lv260913-002, the follow-up to strict-043. Rick answered the which-one with his sister's maiden AND married names in one line; the translator read two people and the people-count guard declined with \"Checked: graph-query validation only\". HallieTurnExecutor.collapsedDoubleName now collapses two names that EXACTLY claim the same People profile into one person, visibly in the basis (\"as one person\"). This row pins only that the turn reaches a family source — the collapse needs surname/maidenName filled on the profile, so do not tighten it to expectedOutcome=answered until Rick's Beth profile carries both. Two names meaning two people still decline (PeopleTabDoubleNameTests.twoNamesThatMeanTwoPeopleStillDecline)."
+  },
+  {
+   "id": "strict-045",
+   "category": "strict",
+   "text": "how old was dad breen when he passed?",
+   "expect": "kinship",
+   "expectedRoutes": [
+    "temporal"
+   ],
+   "expectedOutcome": "answered",
+   "expectMode": "tree",
+   "mustContain": [
+    "79"
+   ],
+   "mustNotContain": [
+    "Matthew Rice",
+    "1629",
+    "1994",
+    "64",
+    "65"
+   ],
+   "notes": "lv260921-001 (session 7B52B1A4, Rick, app, 2026-09-21 13:52, tree mode). LIVE MISS: \"Richard was 64–65 years old during 1994, depending on the date\" — the translator invented explicitYear(1994) and the temporal lane had no age-AT-DEATH ask, so \"when he passed\" was read as a plain age against the invented year. (The Matthew Rice biography the ledger first blamed was codex's replay session 1603DC26 interleaved in the shared transcript, not Rick's turn; it stays in mustNotContain as the wrong-person sensor.) Fixed 2026-09-21: ArchivistTemporalExecutor.Ask.ageAtDeath + GroupReference.death count from the People profile's own birth and death dates (Dad Breen b. 1929-02-21, d. 2008-06-25 → 79); HallieTurnExecutor drops an explicitYear the question never mentions (questionSuppliesYear) and says so in the basis. Pinned by HallieDadBreenAgeAtDeathTests (the live AST, the honest AST, Ma Breen 92, the second Richard Breen and a same-surname tree stranger never win over the alias, a living person gets no age at death, bare \"dad\" in Rick's session is Dad Breen). expectMode tree: the mode gate's explicitCue(dad) is unchanged; the lane switches to catalog for the age arithmetic but the session mode recorded for the turn is the tree it was in."
   }
  ]
 }
