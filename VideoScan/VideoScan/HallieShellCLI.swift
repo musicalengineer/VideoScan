@@ -189,6 +189,10 @@ enum HallieShellCLI {
         var saveDrillStore: (PronunciationDrillStore, PronunciationDrillManifest) throws -> Void
         var loadLexicon: () -> HalliePronunciationLexicon
         var loadPronunciationGold: () -> MisakiGoldLexicon
+        /// Rick's kind words (HallieKindWords), same behaviour as the app
+        /// so replays see what the family sees. Default none, so tests
+        /// never read a file; production reads the cached store.
+        var loadKindWords: () -> HallieKindWordsBook = { .empty }
 
         init(
             loadCatalog: @escaping (URL) -> [VideoRecord]?,
@@ -288,7 +292,7 @@ enum HallieShellCLI {
         }
 
         static var production: Dependencies {
-            Dependencies(
+            var production = Dependencies(
                 loadCatalog: { FileBackedCatalogSource.loadRecords(from: $0) },
                 configureFamilyAssets: { configureFamilyAssetsReadOnly(options: $0) },
                 loadProfiles: { loadProfilesReadOnly() },
@@ -440,6 +444,8 @@ enum HallieShellCLI {
                         allowDefaultWrite: !ViewerModeCenter.shared.isViewer)
                 },
                 loadPronunciationGold: { .shared })
+            production.loadKindWords = { HallieKindWordsStore.shared.book() }
+            return production
         }
     }
 
@@ -1310,6 +1316,13 @@ enum HallieShellCLI {
             state.memory.record(intent: intent, result: result)
             result = await phrase(result, question: question, options: options,
                                   state: &state, dependencies: dependencies)
+            // Rick's kind word, after phrasing (the verifier never sees it).
+            result = HallieKindWords.apply(
+                HallieKindWords.biographyOffer(
+                    result: result, ast: intent.ast,
+                    profiles: context.profiles, graph: context.graph,
+                    loadBook: dependencies.loadKindWords),
+                to: result, memory: &state.memory)
 
             render(
                 result,
@@ -1365,7 +1378,7 @@ enum HallieShellCLI {
     }
 
     private static func completeLocalAnswer(
-        _ result: HallieTurnExecutor.Result,
+        _ localResult: HallieTurnExecutor.Result,
         question: String,
         identity: HallieTurnExecutor.Context,
         options: Options,
@@ -1373,6 +1386,12 @@ enum HallieShellCLI {
         output: (String) -> Void,
         dependencies: Dependencies
     ) async -> AnswerOutcome {
+        // "hi hallie": the user's own kind word, same rule as the app.
+        let result = HallieKindWords.apply(
+            HallieKindWords.greetingOffer(
+                result: localResult, speakers: identity.speakers,
+                profiles: identity.profiles, loadBook: dependencies.loadKindWords),
+            to: localResult, memory: &state.memory)
         state.lastResponder = "local"
         // "start over" clears memory; other local answers leave it.
         state.memory.record(intent: nil, result: result, question: question)
@@ -1455,6 +1474,12 @@ enum HallieShellCLI {
             state.memory.record(intent: pending.value.intent, result: result)
             result = await phrase(result, question: reply, options: options,
                                   state: &state, dependencies: dependencies)
+            result = HallieKindWords.apply(
+                HallieKindWords.biographyOffer(
+                    result: result, ast: pending.value.intent.ast, selected: selectedID,
+                    profiles: pending.context.profiles, graph: pending.context.graph,
+                    loadBook: dependencies.loadKindWords),
+                to: result, memory: &state.memory)
             state.remember(question: reply, answer: result.prose)
             render(
                 result,
