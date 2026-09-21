@@ -80,6 +80,29 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     /// (set by `applyFamilyAttention`, one O(n) pass); half of it counts
     /// against this file. 0 when the pass has not run.
     var familySkips: Double
+    /// Device model from the container tags (`VideoRecord.originModel`:
+    /// `model` / `com.apple.quicktime.model`, e.g. "iPhone 12"); "" when
+    /// the file carries none. Read by the recent-phone-clip floor.
+    var deviceModel: String
+    /// The capture date stamped in the container
+    /// (`VideoRecord.embeddedCreationDate` — QuickTime creationdate /
+    /// creation_time, survives copies). NOT `dateCreated`, which on a
+    /// Photos-library export is the COPY date. nil = no usable tag.
+    var captureDate: Date?
+
+    /// Rick 2026-09-21: a Live Photo's motion half
+    /// (`jpegvideocomplement_*.mov`, ~3 s) is part of a photo, not a video.
+    var isLivePhotoMotion: Bool {
+        filename.lowercased().hasPrefix("jpegvideocomplement")
+    }
+
+    /// A clip shot on an iPhone/iPad: the device tag says so, or the file
+    /// lives inside a Photos library bundle.
+    var isPhoneClip: Bool {
+        let model = deviceModel.lowercased()
+        return model.contains("iphone") || model.contains("ipad")
+            || fullPath.lowercased().contains(".photoslibrary/")
+    }
 
     /// The event family this file belongs to (folder + base stem, share-out
     /// and derivative tokens stripped) — one member per batch. Filled by
@@ -115,7 +138,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     }()
 
     init(id: UUID = UUID(), filename: String = "clip.mov", fullPath: String = "/Volumes/X/clip.mov",
-         sizeBytes: Int64 = 1_000_000_000, durationSeconds: Double = 60,
+         sizeBytes: Int64 = 1_000_000_000, durationSeconds: Double = 120,
          streamTypeRaw: String = StreamType.videoAndAudio.rawValue, isPlayable: String = "Yes",
          starRating: Int = 0, mediaDisposition: MediaDisposition = .unreviewed,
          archiveStage: ArchiveStage = .none, junkScore: Int = 0,
@@ -129,7 +152,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
          isOnMasterArchive: Bool = false, useCount: Int = 0, lastUsed: Date? = nil,
          videoCodec: String = "", duplicateGroupID: UUID? = nil, derivativeOfOriginal: String? = nil,
          contentKey: String = "", attention: ArchiveAngelAttention = .none, familySkips: Double = 0,
-         familyKey: String = "") {
+         familyKey: String = "", deviceModel: String = "", captureDate: Date? = nil) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds; self.streamTypeRaw = streamTypeRaw; self.isPlayable = isPlayable
         self.starRating = starRating; self.mediaDisposition = mediaDisposition; self.archiveStage = archiveStage
@@ -146,6 +169,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         self.derivativeOfOriginal = derivativeOfOriginal
         self.contentKey = contentKey; self.attention = attention; self.familySkips = familySkips
         self.familyKey = familyKey
+        self.deviceModel = deviceModel; self.captureDate = captureDate
     }
 }
 
@@ -164,7 +188,9 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     case alreadyArchived = "Already in the archive"
     case duplicateArchived = "A copy is already in the archive"
     case volumeOffline = "Volume offline"
-    case tooShort = "Too short (under 1 min — short clips are usually edits of a longer original)"
+    case tooShort = "Too short (under 2 min — short clips are usually pieces of a longer original)"
+    case livePhotoMotion = "Live Photo motion (part of a photo, not a video)"
+    case recentPhoneClip = "Phone clip under 10 years old (Rick 2026-09-21: only older phone clips are worth archiving)"
     case junk = "Marked junk"
     case suspectedJunk = "Looks like junk (machine evidence, unrated)"
     case notPlayable = "Not playable / un-probeable"
@@ -253,12 +279,35 @@ struct ArchiveAngelWeights: Sendable, Equatable {
     var halfTapeSeconds = 1800.0
     var longSceneSeconds = 900.0
     var sceneSeconds = 300.0
-    /// Hard floor for EVERY clip, marked or not — Rick 2026-09-10: "exclude
-    /// short videos under 1 minute for now … we'll keep these short videos
-    /// in the catalog". (Earlier: 60 s unmarked / 30 s marked; the marked
-    /// exception let a starred 35 s Cape edit through, which is exactly
-    /// the kind of clip whose long original should be picked instead.)
-    var minimumDurationSeconds = 60.0
+    /// Hard floor for EVERY automatically proposed clip, marked or not.
+    /// Rick 2026-09-10: "exclude short videos under 1 minute for now …
+    /// we'll keep these short videos in the catalog". (Earlier: 60 s
+    /// unmarked / 30 s marked; the marked exception let a starred 35 s
+    /// Cape edit through, which is exactly the kind of clip whose long
+    /// original should be picked instead.)
+    /// Rick 2026-09-21 raised it to 2 min: "I am hitting a lot of short
+    /// clips that won't be useful … 90% of the time these are partials
+    /// from longer sequences (iMovie diced it up, I diced it up, or the
+    /// boys did on the old Cheesegrater)." Catalog that day (unarchived
+    /// video): 8,522 files under 5 min held only 51 h; 281 files of
+    /// 20 min+ held 291 h of 417 h. Short clips stay in the catalog.
+    var minimumDurationSeconds = 120.0
+    /// The floor for an EXPLICIT pick ("Prepare with Archive Angel" on a
+    /// catalog selection) — deliberately left at the pre-2026-09-21 value
+    /// so raising the automatic floor does not change what Rick can hand
+    /// the Angel himself. See `ArchiveAngelJob.explicitSelection`.
+    var explicitPickMinimumDurationSeconds = 60.0
+    /// Rick 2026-09-21: "ignore iphone clips unless > 10 years old". That
+    /// day 3,159 of 9,404 catalog videos were Live Photo motion halves.
+    /// Both rules govern AUTOMATIC proposals only; an explicit pick turns
+    /// them off (`ArchiveAngelJob.explicitSelection`). A star does not
+    /// exempt a file — same as the duration floor.
+    var excludeLivePhotoMotion = true
+    var excludeRecentPhoneClips = true
+    /// A phone clip whose capture date is less than this many years
+    /// before `now` is excluded; one with NO known capture date is treated
+    /// as recent (the catalog cannot prove it is old).
+    var recentPhoneClipYears = 10
     var junkFloor = 5
     var dateConfidenceKnown: Float = 0.8
     /// Average bitrate floor for anything a minute or longer. DV is
@@ -318,8 +367,10 @@ enum ArchiveAngelScorer {
     /// fatigue, resting, family share — Phase 1 of the curation plan);
     /// 9 = the evidence record carries `familySkips` and the file is
     /// stamped with the attention revision it was scored under (codex
-    /// 2026-09-20 #5/#6) — a v8 sidecar lacks both, so it must rescore.
-    static let rulesVersion = 9
+    /// 2026-09-20 #5/#6) — a v8 sidecar lacks both, so it must rescore;
+    /// 10 = 2-minute floor (Rick 2026-09-21), plus the Live Photo motion
+    /// and recent-phone-clip exclusions (same day, same bump).
+    static let rulesVersion = 10
 
     /// The verdict for one record. Pure.
     static func verdict(_ c: ArchiveAngelCandidate,
@@ -468,6 +519,13 @@ enum ArchiveAngelScorer {
             return .notPlayable
         }
         if c.isPairedHalf { return .pairedHalf }
+        // Rick 2026-09-21. Ahead of `.tooShort` so a 3 s Live Photo half
+        // is counted as what it is, not as a short clip.
+        if w.excludeLivePhotoMotion, c.isLivePhotoMotion { return .livePhotoMotion }
+        if w.excludeRecentPhoneClips, c.isPhoneClip,
+           Self.isRecent(captureDate: c.captureDate, years: w.recentPhoneClipYears, now: now) {
+            return .recentPhoneClip
+        }
         // Machine evidence below here yields to a human star, like junk.
         if c.starRating == 0, Self.looksLikeAppCache(filename: c.filename, fullPath: c.fullPath) { return .appCache }
         if c.starRating == 0, c.derivativeOfOriginal != nil { return .derivativeOfOriginal }
@@ -485,6 +543,16 @@ enum ArchiveAngelScorer {
         if !c.volumeOnline { return .volumeOffline }
         if c.attention.restingUntil(now: now, weights: w) != nil { return .resting }
         return nil
+    }
+
+    /// True when `captureDate` is within `years` of `now`, or unknown
+    /// (nil) — an undated phone clip cannot be shown to be old. Pure.
+    static func isRecent(captureDate: Date?, years: Int, now: Date) -> Bool {
+        guard let captured = captureDate else { return true }
+        guard let cutoff = ArchiveAngelCandidate.utcCalendar.date(byAdding: .year, value: -years, to: now) else {
+            return false
+        }
+        return captured > cutoff
     }
 
     /// Score every candidate, sort by `rank`, keep one member per duplicate
@@ -801,7 +869,7 @@ enum ArchiveAngelScorer {
 
     /// Points and the printed tier for a duration; nil under 5 min (a
     /// short clip earns nothing for its length — it must make the list on
-    /// stars, people or dates alone, and the floor already removes < 1 min).
+    /// stars, people or dates alone, and the floor already removes < 2 min).
     static func durationTier(_ seconds: Double,
                              weights w: ArchiveAngelWeights = .standard) -> (points: Int, tier: String)? {
         switch seconds {

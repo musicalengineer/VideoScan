@@ -47,26 +47,44 @@ struct ArchiveAngelFloorTests {
         #expect(ArchiveAngelScorer.verdict(.init(starRating: 3, mediaDisposition: .confirmedJunk)) == .rejected(.junk))
     }
 
-    @Test("under one minute is out for everyone — a star, a person, a note or a date no longer lowers the floor")
-    func minuteFloorForAll() {
-        // Rick 2026-09-10: "usually there's a longer video of the whole
-        // scene … a 60 s or less clip is just a small edit I made to send
-        // to someone" — the long original is the archive candidate.
+    @Test("under two minutes is out for everyone — a star, a person, a note or a date does not lower the floor")
+    func twoMinuteFloorForAll() {
+        // Rick 2026-09-10: "a 60 s or less clip is just a small edit I made
+        // to send to someone"; 2026-09-21 raised to 2 min: "90% of the time
+        // these are partials from longer sequences".
         #expect(ArchiveAngelScorer.verdict(.init(durationSeconds: 40)) == .rejected(.tooShort))
+        #expect(ArchiveAngelScorer.verdict(.init(durationSeconds: 90)) == .rejected(.tooShort),
+                "90 s cleared the old 60 s floor; it does not clear the 2-minute one")
         #expect(ArchiveAngelScorer.verdict(.init(durationSeconds: 35, starRating: 3, confirmedPeople: ["Donna"])) == .rejected(.tooShort),
                 "a starred 35 s Cape edit — the whole-tape original is what we want")
-        for marked in [ArchiveAngelCandidate(durationSeconds: 59.9, starRating: 1),
-                       ArchiveAngelCandidate(durationSeconds: 59.9, confirmedPeople: ["Donna"]),
-                       ArchiveAngelCandidate(durationSeconds: 59.9, hasUserNotes: true),
-                       ArchiveAngelCandidate(durationSeconds: 59.9, userDate: "1994")] {
+        for marked in [ArchiveAngelCandidate(durationSeconds: 119.9, starRating: 1),
+                       ArchiveAngelCandidate(durationSeconds: 119.9, confirmedPeople: ["Donna"]),
+                       ArchiveAngelCandidate(durationSeconds: 119.9, hasUserNotes: true),
+                       ArchiveAngelCandidate(durationSeconds: 119.9, userDate: "1994")] {
             #expect(ArchiveAngelScorer.verdict(marked) == .rejected(.tooShort), "\(marked)")
         }
-        guard case .eligible = ArchiveAngelScorer.verdict(.init(durationSeconds: 60)) else {
-            Issue.record("60 s is the floor, inclusive"); return
+        guard case .eligible = ArchiveAngelScorer.verdict(.init(durationSeconds: 120, starRating: 3)) else {
+            Issue.record("120 s starred is the floor, inclusive"); return
         }
-        guard case .eligible = ArchiveAngelScorer.verdict(.init(durationSeconds: 60, starRating: 3)) else {
-            Issue.record("60 s starred is the floor, inclusive"); return
+    }
+
+    @Test("boundary: 119 s is too short, 120 s is eligible (Rick 2026-09-21)")
+    func twoMinuteBoundary() {
+        #expect(ArchiveAngelScorer.verdict(.init(durationSeconds: 119)) == .rejected(.tooShort))
+        guard case .eligible = ArchiveAngelScorer.verdict(.init(durationSeconds: 120)) else {
+            Issue.record("120 s is the floor, inclusive"); return
         }
+    }
+
+    @Test("SENSOR (Rick 2026-09-21): the automatic floor is 120 s, explicit picks keep 60 s, rules v10")
+    func twoMinuteFloorSensor() {
+        #expect(ArchiveAngelWeights.standard.minimumDurationSeconds == 120,
+                "the Angel's automatic floor — re-pin only on a new ruling from Rick")
+        #expect(ArchiveAngelWeights.standard.explicitPickMinimumDurationSeconds == 60,
+                "an explicit pick is judged as it was before the 2-minute floor")
+        #expect(ArchiveAngelRejection.tooShort.rawValue
+                == "Too short (under 2 min — short clips are usually pieces of a longer original)")
+        #expect(ArchiveAngelScorer.rulesVersion >= 10, "the floor moved → cached evidence must re-score")
     }
 
     @Test("iMovie caches and thumbnail streams never qualify — Rick 2026-09-10 (Cache.mov scored 120)")
@@ -111,7 +129,7 @@ struct ArchiveAngelFloorTests {
 
     @Test("the rejection line tells the user why short clips are skipped")
     func floorReasonText() {
-        #expect(ArchiveAngelRejection.tooShort.rawValue.contains("under 1 min"))
+        #expect(ArchiveAngelRejection.tooShort.rawValue.contains("under 2 min"))
         #expect(ArchiveAngelRejection.tooShort.rawValue.contains("longer original"))
     }
 }
@@ -190,7 +208,7 @@ struct ArchiveAngelEvidenceTests {
 
     @Test("duration tiers: nothing under 5 min, then scene 10 / long scene 25 / half tape 45 / whole tape 60")
     func durationTiers() {
-        #expect(lines(.init(durationSeconds: 60)).0 == 0)
+        #expect(lines(.init(durationSeconds: 120)).0 == 0)
         #expect(lines(.init(durationSeconds: 299)).0 == 0)
         #expect(lines(.init(durationSeconds: 300)).0 == 10)
         #expect(lines(.init(durationSeconds: 899)).0 == 10)
@@ -638,5 +656,125 @@ struct ArchiveAngelSelectionTests {
         let elapsed = ContinuousClock.now - started
         #expect(sel.picks.count == 50)
         #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "100k select took \(elapsed)")
+    }
+}
+
+@Suite("Archive Angel scorer — Live Photo motion + recent phone clips (Rick 2026-09-21)")
+struct ArchiveAngelPhoneClipTests {
+
+    /// 2026-09-21 12:00 UTC — every "now" below is this date, injected.
+    static let now = Date(timeIntervalSince1970: 1_789_992_000)
+    static func year(_ y: Int) -> Date {
+        ArchiveAngelCandidate.utcCalendar.date(from: DateComponents(year: y, month: 6, day: 1))!
+    }
+
+    @Test("a Live Photo motion half is excluded at any length, date or rating")
+    func livePhotoMotionAlwaysExcluded() {
+        let fiveMin = ArchiveAngelCandidate(filename: "jpegvideocomplement_A1B2.mov",
+                                            fullPath: "/Volumes/X/Old.photoslibrary/originals/A/jpegvideocomplement_A1B2.mov",
+                                            durationSeconds: 300, deviceModel: "iPhone 12", captureDate: Self.year(2010))
+        #expect(ArchiveAngelScorer.verdict(fiveMin, now: Self.now) == .rejected(.livePhotoMotion))
+        let upper = ArchiveAngelCandidate(filename: "JPEGVideoComplement_9.MOV", durationSeconds: 3)
+        #expect(ArchiveAngelScorer.verdict(upper, now: Self.now) == .rejected(.livePhotoMotion),
+                "case-insensitive, and ahead of .tooShort so the count says what it is")
+        let starred = ArchiveAngelCandidate(filename: "jpegvideocomplement_x.mov", durationSeconds: 600, starRating: 3)
+        #expect(ArchiveAngelScorer.verdict(starred, now: Self.now) == .rejected(.livePhotoMotion))
+    }
+
+    @Test("an iPhone clip older than 10 years is eligible; a 2021 one is excluded")
+    func phoneClipAge() {
+        let old = ArchiveAngelCandidate(filename: "IMG_0412.MOV", durationSeconds: 180,
+                                        deviceModel: "iPhone 4S", captureDate: Self.year(2012))
+        guard case .eligible = ArchiveAngelScorer.verdict(old, now: Self.now) else {
+            Issue.record("a 2012 iPhone clip at 3 min must be eligible"); return
+        }
+        let recent = ArchiveAngelCandidate(filename: "IMG_5521.MOV", durationSeconds: 180,
+                                           deviceModel: "iPhone 12", captureDate: Self.year(2021))
+        #expect(ArchiveAngelScorer.verdict(recent, now: Self.now) == .rejected(.recentPhoneClip))
+        let iPad = ArchiveAngelCandidate(filename: "IMG_1.MOV", durationSeconds: 600,
+                                         deviceModel: "iPad Pro", captureDate: Self.year(2024))
+        #expect(ArchiveAngelScorer.verdict(iPad, now: Self.now) == .rejected(.recentPhoneClip))
+    }
+
+    @Test("boundary: 10 years and a day ago is old, 10 years minus a day is recent")
+    func tenYearBoundary() {
+        let cal = ArchiveAngelCandidate.utcCalendar
+        let tenYears = cal.date(byAdding: .year, value: -10, to: Self.now)!
+        let justOld = tenYears.addingTimeInterval(-86_400)
+        let justRecent = tenYears.addingTimeInterval(86_400)
+        #expect(!ArchiveAngelScorer.isRecent(captureDate: justOld, years: 10, now: Self.now))
+        #expect(ArchiveAngelScorer.isRecent(captureDate: justRecent, years: 10, now: Self.now))
+        #expect(ArchiveAngelScorer.isRecent(captureDate: nil, years: 10, now: Self.now), "unknown date = recent")
+    }
+
+    @Test("a Photos-library file with no model tag and no capture date is treated as a recent phone clip")
+    func photosLibraryUnknownDate() {
+        let c = ArchiveAngelCandidate(filename: "IMG_0001.mov",
+                                      fullPath: "/Volumes/X/Photos Library.photoslibrary/originals/0/IMG_0001.mov",
+                                      durationSeconds: 400)
+        #expect(c.isPhoneClip)
+        #expect(ArchiveAngelScorer.verdict(c, now: Self.now) == .rejected(.recentPhoneClip))
+        var dated = c
+        dated.captureDate = Self.year(2009)
+        guard case .eligible = ArchiveAngelScorer.verdict(dated, now: Self.now) else {
+            Issue.record("the same file with a 2009 capture date is old enough"); return
+        }
+    }
+
+    @Test("a DV tape, a camcorder file and an undated non-phone clip are unaffected")
+    func nonPhoneUnaffected() {
+        let tape = ArchiveAngelCandidate(filename: "Christmas_1990.dv", sizeBytes: 12_000_000_000,
+                                         durationSeconds: 3600, videoCodec: "dvvideo")
+        let camcorder = ArchiveAngelCandidate(filename: "00012.MTS", durationSeconds: 900,
+                                              deviceModel: "HDR-CX405", captureDate: Self.year(2022))
+        let undated = ArchiveAngelCandidate(filename: "Birthday.mov", durationSeconds: 900)
+        for c in [tape, camcorder, undated] {
+            #expect(!c.isPhoneClip && !c.isLivePhotoMotion, "\(c.filename)")
+            guard case .eligible = ArchiveAngelScorer.verdict(c, now: Self.now) else {
+                Issue.record("\(c.filename) must stay eligible"); return
+            }
+        }
+    }
+
+    @Test("SCALE: 10k candidates incl. 3k Live Photo halves and 1k recent phone clips — select within the 100k budget (4 s)")
+    func tenThousandWithLivePhotos() {
+        var cs: [ArchiveAngelCandidate] = []
+        cs.reserveCapacity(10_000)
+        for i in 0..<10_000 {
+            switch i % 10 {
+            case 0, 1, 2:
+                cs.append(.init(filename: "jpegvideocomplement_\(i).mov",
+                                fullPath: "/v/Lib.photoslibrary/originals/\(i % 16)/jpegvideocomplement_\(i).mov",
+                                sizeBytes: 4_000_000, durationSeconds: 3, deviceModel: "iPhone 12",
+                                captureDate: Self.year(2022)))
+            case 3:
+                cs.append(.init(filename: "IMG_\(i).MOV", fullPath: "/v/phone/IMG_\(i).MOV",
+                                durationSeconds: 200, deviceModel: "iPhone 12", captureDate: Self.year(2023)))
+            default:
+                cs.append(.init(filename: "tape\(i).mov", fullPath: "/v/t\(i / 50)/tape\(i).mov",
+                                sizeBytes: 9_000_000_000, durationSeconds: 1800 + Double(i % 97),
+                                starRating: i % 4))
+            }
+        }
+        var sel: ArchiveAngelSelection?
+        let elapsed = ContinuousClock().measure {
+            sel = ArchiveAngelScorer.select(cs, count: 10, now: Self.now)
+        }
+        #expect(sel?.picks.count == 10)
+        #expect(sel?.rejected[.livePhotoMotion] == 3_000)
+        #expect(sel?.rejected[.recentPhoneClip] == 1_000)
+        #expect(sel?.picks.allSatisfy { !$0.candidate.isPhoneClip } == true)
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(4)), "10k select took \(elapsed)")
+    }
+
+    @Test("SENSOR (Rick 2026-09-21): both reason strings, the 10-year window, and both rules on by default")
+    func phoneClipSensor() {
+        #expect(ArchiveAngelRejection.livePhotoMotion.rawValue == "Live Photo motion (part of a photo, not a video)")
+        #expect(ArchiveAngelRejection.recentPhoneClip.rawValue
+                == "Phone clip under 10 years old (Rick 2026-09-21: only older phone clips are worth archiving)")
+        #expect(ArchiveAngelWeights.standard.recentPhoneClipYears == 10)
+        #expect(ArchiveAngelWeights.standard.excludeLivePhotoMotion)
+        #expect(ArchiveAngelWeights.standard.excludeRecentPhoneClips)
+        #expect(ArchiveAngelScorer.rulesVersion >= 10)
     }
 }
