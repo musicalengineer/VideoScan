@@ -8,13 +8,20 @@
 // It is rewritten atomically after EVERY pair through one ordered writer,
 // so a quit or a crash mid-run leaves a plan the next launch can OFFER to
 // resume — never resume on its own. A finished plan moves to `done/` and
-// stays there for the log; nothing here is ever deleted.
+// stays there for the log; nothing here is ever deleted. A plan with a
+// row whose file is STILL IN QUARANTINE (a restore that failed) is never
+// filed as done and stays offerable — "N files waiting to be put back" —
+// whatever its `finishedAt` says (codex 1606 #3).
 //
 // COPY-COUNT TIERING (Rick 2026-09-20 evening): each row is decided at
 // deletion time from the fresh catalog by how many VERIFIED copies of the
-// family remain after it goes — the fixity-verified Master Archive copy,
-// the keeper just verified, and any other online copy whose stored fixity
-// reproduces and whose digest is this one's:
+// family remain after it goes — the keeper just verified, and any other
+// online copy (archive copy or sibling alike) whose STAMP-BOUND stored
+// fixity reproduces on a fresh stat, ctime included, and whose digest is
+// this one's. An archive copy's promote-time digest alone is a record,
+// not current evidence: a same-size rewrite of the archive leaves size
+// and digest-on-record intact (codex 1606 #1), so only Verify Archive
+// Copies' stamp-bound fixity lets it count:
 //     ≥ 3 remaining → PERMANENT   (space back now)
 //     = 2 remaining → TRASH       (to the volume's Trash, not gone)
 //     < 2 remaining → LEFT ALONE  (put back untouched)
@@ -61,9 +68,17 @@ enum DeletionTier: String, Codable, Sendable, Equatable {
 struct DeletionTierCandidates: Sendable, Equatable {
     struct ArchiveCopy: Sendable, Equatable {
         let path: String
-        /// The archive's own whole-file digest (lowercase hex) + size.
+        /// The archive's own whole-file digest (lowercase hex) + size —
+        /// the promote read-back's word, on record. Informational: it
+        /// says the family HAS an archive copy of these bytes.
         let digest: String
         let sizeBytes: Int64
+        /// The archive record's stamp-bound general fixity (Verify
+        /// Archive Copies writes it after ITS read, stat before and
+        /// after; promotion deliberately does not). ONLY this can prove
+        /// the copy holds the bytes NOW (codex 1606 #1) — without it the
+        /// copy is "not verified now" and does not count.
+        var fixity: ContentFixity? = nil
         /// "archive copy on FamilyArchive" — for the row's reason.
         var label: String = "archive copy"
     }
@@ -97,13 +112,15 @@ struct DeletionTierCandidates: Sendable, Equatable {
 /// DUPLICATE is never counted — "remaining" means after it goes.
 struct DeletionTierFacts: Sendable, Equatable {
     /// Verified copies that remain after this deletion: keeper + archive
-    /// copies that reproduce + other copies whose fixity reproduces and
-    /// whose digest is this one's.
+    /// copies and other copies whose STAMP-BOUND fixity reproduces now
+    /// (ctime included) and whose digest is this one's.
     var remainingVerifiedCopies: Int = 1
     /// INFORMATIONAL (Rick 2026-09-20, late: "the archive is NOT
     /// required"): at least one archive copy is online with this file's
-    /// size and digest. The detail row says "not yet archived" when
-    /// false; the tier does not care.
+    /// size and digest ON RECORD. The detail row says "not yet archived"
+    /// when false; the tier does not care — and this is NOT the count's
+    /// evidence (codex 1606 #1): an archive copy counts only through
+    /// its stamp-bound fixity, like any sibling.
     var hasVerifiedArchive: Bool = false
     /// Family copies that exist but could not be counted (no fixity,
     /// stamp changed, offline, or a different digest).
@@ -151,14 +168,30 @@ struct DeletionTierFacts: Sendable, Equatable {
                 facts.notCounted.append("\(archive.label) offline")
                 continue
             }
-            guard stamp.size == archive.sizeBytes, archive.digest.lowercased() == wanted else {
+            guard stamp.size == archive.sizeBytes, archive.digest.lowercased() == wanted,
+                  archive.fixity.map({ $0.digest == wanted }) ?? true else {
                 facts.unverifiedCopies += 1
                 facts.notCounted.append("\(archive.label) holds different bytes")
                 continue
             }
+            // On record: the family has an archive copy of these bytes.
+            // Informational only — the count below needs CURRENT,
+            // identity-bound evidence, exactly as a sibling does (codex
+            // 1606 #1: a same-size rewrite of the archive keeps its size
+            // and its digest on record; only the kernel ctime tells).
+            facts.hasVerifiedArchive = true
+            guard let fixity = archive.fixity, fixity.isUsableForVerification else {
+                facts.unverifiedCopies += 1
+                facts.notCounted.append("\(archive.label) not verified now (no stamp-bound fixity — run Verify Archive Copies)")
+                continue
+            }
+            guard fixity.describesFileNow(stamp) else {
+                facts.unverifiedCopies += 1
+                facts.notCounted.append("\(archive.label) not verified now (changed since it was verified)")
+                continue
+            }
             if alreadyCounted(stamp, archive.label) { continue }
             facts.remainingVerifiedCopies += 1
-            facts.hasVerifiedArchive = true
             facts.counted.append(archive.label)
         }
         for copy in candidates.otherCopies {
@@ -228,6 +261,10 @@ enum DeletionTierText {
     static let preferTrashToggleLabel = "Prefer the Trash for every duplicate"
     static let preferTrashCaption = "Off: a duplicate with three or more verified copies left behind (the keeper, an archive copy, siblings whose stored fixity still reproduces) is deleted outright; with exactly two left, it goes to the drive's Trash instead; with fewer, it is left alone. On: every duplicate goes to the Trash, whatever the count. An archive copy counts but is not required."
     static func inTheTrashOf(_ volume: String) -> String { "in the Trash of \(volume)" }
+    /// "1 file on SanDisk is waiting to be put back from quarantine".
+    static func waitingToBePutBack(_ n: Int, volume: String) -> String {
+        "\(n) file\(n == 1 ? " is" : "s are") on \(volume) waiting to be put back from quarantine"
+    }
 }
 
 struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
@@ -310,6 +347,24 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         var hasVerifiedArchive: Bool?
 
         var keeperVolumeName: String { VolumeReachability.volumeName(forPath: keeperPath) }
+
+        /// RECOVERY NEEDED (codex 1606 #3): the row is settled — refused,
+        /// failed, whatever — but its file is still sitting in the
+        /// quarantine folder the plan names, because a put-back failed
+        /// (the original path was occupied, the move failed). Distinct
+        /// from permission to delete: this row is never re-verified or
+        /// removed; the only thing owed is the move back to `path`.
+        /// A row still `.verified` is in flight (or crashed mid-pair) and
+        /// is the resume's business, not recovery's.
+        var needsRecovery: Bool { status.isSettled && quarantineDirectory != nil }
+
+        /// Where the stranded file sits: the named folder + the original
+        /// basename (the quarantine move keeps the name).
+        var quarantinedFileURL: URL? {
+            guard let quarantineDirectory else { return nil }
+            return URL(fileURLWithPath: quarantineDirectory, isDirectory: true)
+                .appendingPathComponent((path as NSString).lastPathComponent)
+        }
 
         /// "Permanent" / "Trash of SanDisk" / "—" for the detail view,
         /// with " · not yet archived" when the family has no verified
@@ -419,11 +474,32 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
 
     var remainingCount: Int { entries.reduce(0) { $0 + ($1.status.isSettled ? 0 : 1) } }
     var isFinished: Bool { finishedAt != nil }
-    /// A plan worth offering: not finished and with rows still to do.
+    /// A plan whose rows can be RESUMED: not finished and with rows still
+    /// to do. Says nothing about stranded files — see `needsRecovery`.
     var isResumable: Bool { finishedAt == nil && remainingCount > 0 }
 
+    /// Rows whose file is still in quarantine and owed a put-back.
+    var strandedEntries: [Entry] { entries.filter(\.needsRecovery) }
+    var strandedCount: Int { entries.reduce(0) { $0 + ($1.needsRecovery ? 1 : 0) } }
+    /// At least one file is waiting to be put back (codex 1606 #3).
+    var needsRecovery: Bool { entries.contains { $0.needsRecovery } }
+    /// Worth OFFERING at launch and after a run: resumable, or with files
+    /// waiting to be put back — regardless of `finishedAt` and of any
+    /// deletion authority. Such a plan is never under done/.
+    var isOfferable: Bool { isResumable || needsRecovery }
+
+    /// "1 file is on SanDisk waiting to be put back from quarantine".
+    var recoveryOffer: String { DeletionTierText.waitingToBePutBack(strandedCount, volume: volumeName) }
+
     /// "Resume deleting duplicates on SanDisk — 1,203 of 2,992 remaining?"
+    /// — and, when files are stranded, that too; a plan with ONLY
+    /// stranded files says just that.
     var resumeOffer: String {
+        guard isResumable else { return needsRecovery ? recoveryOffer : plainResumeOffer }
+        return needsRecovery ? plainResumeOffer + " " + recoveryOffer + "." : plainResumeOffer
+    }
+
+    private var plainResumeOffer: String {
         let f = NumberFormatter(); f.numberStyle = .decimal
         let remaining = f.string(from: NSNumber(value: remainingCount)) ?? "\(remainingCount)"
         let total = f.string(from: NSNumber(value: entries.count)) ?? "\(entries.count)"
@@ -464,6 +540,18 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
         entries[i].quarantineDirectory = nil
         entries[i].quarantinedStamp = nil
+    }
+
+    /// A stranded row's file was put back (or found gone from the folder):
+    /// forget the folder and say so on the row; the status stays what the
+    /// run decided — recovery is not a verdict.
+    mutating func markRecovered(_ id: UUID, note: String, at now: Date = Date()) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[i].quarantineDirectory = nil
+        entries[i].quarantinedStamp = nil
+        entries[i].note = entries[i].note.isEmpty ? note : entries[i].note + " — " + note
+        entries[i].settledAt = now
+        log.append(note)
     }
 
     /// Rows still unsettled become `skipped` with `reason` (cancel / quit).
@@ -644,8 +732,11 @@ enum DeleteDuplicatesPlanStore {
         return try dec.decode(DeleteDuplicatesPlan.self, from: Data(contentsOf: url))
     }
 
-    /// Every unfinished plan under `root` (not under done/), newest first.
-    /// Unreadable folders are named to `log` once per call and left alone.
+    /// Every plan under `root` (not under done/) worth offering, newest
+    /// first: resumable, or with files waiting to be put back from
+    /// quarantine — a finished plan with a stranded row is listed too
+    /// (codex 1606 #3). Unreadable folders are named to `log` once per
+    /// call and left alone.
     nonisolated static func unfinishedPlans(root: URL,
                                             log: (String) -> Void = { appLog.write($0) }) -> [DeleteDuplicatesPlan] {
         let fm = FileManager.default
@@ -657,7 +748,7 @@ enum DeleteDuplicatesPlanStore {
             guard fm.fileExists(atPath: url.path) else { continue }
             do {
                 let plan = try load(url: url)
-                if plan.isResumable { plans.append(plan) }
+                if plan.isOfferable { plans.append(plan) }
             } catch {
                 log("Delete Duplicates: plan \(name) can't be read — \(error.localizedDescription); left in place")
             }

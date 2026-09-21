@@ -228,9 +228,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     center.finishInFlightThenSuspendForQuit()
                     Task { @MainActor [weak self] in
                         let settled = await center.waitForDeleteDuplicatesToSettle(deadline: Self.deleteDuplicatesFinishDeadline)
+                        // The deadline path revoked "finish this file" and
+                        // asked for the put-back; what is logged is what was
+                        // OBSERVED after the grace period (codex 1606).
                         appLog.write(settled
                             ? "quit: Delete Duplicates finished its file and suspended (plan kept for resume)"
-                            : "quit: Delete Duplicates did not finish in time — file put back, plan kept for resume")
+                            : "quit: Delete Duplicates did not finish in time — finish revoked, put-back requested")
+                        for line in center.deleteDuplicatesQuitOutcomeLines { appLog.write("quit: \(line)") }
                         self?.captionOrchestrator?.beginShutdown()
                         await self?.drainVLMForShutdownIfActive()
                         NSApp.reply(toApplicationShouldTerminate: true)
@@ -241,16 +245,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     appLog.write("quit dialog: user chose \(midPair ? "Stop now" : "Quit Anyway") — stopping \(running) operation(s)"
                                  + (suspending ? " (Delete Duplicates suspended, plan kept for resume)" : ""))
                     center.stopAllForQuit()
-                    // "Move to Trash" (Archived — what next?): Stop cancels
-                    // its reads at once, but a file already past its guard
-                    // is mid-trashItem on a detached task, and its purgedAt
-                    // + ledger line land only when the job's task returns.
-                    // Give it a bounded moment rather than terminateNow.
-                    if center.hasActivePruneApply {
-                        appLog.write("quit: waiting up to \(Int(Self.pruneApplySettleDeadline))s for Move to Trash to settle its file")
+                    // Two jobs promise the file in flight is put back or
+                    // settled before the process goes away — wait for
+                    // whichever is active, bounded, and log what was seen.
+                    // Delete Duplicates (codex 1606): the restore + plan save.
+                    // Move to Trash: a file past its guard is mid-trashItem
+                    // on a detached task; its purgedAt + ledger line land
+                    // only when the job's task returns.
+                    if suspending || center.hasActivePruneApply {
                         Task { @MainActor [weak self] in
-                            let settled = await center.waitForPruneApplyToSettle(deadline: Self.pruneApplySettleDeadline)
-                            appLog.write(settled ? "quit: Move to Trash settled" : "quit: Move to Trash did not settle in time — proceeding")
+                            if suspending {
+                                let stopped = await center.waitForDeleteDuplicatesToStop(deadline: Self.deleteDuplicatesStopDeadline)
+                                appLog.write(stopped
+                                    ? "quit: Delete Duplicates stopped and its plan is saved"
+                                    : "quit: Delete Duplicates did not settle within \(Int(Self.deleteDuplicatesStopDeadline))s — quitting anyway; the next launch offers recovery from the plan")
+                                for line in center.deleteDuplicatesQuitOutcomeLines { appLog.write("quit: \(line)") }
+                            }
+                            if center.hasActivePruneApply {
+                                appLog.write("quit: waiting up to \(Int(Self.pruneApplySettleDeadline))s for Move to Trash to settle its file")
+                                let settled = await center.waitForPruneApplyToSettle(deadline: Self.pruneApplySettleDeadline)
+                                appLog.write(settled ? "quit: Move to Trash settled" : "quit: Move to Trash did not settle in time — proceeding")
+                            }
                             self?.captionOrchestrator?.beginShutdown()
                             await self?.drainVLMForShutdownIfActive()
                             NSApp.reply(toApplicationShouldTerminate: true)
@@ -300,6 +315,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Stop: at most one trashItem already past its guard (a rename), plus
     /// the catalog stamp and ledger line.
     static let pruneApplySettleDeadline: TimeInterval = 30
+
+    /// Max seconds "Stop now" / "Quit Anyway" waits for Delete Duplicates
+    /// to put the file in flight back and save its plan. A put-back is a
+    /// rename plus one cancelled read noticing (1 MiB blocks); a minute
+    /// is generous, and past it the plan on disk names the file anyway.
+    static let deleteDuplicatesStopDeadline: TimeInterval = 60
 
     /// The VLM drain, shared by the immediate quit path and the
     /// finish-this-file-first path. No-op when no batch is active.

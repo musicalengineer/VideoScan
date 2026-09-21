@@ -65,7 +65,19 @@
 // "Stop and discard the rest" files the plan as cancelled. QUIT mid-pair
 // offers "Finish this file, then quit" (the pair lands, the plan is
 // saved at the boundary) or "Stop now" (the pair is put back); either way
-// the plan is suspended, never abandoned (#5).
+// the plan is suspended, never abandoned (#5). "Finish this file" is a
+// PERMISSION, and a later Stop / Quit / deadline REVOKES it (codex 1606
+// #2): the latch is cleared and the stop flag set before any await can
+// return, so phase 2 never starts after a forced stop — the file goes
+// back. What happened to the file in flight is recorded on the job
+// (`interruptedFileOutcomes`) so the quit path logs what it OBSERVED,
+// never what it hoped (codex 1606, "Stop now").
+//
+// A file a put-back could not return (the original path was occupied)
+// leaves its row settled but STRANDED: the plan is never filed as done,
+// stays offered as "N files waiting to be put back", and the Put Back
+// action (or the next resume) retries only the move home — no
+// verification, no deletion authority (codex 1606 #3).
 //
 // (For Rick: `@MainActor final class` ≈ a class whose every member is
 // touched only on the UI thread; the disk work is handed to
@@ -284,8 +296,13 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// The app is quitting: suspend, don't abandon (#5).
     private(set) var quitRequested = false
     /// Quit chose "Finish this file, then quit": the pair(s) in flight
-    /// land normally, nothing new starts.
+    /// land normally, nothing new starts. A PERMISSION — revoked by any
+    /// later Stop / Quit / deadline (codex 1606 #2), never left standing.
     private(set) var finishInFlightForQuit = false
+    /// What became of each file that was in flight when the run was
+    /// interrupted — "put back at …" or "could not put back — …" — in
+    /// the order they settled. The quit path logs these, observed.
+    private(set) var interruptedFileOutcomes: [String] = []
     /// Stop (default): put the pair in flight back, keep the plan
     /// resumable and offer it at once.
     private(set) var stopKeepingPlan = false
@@ -390,6 +407,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
 
     func cancel(discardingRemaining: Bool) {
         guard state.isActive else { return }
+        // Revoke "finish this file" FIRST (codex 1606 #2): the release
+        // gate after the ticket save and the newborn-worker cancel both
+        // read this latch, and a Stop that lands during that save has no
+        // worker to cancel — the cleared latch is what stops phase 2.
+        finishInFlightForQuit = false
         if discardingRemaining {
             discardRequested = true
             subtitleText = "Stopping — files already deleted stay deleted, the rest are left alone…"
@@ -408,6 +430,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// stays unfinished in place and is offered to resume at the next launch.
     func stopForQuit() {
         guard state.isActive else { return }
+        // A forced stop after "finish this file" (the quit deadline, or
+        // "Stop now" chosen after it) revokes the permission before any
+        // await returns (codex 1606 #2).
+        finishInFlightForQuit = false
         quitRequested = true
         state = .cancelling
         subtitleText = "Quitting — files already deleted stay deleted; the rest will be offered to resume at the next launch…"
@@ -463,6 +489,18 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// The quit guard's log line for a paused, idle job.
     var pausedForQuitLogLine: String {
         "delete duplicates paused at \(progressText()) — plan kept, resume at next launch"
+    }
+
+    /// What the quit path OBSERVED after a stop (codex 1606, "Stop now"):
+    /// whether the run has settled, and what became of each file that was
+    /// in flight — put back at its path, or could not be put back and
+    /// where it sits. Never a promise.
+    var quitOutcomeLine: String {
+        let settled = state.isActive ? "still settling (\(inFlight.count) in flight)" : "settled"
+        let files = interruptedFileOutcomes.isEmpty
+            ? (state.isActive ? "no file has settled yet" : "no file was in flight")
+            : interruptedFileOutcomes.joined(separator: "; ")
+        return "delete duplicates on \(volumeName) \(settled) at \(progressText()) — \(files); plan kept for resume"
     }
 
     private func progressText() -> String {
@@ -735,7 +773,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         // where it is — still discoverable — and says so.
         if !stranded.isEmpty {
             _ = await savePlan(context: "finished with \(stranded.count) stranded", final: true)
-            model.log("  Delete Duplicates: \(stranded.count) file(s) are still in quarantine and could not be put back — the plan stays under \(DeleteDuplicatesPlanStore.directory(for: finalPlan.id, root: planRoot).path) and is not filed as done: "
+            model.log("  Delete Duplicates: \(stranded.count) file(s) are still in quarantine and could not be put back — the plan stays under \(DeleteDuplicatesPlanStore.directory(for: finalPlan.id, root: planRoot).path) and is not filed as done; it will be offered with a Put Back action (here, and at the next launch): "
                       + stranded.map { "\($0.filename) in \($0.quarantineDirectory ?? "?")" }.joined(separator: "; "))
         } else if await savePlan(context: "finished", final: true) {
             fileDone(finalPlan)
@@ -812,7 +850,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 // A Stop / Quit landed while the ticket was being saved —
                 // no worker was running to cancel. Re-check the latch
                 // BEFORE phase 2 exists: the file goes back, never on
-                // (codex follow-up P1 #4).
+                // (codex follow-up P1 #4). A forced stop that REVOKED
+                // "finish this file" during the save lands here too: the
+                // latch is false again, the stop flag set (codex 1606 #2).
                 outcome = await runDetached(entryID: entry.id) {
                     DeleteDuplicatesDiskWorker.release(ticket, reason: "stopped after quarantine",
                                                        keeperFilename: keeperName)
@@ -910,6 +950,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             tally.failed += 1
             model.log("  RETAINED safely at \(path): \(reason)")
             mutatePlan { $0.set(entry.id, .failed, note: "retained safely at \(path): \(reason)") }
+            if stopRequested {
+                interruptedFileOutcomes.append("could not put back \(entry.filename) — retained at \(path): \(reason)")
+            }
         case .deleted(let bytes, let proof):
             tally.bytesFreed += bytes
             tally.deleted += 1
@@ -938,6 +981,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             let how = quitRequested ? "quit" : "Stop"
             mutatePlan { $0.set(entry.id, .pending, note: "interrupted by \(how) — will be re-checked at resume") }
             model.log("  \(quitRequested ? "Quit" : "Stopped") while verifying \(entry.filename) — put back; it will be re-checked at resume")
+            interruptedFileOutcomes.append("put back \(entry.filename) at \(entry.path)")
         } else if cancelled && planSaveFailed {
             tally.failed += 1
             mutatePlan { $0.set(entry.id, .skipped, note: "the plan could not be saved after quarantine — put back and left alone") }
@@ -948,6 +992,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             tally.failed += 1
             mutatePlan { $0.set(entry.id, .skipped, note: "cancelled during verification — left alone") }
             model.log("  Stopped while verifying \(entry.filename) — left alone")
+            interruptedFileOutcomes.append("put back \(entry.filename) at \(entry.path)")
         } else {
             tally.refused += 1
             let mutated = model.noteRefusedDuplicate(expectedID: entry.id, expectedPath: entry.path,
@@ -1030,6 +1075,12 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         var plan = input
         plan.resumeCount += 1
         model.log("\nResuming Delete Duplicates on \(plan.volumeName): \(plan.remainingCount) of \(plan.entries.count) remaining — re-checking every one against the catalog first…")
+        // Files stranded by an earlier failed put-back are tried again
+        // before anything else — the move home only, no verdict (codex
+        // 1606 #3). A settled row never re-enters the run.
+        if plan.needsRecovery {
+            _ = Self.putBackStranded(in: &plan, log: { model.log($0) })
+        }
         let now = Date()
         var refusedNow = 0
         var skippedNow = 0
@@ -1289,6 +1340,44 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         return .success(removed)
     }
 
+    /// Retry the put-back of every STRANDED row (settled, file still in
+    /// the quarantine folder the plan names) — the move home and nothing
+    /// else: only the file this run put there (recorded stamp; size when
+    /// the crash beat the save), only onto a free original path, the
+    /// folder removed only if empty. A row whose folder no longer holds
+    /// the file (moved by hand) is closed with a note. The row's status
+    /// is untouched — recovery is not a verdict. Synchronous: a handful
+    /// of renames (codex 1606 #3).
+    @discardableResult
+    nonisolated static func putBackStranded(in plan: inout DeleteDuplicatesPlan,
+                                            log: (String) -> Void) -> (restored: Int, stillStranded: Int) {
+        var restored = 0
+        var stillStranded = 0
+        for entry in plan.entries where entry.needsRecovery {
+            guard let url = entry.quarantinedFileURL else { continue }
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else {
+                let note = "no longer in \(url.deletingLastPathComponent().lastPathComponent) — nothing to put back"
+                plan.markRecovered(entry.id, note: note)
+                log("  \(entry.filename): \(note) (moved by hand?)")
+                continue
+            }
+            switch restoreQuarantined(url, to: entry.path, expectedStamp: entry.quarantinedStamp,
+                                      expectedSize: entry.sizeBytes) {
+            case .success(let directoryRemoved):
+                restored += 1
+                let note = "put back at \(entry.path)"
+                plan.markRecovered(entry.id, note: note)
+                log("  Put back \(entry.filename) at \(entry.path) from quarantine"
+                    + (directoryRemoved ? "" : " (the quarantine folder was not empty and was left in place)"))
+            case .failure(let error):
+                stillStranded += 1
+                log("  \(entry.filename) is still in quarantine at \(url.path) — not put back: \(error.description)")
+            }
+        }
+        return (restored, stillStranded)
+    }
+
     /// True when the snapshot is missing or older than the catalog file's
     /// last modification. Pure over paths + dates; nil snapshot = stale.
     nonisolated static func snapshotIsStale(snapshotPath: String?, takenAt: Date?,
@@ -1481,13 +1570,36 @@ extension MediaFileOperationsCenter {
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
         if activeDeleteDuplicates.isEmpty { return true }
-        deleteDupLog.warning("quit: Delete Duplicates did not finish its file within \(deadline)s — putting it back")
+        deleteDupLog.warning("quit: Delete Duplicates did not finish its file within \(deadline)s — revoking finish, putting it back")
+        // Revokes "finish this file" and sets the stop flag on each job
+        // BEFORE this function next suspends (codex 1606 #2).
         for job in activeDeleteDuplicates { job.stopForQuit() }
         let graceStart = Date()
         while !activeDeleteDuplicates.isEmpty, Date().timeIntervalSince(graceStart) < grace {
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
+        // Log what was OBSERVED, not what was hoped.
+        for line in deleteDuplicatesQuitOutcomeLines { deleteDupLog.notice("quit: \(line, privacy: .public)") }
         return false
+    }
+
+    /// After `stopAllForQuit` ("Stop now" / "Quit Anyway"): wait, bounded,
+    /// for every Delete Duplicates job to put its file back and save its
+    /// plan before the process goes away (codex 1606: the branch used to
+    /// return `.terminateNow` with the restore still in flight). Returns
+    /// true when all settled in time; the observed outcomes are in
+    /// `deleteDuplicatesQuitOutcomeLines` either way.
+    func waitForDeleteDuplicatesToStop(deadline: TimeInterval) async -> Bool {
+        let started = Date()
+        while !activeDeleteDuplicates.isEmpty, Date().timeIntervalSince(started) < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return activeDeleteDuplicates.isEmpty
+    }
+
+    /// One observed line per Delete Duplicates job a quit interrupted.
+    var deleteDuplicatesQuitOutcomeLines: [String] {
+        jobs.compactMap { $0 as? DeleteDuplicatesJob }.filter { $0.quitRequested }.map(\.quitOutcomeLine)
     }
 
     /// The quit dialog's body. A live Delete Duplicates run is suspended,

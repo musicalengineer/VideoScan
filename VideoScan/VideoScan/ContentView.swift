@@ -997,14 +997,24 @@ struct CatalogView: View {
                    get: { model.pendingDeleteDuplicatesResume != nil && !dismissedResumeOffer },
                    set: { shown in if !shown { dismissedResumeOffer = true } }),
                presenting: model.pendingDeleteDuplicatesResume) { plan in
-            Button("Resume") {
-                fileOpsCenter.resumeDeleteDuplicates(plan: plan, model: model)
-                MediaFileOperationsWindowOpener.openInFront(openWindow)
+            if plan.isResumable {
+                Button("Resume") {
+                    fileOpsCenter.resumeDeleteDuplicates(plan: plan, model: model)
+                    MediaFileOperationsWindowOpener.openInFront(openWindow)
+                }
+            }
+            if plan.needsRecovery {
+                // Files a run could not put back (codex 1606 #3): the move
+                // home only — no verification, no deletion.
+                Button("Put Back") { model.putBackStrandedDuplicates() }
             }
             Button("Discard", role: .destructive) { model.discardPendingDeleteDuplicatesPlan() }
             Button("Not Now", role: .cancel) { dismissedResumeOffer = true }
         } message: { plan in
-            Text(plan.resumeOffer + "\n\nA run was interrupted (quit or crash). Nothing resumes on its own: every remaining file is re-checked against the catalog and its keeper before anything is read or removed. Not Now keeps the offer in the Media File Operations window.")
+            Text(plan.resumeOffer + (plan.isResumable
+                 ? "\n\nA run was interrupted (quit or crash). Nothing resumes on its own: every remaining file is re-checked against the catalog and its keeper before anything is read or removed."
+                 : "\n\nA run ended with a file it could not put back (its original path was occupied). Put Back moves it to where it lived — nothing is verified or deleted.")
+                 + " Not Now keeps the offer in the Media File Operations window.")
         }
         .alert("Clear & Re-correlate All", isPresented: $showClearRecorrelateConfirm) {
             Button("Clear All Pairs & Re-correlate", role: .destructive) {

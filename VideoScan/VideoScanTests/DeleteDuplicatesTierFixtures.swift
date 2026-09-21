@@ -18,12 +18,14 @@ import VideoScanCore
 
 /// Give `keeper`'s family what the tier needs for a PERMANENT deletion:
 /// a fixity-verified archive copy of the keeper's bytes (an
-/// `archivePromotion` derivative of the keeper with `archiveFixity`) and,
-/// by default, one more verified member of the same duplicate group (a
-/// `.review` row with a stored ContentFixity) — so archive + keeper +
-/// sibling = 3 verified copies remain after any extra goes. Files are
-/// written beside the keeper (or in `directory`). Both records are
-/// appended to `model.records`.
+/// `archivePromotion` derivative of the keeper with `archiveFixity` AND
+/// the stamp-bound `contentFixity` Verify Archive Copies writes — since
+/// codex 1606 #1 an archive copy counts only through that, like any
+/// sibling) and, by default, one more verified member of the same
+/// duplicate group (a `.review` row with a stored ContentFixity) — so
+/// archive + keeper + sibling = 3 verified copies remain after any extra
+/// goes. Files are written beside the keeper (or in `directory`). Both
+/// records are appended to `model.records`.
 @MainActor
 @discardableResult
 func addVerifiedArchiveFamily(to model: VideoScanModel, keeper: VideoRecord, in directory: URL? = nil,
@@ -44,6 +46,7 @@ func addVerifiedArchiveFamily(to model: VideoScanModel, keeper: VideoRecord, in 
     archive.derivedFrom = keeper.id
     archive.derivationKind = ArchivePromotion.derivationKind
     archive.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: Date(), sizeBytes: Int64(bytes.count))
+    archive.contentFixity = ContentFixity.captured(path: archiveURL.path, digest: digest, byteCount: Int64(bytes.count))
     model.records.append(archive)
 
     var sibling: VideoRecord?

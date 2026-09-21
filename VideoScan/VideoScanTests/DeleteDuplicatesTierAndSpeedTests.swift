@@ -175,15 +175,18 @@ struct DeletionTierRuleTests {
     }
 
     /// The disk side: an archive copy counts only when it is there with
-    /// the same size and the SAME digest; another copy only when its
-    /// stored fixity reproduces and its digest is this one's; a keeper
-    /// that IS the archive copy is counted once.
+    /// the same size, the SAME digest AND a stamp-bound fixity that
+    /// reproduces now (codex 1606 #1 — the digest on record alone is
+    /// not current evidence); another copy only when its stored fixity
+    /// reproduces and its digest is this one's; a keeper that IS the
+    /// archive copy is counted once.
     @Test func gatherCountsOnlyCopiesThatHoldTheseBytes() throws {
         let dir = tempDir("gather"); defer { try? FileManager.default.removeItem(at: dir) }
         let bytes = (0..<4_096).map { UInt8($0 % 7) }
         var other = bytes; other[100] ^= 0xFF
         let archiveOK = dir.appendingPathComponent("archive.mov"); write(archiveOK, bytes)
         let archiveOther = dir.appendingPathComponent("archive-other.mov"); write(archiveOther, other)
+        let archiveUnaudited = dir.appendingPathComponent("archive-unaudited.mov"); write(archiveUnaudited, bytes)
         let copyOK = dir.appendingPathComponent("copy.mov"); write(copyOK, bytes)
         let copyStale = dir.appendingPathComponent("stale.mov"); write(copyStale, bytes)
         let digest = plainSHA256(archiveOK)
@@ -192,20 +195,23 @@ struct DeletionTierRuleTests {
 
         var c = DeletionTierCandidates()
         c.keeperLabel = "keeper on LaCieWorkspace"
-        c.archiveCopies = [.init(path: archiveOK.path, digest: digest.uppercased(), sizeBytes: 4_096, label: "archive copy on FamilyArchive"),
+        c.archiveCopies = [.init(path: archiveOK.path, digest: digest.uppercased(), sizeBytes: 4_096,
+                                 fixity: ContentFixity.captured(path: archiveOK.path, digest: digest, byteCount: 4_096), label: "archive copy on FamilyArchive"),
                            .init(path: archiveOther.path, digest: plainSHA256(archiveOther), sizeBytes: 4_096, label: "archive copy on Projects"),
-                           .init(path: dir.appendingPathComponent("offline.mov").path, digest: digest, sizeBytes: 4_096, label: "archive copy on MyBook")]
+                           .init(path: dir.appendingPathComponent("offline.mov").path, digest: digest, sizeBytes: 4_096, label: "archive copy on MyBook"),
+                           .init(path: archiveUnaudited.path, digest: digest, sizeBytes: 4_096, label: "archive copy on Pegasus")]
         c.otherCopies = [.init(path: copyOK.path, fixity: ContentFixity.captured(path: copyOK.path, digest: digest, byteCount: 4_096), label: "sibling copy.mov on SanDisk"),
                          .init(path: copyStale.path, fixity: staleFixity, label: "sibling stale.mov on SanDisk"),
                          .init(path: dir.appendingPathComponent("nofixity.mov").path, fixity: nil, label: "sibling nofixity.mov on M4drive")]
         let f = DeletionTierFacts.gather(c, digest: digest)
         #expect(f.hasVerifiedArchive)
         #expect(f.remainingVerifiedCopies == 3, "keeper + the one good archive copy + the one good copy")
-        #expect(f.unverifiedCopies == 4)
+        #expect(f.unverifiedCopies == 5)
         #expect(f.counted == ["keeper on LaCieWorkspace", "archive copy on FamilyArchive", "sibling copy.mov on SanDisk"])
         #expect(f.notCounted == ["archive copy on Projects holds different bytes", "archive copy on MyBook offline",
+                                 "archive copy on Pegasus not verified now (no stamp-bound fixity — run Verify Archive Copies)",
                                  "sibling stale.mov on SanDisk changed since it was verified", "sibling nofixity.mov on M4drive not verified yet"])
-        #expect(f.summary == "3 verified remain: keeper on LaCieWorkspace, archive copy on FamilyArchive, sibling copy.mov on SanDisk; archive copy on Projects holds different bytes, archive copy on MyBook offline, sibling stale.mov on SanDisk changed since it was verified, sibling nofixity.mov on M4drive not verified yet")
+        #expect(f.summary == "3 verified remain: keeper on LaCieWorkspace, archive copy on FamilyArchive, sibling copy.mov on SanDisk; archive copy on Projects holds different bytes, archive copy on MyBook offline, archive copy on Pegasus not verified now (no stamp-bound fixity — run Verify Archive Copies), sibling stale.mov on SanDisk changed since it was verified, sibling nofixity.mov on M4drive not verified yet")
         let d = DeletionTierDecision.decide(facts: f, preferTrash: false)
         #expect(d.tier == .permanent && d.reason == "space back now (\(f.summary))")
 

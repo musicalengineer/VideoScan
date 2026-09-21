@@ -588,8 +588,12 @@ extension VideoScanModel {
         func noteArchive(_ copy: VideoRecord) {
             guard !copy.isPurged, !seenArchive.contains(copy.id), let fixity = copy.archiveFixity else { return }
             seenArchive.insert(copy.id)
+            // The promote-time digest is the record; the stamp-bound
+            // `contentFixity` (Verify Archive Copies) is the only thing
+            // that can prove the copy holds these bytes NOW (codex 1606
+            // #1). Without it the copy is named "not verified now".
             out.archiveCopies.append(.init(path: copy.fullPath, digest: fixity.digest, sizeBytes: fixity.sizeBytes,
-                                           label: "archive copy on \(volume(copy))"))
+                                           fixity: copy.contentFixity, label: "archive copy on \(volume(copy))"))
         }
         // The keeper is counted once by the worker, as the keeper. When it
         // IS the archive copy it is not listed again as an archive copy —
@@ -669,10 +673,57 @@ extension VideoScanModel {
         }
         pendingDeleteDuplicatesResume = oldest
         let others = mine.count - 1
-        log("\nDelete Duplicates: an unfinished run on \(oldest.volumeName) was found — "
-            + "\(oldest.remainingCount) of \(oldest.entries.count) still to do. Nothing resumes on its own; "
-            + "use Resume or Discard in Media File Operations."
-            + (others > 0 ? " \(others) more unfinished run\(others == 1 ? "" : "s") will be offered after it, oldest first." : ""))
+        let stranded = oldest.strandedCount
+        if oldest.isResumable {
+            log("\nDelete Duplicates: an unfinished run on \(oldest.volumeName) was found — "
+                + "\(oldest.remainingCount) of \(oldest.entries.count) still to do"
+                + (stranded > 0 ? ", and \(oldest.recoveryOffer)" : "")
+                + ". Nothing resumes on its own; use Resume\(stranded > 0 ? ", Put Back" : "") or Discard in Media File Operations."
+                + (others > 0 ? " \(others) more unfinished run\(others == 1 ? "" : "s") will be offered after it, oldest first." : ""))
+        } else {
+            // Only stranded files (codex 1606 #3): a run that ended with a
+            // put-back it could not do. Nothing here is a deletion.
+            log("\nDelete Duplicates: \(oldest.recoveryOffer) — the run on \(oldest.volumeName) is over; "
+                + "Put Back in Media File Operations moves the file\(stranded == 1 ? "" : "s") to where \(stranded == 1 ? "it" : "they") lived. Nothing is deleted or re-verified."
+                + (others > 0 ? " \(others) more unfinished run\(others == 1 ? "" : "s") will be offered after it, oldest first." : ""))
+        }
+    }
+
+    /// The user chose Put Back (codex 1606 #3): every stranded row's file
+    /// is moved from the quarantine folder the plan names back to its
+    /// original path — only the file this run put there (stamp), only when
+    /// the path is free; nothing is verified, nothing is deleted, no
+    /// deletion authority is consulted. The plan is saved; when nothing is
+    /// left to resume or recover it is filed under done/. A file that
+    /// still cannot be put back stays named, and the plan stays offered.
+    /// Returns how many were put back.
+    @discardableResult
+    func putBackStrandedDuplicates(root: URL = DeleteDuplicatesPlanStore.defaultRoot) -> Int {
+        guard var plan = pendingDeleteDuplicatesResume, plan.needsRecovery else { return 0 }
+        let result = DeleteDuplicatesJob.putBackStranded(in: &plan, log: { [weak self] in self?.log($0) })
+        if !plan.isResumable, !plan.needsRecovery {
+            if plan.finishedAt == nil {
+                plan.finishedAt = Date()
+                plan.outcome = plan.outcome ?? "completed"
+            }
+        }
+        do {
+            try DeleteDuplicatesPlanStore.save(plan, root: root)
+            if !plan.isOfferable {
+                try DeleteDuplicatesPlanStore.moveToDone(plan, root: root)
+            }
+        } catch {
+            log("Delete Duplicates: could not save the plan for \(plan.volumeName) after putting files back — \(error.localizedDescription)")
+        }
+        if result.stillStranded > 0 {
+            log("Delete Duplicates: \(result.restored) put back, \(result.stillStranded) still in quarantine on \(plan.volumeName) — the offer stays until they are back.")
+        } else {
+            log("Delete Duplicates: \(result.restored) file\(result.restored == 1 ? "" : "s") put back on \(plan.volumeName)"
+                + (plan.isResumable ? "; the run is still offered to resume." : "; nothing else is owed — the plan is filed."))
+        }
+        pendingDeleteDuplicatesResume = nil
+        checkForUnfinishedDeleteDuplicatesPlans(root: root)
+        return result.restored
     }
 
     /// The user chose Discard: the plan is settled (remaining rows skipped,
@@ -682,9 +733,24 @@ extension VideoScanModel {
     func discardPendingDeleteDuplicatesPlan(root: URL = DeleteDuplicatesPlanStore.defaultRoot) {
         guard var plan = pendingDeleteDuplicatesResume else { return }
         pendingDeleteDuplicatesResume = nil
+        // A stranded file is put back first (codex 1606 #3): Discard files
+        // the plan under done/, and a plan under done/ is never offered
+        // again — so it must not carry a file still in quarantine. One
+        // that STILL cannot be put back keeps the plan in place, offered.
+        if plan.needsRecovery {
+            let result = DeleteDuplicatesJob.putBackStranded(in: &plan, log: { [weak self] in self?.log($0) })
+            if plan.needsRecovery {
+                do { try DeleteDuplicatesPlanStore.save(plan, root: root) } catch {
+                    log("Delete Duplicates: could not save the plan for \(plan.volumeName) — \(error.localizedDescription)")
+                }
+                log("Delete Duplicates: not discarded — \(result.stillStranded) file\(result.stillStranded == 1 ? " is" : "s are") still in quarantine on \(plan.volumeName) and must be put back first (see the console for why).")
+                checkForUnfinishedDeleteDuplicatesPlans(root: root)
+                return
+            }
+        }
         let skipped = plan.skipRemaining(reason: "discarded by you at the next launch")
-        plan.finishedAt = Date()
-        plan.outcome = "discarded"
+        plan.finishedAt = plan.finishedAt ?? Date()
+        plan.outcome = plan.outcome ?? "discarded"
         plan.log.append("Discarded at launch: \(skipped) row(s) never reached")
         do {
             try DeleteDuplicatesPlanStore.save(plan, root: root)

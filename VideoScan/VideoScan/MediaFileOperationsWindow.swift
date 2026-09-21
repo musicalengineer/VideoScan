@@ -147,6 +147,7 @@ struct MediaFileOperationsWindow: View {
             if let pending = model.pendingDeleteDuplicatesResume {
                 DeleteDuplicatesResumeBanner(plan: pending,
                                              onResume: { center.resumeDeleteDuplicates(plan: pending, model: model) },
+                                             onPutBack: { model.putBackStrandedDuplicates() },
                                              onDiscard: { model.discardPendingDeleteDuplicatesPlan() })
                 Divider()
             }
@@ -379,11 +380,13 @@ struct MediaFileOperationsWindow: View {
 // MARK: - Resume offer (Delete Duplicates, 2026-09-20)
 
 /// "Resume deleting duplicates on SanDisk — 1,203 of 2,992 remaining?"
-/// with Resume / Discard. Shown while the model holds an unfinished plan
-/// found at launch; NEVER acts on its own.
+/// with Resume / Discard — and "N files waiting to be put back" with
+/// Put Back when a run left files in quarantine (codex 1606 #3). Shown
+/// while the model holds an offerable plan; NEVER acts on its own.
 struct DeleteDuplicatesResumeBanner: View {
     let plan: DeleteDuplicatesPlan
     let onResume: () -> Void
+    var onPutBack: () -> Void = {}
     let onDiscard: () -> Void
 
     var body: some View {
@@ -394,7 +397,9 @@ struct DeleteDuplicatesResumeBanner: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(plan.resumeOffer)
                     .font(.system(size: 13, weight: .semibold))
-                Text("Every remaining file is re-checked against the catalog and its keeper before anything is read or removed.")
+                Text(plan.isResumable
+                     ? "Every remaining file is re-checked against the catalog and its keeper before anything is read or removed."
+                     : "Put Back moves the file to where it lived — nothing is verified or deleted.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
@@ -402,10 +407,18 @@ struct DeleteDuplicatesResumeBanner: View {
             Button("Discard", role: .destructive, action: onDiscard)
                 .controlSize(.small)
                 .accessibilityIdentifier("mfo.deleteDuplicates.discard")
-            Button("Resume", action: onResume)
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier("mfo.deleteDuplicates.resume")
+            if plan.needsRecovery {
+                Button("Put Back", action: onPutBack)
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("mfo.deleteDuplicates.putBack")
+            }
+            if plan.isResumable {
+                Button("Resume", action: onResume)
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("mfo.deleteDuplicates.resume")
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
