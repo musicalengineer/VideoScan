@@ -17,7 +17,13 @@ enum HallieTurnExecutor {
         /// ONE catalog record — the selected row or a named file — and its
         /// people / date / dossier (ArchivistRecordExecutor, 2026-09-02).
         case record
-        case unsupportedEvent
+        /// "what happened at …" / "show me X at Y in the 90s" read by the
+        /// translator as an event: people + years + media kind + visible
+        /// and spoken terms — the same fields as `cross` — run on the
+        /// presence executor (2026-09-20, Rick: "getting a lot of 'Event
+        /// queries are not supported yet'"). Never declined when the
+        /// payload carries anything to search for.
+        case event
         /// A model-free turn about the previous answer: play/reveal/show a
         /// cited item, paging, an elliptical refinement, or an honest
         /// "ask me for something first".
@@ -998,7 +1004,7 @@ enum HallieTurnExecutor {
         case .temporal: return .temporal
         case .aggregate: return .aggregate
         case .graph: return .graph
-        case .event: return .unsupportedEvent
+        case .event: return .event
         case .cross: return .cross
         case .record: return .record
         }
@@ -1012,7 +1018,7 @@ enum HallieTurnExecutor {
         case .graph: return "shape=graph"
         case .cross: return "shape=cross"
         case .record: return "shape=record"
-        case .unsupportedEvent: return "shape=event (unsupported)"
+        case .event: return "shape=event"
         case .followUp: return "follow-up"
         case .capability: return "capability"
         case .help: return "help"
@@ -1033,7 +1039,7 @@ enum HallieTurnExecutor {
         case .graph: return "graph"
         case .cross: return "cross"
         case .record: return "record"
-        case .unsupportedEvent: return "unsupported-event"
+        case .event: return "event"
         case .followUp: return "follow-up"
         case .capability: return "capability"
         case .help: return "help"
@@ -1341,18 +1347,12 @@ enum HallieTurnExecutor {
             }
             return executeRecord(payload, request: request, context: context)
 
-        case .event:
+        case .event(let payload):
             guard request.selectedIdentity == nil else {
                 return invalidContinuationResult(for: ast)
             }
-            return Result(
-                route: .unsupportedEvent,
-                outcome: .unsupported,
-                prose: "Event queries are not supported yet; I did not run a broader search.",
-                basisLine: "Basis: QueryAST shape=event has no deterministic executor.",
-                queryDescription: nil,
-                citations: [],
-                catalogPersonName: nil)
+            return try await executeEvent(
+                payload, request: request, context: context, dependencies: dependencies)
         }
     }
 

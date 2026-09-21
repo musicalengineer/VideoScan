@@ -6,15 +6,25 @@
 // as-is. Pure; shared by the app coordinator, the shell and (through the
 // coordinator) the web bridge.
 //
-//   tree mode  + catalog AST → keep only when the words name media; else a
-//                one-person AST is rewritten to the graph operation the
-//                field guards choose, and anything else is an honest
-//                decline. Tree mode never executes a catalog search.
+//   tree mode  + catalog AST → when the words ask for MEDIA — a media noun,
+//                or a retrieval verb ("show me", "find", "play") with no
+//                word of the sentence naming the tree — the turn switches
+//                to catalog mode and runs there; a photo ask stays (the
+//                portrait road is a tree answer); else a one-person AST is
+//                rewritten to the graph operation the field guards choose,
+//                and anything else is an honest decline. Tree mode itself
+//                never executes a catalog search.
 //   catalog mode + graph AST → a media cue rewrites it to a presence
 //                search for the same people; else a decline with a chip
 //                that re-asks under the tree. Catalog mode never opens a
 //                biography by accident.
 //   unknown    → keep (today's behaviour).
+//
+// 2026-09-20 (Rick: "show me Donna down the cape in the early 90s" ×3,
+// "show me videos of donna down the cape", "show me ellen ronan"): the
+// only media escape was a NOUN, so a "show me <person> <place> <era>" with
+// no noun was read as a biography, and an `event` AST was refused outright.
+// The retrieval-verb tier and `.switchToCatalog` are that fix.
 
 import Foundation
 
@@ -25,6 +35,11 @@ enum HallieModeGate {
         case keep
         /// The AST to execute instead, and the basis note that says so.
         case rewrite(ArchivistQueryAST, note: String)
+        /// The AST is right, the MODE was wrong: the words asked for
+        /// media, so the client runs the AST as translated in catalog
+        /// mode (its context and its `[hallie-mode]` line say so) and the
+        /// session follows. The note goes on the basis line.
+        case switchToCatalog(note: String)
         case decline(Exec.Result)
     }
 
@@ -53,8 +68,15 @@ enum HallieModeGate {
         case .aggregate(let p): people = p.anchorPeople
         case .graph, .temporal, .record: return .keep
         }
-        // The words overruled the classifier: "the Christmas tape" is a
-        // catalog ask whatever the session was doing.
+        // The words overruled the classifier: "the Christmas tape" and
+        // "show me Donna down the cape" are catalog asks whatever the
+        // session was doing — so the turn moves to the catalog and runs.
+        if let cue = catalogIntentCue(in: question) {
+            return .switchToCatalog(
+                note: "read “\(question)” as a catalog search (“\(cue)”), not a family-tree question")
+        }
+        // A photo word alone: "any pictures of donna" is the portrait road
+        // for a tree person (+PhotoAsk), which answers under the tree.
         if HallieMediaVocabulary.containsMediaWord(question) { return .keep }
         let named = people.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         guard named.count == 1, let person = named.first else {
@@ -72,6 +94,39 @@ enum HallieModeGate {
         return .rewrite(
             .graph(graph),
             note: "read “\(question)” as a family-tree question about \(person), not a catalog search")
+    }
+
+    /// Verbs that fetch something from the catalog. Deliberately NOT in
+    /// the classifier's cue sets: "show me Donna's family tree" is a tree
+    /// ask, which is why this tier yields to any tree word in the sentence.
+    static let retrievalVerbs: Set<String> = [
+        "show", "find", "play", "watch", "reveal", "count", "list", "search",
+        "pull", "look", "browse",
+    ]
+
+    /// The word that makes a catalog-shaped AST a catalog ask in tree mode,
+    /// or nil. Two tiers:
+    ///   1. a media item noun or a collection word ("videos", "tape",
+    ///      "archive") — the escape that always existed, photo nouns
+    ///      excluded (the portrait road);
+    ///   2. a retrieval verb ("show me", "find", "play") when NO word or
+    ///      phrase of the sentence names the tree — so "show me videos of
+    ///      donna down the cape", "show me Donna down the cape in the early
+    ///      90s" and "show me ellen ronan" switch, while "show me ellen
+    ///      ronan in the family tree" and "find my grandmother" stay.
+    static func catalogIntentCue(in question: String) -> String? {
+        let words = HallieMediaVocabulary.words(question)
+        if let noun = words.first(where: {
+            HallieMediaVocabulary.nouns.contains($0) || HallieMediaVocabulary.scopeWords.contains($0)
+        }) {
+            return noun
+        }
+        let padded = " " + words.joined(separator: " ") + " "
+        let namesTheTree = HallieModeClassifier.treeCuePhrases.contains { padded.contains(" " + $0 + " ") }
+            || words.contains { HallieModeClassifier.treeCues.contains($0) }
+        if namesTheTree { return nil }
+        if HallieMediaVocabulary.containsPhotoNoun(question) { return nil }
+        return words.first { retrievalVerbs.contains($0) }
     }
 
     /// The graph operation the field guards read off the sentence

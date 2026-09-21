@@ -342,3 +342,72 @@ one"); three links where two name the same woman under different ids is the
 case that ruling did not consider, and it is his call. Pinned as a
 `withKnownIssue` in `HiddenPersonLeavesFamilyRecordsBehindTests` so it cannot
 rot and fails loudly the day it is fixed.
+
+---
+
+## 2026-09-20 — "Event queries are not supported yet" (fixed same evening)
+
+Rick, evening: *"getting a lot of these: 'Event queries are not supported yet;
+I did not run a broader search.'"* From `hallie-conversation-2026-09-20.jsonl`
+and `-21.jsonl` (one session, six turns):
+
+| # | asked | mode | what came back | route |
+|---|-------|------|----------------|-------|
+| 1 | "show me videos of donna down the cape in the 90s" | tree | "Event queries are not supported yet; I did not run a broader search." | `unsupported-event` |
+| 2 | "show me Donna down the cape in the early 90s" | unknown | same | `unsupported-event` |
+| 3 | "show me Donna down the cape in the early 90s" | unknown | same | `unsupported-event` |
+| 4 | "show me Donna down the cape in the early 90s" | unknown | same | `unsupported-event` |
+| 5 | "show me videos of donna down the cape" | tree | same | `unsupported-event` |
+| 6 | "show me ellen ronan" | catalog | same | `unsupported-event` |
+
+Beside them, in the same session: "hi hallie tell me about donna" and "can I
+give you a research note about Ellen Ronan?" → `[hallie-mode] declined: mode
+gate: tree refused shape=event (unsupported)`.
+
+These are the app's core catalog questions — person + place + era, the
+search-first north star — and every one was refused.
+
+**Cause (two, both in source).**
+
+1. `HallieTurnExecutor.route(.event)` returned `.unsupportedEvent`, and
+   `execute` answered every event with a hard-coded refusal in every mode.
+   Yet `ArchivistQueryAST.Event` carries exactly the fields `Cross` does
+   (people, years, media kind, keywords, transcript), and `cross` has run
+   on the presence executor since 2026-08-17. The local translator
+   over-applies its prompt rule *"event: what happened at an event"* to any
+   "show me X at Y in the 90s", so the refusal fired on ordinary asks.
+2. `HallieModeGate.reconcileTree` recognised catalog intent by media
+   **noun** only. "show me Donna down the cape in the early 90s" has none,
+   so under the tree it became a biography rewrite; an `event` AST with no
+   single person was refused as `tree refused shape=event`.
+
+**Fix (branch `fix/hallie-event-shape-fallback`).**
+
+- `HallieTurnExecutor+Event.swift`: `.event` → `executeEvent`, which builds
+  the presence query (keywords + transcript terms merged, blanks dropped) and
+  runs `executePresenceLike` with route `.event` — same hits, citations,
+  offered actions and relaxed facets as the presence AST built by hand. Basis:
+  *"read as an event question; searched the catalog for donna with “cape” in
+  1990–1999"*. Only an event with no people, no words and no years declines,
+  and that one asks *"Who or what should I look for, and roughly when?"*.
+  `Route.unsupportedEvent` is gone; `.event` is a catalog route for memory,
+  the answer plan, provenance, paging and snapshot capture.
+- `HallieModeGate`: new outcome `.switchToCatalog(note:)`. In tree mode a
+  catalog-shaped AST switches when the sentence has a media noun / collection
+  word, **or** a retrieval verb (show, find, play, watch, count, list, search,
+  pull, look, browse) with no tree word or phrase in it. The coordinator and
+  the shell run the turn with `context.mode = .catalog` and log
+  `[hallie-mode] switched tree→catalog for shape=<presence|cross|event>`.
+  "show me ellen ronan in the family tree", "show me rick's parents" and
+  "any pictures of donna" keep their tree roads.
+- `OllamaQueryTranslator.astSystemPrompt`: event is ONLY "what happened
+  at/when …"; one presence example for the cape sentence. A courtesy — the
+  executor no longer depends on the translator getting this right.
+
+**Pinned.** `HallieEventShapeFallbackTests` (the six turns as event ASTs
+against a fixture catalog: same citations as presence, basis prefix, never
+"not supported"; empty event asks for specifics; memory/plan/provenance treat
+event as catalog) and `HallieEventShapeModeGateTests` (pinned tree mode +
+"show me videos of donna down the cape" → executed in catalog mode + the
+switch line; the presence-shape variant; "in the family tree" never
+switches). `HallieModeGateTests` gained the retrieval-verb cases.

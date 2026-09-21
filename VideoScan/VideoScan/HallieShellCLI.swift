@@ -47,8 +47,7 @@ enum HallieShellCLI {
     }
 
     enum Route: Equatable {
-        case presence, temporal, aggregate, graph, cross, record
-        case unsupportedEvent
+        case presence, temporal, aggregate, graph, cross, record, event
         case followUp, capability
         case help, smalltalk, conversation, telling, reset
     }
@@ -593,7 +592,7 @@ enum HallieShellCLI {
         case .graph: return .graph
         case .cross: return .cross
         case .record: return .record
-        case .unsupportedEvent: return .unsupportedEvent
+        case .event: return .event
         case .followUp: return .followUp
         case .capability: return .capability
         case .help: return .help
@@ -1030,6 +1029,9 @@ enum HallieShellCLI {
             let intent: HallieTurnExecutor.Intent
             /// A mode-gate rewrite's basis note (design §3.4 B); nil otherwise.
             let gateNote: String?
+            /// The mode the turn runs in: the classifier's verdict, or the
+            /// catalog when the gate switched a media ask out of tree mode.
+            var turnMode = classified.verdict.mode
             switch pre {
             case .answer(let result):
                 return await completeLocalAnswer(
@@ -1162,6 +1164,15 @@ enum HallieShellCLI {
                         originalQuestion: question, ast: ast, playAfterAnswer: wantsPlay,
                         modeForce: classified.modeForce)
                     gateNote = note
+                case .switchToCatalog(let note):
+                    appLog.write("[hallie-mode] switched tree→catalog for "
+                        + HallieTurnExecutor.description(of: translatedAST))
+                    if options.diagnostics { output("mode gate: \(note)") }
+                    turnMode = .catalog
+                    intent = HallieTurnExecutor.Intent(
+                        originalQuestion: question, ast: translatedAST, playAfterAnswer: wantsPlay,
+                        modeForce: classified.modeForce)
+                    gateNote = note
                 case .decline(let result):
                     appLog.write("[hallie-mode] declined: \(result.queryDescription ?? "")")
                     return await completeLocalAnswer(
@@ -1180,7 +1191,7 @@ enum HallieShellCLI {
 
             var recordScope: HallieTurnExecutor.RecordScope = .noSelection
             switch HallieTurnExecutor.route(intent.ast) {
-            case .presence, .cross:
+            case .presence, .cross, .event:
                 if state.presenceSnapshots == nil {
                     state.presenceSnapshots = await ArchivistPresenceRecordSnapshot
                         .capture(state.records)
@@ -1195,7 +1206,7 @@ enum HallieShellCLI {
                 // executor never sees the catalog. No catalog-wide snapshot.
                 recordScope = await captureRecordScope(
                     for: intent.ast, question: intent.originalQuestion, state: state)
-            case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
+            case .temporal, .graph, .followUp, .capability,
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
             }
@@ -1223,7 +1234,7 @@ enum HallieShellCLI {
                 selectedTemporalDate: selectedDate,
                 recordScope: recordScope,
                 speakers: state.speakers,
-                mode: classified.verdict.mode)
+                mode: turnMode)
             let request = HallieTurnExecutor.Request(intent: intent)
             var result = try await dependencies.executeRequest(request, context)
             if let gateNote { result = result.prefixingBasis(gateNote) }

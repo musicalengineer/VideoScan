@@ -190,8 +190,8 @@ struct HallieAppV2IntegrationTests {
             #expect(invocation.selectedDate == selectedDate)
 
             switch HallieTurnExecutor.route(ast) {
-            case .presence, .cross:
-                // Cross runs on the presence executor (person + spoken words
+            case .presence, .cross, .event:
+                // Cross and event run on the presence executor (person + spoken words
                 // ANDed), so it captures presence snapshots too. People and
                 // CyberBrain provide the bounded spelling vocabulary; GEDCOM
                 // remains unloaded unless an age phrase needs a birth year.
@@ -221,7 +221,7 @@ struct HallieAppV2IntegrationTests {
                 #expect(invocation.aggregateCount == 0)
                 #expect(invocation.profiles?.isEmpty == true)
                 #expect(!invocation.graphWasInjected)
-            case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
+            case .followUp, .capability, .help, .smalltalk,
                  .conversation, .telling, .reset:
                 #expect(invocation.presenceCount == 0)
                 #expect(invocation.aggregateCount == 0)
