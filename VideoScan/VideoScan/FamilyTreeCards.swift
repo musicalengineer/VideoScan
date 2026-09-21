@@ -93,6 +93,15 @@ struct FamilyTreePersonCard: View {
     /// drawn only when ≥ 1, like the bookmark.
     var documentCount: Int = 0
     var onAddDocument: () -> Void = {}
+    /// Refresh from FamilySearch… (2026-09-21): fetch this one person and
+    /// review what changed. Disabled (with a tooltip saying why) when the
+    /// record has no FamilySearch ID — the refresh is keyed on it.
+    var canRefreshFromFamilySearch: Bool = false
+    var onRefreshFromFamilySearch: () -> Void = {}
+    /// True when refreshed facts are applied for this person — offers Undo.
+    /// A set lookup on PersonRefreshCenter, never a disk read per card.
+    var hasFamilySearchRefresh: Bool = false
+    var onUndoFamilySearchRefresh: () -> Void = {}
 
     private var person: FamilyTreePersonSummary { card.person }
     private var accent: Color { person.sex.accent }
@@ -292,6 +301,21 @@ struct FamilyTreePersonCard: View {
                 onAddDocument()
             }
             .accessibilityIdentifier("tree.person.addDocument")
+            Button("Refresh from FamilySearch…", systemImage: "arrow.triangle.2.circlepath") {
+                onSelect()
+                onRefreshFromFamilySearch()
+            }
+            .disabled(!canRefreshFromFamilySearch)
+            .help(canRefreshFromFamilySearch
+                  ? "Fetch \(person.name) from FamilySearch and review what changed before anything is applied"
+                  : "\(person.name) has no FamilySearch ID, so there is no FamilySearch record to refresh from.")
+            .accessibilityIdentifier("tree.person.refreshFromFamilySearch")
+            if hasFamilySearchRefresh {
+                Button("Undo last refresh for this person", systemImage: "arrow.uturn.backward") {
+                    onUndoFamilySearchRefresh()
+                }
+                .accessibilityIdentifier("tree.person.undoFamilySearchRefresh")
+            }
             Divider()
             if let record = detailedRecordText() {
                 Button("Copy person's detailed record", systemImage: "doc.on.doc") {

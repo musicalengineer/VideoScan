@@ -384,6 +384,12 @@ final class FamilyTreeLiveModel: ObservableObject {
     private var summariesInOrder: [FamilyTreePersonSummary] = []
     /// Where compiled artifacts live; nil = parse every load (tests).
     private let compiledStore: FamilyGraphCompiledStore?
+    /// "Refresh from FamilySearch…" fact overlay for a model that loads
+    /// through ITS OWN loader (an injected test model). Production loads
+    /// through FamilyGraphSharedCache, which applies the production overlay
+    /// itself, so this stays nil there (isolation rule: an injected model
+    /// never sees the real overlay unless a test hands one in).
+    var personRefreshOverlayStore: PersonFactOverlayStore?
     private var loadGeneration = 0
     /// Bumped by anything that only needs to SUPPRESS STALE CAPTIONS, never
     /// to invalidate a result (2026-09-06). `recompile()` used to bump
@@ -740,6 +746,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         // the same directory; tests and injected models use their own
         // loader. Either way the bundle is built here, off the main actor.
         let configuration = usesSharedCache ? FamilyAssetConfigurationCenter.shared.snapshot() : nil
+        let overlayStore = personRefreshOverlayStore
         let loaded = await Task.detached(priority: .userInitiated) { [weak self] () -> (FamilyGraphFileLoader.Outcome, FamilyTreeLaunchBundle?) in
             let progress: (String) -> Void = { phase in
                 Task { @MainActor [weak self] in
@@ -764,7 +771,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)
             loader.compiledStore = store
             loader.progress = progress
-            let outcome = loader.loadNewestOutcome()
+            let outcome = Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory)
             let people = outcome.graph?.people.count ?? 0
             Self.logStep("load: decode/parse", took: clock.now - mark, people: people)
             // Sidebar rows, the group-photo identity directory and the
@@ -961,7 +968,47 @@ final class FamilyTreeLiveModel: ObservableObject {
         loadState = .loading
         var loader = FamilyGraphFileLoader(originalsDirectory: originalsDirectory)
         loader.compiledStore = compiledStore
-        install(outcome: loader.loadNewestOutcome())
+        install(outcome: Self.overlaid(loader.loadNewestOutcome(), store: personRefreshOverlayStore,
+                                       directory: originalsDirectory))
+    }
+
+    /// The injected-model twin of FamilyGraphSharedCache's overlay step:
+    /// the same reader, applied after the loader returns (never before an
+    /// ingest), so a test model sees exactly what production shows.
+    nonisolated private static func overlaid(_ outcome: FamilyGraphFileLoader.Outcome,
+                                             store: PersonFactOverlayStore?,
+                                             directory: URL) -> FamilyGraphFileLoader.Outcome {
+        guard let store, let graph = outcome.graph else { return outcome }
+        return outcome.replacingGraph(PersonRefreshOverlayReader.apply(
+            to: graph, store: store, discoveryDirectory: directory, canWrite: true,
+            log: { appLog.write($0) }))
+    }
+
+    // MARK: Refresh from FamilySearch (one person, 2026-09-21)
+
+    /// What the tree shows now for this FamilySearch ID — overlay included,
+    /// so a second refresh after an Apply reads "Already matches". Nil on
+    /// the demo tree or when the ID is not in the loaded tree.
+    func personFacts(familySearchID: String) -> PersonFacts? {
+        guard let graph, let person = graph.person(familySearchID: familySearchID) else { return nil }
+        return PersonFacts(person: person, in: graph)
+    }
+
+    /// The refresh target for a card, or nil when the menu item must be
+    /// disabled (demo tree, unknown pointer, no FamilySearch ID).
+    func personRefreshTarget(for personID: String) -> PersonRefreshCoordinator.Target? {
+        guard let person = graph?.people[personID], let fsid = person.familySearchID else { return nil }
+        return PersonRefreshCoordinator.Target(personID: personID, familySearchID: fsid, personName: person.name)
+    }
+
+    /// After an Apply or Undo: reload through the ordinary path (the shared
+    /// cache sees the overlay's new stamp and re-overlays its cached base —
+    /// no decode) and keep the refreshed person on screen. `install` would
+    /// otherwise treat changed dates as "a different person" and fall back
+    /// to the default focus.
+    func reloadAfterPersonRefresh(selecting personID: String) async {
+        await loadFromDisk()
+        if graph?.people[personID] != nil { select(personID) }
     }
 
     /// Install a parsed graph (nil → demo fallback). Keeps the current
