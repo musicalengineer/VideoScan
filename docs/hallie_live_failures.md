@@ -411,3 +411,43 @@ event as catalog) and `HallieEventShapeModeGateTests` (pinned tree mode +
 "show me videos of donna down the cape" → executed in catalog mode + the
 switch line; the presence-shape variant; "in the family tree" never
 switches). `HallieModeGateTests` gained the retrieval-verb cases.
+
+## 2026-09-21 — "how old was dad breen when he passed?" → a biography of Matthew Rice (b. 1629)
+
+Rick, 13:52, tree mode (`[hallie-mode] mode=tree reason=explicitCue(dad)`).
+The transcript row: `shape=graph operation=biography person=Matthew Rice` —
+*"Matthew Rice was born 28 February 1629 in Great Berkhampstead … died before
+29 November 1717 in Sudbury"*. The app log says `phrased temporal/answered by
+model`. Rick: *"make a note when hallie fails such as just now … Imagine when
+we turn her loose on real family, what will she fail at."*
+
+**What the right answer is.** "Dad Breen" is an ALIAS on the People tab
+(Richard Breen, b. 21 Feb 1929, d. 25 Jun 2008 — the People tab is the
+source of truth for the inner circle): **79** when he died, on 25 June 2008.
+There are two Richard Breens on the People tab (Dad and Rick); the alias is
+what disambiguates, and a kin term + surname ("dad breen", "ma breen",
+"gramma breen") must resolve to the alias BEFORE any tree-wide name scan.
+
+**Failure class.** The worst one: a confident, fully-cited answer about the
+WRONG PERSON — not a decline, not a clarify. A cousin would not know Matthew
+Rice is nobody's dad. Same family as the 9/07 ledger finding ("fallback
+answers a DIFFERENT question confidently") and the 9/17 kin-term collision.
+
+**Not yet traced** (bug-fix lane `fix/hallie-dad-breen-age-at-death`):
+why "dad breen" reached the graph as a person named something else — alias
+lookup missed on the two-word alias with a surname? the age-at-death
+temporal shape has no executor and fell through to a biography of the
+translator's guess? Trace, fix, pin, then add `strict-045`.
+
+**Variations to cover** (advisory corpus, `lv260921-*`): "how old was Dad
+when he died", "what age did Ma Breen pass", "how old was my dad breen when
+he passed", "when did dad breen die", "how old would Dad Breen be today",
+"how old was Ma when Dad died", "how long did Ma outlive Dad", "how old was
+Rick when his father died" — every kin term × every inner-circle alias × the
+age/when/how-long shapes.
+
+Also in the same ten minutes (not failures, but corpus fodder): "how am I
+related to edward iii of england?", "who in the family was in the us marine
+corps?", "The US Marine Corps" (a bare topic follow-up, sent to the general
+lane), "tell me about rick" / "tell me about dicky" (template on model
+timeout — codex's replay had the M4 brain busy).
