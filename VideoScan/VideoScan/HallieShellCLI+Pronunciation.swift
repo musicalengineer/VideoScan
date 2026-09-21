@@ -21,8 +21,11 @@ extension HallieShellCLI {
     ) async -> AnswerOutcome? {
         if let told = HallieTellingMode.detectPronunciation(text) {
             // Pronunciations are for people (GH #184 item 6): a word nobody
-            // carries is declined, never written or remembered.
-            guard knownSpelling(told.word, state: state, dependencies: dependencies) != nil else {
+            // carries is declined, never written or remembered. An everyday
+            // word goes on to teachOneOff, whose guard gives the honest
+            // "that's an everyday word" sentence (GH #187).
+            guard HalliePronunciationGuard.isCommonWord(told.word)
+                    || knownSpelling(told.word, state: state, dependencies: dependencies) != nil else {
                 return await declineTeach(word: told.word, state: &state, output: output, dependencies: dependencies)
             }
             return await teachOneOff(word: told.word, alternatives: told.alternatives, hint: nil,
@@ -106,6 +109,25 @@ extension HallieShellCLI {
         options: Options, state: inout Session, output: (String) -> Void, dependencies: Dependencies
     ) async -> AnswerOutcome {
         let told = HallieTellingMode.PronunciationTelling(word: word, alternatives: alternatives)
+        // Shell parity with HallieAppTurnCoordinator.teach (GH #187): the
+        // guard runs before anything is written OR remembered for the session.
+        let refusalPhonemes = HallieAppTurnCoordinator.derivePhonemes(
+            alternatives: alternatives, hint: hint?.hint, gold: dependencies.loadPronunciationGold())
+        let (profiles, graph, brainPeople) = (state.profiles ?? [], state.graph, state.cyberBrain?.archive.people ?? [])
+        let names = {
+            HallieKnownNames.from(
+                profiles: profiles.map { (primary: $0.name, aliases: $0.aliases) },
+                graph: graph, cyberBrainPeople: brainPeople)
+        }
+        if let refusal = HalliePronunciationGuard.refusal(
+            written: word, spoken: told.saidAs, phonemes: refusalPhonemes,
+            isKnownName: { names().contains($0) }) {
+            appLog.write("[hallie-voice] refused pronunciation teach: \(refusal.reply) nothing written")
+            return await emitPronunciation(
+                refusal.reply, description: "pronunciation",
+                basis: "Basis: listening — pronunciation NOT kept (\(refusal.shortReason)); no model call, no catalog query.",
+                outcome: .declined, state: &state, output: output, dependencies: dependencies)
+        }
         let target = HallieAppTurnCoordinator.resolvePronunciationTarget(
             word: word, cyberBrain: state.cyberBrain, graph: state.graph)
         let scope: HallieTellingMode.PronunciationScope

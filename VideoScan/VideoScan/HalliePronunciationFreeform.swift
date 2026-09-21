@@ -274,6 +274,7 @@ enum HalliePronunciationFreeform {
         var seen: Set<String> = []
         var explicit: [String] = []
         for spelling in respellings {
+            guard !HalliePronunciationLexicon.isRegnalNumeralRespelling(spelling) else { continue }
             let key = spelling.lowercased().filter(\.isLetter)
             guard !key.isEmpty, key != nameKey, !seen.contains(key) else { continue }
             seen.insert(key)
@@ -664,6 +665,11 @@ enum HalliePronunciationFreeform {
 
     /// Nothing mappable: the raw hint is kept; ask for a spelling.
     static func hintOnlyReply(_ told: HallieFreeformPronunciation) -> String {
-        "I've noted what you said about \(told.word) — spell it out for me like \u{201C}LAT-uh\u{201D} and I'll say it that way?"
+        if told.rawHint.split(whereSeparator: \.isWhitespace).contains(where: {
+            HalliePronunciationLexicon.isRegnalNumeralRespelling(String($0))
+        }) {
+            return "I haven't changed how I say \(told.word). Use spoken words such as third instead of a Roman numeral when teaching a pronunciation."
+        }
+        return "I've noted what you said about \(told.word) — spell it out for me like \u{201C}LAT-uh\u{201D} and I'll say it that way?"
     }
 }

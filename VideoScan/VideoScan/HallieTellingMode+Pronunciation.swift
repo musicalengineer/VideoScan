@@ -83,6 +83,7 @@ extension HallieTellingMode {
     /// token carrying an all-caps stressed syllable ("LAT uh"). "to cook"
     /// is none of those.
     static func looksLikeRespelling(_ saidAs: String) -> Bool {
+        guard !HalliePronunciationLexicon.isRegnalNumeralRespelling(saidAs) else { return false }
         let tokens = saidAs.split(separator: " ")
         guard let first = tokens.first, tokens.count <= 2,
               !notRespellingOpeners.contains(first.lowercased()) else { return false }
