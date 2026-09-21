@@ -65,7 +65,9 @@ extension ArchiveAngelCandidate {
             lastUsed: nil,
             videoCodec: r.videoCodec,
             duplicateGroupID: r.duplicateGroupID,
-            contentKey: VideoScanModel.ledgerContentKey(for: r))
+            contentKey: VideoScanModel.ledgerContentKey(for: r),
+            deviceModel: r.originModel ?? "",
+            captureDate: r.embeddedCreationDate)
     }
 
     /// The projection the job uses: keeper policy built ONCE by the

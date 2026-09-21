@@ -110,6 +110,12 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     /// `.duplicateArchived` — the same answer the to-do view gives by
     /// hiding it (the catalog's Prepare item pre-filters on
     /// `pfNotYetArchived`, so such a row normally never reaches here).
+    ///
+    /// Duration: an explicit pick is judged against
+    /// `explicitPickMinimumDurationSeconds` (60 s), not the automatic
+    /// 2-minute floor (Rick 2026-09-21) — raising the proposal floor must
+    /// not refuse a 90 s clip Rick chose himself. The Live Photo motion
+    /// and recent-phone-clip exclusions are off here for the same reason.
     nonisolated static func explicitSelection(
         ids: [UUID], inFlight: Set<UUID>, now: Date = Date(),
         project: (UUID) -> ArchiveAngelCandidate?
@@ -117,6 +123,12 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         var picks: [ArchiveAngelPick] = []
         var rejected: [ArchiveAngelRejection: Int] = [:]
         var seen = Set<UUID>()
+        var weights = ArchiveAngelWeights.standard
+        weights.minimumDurationSeconds = weights.explicitPickMinimumDurationSeconds
+        // Rick 2026-09-21: the Live Photo / recent-phone-clip rules keep
+        // the Angel from PROPOSING such files; a hand-picked one goes.
+        weights.excludeLivePhotoMotion = false
+        weights.excludeRecentPhoneClips = false
         for id in ids where seen.insert(id).inserted {
             guard var candidate = project(id) else { continue }
             if inFlight.contains(id) { rejected[.inAnotherBatch, default: 0] += 1; continue }
@@ -124,7 +136,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             // fatigue) does not apply to an explicit pick.
             candidate.attention = .none
             candidate.familySkips = 0
-            switch ArchiveAngelScorer.verdict(candidate, now: now) {
+            switch ArchiveAngelScorer.verdict(candidate, weights: weights, now: now) {
             case .eligible(let score, let evidence):
                 picks.append(.init(candidate: candidate, score: score, evidence: evidence))
             case .rejected(let reason):

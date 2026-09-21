@@ -142,7 +142,7 @@ struct ArchiveAngelEvidenceStoreTests {
         #expect(await fresh.save() == false)
     }
 
-    @Test("SENSOR (codex #1345): a v8 sidecar — no familySkips, no attention stamp — is ignored; v9 loads")
+    @Test("SENSOR (codex #1345; floor 2026-09-21): a v8 or v9 sidecar is ignored; v10 loads")
     @MainActor
     func staleV6SidecarIgnored() async throws {
         let dir = tempDir("v6")
@@ -153,7 +153,7 @@ struct ArchiveAngelEvidenceStoreTests {
                                   considered: 1, eligible: 1, records: [id: rec(110)]))
         #expect(await store.save())
         var json = try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as! [String: Any]
-        #expect(json["rulesVersion"] as? Int == 9, "this sensor pins the bump; re-pin it on the next rules change")
+        #expect(json["rulesVersion"] as? Int == 10, "this sensor pins the bump; re-pin it on the next rules change")
 
         json["rulesVersion"] = 8
         try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
@@ -164,8 +164,14 @@ struct ArchiveAngelEvidenceStoreTests {
         json["rulesVersion"] = 9
         try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
         let v9 = ArchiveAngelEvidenceStore(directory: dir)
-        #expect(await v9.load())
-        #expect(v9.candidateIDs == [id])
+        #expect(await v9.load() == false, "a v9 sidecar was graded under the 60 s floor")
+        #expect(!v9.isLoaded && v9.candidateIDs.isEmpty)
+
+        json["rulesVersion"] = 10
+        try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
+        let v10 = ArchiveAngelEvidenceStore(directory: dir)
+        #expect(await v10.load())
+        #expect(v10.candidateIDs == [id])
 
         // A real v8 file (records without `familySkips`) fails to decode even
         // with the number forged: the shape itself is the guard. (A
