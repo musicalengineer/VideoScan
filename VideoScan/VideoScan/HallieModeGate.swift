@@ -79,6 +79,18 @@ enum HallieModeGate {
         // for a tree person (+PhotoAsk), which answers under the tree.
         if HallieMediaVocabulary.containsMediaWord(question) { return .keep }
         let named = people.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        // A question about the WHOLE family names nobody by design: "how
+        // many grandchildren are there", "list everyone in the family",
+        // "what do you know about the Breen family", "when did the latta
+        // family come to america?". It is the family-tree overview (or
+        // the surname roll-up) the translator returns as `familyTree`
+        // when it reads the sentence right — the road that answered these
+        // at the 2026-09-18 baseline — never the who-is-it-about decline.
+        if named.isEmpty, let family = familyWideAsk(in: question) {
+            return .rewrite(
+                .graph(.init(people: [], operation: .familyTree, surname: family.surname)),
+                note: "read “\(question)” as a question about the whole family (“\(family.cue)”), not a catalog search")
+        }
         guard named.count == 1, let person = named.first else {
             let description = Exec.description(of: ast)
             return .decline(Exec.Result(
@@ -127,6 +139,86 @@ enum HallieModeGate {
         if namesTheTree { return nil }
         if HallieMediaVocabulary.containsPhotoNoun(question) { return nil }
         return words.first { retrievalVerbs.contains($0) }
+    }
+
+    /// Words that ask about the family as a whole rather than one person.
+    static let familyWideWords: Set<String> = [
+        "family", "families", "everyone", "everybody", "grandchildren",
+        "grandkids", "relatives", "ancestors", "descendants", "generations",
+        "kin", "clan", "surname",
+    ]
+
+    /// Phrases with the same meaning ("when did the lattas come to
+    /// america" is a question about the line, not a person).
+    static let familyWidePhrases: [String] = [
+        "the whole tree", "the entire tree",
+        "come to america", "came to america", "come over", "came over",
+        "came here", "come here", "get here", "got here",
+    ]
+
+    /// Scope phrases name WHERE to look, not WHAT is asked: "who is the
+    /// highest royalty in my family tree" is about a title, not about the
+    /// family, and it keeps the honest decline (HallieTwoModeReplayTests
+    /// row 6). Removed from the sentence before the cue words are read.
+    private static let scopePhrases: [String] =
+        ["family tree", "family history"] + HallieModeClassifier.treeScopePhrases
+
+    /// Adjectives that sit between "the" and "family" without being a
+    /// surname: "the whole family", "our immediate family".
+    private static let familyAdjectives: Set<String> = [
+        "whole", "entire", "immediate", "extended", "own", "big", "large",
+        "small", "little", "this", "that", "same", "other", "close",
+        "nuclear", "wider", "greater",
+    ]
+
+    /// The word or phrase that makes the sentence a whole-family ask, and
+    /// the surname it names ("the Breen family" → "breen", "the Lattas" →
+    /// "latta"), or nil when the sentence is about no family at all.
+    static func familyWideAsk(in question: String) -> (cue: String, surname: String?)? {
+        var padded = " " + HallieMediaVocabulary.words(question).joined(separator: " ") + " "
+        for phrase in scopePhrases.sorted(by: { $0.count > $1.count }) {
+            padded = padded.replacingOccurrences(of: " " + phrase + " ", with: " ")
+        }
+        let words = padded.split(separator: " ").map(String.init)
+        let cue = words.first(where: familyWideWords.contains)
+            ?? familyWidePhrases.first(where: { padded.contains(" " + $0 + " ") })
+        let surname = surnameOfFamily(in: question)
+        if let cue { return (cue, surname) }
+        if let surname { return ("the \(surname)s", surname) }
+        return nil
+    }
+
+    /// "the breen family" / "our latta family" → "breen" / "latta";
+    /// "the Breens" (typed as a name) → "breen". Nil for "the whole
+    /// family" and for any plural that is not capitalised.
+    static func surnameOfFamily(in question: String) -> String? {
+        let text = question.replacingOccurrences(of: "\u{2019}", with: "'")
+        if let match = text.range(
+            of: #"\b(?:the|our|my|your)\s+([A-Za-z][A-Za-z'-]+)\s+famil(?:y|ies)\b"#,
+            options: [.regularExpression, .caseInsensitive]) {
+            let phrase = text[match].split(separator: " ").map(String.init)
+            if phrase.count >= 3 {
+                let candidate = phrase[1].lowercased()
+                if !familyAdjectives.contains(candidate), !HallieModeClassifier.treeCues.contains(candidate) {
+                    return candidate
+                }
+            }
+        }
+        // Only at the end of the sentence and after "about / of / on", so
+        // "the Christmas party" is never read as the Christma family.
+        if let match = text.range(
+            of: #"\b(?:about|of|on)\s+the\s+([A-Z][a-z'-]{2,})s\s*[?.!]*\s*$"#,
+            options: .regularExpression) {
+            let word = String(text[match])
+                .trimmingCharacters(in: CharacterSet(charactersIn: " ?.!"))
+                .split(separator: " ").last.map(String.init) ?? ""
+            let singular = String(word.dropLast()).lowercased()
+            if !singular.isEmpty, !HallieMediaVocabulary.all.contains(word.lowercased()),
+               !HallieModeClassifier.treeCues.contains(word.lowercased()) {
+                return singular
+            }
+        }
+        return nil
     }
 
     /// The graph operation the field guards read off the sentence

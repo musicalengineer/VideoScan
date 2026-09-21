@@ -1082,8 +1082,30 @@ enum HallieShellCLI {
                     interpretation = try await dependencies.interpretTurn(
                         effectiveQuestion, options)
                 }
+                // THE SOCIAL BACKSTOP (2026-09-21), the same check the app
+                // runs: a catalog AST naming nobody and no time, for a
+                // sentence addressed to Hallie or a bare reaction with no
+                // archive word in it, is conversation — never a transcript
+                // search for "nice to meet you". It skips the archive
+                // re-check below on purpose (see HallieSocialShapeGuard).
+                var interpreted = interpretation.value
+                var socialByShape: HallieSocialShapeGuard.Verdict?
+                if case .archive(let ast) = interpreted, !wantsPlay,
+                   let verdict = HallieSocialShapeGuard.verdict(
+                       question: effectiveQuestion, ast: ast,
+                       isKnownPerson: {
+                           HallieTurnExecutor.isKnownPerson($0, context: identity)
+                       },
+                       isInnerCircleName: {
+                           HallieTurnExecutor.isInnerCircleName($0, context: identity)
+                       }) {
+                    appLog.write(verdict.logLine(question: effectiveQuestion, ast: ast))
+                    if options.diagnostics { output("social guard: \(verdict.reason)") }
+                    socialByShape = verdict
+                    interpreted = .conversation(verdict.kind)
+                }
                 let translatedAST: ArchivistQueryAST
-                switch interpretation.value {
+                switch interpreted {
                 case .archive(let ast):
                     state.lastResponder = interpretation.responderHost
                     if options.diagnostics {
@@ -1095,7 +1117,7 @@ enum HallieShellCLI {
                     // A model classification never gets the last word on the
                     // safety boundary. Known people and archive language are
                     // retranslated with the archive-only schema.
-                    if HallieConversationGuard.requiresArchive(
+                    if socialByShape == nil, HallieConversationGuard.requiresArchive(
                         effectiveQuestion,
                         kind: kind,
                         isKnownPerson: {

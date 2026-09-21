@@ -617,17 +617,40 @@ enum HallieAppTurnCoordinator {
                     effectiveQuestion, effectiveHosts, modelName)
             }
             try Task.checkCancellation()
+            // THE SOCIAL BACKSTOP (2026-09-21): a catalog AST that names
+            // nobody and no time, for a sentence addressed to Hallie or a
+            // bare reaction with no archive word in it, is conversation —
+            // "nice to meet you" is not a transcript search for those
+            // words. Decided in Swift after the model's guess, and it
+            // skips the archive re-check below: the guard already refused
+            // every archive, media, family, date and typed-name cue, and
+            // the loose is-this-a-person oracle (which reads "Real" and
+            // "Nice" as surnames in a 39k-person tree) is exactly what
+            // would send the sentence back to the catalog.
+            var interpreted = interpretation.value
+            var socialByShape: HallieSocialShapeGuard.Verdict?
+            if case .archive(let ast) = interpreted, !wantsPlay,
+               let verdict = try await socialShapeVerdictOffMain(
+                   question: effectiveQuestion, ast: ast, dependencies: dependencies) {
+                appLog.write(verdict.logLine(question: effectiveQuestion, ast: ast))
+                socialByShape = verdict
+                interpreted = .conversation(verdict.kind)
+            }
+            try Task.checkCancellation()
             let translatedAST: ArchivistQueryAST
-            switch interpretation.value {
+            switch interpreted {
             case .archive(let ast):
                 translatedAST = ast
                 responderHost = interpretation.responderHost
 
             case .conversation(let kind):
-                let requiresArchive = try await conversationRequiresArchiveOffMain(
-                    question: effectiveQuestion,
-                    kind: kind,
-                    dependencies: dependencies)
+                var requiresArchive = false
+                if socialByShape == nil {
+                    requiresArchive = try await conversationRequiresArchiveOffMain(
+                        question: effectiveQuestion,
+                        kind: kind,
+                        dependencies: dependencies)
+                }
                 try Task.checkCancellation()
                 if requiresArchive {
                     // False-social is the dangerous direction. Retry with the
@@ -843,6 +866,44 @@ enum HallieAppTurnCoordinator {
                 },
                 isInnerCircleName: {
                     HallieTurnExecutor.isInnerCircleName($0, context: context)
+                })
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
+    /// The social backstop's typed-name test needs the identity oracles;
+    /// the sources are loaded lazily and only when the AST is a catalog
+    /// shape that names nobody (the cheap test runs first, on the caller).
+    private static func socialShapeVerdictOffMain(
+        question: String,
+        ast: ArchivistQueryAST,
+        dependencies: Dependencies
+    ) async throws -> HallieSocialShapeGuard.Verdict? {
+        guard HallieSocialShapeGuard.isUnanchoredCatalogShape(ast) else { return nil }
+        let worker = Task.detached(priority: .userInitiated) {
+            () throws -> HallieSocialShapeGuard.Verdict? in
+            try Task.checkCancellation()
+            var loaded: HallieTurnExecutor.Context?
+            func sources() -> HallieTurnExecutor.Context {
+                if let loaded { return loaded }
+                let context = HallieTurnExecutor.Context(
+                    profiles: dependencies.loadProfiles(),
+                    graph: dependencies.loadGraph(),
+                    cyberBrain: dependencies.loadCyberBrain())
+                loaded = context
+                return context
+            }
+            return HallieSocialShapeGuard.verdict(
+                question: question, ast: ast,
+                isKnownPerson: {
+                    HallieTurnExecutor.isKnownPerson($0, context: sources())
+                },
+                isInnerCircleName: {
+                    HallieTurnExecutor.isInnerCircleName($0, context: sources())
                 })
         }
         return try await withTaskCancellationHandler {

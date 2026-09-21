@@ -60,7 +60,7 @@ enum HallieConversationGuard {
         "which", "as", "at", "from", "about", "into", "than", "then",
         "if", "please",
     ]
-    private static let archivePhrases = [
+    static let archivePhrases = [
         "family tree", "family history", "tell me about", "how many",
         "show me", "find ", "play ", "reveal ", "open ",
         "where did that come from", "show the source", "what is the source",
@@ -101,7 +101,7 @@ enum HallieConversationGuard {
 
     /// Direct tree questions addressed to "you" must not be mistaken for a
     /// memory trap. They have a grounded graph answer when the tree has one.
-    private static let directPersonaFacts = [
+    static let directPersonaFacts = [
         "when were you born", "where were you born", "when did you die",
         "who were your parents", "who was your father", "who was your mother",
         "did you have children", "who were your children",
