@@ -48,6 +48,13 @@
 //     copy — those rows are listed, disabled, with the reason.
 //   * Still refused, listed and disabled with the reason: an offline copy
 //     ("drive not connected") and a recovered A/V pair half.
+//   * A MISSING FILE (2026-09-21, Rick: "'M4drive' was said 'not connected'
+//     in some cases which is weird" — the boot volume is M4drive and the
+//     file had been moved or deleted outside the app) is neither: the
+//     volume is online, the file is not there. It is listed, disabled,
+//     with "not on M4drive any more (moved or deleted?)", never a copy for
+//     the tier / keeper / device counts, and the sheet offers to remove
+//     the row from the catalog (a tombstone — nothing on disk).
 //   * A VERSION and a copy WITH A NOTE are checkable — unchecked by
 //     default, with the advice in words (the note is carried to the
 //     archive copy's record by the apply path before the file goes).
@@ -81,7 +88,13 @@ public struct ArchiveCopySnapshot: Equatable, Sendable, Identifiable {
     /// The archive copy carries a read-back fixity record.
     public var fixityVerified: Bool
     public var isInsideArchiveRoot: Bool
+    /// The VOLUME holding the file is mounted (never "the file exists").
     public var isOnline: Bool
+    /// The file is on disk where the catalog says — meaningful only when
+    /// `isOnline`; left `true` (unknown) for an offline volume. Filled by
+    /// `ArchiveCopyFamilies.checkingFiles` off the main actor, for the
+    /// working copies of the batch's families only.
+    public var fileExists: Bool
     public var isPairMember: Bool
     /// A balance-audio / trim / transcode of another record (repairs are
     /// not versions) — never elected as the keeper, unchecked by default,
@@ -106,7 +119,7 @@ public struct ArchiveCopySnapshot: Equatable, Sendable, Identifiable {
     public init(id: UUID, filename: String, fullPath: String, volumeName: String, sizeBytes: Int64,
                 contentKey: String, promotedFromID: UUID? = nil, isArchiveCopy: Bool = false,
                 fixityVerified: Bool = false, isInsideArchiveRoot: Bool = false, isOnline: Bool = true,
-                isPairMember: Bool = false, isVersion: Bool = false, hasHumanNote: Bool = false,
+                fileExists: Bool = true, isPairMember: Bool = false, isVersion: Bool = false, hasHumanNote: Bool = false,
                 starRating: Int = 0, disposition: MediaDisposition = .unreviewed,
                 attestations: [BackupAttestation] = [], volumeIsConnectedWorking: Bool = true,
                 volumeFreeBytes: Int64? = nil, isPurged: Bool = false,
@@ -115,7 +128,7 @@ public struct ArchiveCopySnapshot: Equatable, Sendable, Identifiable {
         self.sizeBytes = sizeBytes; self.contentKey = contentKey; self.promotedFromID = promotedFromID
         self.isArchiveCopy = isArchiveCopy; self.fixityVerified = fixityVerified
         self.isInsideArchiveRoot = isInsideArchiveRoot; self.isOnline = isOnline
-        self.isPairMember = isPairMember; self.isVersion = isVersion; self.hasHumanNote = hasHumanNote
+        self.fileExists = fileExists; self.isPairMember = isPairMember; self.isVersion = isVersion; self.hasHumanNote = hasHumanNote
         self.starRating = starRating; self.disposition = disposition; self.attestations = attestations
         self.volumeIsConnectedWorking = volumeIsConnectedWorking; self.volumeFreeBytes = volumeFreeBytes
         self.isPurged = isPurged
@@ -134,6 +147,10 @@ public struct ArchiveCopySnapshot: Equatable, Sendable, Identifiable {
     /// The archive side of a family: a promoted copy or anything inside
     /// the archive root. Never a row.
     public var isArchiveSide: Bool { isArchiveCopy || isInsideArchiveRoot }
+
+    /// The volume is mounted and the file is not there: a catalog row
+    /// with nothing behind it — not a copy.
+    public var isMissingFile: Bool { isOnline && !fileExists }
 
     /// "h" for a segmented content hash, "p" for the partial-MD5 + size
     /// pair, nil when never hashed.
@@ -208,9 +225,28 @@ public enum ArchiveCopyFamilies {
         return families
     }
 
-    /// The protection line for a batch, from the same families.
+    /// The protection line for a batch, from the same families. A missing
+    /// file is not a copy — it neither counts nor names its volume.
     public static func protection(families: [[ArchiveCopySnapshot]]) -> ProtectionSummary {
-        ProtectionSummary.summarize(families: families.map { $0.map(\.copyFacts) })
+        ProtectionSummary.summarize(families: families.map { fam in
+            fam.filter { !$0.isMissingFile }.map(\.copyFacts)
+        })
+    }
+
+    /// The same families with `fileExists` filled in for every WORKING
+    /// copy on an online volume (the archive side has its own disk checks
+    /// in the apply path; an offline volume cannot be asked). One stat per
+    /// working copy in the batch's families — call it off the main actor.
+    public static func checkingFiles(_ families: [[ArchiveCopySnapshot]],
+                                     fileExists: (String) -> Bool) -> [[ArchiveCopySnapshot]] {
+        families.map { fam in
+            fam.map { s in
+                guard !s.isPurged, !s.isArchiveSide, s.isOnline else { return s }
+                var out = s
+                out.fileExists = fileExists(s.fullPath)
+                return out
+            }
+        }
     }
 
     /// "Might be copies" of one family: the related snapshots (capped) and
@@ -232,8 +268,8 @@ public enum ArchiveCopyFamilies {
     /// are name-related to a member — the same `baseStem` (the app passes
     /// ArchiveAngelFamily.baseStem: derivative and share-out tokens
     /// stripped) or the same filename — but NOT in the family by content.
-    /// Archive-side, purged, offline and family members (of ANY family in
-    /// the batch) are never related rows. (Reachable, not "connected
+    /// Archive-side, purged, offline, missing-file and family members (of
+    /// ANY family in the batch) are never related rows. (Reachable, not "connected
     /// working": a copy on a retired drive that is plugged in may be
     /// hashed and, if it matches, offered — it is the person's call.)
     /// O(snapshots × stem length) hash lookups; `baseStem` runs only on
@@ -254,7 +290,7 @@ public enum ArchiveCopyFamilies {
         var out = [RelatedGroup](repeating: .empty, count: families.count)
         guard !familyOfBase.isEmpty else { return out }
         for s in snapshots {
-            guard !s.isPurged, !s.isArchiveSide, s.isOnline, !memberIDs.contains(s.id) else { continue }
+            guard !s.isPurged, !s.isArchiveSide, s.isOnline, s.fileExists, !memberIDs.contains(s.id) else { continue }
             let lower = s.stem.lowercased()
             guard !lower.isEmpty else { continue }
             // A base stem is always a prefix of the lowercased stem, so a
@@ -437,12 +473,16 @@ public struct PrunePlan: Equatable, Sendable {
     public enum KeepReason: String, Equatable, Sendable {
         case archiveCopy, insideArchiveRoot, offline, pairMember, version, humanNote, keeper, barNotMet
         case noArchiveCopy, archiveUnverified
+        /// The volume is connected but the file is not where the catalog
+        /// says (moved or deleted outside the app) — not a copy at all.
+        case fileMissing
 
         public var displayText: String {
             switch self {
             case .archiveCopy:       return "the archive copy"
             case .insideArchiveRoot: return "inside the Master Archive"
             case .offline:           return "drive not connected"
+            case .fileMissing:       return "file not found — moved or deleted outside the app?"
             case .pairMember:        return "part of a recovered A/V pair Combine still needs"
             case .version:           return "a version — the original is in the archive"
             case .humanNote:         return "has your note"
@@ -472,8 +512,8 @@ public struct PrunePlan: Equatable, Sendable {
             /// Checkable: passes `isCandidate` and the family has a
             /// verified archive copy.
             case candidate
-            /// Never checkable — offline / pair, or any working copy in a
-            /// family with no verified archive copy.
+            /// Never checkable — offline / missing / pair, or any working
+            /// copy in a family with no verified archive copy.
             case kept(KeepReason)
         }
 
@@ -525,10 +565,16 @@ public struct PrunePlan: Equatable, Sendable {
 
         public var checkable: Bool { role == .candidate }
 
+        /// The volume is connected, the file is not there: listed so the
+        /// person can remove the row from the catalog; never a copy.
+        public var isMissingFile: Bool { role == .kept(.fileMissing) }
+
         /// Why the box is disabled, or the plan's hint on a checkable row
         /// (nil = a plain candidate).
         public var reasonText: String? {
             switch role {
+            case .kept(.fileMissing):
+                return "not on \(copy.volumeName.isEmpty ? "its drive" : copy.volumeName) any more (moved or deleted?)"
             case .kept(let r): return r.displayText
             case .candidate:
                 switch planKeeps {
@@ -628,6 +674,9 @@ public struct PrunePlan: Equatable, Sendable {
         public var defaultSelection: Set<UUID> { Set(rows.lazy.filter(\.defaultChecked).map(\.id)) }
         /// Every row the person may check, in row order.
         public var checkableIDs: [UUID] { rows.filter(\.checkable).map(\.id) }
+        /// Rows whose file is gone from a connected volume — removable
+        /// from the catalog, never Trashed, never counted.
+        public var missingIDs: [UUID] { rows.filter(\.isMissingFile).map(\.id) }
         public var checkableBytes: Int64 { rows.reduce(0) { $0 + ($1.checkable ? $1.copy.sizeBytes : 0) } }
         /// The bar's cloud-or-off-site want is met — by a "yes" or by
         /// "n/a for these".
@@ -640,6 +689,9 @@ public struct PrunePlan: Equatable, Sendable {
             var devicesAfter = Set<String>()
             var archiveOnly = true
             for row in rows {
+                // A missing file is not a copy: it holds no device and
+                // does not keep the family off "archive only".
+                if row.isMissingFile { continue }
                 switch row.role {
                 case .kept:
                     archiveOnly = false
@@ -683,7 +735,7 @@ public struct PrunePlan: Equatable, Sendable {
                          + (versionArchive.isEmpty ? "" : " + \(versionArchive.count) version\(versionArchive.count == 1 ? "" : "s") archived"))
             var volumes: [String] = []
             var seen = Set<String>()
-            var checkable = 0, offline = 0, pair = 0, locked = 0, versions = 0, noted = 0
+            var checkable = 0, offline = 0, missing = 0, pair = 0, locked = 0, versions = 0, noted = 0
             for r in rows {
                 let v = r.copy.volumeName.isEmpty ? "?" : r.copy.volumeName
                 if seen.insert(v).inserted { volumes.append(v) }
@@ -693,6 +745,7 @@ public struct PrunePlan: Equatable, Sendable {
                     if r.kind.isVersion { versions += 1 }
                     if r.hasNote { noted += 1 }
                 case .kept(.offline): offline += 1
+                case .kept(.fileMissing): missing += 1
                 case .kept(.pairMember): pair += 1
                 case .kept: locked += 1
                 }
@@ -701,6 +754,7 @@ public struct PrunePlan: Equatable, Sendable {
             if versions > 0 { counts.append("\(versions) version\(versions == 1 ? "" : "s")") }
             if noted > 0 { counts.append("\(noted) noted") }
             if offline > 0 { counts.append("\(offline) offline") }
+            if missing > 0 { counts.append("\(missing) missing (removable)") }
             if pair > 0 { counts.append("\(pair) pair") }
             if locked > 0 { counts.append("\(locked) locked: \(shortfall ?? "")") }
             parts.append(rows.isEmpty
@@ -825,6 +879,10 @@ public struct PrunePlan: Equatable, Sendable {
         return out
     }
 
+    /// Rows whose file is gone from a connected volume, across the batch.
+    public var missingIDs: [UUID] { families.flatMap(\.missingIDs) }
+    public var missingCount: Int { families.reduce(0) { $0 + $1.missingIDs.count } }
+
     public var checkableCount: Int { families.reduce(0) { $0 + $1.candidateCount } }
     public var checkableBytes: Int64 { families.reduce(0) { $0 + $1.checkableBytes } }
     public var rowCount: Int { families.reduce(0) { $0 + $1.rows.count } }
@@ -908,11 +966,11 @@ public struct PrunePlan: Equatable, Sendable {
 
     /// The scrubbable-copy rule for ONE copy, ignoring the family-level
     /// archive test (applied in `plan`): not archive, not inside the root,
-    /// online, not a pair member. Versions and noted copies ARE candidates
-    /// (Rick's ruling 2026-09-20) — unchecked by default, see
+    /// online, ON DISK, not a pair member. Versions and noted copies ARE
+    /// candidates (Rick's ruling 2026-09-20) — unchecked by default, see
     /// `isPlainCandidate`.
     public static func isCandidate(_ c: ArchiveCopySnapshot) -> Bool {
-        !c.isPurged && !c.isArchiveSide && c.isOnline && !c.isPairMember
+        !c.isPurged && !c.isArchiveSide && c.isOnline && c.fileExists && !c.isPairMember
     }
 
     /// A candidate the bar-respecting plan may elect or Trash by default:
@@ -961,7 +1019,9 @@ public struct PrunePlan: Equatable, Sendable {
             if c.isInsideArchiveRoot { kept.append(KeptCopy(copy: CopyRef(c), reason: .insideArchiveRoot)); continue }
             if let locked = lockedReason(c) {
                 kept.append(KeptCopy(copy: CopyRef(c), reason: locked))
-                if !c.volumeName.isEmpty { devicesKept.insert(c.volumeName) }
+                // A missing file holds no device (an offline copy does —
+                // it exists, on a drive that is not here).
+                if locked != .fileMissing, !c.volumeName.isEmpty { devicesKept.insert(c.volumeName) }
             } else if softReason(c) != nil {
                 // Listed in `kept` below with its reason (or the family's
                 // no-archive reason); it still counts as a device.
@@ -991,7 +1051,7 @@ public struct PrunePlan: Equatable, Sendable {
             if let kind = s.contentKeyKind, memberKinds.contains(kind) { status = .differentFootage }
             return RelatedRow(copy: CopyRef(s), status: status)
         }
-        let unhashed = fam.filter { !$0.isPurged && !$0.isVersion && $0.isOnline && $0.contentKeyKind != "h" }.map(\.id)
+        let unhashed = fam.filter { !$0.isPurged && !$0.isVersion && $0.isOnline && $0.fileExists && $0.contentKeyKind != "h" }.map(\.id)
 
         func make(covered: Bool, shortfall: String?, keeper: CopyRef?, keeperRequired: Bool, trash: [CopyRef],
                   kept: [KeptCopy], advice: String?, rows: [CopyRow]) -> Family {
@@ -1095,7 +1155,7 @@ public struct PrunePlan: Equatable, Sendable {
 
     /// The checklist rows for one family: the WORKING copies in catalog
     /// order (archive copies are the header). Locked reasons (offline /
-    /// pair) are the plan's own; `candidateRole` says what a copy that
+    /// missing / pair) are the plan's own; `candidateRole` says what a copy that
     /// passes `isCandidate` becomes in this family — (role, planKeeps,
     /// defaultChecked). O(copies).
     static func rows(_ fam: [ArchiveCopySnapshot], originalID: UUID?,
@@ -1115,10 +1175,13 @@ public struct PrunePlan: Equatable, Sendable {
         return working
     }
 
-    /// Why a working copy can never be a candidate (nil = it can): not
-    /// reachable, or a recovered A/V pair half.
+    /// Why a working copy can never be a candidate (nil = it can): its
+    /// volume is not reachable, its file is not there, or it is a
+    /// recovered A/V pair half. Offline is judged first: an unmounted
+    /// volume cannot say whether the file exists.
     static func lockedReason(_ c: ArchiveCopySnapshot) -> KeepReason? {
         if !c.isOnline { return .offline }
+        if !c.fileExists { return .fileMissing }
         if c.isPairMember { return .pairMember }
         return nil
     }

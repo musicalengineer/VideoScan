@@ -28,6 +28,24 @@
 //     answerable.
 //   - `offerArchivedWhatNext(...)` — sets the sheet driver ONCE per batch.
 //
+// TWO FACTS, NOT ONE (2026-09-21 — Rick: "'M4drive' was said 'not
+// connected' in some cases which is weird. So I could only delete some
+// videos."): the boot volume is named M4drive, and `VolumeReachability
+// .isReachable(path:)` answers "does this FILE exist" for internal paths.
+// A row whose file had been moved or deleted outside the app (13 in the
+// live catalog: 8 Angel buffer companions from batches cleared before the
+// companion-retirement fix, 5 ~/Movies files) read as "drive not
+// connected". Now the snapshot's `isOnline` is the VOLUME
+// (`VolumeReachability.isVolumeReachable` — the mount root, never the
+// file), and `fileExists` is a stat of the working copies in the batch's
+// families, taken OFF the main actor inside the same `@concurrent` call
+// that builds the plan (never O(records) stats on main). PrunePlan turns
+// `isOnline && !fileExists` into `.fileMissing`: listed, disabled, never a
+// copy for the tier / keeper / device counts, and removable from the
+// catalog right there (`removeMissingCopiesFromCatalog` — the existing
+// purge tombstone, a `setAside` "removed-from-catalog" ledger line,
+// nothing on disk).
+//
 // (For Rick: `Task { … }` inherits the main actor; the `@concurrent`
 // static functions are what actually leave it — the same discipline as
 // VideoScanModel+BackupAttestations.)
@@ -181,11 +199,25 @@ extension VideoScanModel {
 
     // MARK: Snapshots (ONE main-actor pass)
 
+    /// The default `isOnline`: is the VOLUME mounted — never "does the
+    /// file exist" (2026-09-21). A missing file on the boot disk is a
+    /// missing file, not a disconnected drive.
+    nonisolated static func volumeIsOnline(_ rec: VideoRecord) -> Bool {
+        VolumeReachability.isVolumeReachable(path: rec.fullPath)
+    }
+
+    /// The default `fileExists`: one stat. Called off the main actor, for
+    /// the working copies of the batch's families only.
+    nonisolated static func fileIsOnDisk(_ path: String) -> Bool {
+        FileManager.default.fileExists(atPath: path)
+    }
+
     /// The Sendable facts about every active record — what the pure
     /// families / protection / prune code reads. O(records) value
     /// capture on the main actor (the Tidy dry-run does the same); the
     /// heavy work happens off it. `isOnline` is injectable so tests never
-    /// touch a volume.
+    /// touch a volume. NOTHING here touches the disk: `fileExists` is
+    /// left `true` (unknown) and filled off-main by the callers below.
     ///
     /// v3 (2026-09-20): `derivedFrom` / `derivationKind` ride along so a
     /// version can join its original's family off-main (a cleanup output
@@ -194,7 +226,7 @@ extension VideoScanModel {
     /// (ArchiveAngelCandidate.hasHumanNote — 9,977 of 13,842 records
     /// carry ffprobe/recipe text in `userNotes` that nobody typed, and
     /// those must not read as "has your note").
-    func archiveCopySnapshots(isOnline: (VideoRecord) -> Bool = { VolumeReachability.isReachable(path: $0.fullPath) })
+    func archiveCopySnapshots(isOnline: (VideoRecord) -> Bool = VideoScanModel.volumeIsOnline)
     -> [ArchiveCopySnapshot] {
         // Per-volume facts from the scan targets (dozens, one statfs each).
         struct VolumeFacts { var connectedWorking: Bool; var free: Int64? }
@@ -252,18 +284,23 @@ extension VideoScanModel {
     // MARK: Protection (off-main)
 
     /// The protection line for a batch — snapshot on main, group +
-    /// summarize on the cooperative pool.
+    /// stat the working copies + summarize on the cooperative pool. A
+    /// missing file is not a copy.
     func batchProtection(for recordIDs: [UUID],
-                         isOnline: (VideoRecord) -> Bool = { VolumeReachability.isReachable(path: $0.fullPath) }) async -> ProtectionSummary {
+                         isOnline: (VideoRecord) -> Bool = VideoScanModel.volumeIsOnline,
+                         fileExists: @escaping @Sendable (String) -> Bool = VideoScanModel.fileIsOnDisk) async -> ProtectionSummary {
         let snaps = archiveCopySnapshots(isOnline: isOnline)
-        return await Self.protectionOffMain(batch: Set(recordIDs), snapshots: snaps)
+        return await Self.protectionOffMain(batch: Set(recordIDs), snapshots: snaps, fileExists: fileExists)
     }
 
     #if compiler(>=6.2)
     @concurrent
     #endif
-    nonisolated static func protectionOffMain(batch: Set<UUID>, snapshots: [ArchiveCopySnapshot]) async -> ProtectionSummary {
-        ArchiveCopyFamilies.protection(families: ArchiveCopyFamilies.group(batch: batch, snapshots: snapshots))
+    nonisolated static func protectionOffMain(batch: Set<UUID>, snapshots: [ArchiveCopySnapshot],
+                                              fileExists: @escaping @Sendable (String) -> Bool = VideoScanModel.fileIsOnDisk) async -> ProtectionSummary {
+        let families = ArchiveCopyFamilies.checkingFiles(
+            ArchiveCopyFamilies.group(batch: batch, snapshots: snapshots), fileExists: fileExists)
+        return ArchiveCopyFamilies.protection(families: families)
     }
 
     // MARK: Prune plan (off-main, dry run)
@@ -272,20 +309,28 @@ extension VideoScanModel {
     var importanceBar: ImportanceBar { ImportanceBar.load(defaults: .standard) }
 
     /// The dry-run plan for the sheet: families by content + provenance,
-    /// and the name-related "might be copies" per family, in ONE off-main
-    /// pass over the snapshots.
+    /// the stat of every working copy in them (`fileExists` — injectable
+    /// so synthetic-path tests never touch the disk), and the name-related
+    /// "might be copies" per family, in ONE off-main pass over the
+    /// snapshots.
     func prunePlan(for recordIDs: [UUID], options: PrunePlan.Options,
-                   isOnline: (VideoRecord) -> Bool = { VolumeReachability.isReachable(path: $0.fullPath) }) async -> PrunePlan {
+                   isOnline: (VideoRecord) -> Bool = VideoScanModel.volumeIsOnline,
+                   fileExists: @escaping @Sendable (String) -> Bool = VideoScanModel.fileIsOnDisk) async -> PrunePlan {
         let snaps = archiveCopySnapshots(isOnline: isOnline)
-        return await Self.prunePlanOffMain(batch: Set(recordIDs), snapshots: snaps, options: options)
+        return await Self.prunePlanOffMain(batch: Set(recordIDs), snapshots: snaps, options: options,
+                                           fileExists: fileExists)
     }
 
     #if compiler(>=6.2)
     @concurrent
     #endif
     nonisolated static func prunePlanOffMain(batch: Set<UUID>, snapshots: [ArchiveCopySnapshot],
-                                             options: PrunePlan.Options) async -> PrunePlan {
-        let families = ArchiveCopyFamilies.group(batch: batch, snapshots: snapshots)
+                                             options: PrunePlan.Options,
+                                             fileExists: @escaping @Sendable (String) -> Bool = VideoScanModel.fileIsOnDisk) async -> PrunePlan {
+        // The stat happens HERE, off-main, for the batch's families only
+        // (never the whole catalog): a missing file becomes `.fileMissing`.
+        let families = ArchiveCopyFamilies.checkingFiles(
+            ArchiveCopyFamilies.group(batch: batch, snapshots: snapshots), fileExists: fileExists)
         // Name-relatedness = the Angel's event-family stem: derivative
         // tokens (_trimmed, _balanced, .vs.edit…) and share-out tokens
         // (clip 1, part 2, v3) stripped, case-folded.
@@ -296,12 +341,65 @@ extension VideoScanModel {
 
     /// One log line per family, written when the sheet opens (and after a
     /// hash-to-confirm re-plan), so the log always says why a copy could
-    /// or could not be selected.
+    /// or could not be selected. The header names the missing rows too
+    /// ("2 missing (removable)") — the rows a Remove from catalog can
+    /// clear.
     func logArchivedWhatNextPlan(_ plan: PrunePlan, batchID: String) {
+        let missing = plan.missingCount
         log("Archived — what next? [\(batchID)]: \(plan.families.count) famil\(plan.families.count == 1 ? "y" : "ies"), "
             + "\(plan.checkableCount) checkable cop\(plan.checkableCount == 1 ? "y" : "ies") (\(MediaBytes.display(plan.checkableBytes))), "
-            + "\(plan.relatedCount) name-related")
+            + "\(plan.relatedCount) name-related"
+            + (missing > 0 ? ", \(missing) missing (removable)" : ""))
         for f in plan.families { log(f.logLine) }
+    }
+
+    // MARK: Remove missing rows from the catalog (2026-09-21)
+
+    /// The sheet's "Remove from catalog" on a missing-file row: the record
+    /// is re-checked (active, not archive-side, volume online, file still
+    /// NOT on disk — the stat off-main) and then tombstoned through the
+    /// ONE existing purge path (`purgeRecords`: `purgedAt`, the undo
+    /// banner, a `setAside` "removed-from-catalog" ledger line). Nothing
+    /// on disk is touched — there is nothing there. A record whose file
+    /// turns out to exist is left alone and named. Returns the count
+    /// removed; the sheet re-plans afterwards.
+    @discardableResult
+    func removeMissingCopiesFromCatalog(recordIDs: [UUID],
+                                        fileExists: @escaping @Sendable (String) -> Bool = VideoScanModel.fileIsOnDisk) async -> Int {
+        guard !isReadOnly else {
+            log("what-next: Remove from catalog refused — read-only viewer mode.")
+            return 0
+        }
+        struct Item: Sendable { let id: UUID; let path: String; let filename: String; let volume: String }
+        var items: [Item] = []
+        var seen = Set<UUID>()
+        for id in recordIDs where seen.insert(id).inserted {
+            guard let rec = record(forID: id), !rec.isPurged else { continue }
+            guard !isArchiveCopy(rec), !isInsideMasterArchive(path: rec.fullPath) else {
+                log("what-next: \(rec.filename) is on the archive side — never removed here")
+                continue
+            }
+            guard VolumeReachability.isVolumeReachable(path: rec.fullPath) else {
+                log("what-next: \(rec.filename) kept — \(rec.volumeName) is not connected, so the file may well be there")
+                continue
+            }
+            items.append(Item(id: rec.id, path: rec.fullPath, filename: rec.filename, volume: rec.volumeName))
+        }
+        guard !items.isEmpty else { return 0 }
+        let present: Set<UUID> = await Task.detached(priority: .userInitiated) {
+            Set(items.filter { fileExists($0.path) }.map(\.id))
+        }.value
+        for item in items where present.contains(item.id) {
+            log("what-next: \(item.filename) is on \(item.volume) after all — kept in the catalog")
+        }
+        let gone = items.filter { !present.contains($0.id) }
+        guard !gone.isEmpty else { return 0 }
+        let n = purgeRecords(ids: Set(gone.map(\.id)))
+        noteCatalogRecordsMutated()
+        log("what-next: removed \(n) missing row\(n == 1 ? "" : "s") from the catalog — nothing on disk was touched: "
+            + gone.prefix(5).map { "\($0.filename) (\($0.volume))" }.joined(separator: ", ")
+            + (gone.count > 5 ? " and \(gone.count - 5) more" : ""))
+        return n
     }
 
     // MARK: Hash to confirm (v3)

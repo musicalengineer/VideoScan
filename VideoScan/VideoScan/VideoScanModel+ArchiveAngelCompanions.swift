@@ -24,6 +24,16 @@
 // a file ffmpeg still held — keeps its record and is logged as a
 // survivor, never given a `copyDeleted` line it did not earn.
 //
+// LAUNCH RECONCILIATION (2026-09-21): the entry point above reconciles
+// only when it is called, so batches cleared BEFORE it existed left their
+// companion records live (8 of the 13 "not connected" rows in Rick's
+// "Archived — what next?" sheet were exactly those). Once per launch,
+// `reconcileArchiveAngelBufferAtLaunch` walks the active records under
+// the buffer root, stats their batch and entry folders OFF the main
+// actor, and retires — through the same entry point, per batch folder —
+// the companions whose folder is gone. A record whose folder is still
+// there is never touched, whatever its file says: that is a job's call.
+//
 // (For Rick: this is the same "separate, don't delete" discipline as the
 // rest of the catalog — a tombstone, not a removal.)
 
@@ -161,5 +171,100 @@ extension VideoScanModel {
         let path = URL(fileURLWithPath: dir).standardizedFileURL.path
         guard !path.isEmpty, path != "/" else { return "" }
         return path.hasSuffix("/") ? path : path + "/"
+    }
+
+    // MARK: - Launch reconciliation (2026-09-21)
+
+    /// The reason strings the launch pass writes (tests pin them).
+    enum ArchiveAngelLaunchReconcile {
+        static let batchFolderGone = "buffer folder gone — retired at launch"
+        static let entryFolderGone = "buffer row folder gone — retired at launch"
+    }
+
+    /// The folders a record under the buffer root belongs to, from its
+    /// path alone: `<root>/batch-…/<entryUUID>/file` → (batchDir, entryDir).
+    /// nil when the path is not `<root>/batch-…/…`; `entryDir` nil when the
+    /// second component is not a UUID (a file directly in the batch
+    /// folder, or an older layout). Pure — unit-tested directly.
+    nonisolated static func archiveAngelBufferFolders(of path: String, bufferRoot: URL)
+        -> (batchDir: String, entryDir: String?)? {
+        let prefix = folderPrefix(bufferRoot.path)
+        guard !prefix.isEmpty, path.hasPrefix(prefix) else { return nil }
+        let rest = String(path.dropFirst(prefix.count))
+        let comps = rest.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard comps.count >= 2, comps[0].hasPrefix("batch-") else { return nil }
+        let batchDir = prefix + comps[0]
+        guard comps.count >= 3, UUID(uuidString: comps[1]) != nil else { return (batchDir, nil) }
+        return (batchDir, batchDir + "/" + comps[1])
+    }
+
+    /// Once per launch (called from `configureArchiveAngelSweep`'s launch
+    /// task; tests call it directly with a sandbox root): every active
+    /// record whose path lies under the Angel buffer root and whose batch
+    /// folder — or row folder — no longer exists is retired through
+    /// `forgetArchiveAngelCompanions` per batch, with a launch reason and
+    /// a `copyDeleted` line by the angel. Folder stats run OFF the main
+    /// actor; the catalog is read and written on it. A record whose
+    /// folders still exist is never touched — even if its file is gone —
+    /// that is a job's reconciliation, not launch's. A batch a job is
+    /// running right now is skipped. Idempotent: the second pass finds
+    /// nothing. Returns the number of records retired; one log line names
+    /// the count.
+    @discardableResult
+    func reconcileArchiveAngelBufferAtLaunch(bufferRoot: URL = ArchiveAngelPlanStore.defaultBufferRoot,
+                                             fileExists: @escaping @Sendable (String) -> Bool = VideoScanModel.fileIsOnDisk) async -> Int {
+        // Main actor: which records live under the buffer, and in which folders.
+        var recordsInBatch: [String: Int] = [:]
+        var entriesOfBatch: [String: Set<String>] = [:]
+        for rec in records where !rec.isPurged {
+            guard let (batchDir, entryDir) = Self.archiveAngelBufferFolders(of: rec.fullPath, bufferRoot: bufferRoot) else { continue }
+            guard !ArchiveAngelLiveBatches.isLive(batchDir) else { continue }
+            recordsInBatch[batchDir, default: 0] += 1
+            if let entryDir { entriesOfBatch[batchDir, default: []].insert(entryDir) }
+        }
+        guard !recordsInBatch.isEmpty else { return 0 }
+        let batchDirs = recordsInBatch.keys.sorted()
+        let entryDirs = entriesOfBatch
+
+        // Off-main: one stat per batch folder, one per row folder of the
+        // batches that are still there.
+        let (goneBatches, goneEntries): ([String], [String: [String]]) = await Task.detached(priority: .utility) {
+            var gone: [String] = []
+            var goneRows: [String: [String]] = [:]
+            for dir in batchDirs {
+                if !fileExists(dir) { gone.append(dir); continue }
+                for entry in (entryDirs[dir] ?? []).sorted() where !fileExists(entry) {
+                    goneRows[dir, default: []].append(entry)
+                }
+            }
+            return (gone, goneRows)
+        }.value
+
+        // Main actor: retire through the one entry point, per batch. The
+        // folders are gone, so every file under them is gone — the
+        // entry point's own file check is answered from that fact (no
+        // second stat, and never a "survivor" line for a folder that
+        // does not exist).
+        let now = Date()
+        var retired = 0
+        if !goneBatches.isEmpty {
+            retired += forgetArchiveAngelCompanions(batchDirs: goneBatches,
+                                                    reason: ArchiveAngelLaunchReconcile.batchFolderGone,
+                                                    at: now, fileExists: { _ in false })
+        }
+        for (dir, entries) in goneEntries.sorted(by: { $0.key < $1.key }) {
+            let ids = Set(entries.compactMap { UUID(uuidString: ($0 as NSString).lastPathComponent) })
+            guard !ids.isEmpty else { continue }
+            retired += forgetArchiveAngelCompanions(batchDir: dir, entryIDs: ids,
+                                                    reason: ArchiveAngelLaunchReconcile.entryFolderGone,
+                                                    at: now, fileExists: { _ in false })
+        }
+        let checked = recordsInBatch.values.reduce(0, +)
+        let line = "Archive Angel: launch reconciliation — \(checked) companion record(s) under the buffer in "
+            + "\(batchDirs.count) batch folder(s); \(goneBatches.count) folder(s) gone, "
+            + "\(goneEntries.values.reduce(0) { $0 + $1.count }) row folder(s) gone; retired \(retired) record(s)"
+        log(line)
+        appLog.write(line)
+        return retired
     }
 }
