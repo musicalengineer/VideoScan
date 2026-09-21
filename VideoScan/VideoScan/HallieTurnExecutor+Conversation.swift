@@ -112,6 +112,24 @@ extension HallieTurnExecutor {
 
         var effectiveMode: HallieMode { forcedMode ?? mode }
 
+        // MARK: Kind words (HallieKindWords, Rick 2026-09-21)
+
+        /// People-profile UUIDs whose kind word Hallie already said in this
+        /// conversation — at most once per person, so it stays charming,
+        /// not repetitive. Cleared only by reset (a new conversation).
+        private(set) var kindWordSubjects: Set<UUID> = []
+        /// The current user already heard their own kind word in a
+        /// greeting this conversation.
+        private(set) var kindWordGreetingSaid = false
+
+        mutating func noteKindWord(about uuid: UUID) {
+            kindWordSubjects.insert(uuid)
+        }
+
+        mutating func noteGreetingKindWord() {
+            kindWordGreetingSaid = true
+        }
+
         struct TreeContext: Sendable, Equatable {
             /// Canonical subject — the same value as `lastSubject`, kept in
             /// sync by `record`, never computed twice.

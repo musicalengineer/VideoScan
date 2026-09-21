@@ -47,6 +47,9 @@ enum HallieResponseCommit {
         // No suspension occurs between acceptance and the final action.
         guard !isCancelled, activeRequestID == requestID else { return false }
         var state = state
+        // Rick's kind word (HallieKindWords): said — or dropped as already
+        // heard this conversation — before anything is spoken or shown.
+        let response = response.applyingKindWord(memory: &state.memory)
         // Rick 2026-08-22: "in-app, there's no audio." On by default; the
         // settings sheet has the switch and the voice picker.
         if sinks.isSpeechEnabled() {

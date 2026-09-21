@@ -184,9 +184,12 @@ final class HallieWebBridge {
                let pending = session.pendingClarification,
                let candidateID = Self.candidateID(from: select) {
                 session.pendingClarification = nil
-                response = try await HallieAppTurnCoordinator.continue(
+                // Rick's kind word, said against THIS reader's session
+                // memory (once per person per conversation).
+                let continued = try await HallieAppTurnCoordinator.continue(
                     pending: pending, selecting: candidateID,
                     history: session.history, dependencies: turnDependencies)
+                response = continued.applyingKindWord(memory: &session.memory)
             } else {
                 guard let text = (object["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !text.isEmpty, text.count <= 2_000 else {
@@ -215,7 +218,7 @@ final class HallieWebBridge {
                 for (index, clause) in clauses.enumerated() {
                     // "play donna at christmas" is recognised inside the
                     // coordinator (pre-translation), same as the chat window.
-                    let step = try await HallieAppTurnCoordinator.execute(
+                    let answered = try await HallieAppTurnCoordinator.execute(
                         question: clause,
                         records: records(),
                         referent: .init(recordID: nil, temporalDate: nil),
@@ -229,6 +232,7 @@ final class HallieWebBridge {
                         drill: session.drill,
                         picker: session.picker,
                         dependencies: turnDependencies)
+                    let step = answered.applyingKindWord(memory: &session.memory)
                     session.history.append(.init(user: clause, assistant: step.result.prose))
                     if session.history.count > HallieGroundedComposer.historyTurns {
                         session.history.removeFirst(session.history.count - HallieGroundedComposer.historyTurns)
@@ -669,7 +673,8 @@ extension HallieAppTurnCoordinator.Dependencies {
             executeRequest: executeRequest,
             continueTurn: continueTurn,
             resolveBiographyPhoto: resolveBiographyPhoto,
-            composeAnswer: composeAnswer)
+            composeAnswer: composeAnswer,
+            loadKindWords: loadKindWords)
     }
 }
 

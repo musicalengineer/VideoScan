@@ -78,7 +78,9 @@ enum HallieAppTurnCoordinator {
     }
 
     struct Response: Sendable {
-        let result: HallieTurnExecutor.Result
+        /// `var` so a client can apply the pending kind word against its
+        /// own conversation memory (HallieKindWords) before showing it.
+        var result: HallieTurnExecutor.Result
         let responderHost: String
         let biographyPhoto: ArchivistBiographyPhoto?
         let capturedReferentID: UUID?
@@ -106,6 +108,12 @@ enum HallieAppTurnCoordinator {
         /// same for the Apple voice, which cannot read the override syntax.
         var pickerSpeech: String? = nil
         var pickerSpeechFallback: String? = nil
+        /// Rick's kind word that MAY be said with this answer (a biography
+        /// subject's line, or the user's own line in a greeting). Resolved
+        /// off-main here; said — or dropped as already heard — by the
+        /// client that owns the conversation memory, via
+        /// `applyingKindWord(memory:)`. Never part of the facts.
+        var kindWord: HallieKindWords.Offer? = nil
     }
 
     /// The responder label for turns that never reached a model.
@@ -185,6 +193,9 @@ enum HallieAppTurnCoordinator {
         let composeAnswer: @Sendable (
             HallieAnswerPlan, [HallieGroundedComposer.HistoryTurn], [String], String
         ) async -> HallieGroundedComposer.Outcome
+        /// Rick's kind words (HallieKindWords). The default has none, so
+        /// tests never read a real file; live reads the cached store.
+        let loadKindWords: @Sendable () -> HallieKindWordsBook
 
         init(
             startLocalBrain: @escaping @Sendable ([String]) async throws -> [String],
@@ -227,7 +238,8 @@ enum HallieAppTurnCoordinator {
                 HallieAnswerPlan, [HallieGroundedComposer.HistoryTurn], [String], String
             ) async -> HallieGroundedComposer.Outcome = { plan, _, _, _ in
                 .template(plan, note: "template: no composer configured")
-            }
+            },
+            loadKindWords: @escaping @Sendable () -> HallieKindWordsBook = { .empty }
         ) {
             self.startLocalBrain = startLocalBrain
             self.translateAST = translateAST
@@ -264,6 +276,7 @@ enum HallieAppTurnCoordinator {
             self.continueTurn = continueTurn
             self.resolveBiographyPhoto = resolveBiographyPhoto
             self.composeAnswer = composeAnswer
+            self.loadKindWords = loadKindWords
         }
 
         private static let productionApplicationSupportRoot = FileManager.default.urls(
@@ -456,7 +469,8 @@ enum HallieAppTurnCoordinator {
                         try await fleet.composePlainText(system: system, user: user)
                     })
                 return await composer.compose(plan: plan, history: history)
-            })
+            },
+            loadKindWords: { HallieKindWordsStore.shared.book() })
         }
     }
 
@@ -566,7 +580,7 @@ enum HallieAppTurnCoordinator {
         case .answer(let result):
             // Help, capability, small talk, reset, follow-up actions and
             // declines: fixed wording by design; the composer is never asked.
-            return Response(
+            var response = Response(
                 result: result,
                 responderHost: localResponder,
                 biographyPhoto: nil,
@@ -575,6 +589,19 @@ enum HallieAppTurnCoordinator {
                 pendingClarification: nil,
                 playAfterAnswer: false,
                 executedIntent: nil)
+            // "hi hallie": the greeting may carry the user's own kind word
+            // (HallieKindWords). Profiles and the file are read off-main,
+            // and only for a greeting.
+            if HallieKindWords.isGreeting(result) {
+                response.kindWord = await Task.detached(priority: .userInitiated) {
+                    HallieKindWords.greetingOffer(
+                        result: result,
+                        speakers: dependencies.loadSpeakers(),
+                        profiles: dependencies.loadProfiles(),
+                        loadBook: dependencies.loadKindWords)
+                }.value
+            }
+            return response
 
         case .run(let local):
             intent = local
@@ -777,6 +804,7 @@ enum HallieAppTurnCoordinator {
             context: pending.context,
             playAfterAnswer: pending.clarification.intent.playAfterAnswer,
             composition: composition,
+            selectedIdentity: candidateID,
             dependencies: dependencies) {
                 try await dependencies.continueTurn(
                     pending.clarification,
@@ -1134,6 +1162,7 @@ enum HallieAppTurnCoordinator {
         context: HallieTurnExecutor.Context,
         playAfterAnswer: Bool,
         composition: Composition,
+        selectedIdentity: HallieTurnExecutor.CandidateID? = nil,
         dependencies: Dependencies,
         operation: @escaping @Sendable () async throws
             -> HallieTurnExecutor.Result
@@ -1166,6 +1195,15 @@ enum HallieAppTurnCoordinator {
                 }
             }
             try Task.checkCancellation()
+
+            // Rick's kind word for the biography's subject (HallieKindWords),
+            // resolved AFTER composition/verification so the verifier never
+            // judges it, and BEFORE the gallery offer so "want to see them
+            // all?" stays the last sentence (the anchor is today's prose).
+            let kindWord = HallieKindWords.biographyOffer(
+                result: result, ast: ast, selected: selectedIdentity,
+                profiles: context.profiles, graph: context.graph,
+                loadBook: dependencies.loadKindWords)
 
             let photo: ArchivistBiographyPhoto?
             if result.clarification == nil,
@@ -1251,7 +1289,7 @@ enum HallieAppTurnCoordinator {
                     capturedReferentID: capturedReferentID,
                     composition: composition)
             }
-            return Response(
+            var response = Response(
                 result: result,
                 responderHost: responderHost,
                 biographyPhoto: photo,
@@ -1262,6 +1300,8 @@ enum HallieAppTurnCoordinator {
                     && result.clarification == nil
                     && playAfterAnswer,
                 executedIntent: intent)
+            response.kindWord = kindWord
+            return response
         }
         return try await withTaskCancellationHandler {
             try await worker.value
