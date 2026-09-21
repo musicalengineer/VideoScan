@@ -134,6 +134,13 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// Pause/Resume between pairs, a saved plan for resume after a quit.
     /// DeleteDuplicatesJob.
     case deleteDuplicates
+    /// "Archived — what next?" → "Move N to Trash" as a job (Rick
+    /// 2026-09-20: "the app blocks when post-promote delete of big files").
+    /// Every copy is proven identical to its archive copy (read in full,
+    /// or trusted on its promotion stamp) and both are re-checked the
+    /// instant before the move; one file at a time, Pause/Stop between
+    /// files, held copies named in the row. PruneApplyJob.
+    case pruneCopies
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -162,6 +169,10 @@ enum MediaFileOperationKind: String, CaseIterable {
         // would read like every other verb): the one destructive row in
         // the list must be unmistakable at a glance.
         case .deleteDuplicates: return "DELETE"
+        // The other destructive row — the same treatment (upper-case, its
+        // own high-contrast fill) so it is never mistaken for a verb that
+        // only reads.
+        case .pruneCopies: return "TRASH"
         }
     }
 
@@ -190,6 +201,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .verifyArchive: return "verify archive"
         case .archiveAngel: return "archive angel"
         case .deleteDuplicates: return "delete duplicates"
+        case .pruneCopies: return "trash copies"
         }
     }
 }

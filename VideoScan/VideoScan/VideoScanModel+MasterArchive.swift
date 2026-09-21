@@ -820,7 +820,8 @@ extension VideoScanModel {
                               sha256: String,
                               probed copy: VideoRecord,
                               promotedAt: Date = Date(),
-                              readiness: ArchiveReadiness? = nil) -> VideoRecord {
+                              readiness: ArchiveReadiness? = nil,
+                              sourceStamp: FileIdentityStamp? = nil) -> VideoRecord {
         // Self-contained provenance on the COPY (codex QA major b): the
         // source's id, path and volume live on this record, so a later
         // retired-volume cleanup that removes the source record leaves
@@ -839,6 +840,19 @@ extension VideoScanModel {
         // equal one taken now. Verify Archive Copies writes it properly
         // (stat before and after its own read); until then the first
         // Delete Duplicates pair with this copy as keeper reads it once.
+        // The SOURCE's promotion-time identity (codex follow-up 2026-09-20
+        // #1): the promote read every byte of the source and the job
+        // stat'ed it before and after that read; when the two stamps agree
+        // the digest describes exactly the file that stamp names, so the
+        // source gets a whole-file `contentFixity` bound to it. "Archived —
+        // what next?" trusts the promotion original unread only while its
+        // CURRENT stat reproduces this stamp (ctime included) — never on
+        // the strength of a later archive audit. No stamp → no fixity →
+        // the original is read in full before it may go.
+        if let sourceStamp, sourceStamp.hasChangeTime, sourceStamp.size == copy.sizeBytes {
+            source.contentFixity = ContentFixity(digest: sha256, byteCount: sourceStamp.size,
+                                                 stamp: sourceStamp, computedAt: promotedAt)
+        }
         copy.archivedAt = promotedAt
         copy.starRating = max(source.starRating, 3)
         copy.archiveStage = .masterAssigned

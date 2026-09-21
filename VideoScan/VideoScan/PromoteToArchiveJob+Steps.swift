@@ -281,6 +281,9 @@ extension PromoteToArchiveJob {
         claimedNames.insert(destURL.path)
 
         let sha: String
+        // The source's promotion-time identity (copy path only — an
+        // adoption never read the source around a stamp pair).
+        var sourceStamp: FileIdentityStamp?
         var journalEntry = ArchivePromoteJournal.Entry(
             sourceRecordID: source.id, sourcePath: source.fullPath,
             destRelPath: choice.relPath,
@@ -324,12 +327,13 @@ extension PromoteToArchiveJob {
                     self?.applyPhaseSubtitle(sub)
                 }
             }
-            let published = try await Self.copyOffMain(sourcePath: source.fullPath,
-                                                       root: ctx.root,
-                                                       relPath: choice.relPath,
-                                                       progress: { _ in },
-                                                       phaseProgress: phaseProgress)
+            let (published, stamp) = try await Self.copyOffMain(sourcePath: source.fullPath,
+                                                                root: ctx.root,
+                                                                relPath: choice.relPath,
+                                                                progress: { _ in },
+                                                                phaseProgress: phaseProgress)
             sha = published.sha256
+            sourceStamp = stamp
             journalEntry = journalEntry.with(state: .renamed, sha256: sha)
             try ArchivePromoteJournal.append(journalEntry, rootPath: ctx.root)
         }
@@ -338,7 +342,7 @@ extension PromoteToArchiveJob {
         try await finishPublished(sourceID: source.id, source: source, sourcePath: source.fullPath,
                                   relPath: choice.relPath, destURL: destURL, sha: sha,
                                   model: model, ctx: ctx, journalBase: journalEntry,
-                                  readiness: entry.readiness)
+                                  readiness: entry.readiness, sourceStamp: sourceStamp)
         let elapsed = -fileStart.timeIntervalSinceNow
         model.log("Promote: \(entry.filename) → \(choice.relPath) (sha256 \(sha.prefix(12))…) ✓ in \(Self.promoteElapsedText(elapsed))")
         // .notice, not .info: promote is irreversible, so its DONE line has
@@ -393,7 +397,8 @@ extension PromoteToArchiveJob {
                          model: VideoScanModel,
                          ctx: RunContext,
                          journalBase: ArchivePromoteJournal.Entry?,
-                         readiness: ArchiveReadiness? = nil) async throws {
+                         readiness: ArchiveReadiness? = nil,
+                         sourceStamp: FileIdentityStamp? = nil) async throws {
         // The catalog record's id: when the manifest already names this
         // copy, REUSE its record_id so manifest ↔ catalog join on one id
         // (codex R5 major 5); a fresh id only for a brand-new row. A
@@ -449,7 +454,8 @@ extension PromoteToArchiveJob {
             archiveRecord = model.registerPromotedCopy(source: source, destinationURL: destURL,
                                                        relativePath: relPath, sha256: sha,
                                                        probed: copyProbe, promotedAt: now,
-                                                       readiness: readiness ?? ArchiveReadiness.assess(record: source))
+                                                       readiness: readiness ?? ArchiveReadiness.assess(record: source),
+                                                       sourceStamp: sourceStamp)
         } else {
             archiveRecord = model.registerOrphanPromotedCopy(sourceID: sourceID, sourcePath: sourcePath,
                                                              destinationURL: destURL, relativePath: relPath,
@@ -580,16 +586,32 @@ extension PromoteToArchiveJob {
     #if compiler(>=6.2)
     @concurrent
     #endif
+    /// Returns the publish result AND the source's stat stamp (ctime
+    /// included) when a stamp taken BEFORE the source was opened is
+    /// reproduced by one taken AFTER the copy + read-back — i.e. the stamp
+    /// describes exactly the bytes the digest covers. nil stamp = the
+    /// source changed under the copy (the engine throws for that too) or
+    /// could not be stat'ed; nothing is inferred. The stamp is the source's
+    /// promotion-time identity: "Archived — what next?" trusts the
+    /// promotion original unread ONLY while its current stat reproduces
+    /// it (codex follow-up 2026-09-20 #1 — an archive audit's date must
+    /// never vouch for the source).
     static func copyOffMain(sourcePath: String,
                             root: String,
                             relPath: String,
                             progress: @escaping @Sendable (Int64) -> Void,
-                            phaseProgress: @escaping @Sendable (ArchivePromoteEngine.ProgressPhase, Int64) -> Void = { _, _ in }) async throws -> ArchivePromoteEngine.PublishResult {
+                            phaseProgress: @escaping @Sendable (ArchivePromoteEngine.ProgressPhase, Int64) -> Void = { _, _ in })
+        async throws -> (published: ArchivePromoteEngine.PublishResult, sourceStamp: FileIdentityStamp?) {
+        let stampBefore = FileIdentityStamp.capture(path: sourcePath)
         let source = try ArchivePromoteEngine.openSource(path: sourcePath)
         defer { source.close() }
-        return try ArchivePromoteEngine.copyVerifyPublish(
+        let published = try ArchivePromoteEngine.copyVerifyPublish(
             source: source, root: root, relativePath: relPath,
             progress: progress, phaseProgress: phaseProgress, shouldCancel: { Task.isCancelled })
+        let stampAfter = FileIdentityStamp.capture(path: sourcePath)
+        let stamp = (stampBefore != nil && stampBefore == stampAfter && stampBefore?.size == published.sizeBytes)
+            ? stampBefore : nil
+        return (published, stamp)
     }
 
     /// Digest of an archive-relative file resolved through the dirfd
