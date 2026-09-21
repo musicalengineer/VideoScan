@@ -451,3 +451,30 @@ related to edward iii of england?", "who in the family was in the us marine
 corps?", "The US Marine Corps" (a bare topic follow-up, sent to the general
 lane), "tell me about rick" / "tell me about dicky" (template on model
 timeout — codex's replay had the M4 brain busy).
+
+## 2026-09-21 — codex's visible replay on 9818ff51 vs the 09-18 baseline (93b97f2f)
+
+| run | strict (44) | advisory (412) |
+|-----|-------------|----------------|
+| 09-18 nightly | 41 clean / 3 defects | 343 clean / 56 defects |
+| 09-21 live (codex, M4) | 40 / 4 | 329 / 83 — **32 new defects, 7 fixed** |
+
+The 32 new ones fall into three clusters, each with a lane:
+
+1. **Renamed people lost their videos** (9): "show videos of tim" → *"I took
+   “tim” to mean Timothy. I don't have any videos tagged with Timothy yet"*;
+   "how many videos of my dad" → *"…tagged with Richard Harding Breen Sr"*.
+   Catalog tags are strings captured when tagged ("Tim", "Timmy"); on 9/19–20
+   the People profiles were renamed (Timothy Christopher Breen / Timothy
+   William Breen / Daniel / Elizabeth / Richard) and the presence executor
+   matches tags by the profile's `name`. Rick hit it live at 13:54. Lane
+   `fix/hallie-dad-breen-age-at-death` (same resolution code). Long-term:
+   tags keyed by POI UUID.
+2. **Social / identity turns became catalog searches** (9): "nice to meet
+   you" → 51 transcript hits; "that was terrible lol" → event → Christmas
+   files; "ok" → 960 videos. Lane `fix/hallie-social-and-family-wide`.
+3. **Family-wide tree questions decline "couldn't tell who it is about"**
+   (6): "how many grandchildren are there", "list everyone in the family",
+   "what do you know about the Breen family". Same lane.
+
+Plus the wrong-person miss above (not in the corpus until today).
