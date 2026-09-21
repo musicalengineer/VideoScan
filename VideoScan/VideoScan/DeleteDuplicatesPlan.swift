@@ -344,6 +344,12 @@ enum DeletionTierText {
     static func waitingToBePutBack(_ n: Int, volume: String) -> String {
         "\(n) file\(n == 1 ? " is" : "s are") on \(volume) waiting to be put back from quarantine"
     }
+    /// "SanDisk is not connected — reconnect it and choose Put Back again"
+    /// (codex 1619 #2): a file still owed a put-back cannot be forgotten
+    /// while the drive that holds it is away.
+    static func notConnected(_ volume: String, path: String) -> String {
+        "\(volume) is not connected — reconnect it and choose Put Back again (\(path) is not reachable)"
+    }
 }
 
 struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {

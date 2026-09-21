@@ -539,6 +539,20 @@ enum SignatureVerification {
         case trash
     }
 
+    /// The removal boundary's LAST word (codex 1619 #1): a caller-supplied
+    /// check consulted after every read and identity check has passed,
+    /// immediately before the unlink / Trash move — in the same
+    /// synchronous stretch, no await between. `.proceed` may lower the
+    /// disposal (permanent → Trash); `.putBack` restores the file
+    /// untouched, reported as `.refused(.cancelled)` exactly like
+    /// `releaseQuarantine`. The job uses it to re-stat every copy its
+    /// copy-count tier was counted on — AFTER the fallback path's full
+    /// re-read, not before it.
+    enum FinalVerdict: Equatable, Sendable {
+        case proceed(Disposal)
+        case putBack(reason: String)
+    }
+
     enum DeletionResult: Equatable {
         case deleted(bytes: Int64)
         /// Moved into the Trash; `location` is where it sits now.
@@ -652,12 +666,16 @@ enum SignatureVerification {
     /// Unless the ticket's read already happened in quarantine, read the
     /// quarantined file in full again and require its digest to be the
     /// proof's; then require the baseline (ctime included) and the keeper
-    /// to reproduce and the original name to be empty; then unlink — or,
-    /// with `.trash`, move into the volume's Trash. Any doubt puts the
-    /// file back (or retains it in place, named).
+    /// to reproduce and the original name to be empty; then ask
+    /// `finalVerdict` (if given) — the caller's own last check, run after
+    /// ALL hashing so nothing it looked at can change under a long read
+    /// (codex 1619 #1); then unlink — or, with `.trash`, move into the
+    /// volume's Trash. Any doubt puts the file back (or retains it in
+    /// place, named).
     static func deleteQuarantined(_ ticket: QuarantineTicket,
                                   disposal: Disposal = .permanent,
-                                  hooks: Hooks = .live) -> DeletionResult {
+                                  hooks: Hooks = .live,
+                                  finalVerdict: (() -> FinalVerdict)? = nil) -> DeletionResult {
         let proof = ticket.proof
         let quarantined = URL(fileURLWithPath: ticket.quarantinedPath)
         let original = URL(fileURLWithPath: ticket.originalPath)
@@ -711,11 +729,28 @@ enum SignatureVerification {
                 cancelled: cancelledAfterQuarantine)
         }
 
+        // The caller's final word, AFTER the re-read and the identity checks
+        // and with nothing else between here and the removal: the copy-count
+        // evidence is re-stat'ed here, not before a read that could take
+        // minutes on a spinning disk (codex 1619 #1).
+        var disposal = disposal
+        if let finalVerdict {
+            switch finalVerdict() {
+            case .proceed(let final):
+                disposal = final
+            case .putBack(let reason):
+                return restoreOrRetain(quarantined: quarantined, original: original,
+                                       quarantineDirectory: quarantineDirectory,
+                                       reason: reason, cancelled: true)
+            }
+        }
+
         switch disposal {
         case .permanent:
             do {
-                // No await or callback precedes this removal after the identity
-                // check. The entry is isolated in a fresh owner-only directory.
+                // No await precedes this removal after the identity check and
+                // the final verdict. The entry is isolated in a fresh owner-only
+                // directory.
                 try FileManager.default.removeItem(at: quarantined)
             } catch {
                 return .retainedQuarantine(
