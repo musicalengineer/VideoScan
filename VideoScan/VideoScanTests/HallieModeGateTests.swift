@@ -56,12 +56,49 @@ struct HallieModeGateTests {
         } else { Issue.record("expected a biography rewrite") }
     }
 
-    @Test func treeModeKeepsACatalogASTWhenTheWordsNameMedia() {
+    /// A media noun or a collection word: the turn runs in the catalog
+    /// (2026-09-20: it used to be kept under the tree's context). A photo
+    /// word alone is still kept — the portrait road answers under the tree.
+    @Test func treeModeSwitchesACatalogASTToTheCatalogWhenTheWordsNameMedia() {
         let presence = ArchivistQueryAST.presence(.init(people: ["donna"], keywords: ["christmas"]))
-        #expect(tree(presence, "the Christmas tape with Donna") == .keep)
-        #expect(tree(presence, "videos of donna at christmas") == .keep)
+        #expect(tree(presence, "the Christmas tape with Donna")
+                == .switchToCatalog(note: "read “the Christmas tape with Donna” as a catalog search (“tape”), not a family-tree question"))
+        #expect(tree(presence, "videos of donna at christmas")
+                == .switchToCatalog(note: "read “videos of donna at christmas” as a catalog search (“videos”), not a family-tree question"))
+        #expect(tree(presence, "is donna in the archive")
+                == .switchToCatalog(note: "read “is donna in the archive” as a catalog search (“archive”), not a family-tree question"))
         #expect(tree(presence, "any pictures of donna") == .keep)
-        #expect(tree(presence, "is donna in the archive") == .keep)
+    }
+
+    /// Rick, 2026-09-20: "show me Donna down the cape in the early 90s" has
+    /// no media noun. A retrieval verb with no tree word in the sentence is
+    /// a catalog ask; the same verb beside a tree word is not.
+    @Test func treeModeSwitchesOnARetrievalVerbUnlessTheSentenceNamesTheTree() {
+        let cape = ArchivistQueryAST.presence(.init(people: ["donna"], yearStart: 1990, yearEnd: 1993, keywords: ["cape"]))
+        #expect(tree(cape, "show me Donna down the cape in the early 90s")
+                == .switchToCatalog(note: "read “show me Donna down the cape in the early 90s” as a catalog search (“show”), not a family-tree question"))
+        let event = ArchivistQueryAST.event(.init(people: ["donna"], keywords: ["cape"]))
+        #expect(tree(event, "find donna down the cape")
+                == .switchToCatalog(note: "read “find donna down the cape” as a catalog search (“find”), not a family-tree question"))
+        #expect(tree(.event(.init(people: ["ellen ronan"])), "show me ellen ronan")
+                == .switchToCatalog(note: "read “show me ellen ronan” as a catalog search (“show”), not a family-tree question"))
+        // "in the family tree" / a kin noun: the verb does not switch.
+        if case .rewrite(let ast, _) = tree(.presence(.init(people: ["ellen ronan"], keywords: ["family", "tree"])),
+                                             "show me ellen ronan in the family tree") {
+            #expect(ast == .graph(.init(people: ["ellen ronan"], operation: .biography)))
+        } else { Issue.record("expected a biography rewrite, not a switch") }
+        if case .rewrite(let ast, _) = tree(.presence(.init(people: ["rick"], keywords: ["parents"])),
+                                             "show me rick's parents") {
+            #expect(ast == .graph(.init(people: ["rick"], operation: .kinship, relation: .parents)))
+        } else { Issue.record("expected a kinship rewrite, not a switch") }
+        // No verb, no noun: the old road — one person is a biography.
+        if case .rewrite = tree(.event(.init(people: ["donna"])), "donna down the cape") {} else {
+            Issue.record("expected a rewrite")
+        }
+        #expect(Gate.catalogIntentCue(in: "show me Donna down the cape in the early 90s") == "show")
+        #expect(Gate.catalogIntentCue(in: "show me videos of donna down the cape") == "videos")
+        #expect(Gate.catalogIntentCue(in: "show me ellen ronan in the family tree") == nil)
+        #expect(Gate.catalogIntentCue(in: "any pictures of donna") == nil)
     }
 
     @Test func treeModeDeclinesACatalogASTNamingNobody() {

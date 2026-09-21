@@ -380,7 +380,7 @@ enum ArchivistFollowUpResolver {
 
     static func isPageable(_ ast: ArchivistQueryAST) -> Bool {
         switch ast {
-        case .presence, .cross: return true
+        case .presence, .cross, .event: return true
         default: return false
         }
     }

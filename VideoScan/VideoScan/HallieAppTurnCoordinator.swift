@@ -550,7 +550,9 @@ enum HallieAppTurnCoordinator {
         // general lane's `[hallie-general]`.
         appLog.write(classified.verdict.logLine(
             question: routingQuestion, forced: memory.forcedMode != nil))
-        let turnMode = classified.verdict.mode
+        // `var`: the mode gate may switch a tree turn to the catalog when
+        // the words ask for media (design §3.4 B, 2026-09-20).
+        var turnMode = classified.verdict.mode
 
         let intent: HallieTurnExecutor.Intent
         let responderHost: String
@@ -673,6 +675,16 @@ enum HallieAppTurnCoordinator {
                 appLog.write("[hallie-mode] rewrite: \(note)")
                 intent = HallieTurnExecutor.Intent(
                     originalQuestion: question, ast: ast, playAfterAnswer: wantsPlay,
+                    modeForce: classified.modeForce)
+                gateNote = note
+            case .switchToCatalog(let note):
+                // The words asked for media: the turn RUNS, in the catalog,
+                // and the session follows it there (recordMode).
+                appLog.write("[hallie-mode] switched tree→catalog for "
+                    + HallieTurnExecutor.description(of: translatedAST))
+                turnMode = .catalog
+                intent = HallieTurnExecutor.Intent(
+                    originalQuestion: question, ast: translatedAST, playAfterAnswer: wantsPlay,
                     modeForce: classified.modeForce)
                 gateNote = note
             case .decline(let result):
@@ -921,7 +933,7 @@ enum HallieAppTurnCoordinator {
         let aggregateRecords: [ArchivistAggregateRecordSnapshot]
         var recordScope: HallieTurnExecutor.RecordScope = .noSelection
         switch route {
-        case .presence, .cross:
+        case .presence, .cross, .event:
             presenceRecords = await ArchivistPresenceRecordSnapshot.capture(
                 records)
             aggregateRecords = []
@@ -939,7 +951,7 @@ enum HallieAppTurnCoordinator {
                 recordScope = resolveRecordScope(
                     for: payload.reference, question: question, referent: referent, records: records)
             }
-        case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
+        case .temporal, .graph, .followUp, .capability,
              .help, .smalltalk, .conversation, .telling, .reset:
             presenceRecords = []
             aggregateRecords = []
@@ -966,7 +978,7 @@ enum HallieAppTurnCoordinator {
                 graph = dependencies.loadGraph()
                 if graph == nil { needsRecompile = dependencies.loadNeedsRecompile() }
                 cyberBrain = dependencies.loadCyberBrain()
-            case .presence, .cross:
+            case .presence, .cross, .event:
                 // People + CyberBrain provide the closed vocabulary for safe
                 // spelling recovery ("rick brren" → profile tag "Rick").
                 // GEDCOM is larger and remains age-phrase-only here.
@@ -976,7 +988,7 @@ enum HallieAppTurnCoordinator {
                 graph = needsBirthYear || HallieTurnExecutor.isPhotoAsk(ast)
                     ? dependencies.loadGraph() : nil
                 cyberBrain = dependencies.loadCyberBrain()
-            case .record, .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
+            case .record, .followUp, .capability, .help, .smalltalk,
                  .conversation, .telling, .reset:
                 // A record turn reads ONE record's own fields (captured on
                 // the main actor above); no identity source is loaded.

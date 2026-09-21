@@ -1204,7 +1204,7 @@ struct HallieShellCLITests {
             (.aggregate(.init(operation: .coOccurrence,
                               anchorPeople: ["Donna"])), .aggregate),
             (.graph(.init(people: ["Donna"], operation: .biography)), .graph),
-            (.event(.init(keywords: ["birthday"])), .unsupportedEvent),
+            (.event(.init(keywords: ["birthday"])), .event),
             (.cross(.init(people: ["Donna"], transcript: ["birthday"])), .cross),
         ]
         for (ast, expected) in cases {
@@ -1245,7 +1245,10 @@ struct HallieShellCLITests {
         }
     }
 
-    @Test func eventIsDeclinedBySharedTurnWithoutMediaAction() async throws {
+    /// Event runs on the deterministic presence executor (2026-09-20, like
+    /// cross): with no matching evidence it declines on evidence (exit 3),
+    /// never as an unsupported shape, and never opens media.
+    @Test func eventExecutesDeterministicallyAndDeclinesOnNoEvidence() async throws {
         let ast = ArchivistQueryAST.event(.init(keywords: ["first birthday"]))
         let harness = Harness(translations: [ast])
         let options = try HallieShellCLI.parse(arguments: [
@@ -1255,11 +1258,12 @@ struct HallieShellCLITests {
             options: options, output: { harness.output.append($0) },
             dependencies: harness.dependencies())
 
-        #expect(harness.output.contains { $0.contains("not supported") })
-        #expect(harness.output.contains { $0.contains("did not run a broader search") })
-        #expect(harness.output.contains { $0.contains("QueryAST shape=") })
+        #expect(harness.output.contains { $0.contains("shape=event") })
+        #expect(harness.output.contains { $0.contains("read as an event question") })
+        #expect(!harness.output.contains { $0.contains("not supported") })
+        #expect(!harness.output.contains { $0.contains("did not run a broader search") })
         #expect(harness.mediaActions.isEmpty)
-        #expect(code == HallieShellCLI.ExitCode.unsupportedShape.rawValue)
+        #expect(code == HallieShellCLI.ExitCode.noEvidence.rawValue)
     }
 
     /// Cross now runs on the deterministic presence executor: with no
@@ -1284,7 +1288,7 @@ struct HallieShellCLITests {
     @Test func unsupportedRoutesRenderSharedResultWithoutShellOverride() async throws {
         for (ast, route) in [
             (ArchivistQueryAST.event(.init(keywords: ["birthday"])),
-             HallieTurnExecutor.Route.unsupportedEvent),
+             HallieTurnExecutor.Route.event),
         ] {
             let harness = Harness(translations: [ast])
             harness.executeTurn = { _, _ in

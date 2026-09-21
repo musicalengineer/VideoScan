@@ -191,9 +191,9 @@ struct HallieAnswerPlan: Sendable, Equatable {
             route: result.route, shape: .fixed, fallbackText: result.prose)
         switch result.route {
         case .capability, .help, .smalltalk, .conversation, .telling, .reset,
-             .followUp, .unsupportedEvent:
+             .followUp:
             return fixed
-        case .presence, .cross, .temporal, .aggregate, .graph, .record:
+        case .presence, .cross, .event, .temporal, .aggregate, .graph, .record:
             break
         }
         guard result.outcome == .answered, result.clarification == nil else {
@@ -207,7 +207,7 @@ struct HallieAnswerPlan: Sendable, Equatable {
         }
         let shape: Shape
         switch result.route {
-        case .presence, .cross, .aggregate: shape = .list
+        case .presence, .cross, .event, .aggregate: shape = .list
         case .graph: shape = result.knowledgeCitations.isEmpty ? .fact : .biography
         case .temporal, .record: shape = .fact
         default: shape = .fact

@@ -36,7 +36,7 @@ struct HallieTurnExecutorTests {
             (.aggregate(.init(operation: .coOccurrence,
                               anchorPeople: ["Donna"])), .aggregate),
             (.graph(.init(people: ["Donna"], operation: .biography)), .graph),
-            (.event(.init(keywords: ["birthday"])), .unsupportedEvent),
+            (.event(.init(keywords: ["birthday"])), .event),
             (.cross(.init(people: ["Donna"], keywords: ["birthday"])), .cross),
         ]
 
@@ -44,11 +44,15 @@ struct HallieTurnExecutorTests {
             #expect(HallieTurnExecutor.route(ast) == expectedRoute)
         }
 
+        // Event runs on the presence executor like cross (2026-09-20). With
+        // no records it declines honestly on evidence, never "unsupported".
         let event = try await HallieTurnExecutor.execute(cases[4].0, context: .init())
-        #expect(event.outcome == .unsupported)
+        #expect(event.route == .event)
+        #expect(event.outcome == .declined)
         #expect(event.citations.isEmpty)
-        #expect(event.prose.contains("not supported"))
-        #expect(event.prose.contains("did not"))
+        #expect(!event.prose.contains("not supported"))
+        #expect(event.basisLine.hasPrefix("Basis: read as an event question; searched the catalog for “birthday”"),
+                Comment(rawValue: event.basisLine))
 
         // Cross is now executed deterministically (person AND keyword). With
         // no records it declines honestly on evidence, never "unsupported".

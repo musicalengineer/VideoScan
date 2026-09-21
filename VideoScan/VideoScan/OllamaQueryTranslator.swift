@@ -1103,8 +1103,10 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     - aggregate: who appears with named anchorPeople. operation is \
     coOccurrence. Include limit only when the user explicitly states a count; \
     otherwise omit it.
-    - event: what happened at an event; put visible/event terms in keywords \
-    and explicitly spoken terms in transcript.
+    - event: ONLY "what happened at/when …" — a question about the event \
+    itself; put visible/event terms in keywords and explicitly spoken terms \
+    in transcript. "show me / find / videos of <person> <place or era>" is \
+    presence, never event.
     - graph: biography, birth, death, kinship, relationship, or familyTree \
     about named people. relation is required only for kinship and must use \
     a schema value; multi-hop relations exist (grandmother, \
@@ -1174,6 +1176,8 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     {"shape":"graph","payload":{"operation":"familyTree"}}
     "count how many videos of Donna we have" -> \
     {"shape":"presence","payload":{"people":["donna"],"mediaKind":"video"}}
+    "show me Donna down the cape in the early 90s" -> \
+    {"shape":"presence","payload":{"people":["donna"],"yearStart":1990,"yearEnd":1993,"keywords":["cape"]}}
     "what happened when someone said surprise?" -> \
     {"shape":"event","payload":{"transcript":["surprise"]}}
     "find Dan opening the red bike" -> \

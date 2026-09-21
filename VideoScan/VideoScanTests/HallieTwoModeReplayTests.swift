@@ -130,6 +130,7 @@ struct HallieTwoModeReplayTests {
                                             memory: memory, playAfterAnswer: play) {
             case .keep: break
             case .rewrite(let rewritten, let n): executed = rewritten; note = n
+            case .switchToCatalog(let n): note = n
             case .decline(let result):
                 memory.record(intent: nil, result: result, question: text)
                 return result

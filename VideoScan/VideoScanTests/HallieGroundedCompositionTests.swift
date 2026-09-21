@@ -135,7 +135,7 @@ struct HallieGroundedCompositionTests {
 
     @Test func fixedRoutesDeclinesAndClarificationsAreNeverComposable() async throws {
         for route in [HallieTurnExecutor.Route.capability, .help, .smalltalk,
-                      .reset, .followUp, .unsupportedEvent] {
+                      .reset, .followUp] {
             let plan = HallieAnswerPlan.derive(from: fixedResult(route))
             #expect(plan.shape == .fixed, "\(route)")
             #expect(!plan.isComposable, "\(route)")

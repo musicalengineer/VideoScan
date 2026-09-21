@@ -175,7 +175,7 @@ enum HallieProvenanceFollowUp {
 
     private static func sourceSentence(_ p: Provenance) -> String {
         switch p.route {
-        case .presence, .cross:
+        case .presence, .cross, .event:
             return p.humanConfirmed
                 ? "That came from the video catalog — the people tags on those files were confirmed by a person, not guessed."
                 : "That came from the video catalog: file names, dates and the tags on each file."
@@ -193,7 +193,7 @@ enum HallieProvenanceFollowUp {
                 : "That came from the family tree together with what the family has told me."
         case .telling:
             return "That was you telling me — I wrote it down exactly as you said it, marked as told by you and not yet verified."
-        case .unsupportedEvent, .followUp, .capability, .help, .smalltalk, .conversation, .reset:
+        case .followUp, .capability, .help, .smalltalk, .conversation, .reset:
             return "That wasn't a fact from the archive — it was conversation, so there's nothing to cite."
         }
     }
@@ -203,7 +203,7 @@ enum HallieProvenanceFollowUp {
             return "As sure as the family's own account: part of it was told to me and is marked not yet verified, so treat it as a recollection, not a record."
         }
         switch p.route {
-        case .presence, .cross, .aggregate:
+        case .presence, .cross, .event, .aggregate:
             return p.humanConfirmed
                 ? "Quite sure — those tags were confirmed by a person; I don't infer who is in a video."
                 : "Sure of the files; less sure of who is in them unless a person tagged them — I never guess identity."

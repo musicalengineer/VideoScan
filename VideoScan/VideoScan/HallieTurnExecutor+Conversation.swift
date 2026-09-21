@@ -226,7 +226,7 @@ extension HallieTurnExecutor {
             // retry in its own prose leaves a new one.
             pendingOffer = result.retryOffer
             switch result.route {
-            case .presence, .cross, .aggregate, .temporal, .graph, .telling, .record:
+            case .presence, .cross, .event, .aggregate, .temporal, .graph, .telling, .record:
                 lastProvenance = HallieProvenanceFollowUp.Provenance(result: result)
             default:
                 break
@@ -275,7 +275,7 @@ extension HallieTurnExecutor {
                 lastSubject = nil
             }
             switch result.route {
-            case .presence, .cross, .aggregate:
+            case .presence, .cross, .event, .aggregate:
                 if result.outcome == .answered {
                     lastResultSet = ResultSet(
                         ast: ast,
@@ -305,7 +305,7 @@ extension HallieTurnExecutor {
                 if result.refinableQuery == nil { lastRefinable = nil }
             case .record:
                 recordRecordTurn(ast: ast, result: result)
-            case .temporal, .unsupportedEvent, .followUp, .capability,
+            case .temporal, .followUp, .capability,
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
             }
@@ -324,9 +324,9 @@ extension HallieTurnExecutor {
             switch result.route {
             case .graph, .telling:
                 mode = .tree
-            case .presence, .cross, .aggregate, .record, .temporal:
+            case .presence, .cross, .event, .aggregate, .record, .temporal:
                 mode = .catalog
-            case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
+            case .followUp, .capability, .help, .smalltalk,
                  .conversation, .reset:
                 break
             }
@@ -361,7 +361,7 @@ extension HallieTurnExecutor {
                 }
                 catalog.countScope = nil
                 catalog.resultCount = nil
-            case .presence, .cross:
+            case .presence, .cross, .event:
                 tree.lastOffers = []
                 catalog.resultCount = result.matchCount
                 // A count answered with a match count keeps its scope; a
@@ -389,7 +389,7 @@ extension HallieTurnExecutor {
                 tree.lastOffers = []
                 catalog.countScope = nil
                 catalog.resultCount = nil
-            case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
+            case .followUp, .capability, .help, .smalltalk,
                  .conversation, .reset:
                 break
             }
@@ -429,7 +429,7 @@ extension HallieTurnExecutor {
             if let asked, !asked.isEmpty {
                 let laneRoute: Bool
                 switch result.route {
-                case .presence, .cross, .aggregate, .temporal, .graph, .telling, .unsupportedEvent, .record:
+                case .presence, .cross, .event, .aggregate, .temporal, .graph, .telling, .record:
                     laneRoute = true
                 case .capability, .followUp, .help, .smalltalk, .conversation, .reset:
                     laneRoute = false
@@ -447,7 +447,7 @@ extension HallieTurnExecutor {
                 substantive = true
             } else {
                 switch result.route {
-                case .presence, .cross, .aggregate, .temporal, .graph, .telling, .unsupportedEvent,
+                case .presence, .cross, .event, .aggregate, .temporal, .graph, .telling,
                      .record:
                     substantive = result.outcome == .answered || result.outcome == .needsClarification
                 case .capability:
@@ -1911,7 +1911,7 @@ extension HallieTurnExecutor {
     /// turn touches.
     static func needsPresenceRecords(_ ast: ArchivistQueryAST) -> Bool {
         switch route(ast) {
-        case .presence, .cross: return true
+        case .presence, .cross, .event: return true
         default: return false
         }
     }
