@@ -228,9 +228,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     center.finishInFlightThenSuspendForQuit()
                     Task { @MainActor [weak self] in
                         let settled = await center.waitForDeleteDuplicatesToSettle(deadline: Self.deleteDuplicatesFinishDeadline)
+                        // The deadline path revoked "finish this file" and
+                        // asked for the put-back; what is logged is what was
+                        // OBSERVED after the grace period (codex 1606).
                         appLog.write(settled
                             ? "quit: Delete Duplicates finished its file and suspended (plan kept for resume)"
-                            : "quit: Delete Duplicates did not finish in time — file put back, plan kept for resume")
+                            : "quit: Delete Duplicates did not finish in time — finish revoked, put-back requested")
+                        for line in center.deleteDuplicatesQuitOutcomeLines { appLog.write("quit: \(line)") }
                         self?.captionOrchestrator?.beginShutdown()
                         await self?.drainVLMForShutdownIfActive()
                         NSApp.reply(toApplicationShouldTerminate: true)
@@ -241,6 +245,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     appLog.write("quit dialog: user chose \(midPair ? "Stop now" : "Quit Anyway") — stopping \(running) operation(s)"
                                  + (suspending ? " (Delete Duplicates suspended, plan kept for resume)" : ""))
                     center.stopAllForQuit()
+                    if suspending {
+                        // The dialog promised the file in flight is put
+                        // back: WAIT for that (bounded) before the process
+                        // goes away, and log what was observed (codex 1606:
+                        // this branch used to return .terminateNow with the
+                        // restore and the plan save still in flight).
+                        Task { @MainActor [weak self] in
+                            let stopped = await center.waitForDeleteDuplicatesToStop(deadline: Self.deleteDuplicatesStopDeadline)
+                            appLog.write(stopped
+                                ? "quit: Delete Duplicates stopped and its plan is saved"
+                                : "quit: Delete Duplicates did not settle within \(Int(Self.deleteDuplicatesStopDeadline))s — quitting anyway; the next launch offers recovery from the plan")
+                            for line in center.deleteDuplicatesQuitOutcomeLines { appLog.write("quit: \(line)") }
+                            self?.captionOrchestrator?.beginShutdown()
+                            await self?.drainVLMForShutdownIfActive()
+                            NSApp.reply(toApplicationShouldTerminate: true)
+                        }
+                        return .terminateLater
+                    }
                 } else {
                     // Without this line, "Keep Working" is indistinguishable in
                     // the log from a hang before willTerminate: no "app
@@ -279,6 +301,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// file in flight after "Finish this file, then quit". A 50 GB tape
     /// at 200 MB/s is ~4 min; past this the file is put back instead.
     static let deleteDuplicatesFinishDeadline: TimeInterval = 15 * 60
+
+    /// Max seconds "Stop now" / "Quit Anyway" waits for Delete Duplicates
+    /// to put the file in flight back and save its plan. A put-back is a
+    /// rename plus one cancelled read noticing (1 MiB blocks); a minute
+    /// is generous, and past it the plan on disk names the file anyway.
+    static let deleteDuplicatesStopDeadline: TimeInterval = 60
 
     /// The VLM drain, shared by the immediate quit path and the
     /// finish-this-file-first path. No-op when no batch is active.
