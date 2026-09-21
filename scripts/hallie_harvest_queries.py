@@ -110,6 +110,55 @@ def guess_expect(text):
     return "catalog"
 
 
+# THE SIBLING CORPORA COUNT AS "ALREADY HAVE" (2026-09-21). The harvester
+# only knew the advisory corpus, so a question pinned in the strict lane
+# (tests/hallie_strict_regressions.json) or the live-misses lane was
+# re-harvested as new. The other lanes use the categories/sessions shape,
+# which load_corpus expands; this walker only needs the texts.
+SIBLING_CORPORA = ("hallie_strict_regressions.json", "hallie_live_misses_corpus.json",
+                   "hallie_interaction_corpus.json")
+
+
+def corpus_texts(data):
+    texts = set()
+
+    def walk(node, key=None):
+        if isinstance(node, dict):
+            if isinstance(node.get("text"), str):
+                texts.add(normalize(node["text"]))
+            for k, v in node.items():
+                walk(v, k)
+        elif isinstance(node, list):
+            for item in node:
+                if isinstance(item, str) and key in ("prompts", "turns"):
+                    texts.add(normalize(item))
+                else:
+                    walk(item, key)
+    walk(data)
+    return texts
+
+
+def sibling_texts(corpus_path):
+    texts = set()
+    for name in SIBLING_CORPORA:
+        path = Path(corpus_path).parent / name
+        if path.exists():
+            with open(path) as f:
+                texts |= corpus_texts(json.load(f))
+    return texts
+
+
+def detect_indent(text):
+    """The indent the file already uses, so --append changes only the rows it
+    adds. The 2026-09-07 fix hard-coded indent=1; the file has since been
+    rewritten at indent=2, and the same 5,000-line-diff bug came back."""
+    for line in text.splitlines()[1:]:
+        stripped = line.lstrip(" ")
+        if stripped and stripped != line:
+            return len(line) - len(stripped)
+    return 1
+
+
 def read_turns(since):
     turns = []
     for filename in sorted(LOG_DIR.glob("hallie-conversation-*.jsonl")):
@@ -180,8 +229,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     with open(args.corpus) as f:
-        corpus = json.load(f)
-    existing = {normalize(q["text"]) for q in corpus["questions"]}
+        source_text = f.read()
+    corpus = json.loads(source_text)
+    existing = {normalize(q["text"]) for q in corpus["questions"]} | sibling_texts(args.corpus)
     entries = harvest(read_turns(args.since), existing, args.include_statements,
                       used_ids={q.get("id", "") for q in corpus["questions"]})
     if not args.append:
@@ -192,13 +242,13 @@ def main(argv=None):
     corpus["description"] = re.sub(r"\d+ questions", f"{len(corpus['questions'])} questions",
                                    corpus["description"], count=1)
     with open(args.corpus, "w") as f:
-        # indent=1 MATCHES THE FILE (2026-09-07). Writing indent=2 into an
-        # indent=1 corpus rewrote all 2,565 lines on every append, so a
-        # four-question harvest showed up as a 5,160-line diff and nothing in
-        # it could be reviewed — the same shape as every other bug found
-        # today: a real change hidden inside noise. A corrupted entry would
-        # have been invisible.
-        json.dump(corpus, f, indent=1, ensure_ascii=False)
+        # THE INDENT MATCHES THE FILE (2026-09-07, generalised 2026-09-21).
+        # Writing indent=2 into an indent=1 corpus rewrote all 2,565 lines on
+        # every append, so a four-question harvest showed up as a 5,160-line
+        # diff and nothing in it could be reviewed — a real change hidden
+        # inside noise. A corrupted entry would have been invisible. The file
+        # is now indent=2, so the indent is read from the file, not assumed.
+        json.dump(corpus, f, indent=detect_indent(source_text), ensure_ascii=False)
         f.write("\n")
     print(f"[harvest] appended {len(entries)} → {args.corpus} ({len(corpus['questions'])} questions)")
     return 0

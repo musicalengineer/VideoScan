@@ -1,6 +1,8 @@
+import hashlib
 import importlib.util
 import io
 import json
+import re
 import tempfile
 import unittest
 from collections import Counter
@@ -1007,3 +1009,84 @@ class NightlyReplayVerdictTests(unittest.TestCase):
         records, _, _ = hallie_eval.build_records(questions, events)
         self.assertIsNone(records[0]["mode"])
         self.assertEqual(hallie_eval.grade_record(records[0]), [])
+
+
+class AdvisoryCorpusTests(unittest.TestCase):
+    """tests/hallie_eval_corpus.json — the advisory corpus the nightly replay
+    walks. Grown by ~280 on 2026-09-21 (Rick: "add a couple hundred more tests
+    based on either the logs or the variations of queries you've seen").
+    These pin the shape, not the answers: unique ids, follow-up chains that
+    have a leader, hand-written expectations on every synthetic row, and a
+    privacy invariant."""
+
+    CORPUS = ROOT / "tests" / "hallie_eval_corpus.json"
+    # One first name is deliberately kept out of every Hallie corpus (a family
+    # matter; see the private memory note). The literal is not written here on
+    # purpose — words are compared by SHA-256.
+    EXCLUDED_FIRST_NAME_SHA256 = (
+        "34550715062af006ac4fab288de67ecb44793c3a05c475227241535f6ef7a81b")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.data = json.loads(cls.CORPUS.read_text(encoding="utf-8"))
+        cls.questions = cls.data["questions"]
+
+    def test_ids_are_unique_and_the_description_count_is_honest(self):
+        ids = [q["id"] for q in self.questions]
+        self.assertEqual(len(ids), len(set(ids)),
+                         [i for i, n in Counter(ids).items() if n > 1])
+        self.assertGreaterEqual(len(self.questions), 600)
+        self.assertIn(f"{len(self.questions)} questions", self.data["description"])
+
+    def test_every_expectation_is_a_declared_value(self):
+        allowed = set(self.data["expect_values"]) | {"lineage"}
+        bad = [(q["id"], q["expect"]) for q in self.questions
+               if q.get("expect") not in allowed]
+        self.assertEqual(bad, [])
+
+    def test_follow_ups_always_have_a_leader(self):
+        self.assertFalse(self.questions[0].get("followsPrevious"))
+        # A 2026-09-21 follow-up may not sit behind a row from a different
+        # category block — it would be replayed after an unrelated question.
+        # (Older harvested rows already cross blocks, e.g. lv260906-012, so
+        # the rule is pinned for the new ids only.)
+        new_ids = ("lv-h-", "var-age-", "fam-")
+        for prev, cur in zip(self.questions, self.questions[1:]):
+            if cur.get("followsPrevious") and cur["id"].startswith(new_ids):
+                self.assertEqual(prev["category"], cur["category"],
+                                 f"{cur['id']} follows {prev['id']}")
+
+    def test_synthetic_rows_state_the_intended_behaviour(self):
+        synthetic = [q for q in self.questions
+                     if q["id"].startswith(("var-age-", "fam-"))]
+        self.assertGreaterEqual(len([q for q in synthetic if q["id"].startswith("var-age-")]), 50)
+        self.assertGreaterEqual(len([q for q in synthetic if q["id"].startswith("fam-")]), 50)
+        missing = [q["id"] for q in synthetic if not q.get("notes", "").strip()]
+        self.assertEqual(missing, [])
+
+    def test_harvested_rows_are_marked_unconfirmed(self):
+        harvested = [q for q in self.questions if q["id"].startswith("lv-h-")]
+        self.assertGreaterEqual(len(harvested), 100)
+        for q in harvested:
+            self.assertTrue(q.get("notes", "").startswith("harvested 2026-"), q["id"])
+            self.assertIn("expectation unconfirmed", q["notes"])
+            self.assertEqual(q["category"], "live")
+
+    def test_dad_breen_age_variants_reject_the_2026_09_21_stranger(self):
+        # "how old was dad breen when he passed?" came back as a biography of
+        # Matthew Rice (b. 1629). Every Dad Breen age/death variant carries the
+        # sensor so the replay flags a recurrence, not just the original row.
+        variants = [q for q in self.questions if q["id"].startswith("var-age-")
+                    and re.search(r"\b(dad breen|grampa breen|dick)\b", q["text"], re.I)]
+        self.assertGreaterEqual(len(variants), 10)
+        for q in variants:
+            self.assertIn("Matthew Rice", q.get("mustNotContain", []), q["id"])
+
+    def test_no_hallie_corpus_names_the_excluded_person(self):
+        corpora = sorted((ROOT / "tests").glob("hallie_*.json"))
+        self.assertGreaterEqual(len(corpora), 4)
+        for path in corpora:
+            words = set(re.findall(r"[a-z]+", path.read_text(encoding="utf-8").lower()))
+            hits = [w for w in words
+                    if hashlib.sha256(w.encode()).hexdigest() == self.EXCLUDED_FIRST_NAME_SHA256]
+            self.assertEqual(hits, [], path.name)

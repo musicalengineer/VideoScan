@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 416 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 695 questions across fifteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -3487,6 +3487,2080 @@
       "expect": "clarify",
       "notes": "Rick 2026-09-21 13:56, bare topic right after the Marine Corps question; went to the general-knowledge lane and declined. Should read as a follow-up on the previous turn.",
       "followsPrevious": true
+    },
+    {
+      "id": "lv-h-001",
+      "category": "live",
+      "text": "who is rick's dad?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-17); expectation unconfirmed. went 'try a fuller name' — Rick is a People-tab alias"
+    },
+    {
+      "id": "lv-h-002",
+      "category": "live",
+      "text": "show timmy as a baby video saying peekaboo",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-17); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-003",
+      "category": "live",
+      "text": "who is hallie mae?",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-17); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-004",
+      "category": "live",
+      "text": "how many children did rick and donna have and what are their names?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-17); expectation unconfirmed. two people in one ask is a couple, not an ambiguity"
+    },
+    {
+      "id": "lv-h-005",
+      "category": "live",
+      "text": "hallie, where did you get the biography info of rick?",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-17); expectation unconfirmed. provenance question; came back as the biography itself"
+    },
+    {
+      "id": "lv-h-006",
+      "category": "live",
+      "text": "Hi hallie - find me movies of rick playing guitar",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-17); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-007",
+      "category": "live",
+      "text": "Hi Hallie - count how many videos of donna we have?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-17); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-008",
+      "category": "live",
+      "text": "play one of them, say the first one",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-17); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-009",
+      "category": "live",
+      "text": "who was donna's great grandmother on her maternal side?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-17); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-010",
+      "category": "live",
+      "text": "tell me about yourself hallie",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-17); expectation unconfirmed. came back as Hallie May McGill's (1876) tree biography"
+    },
+    {
+      "id": "lv-h-011",
+      "category": "live",
+      "text": "that's wrong",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-22); expectation unconfirmed. a bare correction after the wrong-person biography",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-012",
+      "category": "live",
+      "text": "help",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-18); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-013",
+      "category": "live",
+      "text": "make sure any videos you give me have sound",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-18); expectation unconfirmed. answered with 6360 items"
+    },
+    {
+      "id": "lv-h-014",
+      "category": "live",
+      "text": "how am I related to you hallie?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-18); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-015",
+      "category": "live",
+      "text": "can you go back to england on rick's father's mother's side?",
+      "expect": "lineage",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-18); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-016",
+      "category": "live",
+      "text": "find videos from our montana trip and tell me what year that was in",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-19); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-017",
+      "category": "live",
+      "text": "why did they call Hallie's father Dr Love",
+      "expect": "graceful_decline",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-19); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-018",
+      "category": "live",
+      "text": "show me the love family line",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-19); expectation unconfirmed. Love is a middle name in the Latta line, not a surname"
+    },
+    {
+      "id": "lv-h-019",
+      "category": "live",
+      "text": "tell me about your father",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-21); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-020",
+      "category": "live",
+      "text": "right, who was his father",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-21); expectation unconfirmed. went 'I don't find his'",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-021",
+      "category": "live",
+      "text": "where was he born",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-21); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-022",
+      "category": "live",
+      "text": "how many files in the archive and how many in the main catalog not archived?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-21); expectation unconfirmed. translator returned unusable output"
+    },
+    {
+      "id": "lv-h-023",
+      "category": "live",
+      "text": "can I tell you about donna?",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-21); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-024",
+      "category": "live",
+      "text": "describe halle may mcgill",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-22); expectation unconfirmed. one-letter typo in Hallie"
+    },
+    {
+      "id": "lv-h-025",
+      "category": "live",
+      "text": "is donna very pretty?",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-22); expectation unconfirmed. searched videos for 'pretty'"
+    },
+    {
+      "id": "lv-h-026",
+      "category": "live",
+      "text": "who was richard brren sr",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-22); expectation unconfirmed. typo in Breen"
+    },
+    {
+      "id": "lv-h-027",
+      "category": "live",
+      "text": "can you speak rather than type or in addition to typing?",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-22); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-028",
+      "category": "live",
+      "text": "please tell me about dan",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-22); expectation unconfirmed. Dan is on the People tab, not the tree"
+    },
+    {
+      "id": "lv-h-029",
+      "category": "live",
+      "text": "how many kids does rick have",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-22); expectation unconfirmed. tree has none; People tab has four sons"
+    },
+    {
+      "id": "lv-h-030",
+      "category": "live",
+      "text": "rick is married to donna, so if donna has sons, doesn't rick also?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-22); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-031",
+      "category": "live",
+      "text": "there is a tim breen and a timmy breen, can you tell me the difference between these two people?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-22); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-032",
+      "category": "live",
+      "text": "tell me about the name breen and its heritage",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-22); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-033",
+      "category": "live",
+      "text": "who is the common ancestor between the breen and hudson lines?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-23); expectation unconfirmed. answered with a Breen surname roster"
+    },
+    {
+      "id": "lv-h-034",
+      "category": "live",
+      "text": "go back on our family tree until you hit a damon",
+      "expect": "lineage",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-23); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-035",
+      "category": "live",
+      "text": "how are matt and timmy related",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-23); expectation unconfirmed. brothers, per the People tab"
+    },
+    {
+      "id": "lv-h-036",
+      "category": "live",
+      "text": "show the breen family crest",
+      "expect": "graceful_decline",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-23); expectation unconfirmed. answered with a surname roster"
+    },
+    {
+      "id": "lv-h-037",
+      "category": "live",
+      "text": "tell me about fred lamb",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-23); expectation unconfirmed. Fred = Frederick Burton Lamb; nickname resolution"
+    },
+    {
+      "id": "lv-h-038",
+      "category": "live",
+      "text": "trace my paternal links to old puritan boston",
+      "expect": "lineage",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-24); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-039",
+      "category": "live",
+      "text": "tell me about Issaa Damno",
+      "expect": "clarify",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-24); expectation unconfirmed. two typos on Isaac Damon; should offer the spelling"
+    },
+    {
+      "id": "lv-h-040",
+      "category": "live",
+      "text": "snow me about donna",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-24); expectation unconfirmed. typo for show/tell"
+    },
+    {
+      "id": "lv-h-041",
+      "category": "live",
+      "text": "how mny videos are in the family catalog?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-25); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-042",
+      "category": "live",
+      "text": "How hallie, how are you?",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-25); expectation unconfirmed. answered with Hallie May McGill's biography"
+    },
+    {
+      "id": "lv-h-043",
+      "category": "live",
+      "text": "trace the parker family tree from edith lucy parker as far back as you can go",
+      "expect": "lineage",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-26); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-044",
+      "category": "live",
+      "text": "tell me about Rick Breen's great great grandpa on his paternal side",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-26); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-045",
+      "category": "live",
+      "text": "Find rick's grandma muriel and tell me about her.",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-26); expectation unconfirmed. read as two people"
+    },
+    {
+      "id": "lv-h-046",
+      "category": "live",
+      "text": "tell me about Nathaniel Parker Sr",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-27); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-047",
+      "category": "live",
+      "text": "are there any photos of him",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-27); expectation unconfirmed. went 'I don't find Him'",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-048",
+      "category": "live",
+      "text": "what percent of the total has been archived",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-27); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-049",
+      "category": "live",
+      "text": "who invented the vacuum tube?",
+      "expect": "graceful_decline",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-27); expectation unconfirmed. general knowledge; searched videos for 'vacuum tube'"
+    },
+    {
+      "id": "lv-h-050",
+      "category": "live",
+      "text": "how many peopl in my family have the name richard",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-27); expectation unconfirmed. first name, not surname; answered with surname Richard"
+    },
+    {
+      "id": "lv-h-051",
+      "category": "live",
+      "text": "who is the person born the furthest back in tack in our tree",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-27); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-052",
+      "category": "live",
+      "text": "is there a beeman in the tree",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-27); expectation unconfirmed. Beaman spelled by ear"
+    },
+    {
+      "id": "lv-h-053",
+      "category": "live",
+      "text": "how am I related to Thomas Damon",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-27); expectation unconfirmed. went 'Which Rick Breen'"
+    },
+    {
+      "id": "lv-h-054",
+      "category": "live",
+      "text": "who is rick's brother",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-28); expectation unconfirmed. People tab: Tim"
+    },
+    {
+      "id": "lv-h-055",
+      "category": "live",
+      "text": "tell me about pa o'connor",
+      "expect": "clarify",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-29); expectation unconfirmed. unknown alias; offer the O'Connors on record"
+    },
+    {
+      "id": "lv-h-056",
+      "category": "live",
+      "text": "tell me about rick's family tree, his brothers, sisters, parents, and grandparents.",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-29); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-057",
+      "category": "live",
+      "text": "describe Dad Breen",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-29); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-058",
+      "category": "live",
+      "text": "tell me about the latta family",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-30); expectation unconfirmed. answered with the Ralston surname"
+    },
+    {
+      "id": "lv-h-059",
+      "category": "live",
+      "text": "find sue",
+      "expect": "clarify",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-08-31); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-060",
+      "category": "live",
+      "text": "is there a video of dad ?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-02); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-061",
+      "category": "live",
+      "text": "find videos of tim my brother",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-02); expectation unconfirmed. 'my brother' should disambiguate Tim from Timmy, not ask"
+    },
+    {
+      "id": "lv-h-062",
+      "category": "live",
+      "text": "tell me about the people in the catalog",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-02); expectation unconfirmed. answered with the tree's 39,250 people"
+    },
+    {
+      "id": "lv-h-063",
+      "category": "live",
+      "text": "show videos of matt being born",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-02); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-064",
+      "category": "live",
+      "text": "how many videos do we have promoted to the archive as of today?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-02); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-065",
+      "category": "live",
+      "text": "you are the archivist, you should know these things.",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-02); expectation unconfirmed. model answered as a generic librarian",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-066",
+      "category": "live",
+      "text": "show me the New Hampshire video",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-03); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-067",
+      "category": "live",
+      "text": "who is in this video?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-03); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-068",
+      "category": "live",
+      "text": "how are rick and tim related",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed. went 'I don't find Tim' — People tab brother"
+    },
+    {
+      "id": "lv-h-069",
+      "category": "live",
+      "text": "how far back does the tree go?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-070",
+      "category": "live",
+      "text": "who is the oldest recorded person in the tree",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed. interpretation failed"
+    },
+    {
+      "id": "lv-h-071",
+      "category": "live",
+      "text": "Follow the brithplaces on my paternal side and list out the places for each person along with the name and date",
+      "expect": "lineage",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed. typo in birthplaces"
+    },
+    {
+      "id": "lv-h-072",
+      "category": "live",
+      "text": "how old is tim",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed. answered with Rick's sons"
+    },
+    {
+      "id": "lv-h-073",
+      "category": "live",
+      "text": "how many people named parker in the family tree on rick's side?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed. answered with Donna's biography"
+    },
+    {
+      "id": "lv-h-074",
+      "category": "live",
+      "text": "tell me about Tim's company",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed. Lee Machine, per the People profile; answered with Rick's parents"
+    },
+    {
+      "id": "lv-h-075",
+      "category": "live",
+      "text": "tell me about my brother",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-076",
+      "category": "live",
+      "text": "were cameras available during David T McGill's lifetime?",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed. b. 1843; answered 'is the subject of this record'"
+    },
+    {
+      "id": "lv-h-077",
+      "category": "live",
+      "text": "tell me about your dad",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-078",
+      "category": "live",
+      "text": "show me his photo",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed. went 'I don't find you'",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-079",
+      "category": "live",
+      "text": "who is tim",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-080",
+      "category": "live",
+      "text": "show photo of george",
+      "expect": "clarify",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-081",
+      "category": "live",
+      "text": "show video of ma",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-082",
+      "category": "live",
+      "text": "play the first",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-04); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-083",
+      "category": "live",
+      "text": "tell me about ma breen",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-06); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-084",
+      "category": "live",
+      "text": "cia",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-05); expectation unconfirmed. one-word follow-up; the profile notes say she was recruited by the CIA in 1952",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-085",
+      "category": "live",
+      "text": "stepehen parker",
+      "expect": "clarify",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-07); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-086",
+      "category": "live",
+      "text": "tellme of john of Gaunt",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-07); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-087",
+      "category": "live",
+      "text": "King Henry 8th",
+      "expect": "graceful_decline",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-07); expectation unconfirmed. not in the tree; say so"
+    },
+    {
+      "id": "lv-h-088",
+      "category": "live",
+      "text": "how many people in the tree have a birthplace in the coubtry of england ?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-08); expectation unconfirmed. went 'Which England'"
+    },
+    {
+      "id": "lv-h-089",
+      "category": "live",
+      "text": "find videos with dicky",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-08); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-090",
+      "category": "live",
+      "text": "what is the furthest back you can go on any of my lines",
+      "expect": "lineage",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-08); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-091",
+      "category": "live",
+      "text": "that's a long time",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-07); expectation unconfirmed. a remark on the previous lineage answer, not a query",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-092",
+      "category": "live",
+      "text": "who is the first person on donna's maternal line to not be born in america?",
+      "expect": "lineage",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-08); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-093",
+      "category": "live",
+      "text": "trace beth's maternal line",
+      "expect": "lineage",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-08); expectation unconfirmed. Beth is on the People tab; must not ask which of 2190 Elizabeths"
+    },
+    {
+      "id": "lv-h-094",
+      "category": "live",
+      "text": "Trace her maternal line as far back as you can",
+      "expect": "lineage",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-08); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-095",
+      "category": "live",
+      "text": "good morning, what about eileen latta",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-09); expectation unconfirmed. greeting + question; searched videos"
+    },
+    {
+      "id": "lv-h-096",
+      "category": "live",
+      "text": "good morning hallie, did you rest well overnight?",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-12); expectation unconfirmed. searched videos for 'rest well overnight'"
+    },
+    {
+      "id": "lv-h-097",
+      "category": "live",
+      "text": "tell me about my grandparents and great grandparents",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-12); expectation unconfirmed. searched videos for 'grandparents'"
+    },
+    {
+      "id": "lv-h-098",
+      "category": "live",
+      "text": "find edward the third and see if he is a distant ancestor to me or to donna",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-15); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-099",
+      "category": "live",
+      "text": "list all bookmarked individuals in FT",
+      "expect": "graceful_decline",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-15); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-100",
+      "category": "live",
+      "text": "tell me about my grandma",
+      "expect": "clarify",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-16); expectation unconfirmed. maternal or paternal; both named"
+    },
+    {
+      "id": "lv-h-101",
+      "category": "live",
+      "text": "trace my line back to john of gaunt",
+      "expect": "lineage",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-16); expectation unconfirmed. read 'John Of Gaunt' as a place"
+    },
+    {
+      "id": "lv-h-102",
+      "category": "live",
+      "text": "I think you're confused",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-20); expectation unconfirmed. a correction after a wrong answer; searched videos for 'confused'",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv-h-103",
+      "category": "live",
+      "text": "what's happening hallie?",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-16); expectation unconfirmed. went unsupported-event"
+    },
+    {
+      "id": "lv-h-104",
+      "category": "live",
+      "text": "tell me about may o'connor",
+      "expect": "clarify",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-18); expectation unconfirmed. May = Mary O'Connor's nickname; offer the Marys"
+    },
+    {
+      "id": "lv-h-105",
+      "category": "live",
+      "text": "hi hallie tell me about donna",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-20); expectation unconfirmed. greeting + question; tree mode could not find the subject"
+    },
+    {
+      "id": "lv-h-106",
+      "category": "live",
+      "text": "how old is timmy",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-21); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-107",
+      "category": "live",
+      "text": "people of the breen family in the people tab",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-21); expectation unconfirmed. answered with Hallie Mae McGill"
+    },
+    {
+      "id": "lv-h-108",
+      "category": "live",
+      "text": "tell me about dicky",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-21); expectation unconfirmed. searched the catalog instead"
+    },
+    {
+      "id": "lv-h-109",
+      "category": "live",
+      "text": "did we fix a nasty bug today or what?",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-15); expectation unconfirmed. searched videos for 'bug'"
+    },
+    {
+      "id": "lv-h-110",
+      "category": "live",
+      "text": "good evening hallie, how are you? have you been taking care of the family archive?",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the app transcript (2026-09-15); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-111",
+      "category": "live",
+      "text": "how re you hallie?",
+      "expect": "social",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-08-20); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-112",
+      "category": "live",
+      "text": "when waas rick breen born?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-08-20); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-113",
+      "category": "live",
+      "text": "shxw me videos of Donna",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-08-22); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-114",
+      "category": "live",
+      "text": "who is Mimmy?",
+      "expect": "clarify",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-08-22); expectation unconfirmed. nobody; offer Timmy"
+    },
+    {
+      "id": "lv-h-115",
+      "category": "live",
+      "text": "tell me about my brother fred",
+      "expect": "graceful_decline",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-09-04); expectation unconfirmed. no brother Fred on the People tab; never invent one"
+    },
+    {
+      "id": "lv-h-116",
+      "category": "live",
+      "text": "What was my mom's maiden name?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-08-21); expectation unconfirmed. Latta"
+    },
+    {
+      "id": "lv-h-117",
+      "category": "live",
+      "text": "Why is there no audio on the beach footage?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-08-21); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-118",
+      "category": "live",
+      "text": "is Donna related to me by blood",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-09-18); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-119",
+      "category": "live",
+      "text": "how are Beth and Donna related",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-09-18); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-120",
+      "category": "live",
+      "text": "who appears with Donna the most",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-09-04); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-121",
+      "category": "live",
+      "text": "what still needs to be archived",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-09-04); expectation unconfirmed"
+    },
+    {
+      "id": "lv-h-122",
+      "category": "live",
+      "text": "was my father in the military",
+      "expect": "biography",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-09-04); expectation unconfirmed. US Marine Corps, per the People profile"
+    },
+    {
+      "id": "lv-h-123",
+      "category": "live",
+      "text": "how old was Donna",
+      "expect": "clarify",
+      "notes": "harvested 2026-09-21 from the shell transcript (2026-09-02); expectation unconfirmed. when? no year given"
+    },
+    {
+      "id": "var-age-001",
+      "category": "age_variations",
+      "text": "how old was Dad Breen when he passed away?",
+      "expect": "kinship",
+      "notes": "Richard Breen Sr b. 1929-02-21 d. 2008-06-25 → 79. The alias resolves on the People tab before any tree-wide name scan; never a stranger's biography.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-002",
+      "category": "age_variations",
+      "text": "how old was Dad when he died?",
+      "expect": "kinship",
+      "notes": "Richard Breen Sr b. 1929-02-21 d. 2008-06-25 → 79. The alias resolves on the People tab before any tree-wide name scan; never a stranger's biography.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-003",
+      "category": "age_variations",
+      "text": "how old was grampa breen when he passed?",
+      "expect": "kinship",
+      "notes": "Richard Breen Sr b. 1929-02-21 d. 2008-06-25 → 79. The alias resolves on the People tab before any tree-wide name scan; never a stranger's biography.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-004",
+      "category": "age_variations",
+      "text": "how old was dick when he died?",
+      "expect": "kinship",
+      "notes": "Richard Breen Sr b. 1929-02-21 d. 2008-06-25 → 79. The alias resolves on the People tab before any tree-wide name scan; never a stranger's biography.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-005",
+      "category": "age_variations",
+      "text": "how old was ma when she passed?",
+      "expect": "kinship",
+      "notes": "Eileen Latta Breen b. 1930-08-31 d. 2023-03-03 → 92. The alias resolves on the People tab before any tree-wide name scan; never a stranger's biography."
+    },
+    {
+      "id": "var-age-006",
+      "category": "age_variations",
+      "text": "how old was Ma Breen when she died?",
+      "expect": "kinship",
+      "notes": "Eileen Latta Breen b. 1930-08-31 d. 2023-03-03 → 92. The alias resolves on the People tab before any tree-wide name scan; never a stranger's biography."
+    },
+    {
+      "id": "var-age-007",
+      "category": "age_variations",
+      "text": "how old was gramma breen when she passed?",
+      "expect": "kinship",
+      "notes": "Eileen Latta Breen b. 1930-08-31 d. 2023-03-03 → 92. The alias resolves on the People tab before any tree-wide name scan; never a stranger's biography."
+    },
+    {
+      "id": "var-age-008",
+      "category": "age_variations",
+      "text": "how old was eileen when she died?",
+      "expect": "kinship",
+      "notes": "Eileen Latta Breen b. 1930-08-31 d. 2023-03-03 → 92. The alias resolves on the People tab before any tree-wide name scan; never a stranger's biography."
+    },
+    {
+      "id": "var-age-009",
+      "category": "age_variations",
+      "text": "how old was my dad breen when he passed",
+      "expect": "kinship",
+      "notes": "Richard Breen Sr b. 1929-02-21 d. 2008-06-25 → 79; 'my' + kin term + surname is still the People-tab alias.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-010",
+      "category": "age_variations",
+      "text": "how old was rick when he passed",
+      "expect": "kinship",
+      "notes": "Trap: Rick is living (no death date on the People tab). Say so and give his age today (67); never invent a death."
+    },
+    {
+      "id": "var-age-011",
+      "category": "age_variations",
+      "text": "how old was donna when she died",
+      "expect": "kinship",
+      "notes": "Trap: Donna is living. Say so (67 today); never invent a death date."
+    },
+    {
+      "id": "var-age-012",
+      "category": "age_variations",
+      "text": "what age did dad breen pass",
+      "expect": "kinship",
+      "notes": "Richard Breen Sr b. 1929-02-21 d. 2008-06-25 → 79.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-013",
+      "category": "age_variations",
+      "text": "what age did ma breen pass",
+      "expect": "kinship",
+      "notes": "Eileen Latta Breen b. 1930-08-31 d. 2023-03-03 → 92."
+    },
+    {
+      "id": "var-age-014",
+      "category": "age_variations",
+      "text": "what age was gramma breen when she passed",
+      "expect": "kinship",
+      "notes": "Eileen Latta Breen b. 1930-08-31 d. 2023-03-03 → 92; Gramma Breen is a People-tab alias for Eileen."
+    },
+    {
+      "id": "var-age-015",
+      "category": "age_variations",
+      "text": "when did dad die",
+      "expect": "kinship",
+      "notes": "Dad Breen d. 2008-06-25. 'dad' alone means Rick's father (People tab), not Rick — Rick is 'Dad' only to the sons; ask if the speaker is unknown.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-016",
+      "category": "age_variations",
+      "text": "when did ma die",
+      "expect": "kinship",
+      "notes": "Ma d. 2023-03-03 (Stoughton, MA per the tree)."
+    },
+    {
+      "id": "var-age-017",
+      "category": "age_variations",
+      "text": "when did grampa breen die",
+      "expect": "kinship",
+      "notes": "Dad Breen d. 2008-06-25.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-018",
+      "category": "age_variations",
+      "text": "when did eileen pass away",
+      "expect": "kinship",
+      "notes": "Ma (Eileen) d. 2023-03-03."
+    },
+    {
+      "id": "var-age-019",
+      "category": "age_variations",
+      "text": "when did beth die",
+      "expect": "kinship",
+      "notes": "Trap: Beth is living (b. 1963-02-22, no death date). Say so; never invent a death."
+    },
+    {
+      "id": "var-age-020",
+      "category": "age_variations",
+      "text": "how old would dad breen be today",
+      "expect": "kinship",
+      "notes": "Richard Breen Sr b. 1929-02-21 d. 2008-06-25 → would be 97 on 2026-09-21; must say he died in 2008 at 79, not give it as a living age.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-021",
+      "category": "age_variations",
+      "text": "how old would ma be today",
+      "expect": "kinship",
+      "notes": "Eileen Latta Breen b. 1930-08-31 d. 2023-03-03 → would be 96; must note she died in 2023 at 92."
+    },
+    {
+      "id": "var-age-022",
+      "category": "age_variations",
+      "text": "how old would dick be now",
+      "expect": "kinship",
+      "notes": "Dick = Dad Breen (People-tab alias) → would be 97; died 2008 at 79.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-023",
+      "category": "age_variations",
+      "text": "if gramma breen were alive how old would she be",
+      "expect": "kinship",
+      "notes": "Ma → 96 today; subjunctive 'were alive' must not be read as a claim she is."
+    },
+    {
+      "id": "var-age-024",
+      "category": "age_variations",
+      "text": "how old was dad in 1985",
+      "expect": "kinship",
+      "notes": "Richard Breen Sr b. 1929-02-21 d. 2008-06-25 → turned 56 in 1985 (55 before 21 Feb). Not the age today, not a video search for '1985'.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-025",
+      "category": "age_variations",
+      "text": "how old was ma in 1985",
+      "expect": "kinship",
+      "notes": "Eileen Latta Breen b. 1930-08-31 d. 2023-03-03 → turned 55 in 1985 (54 before 31 Aug). Not the age today, not a video search for '1985'."
+    },
+    {
+      "id": "var-age-026",
+      "category": "age_variations",
+      "text": "how old was rick in 1985",
+      "expect": "kinship",
+      "notes": "Rick b. 1959-03-04 → turned 26 in 1985 (25 before 04 Mar). Not the age today, not a video search for '1985'."
+    },
+    {
+      "id": "var-age-027",
+      "category": "age_variations",
+      "text": "how old was donna in 1985",
+      "expect": "kinship",
+      "notes": "Donna b. 1959-08-04 → turned 26 in 1985 (25 before 04 Aug). Not the age today, not a video search for '1985'."
+    },
+    {
+      "id": "var-age-028",
+      "category": "age_variations",
+      "text": "how old was tim in 1985",
+      "expect": "kinship",
+      "notes": "Tim (Rick's brother) b. 1960-06-21 → turned 25 in 1985 (24 before 21 Jun). Not the age today, not a video search for '1985'."
+    },
+    {
+      "id": "var-age-029",
+      "category": "age_variations",
+      "text": "how old was beth in 1985",
+      "expect": "kinship",
+      "notes": "Beth b. 1963-02-22 → turned 22 in 1985 (21 before 22 Feb). Not the age today, not a video search for '1985'."
+    },
+    {
+      "id": "var-age-030",
+      "category": "age_variations",
+      "text": "how old was ellen in 1985",
+      "expect": "kinship",
+      "notes": "Ellen b. 1961-11-28 → turned 24 in 1985 (23 before 28 Nov). Not the age today, not a video search for '1985'."
+    },
+    {
+      "id": "var-age-031",
+      "category": "age_variations",
+      "text": "how old was timmy in 1985",
+      "expect": "kinship",
+      "notes": "Trap: Timmy b. 1996-04-22 — not born yet in 1985. Say so; never give a negative or invented age."
+    },
+    {
+      "id": "var-age-032",
+      "category": "age_variations",
+      "text": "how old was ma when dad died",
+      "expect": "kinship",
+      "notes": "Eileen Latta Breen b. 1930-08-31; Richard Breen Sr d. 2008-06-25 → 77. Two people, two fields; neither is ambiguous.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-033",
+      "category": "age_variations",
+      "text": "how old was rick when his father died",
+      "expect": "kinship",
+      "notes": "Rick b. 1959-03-04; Richard Breen Sr d. 2008-06-25 → 49. Two people, two fields; neither is ambiguous."
+    },
+    {
+      "id": "var-age-034",
+      "category": "age_variations",
+      "text": "how old was rick when ma died",
+      "expect": "kinship",
+      "notes": "Rick b. 1959-03-04; Eileen Latta Breen d. 2023-03-03 → 63. Two people, two fields; neither is ambiguous."
+    },
+    {
+      "id": "var-age-035",
+      "category": "age_variations",
+      "text": "how old was beth when ma died",
+      "expect": "kinship",
+      "notes": "Beth b. 1963-02-22; Eileen Latta Breen d. 2023-03-03 → 60. Two people, two fields; neither is ambiguous."
+    },
+    {
+      "id": "var-age-036",
+      "category": "age_variations",
+      "text": "how old was tim when dad breen died",
+      "expect": "kinship",
+      "notes": "Tim (Rick's brother) b. 1960-06-21; Richard Breen Sr d. 2008-06-25 → 48. Two people, two fields; neither is ambiguous.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-037",
+      "category": "age_variations",
+      "text": "how old was timmy when grampa breen died",
+      "expect": "kinship",
+      "notes": "Timmy (Rick's son) b. 1996-04-22; Richard Breen Sr d. 2008-06-25 → 12. Two people, two fields; neither is ambiguous.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-038",
+      "category": "age_variations",
+      "text": "how old was libby when gramma breen died",
+      "expect": "kinship",
+      "notes": "Libby b. 2018-04-11; Eileen Latta Breen d. 2023-03-03 → 4. Two people, two fields; neither is ambiguous."
+    },
+    {
+      "id": "var-age-039",
+      "category": "age_variations",
+      "text": "how old was donna when eileen died",
+      "expect": "kinship",
+      "notes": "Donna b. 1959-08-04; Eileen Latta Breen d. 2023-03-03 → 63. Two people, two fields; neither is ambiguous."
+    },
+    {
+      "id": "var-age-040",
+      "category": "age_variations",
+      "text": "how old was dad breen when ma died",
+      "expect": "kinship",
+      "notes": "Trap: Dad Breen d. 2008-06-25 predeceased Ma (d. 2023-03-03) by 14 years. Must say he had already died; never compute an age for a dead man.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-041",
+      "category": "age_variations",
+      "text": "how long did ma outlive dad",
+      "expect": "kinship",
+      "notes": "Dad d. 2008-06-25, Ma d. 2023-03-03 → 14 years 8 months.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-042",
+      "category": "age_variations",
+      "text": "how long did dad breen outlive ma",
+      "expect": "kinship",
+      "notes": "Trap: he did not — Ma outlived him by 14 years 8 months. Correct the premise, never answer the wrong direction.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-043",
+      "category": "age_variations",
+      "text": "how many years were ma and dad married",
+      "expect": "kinship",
+      "notes": "People profile: married 1955/1956 (the two profiles disagree — say so); Dad d. 2008 → about 52–53 years. Never invent a wedding date.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-044",
+      "category": "age_variations",
+      "text": "how old is rick",
+      "expect": "kinship",
+      "notes": "Rick b. 1959-03-04 → 67 on 2026-09-21."
+    },
+    {
+      "id": "var-age-045",
+      "category": "age_variations",
+      "text": "how old is dicky",
+      "expect": "kinship",
+      "notes": "Rick b. 1959-03-04 → 67 on 2026-09-21."
+    },
+    {
+      "id": "var-age-046",
+      "category": "age_variations",
+      "text": "how old is donna now",
+      "expect": "kinship",
+      "notes": "Donna b. 1959-08-04 → 67 on 2026-09-21."
+    },
+    {
+      "id": "var-age-047",
+      "category": "age_variations",
+      "text": "how old is beth",
+      "expect": "kinship",
+      "notes": "Beth b. 1963-02-22 → 63 on 2026-09-21."
+    },
+    {
+      "id": "var-age-048",
+      "category": "age_variations",
+      "text": "how old is my brother tim",
+      "expect": "kinship",
+      "notes": "Tim (Rick's brother) b. 1960-06-21 → 66 on 2026-09-21. 'tim' is the brother; Timmy (b. 1996, 30) is the son."
+    },
+    {
+      "id": "var-age-049",
+      "category": "age_variations",
+      "text": "how old is ellen",
+      "expect": "kinship",
+      "notes": "Ellen b. 1961-11-28 → 64 on 2026-09-21."
+    },
+    {
+      "id": "var-age-050",
+      "category": "age_variations",
+      "text": "how old is libby",
+      "expect": "kinship",
+      "notes": "Libby b. 2018-04-11 → 8 on 2026-09-21."
+    },
+    {
+      "id": "var-age-051",
+      "category": "age_variations",
+      "text": "how old is dan",
+      "expect": "kinship",
+      "notes": "Dan b. 1982-02-03 → 44 on 2026-09-21."
+    },
+    {
+      "id": "var-age-052",
+      "category": "age_variations",
+      "text": "how old is mark",
+      "expect": "kinship",
+      "notes": "Mark b. 1983-11-20 → 42 on 2026-09-21."
+    },
+    {
+      "id": "var-age-053",
+      "category": "age_variations",
+      "text": "how old is matt",
+      "expect": "kinship",
+      "notes": "Matt b. 1994-06-05 → 32 on 2026-09-21."
+    },
+    {
+      "id": "var-age-054",
+      "category": "age_variations",
+      "text": "how old is anna",
+      "expect": "graceful_decline",
+      "notes": "Anna (Dan's wife) has no birth date on the People tab. Say the tab has no birth date for her; never estimate or invent one."
+    },
+    {
+      "id": "var-age-055",
+      "category": "age_variations",
+      "text": "how old is ma",
+      "expect": "kinship",
+      "notes": "Trap: present tense for someone who died (2023-03-03, at 92). Must say she has died and give 92, not a living age of 96."
+    },
+    {
+      "id": "var-age-056",
+      "category": "age_variations",
+      "text": "how old is dad",
+      "expect": "kinship",
+      "notes": "Trap: Dad Breen died 2008-06-25 at 79. Must not answer with a living age (97).",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-057",
+      "category": "age_variations",
+      "text": "how old is dad breen now",
+      "expect": "kinship",
+      "notes": "Trap: 'now' for a man who died in 2008. Say he died at 79; would be 97.",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-058",
+      "category": "age_variations",
+      "text": "when was dad breen born",
+      "expect": "kinship",
+      "notes": "Dad Breen b. 1929-02-21 (People tab; the tree says 22 Feb — say which source).",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-059",
+      "category": "age_variations",
+      "text": "when was ma born",
+      "expect": "kinship",
+      "notes": "Ma b. 1930-08-31."
+    },
+    {
+      "id": "var-age-060",
+      "category": "age_variations",
+      "text": "when was ellen born",
+      "expect": "kinship",
+      "notes": "Ellen b. 1961-11-28 (People tab; Ellen Ronan b. 1883 is a different person — the sister, not the ancestor, unless the turn says otherwise)."
+    },
+    {
+      "id": "var-age-061",
+      "category": "age_variations",
+      "text": "when was libby born",
+      "expect": "kinship",
+      "notes": "Libby b. 2018-04-11 (People tab; Elizabeth McAuliffe/Beth is a different Elizabeth)."
+    },
+    {
+      "id": "var-age-062",
+      "category": "age_variations",
+      "text": "when was anna born",
+      "expect": "graceful_decline",
+      "notes": "No birth date on the People tab for Anna. Say so."
+    },
+    {
+      "id": "var-age-063",
+      "category": "age_variations",
+      "text": "where was dad breen born",
+      "expect": "kinship",
+      "notes": "Tree: Boston, Suffolk, MA. Answer the PLACE field, not the date (ledger row 10 class).",
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-064",
+      "category": "age_variations",
+      "text": "where was ma born",
+      "expect": "kinship",
+      "notes": "Chelsea, MA (People profile notes and the tree agree)."
+    },
+    {
+      "id": "var-age-065",
+      "category": "age_variations",
+      "text": "where was donna born",
+      "expect": "kinship",
+      "notes": "Brockton, MA (tree + CyberBrain)."
+    },
+    {
+      "id": "var-age-066",
+      "category": "age_variations",
+      "text": "where was timmy born",
+      "expect": "graceful_decline",
+      "notes": "No birthplace recorded for Timmy on the People tab or in CyberBrain. Say so; never borrow Matt's Emerson Hospital."
+    },
+    {
+      "id": "var-age-lead-001",
+      "category": "age_variations",
+      "text": "show me the christmas 1990 video",
+      "expect": "catalog",
+      "notes": "Leader for the next turn; a real Christmas1990 tape exists in the catalog."
+    },
+    {
+      "id": "var-age-067",
+      "category": "age_variations",
+      "text": "how old was dad in this video",
+      "expect": "kinship",
+      "notes": "followsPrevious after a catalog turn: video year 1990 − Dad Breen b. 1929 → 61. Needs both the catalog date and the People-tab birth date; must not become a video search for 'dad'.",
+      "followsPrevious": true,
+      "mustNotContain": [
+        "Matthew Rice",
+        "1629"
+      ]
+    },
+    {
+      "id": "var-age-lead-002",
+      "category": "age_variations",
+      "text": "find videos of donna down the cape in 1993",
+      "expect": "catalog",
+      "notes": "Leader for the next turn."
+    },
+    {
+      "id": "var-age-068",
+      "category": "age_variations",
+      "text": "how old was she in that one",
+      "expect": "kinship",
+      "notes": "followsPrevious: 'she' = Donna from the previous turn, year 1993 − b. 1959-08-04 → 33 (34 after 4 Aug). Pronoun + deictic 'that one' must both resolve.",
+      "followsPrevious": true
+    },
+    {
+      "id": "var-age-lead-003",
+      "category": "age_variations",
+      "text": "show me videos of timmy as a baby",
+      "expect": "catalog",
+      "notes": "Leader for the next turn."
+    },
+    {
+      "id": "var-age-069",
+      "category": "age_variations",
+      "text": "how old was timmy in this one",
+      "expect": "kinship",
+      "notes": "followsPrevious: item year (1996/1997) − Timmy b. 1996-04-22 → under 2. Deictic 'this' = the selected/last-cited item (ledger 2026-09-17: copula defeats stickiness).",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-001",
+      "category": "real_family",
+      "text": "who's donnas mom",
+      "expect": "kinship",
+      "notes": "Elaine Bowser (1933–2022); apostrophe-less possessive and casual 'mom'."
+    },
+    {
+      "id": "fam-002",
+      "category": "real_family",
+      "text": "wat year did we go to disney",
+      "expect": "catalog",
+      "notes": "Search filenames/transcripts/tags for Disney and report the year(s) of the hits; if none, say the catalog has no Disney footage — never guess a year."
+    },
+    {
+      "id": "fam-003",
+      "category": "real_family",
+      "text": "wen was ma born",
+      "expect": "kinship",
+      "notes": "Ma b. 1930-08-31; one-letter typo in when."
+    },
+    {
+      "id": "fam-004",
+      "category": "real_family",
+      "text": "hows many vids of timmy",
+      "expect": "catalog",
+      "notes": "Count of catalog items tagged Timmy; 'vids' is a media noun."
+    },
+    {
+      "id": "fam-005",
+      "category": "real_family",
+      "text": "were was dad born",
+      "expect": "kinship",
+      "notes": "'were' = where. Dad Breen b. Boston, MA. Answer the place, not the date."
+    },
+    {
+      "id": "fam-006",
+      "category": "real_family",
+      "text": "show me vidoes of the boys",
+      "expect": "catalog",
+      "notes": "'the boys' = Dan, Mark, Matt, Timmy collectively (People tab notes); search all four, not the word 'boys'."
+    },
+    {
+      "id": "fam-007",
+      "category": "real_family",
+      "text": "donna n rick wedding video",
+      "expect": "catalog",
+      "notes": "Search for the 1981 wedding (14 Feb 1981 per CyberBrain); no verb, 'n' for and."
+    },
+    {
+      "id": "fam-008",
+      "category": "real_family",
+      "text": "videos of me and donna",
+      "expect": "catalog",
+      "notes": "'me' = the signed-in owner (Rick) unless the speaker is someone else; both people, not the word 'me'."
+    },
+    {
+      "id": "fam-009",
+      "category": "real_family",
+      "text": "how old is richard",
+      "expect": "clarify",
+      "notes": "Two Richard Breens on the People tab (Rick b. 1959, Dad Breen b. 1929). Must ask which — offering both with birth years."
+    },
+    {
+      "id": "fam-010",
+      "category": "real_family",
+      "text": "tell me about richard breen",
+      "expect": "clarify",
+      "notes": "Two Richard Breens; ask which (Rick or Dad Breen), never pick silently, never a tree-wide stranger."
+    },
+    {
+      "id": "fam-011",
+      "category": "real_family",
+      "text": "when was timothy born",
+      "expect": "clarify",
+      "notes": "Timothy = Tim (brother, b. 1960) or Timmy (son, b. 1996). Ask which, offering both."
+    },
+    {
+      "id": "fam-012",
+      "category": "real_family",
+      "text": "who is elizabeth",
+      "expect": "clarify",
+      "notes": "Elizabeth = Beth (sister, b. 1963) or Libby (granddaughter, b. 2018). Ask which; never 2190 tree Elizabeths."
+    },
+    {
+      "id": "fam-013",
+      "category": "real_family",
+      "text": "show me videos of elizabeth",
+      "expect": "clarify",
+      "notes": "Beth or Libby; ask which, or show both groups labelled."
+    },
+    {
+      "id": "fam-014",
+      "category": "real_family",
+      "text": "how is richard related to donna",
+      "expect": "clarify",
+      "notes": "Rick (husband) vs Dad Breen (father-in-law) give different answers; must ask which Richard."
+    },
+    {
+      "id": "fam-015",
+      "category": "real_family",
+      "text": "tell me about uncle frank",
+      "expect": "graceful_decline",
+      "notes": "No Frank on the People tab or in CyberBrain; say so and offer the uncles that are recorded. Never invent an uncle."
+    },
+    {
+      "id": "fam-016",
+      "category": "real_family",
+      "text": "how is bob related to me",
+      "expect": "graceful_decline",
+      "notes": "No Bob in the family data; say 'not in the tree or the People tab' — not 'which Bob'."
+    },
+    {
+      "id": "fam-017",
+      "category": "real_family",
+      "text": "show me videos of aunt carol",
+      "expect": "graceful_decline",
+      "notes": "No Carol tagged anywhere; say so, do not search the word 'aunt', do not invent a person."
+    },
+    {
+      "id": "fam-018",
+      "category": "real_family",
+      "text": "tell me about my cousin sheila",
+      "expect": "graceful_decline",
+      "notes": "Not recorded; decline warmly and offer to remember what the user tells."
+    },
+    {
+      "id": "fam-019",
+      "category": "real_family",
+      "text": "did rick have any other siblings besides beth tim and ellen",
+      "expect": "kinship",
+      "notes": "Answer strictly from the People tab (no other siblings listed); never speculate or enumerate beyond the tab."
+    },
+    {
+      "id": "fam-020",
+      "category": "real_family",
+      "text": "what did ma die of",
+      "expect": "graceful_decline",
+      "notes": "Cause of death is not recorded anywhere; say so kindly. Never infer from age or invent an illness."
+    },
+    {
+      "id": "fam-021",
+      "category": "real_family",
+      "text": "did dad breen drink",
+      "expect": "graceful_decline",
+      "notes": "Nothing recorded; refuse to speculate about a person's habits. Offer what IS recorded (Marine Corps, typewriter repairman, bus driver)."
+    },
+    {
+      "id": "fam-022",
+      "category": "real_family",
+      "text": "tell me something private about the family",
+      "expect": "graceful_decline",
+      "notes": "Decline gently; offer recorded stories instead. Nothing 'private' is ever composed."
+    },
+    {
+      "id": "fam-023",
+      "category": "real_family",
+      "text": "who in the family got divorced",
+      "expect": "graceful_decline",
+      "notes": "Not recorded for the inner circle; say so; never infer from surnames (e.g. McAuliffe née Breen)."
+    },
+    {
+      "id": "fam-024",
+      "category": "real_family",
+      "text": "why did we move to middlefield",
+      "expect": "biography",
+      "notes": "CyberBrain: moved from Westford to Middlefield in 2020 (Donna retired 2020). The reason is not recorded — give the fact, not a motive."
+    },
+    {
+      "id": "fam-025",
+      "category": "real_family",
+      "text": "I'm beth, how am I related to martha lamson",
+      "expect": "kinship",
+      "notes": "Beth is Rick's sister: lineage-equivalent to Rick (Martha Lamson is Rick's and Donna's nearest common ancestor). Same chain, from Beth."
+    },
+    {
+      "id": "fam-026",
+      "category": "real_family",
+      "text": "im ricks sister ellen how are we related to donna",
+      "expect": "kinship",
+      "notes": "Donna is Ellen's sister-in-law; by blood, distant cousins via Martha Lamson — same as Rick's line."
+    },
+    {
+      "id": "fam-027",
+      "category": "real_family",
+      "text": "my mom is beth, who was my grandfather",
+      "expect": "kinship",
+      "notes": "Beth's father = Dad Breen (Richard Breen Sr); maternal grandfather for Beth's child. Paternal side (McAuliffe) is not on the tab — say so."
+    },
+    {
+      "id": "fam-028",
+      "category": "real_family",
+      "text": "im dan, who was my great grandfather on dads side",
+      "expect": "kinship",
+      "notes": "Dan → Rick → Dad Breen → George E Breen. Three hops up the male line."
+    },
+    {
+      "id": "fam-029",
+      "category": "real_family",
+      "text": "if im timmy how am i related to eileen latta",
+      "expect": "kinship",
+      "notes": "Timmy is Rick's son; Eileen is Rick's mother → grandmother."
+    },
+    {
+      "id": "fam-030",
+      "category": "real_family",
+      "text": "how is libby related to ma",
+      "expect": "kinship",
+      "notes": "Libby (Dan's daughter) → Dan → Rick → Ma: great-granddaughter."
+    },
+    {
+      "id": "fam-031",
+      "category": "real_family",
+      "text": "is anna related to donna",
+      "expect": "kinship",
+      "notes": "Anna is Dan's wife → Donna's daughter-in-law; not by blood. Say both halves."
+    },
+    {
+      "id": "fam-032",
+      "category": "real_family",
+      "text": "how is tim related to timmy",
+      "expect": "kinship",
+      "notes": "Tim is Rick's brother; Timmy is Rick's son → uncle and nephew."
+    },
+    {
+      "id": "fam-033",
+      "category": "real_family",
+      "text": "videos of the cape house in the 90s",
+      "expect": "catalog",
+      "notes": "Place ('cape') + era (1990–1999); person-less presence/event search, never 'event queries not supported'."
+    },
+    {
+      "id": "fam-034",
+      "category": "real_family",
+      "text": "christmas at ma's",
+      "expect": "catalog",
+      "notes": "Event + place-by-person: Christmas videos tagged with Ma / at her house; possessive without a noun."
+    },
+    {
+      "id": "fam-035",
+      "category": "real_family",
+      "text": "thanksgiving in new hampshire",
+      "expect": "catalog",
+      "notes": "Event + place; both are filename/transcript terms."
+    },
+    {
+      "id": "fam-036",
+      "category": "real_family",
+      "text": "any video from westford",
+      "expect": "catalog",
+      "notes": "Place only; Westford is where the boys grew up (CyberBrain) — filenames/transcripts."
+    },
+    {
+      "id": "fam-037",
+      "category": "real_family",
+      "text": "footage from the 80s with the boys",
+      "expect": "catalog",
+      "notes": "Era + collective alias for the four sons."
+    },
+    {
+      "id": "fam-038",
+      "category": "real_family",
+      "text": "first christmas with libby",
+      "expect": "catalog",
+      "notes": "Libby b. 2018-04-11 → Christmas 2018; search Christmas + Libby, earliest year first."
+    },
+    {
+      "id": "fam-039",
+      "category": "real_family",
+      "text": "donna's retirement party",
+      "expect": "catalog",
+      "notes": "2020 per CyberBrain; search 'retirement' + Donna; if nothing, say so — never claim a tape exists."
+    },
+    {
+      "id": "fam-040",
+      "category": "real_family",
+      "text": "mark's birthday 1984",
+      "expect": "catalog",
+      "notes": "Mark_Bday_Thanksgiving_1984 exists; year + person + event."
+    },
+    {
+      "id": "fam-041",
+      "category": "real_family",
+      "text": "how many tapes have tim in them",
+      "expect": "catalog",
+      "notes": "'tapes' is a media noun; Tim vs Timmy must be resolved (ask, or count both labelled). Never the tree."
+    },
+    {
+      "id": "fam-042",
+      "category": "real_family",
+      "text": "how many videos do we have from the 1980s",
+      "expect": "catalog",
+      "notes": "Decade count (1980–1989), not a single year."
+    },
+    {
+      "id": "fam-043",
+      "category": "real_family",
+      "text": "how many hours of video is there of donna",
+      "expect": "catalog",
+      "notes": "Sum of durations of items tagged Donna, stated in hours; if durations are missing say how many items lack them."
+    },
+    {
+      "id": "fam-044",
+      "category": "real_family",
+      "text": "how many videos have all four boys",
+      "expect": "catalog",
+      "notes": "Intersection: items tagged Dan AND Mark AND Matt AND Timmy, not the union."
+    },
+    {
+      "id": "fam-045",
+      "category": "real_family",
+      "text": "how many people are on the people tab",
+      "expect": "kinship",
+      "notes": "The tab's own profile count, not the tree's tens of thousands."
+    },
+    {
+      "id": "fam-046",
+      "category": "real_family",
+      "text": "tell me all about ma",
+      "expect": "biography",
+      "notes": "Leader for the chain below; Eileen Latta Breen from the People profile + CyberBrain + tree."
+    },
+    {
+      "id": "fam-047",
+      "category": "real_family",
+      "text": "I miss her",
+      "expect": "social",
+      "notes": "followsPrevious: a grief statement, not a query. Warm, brief, no search, no 'which her'.",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-048",
+      "category": "real_family",
+      "text": "and her mother?",
+      "expect": "kinship",
+      "notes": "followsPrevious: 'her' still = Ma after the social turn → Mary Catherine O'Connor (b. 1904, Ireland).",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-049",
+      "category": "real_family",
+      "text": "where was she born",
+      "expect": "kinship",
+      "notes": "followsPrevious: 'she' = Mary O'Connor now → Ireland. Pronoun chain two deep.",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-050",
+      "category": "real_family",
+      "text": "thank you hallie",
+      "expect": "social",
+      "notes": "Plain thanks; no pivot to the archive."
+    },
+    {
+      "id": "fam-051",
+      "category": "real_family",
+      "text": "this is making me cry",
+      "expect": "social",
+      "notes": "Acknowledge kindly; do not search for 'cry'; offer to pause."
+    },
+    {
+      "id": "fam-052",
+      "category": "real_family",
+      "text": "ma would have loved this",
+      "expect": "social",
+      "notes": "Reflective statement; brief warm reply; 'ma' is not a search term here."
+    },
+    {
+      "id": "fam-053",
+      "category": "real_family",
+      "text": "what is donna to tim",
+      "expect": "kinship",
+      "notes": "Sister-in-law (Donna is Rick's wife; Tim is Rick's brother). Leader for the correction below."
+    },
+    {
+      "id": "fam-054",
+      "category": "real_family",
+      "text": "you got that wrong hallie",
+      "expect": "social",
+      "notes": "followsPrevious: a correction with no content; ask what was wrong or offer to retry — never search videos for 'wrong'.",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-055",
+      "category": "real_family",
+      "text": "how are beth and libby related",
+      "expect": "kinship",
+      "notes": "Beth is Rick's sister; Libby is Rick's granddaughter → great-aunt and great-niece. Leader for the remark below."
+    },
+    {
+      "id": "fam-056",
+      "category": "real_family",
+      "text": "wow",
+      "expect": "social",
+      "notes": "followsPrevious: one word after an answer; brief acknowledgement, nothing more.",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-057",
+      "category": "real_family",
+      "text": "ma n dad at christmas",
+      "expect": "catalog",
+      "notes": "Person + person + event; both kin terms resolve to People-tab aliases; the two are a couple, not an ambiguity. Leader for the remark below."
+    },
+    {
+      "id": "fam-058",
+      "category": "real_family",
+      "text": "thats dad alright lol",
+      "expect": "social",
+      "notes": "followsPrevious: fond remark after a video answer; not a new search.",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-059",
+      "category": "real_family",
+      "text": "when was ma born and where",
+      "expect": "kinship",
+      "notes": "Two fields, one person: 1930-08-31, Chelsea MA. Both, in one answer."
+    },
+    {
+      "id": "fam-060",
+      "category": "real_family",
+      "text": "who was dad's father and did he serve in the war",
+      "expect": "kinship",
+      "notes": "George E Breen; military service for George is not recorded — say so for the second half rather than borrowing Dad Breen's Marine service."
+    },
+    {
+      "id": "fam-061",
+      "category": "real_family",
+      "text": "show me videos of donna and tell me how old she was in them",
+      "expect": "catalog",
+      "notes": "Catalog hits, each with (year − 1959) as an age; two asks, one answer."
+    },
+    {
+      "id": "fam-062",
+      "category": "real_family",
+      "text": "how old is timmy and where does he live",
+      "expect": "kinship",
+      "notes": "30 (b. 1996-04-22); residence not recorded → say so for the second half."
+    },
+    {
+      "id": "fam-063",
+      "category": "real_family",
+      "text": "show me videos of tim",
+      "expect": "clarify",
+      "notes": "Leader for the follow-up chain; Tim vs Timmy must be asked (or both shown labelled)."
+    },
+    {
+      "id": "fam-064",
+      "category": "real_family",
+      "text": "the brother",
+      "expect": "catalog",
+      "notes": "followsPrevious: answers the clarify → Tim (b. 1960); then show his videos.",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-065",
+      "category": "real_family",
+      "text": "show me those",
+      "expect": "catalog",
+      "notes": "followsPrevious: 'those' = the items just listed; re-present or open them, not a new search for 'those'.",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-066",
+      "category": "real_family",
+      "text": "just the ones from the 90s",
+      "expect": "catalog",
+      "notes": "followsPrevious: refine the previous result set by decade.",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-067",
+      "category": "real_family",
+      "text": "the second one",
+      "expect": "catalog",
+      "notes": "followsPrevious: ordinal selection from the last list; open/play item 2.",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-068",
+      "category": "real_family",
+      "text": "how old was he in that",
+      "expect": "kinship",
+      "notes": "followsPrevious: 'he' = Tim, 'that' = item 2's year → year − 1960.",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-069",
+      "category": "real_family",
+      "text": "hallie show me videos of donna period",
+      "expect": "catalog",
+      "notes": "Dictated punctuation word 'period' is noise; search Donna."
+    },
+    {
+      "id": "fam-070",
+      "category": "real_family",
+      "text": "how old is timmy question mark",
+      "expect": "kinship",
+      "notes": "'question mark' is dictation noise; 30."
+    },
+    {
+      "id": "fam-071",
+      "category": "real_family",
+      "text": "um show me videos of uh the cape",
+      "expect": "catalog",
+      "notes": "Filler words; place search for cape."
+    },
+    {
+      "id": "fam-072",
+      "category": "real_family",
+      "text": "Show me videos of Donna. Down the Cape. In the nineties.",
+      "expect": "catalog",
+      "notes": "Dictation split into sentences; one query: Donna + cape + 1990–1999. 'nineties' spelled out."
+    },
+    {
+      "id": "fam-073",
+      "category": "real_family",
+      "text": "who served in the marines",
+      "expect": "biography",
+      "notes": "Dad Breen (US Marine Corps per the People profile). Answer from recorded service only; never guess about others."
+    },
+    {
+      "id": "fam-074",
+      "category": "real_family",
+      "text": "was dad in the navy",
+      "expect": "biography",
+      "notes": "No — Marines. Correct the branch rather than confirm the premise."
+    },
+    {
+      "id": "fam-075",
+      "category": "real_family",
+      "text": "did anyone in the family serve in ww2",
+      "expect": "biography",
+      "notes": "Dad Breen served in the USMC but his service dates are not recorded (b. 1929 — do not assert WW2); uncles/in-laws served, per Rick, but are not in the data. Say what is recorded and what is not; never invent service."
+    },
+    {
+      "id": "fam-076",
+      "category": "real_family",
+      "text": "who was a marine",
+      "expect": "biography",
+      "notes": "Dad Breen. Bare 'marine' must not become a catalog search."
+    },
+    {
+      "id": "fam-077",
+      "category": "real_family",
+      "text": "where did the o'connors come from",
+      "expect": "biography",
+      "notes": "Ireland — Christopher O'Connor b. 1883 Ireland; Ellen Ronan's father Peter Ronan b. 1861 County Cork. Say Ireland / Cork with the citation."
+    },
+    {
+      "id": "fam-078",
+      "category": "real_family",
+      "text": "what part of ireland",
+      "expect": "biography",
+      "notes": "followsPrevious: County Cork (Peter Ronan); if the O'Connor townland is not recorded, say so.",
+      "followsPrevious": true
+    },
+    {
+      "id": "fam-079",
+      "category": "real_family",
+      "text": "where did the breens come from",
+      "expect": "biography",
+      "notes": "The tree's earliest Breen is John E Breen (Boston); the surname is Irish. Give the tree fact first, the surname note second, and say the tree does not reach Ireland on that line."
+    },
+    {
+      "id": "fam-080",
+      "category": "real_family",
+      "text": "where did the lattas come from",
+      "expect": "biography",
+      "notes": "Wilmington, North Carolina (William Love Latta Sr b. 1875; David McGill Latta Sr b. 1902), earlier Latta/Ralston line; not Ireland."
+    },
+    {
+      "id": "fam-081",
+      "category": "real_family",
+      "text": "are we irish or scottish",
+      "expect": "biography",
+      "notes": "Both, by line: O'Connor/Ronan Irish (Ma's mother), MacGregor Scottish (Donna's paternal grandmother Bessie MacGregor b. 1897 Glasgow), Breen an Irish surname. Answer per line, cited."
+    },
+    {
+      "id": "fam-082",
+      "category": "real_family",
+      "text": "who was the first breen in america",
+      "expect": "graceful_decline",
+      "notes": "The tree ends at John E Breen with no immigration record; say the tree does not show who came over. Never invent an arrival."
+    },
+    {
+      "id": "fam-083",
+      "category": "real_family",
+      "text": "did any of our ancestors come over on the mayflower",
+      "expect": "kinship",
+      "notes": "Search the tree for 1620 Plymouth arrivals; answer yes/no from the tree with names, or say the tree does not record it. Never assume."
+    },
+    {
+      "id": "fam-084",
+      "category": "real_family",
+      "text": "was ma really recruited by the cia",
+      "expect": "biography",
+      "notes": "People profile notes: recruited in 1952, declined, married Richard Breen Sr. Report it as told by Rick, not as verified fact."
     }
   ]
 }
