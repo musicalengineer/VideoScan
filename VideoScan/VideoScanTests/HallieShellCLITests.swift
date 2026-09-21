@@ -366,6 +366,116 @@ struct HallieShellCLITests {
             catalogURL: missingMarker) == nil)
     }
 
+    // MARK: - Native speech (no real preferences, audio, or model calls)
+
+    @Test func speechIsOptInAndParsesWithOnce() throws {
+        #expect(!HallieShellCLI.Options().speech)
+        #expect(try !HallieShellCLI.parse(arguments: ["--hallie"]).speech)
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--speech", "--once", "let me tell you about Dad Breen",
+        ])
+        #expect(options.speech)
+        #expect(options.once == "let me tell you about Dad Breen")
+        #expect(HallieShellCLI.usage.contains("--speech"))
+    }
+
+    @Test func defaultShellDoesNotInvokeSpeech() async throws {
+        let harness = Harness()
+        var spoken: [String] = []
+        var dependencies = harness.dependencies()
+        dependencies.speakAnswer = { spoken.append($0) }
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--once", "let me tell you about Dad Breen",
+        ])
+        _ = await HallieShellCLI.run(
+            options: options, output: { harness.output.append($0) },
+            dependencies: dependencies)
+        #expect(harness.transcriptEvents.contains { $0.kind == .assistant })
+        #expect(spoken.isEmpty)
+    }
+
+    @Test func speechReadsOnlyRecordedAnswersAndFinishesBeforeNextInput() async throws {
+        let harness = Harness(inputs: ["let me tell you about Dad Breen", ":quit"])
+        var spoken: [String] = []
+        var speechFinished = false
+        var dependencies = harness.dependencies()
+        dependencies.speakAnswer = { text in
+            #expect(harness.transcriptEvents.contains { $0.kind == .assistant && $0.text == text })
+            #expect(harness.readCount == 1)
+            await Task.yield()
+            #expect(harness.readCount == 1)
+            spoken.append(text)
+            speechFinished = true
+        }
+        let options = try HallieShellCLI.parse(arguments: ["--hallie", "--speech"])
+        _ = await HallieShellCLI.run(
+            options: options, input: {
+                if harness.readCount > 0 { #expect(speechFinished) }
+                return harness.nextInput()
+            }, output: { harness.output.append($0) }, dependencies: dependencies)
+        let answers = harness.transcriptEvents.filter { $0.kind == .assistant }.map(\.text)
+        #expect(!answers.isEmpty)
+        #expect(harness.transcriptEvents.contains { $0.kind == .user })
+        #expect(spoken == answers)
+        #expect(speechFinished)
+    }
+
+    @Test func onceWaitsForSpeechBeforeReturning() async throws {
+        let harness = Harness()
+        var speechFinished = false
+        var runFinished = false
+        var releaseSpeech: CheckedContinuation<Void, Never>?
+        var dependencies = harness.dependencies()
+        dependencies.speakAnswer = { _ in
+            await withCheckedContinuation { releaseSpeech = $0 }
+            speechFinished = true
+        }
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--speech", "--once", "let me tell you about Dad Breen",
+        ])
+        let task = Task { @MainActor in
+            let code = await HallieShellCLI.run(
+                options: options, output: { harness.output.append($0) },
+                dependencies: dependencies)
+            runFinished = true
+            return code
+        }
+        while releaseSpeech == nil && !runFinished { await Task.yield() }
+        #expect(!runFinished)
+        #expect(!speechFinished)
+        releaseSpeech?.resume()
+        let code = await task.value
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(speechFinished)
+        #expect(runFinished)
+    }
+
+    @Test func cancellingDuringSpeechDoesNotReadAnotherQuestion() async throws {
+        let harness = Harness(inputs: ["let me tell you about Dad Breen", "another question", ":quit"])
+        var releaseSpeech: CheckedContinuation<Void, Never>?
+        var speechObservedCancellation = false
+        var runFinished = false
+        var dependencies = harness.dependencies()
+        dependencies.speakAnswer = { _ in
+            await withCheckedContinuation { releaseSpeech = $0 }
+            speechObservedCancellation = Task.isCancelled
+        }
+        let options = try HallieShellCLI.parse(arguments: ["--hallie", "--speech"])
+        let task = Task { @MainActor in
+            _ = await HallieShellCLI.run(
+                options: options, input: harness.nextInput,
+                output: { harness.output.append($0) }, dependencies: dependencies)
+            runFinished = true
+        }
+        while releaseSpeech == nil && !runFinished { await Task.yield() }
+        task.cancel()
+        releaseSpeech?.resume()
+        await task.value
+        #expect(speechObservedCancellation)
+        #expect(harness.readCount == 1)
+        #expect(harness.inputs == ["another question", ":quit"])
+    }
+
     // MARK: - Interactive and once modes
 
     @Test func helpSessionAndQuitCommandsDoNotTranslateOrOpenMedia() async throws {

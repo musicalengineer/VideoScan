@@ -16,6 +16,8 @@ enum HallieShellCLI {
         /// facts locked). OFF by default in the shell — it is a diagnostic
         /// surface and the templated wording is the reference output.
         var compose = false
+        /// Speak answers with the same voice and pronunciation settings as the app.
+        var speech = false
         /// Print routes, evidence bases, responder hosts, full paths, and
         /// other QA metadata. Normal conversation keeps these in the log.
         var diagnostics = false
@@ -164,6 +166,9 @@ enum HallieShellCLI {
         var performMediaAction: (MediaAction) -> Void
         /// Injected as a no-op so unit tests never touch Rick's real log.
         var recordTranscript: ([HallieTranscriptEvent]) async -> Void
+        /// Await completion before reading stdin again or exiting `--once`.
+        /// Tests default to silence and never create a real audio engine.
+        var speakAnswer: (String) async -> Void
         /// Phrase an approved plan; only consulted with `--compose` and only
         /// for composable plans. The default returns the template.
         var composeAnswer: @Sendable (
@@ -217,6 +222,7 @@ enum HallieShellCLI {
             tryPerformMediaAction: ((MediaAction) -> Bool)? = nil,
             performMediaAction: @escaping (MediaAction) -> Void,
             recordTranscript: @escaping ([HallieTranscriptEvent]) async -> Void = { _ in },
+            speakAnswer: @escaping (String) async -> Void = { _ in },
             composeAnswer: @escaping @Sendable (
                 HallieAnswerPlan, [HallieGroundedComposer.HistoryTurn], Options
             ) async -> HallieGroundedComposer.Outcome = { plan, _, _ in
@@ -277,6 +283,7 @@ enum HallieShellCLI {
             }
             self.performMediaAction = performMediaAction
             self.recordTranscript = recordTranscript
+            self.speakAnswer = speakAnswer
             self.composeAnswer = composeAnswer
         }
 
@@ -400,6 +407,7 @@ enum HallieShellCLI {
                 recordTranscript: { events in
                     await HallieConversationRecorder.shared.append(events)
                 },
+                speakAnswer: { text in await speakNativeAnswer(text) },
                 composeAnswer: { plan, history, options in
                     var template = OllamaQueryTranslator()
                     template.model = options.model
@@ -525,7 +533,7 @@ enum HallieShellCLI {
     static let usage = """
     Usage: VideoScan --hallie [--catalog PATH] [--host HOST[,HOST...]]
                      [--model MODEL] [--gedcom PATH] [--once QUESTION] [--compose]
-                     [--no-actions] [--log-run-id ID] [--remember] [--diagnostics]
+                     [--no-actions] [--log-run-id ID] [--remember] [--diagnostics] [--speech]
     """
 
     static let help = """
@@ -547,6 +555,7 @@ enum HallieShellCLI {
             let argument = arguments[index]
             if argument == "--hallie" { index += 1; continue }
             if argument == "--compose" { result.compose = true; index += 1; continue }
+            if argument == "--speech" { result.speech = true; index += 1; continue }
             if argument == "--diagnostics" {
                 result.diagnostics = true
                 index += 1
@@ -603,6 +612,31 @@ enum HallieShellCLI {
         }
     }
 
+    /// Reuse the app's selected neural/Apple voice, pace and pronunciation layer.
+    /// The asynchronous wait keeps MainActor available for audio callbacks even
+    /// though the shell's next stdin read is blocking. A broken audio backend
+    /// cannot hold an unattended replay forever.
+    @MainActor
+    private static func speakNativeAnswer(_ text: String) async {
+        guard !Task.isCancelled else { return }
+        let speaker = HallieSpeaker.shared
+        speaker.speak(text)
+        defer { speaker.stop() }
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(300))
+        while speaker.isSpeaking && !Task.isCancelled && clock.now < deadline {
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+            } catch {
+                return // cancellation; the defer stops playback and synthesis
+            }
+        }
+        if speaker.isSpeaking && !Task.isCancelled {
+            FileHandle.standardError.write(Data(
+                "Hallie speech timed out after five minutes; continuing.\n".utf8))
+        }
+    }
+
     /// Runs without constructing VideoScanModel, CatalogStore, or a SwiftUI
     /// scene. The catalog is decoded once and never mutated or saved.
     static func run(
@@ -614,6 +648,18 @@ enum HallieShellCLI {
         },
         dependencies: Dependencies = .production
     ) async -> Int32 {
+        var dependencies = dependencies
+        if options.speech {
+            let recordTranscript = dependencies.recordTranscript
+            let speakAnswer = dependencies.speakAnswer
+            dependencies.recordTranscript = { events in
+                await recordTranscript(events)
+                for event in events where event.kind == .assistant {
+                    guard !Task.isCancelled else { return }
+                    await speakAnswer(event.text)
+                }
+            }
+        }
         output(options.diagnostics
             ? "Hallie Mae — headless read-only shell"
             : "Hallie Mae — standalone family librarian")
@@ -665,7 +711,7 @@ enum HallieShellCLI {
             ? help
             : "Type :help for commands; :quit to leave.")
         var terminalInput = HallieTerminalLineReader()
-        while true {
+        while !Task.isCancelled {
             let raw: String?
             if let input {
                 output("hallie> ")
@@ -689,6 +735,7 @@ enum HallieShellCLI {
             _ = await answer(line, options: options, state: &state,
                              output: output, dependencies: dependencies)
         }
+        return ExitCode.success.rawValue
     }
 
     struct Session {

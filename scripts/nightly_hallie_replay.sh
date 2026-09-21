@@ -25,7 +25,7 @@
 # Options:    --bin <VideoScan binary>  --host <ollama url>  --model <tag>
 #             --budget-seconds <N>  --strict-only  --advisory-only  --dry-run
 #             --live (colored queries and answers in this terminal)
-#             --speech (also speak the latest answer with the macOS voice)
+#             --speech (read answers with Hallie's selected app voice)
 # Defaults:   host  http://127.0.0.1:11434 — the M4's OWN ollama (GH #181:
 #                   it binds loopback only, so never RicksM4.local)
 #             model the app's SELECTED Hallie brain (Settings > Archivist
@@ -50,8 +50,8 @@ Usage: scripts/nightly_hallie_replay.sh --live [--out summary.json] [options]
 
   --live                Show queries in cyan, answers in green, flags in yellow.
                         Without --out, save a timestamped summary in LOGDIR.
-  --speech              Enable --live and speak answers with the macOS voice.
-                        Each new answer stops the previous utterance; no backlog.
+  --speech              Enable --live and use Hallie's selected app voice/pace.
+                        Each spoken answer finishes before the next query.
   --out PATH            Save the final graded JSON summary to PATH.
   --strict-only         Run only the strict regression questions.
   --advisory-only       Run only the full advisory corpus.

@@ -44,13 +44,13 @@ MEDIA_FILENAME_EXTENSIONS = (
 )
 
 
-def live_transcript(run_id, *, speech=False):
+def live_transcript(run_id):
     # Resolve beside this file so direct CLI invocation and import-based tests
     # work from any directory, without changing the process-wide import path.
     spec = importlib.util.spec_from_file_location("watch_hallie_chat", REPO / "scripts/watch_hallie_chat.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.LiveTranscript(run_id, LOG_DIR, speech=speech)
+    return module.LiveTranscript(run_id, LOG_DIR)
 
 # ---------------------------------------------------------------- run
 
@@ -380,6 +380,11 @@ def run(args):
     run_id = f"hallie-eval-{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     cmd = [str(HALLIE), "--no-actions", "--log-run-id", run_id]
+    speech = getattr(args, "speech", False)
+    if speech:
+        cmd.append("--speech")
+        print("Speech on: Hallie's app voice and pace; each answer finishes before the next query.",
+              file=sys.stderr, flush=True)
     if not args.no_compose:
         cmd.append("--compose")
     if args.host:
@@ -410,8 +415,7 @@ def run(args):
     print(f"[eval] {len(questions)} questions → {' '.join(cmd)}", flush=True)
     t0 = time.time()
     timed_out = False
-    speech = getattr(args, "speech", False)
-    viewer = (live_transcript(run_id, speech=speech)
+    viewer = (live_transcript(run_id)
               if getattr(args, "live", False) or speech else nullcontext())
     with viewer as live_view:
         try:
@@ -798,7 +802,7 @@ def main():
     pr.add_argument("--live", action="store_true",
                     help="show this replay's queries and answers in color on stderr as they happen")
     pr.add_argument("--speech", action="store_true",
-                    help="enable live display and speak the latest answer using the Mac voice")
+                    help="enable live display and use Hallie's app voice, finishing each answer before continuing")
     pr.add_argument("--host")
     pr.add_argument("--model", default=configured_model(),
                     help="default: Settings > Archivist Brain, else the shipped brain")
