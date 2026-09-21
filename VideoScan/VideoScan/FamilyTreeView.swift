@@ -87,6 +87,14 @@ struct FamilyTreeView: View {
     /// last add/remove failure shown under the inspector's Documents list.
     @State private var documentAddTarget: FamilyDocumentAddTarget?
     @State private var documentsError: String?
+    /// Refresh from FamilySearch… (2026-09-21). The center owns the refresh
+    /// in flight (so closing the tab never kills the watcher); the review
+    /// sheet is shown while `refreshReview` is non-nil — `.sheet(item:)`.
+    @ObservedObject private var refreshCenter = PersonRefreshCenter.shared
+    @State private var refreshReview: PersonRefreshCoordinator?
+    /// The refresh whose review sheet already opened by itself once, so a
+    /// Cancel on the sheet is not answered by the sheet reopening.
+    @State private var autoPresentedRefreshID: UUID?
 
     // Cross-tab navigation. Both tabs share state via @AppStorage so a
     // right-click in either place can drop the other a hint.
@@ -218,6 +226,81 @@ struct FamilyTreeView: View {
         }
     }
 
+    /// Refresh from FamilySearch… — the non-blocking strip for the refresh
+    /// in flight, and the last Undo's sentence. Separate from
+    /// `statusBanners` so neither expression outgrows the type checker.
+    @ViewBuilder
+    private var personRefreshBanners: some View {
+        if let refresh = refreshCenter.coordinator, refresh.phase != .idle {
+            PersonRefreshBanner(
+                coordinator: refresh,
+                onReview: { refreshReview = refresh },
+                onCancel: { refreshCenter.cancel() },
+                onUndo: {
+                    let target = refresh.target
+                    refreshCenter.dismiss()
+                    undoPersonRefresh(target)
+                },
+                onDismiss: { refreshCenter.dismiss() })
+        }
+        if let notice = refreshCenter.notice {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.uturn.backward.circle")
+                Text(notice).font(.system(size: 12))
+                Spacer()
+                Button("Dismiss") { refreshCenter.notice = nil }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(Color.accentColor.opacity(0.08))
+        }
+    }
+
+    /// Right-click → Refresh from FamilySearch…: hand the person to the
+    /// center, which writes the Terminal script and starts watching.
+    private func startPersonRefresh(for personID: String) {
+        guard let target = model.personRefreshTarget(for: personID) else { return }
+        let model = self.model
+        autoPresentedRefreshID = nil
+        refreshCenter.begin(target: target, installedFacts: {
+            model.personFacts(familySearchID: target.familySearchID)
+        })
+    }
+
+    private func undoPersonRefresh(_ target: PersonRefreshCoordinator.Target) {
+        _ = refreshCenter.undoLast(familySearchID: target.familySearchID, personName: target.personName)
+        Task { await model.reloadAfterPersonRefresh(selecting: target.personID) }
+    }
+
+    /// The review sheet opens by itself ONCE when the file has been read —
+    /// after the work, never over it.
+    private func autoPresentRefreshReview() {
+        guard let refresh = refreshCenter.coordinator, case .ready = refresh.phase,
+              refreshReview == nil, autoPresentedRefreshID != refresh.id else { return }
+        autoPresentedRefreshID = refresh.id
+        refreshReview = refresh
+    }
+
+    @ViewBuilder
+    private func refreshReviewSheet(_ refresh: PersonRefreshCoordinator) -> some View {
+        if case .ready(let diff) = refresh.phase {
+            PersonRefreshReviewSheet(
+                coordinator: refresh, diff: diff,
+                onApplied: {
+                    refreshReview = nil
+                    refreshCenter.noteApplied()
+                    let personID = refresh.target.personID
+                    Task { await model.reloadAfterPersonRefresh(selecting: personID) }
+                },
+                onClose: { refreshReview = nil })
+        } else {
+            // The phase moved on (applied / cancelled) while the sheet was
+            // up; nothing left to review.
+            Button("Close") { refreshReview = nil }
+                .padding(20)
+        }
+    }
+
     /// Sidebar · canvas · inspector, with the sidebar slide.
     private var splitContent: some View {
         HSplitView {
@@ -251,6 +334,7 @@ struct FamilyTreeView: View {
     private var rootStack: some View {
         VStack(spacing: 0) {
             statusBanners
+            personRefreshBanners
             splitContent
         }
     }
@@ -353,6 +437,7 @@ struct FamilyTreeView: View {
                 Text(researchRefusal ?? "")
             }
             .sheet(item: $documentAddTarget) { target in documentAddSheet(target) }
+            .sheet(item: $refreshReview) { refresh in refreshReviewSheet(refresh) }
             .sheet(item: $identityPickTarget) { target in
                 TreeIdentityPickerSheet(target: target, center: identityCenter,
                                         profiles: POIProfile.cachedSnapshot(),
@@ -395,6 +480,7 @@ struct FamilyTreeView: View {
             .onChange(of: incomingPersonID) { _, _ in handleIncomingHighlight() }
             .onChange(of: incomingSearchText) { _, _ in handleIncomingHighlight() }
             .onChange(of: model.loadState) { _, _ in handleIncomingHighlight() }
+            .onChange(of: refreshCenter.revision) { _, _ in autoPresentRefreshReview() }
             .onChange(of: getFamilyTreeRequest) { _, token in
                 guard !token.isEmpty else { return }
                 getFamilyTreeRequest = ""
@@ -1018,7 +1104,13 @@ struct FamilyTreeView: View {
                 detailedRecordText: { model.metadataText(for: card.person.id) },
                 onResearch: { presentResearch(for: card.person.id) },
                 documentCount: model.documentCount(for: card.person.id),
-                onAddDocument: { presentAddDocument(for: card.person.id) }
+                onAddDocument: { presentAddDocument(for: card.person.id) },
+                canRefreshFromFamilySearch: model.isLive && card.person.familySearchID != nil,
+                onRefreshFromFamilySearch: { startPersonRefresh(for: card.person.id) },
+                hasFamilySearchRefresh: refreshCenter.hasRefresh(for: card.person.familySearchID),
+                onUndoFamilySearchRefresh: {
+                    if let target = model.personRefreshTarget(for: card.person.id) { undoPersonRefresh(target) }
+                }
             )
     }
 
@@ -1650,6 +1742,13 @@ struct FamilyTreeView: View {
             Divider()
             Button("Add document…") { presentAddDocument(for: person.id) }
                 .disabled(!model.isLive)
+            Button("Refresh from FamilySearch…") { startPersonRefresh(for: person.id) }
+                .disabled(!model.isLive || person.familySearchID == nil)
+            if refreshCenter.hasRefresh(for: person.familySearchID) {
+                Button("Undo last refresh for this person") {
+                    if let target = model.personRefreshTarget(for: person.id) { undoPersonRefresh(target) }
+                }
+            }
         } label: {
             Image(systemName: "camera")
         }

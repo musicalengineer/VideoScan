@@ -107,7 +107,8 @@ struct FamilyAssetConfiguration: Sendable, Equatable {
 /// is held across the load on purpose so two concurrent turns cannot
 /// both decode the artifact.
 final class FamilyGraphSharedCache: @unchecked Sendable {
-    static let shared = FamilyGraphSharedCache(log: { appLog.write($0) })
+    static let shared = FamilyGraphSharedCache(log: { appLog.write($0) },
+                                               overlayStore: PersonRefreshPaths.productionOverlayStore)
 
     struct Loaded {
         let graph: GedcomFamilyGraph
@@ -128,15 +129,36 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
         let storeRoot: URL?
         let pointer: FamilyGraphCompiledStore.Pointer?
         let gedcomFiles: [String]
+        /// The person-refresh overlay file's "mtime|size" (2026-09-21), so
+        /// an Apply or Undo reaches Hallie's next turn and the tree's next
+        /// load. Only this part changing does NOT re-run the loader — the
+        /// cached base graph is re-overlaid (see `outcome(for:)`).
+        var overlayStamp: String = "none"
+
+        func sameBase(as other: Key) -> Bool {
+            directory == other.directory && access == other.access && storeRoot == other.storeRoot
+                && pointer == other.pointer && gedcomFiles == other.gedcomFiles
+        }
     }
 
     private let lock = NSLock()
+    /// `base` is the loader's own outcome, before any overlay — kept so an
+    /// overlay-only change re-applies facts without a decode.
     private var entry: (key: Key, graph: GedcomFamilyGraph, compiled: Bool, token: UUID,
-                        outcome: FamilyGraphFileLoader.Outcome)?
+                        outcome: FamilyGraphFileLoader.Outcome, base: FamilyGraphFileLoader.Outcome)?
     private var loadCount = 0
     private let log: (String) -> Void
+    /// Where "Refresh from FamilySearch…" keeps its fact overlay. Nil = no
+    /// overlay (tests that build their own cache and do not opt in). The
+    /// production default is App Support family-tree/person-refresh/, and a
+    /// scratch folder under a test host (PersonRefreshPaths).
+    let overlayStore: PersonFactOverlayStore?
 
-    init(log: @escaping (String) -> Void = { _ in }) { self.log = log }
+    init(log: @escaping (String) -> Void = { _ in },
+         overlayStore: PersonFactOverlayStore? = nil) {
+        self.log = log
+        self.overlayStore = overlayStore
+    }
 
     /// How many times the loader actually ran (decode or parse). Tests use
     /// this to prove consecutive turns did not reload.
@@ -161,6 +183,12 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
     /// loader under the lock. An outcome without a graph (nothing on disk,
     /// or `needsRecompile`) is returned but never cached. `outcome` is nil
     /// only when the archive authority is `.unavailable`.
+    ///
+    /// 2026-09-21: the returned outcome's graph carries the person-refresh
+    /// fact overlay (facts only, keyed by FamilySearch ID — never a link),
+    /// so the tab and Hallie read the same refreshed dates. The overlay is
+    /// applied AFTER the loader returns: nothing overlaid ever reaches the
+    /// compiled store, and the loader never sees the overlay folder.
     func outcome(for configuration: FamilyAssetConfiguration,
                  store: FamilyGraphCompiledStore?,
                  progress: ((String) -> Void)? = nil)
@@ -175,25 +203,40 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
                       access: configuration.access,
                       storeRoot: store?.root,
                       pointer: store?.readPointer(),
-                      gedcomFiles: Self.gedcomStamps(in: configuration.gedcomDirectory()))
+                      gedcomFiles: Self.gedcomStamps(in: configuration.gedcomDirectory()),
+                      overlayStamp: overlayStore?.stamp() ?? "none")
         return lock.withLock {
             if let entry, entry.key == key {
                 let loaded = Loaded(graph: entry.graph, compiled: entry.compiled, token: entry.token, reused: true)
                 return (entry.outcome, loaded)
             }
-            loadCount += 1
-            let report: (String) -> Void = { [log] phase in
-                log("[hallie] family graph: \(phase)")
-                progress?(phase)
+            let base: FamilyGraphFileLoader.Outcome
+            if let entry, entry.key.sameBase(as: key) {
+                // Only the overlay moved (an Apply / Undo): same tree, new
+                // facts. No decode, no parse — re-overlay the cached base.
+                base = entry.base
+            } else {
+                loadCount += 1
+                let report: (String) -> Void = { [log] phase in
+                    log("[hallie] family graph: \(phase)")
+                    progress?(phase)
+                }
+                guard let outcome = configuration.loadFamilyGraphOutcome(compiledStore: store, progress: report) else {
+                    entry = nil
+                    return (nil, nil)
+                }
+                base = outcome
             }
-            guard let outcome = configuration.loadFamilyGraphOutcome(compiledStore: store, progress: report) else {
+            guard let baseGraph = base.graph else {
                 entry = nil
-                return (nil, nil)
+                return (base, nil)
             }
-            guard var graph = outcome.graph else {
-                entry = nil
-                return (outcome, nil)
-            }
+            let overlaid = PersonRefreshOverlayReader.apply(
+                to: baseGraph, store: overlayStore,
+                discoveryDirectory: configuration.gedcomDirectory(),
+                canWrite: configuration.access == .readWrite, log: log)
+            let outcome = base.replacingGraph(overlaid)
+            var graph = overlaid
             // Apply Rick's identity rulings to THE graph, once, here —
             // the one place Hallie, kinship, the People tab and the Family
             // Tree all get their tree from. "hallie needs to honor FT hide."
@@ -229,7 +272,12 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
                     + "\(redirect.count) redirected to the record Rick verified")
             }
             let token = UUID()
-            entry = (key, graph, outcome.compiled, token, outcome)
+            // The overlay stamp is re-read AFTER the apply: a retirement
+            // just rewrote the file, and keying on the pre-retirement stamp
+            // would make the very next call a miss.
+            var storedKey = key
+            storedKey.overlayStamp = overlayStore?.stamp() ?? "none"
+            entry = (storedKey, graph, outcome.compiled, token, outcome, base)
             // Name EVERY source, not just the first. 2026-09-17: a 39,250-person
             // two-pull tree and a 16,383-person one-pull tree logged almost
             // identically, because this line printed only selectedURL -- so the

@@ -1125,7 +1125,27 @@ public struct GedcomFamilyGraph: Sendable {
     /// Lazily-built derived structures (name postings, CSR topology,
     /// sidebar order); shared by every copy of this value. Read through
     /// `index`. Populated ready-made when decoded from a compiled artifact.
-    let indexBox = TreeIndexBox()
+    /// `var` (2026-09-21) only so `replacingRecords` can hand a copy whose
+    /// records changed a box of its OWN — a copy sharing the old box would
+    /// answer searches and life-years from the records it no longer has.
+    var indexBox = TreeIndexBox()
+
+    /// A copy with new person / family tables and a FRESH index box
+    /// (`index` nil = rebuilt lazily on first use; non-nil = installed as
+    /// given, for a caller that patched the old index cheaply). Everything
+    /// else — roots, provenance, the FamilySearch index, suppression — is
+    /// carried unchanged, so callers must not change a FamilySearch ID or a
+    /// pointer through this seam. Used by the person-refresh fact overlay
+    /// (GedcomFamilyGraph+FactOverlay.swift), which changes facts only.
+    func replacingRecords(people newPeople: [String: Person],
+                          families newFamilies: [String: Family],
+                          index: TreeIndex?) -> GedcomFamilyGraph {
+        var out = self
+        out.people = newPeople
+        out.families = newFamilies
+        out.indexBox = TreeIndexBox(index)
+        return out
+    }
     /// Read access for the compiled-artifact encoder.
     var familyTable: [String: Family] { families }
     var familySearchIndexTable: [String: String] { personIDByFamilySearchID }
