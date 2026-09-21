@@ -25,6 +25,7 @@
 # Options:    --bin <VideoScan binary>  --host <ollama url>  --model <tag>
 #             --budget-seconds <N>  --strict-only  --advisory-only  --dry-run
 #             --live (colored queries and answers in this terminal)
+#             --speech (also speak the latest answer with the macOS voice)
 # Defaults:   host  http://127.0.0.1:11434 — the M4's OWN ollama (GH #181:
 #                   it binds loopback only, so never RicksM4.local)
 #             model the app's SELECTED Hallie brain (Settings > Archivist
@@ -41,7 +42,7 @@ LOGDIR=${LOGDIR:-$HOME/Library/Logs/VideoScan/hallie-eval}
 mkdir -p "$LOGDIR"
 
 OUT=""; BIN=""; HOST=""; MODEL=""; BUDGET=${NIGHTLY_HALLIE_BUDGET_SECONDS:-3600}
-LANES="strict advisory"; DRY_RUN=0; LIVE=0
+LANES="strict advisory"; DRY_RUN=0; LIVE=0; SPEECH=0
 usage() {
     cat <<'USAGE'
 Usage: scripts/nightly_hallie_replay.sh --live [--out summary.json] [options]
@@ -49,6 +50,8 @@ Usage: scripts/nightly_hallie_replay.sh --live [--out summary.json] [options]
 
   --live                Show queries in cyan, answers in green, flags in yellow.
                         Without --out, save a timestamped summary in LOGDIR.
+  --speech              Enable --live and speak answers with the macOS voice.
+                        Each new answer stops the previous utterance; no backlog.
   --out PATH            Save the final graded JSON summary to PATH.
   --strict-only         Run only the strict regression questions.
   --advisory-only       Run only the full advisory corpus.
@@ -75,6 +78,7 @@ while [ $# -gt 0 ]; do
         --advisory-only) LANES="advisory"; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         --live) LIVE=1; shift ;;
+        --speech) SPEECH=1; LIVE=1; shift ;;
         --help|-h) usage; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 64 ;;
     esac
@@ -183,6 +187,7 @@ run_lane() {
     [ -n "$HOST" ]  && args+=(--host "$HOST")
     [ -n "$MODEL" ] && args+=(--model "$MODEL")
     args+=(--build-sha "$SHA")
+    [ "$SPEECH" = 1 ] && args+=(--speech)
     local run_log="$LOGDIR/nightly-$STAMP-$lane.run.log"
     local run_rc
     if [ "$LIVE" = 1 ]; then

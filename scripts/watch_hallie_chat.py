@@ -12,6 +12,8 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
+import subprocess
 from pathlib import Path
 import sys
 import threading
@@ -119,6 +121,72 @@ def render(line: str, include_system: bool, *, color: bool = False, stream=None)
         file=stream, flush=True)
 
 
+class AnswerSpeech:
+    """One local utterance at a time; never queue answers behind the replay."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.process = None
+        self.disabled = False
+
+    def speak(self, text):
+        if self.disabled:
+            return
+        # Citation labels and synthesis control markup are not spoken prose.
+        text = re.sub(r"\[\[.*?\]\]|\[c\d+\]", "", str(text or ""), flags=re.DOTALL)
+        text = compact_text(text)
+        if not text:
+            return
+        try:
+            if self.process is not None and self.process.poll() not in (None, 0):
+                self.disabled = True
+                print("Speech unavailable: the Mac voice command failed; continuing silently.",
+                      file=self.stream, flush=True)
+                self.close()
+                return
+            self.close()
+            self.process = subprocess.Popen(
+                ["/usr/bin/say", "-f", "-"], stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Use stdin, never interpret answer text as command-line options.
+            self.process.stdin.write(text.encode("utf-8"))
+            self.process.stdin.close()
+        except OSError as error:
+            self.disabled = True
+            self.close()
+            print(f"Speech unavailable: {error}; continuing silently.", file=self.stream, flush=True)
+
+    def close(self, *, finish=False):
+        process, self.process = self.process, None
+        if process is None:
+            return
+        if process.stdin is not None and not process.stdin.closed:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+        if finish:
+            try:
+                process.wait(timeout=20)
+                return
+            except subprocess.TimeoutExpired:
+                pass
+            except BaseException:
+                self._terminate(process)
+                raise
+        self._terminate(process)
+
+    @staticmethod
+    def _terminate(process):
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1)
+
+
 class LiveTranscript:
     """Follow only one replay, without stealing stdout from its JSON results.
 
@@ -126,7 +194,7 @@ class LiveTranscript:
     Stop with a final drain so the last answer appears before grading starts.
     """
 
-    def __init__(self, run_id: str, log_dir: Path = DEFAULT_LOG_DIR, *, stream=None):
+    def __init__(self, run_id: str, log_dir: Path = DEFAULT_LOG_DIR, *, stream=None, speech=False):
         self.run_id = run_id
         self.log_dir = log_dir
         self.stream = stream if stream is not None else sys.stderr
@@ -134,18 +202,26 @@ class LiveTranscript:
         self._offsets: dict[Path, int] = {}
         self._thread = None
         self.review_count = 0
+        self.speech = AnswerSpeech(self.stream) if speech else None
 
     def __enter__(self):
         self._offsets = {p: p.stat().st_size for p in self.log_dir.glob("hallie-conversation-*.jsonl")}
         print("\033[36mQueries\033[0m · \033[32mHallie responses\033[0m · "
               "\033[33mReview flags\033[0m", file=self.stream, flush=True)
+        if self.speech is not None:
+            print("Speech on: Mac voice; each new answer replaces the previous utterance.",
+                  file=self.stream, flush=True)
         self._thread = threading.Thread(target=self._follow, name="hallie-live-transcript", daemon=True)
         self._thread.start()
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, exc_type, *_):
         self._stop.set()
-        self._thread.join()
+        try:
+            self._thread.join()
+        finally:
+            if self.speech is not None:
+                self.speech.close(finish=exc_type is None)
 
     def _follow(self):
         try:
@@ -180,6 +256,8 @@ class LiveTranscript:
                         if str(event.get("kind") or "").lower() != "system" and likely_failure(event):
                             self.review_count += 1
                         render(line, False, color=True, stream=self.stream)
+                        if self.speech is not None and event.get("kind") == "assistant":
+                            self.speech.speak(event.get("text"))
 
 
 def existing_tail(path: Path, count: int) -> list[str]:

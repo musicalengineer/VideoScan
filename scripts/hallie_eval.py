@@ -44,13 +44,13 @@ MEDIA_FILENAME_EXTENSIONS = (
 )
 
 
-def live_transcript(run_id):
+def live_transcript(run_id, *, speech=False):
     # Resolve beside this file so direct CLI invocation and import-based tests
     # work from any directory, without changing the process-wide import path.
     spec = importlib.util.spec_from_file_location("watch_hallie_chat", REPO / "scripts/watch_hallie_chat.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.LiveTranscript(run_id, LOG_DIR)
+    return module.LiveTranscript(run_id, LOG_DIR, speech=speech)
 
 # ---------------------------------------------------------------- run
 
@@ -410,7 +410,10 @@ def run(args):
     print(f"[eval] {len(questions)} questions → {' '.join(cmd)}", flush=True)
     t0 = time.time()
     timed_out = False
-    with live_transcript(run_id) if getattr(args, "live", False) else nullcontext() as live_view:
+    speech = getattr(args, "speech", False)
+    viewer = (live_transcript(run_id, speech=speech)
+              if getattr(args, "live", False) or speech else nullcontext())
+    with viewer as live_view:
         try:
             proc = subprocess.run(
                 cmd, input=build_stdin(questions), capture_output=True, text=True,
@@ -794,6 +797,8 @@ def main():
     pr.add_argument("--limit", type=int)
     pr.add_argument("--live", action="store_true",
                     help="show this replay's queries and answers in color on stderr as they happen")
+    pr.add_argument("--speech", action="store_true",
+                    help="enable live display and speak the latest answer using the Mac voice")
     pr.add_argument("--host")
     pr.add_argument("--model", default=configured_model(),
                     help="default: Settings > Archivist Brain, else the shipped brain")

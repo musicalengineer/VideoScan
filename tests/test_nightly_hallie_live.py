@@ -17,6 +17,9 @@ import json, os, pathlib, sys, time
 args = sys.argv[1:]
 def arg(key): return args[args.index(key) + 1]
 if args[0] == "run":
+    if os.environ.get("STUB_ARGS_LOG"):
+        with open(os.environ["STUB_ARGS_LOG"], "a") as output:
+            output.write(json.dumps(args) + "\n")
     print("ordinary harness diagnostics", flush=True)
     if "--live" in args:
         print("\x1b[36mQuery: where is Donna?\x1b[0m", file=sys.stderr, flush=True)
@@ -160,6 +163,29 @@ class LiveReplayTests(unittest.TestCase):
         result = self.run_replay("--out")
         self.assertEqual(result.returncode, 64)
         self.assertIn("requires a value", result.stderr)
+
+    def test_speech_implies_live_and_is_forwarded_to_both_lanes(self):
+        args_log = self.root / "harness-args.jsonl"
+        self.env["STUB_ARGS_LOG"] = str(args_log)
+        result = self.run_replay("--speech")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        invocations = [json.loads(line) for line in args_log.read_text().splitlines()]
+        self.assertEqual(len(invocations), 2)
+        for args in invocations:
+            self.assertIn("--live", args)
+            self.assertIn("--speech", args)
+        self.assertEqual(result.stderr.count(QUERY), 2)
+        self.assertIn("DONE", result.stderr)
+        self.assertEqual(len(list((self.root / "logs").glob("replay-*.summary.json"))), 1)
+
+    def test_live_without_speech_remains_silent(self):
+        args_log = self.root / "harness-args.jsonl"
+        self.env["STUB_ARGS_LOG"] = str(args_log)
+        result = self.run_replay("--live", "--strict-only")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = json.loads(args_log.read_text())
+        self.assertIn("--live", args)
+        self.assertNotIn("--speech", args)
 
 
 if __name__ == "__main__":
