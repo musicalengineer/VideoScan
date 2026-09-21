@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import sys
 import tempfile
 import unittest
 from collections import Counter
@@ -790,7 +791,42 @@ class SelectDirectiveTests(unittest.TestCase):
 
 
 class NightlyReplayVerdictTests(unittest.TestCase):
-    def replay(self, returncode=0, turns=None, timeout=False, mutate_corpus=False):
+    def test_live_replay_emits_colored_conversation_and_keeps_pairing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus = root / "corpus.json"
+            corpus.write_text(json.dumps({"questions": [
+                {"id": "q1", "text": "Where was Alpha born?", "expect": "biography"}
+            ]}))
+            shell = root / "fake-hallie"
+            log = root / "hallie-conversation-2026-09-21.jsonl"
+            shell.write_text(f"#!{sys.executable}\n" +
+                             "import json, sys\n"
+                             "run = sys.argv[sys.argv.index('--log-run-id') + 1]\n"
+                             "sys.stdin.read()\n" +
+                             f"with open({str(log)!r}, 'a') as f:\n" +
+                             " for kind, text in [('user', 'Where was Alpha born?'), ('assistant', 'Alpha was born in Ireland.')]:\n"
+                             "  f.write(json.dumps(dict(kind=kind, text=text, runID=run, route='graph', outcome='answered')) + '\\n')\n")
+            shell.chmod(0o700)
+            result = root / "run.jsonl"
+            args = SimpleNamespace(corpus=str(corpus), limit=None, no_compose=True,
+                                   host=None, model="fixture", bin=sys.executable,
+                                   timeout=5, out=str(result), build_sha="fixture", live=True)
+            output, live = io.StringIO(), io.StringIO()
+            with patch.object(hallie_eval, "HALLIE", shell), patch.object(hallie_eval, "LOG_DIR", root), \
+                    redirect_stdout(output), patch("sys.stderr", live):
+                code = hallie_eval.run(args)
+            self.assertEqual(code, 0)
+            self.assertIn("Where was Alpha born?", live.getvalue())
+            self.assertIn("Alpha was born in Ireland.", live.getvalue())
+            self.assertIn("\033[36m", live.getvalue())
+            self.assertIn("\033[32m", live.getvalue())
+            self.assertNotIn("\033", output.getvalue())
+            rows = [json.loads(line) for line in result.read_text().splitlines()]
+            self.assertEqual(rows[0]["meta"]["paired"], 1)
+            self.assertEqual(rows[1]["answer"], "Alpha was born in Ireland.")
+
+    def replay(self, returncode=0, turns=None, timeout=False, mutate_corpus=False, live=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             corpus = root / "corpus.json"
@@ -803,7 +839,7 @@ class NightlyReplayVerdictTests(unittest.TestCase):
             args = SimpleNamespace(corpus=str(corpus), limit=None, no_compose=True,
                                    host="http://fixture", model="fixture-model",
                                    bin=str(binary), timeout=1, out=str(output),
-                                   build_sha="built-source-sha")
+                                   build_sha="built-source-sha", live=live)
             result = (hallie_eval.subprocess.TimeoutExpired("fixture", 1) if timeout
                       else SimpleNamespace(returncode=returncode, stdout="", stderr="fixture failure"))
             original_hash = hallie_eval.hashlib.sha256(corpus.read_bytes()).hexdigest()
@@ -819,10 +855,19 @@ class NightlyReplayVerdictTests(unittest.TestCase):
 
             with patch.object(hallie_eval.subprocess, "run", side_effect=invoke), \
                     patch.object(hallie_eval, "read_run_turns", return_value=turns or []), \
+                    patch.object(hallie_eval, "live_transcript") as live_view, \
                     redirect_stdout(io.StringIO()), patch("sys.stderr", new_callable=io.StringIO):
+                live_view.return_value.__enter__.return_value.review_count = 2
                 code = hallie_eval.run(args)
+                if live:
+                    live_view.assert_called_once()
+                    live_view.return_value.__enter__.assert_called_once()
+                    live_view.return_value.__exit__.assert_called_once()
+                else:
+                    live_view.assert_not_called()
             meta = json.loads(output.read_text().splitlines()[0])["meta"]
             self.assertEqual(meta["corpusSHA256"], original_hash)
+            self.assertEqual(meta["liveReviewFlags"], 2 if live else None)
             return code, meta
 
     def test_missing_answer_fails_and_records_completion(self):
@@ -843,6 +888,12 @@ class NightlyReplayVerdictTests(unittest.TestCase):
 
     def test_timeout_preserves_failure_artifact(self):
         code, meta = self.replay(timeout=True)
+        self.assertEqual(code, 2)
+        self.assertTrue(meta["timedOut"])
+        self.assertEqual(meta["processReturnCode"], 124)
+
+    def test_live_timeout_stops_viewer_and_preserves_failure_artifact(self):
+        code, meta = self.replay(timeout=True, live=True)
         self.assertEqual(code, 2)
         self.assertTrue(meta["timedOut"])
         self.assertEqual(meta["processReturnCode"], 124)

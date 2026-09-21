@@ -24,6 +24,7 @@
 # On demand:  scripts/nightly_hallie_replay.sh --out /tmp/hallie.json
 # Options:    --bin <VideoScan binary>  --host <ollama url>  --model <tag>
 #             --budget-seconds <N>  --strict-only  --advisory-only  --dry-run
+#             --live (colored queries and answers in this terminal)
 # Defaults:   host  http://127.0.0.1:11434 — the M4's OWN ollama (GH #181:
 #                   it binds loopback only, so never RicksM4.local)
 #             model the app's SELECTED Hallie brain (Settings > Archivist
@@ -40,8 +41,30 @@ LOGDIR=${LOGDIR:-$HOME/Library/Logs/VideoScan/hallie-eval}
 mkdir -p "$LOGDIR"
 
 OUT=""; BIN=""; HOST=""; MODEL=""; BUDGET=${NIGHTLY_HALLIE_BUDGET_SECONDS:-3600}
-LANES="strict advisory"; DRY_RUN=0
+LANES="strict advisory"; DRY_RUN=0; LIVE=0
+usage() {
+    cat <<'USAGE'
+Usage: scripts/nightly_hallie_replay.sh --live [--out summary.json] [options]
+       scripts/nightly_hallie_replay.sh --out summary.json [options]
+
+  --live                Show queries in cyan, answers in green, flags in yellow.
+                        Without --out, save a timestamped summary in LOGDIR.
+  --out PATH            Save the final graded JSON summary to PATH.
+  --strict-only         Run only the strict regression questions.
+  --advisory-only       Run only the full advisory corpus.
+  --bin PATH            VideoScan binary to test.
+  --host URL            Ollama host (default: http://127.0.0.1:11434).
+  --model TAG           Override the app's selected Hallie model.
+  --budget-seconds N    Total replay budget (default: 3600).
+  --dry-run             Check model/host availability without running questions.
+  --help                Show this help.
+USAGE
+}
 while [ $# -gt 0 ]; do
+    case "$1" in
+        --out|--bin|--host|--model|--budget-seconds)
+            [ $# -ge 2 ] || { echo "$1 requires a value" >&2; exit 64; } ;;
+    esac
     case "$1" in
         --out) OUT="$2"; shift 2 ;;
         --bin) BIN="$2"; shift 2 ;;
@@ -51,10 +74,19 @@ while [ $# -gt 0 ]; do
         --strict-only) LANES="strict"; shift ;;
         --advisory-only) LANES="advisory"; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
+        --live) LIVE=1; shift ;;
+        --help|-h) usage; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 64 ;;
     esac
 done
-[ -n "$OUT" ] || { echo "--out is required" >&2; exit 64; }
+if [ "$LIVE" = 1 ]; then
+    OUT=${OUT:-$LOGDIR/replay-$(date +%Y%m%dT%H%M%S)-$$.summary.json}
+    # run_lane is captured with $(...), so keep live output on the caller's
+    # stderr, never on the stdout reserved for its lane summary JSON.
+    exec 3>&2
+    [ "$DRY_RUN" = 1 ] || echo "Hallie summary will be saved to: $OUT" >&3
+fi
+[ -n "$OUT" ] || { echo "--out is required (or use --live)" >&2; exit 64; }
 
 # WHICH HOST, WHICH MODEL (2026-09-12). Rick's standing ruling (codex #1359):
 # Hallie tests run on the M4, against the M4's own brain. This script used to
@@ -151,8 +183,21 @@ run_lane() {
     [ -n "$HOST" ]  && args+=(--host "$HOST")
     [ -n "$MODEL" ] && args+=(--model "$MODEL")
     args+=(--build-sha "$SHA")
-    "$PY" "$REPO/scripts/hallie_eval.py" "${args[@]}" > "$LOGDIR/nightly-$STAMP-$lane.run.log" 2>&1
-    local run_rc=$?
+    local run_log="$LOGDIR/nightly-$STAMP-$lane.run.log"
+    local run_rc
+    if [ "$LIVE" = 1 ]; then
+        args+=(--live)
+        : > "$run_log"
+        # Both writers append: ordinary harness output cannot overwrite a
+        # colored stderr line. Route stderr into the pipe BEFORE redirecting
+        # stdout to the log; the foreground pipeline drains tee before grading.
+        "$PY" "$REPO/scripts/hallie_eval.py" "${args[@]}" 2>&1 >> "$run_log" | tee -a "$run_log" >&3
+        run_rc=${PIPESTATUS[0]}
+    else
+        "$PY" "$REPO/scripts/hallie_eval.py" "${args[@]}" > "$run_log" 2>&1
+        run_rc=$?
+    fi
+    [ "$run_rc" -lt 128 ] || return "$run_rc"
     if [ ! -s "$run" ]; then
         echo "{\"status\":\"failed\",\"expected\":0,\"completed\":0,\"clean\":0,\"defects\":0,\"incomplete\":0,\"runRC\":$run_rc}"
         return 1
@@ -173,6 +218,7 @@ PYEOF
         grep -m1 '^GRADE_SUMMARY: ' "$LOGDIR/nightly-$STAMP-$lane.grade.log" | sed 's/^GRADE_SUMMARY: //' \
             || echo "{\"status\":\"failed\",\"expected\":0,\"completed\":0,\"clean\":0,\"defects\":0,\"incomplete\":0,\"runRC\":$run_rc,\"gradeRC\":$grade_rc}"
     fi
+    [ "$run_rc" = 0 ] || return "$run_rc"
     return "$grade_rc"
 }
 
@@ -195,6 +241,10 @@ for lane in $LANES; do
                 ADVISORY_JSON=$(run_lane advisory "$ADVISORY_CORPUS" "" "$share"); ADVISORY_RC=$?
             fi ;;
     esac
+    # A stopped harness is not a completed replay: do not launch another lane
+    # or print the completion banner after Ctrl-C / signal termination.
+    [ "${STRICT_RC:-0}" -lt 128 ] || exit "$STRICT_RC"
+    [ "${ADVISORY_RC:-0}" -lt 128 ] || exit "$ADVISORY_RC"
 done
 ELAPSED=$(( $(date +%s) - STARTED ))
 
@@ -212,7 +262,7 @@ PYEOF
 )
 
 python3 - "$OUT" "$STATUS" "$STRICT_JSON" "$ADVISORY_JSON" "$ELAPSED" "$SHA" "$BIN" "$HOST" "$MODEL" "$TREE_GEN" \
-        "$(sha256 "$STRICT_CORPUS")" "$(sha256 "$ADVISORY_CORPUS")" "$STAMP" "$MODEL_SOURCE" <<'PYEOF'
+        "$(sha256 "$STRICT_CORPUS")" "$(sha256 "$ADVISORY_CORPUS")" "$STAMP" "$MODEL_SOURCE" "$LIVE" <<'PYEOF'
 import json, os, sys, time
 out, status, strict, advisory, elapsed, sha, binary, host, model, tree, msha, csha, stamp, source = sys.argv[1:15]
 def incomplete_count(s):
@@ -230,6 +280,7 @@ def lane(js, name):
             f"hallie_{name}_pass": s.get("clean", 0),
             f"hallie_{name}_fail": s.get("defects", 0),
             f"hallie_{name}_incomplete": incomplete_count(s),
+            f"hallie_{name}_yellow": (s.get("meta") or {}).get("liveReviewFlags"),
             f"hallie_{name}_run_id": s.get("runID"),
             f"hallie_{name}_flags": s.get("flags")}
 row = {"hallie_replay_status": status,
@@ -251,5 +302,20 @@ print(f"hallie replay {status}: strict {row['hallie_strict_pass']}/{row['hallie_
       f"{row['hallie_strict_fail']} fail, {row['hallie_strict_incomplete']} incomplete; "
       f"advisory {row['hallie_advisory_pass']}/{row['hallie_advisory_expected']} pass, "
       f"{row['hallie_advisory_fail']} fail ({row['hallie_advisory_status']}); {elapsed}s")
+if sys.argv[15] == "1":
+    print("\n\n\n" + "=" * 64 + f"\nDONE — replay {status}", file=sys.stderr)
+    for name in ("strict", "advisory"):
+        prefix = f"hallie_{name}_"
+        if row[prefix + "status"] == "not-run":
+            print(f"{name.title()}: not run", file=sys.stderr)
+            continue
+        yellow = row[prefix + "yellow"]
+        yellow = "not measured" if yellow is None else str(yellow)
+        good, bad = ("passed", "failed") if name == "strict" else ("clean", "flagged")
+        print(f"{name.title()}: {row[prefix + 'pass']} {good}, "
+              f"{row[prefix + 'fail']} {bad}, "
+              f"{row[prefix + 'incomplete']} incomplete; yellow: {yellow}", file=sys.stderr)
+    print("Advisory clean results are not verified passes. Yellow marks heuristic review flags, not grading failures.", file=sys.stderr)
+    print(f"Summary saved to: {out}", file=sys.stderr)
 PYEOF
 case "$STATUS" in ok) exit 0 ;; incomplete) exit 2 ;; *) exit 1 ;; esac

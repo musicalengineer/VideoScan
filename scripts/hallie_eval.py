@@ -22,6 +22,7 @@ pass / 1 strict defects / 2 incomplete. Invalid inputs may also fail nonzero.
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -29,6 +30,7 @@ import subprocess
 import sys
 import time
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -40,6 +42,15 @@ MEDIA_FILENAME_EXTENSIONS = (
     "mod|tod|wav|aif|aiff|mp3|mp2|m4a|aac|flac|caf|wma|ac3|oga|opus|"
     "alac|amr|au|snd"
 )
+
+
+def live_transcript(run_id):
+    # Resolve beside this file so direct CLI invocation and import-based tests
+    # work from any directory, without changing the process-wide import path.
+    spec = importlib.util.spec_from_file_location("watch_hallie_chat", REPO / "scripts/watch_hallie_chat.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.LiveTranscript(run_id, LOG_DIR)
 
 # ---------------------------------------------------------------- run
 
@@ -399,14 +410,15 @@ def run(args):
     print(f"[eval] {len(questions)} questions → {' '.join(cmd)}", flush=True)
     t0 = time.time()
     timed_out = False
-    try:
-        proc = subprocess.run(
-            cmd, input=build_stdin(questions), capture_output=True, text=True,
-            timeout=args.timeout, cwd=str(REPO), env=env,
-        )
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        proc = subprocess.CompletedProcess(cmd, 124, "", "Hallie replay timed out")
+    with live_transcript(run_id) if getattr(args, "live", False) else nullcontext() as live_view:
+        try:
+            proc = subprocess.run(
+                cmd, input=build_stdin(questions), capture_output=True, text=True,
+                timeout=args.timeout, cwd=str(REPO), env=env,
+            )
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            proc = subprocess.CompletedProcess(cmd, 124, "", "Hallie replay timed out")
     elapsed = time.time() - t0
     print(f"[eval] session finished in {elapsed:.0f}s (exit {proc.returncode})", flush=True)
 
@@ -424,6 +436,7 @@ def run(args):
             "processReturnCode": proc.returncode,
             "timedOut": timed_out,
             "unmatchedTurns": len(unmatched),
+            "liveReviewFlags": live_view.review_count if live_view is not None else None,
             "requestedModel": args.model,
             "requestedHost": args.host,
             "buildSHA": getattr(args, "build_sha", None),
@@ -779,6 +792,8 @@ def main():
     )
     pr.add_argument("--out", required=True)
     pr.add_argument("--limit", type=int)
+    pr.add_argument("--live", action="store_true",
+                    help="show this replay's queries and answers in color on stderr as they happen")
     pr.add_argument("--host")
     pr.add_argument("--model", default=configured_model(),
                     help="default: Settings > Archivist Brain, else the shipped brain")

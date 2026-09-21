@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 from pathlib import Path
 import sys
+import threading
 import time
 
 
@@ -42,7 +44,13 @@ def arguments() -> argparse.Namespace:
         "--all", action="store_true",
         help="include system/reset events (hidden by default)")
     parser.add_argument("--poll", type=float, default=0.25)
+    parser.add_argument("--color", choices=("auto", "always", "never"), default="auto",
+                        help="color queries cyan and Hallie's answers green (default: terminals only)")
     return parser.parse_args()
+
+
+def use_color(mode: str) -> bool:
+    return mode == "always" or (mode == "auto" and sys.stdout.isatty() and "NO_COLOR" not in os.environ)
 
 
 def newest_log(log_dir: Path) -> Path | None:
@@ -78,11 +86,11 @@ def likely_failure(event: dict[str, object]) -> bool:
     )
 
 
-def render(line: str, include_system: bool) -> None:
+def render(line: str, include_system: bool, *, color: bool = False, stream=None) -> None:
     try:
         event = json.loads(line)
     except json.JSONDecodeError as error:
-        print(f"⚠ malformed JSONL: {error}", flush=True)
+        print(f"⚠ malformed JSONL: {error}", file=stream, flush=True)
         return
     if not isinstance(event, dict):
         return
@@ -98,10 +106,80 @@ def render(line: str, include_system: bool) -> None:
         status = " [" + "/".join(
             str(value) for value in (route, outcome) if value) + "]"
     marker = "⚠ REVIEW " if likely_failure(event) else ""
+    text = (f"{local_time(event.get('timestamp'))} "
+            f"{client} {speaker}{status}: {compact_text(event.get('text'))}")
+    if color:
+        if marker:
+            marker = f"\033[33m{marker}\033[0m"
+        tint = {"user": "36", "assistant": "32", "error": "31"}.get(kind)
+        if tint:
+            text = f"\033[{tint}m{text}\033[0m"
     print(
-        f"{marker}{local_time(event.get('timestamp'))} "
-        f"{client} {speaker}{status}: {compact_text(event.get('text'))}",
-        flush=True)
+        f"{marker}{text}",
+        file=stream, flush=True)
+
+
+class LiveTranscript:
+    """Follow only one replay, without stealing stdout from its JSON results.
+
+    Capture EOF before the replay starts; keep offsets across log rotation.
+    Stop with a final drain so the last answer appears before grading starts.
+    """
+
+    def __init__(self, run_id: str, log_dir: Path = DEFAULT_LOG_DIR, *, stream=None):
+        self.run_id = run_id
+        self.log_dir = log_dir
+        self.stream = stream if stream is not None else sys.stderr
+        self._stop = threading.Event()
+        self._offsets: dict[Path, int] = {}
+        self._thread = None
+        self.review_count = 0
+
+    def __enter__(self):
+        self._offsets = {p: p.stat().st_size for p in self.log_dir.glob("hallie-conversation-*.jsonl")}
+        print("\033[36mQueries\033[0m · \033[32mHallie responses\033[0m · "
+              "\033[33mReview flags\033[0m", file=self.stream, flush=True)
+        self._thread = threading.Thread(target=self._follow, name="hallie-live-transcript", daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_):
+        self._stop.set()
+        self._thread.join()
+
+    def _follow(self):
+        try:
+            while not self._stop.wait(0.1):
+                self._drain()
+            self._drain()
+        except (OSError, ValueError) as error:
+            self.review_count = None  # An interrupted display is not a measured zero.
+            print(f"Live transcript unavailable: {error}", file=self.stream, flush=True)
+
+    def _drain(self):
+        for path in sorted(self.log_dir.glob("hallie-conversation-*.jsonl")):
+            offset = self._offsets.get(path, 0)
+            size = path.stat().st_size
+            if size == offset:
+                continue
+            with path.open("rb") as source:
+                source.seek(offset if size >= offset else 0)
+                while True:
+                    start = source.tell()
+                    raw = source.readline()
+                    if not raw.endswith(b"\n"):
+                        self._offsets[path] = start
+                        break
+                    self._offsets[path] = source.tell()
+                    try:
+                        line = raw.decode("utf-8")
+                        event = json.loads(line)
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        continue
+                    if isinstance(event, dict) and event.get("runID") == self.run_id:
+                        if str(event.get("kind") or "").lower() != "system" and likely_failure(event):
+                            self.review_count += 1
+                        render(line, False, color=True, stream=self.stream)
 
 
 def existing_tail(path: Path, count: int) -> list[str]:
@@ -116,6 +194,7 @@ def existing_tail(path: Path, count: int) -> list[str]:
 
 def main() -> int:
     args = arguments()
+    color = use_color(args.color)
     if args.poll <= 0:
         print("error: --poll must be positive", file=sys.stderr)
         return 2
@@ -124,7 +203,7 @@ def main() -> int:
         print(f"waiting for Hallie log in {args.log_dir}", flush=True)
     else:
         for line in existing_tail(initial_path, max(0, args.last)):
-            render(line, args.all)
+            render(line, args.all, color=color)
 
     source = None
     current_path: Path | None = None
@@ -147,7 +226,7 @@ def main() -> int:
             assert source is not None
             line = source.readline()
             if line:
-                render(line, args.all)
+                render(line, args.all, color=color)
                 continue
             try:
                 if source.tell() > latest.stat().st_size:
