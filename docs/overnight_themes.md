@@ -124,3 +124,10 @@ agent only ever produces *issues*, never edits the owner's branch. By
 - **Caps are hard:** time cap, scope cap, and the stop-by hour end the night even mid-heuristic — an unfinished branch is left with a note, never merged.
 - **Machines:** the M4 is Rick's; it is available overnight only when Rick says he has stepped away (not by assumption). Long or model-bound runs go to the M5; check the ollama model/version before any Hallie replay.
 - **Morning brief** (owner writes; reviewer appends): CI/nightly status first, 🔴 important issues in bold at the top, then the metric delta, the SHA table, silent windows, and the questions for Rick.
+
+## 2026-09-20 → 21 — Solidify the day; Hallie up to snuff
+- **Owner:** Claude (overnight lead); codex reviews the delete paths and files findings, never edits.
+- **Scope:** (1) land the three open lanes — fix/codex-followup-prune (QA fix: live record identity in the guard), fix/codex-1606-dupjob (tier archive evidence, quit-timeout latch, stranded-recovery discoverability, artifact with the job suites), fix/hallie-event-shape-fallback (event-shaped questions run the catalog search; tree-mode gate switches instead of refusing) — each through in-house QA, then main, then codex; (2) Hallie regression check: nightly_hallie_replay at 00:23 vs the 2026-09-18 baseline (343 clean / 56 defects of 399), findings to docs/hallie_live_failures.md; (3) 02:00 nightly on main.
+- **Metric:** all three lanes merged with green suites and kept xcresults; codex's open findings on the delete job closed or explicitly disputed; Hallie replay clean count ≥ 343 or the regressions named.
+- **Stop rule:** no product edits to Hallie beyond the event-shape fix; no new features; if codex finds a new blocker on the delete path, fix only that and leave the sweep marked "not rock" in the morning brief.
+- **Morning brief leads with:** CI/nightly status; is the duplicate sweep "rock"; Hallie regressed or not, with numbers.
