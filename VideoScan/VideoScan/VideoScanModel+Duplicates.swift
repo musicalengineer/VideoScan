@@ -741,26 +741,73 @@ extension VideoScanModel {
     /// outcome "discarded") and moved to done/ — kept for the log. The
     /// NEXT unfinished plan, if any, is offered right away (codex 1593 #8
     /// — it used to take another launch).
+    ///
+    /// A plan under done/ is never offered again, so Discard must not file
+    /// one that still owes a put-back (codex 1606 #3, QA 2026-09-21 F2/F3):
+    /// 1. with the plan's drive away nothing can be checked — an unsettled
+    ///    row may be a file a crash left in a quarantine folder the plan
+    ///    never named — so Discard is refused and the plan stays offered;
+    /// 2. stranded rows are put back (Put Back's own step);
+    /// 3. every unsettled row gets the SAME recovery Resume runs (its
+    ///    recorded or derived quarantine folder, adopted onto the row, the
+    ///    file restored when it is ours and the path is free);
+    /// 4. only AFTER the remaining rows are skipped is it decided whether
+    ///    the plan may be filed — never while any row still needs recovery.
     func discardPendingDeleteDuplicatesPlan(root: URL = DeleteDuplicatesPlanStore.defaultRoot) {
         guard var plan = pendingDeleteDuplicatesResume else { return }
         pendingDeleteDuplicatesResume = nil
-        // A stranded file is put back first (codex 1606 #3): Discard files
-        // the plan under done/, and a plan under done/ is never offered
-        // again — so it must not carry a file still in quarantine. One
-        // that STILL cannot be put back keeps the plan in place, offered.
+        func keepOffered(_ line: String) {
+            do { try DeleteDuplicatesPlanStore.save(plan, root: root) } catch {
+                log("Delete Duplicates: could not save the plan for \(plan.volumeName) — \(error.localizedDescription)")
+            }
+            log(line)
+            checkForUnfinishedDeleteDuplicatesPlans(root: root)
+        }
+        // 1. The drive must be here to know nothing is hidden on it.
+        if plan.remainingCount > 0,
+           let away = DeleteDuplicatesJob.volumeAwayLine(for: plan, action: "Discard") {
+            log("Delete Duplicates: not discarded — \(away). \(plan.remainingCount) file\(plan.remainingCount == 1 ? "" : "s") may still be in a quarantine folder on it; nothing was changed and the run stays offered.")
+            checkForUnfinishedDeleteDuplicatesPlans(root: root)
+            return
+        }
+        // 2. Stranded rows: the move home only.
+        var unavailable = 0
         if plan.needsRecovery {
-            let result = DeleteDuplicatesJob.putBackStranded(in: &plan, log: { [weak self] in self?.log($0) })
-            if plan.needsRecovery {
-                do { try DeleteDuplicatesPlanStore.save(plan, root: root) } catch {
-                    log("Delete Duplicates: could not save the plan for \(plan.volumeName) — \(error.localizedDescription)")
+            unavailable = DeleteDuplicatesJob.putBackStranded(in: &plan, log: { [weak self] in self?.log($0) }).unavailable
+        }
+        // 3. Unsettled rows: Resume's recovery, before anything is skipped.
+        let unsettled = plan.entries.filter { !$0.status.isSettled }
+        if !unsettled.isEmpty {
+            let facts = DeleteDuplicatesJob.gatherResumeDiskFacts(planID: plan.id, entries: unsettled)
+            for i in plan.entries.indices where !plan.entries[i].status.isSettled {
+                let name = plan.entries[i].filename
+                switch DeleteDuplicatesJob.recoverFromQuarantine(&plan.entries[i], facts: facts) {
+                case .notInQuarantine:
+                    break
+                case .restored(let folder, let directoryRemoved):
+                    log("  Restored \(name) from \(folder) (a crash left it in quarantine) — put back before discarding"
+                        + (directoryRemoved ? "" : "; the quarantine folder was not empty and was left in place"))
+                    plan.log.append("Restored \(name) from quarantine at discard")
+                case .stillQuarantined(let url, let error):
+                    // The row now names the folder: once skipped below it
+                    // is `needsRecovery` and the plan is not filed.
+                    plan.entries[i].note = "left in quarantine at \(url.path) — not put back: \(error.description)"
+                    log("  \(name) is still in quarantine at \(url.path) — not put back: \(error.description)")
                 }
-                log("Delete Duplicates: not discarded — \(result.stillStranded) file\(result.stillStranded == 1 ? " is" : "s are") still in quarantine on \(plan.volumeName) and must be put back first"
-                    + (result.unavailable > 0 ? " — \(DeletionTierText.notConnected(plan.volumeName, path: plan.volumePath))." : " (see the console for why)."))
-                checkForUnfinishedDeleteDuplicatesPlans(root: root)
-                return
             }
         }
+        // 4. Skip the rest, THEN decide.
         let skipped = plan.skipRemaining(reason: "discarded by you at the next launch")
+        if plan.needsRecovery {
+            let owed = plan.strandedCount
+            // Rick's Discard stands for the rows never reached; only the
+            // put-back is still owed (Put Back files it, as "discarded").
+            plan.outcome = plan.outcome ?? "discarded"
+            plan.log.append("Discard refused: \(owed) row(s) still in quarantine; \(skipped) row(s) never reached")
+            keepOffered("Delete Duplicates: not discarded — \(owed) file\(owed == 1 ? " is" : "s are") still in quarantine on \(plan.volumeName) and must be put back first"
+                        + (unavailable > 0 ? " — \(DeletionTierText.notConnected(plan.volumeName, path: plan.volumePath))." : " (see the console for why)."))
+            return
+        }
         plan.finishedAt = plan.finishedAt ?? Date()
         plan.outcome = plan.outcome ?? "discarded"
         plan.log.append("Discarded at launch: \(skipped) row(s) never reached")
