@@ -90,8 +90,15 @@ extension HallieTurnExecutor {
                     return children(hit, context: context)
                 }
             }
+            // A bare kin word as the whole subject ("how old was dad when
+            // he passed", subject "dad") is the speaker's relative — the
+            // same binding "my dad" gets — unless a profile answers to it
+            // by name (2026-09-21). Never a tree-wide name scan.
+            let bareKin: (phrase: String, relation: GedcomFamilyGraph.Relation)? =
+                (!subjectIsKnown && SpeakerKinship.isKinWord(key))
+                    ? SpeakerKinship.kinshipPhrase(in: "my \(key)") : nil
             if let (phrase, _) = SpeakerKinship.kinshipPhrase(in: subject)
-                ?? SpeakerKinship.kinshipPhrase(in: question) {
+                ?? SpeakerKinship.kinshipPhrase(in: question) ?? bareKin {
                 let kinWord = phrase.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
                 let subjectIsThePhrase = key == phrase || key == kinWord
                     || HallieTurnExecutor.isSpeakerPronoun(key)

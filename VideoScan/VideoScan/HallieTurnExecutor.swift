@@ -1153,99 +1153,42 @@ enum HallieTurnExecutor {
                 merged, route: .cross, request: request,
                 context: context, dependencies: dependencies)
 
-        case .temporal(let payload):
-            guard let profiles = context.profiles else {
-                return unavailableProfilesResult(route: .temporal)
-            }
+        case .temporal(let rawPayload):
+            // A year the question never said is not a reference (live
+            // 2026-09-21: "how old was dad breen when he passed?" arrived
+            // as explicitYear(1994)). Dropped before anything counts.
+            // Only a translator-fresh turn can carry an invented year: a
+            // refined follow-up ("what about Rick?" after "how old was Donna
+            // in 1994") inherits its year from the previous turn on purpose.
             let question = request.intent.originalQuestion
-            let ask = ArchivistTemporalExecutor.detectAsk(in: question)
-            // "the boys" / "my dad" → People profiles through the People-tab
-            // relationships (+TemporalSubjects). Fresh turns only: a
-            // which-one chip already carries the chosen profile id.
-            if request.selectedIdentity == nil {
-                switch TemporalSubjects.resolve(
-                    question: question, subject: payload.subject, context: context) {
-                case .declined(let prose, let basis):
-                    return Result(
-                        route: .temporal, outcome: .declined,
-                        prose: prose, basisLine: basis,
-                        queryDescription: "shape=temporal operation=age subject=\(payload.subject)",
-                        citations: [], catalogPersonName: nil)
-                case .resolved(let group):
-                    return groupTemporalResult(
-                        group, payload: payload, ask: ask, question: question, context: context)
-                case .notApplicable:
-                    break
-                }
+            let isRefinement = request.intent.refinementChain != nil
+                || request.intent.refinementNote != nil
+                || request.intent.refinementChange != nil
+            // With no question text at all (the AST-only entry point, the
+            // shell's fixture translator) there is nothing to judge against:
+            // the year stands.
+            let hasQuestionText = !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            var payload = rawPayload
+            var inventedYear: Int?
+            if !isRefinement, hasQuestionText, case .explicitYear(let year) = rawPayload.reference,
+               !ArchivistTemporalExecutor.questionSuppliesYear(year, in: question) {
+                payload.reference = .currentSelection
+                inventedYear = year
             }
-            let resolution = temporalResolution(
-                payload.subject, profiles: profiles,
-                selectedIdentity: request.selectedIdentity, graph: context.graph)
-            // A born-yet / would-have-been ask, or a person who had passed
-            // on before the record was made, is phrased by the group
-            // composer even for one person ("Dad would have been 58 in
-            // 1994 — he passed on in 1977"); a plain age keeps its wording.
-            if case .resolved(_, let subject) = resolution,
-               ask != .age || passedOnBeforeReference(subject, payload.reference, context: context) {
-                return groupTemporalResult(
-                    TemporalSubjects.Resolved(
-                        phrase: subject.canonicalName, subjects: [subject], note: ""),
-                    payload: payload, ask: ask, question: question, context: context)
+            var result = try await executeTemporalCase(
+                payload, request: request, context: context, dependencies: dependencies)
+            if let inventedYear {
+                result = result.prefixingBasis(
+                    "the translator supplied year \(inventedYear), which the question never mentions, so it was ignored")
             }
-            if case .ambiguous(_, let candidates) = resolution {
-                let choices = profileCandidates(candidates)
-                let clarification = Clarification(
-                    intent: request.intent,
-                    stage: .profileIdentity,
-                    candidates: choices,
-                    continuationToken: context.continuationToken)
-                return Result(
-                    route: .temporal,
-                    outcome: .needsClarification,
-                    prose: "Which \(payload.subject) do you mean?",
-                    basisLine: "Basis: subject resolution matched multiple People profiles.",
-                    queryDescription:
-                        "shape=temporal operation=age subject=\(payload.subject)",
-                    citations: [],
-                    catalogPersonName: nil,
-                    clarification: clarification)
+            // The mode gate KEEPS a tree-mode session on an age question
+            // (HallieModeGate.reconcileTree); say so on the answer, or
+            // conversation memory derives catalog from the route and the
+            // transcript records a mode the gate never chose (2026-09-21).
+            if context.mode == .tree, result.mode == nil {
+                result = result.inMode(.tree)
             }
-            // "how old is Donna" with NOTHING selected (eval ft022,
-            // 2026-09-01): present tense means today, from the profile
-            // birthdate (or "about N" from a tree birth year) — or the age
-            // at death for someone who has passed on. Past tense and "in
-            // this video" keep asking for a dated video or a year.
-            let result: ArchivistTemporalResult
-            if payload.reference == .currentSelection,
-               context.selectedTemporalDate == nil,
-               ArchivistTemporalExecutor.isPresentTenseAge(request.intent.originalQuestion) {
-                let approximate = birthYear(of: payload.subject, context: context).map {
-                    ArchivistTemporalExecutor.ApproximateBirthYear(year: $0.year, source: $0.source)
-                }
-                result = ArchivistTemporalExecutor.executePresentAge(
-                    payload, subject: resolution, approximateBirthYear: approximate)
-            } else {
-                result = dependencies.executeTemporal(
-                    payload, resolution, context.selectedTemporalDate)
-            }
-            // An answered age still carries "videos of that person" for
-            // "and the most recent one?" (conversation memory).
-            var refinable: RefinableQuery?
-            if result.value != nil, case .resolved(_, let subject) = resolution {
-                refinable = .list(
-                    .presence(.init(people: [subject.canonicalName], mediaKind: .video)),
-                    anyOfPeople: false)
-            }
-            return Result(
-                route: .temporal,
-                outcome: result.value == nil ? .declined : .answered,
-                prose: result.prose,
-                basisLine: result.basisLine,
-                queryDescription:
-                    "shape=temporal operation=age subject=\(payload.subject)",
-                citations: [],
-                catalogPersonName: nil,
-                refinableQuery: refinable)
+            return result
 
         case .aggregate(let payload):
             guard request.selectedIdentity == nil else {
@@ -1356,6 +1299,108 @@ enum HallieTurnExecutor {
         }
     }
 
+
+    /// The temporal (age) route proper, after the invented-year guard.
+    private static func executeTemporalCase(
+        _ payload: ArchivistQueryAST.Temporal,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies
+    ) async throws -> Result {
+        guard let profiles = context.profiles else {
+            return unavailableProfilesResult(route: .temporal)
+        }
+        let question = request.intent.originalQuestion
+        let ask = ArchivistTemporalExecutor.detectAsk(in: question)
+        // "the boys" / "my dad" → People profiles through the People-tab
+        // relationships (+TemporalSubjects). Fresh turns only: a
+        // which-one chip already carries the chosen profile id.
+        if request.selectedIdentity == nil {
+            switch TemporalSubjects.resolve(
+                question: question, subject: payload.subject, context: context) {
+            case .declined(let prose, let basis):
+                return Result(
+                    route: .temporal, outcome: .declined,
+                    prose: prose, basisLine: basis,
+                    queryDescription: "shape=temporal operation=age subject=\(payload.subject)",
+                    citations: [], catalogPersonName: nil)
+            case .resolved(let group):
+                return groupTemporalResult(
+                    group, payload: payload, ask: ask, question: question, context: context)
+            case .notApplicable:
+                break
+            }
+        }
+        let resolution = temporalResolution(
+            payload.subject, profiles: profiles,
+            selectedIdentity: request.selectedIdentity, graph: context.graph)
+        // A born-yet / would-have-been ask, or a person who had passed
+        // on before the record was made, is phrased by the group
+        // composer even for one person ("Dad would have been 58 in
+        // 1994 — he passed on in 1977"); a plain age keeps its wording.
+        if case .resolved(_, let subject) = resolution,
+           ask != .age || passedOnBeforeReference(subject, payload.reference, context: context) {
+            return groupTemporalResult(
+                TemporalSubjects.Resolved(
+                    phrase: subject.canonicalName, subjects: [subject], note: ""),
+                payload: payload, ask: ask, question: question, context: context)
+        }
+        if case .ambiguous(_, let candidates) = resolution {
+            let choices = profileCandidates(candidates)
+            let clarification = Clarification(
+                intent: request.intent,
+                stage: .profileIdentity,
+                candidates: choices,
+                continuationToken: context.continuationToken)
+            return Result(
+                route: .temporal,
+                outcome: .needsClarification,
+                prose: "Which \(payload.subject) do you mean?",
+                basisLine: "Basis: subject resolution matched multiple People profiles.",
+                queryDescription:
+                    "shape=temporal operation=age subject=\(payload.subject)",
+                citations: [],
+                catalogPersonName: nil,
+                clarification: clarification)
+        }
+        // "how old is Donna" with NOTHING selected (eval ft022,
+        // 2026-09-01): present tense means today, from the profile
+        // birthdate (or "about N" from a tree birth year) — or the age
+        // at death for someone who has passed on. Past tense and "in
+        // this video" keep asking for a dated video or a year.
+        let result: ArchivistTemporalResult
+        if payload.reference == .currentSelection,
+           context.selectedTemporalDate == nil,
+           ArchivistTemporalExecutor.isPresentTenseAge(request.intent.originalQuestion) {
+            let approximate = birthYear(of: payload.subject, context: context).map {
+                ArchivistTemporalExecutor.ApproximateBirthYear(year: $0.year, source: $0.source)
+            }
+            result = ArchivistTemporalExecutor.executePresentAge(
+                payload, subject: resolution, approximateBirthYear: approximate)
+        } else {
+            result = dependencies.executeTemporal(
+                payload, resolution, context.selectedTemporalDate)
+        }
+        // An answered age still carries "videos of that person" for
+        // "and the most recent one?" (conversation memory).
+        var refinable: RefinableQuery?
+        if result.value != nil, case .resolved(_, let subject) = resolution {
+            refinable = .list(
+                .presence(.init(people: [subject.canonicalName], mediaKind: .video)),
+                anyOfPeople: false)
+        }
+        return Result(
+            route: .temporal,
+            outcome: result.value == nil ? .declined : .answered,
+            prose: result.prose,
+            basisLine: result.basisLine,
+            queryDescription:
+                "shape=temporal operation=age subject=\(payload.subject)",
+            citations: [],
+            catalogPersonName: nil,
+            refinableQuery: refinable)
+    }
+
     /// True when the subject's recorded death is before the reference the
     /// question points at (a selected record's date or an explicit year).
     private static func passedOnBeforeReference(
@@ -1392,14 +1437,21 @@ enum HallieTurnExecutor {
         let description = "shape=temporal operation=age subject=\(payload.subject)"
             + " resolved=\(names.joined(separator: ","))"
         let reference: ArchivistTemporalExecutor.GroupReference
-        switch payload.reference {
+        switch ask == .ageAtDeath ? .currentSelection : payload.reference {
         case .explicitYear(let year):
             reference = .explicitYear(year)
         case .currentSelection:
-            if let selection = context.selectedTemporalDate {
+            if ask == .ageAtDeath {
+                // "how old was Dad when he passed": each person's own
+                // death date; a selection or year is beside the point.
+                reference = .death
+            } else if let selection = context.selectedTemporalDate {
                 reference = .selection(selection)
-            } else if ask != .bornYet, ArchivistTemporalExecutor.isPresentTenseAge(question) {
-                // "how old are the boys now" with nothing selected: today.
+            } else if ask != .bornYet,
+                      ArchivistTemporalExecutor.isPresentTenseAge(question)
+                        || (ask == .wouldHaveBeen && ArchivistTemporalExecutor.asksAboutToday(question)) {
+                // "how old are the boys now" / "how old would Dad be
+                // today" with nothing selected: today.
                 reference = .today(Date())
             } else {
                 let example = names.count == 1

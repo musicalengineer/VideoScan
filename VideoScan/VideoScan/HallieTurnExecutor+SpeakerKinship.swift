@@ -86,6 +86,11 @@ extension HallieTurnExecutor {
         ]
 
         /// The kinship phrase in the question, if any: ("my dad", .father).
+        /// "dad", "ma", "father" … — a bare kin word (no "my").
+        static func isKinWord(_ word: String) -> Bool {
+            kinWords[word.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)] != nil
+        }
+
         static func kinshipPhrase(in question: String) -> (phrase: String, relation: GedcomFamilyGraph.Relation)? {
             let lowered = question.lowercased().replacingOccurrences(of: "’", with: "'")
             let pattern = #"\b(my|our)\s+(dad|daddy|father|pop|papa|mom|mommy|mother|mum|mama|ma|brother|sister|husband|wife|son|daughter)\b"#
