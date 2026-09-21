@@ -33,7 +33,14 @@
 //     NOT in the family by content — "Hash to confirm" (per row, or all)
 //     computes the segmented hash off-main and re-plans; a match joins the
 //     family as a normal row, a mismatch reads "different footage";
-//   * "Select all deletable" / "Select none" per family and for the batch.
+//   * "Select all deletable" / "Select none" per family and for the batch;
+//   * a MISSING FILE (2026-09-21 — Rick: "'M4drive' was said 'not
+//     connected' in some cases which is weird"; the boot volume is M4drive
+//     and the file had been moved or deleted outside the app) is listed,
+//     disabled, "not on M4drive any more (moved or deleted?)", with an
+//     inline "Remove from catalog" (and "Remove N missing rows" on the
+//     family header when there are several) — the existing purge
+//     tombstone, nothing on disk — after which the plan reloads.
 // The attestation "n/a for these" satisfies the bar's cloud-or-off-site
 // want for this batch (the ledger still records n/a). The sheet is
 // 960×720 and resizable. The plan is logged, one line per family, when
@@ -247,7 +254,8 @@ struct ArchivedWhatNextSheet: View {
                                   },
                                   onCheck: { id, on in setChecked([id], on) },
                                   onSelect: { ids, on in setChecked(ids, on) },
-                                  onHash: { ids in runHash(ids) })
+                                  onHash: { ids in runHash(ids) },
+                                  onRemoveMissing: { ids in removeMissing(ids) })
         } else {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -305,6 +313,21 @@ struct ArchivedWhatNextSheet: View {
         Task {
             _ = await model.hashToConfirm(recordIDs: fresh)
             hashing.subtract(fresh)
+            logPlan = true
+            planRevision &+= 1
+        }
+    }
+
+    /// "Remove from catalog" on a missing-file row (or "Remove N missing
+    /// rows" on a family): tombstone the records — the file is not there,
+    /// nothing on disk is touched — then re-plan and log the new plan.
+    private func removeMissing(_ ids: [UUID]) {
+        guard let plan else { return }
+        let allowed = Set(plan.missingIDs)
+        let targets = ids.filter { allowed.contains($0) }
+        guard !targets.isEmpty else { return }
+        Task {
+            _ = await model.removeMissingCopiesFromCatalog(recordIDs: targets)
             logPlan = true
             planRevision &+= 1
         }
@@ -472,6 +495,9 @@ struct PruneChecklist: Equatable {
         /// "Hash all": the unhashed related rows + the family members
         /// with no hash (so the keys can compare).
         let hashAllIDs: [UUID]
+        /// Rows whose file is gone from a connected volume — what "Remove
+        /// N missing rows" tombstones.
+        let missingIDs: [UUID]
     }
 
     struct Item: Identifiable, Equatable {
@@ -504,7 +530,8 @@ struct PruneChecklist: Equatable {
                             archiveCount: family.archive.count, archiveVerified: family.archiveVerified,
                             versionArchiveCount: family.versionArchive.count,
                             checkableIDs: family.checkableIDs, checkableBytes: family.checkableBytes,
-                            hashAllIDs: unhashedRelated.isEmpty ? [] : unhashedRelated + family.unhashedMemberIDs)
+                            hashAllIDs: unhashedRelated.isEmpty ? [] : unhashedRelated + family.unhashedMemberIDs,
+                            missingIDs: family.missingIDs)
     }
 
     static func build(_ plan: PrunePlan, maxRows: Int = maxRows) -> PruneChecklist {
@@ -560,6 +587,8 @@ struct PruneChecklistSection: View {
     let onSelect: ([UUID], Bool) -> Void
     /// Hash to confirm these records, then re-plan.
     let onHash: ([UUID]) -> Void
+    /// Remove these missing-file rows from the catalog, then re-plan.
+    let onRemoveMissing: ([UUID]) -> Void
 
     var body: some View {
         GroupBox(title) {
@@ -696,6 +725,13 @@ struct PruneChecklistSection: View {
                         .disabled(h.hashAllIDs.contains { hashing.contains($0) })
                         .accessibilityIdentifier("whatNext.family.\(h.key).hashAll")
                 }
+                if h.missingIDs.count > 1 {
+                    Button("Remove \(h.missingIDs.count) missing rows") { onRemoveMissing(h.missingIDs) }
+                        .font(.system(size: 10))
+                        .controlSize(.small)
+                        .help("These files are not on their drive any more. Removes the catalog rows only — nothing on disk is touched.")
+                        .accessibilityIdentifier("whatNext.family.\(h.key).removeMissing")
+                }
             }
             if let advice = h.advice {
                 Text(advice)
@@ -739,13 +775,30 @@ struct PruneChecklistSection: View {
                 .frame(width: 70, alignment: .trailing)
             chip(row.kind.chip, tint: row.kind.isVersion ? .purple : (row.kind == .original ? .blue : .gray))
                 .frame(width: 96, alignment: .leading)
-            Text(row.reasonText ?? "")
-                .font(.system(size: 10))
-                .foregroundColor(row.checkable ? .secondary : .orange)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            if row.isMissingFile {
+                HStack(spacing: 6) {
+                    Text(row.reasonText ?? "")
+                        .font(.system(size: 10))
+                        .foregroundColor(.orange)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(row.reasonText ?? "")
+                    Button("Remove from catalog") { onRemoveMissing([row.id]) }
+                        .font(.system(size: 10))
+                        .controlSize(.small)
+                        .help("The file is not on its drive any more. Removes this catalog row only — nothing on disk is touched.")
+                        .accessibilityIdentifier("whatNext.copy.\(row.id.uuidString).removeMissing")
+                }
                 .frame(width: 250, alignment: .leading)
-                .help(row.reasonText ?? "")
+            } else {
+                Text(row.reasonText ?? "")
+                    .font(.system(size: 10))
+                    .foregroundColor(row.checkable ? .secondary : .orange)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(width: 250, alignment: .leading)
+                    .help(row.reasonText ?? "")
+            }
         }
         .padding(.leading, 12)
     }

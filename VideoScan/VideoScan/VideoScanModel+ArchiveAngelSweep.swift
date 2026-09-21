@@ -34,6 +34,11 @@ extension VideoScanModel {
         guard !TestEnvironment.isTestHost else { return }
         Task { [weak self] in
             guard let self else { return }
+            // Buffer companions whose batch folder is already gone (batches
+            // cleared before the companion-retirement fix) are retired
+            // once per launch — stats off-main, the catalog on main
+            // (2026-09-21; VideoScanModel+ArchiveAngelCompanions).
+            await self.reconcileArchiveAngelBufferAtLaunch()
             // Attention memory first (the scorer reads it), then the grades.
             await self.archiveAngelAttention.load(from: self.mediaLedger)
             let loaded = await self.archiveAngelStore.load()

@@ -333,6 +333,51 @@ enum VolumeReachability {
             missDefault: defaultReachability(forKey: key, mountedRoots: mounted))
     }
 
+    // MARK: - Volume-only reachability (2026-09-21)
+    //
+    // Rick (2026-09-21): "'M4drive' was said 'not connected' in some cases
+    // which is weird." The boot volume is named M4drive. `isReachable(path:)`
+    // answers "does this FILE exist" for internal paths (there is no
+    // /Volumes/X root to ask about), so a catalog row whose file was moved
+    // or deleted outside the app read as "drive not connected". Those are
+    // two facts: the VOLUME is reachable (it is the boot disk); the FILE is
+    // gone. `isVolumeReachable(path:)` answers only the first. Callers that
+    // need the second stat the file themselves, off the main thread.
+
+    /// The mount root a path lives on: "/Volumes/X" for external paths;
+    /// for everything else the LONGEST mounted root that is a whole-
+    /// component prefix of the path ("/" at minimum — always mounted).
+    /// Pure — unit-tested directly.
+    static func volumeRootKey(forPath path: String, mountedRoots: Set<String>) -> String {
+        let comps = (path as NSString).pathComponents
+        if comps.count >= 3, comps[1] == "Volumes" {
+            return "/Volumes/\(comps[2])"
+        }
+        var best = "/"
+        for root in mountedRoots where root != "/" && root.count > best.count {
+            if path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/") {
+                best = root
+            }
+        }
+        return best
+    }
+
+    /// True if the VOLUME holding `path` is mounted right now — never
+    /// "does this file exist". /Volumes paths use the same per-volume
+    /// cache as `isReachable`; internal paths are answered from the kernel
+    /// mount table by their mount root (no disk I/O, and a missing file
+    /// can never make the boot disk read as disconnected).
+    static func isVolumeReachable(path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        let mounted = mountedRootsLock.withLockUnchecked { mountedRoots }
+        let key = volumeRootKey(forPath: path, mountedRoots: mounted)
+        if key.hasPrefix("/Volumes/") {
+            return reachabilityCache.value(forKey: key,
+                                           missDefault: defaultReachability(forKey: key, mountedRoots: mounted))
+        }
+        return mounted.contains(key)
+    }
+
     /// Cache key (and, for /Volumes paths, the stat target) for `isReachable`.
     /// For paths under /Volumes, this is the volume root "/Volumes/<name>".
     /// For internal paths, falls back to the full path.

@@ -94,7 +94,10 @@ struct PrunePlanScaleTests {
         // bar; the offline MyBook and X10 copies already count as devices
         // → keeper not required; keep-one keeps the source; the plain
         // machine-noted copy is the default check.
-        let plan = await model.prunePlan(for: [source.id], options: .init()) { $0.volumeName != "MyBook" }
+        // Synthetic /Volumes paths: the volume answer is injected and so is
+        // the file answer (2026-09-21 — the plan stats working copies).
+        let plan = await model.prunePlan(for: [source.id], options: .init(),
+                                         isOnline: { $0.volumeName != "MyBook" }, fileExists: { _ in true })
         #expect(plan.families.count == 1)
         let f = try #require(plan.families.first)
         #expect(f.covered && f.level == .important)
@@ -119,10 +122,12 @@ struct PrunePlanScaleTests {
         #expect(rows["tape.mov"]?.kind == .original && rows["tape_probe.mov"]?.kind == .duplicate)
         #expect(rows["tape_note.mov"]?.checkable == true && rows["tape_note.mov"]?.hasNote == true)
         // keep-one off → the source goes too (the bar is still met by MyBook + X10).
-        let off = await model.prunePlan(for: [source.id], options: .init(keepOne: false)) { $0.volumeName != "MyBook" }
+        let off = await model.prunePlan(for: [source.id], options: .init(keepOne: false),
+                                        isOnline: { $0.volumeName != "MyBook" }, fileExists: { _ in true })
         #expect(off.trashCount == 2 && Set(off.trashFiles.map(\.id)) == [source.id, machineNoted.id])
         // The protection line from the same snapshots.
-        let protection = await model.batchProtection(for: [source.id]) { $0.volumeName != "MyBook" }
+        let protection = await model.batchProtection(for: [source.id], isOnline: { $0.volumeName != "MyBook" },
+                                                     fileExists: { _ in true })
         #expect(protection.archive == .verified)
         #expect(protection.workingCopyCount == 7, "source + offline + pair + balanced + cleaned + noted + machine-noted (the stray is an archive copy by root)")
         #expect(protection.displayLine.contains("MyBook offline"))
@@ -166,7 +171,7 @@ struct PrunePlanScaleTests {
         let clock = ContinuousClock()
         var protection = ProtectionSummary.empty
         let protElapsed = await clock.measure {
-            protection = await model.batchProtection(for: batch, isOnline: online)
+            protection = await model.batchProtection(for: batch, isOnline: online, fileExists: { _ in true })
         }
         #expect(protection.familyCount == 5_000)
         #expect(protection.workingCopyCount == 95_000)
@@ -176,7 +181,7 @@ struct PrunePlanScaleTests {
 
         var plan = PrunePlan.empty
         let planElapsed = await clock.measure {
-            plan = await model.prunePlan(for: batch, options: .init(), isOnline: online)
+            plan = await model.prunePlan(for: batch, options: .init(), isOnline: online, fileExists: { _ in true })
         }
         #expect(plan.families.count == 5_000)
         #expect(plan.notCoveredCount == 5_000 - 1_667, "only every third family attested a cloud copy")
