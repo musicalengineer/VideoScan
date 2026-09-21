@@ -40,9 +40,13 @@
 // RECORDS that folder, the file's stamp there and the tier, and is saved
 // — so a crash between the move and the unlink leaves a plan that names
 // exactly where the file is (codex 1593 blocker 2). Phase 2 (detached):
-// re-stat, unlink or move to the Trash. Then the catalog settles
-// (carry-over, row removal, ledger, log), the row is updated and the plan
-// saved again.
+// re-stat EVERY copy the tier was counted on (codex 1611 — the save is
+// an await, and a counted sibling can be rewritten or pulled under it),
+// re-decide the tier from what still holds — permanent → Trash, or put
+// back when fewer than two remain, the row naming the copy that changed
+// — then re-stat the file and the keeper, unlink or move to the Trash.
+// Then the catalog settles (carry-over, row removal, ledger, log), the
+// row is updated and the plan saved again.
 //
 // PARALLELISM: pairs whose duplicate lives on an SSD may run two at a
 // time; on anything else (HDD, RAID, network, unknown) one at a time —
@@ -129,6 +133,19 @@ struct DeleteDuplicatesPhaseOne: Sendable {
     let learnedKeeperFixity: ContentFixity?
 }
 
+/// Phase 2's result: the outcome, the decision the file ACTUALLY went by
+/// and the facts behind it. When the removal boundary's re-check dropped
+/// a counted copy (codex 1611), `evidenceChanged` is true, `decision` is
+/// the re-decided tier (reason naming the copy) and `facts` is what still
+/// held — the row and the ledger take these over the ones saved with the
+/// ticket. Otherwise they are the phase-one values, untouched.
+struct DeleteDuplicatesPhaseTwo: Sendable {
+    let outcome: DeleteDuplicatesDiskOutcome
+    let decision: DeletionTierDecision
+    let facts: DeletionTierFacts
+    let evidenceChanged: Bool
+}
+
 /// A locked slot for the fixity the gate reports from the disk thread.
 private final class FixityBox: @unchecked Sendable {
     private let lock = NSLock()
@@ -208,14 +225,58 @@ enum DeleteDuplicatesDiskWorker {
         }
     }
 
-    /// Phase 2: re-check every identity (re-read only when the ticket's
-    /// read was not already in quarantine), then unlink or move to the
-    /// Trash.
-    static func deleteQuarantined(_ ticket: QuarantineTicket, disposal: SignatureVerification.Disposal,
+    /// Phase 2: FIRST re-stat every copy the tier was counted on and
+    /// re-decide it from what still holds (codex 1611) — in the same
+    /// synchronous stretch as the removal, no await between — then
+    /// re-check the file's and the keeper's identity (re-read only when
+    /// the ticket's read was not already in quarantine) and unlink or
+    /// move to the Trash. When the evidence no longer reaches two, the
+    /// file is put back untouched and the outcome says which copy
+    /// changed. `decided` is the tier recorded before the save; it is
+    /// what the file goes by when every stamp reproduces. Stat only —
+    /// the keeper is never read here.
+    static func deleteQuarantined(_ ticket: QuarantineTicket, decided: DeletionTierDecision,
+                                  facts: DeletionTierFacts, preferTrash: Bool,
                                   keeperFilename: String,
-                                  hooks: SignatureVerification.Hooks) -> DeleteDuplicatesDiskOutcome {
-        map(SignatureVerification.deleteQuarantined(ticket, disposal: disposal, hooks: hooks),
-            proof: ticket.proof, keeper: keeperFilename)
+                                  hooks: SignatureVerification.Hooks) -> DeleteDuplicatesPhaseTwo {
+        guard let decidedTier = decided.tier else {
+            // Never reached — the caller releases a nil tier itself — but
+            // a nil tier must never default to an unlink.
+            return DeleteDuplicatesPhaseTwo(
+                outcome: release(ticket, reason: decided.reason, keeperFilename: keeperFilename, leftAlone: facts),
+                decision: decided, facts: facts, evidenceChanged: false)
+        }
+        let now = facts.recheck()
+        guard !now.droppedAtBoundary.isEmpty else {
+            // Every counted copy still reproduces its stamp: the recorded
+            // tier stands.
+            let disposal: SignatureVerification.Disposal = decidedTier == .trash ? .trash : .permanent
+            return DeleteDuplicatesPhaseTwo(
+                outcome: map(SignatureVerification.deleteQuarantined(ticket, disposal: disposal, hooks: hooks),
+                             proof: ticket.proof, keeper: keeperFilename),
+                decision: decided, facts: facts, evidenceChanged: false)
+        }
+        let redecided = DeletionTierDecision.decide(facts: now, preferTrash: preferTrash)
+        guard let tier = redecided.tier else {
+            // Below two: back to its original path, untouched. Not a
+            // refusal of the PAIR — the duplicate is still identical to
+            // the keeper — so the row is left alone and keeps its
+            // disposition; the reason names the copy that changed.
+            let reason = "evidence changed before removal: " + redecided.reason
+            let final = DeletionTierDecision(tier: nil, remainingVerifiedCopies: redecided.remainingVerifiedCopies,
+                                             reason: reason)
+            return DeleteDuplicatesPhaseTwo(
+                outcome: release(ticket, reason: reason, keeperFilename: keeperFilename, leftAlone: now),
+                decision: final, facts: now, evidenceChanged: true)
+        }
+        let prefix = tier == decided.tier ? "re-checked before removal — " : "downgraded before removal — "
+        let final = DeletionTierDecision(tier: tier, remainingVerifiedCopies: redecided.remainingVerifiedCopies,
+                                         reason: prefix + redecided.reason)
+        let disposal: SignatureVerification.Disposal = tier == .trash ? .trash : .permanent
+        return DeleteDuplicatesPhaseTwo(
+            outcome: map(SignatureVerification.deleteQuarantined(ticket, disposal: disposal, hooks: hooks),
+                         proof: ticket.proof, keeper: keeperFilename),
+            decision: final, facts: now, evidenceChanged: true)
     }
 
     /// Put a quarantined file back without deleting it (the plan could not
@@ -835,7 +896,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // removed (#2).
             mutatePlan {
                 $0.setQuarantined(entry.id, directory: ticket.quarantineDirectory, stamp: ticket.baseline)
-                $0.setTier(entry.id, decided, trashVolume: trashVolume, hasVerifiedArchive: facts.hasVerifiedArchive)
+                $0.setTier(entry.id, decided, trashVolume: trashVolume, hasVerifiedArchive: facts.hasVerifiedArchive,
+                           evidence: facts.countedCopies)
             }
             await savePlan(context: "quarantined \(entry.filename)")
             testHookAfterQuarantineSaved?(entry)
@@ -858,11 +920,36 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                                                        keeperFilename: keeperName)
                 }
             } else if let tier = decided.tier {
-                // Phase 2: re-check, unlink or move to the Trash.
-                let disposal: SignatureVerification.Disposal = tier == .trash ? .trash : .permanent
-                outcome = await runDetached(entryID: entry.id) { [hooks] in
-                    DeleteDuplicatesDiskWorker.deleteQuarantined(ticket, disposal: disposal,
+                // Phase 2: re-stat the counted copies and re-decide (codex
+                // 1611), re-check the file and the keeper, unlink or move
+                // to the Trash.
+                let preferTrash = model.duplicateKeeperSettings.preferTrashForEveryDuplicate
+                let phaseTwo = await runDetached(entryID: entry.id) { [hooks] in
+                    DeleteDuplicatesDiskWorker.deleteQuarantined(ticket, decided: decided, facts: facts,
+                                                                 preferTrash: preferTrash,
                                                                  keeperFilename: keeperName, hooks: hooks)
+                }
+                outcome = phaseTwo.outcome
+                if phaseTwo.evidenceChanged {
+                    // The count the file goes by is the boundary's, not the
+                    // save's: the row, the log and (through `decision`) the
+                    // ledger line say so, naming the copy that changed.
+                    decision = phaseTwo.decision
+                    mutatePlan {
+                        $0.setTier(entry.id, phaseTwo.decision, trashVolume: trashVolume,
+                                   hasVerifiedArchive: phaseTwo.facts.hasVerifiedArchive,
+                                   evidence: phaseTwo.facts.countedCopies)
+                    }
+                    let went: String
+                    if case .retained = outcome {
+                        went = "put-back failed, retained in quarantine"
+                    } else {
+                        went = phaseTwo.decision.tier.map(\.label) ?? "put back"
+                    }
+                    let line = "\(entry.filename) re-checked before removal: \(tier.label) → \(went) — "
+                        + phaseTwo.facts.droppedAtBoundary.joined(separator: "; ")
+                    model.log("  " + line)
+                    deleteDupLog.notice("\(line, privacy: .public)")
                 }
             } else {
                 // Too few verified copies would remain: put it back, untouched.
@@ -1018,7 +1105,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             isWorkingCopy: entry.isWorkingCopy, batchID: batchID,
             keeperMatchedByStoredFixity: !proof.keeperReadInFull,
             tier: tier, remainingVerifiedCopies: decision?.remainingVerifiedCopies,
-            trashVolume: trashVolume)
+            trashVolume: trashVolume, tierReason: decision?.reason)
         tally.catalogMutated = tally.catalogMutated || mutated
     }
 

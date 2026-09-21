@@ -34,6 +34,18 @@
 // row; the ledger line carries them too. Old plans decode with
 // `tier == nil` and are decided afresh.
 //
+// THE REMOVAL BOUNDARY (codex 1611): the tier is decided, then the
+// ticket save is awaited — and the copies it rests on can change in that
+// window (a sibling rewritten in place, an archive copy pulled). So the
+// EVIDENCE of every counted copy (record id, path, the full stamp it
+// reproduced — ctime included — and the digest it was counted under)
+// rides on the row, and phase two re-stats each one immediately before
+// the unlink / Trash move (`DeletionTierFacts.recheck`, stat only — the
+// keeper is never read). A copy whose stamp no longer reproduces, or is
+// gone, is dropped and the tier re-decided from what still holds:
+// permanent → Trash when the count falls to two; put back untouched when
+// it falls below two, the row naming the copy that changed.
+//
 // Same shape as ArchiveAngelPlan (plan.json + store + ordered writer), not
 // the same files: a deletion plan has no buffer, no companions, no review.
 //
@@ -81,12 +93,16 @@ struct DeletionTierCandidates: Sendable, Equatable {
         var fixity: ContentFixity? = nil
         /// "archive copy on FamilyArchive" — for the row's reason.
         var label: String = "archive copy"
+        /// The catalog record, for the evidence on the row (codex 1611).
+        var recordID: UUID? = nil
     }
     struct OtherCopy: Sendable, Equatable {
         let path: String
         let fixity: ContentFixity?
         /// "sibling copy.mov on M4drive" — for the row's reason.
         var label: String = "sibling"
+        /// The catalog record, for the evidence on the row (codex 1611).
+        var recordID: UUID? = nil
     }
     /// "keeper on LaCieWorkspace".
     var keeperLabel = "keeper"
@@ -111,10 +127,34 @@ struct DeletionTierCandidates: Sendable, Equatable {
 /// was known. The keeper is counted here (it was just verified). The
 /// DUPLICATE is never counted — "remaining" means after it goes.
 struct DeletionTierFacts: Sendable, Equatable {
+    /// One copy the count rests on, as it was when it was counted: the
+    /// full stamp it reproduced (ctime included) and the digest it was
+    /// counted under. Rides on the plan row (Codable) so the removal
+    /// boundary — and anyone reading the plan later — can see exactly
+    /// what was trusted (codex 1611). The keeper is not listed: its own
+    /// identity is on the quarantine ticket and phase two checks it.
+    struct CountedCopy: Codable, Sendable, Equatable {
+        var recordID: UUID?
+        let path: String
+        let label: String
+        let stamp: FileIdentityStamp
+        let digest: String
+    }
+
     /// Verified copies that remain after this deletion: keeper + archive
     /// copies and other copies whose STAMP-BOUND fixity reproduces now
     /// (ctime included) and whose digest is this one's.
     var remainingVerifiedCopies: Int = 1
+    /// The keeper's entry in `counted` ("keeper on LaCieWorkspace (the
+    /// archive copy)") — kept apart so `recheck` can rebuild the list.
+    var keeperCounted: String = "keeper"
+    /// Every copy counted besides the keeper, with the evidence it was
+    /// counted on. `remainingVerifiedCopies == 1 + countedCopies.count`.
+    var countedCopies: [CountedCopy] = []
+    /// Set by `recheck`: the counted copies dropped at the removal
+    /// boundary, with why ("sibling b.mov on M4drive changed since it
+    /// was counted"). Empty when the evidence held.
+    var droppedAtBoundary: [String] = []
     /// INFORMATIONAL (Rick 2026-09-20, late: "the archive is NOT
     /// required"): at least one archive copy is online with this file's
     /// size and digest ON RECORD. The detail row says "not yet archived"
@@ -147,7 +187,8 @@ struct DeletionTierFacts: Sendable, Equatable {
         var facts = DeletionTierFacts()
         let wanted = digest.lowercased()
         facts.hasVerifiedArchive = candidates.keeperIsVerifiedArchive
-        facts.counted.append(candidates.keeperLabel + (candidates.keeperIsVerifiedArchive ? " (the archive copy)" : ""))
+        facts.keeperCounted = candidates.keeperLabel + (candidates.keeperIsVerifiedArchive ? " (the archive copy)" : "")
+        facts.counted.append(facts.keeperCounted)
         // One inode counts once: a hard link (or a second spelling of one
         // name on a case-insensitive volume) is the same bytes on the same
         // platter, not another copy.
@@ -193,6 +234,8 @@ struct DeletionTierFacts: Sendable, Equatable {
             if alreadyCounted(stamp, archive.label) { continue }
             facts.remainingVerifiedCopies += 1
             facts.counted.append(archive.label)
+            facts.countedCopies.append(CountedCopy(recordID: archive.recordID, path: archive.path, label: archive.label,
+                                                   stamp: stamp, digest: wanted))
         }
         for copy in candidates.otherCopies {
             guard let fixity = copy.fixity, fixity.isUsableForVerification else {
@@ -214,12 +257,48 @@ struct DeletionTierFacts: Sendable, Equatable {
             if alreadyCounted(stamp, copy.label) { continue }
             facts.remainingVerifiedCopies += 1
             facts.counted.append(copy.label)
+            facts.countedCopies.append(CountedCopy(recordID: copy.recordID, path: copy.path, label: copy.label,
+                                                   stamp: stamp, digest: wanted))
         }
         for label in candidates.alsoInThisRun {
             facts.unverifiedCopies += 1
             facts.notCounted.append("\(label) still to be decided in this run")
         }
         return facts
+    }
+
+    /// THE REMOVAL BOUNDARY (codex 1611): re-stat every counted copy and
+    /// require the exact stamp it was counted on (ctime included). One
+    /// that is gone, offline, or changed is dropped — named first in
+    /// `notCounted` and in `droppedAtBoundary` — and the count is what
+    /// still holds. Nothing is ever ADDED here: a copy that became
+    /// verifiable meanwhile waits for the next run. Stat only; the
+    /// keeper is not touched (phase two checks its identity itself).
+    /// Returns `self` unchanged when every stamp reproduces, so an
+    /// unchanged row is never rewritten.
+    nonisolated func recheck() -> DeletionTierFacts {
+        var still: [CountedCopy] = []
+        var dropped: [String] = []
+        for copy in countedCopies {
+            guard let now = FileIdentityStamp.capture(path: copy.path) else {
+                dropped.append("\(copy.label) gone since it was counted (removed or offline)")
+                continue
+            }
+            guard now == copy.stamp else {
+                dropped.append("\(copy.label) changed since it was counted")
+                continue
+            }
+            still.append(copy)
+        }
+        guard !dropped.isEmpty else { return self }
+        var out = self
+        out.countedCopies = still
+        out.remainingVerifiedCopies = 1 + still.count
+        out.counted = [keeperCounted] + still.map(\.label)
+        out.unverifiedCopies += dropped.count
+        out.notCounted = dropped + notCounted
+        out.droppedAtBoundary = dropped
+        return out
     }
 }
 
@@ -339,6 +418,12 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         var tier: DeletionTier?
         var tierReason: String?
         var remainingVerifiedCopies: Int?
+        /// The copies the count rests on, with the stamp and digest each
+        /// was counted under (codex 1611): recorded with the tier, before
+        /// the ticket save; phase two re-stats every one immediately
+        /// before the unlink / Trash move. After a boundary downgrade
+        /// this is what STILL held. nil on old plans and rows not reached.
+        var countedCopies: [DeletionTierFacts.CountedCopy]?
         /// For `.trashed`: the volume whose Trash holds the file now.
         var trashedOnVolume: String?
         /// Informational: the family has a fixity-verified archive copy
@@ -524,15 +609,20 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         entries[i].quarantinedStamp = stamp
     }
 
-    /// The tier decided for the row (recorded before the unlink / move).
+    /// The tier decided for the row (recorded before the unlink / move),
+    /// and — when given — the evidence of every copy it was counted on
+    /// (codex 1611). Called again after a boundary re-check that changed
+    /// the count, with the final decision and what still held.
     mutating func setTier(_ id: UUID, _ decision: DeletionTierDecision, trashVolume: String? = nil,
-                          hasVerifiedArchive: Bool? = nil) {
+                          hasVerifiedArchive: Bool? = nil,
+                          evidence: [DeletionTierFacts.CountedCopy]? = nil) {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
         entries[i].tier = decision.tier
         entries[i].tierReason = decision.reason
         entries[i].remainingVerifiedCopies = decision.remainingVerifiedCopies
         entries[i].trashedOnVolume = decision.tier == .trash ? trashVolume : nil
         if let hasVerifiedArchive { entries[i].hasVerifiedArchive = hasVerifiedArchive }
+        if let evidence { entries[i].countedCopies = evidence }
     }
 
     /// The row left quarantine (deleted, or put back): forget the folder.

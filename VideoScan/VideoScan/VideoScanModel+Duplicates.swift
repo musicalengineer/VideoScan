@@ -460,8 +460,10 @@ extension VideoScanModel {
     ///
     /// `tier` says how the file left (unlinked, or into the Trash of
     /// `trashVolume`); `remainingVerifiedCopies` is the count the tier was
-    /// decided on. Both go on the ledger line (copy-count tiering,
-    /// 2026-09-20 evening).
+    /// decided on; `tierReason` is the FINAL reason — after the removal
+    /// boundary's re-check, naming any copy that was dropped (codex
+    /// 1611). All go on the ledger line (copy-count tiering, 2026-09-20
+    /// evening).
     @discardableResult
     func settleDeletedDuplicate(expectedID: UUID, expectedPath: String,
                                 preAwait record: VideoRecord,
@@ -469,7 +471,7 @@ extension VideoScanModel {
                                 isWorkingCopy: Bool, batchID: String,
                                 keeperMatchedByStoredFixity: Bool,
                                 tier: DeletionTier = .permanent, remainingVerifiedCopies: Int? = nil,
-                                trashVolume: String? = nil) -> Bool {
+                                trashVolume: String? = nil, tierReason: String? = nil) -> Bool {
         var catalogMutated = false
         let currentRecord = records.first { $0.id == expectedID && $0.fullPath == expectedPath }
         let liveInstances = Set(records.map(ObjectIdentifier.init))
@@ -546,6 +548,7 @@ extension VideoScanModel {
         if let remainingVerifiedCopies {
             detail[MediaLedgerEvent.Detail.remainingVerifiedCopies] = String(remainingVerifiedCopies)
         }
+        if let tierReason, !tierReason.isEmpty { detail[MediaLedgerEvent.Detail.reason] = tierReason }
         ledgerCopyRemoved([removed], permanent: permanent, by: .rick, batchID: batchID, extraDetail: detail)
         let how = keeperMatchedByStoredFixity
             ? "keeper matched by stored fixity, not re-read"
@@ -593,7 +596,8 @@ extension VideoScanModel {
             // that can prove the copy holds these bytes NOW (codex 1606
             // #1). Without it the copy is named "not verified now".
             out.archiveCopies.append(.init(path: copy.fullPath, digest: fixity.digest, sizeBytes: fixity.sizeBytes,
-                                           fixity: copy.contentFixity, label: "archive copy on \(volume(copy))"))
+                                           fixity: copy.contentFixity, label: "archive copy on \(volume(copy))",
+                                           recordID: copy.id))
         }
         // The keeper is counted once by the worker, as the keeper. When it
         // IS the archive copy it is not listed again as an archive copy —
@@ -612,7 +616,8 @@ extension VideoScanModel {
             if excluding.contains(member.id) {
                 out.alsoInThisRun.append(label)
             } else {
-                out.otherCopies.append(.init(path: member.fullPath, fixity: member.contentFixity, label: label))
+                out.otherCopies.append(.init(path: member.fullPath, fixity: member.contentFixity, label: label,
+                                             recordID: member.id))
             }
         }
         return out
