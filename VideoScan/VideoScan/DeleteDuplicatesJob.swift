@@ -40,13 +40,16 @@
 // RECORDS that folder, the file's stamp there and the tier, and is saved
 // — so a crash between the move and the unlink leaves a plan that names
 // exactly where the file is (codex 1593 blocker 2). Phase 2 (detached):
-// re-stat EVERY copy the tier was counted on (codex 1611 — the save is
-// an await, and a counted sibling can be rewritten or pulled under it),
-// re-decide the tier from what still holds — permanent → Trash, or put
-// back when fewer than two remain, the row naming the copy that changed
-// — then re-stat the file and the keeper, unlink or move to the Trash.
-// Then the catalog settles (carry-over, row removal, ledger, log), the
-// row is updated and the plan saved again.
+// re-read the file in quarantine when phase 1 did not (the uncached-
+// keeper fallback), re-stat the file and the keeper, and THEN — as the
+// gate's final verdict, with nothing between it and the unlink — re-stat
+// EVERY copy the tier was counted on (codex 1611: the save is an await,
+// and a counted sibling can be rewritten or pulled under it; codex 1619
+// #1: so can the fallback's full re-read, which may take minutes), re-
+// decide the tier from what still holds — permanent → Trash, or put back
+// when fewer than two remain, the row naming the copy that changed —
+// then unlink or move to the Trash. Then the catalog settles (carry-over,
+// row removal, ledger, log), the row is updated and the plan saved again.
 //
 // PARALLELISM: pairs whose duplicate lives on an SSD may run two at a
 // time; on anything else (HDD, RAID, network, unknown) one at a time —
@@ -225,16 +228,17 @@ enum DeleteDuplicatesDiskWorker {
         }
     }
 
-    /// Phase 2: FIRST re-stat every copy the tier was counted on and
-    /// re-decide it from what still holds (codex 1611) — in the same
-    /// synchronous stretch as the removal, no await between — then
-    /// re-check the file's and the keeper's identity (re-read only when
-    /// the ticket's read was not already in quarantine) and unlink or
-    /// move to the Trash. When the evidence no longer reaches two, the
-    /// file is put back untouched and the outcome says which copy
-    /// changed. `decided` is the tier recorded before the save; it is
-    /// what the file goes by when every stamp reproduces. Stat only —
-    /// the keeper is never read here.
+    /// Phase 2: re-read the file in quarantine when phase 1 did not (the
+    /// uncached-keeper fallback), re-check the file's and the keeper's
+    /// identity, and — as the gate's FINAL verdict, after all hashing and
+    /// in the same synchronous stretch as the removal, no await between —
+    /// re-stat every copy the tier was counted on and re-decide it from
+    /// what still holds (codex 1611; moved after the re-read for codex
+    /// 1619 #1). When the evidence no longer reaches two, the file is put
+    /// back untouched and the outcome says which copy changed. `decided`
+    /// is the tier recorded before the save; it is what the file goes by
+    /// when every stamp reproduces. Stat only — the keeper is never read
+    /// here.
     static func deleteQuarantined(_ ticket: QuarantineTicket, decided: DeletionTierDecision,
                                   facts: DeletionTierFacts, preferTrash: Bool,
                                   keeperFilename: String,
@@ -246,37 +250,46 @@ enum DeleteDuplicatesDiskWorker {
                 outcome: release(ticket, reason: decided.reason, keeperFilename: keeperFilename, leftAlone: facts),
                 decision: decided, facts: facts, evidenceChanged: false)
         }
-        let now = facts.recheck()
-        guard !now.droppedAtBoundary.isEmpty else {
-            // Every counted copy still reproduces its stamp: the recorded
-            // tier stands.
-            let disposal: SignatureVerification.Disposal = decidedTier == .trash ? .trash : .permanent
-            return DeleteDuplicatesPhaseTwo(
-                outcome: map(SignatureVerification.deleteQuarantined(ticket, disposal: disposal, hooks: hooks),
-                             proof: ticket.proof, keeper: keeperFilename),
-                decision: decided, facts: facts, evidenceChanged: false)
+        let recorded: SignatureVerification.Disposal = decidedTier == .trash ? .trash : .permanent
+        // Set by the final verdict when a counted copy no longer holds:
+        // the re-decided tier and the facts behind it. A non-escaping
+        // closure may write a local of its caller (for Rick: a lambda
+        // capturing by reference).
+        var boundary: (decision: DeletionTierDecision, facts: DeletionTierFacts)?
+        let result = SignatureVerification.deleteQuarantined(ticket, disposal: recorded, hooks: hooks) {
+            let now = facts.recheck()
+            guard !now.droppedAtBoundary.isEmpty else {
+                // Every counted copy still reproduces its stamp: the
+                // recorded tier stands.
+                return .proceed(recorded)
+            }
+            let redecided = DeletionTierDecision.decide(facts: now, preferTrash: preferTrash)
+            guard let tier = redecided.tier else {
+                // Below two: back to its original path, untouched. Not a
+                // refusal of the PAIR — the duplicate is still identical to
+                // the keeper — so the row is left alone and keeps its
+                // disposition; the reason names the copy that changed.
+                let reason = "evidence changed before removal: " + redecided.reason
+                boundary = (DeletionTierDecision(tier: nil, remainingVerifiedCopies: redecided.remainingVerifiedCopies,
+                                                 reason: reason), now)
+                return .putBack(reason: reason)
+            }
+            let prefix = tier == decided.tier ? "re-checked before removal — " : "downgraded before removal — "
+            boundary = (DeletionTierDecision(tier: tier, remainingVerifiedCopies: redecided.remainingVerifiedCopies,
+                                             reason: prefix + redecided.reason), now)
+            return .proceed(tier == .trash ? .trash : .permanent)
         }
-        let redecided = DeletionTierDecision.decide(facts: now, preferTrash: preferTrash)
-        guard let tier = redecided.tier else {
-            // Below two: back to its original path, untouched. Not a
-            // refusal of the PAIR — the duplicate is still identical to
-            // the keeper — so the row is left alone and keeps its
-            // disposition; the reason names the copy that changed.
-            let reason = "evidence changed before removal: " + redecided.reason
-            let final = DeletionTierDecision(tier: nil, remainingVerifiedCopies: redecided.remainingVerifiedCopies,
-                                             reason: reason)
-            return DeleteDuplicatesPhaseTwo(
-                outcome: release(ticket, reason: reason, keeperFilename: keeperFilename, leftAlone: now),
-                decision: final, facts: now, evidenceChanged: true)
+        var outcome = map(result, proof: ticket.proof, keeper: keeperFilename)
+        guard let boundary else {
+            return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false)
         }
-        let prefix = tier == decided.tier ? "re-checked before removal — " : "downgraded before removal — "
-        let final = DeletionTierDecision(tier: tier, remainingVerifiedCopies: redecided.remainingVerifiedCopies,
-                                         reason: prefix + redecided.reason)
-        let disposal: SignatureVerification.Disposal = tier == .trash ? .trash : .permanent
-        return DeleteDuplicatesPhaseTwo(
-            outcome: map(SignatureVerification.deleteQuarantined(ticket, disposal: disposal, hooks: hooks),
-                         proof: ticket.proof, keeper: keeperFilename),
-            decision: final, facts: now, evidenceChanged: true)
+        if boundary.decision.tier == nil, case .refused(_, true) = outcome {
+            // The put-back the verdict asked for succeeded: left alone,
+            // not refused (a failed put-back stays `.retained`, named).
+            outcome = .leftAlone(reason: boundary.decision.reason, facts: boundary.facts)
+        }
+        return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: boundary.decision, facts: boundary.facts,
+                                        evidenceChanged: true)
     }
 
     /// Put a quarantined file back without deleting it (the plan could not
@@ -1209,7 +1222,23 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // same-named file in some OTHER quarantine folder is only
             // reported — never moved, never removed.
             if let orphan = facts.quarantined[e.path] {
-                switch Self.restoreQuarantined(orphan.url, to: e.path, expectedStamp: orphan.recordedStamp,
+                // The obligation goes ON THE ROW before the restore is even
+                // tried (codex 1619 #3): a crash that beat the ticket save
+                // left a folder the plan never named, and a restore that
+                // then fails (the original path occupied) must settle a row
+                // that still names the folder — `needsRecovery` true, the
+                // plan never filed as done, Put Back offered. The stamp
+                // adopted for an unjournaled folder is the one observed
+                // now, only when the size is the plan's (the same test the
+                // stamp-less restore applies); otherwise it stays nil and
+                // the restore refuses on size.
+                let foundFolder = orphan.url.deletingLastPathComponent().path
+                if plan.entries[i].quarantineDirectory != foundFolder || plan.entries[i].quarantinedStamp == nil {
+                    plan.entries[i].quarantineDirectory = foundFolder
+                    plan.entries[i].quarantinedStamp = orphan.recordedStamp
+                        ?? orphan.observedStamp.flatMap { $0.size == e.sizeBytes ? $0 : nil }
+                }
+                switch Self.restoreQuarantined(orphan.url, to: e.path, expectedStamp: plan.entries[i].quarantinedStamp,
                                                expectedSize: e.sizeBytes) {
                 case .success(let directoryRemoved):
                     let folder = orphan.url.deletingLastPathComponent().lastPathComponent
@@ -1305,6 +1334,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             let url: URL
             /// The stamp the plan recorded, when it got to record one.
             let recordedStamp: FileIdentityStamp?
+            /// The file's stamp as found in the folder NOW — what the row
+            /// adopts when the crash beat the save that records one
+            /// (codex 1619 #3).
+            let observedStamp: FileIdentityStamp?
         }
         var keeperStamps: [String: FileIdentityStamp] = [:]
         var missingTargets: Set<String> = []
@@ -1342,7 +1375,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                     let url = URL(fileURLWithPath: candidate.dir, isDirectory: true).appendingPathComponent(name)
                     var isDir: ObjCBool = false
                     if fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue {
-                        facts.quarantined[row.path] = ResumeDiskFacts.Quarantined(url: url, recordedStamp: candidate.stamp)
+                        facts.quarantined[row.path] = ResumeDiskFacts.Quarantined(
+                            url: url, recordedStamp: candidate.stamp,
+                            observedStamp: FileIdentityStamp.capture(path: url.path))
                         found = true
                         break
                     }
@@ -1427,26 +1462,81 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         return .success(removed)
     }
 
+    /// What a stat of a stranded file's quarantine path established
+    /// (codex 1619 #2): the file is there; it is ABSENT — the drive is
+    /// mounted and reachable and the path is simply not on it; or the
+    /// question could not be answered — the drive is not mounted, or the
+    /// path failed for a reason other than "no such file" — in which
+    /// case the obligation is kept, never cleared.
+    enum StrandedPresence: Equatable, Sendable {
+        case present
+        case absent
+        case unavailable(String)
+    }
+
+    /// Absence is established ONLY on an accessible drive: `volumePath`
+    /// must be a directory now and — for a /Volumes/ path — in the
+    /// kernel's mount table (an unmounted drive's mount point may linger
+    /// as an empty folder); and the stat of the file must fail with
+    /// ENOENT / ENOTDIR, not EIO / EACCES / ENXIO. Synchronous: two stats.
+    nonisolated static func strandedPresence(of url: URL, volumePath: String, volumeName: String,
+                                             mountedRoots: Set<String>? = nil,
+                                             volumesRoot: String = "/Volumes/") -> StrandedPresence {
+        var info = stat()
+        if stat(url.path, &info) == 0 {
+            // A directory under the file's name is not the file (moved by
+            // hand, something else put there): nothing of ours to put back.
+            return (info.st_mode & S_IFMT) == S_IFDIR ? .absent : .present
+        }
+        let fileErrno = errno
+        var root = stat()
+        let rootIsDirectory = stat(volumePath, &root) == 0 && (root.st_mode & S_IFMT) == S_IFDIR
+        let mounted = rootIsDirectory && (!volumePath.hasPrefix(volumesRoot)
+                                          || (mountedRoots ?? VolumeReachability.currentMountedRoots()).contains(volumePath))
+        guard mounted else {
+            return .unavailable(DeletionTierText.notConnected(volumeName, path: volumePath))
+        }
+        switch fileErrno {
+        case ENOENT, ENOTDIR:
+            return .absent
+        default:
+            return .unavailable("\(url.path) cannot be reached right now (\(String(cString: strerror(fileErrno)))) — try Put Back again once it can")
+        }
+    }
+
     /// Retry the put-back of every STRANDED row (settled, file still in
     /// the quarantine folder the plan names) — the move home and nothing
     /// else: only the file this run put there (recorded stamp; size when
     /// the crash beat the save), only onto a free original path, the
     /// folder removed only if empty. A row whose folder no longer holds
-    /// the file (moved by hand) is closed with a note. The row's status
-    /// is untouched — recovery is not a verdict. Synchronous: a handful
-    /// of renames (codex 1606 #3).
+    /// the file (moved by hand) is closed with a note — but ONLY when its
+    /// absence is established on a mounted, reachable drive (codex 1619
+    /// #2): with the drive disconnected the file still exists on it, and
+    /// the obligation is kept, the row named, the plan still offered. The
+    /// row's status is untouched — recovery is not a verdict. Synchronous:
+    /// a handful of stats and renames (codex 1606 #3). `stillStranded`
+    /// counts every row still owed, `unavailable` those among them the
+    /// drive could not answer for.
     @discardableResult
     nonisolated static func putBackStranded(in plan: inout DeleteDuplicatesPlan,
-                                            log: (String) -> Void) -> (restored: Int, stillStranded: Int) {
+                                            log: (String) -> Void) -> (restored: Int, stillStranded: Int, unavailable: Int) {
         var restored = 0
         var stillStranded = 0
+        var unavailable = 0
         for entry in plan.entries where entry.needsRecovery {
             guard let url = entry.quarantinedFileURL else { continue }
-            var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else {
+            switch strandedPresence(of: url, volumePath: plan.volumePath, volumeName: plan.volumeName) {
+            case .present:
+                break
+            case .absent:
                 let note = "no longer in \(url.deletingLastPathComponent().lastPathComponent) — nothing to put back"
                 plan.markRecovered(entry.id, note: note)
                 log("  \(entry.filename): \(note) (moved by hand?)")
+                continue
+            case .unavailable(let why):
+                stillStranded += 1
+                unavailable += 1
+                log("  \(entry.filename) is still owed a put-back to \(entry.path) — \(why)")
                 continue
             }
             switch restoreQuarantined(url, to: entry.path, expectedStamp: entry.quarantinedStamp,
@@ -1462,7 +1552,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 log("  \(entry.filename) is still in quarantine at \(url.path) — not put back: \(error.description)")
             }
         }
-        return (restored, stillStranded)
+        return (restored, stillStranded, unavailable)
     }
 
     /// True when the snapshot is missing or older than the catalog file's

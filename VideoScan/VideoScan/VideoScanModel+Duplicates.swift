@@ -720,7 +720,13 @@ extension VideoScanModel {
         } catch {
             log("Delete Duplicates: could not save the plan for \(plan.volumeName) after putting files back — \(error.localizedDescription)")
         }
-        if result.stillStranded > 0 {
+        if result.unavailable > 0 {
+            // The drive is away (codex 1619 #2): nothing was forgotten, the
+            // offer stays, and the console says what to do.
+            log("Delete Duplicates: \(DeletionTierText.notConnected(plan.volumeName, path: plan.volumePath)) — "
+                + "\(result.unavailable) file\(result.unavailable == 1 ? " is" : "s are") still waiting to be put back"
+                + (result.restored > 0 ? "; \(result.restored) put back." : "."))
+        } else if result.stillStranded > 0 {
             log("Delete Duplicates: \(result.restored) put back, \(result.stillStranded) still in quarantine on \(plan.volumeName) — the offer stays until they are back.")
         } else {
             log("Delete Duplicates: \(result.restored) file\(result.restored == 1 ? "" : "s") put back on \(plan.volumeName)"
@@ -748,7 +754,8 @@ extension VideoScanModel {
                 do { try DeleteDuplicatesPlanStore.save(plan, root: root) } catch {
                     log("Delete Duplicates: could not save the plan for \(plan.volumeName) — \(error.localizedDescription)")
                 }
-                log("Delete Duplicates: not discarded — \(result.stillStranded) file\(result.stillStranded == 1 ? " is" : "s are") still in quarantine on \(plan.volumeName) and must be put back first (see the console for why).")
+                log("Delete Duplicates: not discarded — \(result.stillStranded) file\(result.stillStranded == 1 ? " is" : "s are") still in quarantine on \(plan.volumeName) and must be put back first"
+                    + (result.unavailable > 0 ? " — \(DeletionTierText.notConnected(plan.volumeName, path: plan.volumePath))." : " (see the console for why)."))
                 checkForUnfinishedDeleteDuplicatesPlans(root: root)
                 return
             }
