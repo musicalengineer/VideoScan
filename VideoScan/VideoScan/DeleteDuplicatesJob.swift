@@ -134,6 +134,19 @@ enum DeleteDuplicatesDiskOutcome: Sendable {
 struct DeleteDuplicatesPhaseOne: Sendable {
     let outcome: DeleteDuplicatesDiskOutcome
     let learnedKeeperFixity: ContentFixity?
+    /// When phase one ended `.retained` with the file still inside a
+    /// quarantine folder (the single-read path moves BEFORE it hashes, and
+    /// the put-back after a doubt can fail — drive dropped, original path
+    /// re-occupied): that folder, and the file's stamp there taken on the
+    /// disk thread right after (nil when it could not be stat'ed, e.g. the
+    /// drive is gone). The row records both so the plan owes a put-back
+    /// (QA 2026-09-21 F1). nil for every other outcome.
+    var retainedInQuarantine: RetainedInQuarantine? = nil
+
+    struct RetainedInQuarantine: Sendable, Equatable {
+        let directory: String
+        let stamp: FileIdentityStamp?
+    }
 }
 
 /// Phase 2's result: the outcome, the decision the file ACTUALLY went by
@@ -173,7 +186,21 @@ enum DeleteDuplicatesDiskWorker {
             downstream?(fixity)
         }
         let outcome = phaseOne(item, hooks: observing)
-        return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: box.value)
+        return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: box.value,
+                                        retainedInQuarantine: retainedInQuarantine(outcome))
+    }
+
+    /// The quarantine folder a `.retained` outcome left the file in, with
+    /// its stamp now — only when the retained path really is inside one of
+    /// this job's quarantine folders (the prefix), so a retained path is
+    /// never mistaken for a folder the plan should name.
+    static func retainedInQuarantine(_ outcome: DeleteDuplicatesDiskOutcome)
+        -> DeleteDuplicatesPhaseOne.RetainedInQuarantine? {
+        guard case .retained(let path, _) = outcome else { return nil }
+        let directory = (path as NSString).deletingLastPathComponent
+        guard (directory as NSString).lastPathComponent.hasPrefix(SignatureVerification.quarantineDirectoryPrefix)
+        else { return nil }
+        return .init(directory: directory, stamp: FileIdentityStamp.capture(path: path))
     }
 
     private static func phaseOne(_ item: DeleteDuplicatesWorkItem,
@@ -641,7 +668,18 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
 
         var prepared: DeleteDuplicatesPlan
         if let resumed = resumingPlan {
-            prepared = await revalidateForResume(resumed, model: model)
+            switch await revalidateForResume(resumed, model: model) {
+            case .success(let revalidated):
+                prepared = revalidated
+            case .failure(let refusal):
+                // The drive is away (QA 2026-09-21 F4): nothing was
+                // settled and nothing saved — the plan on disk is exactly
+                // as it was, and `start` offers it again.
+                model.duplicateStatus = "Resume refused — \(refusal.line)"
+                wasRefused = true
+                finish(failed: refusal.line)
+                return
+            }
         } else {
             guard let fresh = await model.prepareDuplicateDeletion(onVolume: volumePath) else {
                 finish(success: "Nothing to delete")
@@ -893,6 +931,17 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             DeleteDuplicatesDiskWorker.verifyAndQuarantine(item, hooks: hooks)
         }
         var outcome = phaseOne.outcome
+        if let retained = phaseOne.retainedInQuarantine {
+            // Phase one moved the file and could not put it back: the
+            // folder goes ON THE ROW, exactly as a ticket's would, so the
+            // row settles stranded (`needsRecovery`), the plan is never
+            // filed as done and Put Back is offered (QA 2026-09-21 F1).
+            // The stamp is adopted only when the size is the plan's — the
+            // same test the stamp-less restore applies; otherwise nil and
+            // the restore checks the size itself.
+            let stamp = retained.stamp.flatMap { $0.size == entry.sizeBytes ? $0 : nil }
+            mutatePlan { $0.setRetainedInQuarantine(entry.id, directory: retained.directory, stamp: stamp) }
+        }
         // The keeper was read in full by this pair: publish its fixity to
         // the catalog NOW, whatever this pair's verdict, so the next pair
         // with this keeper only stats it (P2 #6).
@@ -1171,7 +1220,18 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// names the folder) is put back first — from THAT folder only, only
     /// if the file there still reproduces the recorded stamp, and the
     /// folder is removed only if empty — then re-verified like any other.
-    func revalidateForResume(_ input: DeleteDuplicatesPlan, model: VideoScanModel) async -> DeleteDuplicatesPlan {
+    ///
+    /// NOTHING is settled while the plan's volume is not reachable (QA
+    /// 2026-09-21 F4): with the drive away every target looks "gone before
+    /// the crash" and an unjournaled quarantine (the crash beat the save
+    /// that names the folder) would be forgotten with the plan filed as
+    /// done. The resume is refused instead, the plan untouched.
+    func revalidateForResume(_ input: DeleteDuplicatesPlan,
+                             model: VideoScanModel) async -> Result<DeleteDuplicatesPlan, ResumeRefused> {
+        if let away = Self.volumeAwayLine(for: input, action: "Resume") {
+            model.log("\nNot resuming Delete Duplicates on \(input.volumeName): \(away). Nothing was changed; the run stays offered.")
+            return .failure(ResumeRefused(line: away))
+        }
         var plan = input
         plan.resumeCount += 1
         model.log("\nResuming Delete Duplicates on \(plan.volumeName): \(plan.remainingCount) of \(plan.entries.count) remaining — re-checking every one against the catalog first…")
@@ -1221,42 +1281,18 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // decision, not a refusal, so the row is not re-marked. A
             // same-named file in some OTHER quarantine folder is only
             // reported — never moved, never removed.
-            if let orphan = facts.quarantined[e.path] {
-                // The obligation goes ON THE ROW before the restore is even
-                // tried (codex 1619 #3): a crash that beat the ticket save
-                // left a folder the plan never named, and a restore that
-                // then fails (the original path occupied) must settle a row
-                // that still names the folder — `needsRecovery` true, the
-                // plan never filed as done, Put Back offered. The stamp
-                // adopted for an unjournaled folder is the one observed
-                // now, only when the size is the plan's (the same test the
-                // stamp-less restore applies); otherwise it stays nil and
-                // the restore refuses on size.
-                let foundFolder = orphan.url.deletingLastPathComponent().path
-                if plan.entries[i].quarantineDirectory != foundFolder || plan.entries[i].quarantinedStamp == nil {
-                    plan.entries[i].quarantineDirectory = foundFolder
-                    plan.entries[i].quarantinedStamp = orphan.recordedStamp
-                        ?? orphan.observedStamp.flatMap { $0.size == e.sizeBytes ? $0 : nil }
-                }
-                switch Self.restoreQuarantined(orphan.url, to: e.path, expectedStamp: plan.entries[i].quarantinedStamp,
-                                               expectedSize: e.sizeBytes) {
-                case .success(let directoryRemoved):
-                    let folder = orphan.url.deletingLastPathComponent().lastPathComponent
-                    model.log("  Restored \(e.filename) from \(folder) (a crash left it in quarantine) — it will be verified again before anything is removed"
-                              + (directoryRemoved ? "" : "; the quarantine folder was not empty and was left in place"))
-                    plan.log.append("Restored \(e.filename) from quarantine at resume")
-                    plan.entries[i].quarantineDirectory = nil
-                    plan.entries[i].quarantinedStamp = nil
-                    plan.entries[i].tier = nil
-                    plan.entries[i].tierReason = nil
-                    plan.entries[i].remainingVerifiedCopies = nil
-                    plan.entries[i].status = .pending
-                case .failure(let error):
-                    // Still in quarantine: the row keeps naming the folder,
-                    // and the plan is never filed as done with it there.
-                    refuse("left in quarantine at \(orphan.url.path) — not put back: \(error.description)")
-                    continue
-                }
+            switch Self.recoverFromQuarantine(&plan.entries[i], facts: facts) {
+            case .notInQuarantine:
+                break
+            case .restored(let folder, let directoryRemoved):
+                model.log("  Restored \(e.filename) from \(folder) (a crash left it in quarantine) — it will be verified again before anything is removed"
+                          + (directoryRemoved ? "" : "; the quarantine folder was not empty and was left in place"))
+                plan.log.append("Restored \(e.filename) from quarantine at resume")
+            case .stillQuarantined(let url, let error):
+                // Still in quarantine: the row keeps naming the folder,
+                // and the plan is never filed as done with it there.
+                refuse("left in quarantine at \(url.path) — not put back: \(error.description)")
+                continue
             }
             switch model.authorizeDuplicateDeletion(entry: e, volumePath: plan.volumePath,
                                                     crossVolumeMode: plan.crossVolumeMode, stage: "at resume") {
@@ -1287,7 +1323,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             guard let stamp = facts.keeperStamps[e.keeperPath] else {
                 refuse("keeper \(e.keeperFilename) is not reachable — refused at resume"); continue
             }
-            if let planned = e.keeperStamp, planned != stamp {
+            // Device-insensitive (QA 2026-09-21 F5): an external drive
+            // replugged between sessions comes back under a new device
+            // number; inode, size, mtime and kernel ctime still have to
+            // reproduce to the nanosecond.
+            if let planned = e.keeperStamp, !Self.keeperUnchangedAcrossRemount(planned: planned, current: stamp) {
                 refuse("keeper \(e.keeperFilename) changed since the plan was made — refused at resume"); continue
             }
         }
@@ -1319,7 +1359,30 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 model.log("\n⚠️ Could not retake the pre-delete safety snapshot — leaving \(dropped) working cop\(dropped == 1 ? "y" : "ies") alone; only same-drive extras will be removed.")
             }
         }
-        return plan
+        return .success(plan)
+    }
+
+    /// Why a resume was refused before anything was settled.
+    struct ResumeRefused: Error, Equatable {
+        let line: String
+    }
+
+    /// "<volume> is not connected — reconnect it and choose <action>
+    /// again (<path> is not reachable)" when the plan's volume cannot be
+    /// reached by the same test `strandedPresence` uses; nil when it can.
+    nonisolated static func volumeAwayLine(for plan: DeleteDuplicatesPlan, action: String,
+                                           mountedRoots: Set<String>? = nil,
+                                           volumesRoot: String = "/Volumes/") -> String? {
+        volumeIsReachable(plan.volumePath, mountedRoots: mountedRoots, volumesRoot: volumesRoot)
+            ? nil : DeletionTierText.notConnected(plan.volumeName, path: plan.volumePath, action: action)
+    }
+
+    /// The resume's keeper check: the file the plan was made against,
+    /// ignoring only the device number (a replugged external drive gets a
+    /// new one — see `quarantineIdentityMatches`). Inode, size, mtime and
+    /// kernel ctime must all reproduce.
+    nonisolated static func keeperUnchangedAcrossRemount(planned: FileIdentityStamp, current: FileIdentityStamp) -> Bool {
+        quarantineIdentityMatches(recorded: planned, current: current)
     }
 
     /// What the resume re-check needs from disk, gathered off the main
@@ -1345,61 +1408,116 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         var possibleOrphans: [String: [String]] = [:]
     }
 
-    static let quarantinePrefix = SignatureVerification.quarantineDirectoryPrefix
+    nonisolated static let quarantinePrefix = SignatureVerification.quarantineDirectoryPrefix
 
     nonisolated static func resumeDiskFacts(planID: UUID, entries: [DeleteDuplicatesPlan.Entry]) async -> ResumeDiskFacts {
+        await Task.detached(priority: .userInitiated) {
+            gatherResumeDiskFacts(planID: planID, entries: entries)
+        }.value
+    }
+
+    /// The synchronous body of `resumeDiskFacts` — a stat per keeper and
+    /// per row, a listing per parent folder. Discard calls it directly on
+    /// the main actor, as Put Back does its stats (QA 2026-09-21 F2).
+    nonisolated static func gatherResumeDiskFacts(planID: UUID, entries: [DeleteDuplicatesPlan.Entry]) -> ResumeDiskFacts {
         let rows = entries.map { (path: $0.path, keeperPath: $0.keeperPath, entryID: $0.id,
                                   recorded: $0.quarantineDirectory, stamp: $0.quarantinedStamp) }
-        return await Task.detached(priority: .userInitiated) {
-            var facts = ResumeDiskFacts()
-            let fm = FileManager.default
-            for path in Set(rows.map(\.keeperPath)) where !path.isEmpty {
-                if let stamp = FileIdentityStamp.capture(path: path) { facts.keeperStamps[path] = stamp }
-            }
-            var listed: [String: [String]] = [:]   // parent dir → quarantine folder names
-            for row in rows {
-                let parent = (row.path as NSString).deletingLastPathComponent
-                let name = (row.path as NSString).lastPathComponent
-                // The quarantine folders that are THIS row's, checked
-                // whether or not the original path is occupied:
-                // 1. the folder the plan recorded;
-                // 2. the folder this plan + row would have used (the crash
-                //    beat the save that records it).
-                var candidates: [(dir: String, stamp: FileIdentityStamp?)] = []
-                if let recorded = row.recorded { candidates.append((recorded, row.stamp)) }
-                let derived = (parent as NSString).appendingPathComponent(
-                    quarantineDirectoryName(planID: planID, entryID: row.entryID))
-                if derived != row.recorded { candidates.append((derived, nil)) }
-                var found = false
-                for candidate in candidates {
-                    let url = URL(fileURLWithPath: candidate.dir, isDirectory: true).appendingPathComponent(name)
-                    var isDir: ObjCBool = false
-                    if fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue {
-                        facts.quarantined[row.path] = ResumeDiskFacts.Quarantined(
-                            url: url, recordedStamp: candidate.stamp,
-                            observedStamp: FileIdentityStamp.capture(path: url.path))
-                        found = true
-                        break
-                    }
+        var facts = ResumeDiskFacts()
+        let fm = FileManager.default
+        for path in Set(rows.map(\.keeperPath)) where !path.isEmpty {
+            if let stamp = FileIdentityStamp.capture(path: path) { facts.keeperStamps[path] = stamp }
+        }
+        var listed: [String: [String]] = [:]   // parent dir → quarantine folder names
+        for row in rows {
+            let parent = (row.path as NSString).deletingLastPathComponent
+            let name = (row.path as NSString).lastPathComponent
+            // The quarantine folders that are THIS row's, checked
+            // whether or not the original path is occupied:
+            // 1. the folder the plan recorded;
+            // 2. the folder this plan + row would have used (the crash
+            //    beat the save that records it).
+            var candidates: [(dir: String, stamp: FileIdentityStamp?)] = []
+            if let recorded = row.recorded { candidates.append((recorded, row.stamp)) }
+            let derived = (parent as NSString).appendingPathComponent(
+                quarantineDirectoryName(planID: planID, entryID: row.entryID))
+            if derived != row.recorded { candidates.append((derived, nil)) }
+            var found = false
+            for candidate in candidates {
+                let url = URL(fileURLWithPath: candidate.dir, isDirectory: true).appendingPathComponent(name)
+                var isDir: ObjCBool = false
+                if fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue {
+                    facts.quarantined[row.path] = ResumeDiskFacts.Quarantined(
+                        url: url, recordedStamp: candidate.stamp,
+                        observedStamp: FileIdentityStamp.capture(path: url.path))
+                    found = true
+                    break
                 }
-                if found { continue }
-                guard !fm.fileExists(atPath: row.path) else { continue }
-                facts.missingTargets.insert(row.path)
-                // Report-only: same basename in any other sibling quarantine.
-                let folders = listed[parent] ?? {
-                    let names = ((try? fm.contentsOfDirectory(atPath: parent)) ?? [])
-                        .filter { $0.hasPrefix(quarantinePrefix) }
-                    listed[parent] = names
-                    return names
-                }()
-                let ours = Set(candidates.map { ($0.dir as NSString).lastPathComponent })
-                let others = folders.filter { !ours.contains($0) }.filter { folder in
-                    fm.fileExists(atPath: (parent as NSString).appendingPathComponent(folder + "/" + name))
-                }
-                if !others.isEmpty { facts.possibleOrphans[row.path] = others }
             }
-            return facts
-        }.value
+            if found { continue }
+            guard !fm.fileExists(atPath: row.path) else { continue }
+            facts.missingTargets.insert(row.path)
+            // Report-only: same basename in any other sibling quarantine.
+            let folders = listed[parent] ?? {
+                let names = ((try? fm.contentsOfDirectory(atPath: parent)) ?? [])
+                    .filter { $0.hasPrefix(quarantinePrefix) }
+                listed[parent] = names
+                return names
+            }()
+            let ours = Set(candidates.map { ($0.dir as NSString).lastPathComponent })
+            let others = folders.filter { !ours.contains($0) }.filter { folder in
+                fm.fileExists(atPath: (parent as NSString).appendingPathComponent(folder + "/" + name))
+            }
+            if !others.isEmpty { facts.possibleOrphans[row.path] = others }
+        }
+        return facts
+    }
+
+    /// What `recoverFromQuarantine` did for one unsettled row.
+    enum QuarantineRecovery: Equatable, Sendable {
+        /// Nothing of this row's is in its quarantine folders.
+        case notInQuarantine
+        /// Put back at its path; the row is `.pending` again, no folder.
+        case restored(folder: String, directoryRemoved: Bool)
+        /// Still in quarantine; the row NAMES the folder (and a stamp when
+        /// one could be adopted), so once settled it is `needsRecovery`.
+        case stillQuarantined(URL, RestoreError)
+    }
+
+    /// RECOVERY for one unsettled row, shared by Resume and Discard (QA
+    /// 2026-09-21 F2/F3): a crash between the quarantine move and the
+    /// unlink leaves the file in the folder the plan names — or, when the
+    /// crash beat the save that names it, the folder this plan + row would
+    /// have used (`facts.quarantined`). The obligation goes ON THE ROW
+    /// before the restore is even tried (codex 1619 #3): a restore that
+    /// then fails (the original path occupied) leaves a row that still
+    /// names the folder — `needsRecovery` once settled, the plan never
+    /// filed as done, Put Back offered. The stamp adopted for an
+    /// unjournaled folder is the one observed now, only when the size is
+    /// the plan's (the same test the stamp-less restore applies);
+    /// otherwise it stays nil and the restore refuses on size.
+    nonisolated static func recoverFromQuarantine(_ entry: inout DeleteDuplicatesPlan.Entry,
+                                                  facts: ResumeDiskFacts) -> QuarantineRecovery {
+        guard let orphan = facts.quarantined[entry.path] else { return .notInQuarantine }
+        let foundFolder = orphan.url.deletingLastPathComponent().path
+        if entry.quarantineDirectory != foundFolder || entry.quarantinedStamp == nil {
+            entry.quarantineDirectory = foundFolder
+            entry.quarantinedStamp = orphan.recordedStamp
+                ?? orphan.observedStamp.flatMap { $0.size == entry.sizeBytes ? $0 : nil }
+        }
+        switch restoreQuarantined(orphan.url, to: entry.path, expectedStamp: entry.quarantinedStamp,
+                                  expectedSize: entry.sizeBytes) {
+        case .success(let directoryRemoved):
+            entry.quarantineDirectory = nil
+            entry.quarantinedStamp = nil
+            entry.tier = nil
+            entry.tierReason = nil
+            entry.remainingVerifiedCopies = nil
+            entry.status = .pending
+            return .restored(folder: orphan.url.deletingLastPathComponent().lastPathComponent,
+                             directoryRemoved: directoryRemoved)
+        case .failure(let error):
+            return .stillQuarantined(orphan.url, error)
+        }
     }
 
     enum RestoreError: Error, Equatable, CustomStringConvertible {
@@ -1489,11 +1607,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             return (info.st_mode & S_IFMT) == S_IFDIR ? .absent : .present
         }
         let fileErrno = errno
-        var root = stat()
-        let rootIsDirectory = stat(volumePath, &root) == 0 && (root.st_mode & S_IFMT) == S_IFDIR
-        let mounted = rootIsDirectory && (!volumePath.hasPrefix(volumesRoot)
-                                          || (mountedRoots ?? VolumeReachability.currentMountedRoots()).contains(volumePath))
-        guard mounted else {
+        guard volumeIsReachable(volumePath, mountedRoots: mountedRoots, volumesRoot: volumesRoot) else {
             return .unavailable(DeletionTierText.notConnected(volumeName, path: volumePath))
         }
         switch fileErrno {
@@ -1502,6 +1616,18 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         default:
             return .unavailable("\(url.path) cannot be reached right now (\(String(cString: strerror(fileErrno)))) — try Put Back again once it can")
         }
+    }
+
+    /// The drive is accessible: `volumePath` is a directory now and — for
+    /// a /Volumes/ path — in the kernel's mount table (an unmounted
+    /// drive's mount point may linger as an empty folder). The one test
+    /// behind `strandedPresence`, the resume gate and Discard.
+    nonisolated static func volumeIsReachable(_ volumePath: String, mountedRoots: Set<String>? = nil,
+                                              volumesRoot: String = "/Volumes/") -> Bool {
+        var root = stat()
+        let rootIsDirectory = stat(volumePath, &root) == 0 && (root.st_mode & S_IFMT) == S_IFDIR
+        return rootIsDirectory && (!volumePath.hasPrefix(volumesRoot)
+                                   || (mountedRoots ?? VolumeReachability.currentMountedRoots()).contains(volumePath))
     }
 
     /// Retry the put-back of every STRANDED row (settled, file still in

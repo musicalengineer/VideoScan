@@ -347,8 +347,8 @@ enum DeletionTierText {
     /// "SanDisk is not connected — reconnect it and choose Put Back again"
     /// (codex 1619 #2): a file still owed a put-back cannot be forgotten
     /// while the drive that holds it is away.
-    static func notConnected(_ volume: String, path: String) -> String {
-        "\(volume) is not connected — reconnect it and choose Put Back again (\(path) is not reachable)"
+    static func notConnected(_ volume: String, path: String, action: String = "Put Back") -> String {
+        "\(volume) is not connected — reconnect it and choose \(action) again (\(path) is not reachable)"
     }
 }
 
@@ -611,6 +611,17 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
     mutating func setQuarantined(_ id: UUID, directory: String, stamp: FileIdentityStamp) {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
         entries[i].status = .verified
+        entries[i].quarantineDirectory = directory
+        entries[i].quarantinedStamp = stamp
+    }
+
+    /// Phase one left the file in quarantine (a failed put-back after a
+    /// doubt): record the folder and — when it could be taken — the
+    /// file's stamp there, WITHOUT a status change; the row is settled by
+    /// the outcome and stays `needsRecovery` (QA 2026-09-21 F1). A nil
+    /// stamp means the restore falls back to the planned size.
+    mutating func setRetainedInQuarantine(_ id: UUID, directory: String, stamp: FileIdentityStamp?) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
         entries[i].quarantineDirectory = directory
         entries[i].quarantinedStamp = stamp
     }

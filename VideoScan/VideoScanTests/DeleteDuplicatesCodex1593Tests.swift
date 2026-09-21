@@ -662,9 +662,14 @@ struct DeleteDuplicatesJobCodex1593Tests {
         let root = dir.appendingPathComponent("plans", isDirectory: true)
         let model = makeModel(dir)
         func plan(_ name: String, age: TimeInterval) -> DeleteDuplicatesPlan {
-            var p = DeleteDuplicatesPlan(volumePath: "/Volumes/\(name)", catalogLocation: model.catalogStore.fileLocation,
+            // A CONNECTED (present) volume folder: Resume and Discard refuse
+            // a plan whose drive is away (QA 2026-09-21 F4) — this test is
+            // about the offer order, not about a missing drive.
+            let volume = dir.appendingPathComponent(name, isDirectory: true)
+            try? FileManager.default.createDirectory(at: volume, withIntermediateDirectories: true)
+            var p = DeleteDuplicatesPlan(volumePath: volume.path, catalogLocation: model.catalogStore.fileLocation,
                                          crossVolumeMode: false, skippedBeforePlan: 0, summaryLine: "",
-                                         entries: [DeleteDuplicatesPlan.Entry(id: UUID(), path: "/Volumes/\(name)/x.mov", filename: "x.mov",
+                                         entries: [DeleteDuplicatesPlan.Entry(id: UUID(), path: volume.appendingPathComponent("x.mov").path, filename: "x.mov",
                                                                               sizeBytes: 1, keeperID: UUID(), keeperPath: "/k", keeperFilename: "k",
                                                                               keeperStamp: nil)])
             p.createdAt = Date().addingTimeInterval(-age)
