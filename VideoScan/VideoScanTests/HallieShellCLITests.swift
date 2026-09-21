@@ -6,7 +6,7 @@ import Testing
 @MainActor
 @Suite("Hallie standalone shell", .serialized)
 struct HallieShellCLITests {
-    private final class Harness {
+    final class Harness {
         var inputs: [String]
         var output: [String] = []
         var loadedURLs: [URL] = []
