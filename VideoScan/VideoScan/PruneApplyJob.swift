@@ -394,4 +394,19 @@ extension MediaFileOperationsCenter {
     var hasActivePruneApply: Bool {
         jobs.contains { $0.state.isActive && $0 is PruneApplyJob }
     }
+
+    /// The quit path, after `stopAllForQuit()`: wait (bounded) for a live
+    /// "Move to Trash" job to settle. Stop cancels the reads through the
+    /// job's flag, so what remains is at most ONE detached trashItem that
+    /// was already past its guard — and its purgedAt stamp + ledger line
+    /// land only when the job's task returns (QA 2026-09-20 MINOR: a
+    /// terminateNow right after Stop lost both). Returns whether it
+    /// settled within `deadline`.
+    func waitForPruneApplyToSettle(deadline: TimeInterval) async -> Bool {
+        let started = Date()
+        while hasActivePruneApply, Date().timeIntervalSince(started) < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return !hasActivePruneApply
+    }
 }

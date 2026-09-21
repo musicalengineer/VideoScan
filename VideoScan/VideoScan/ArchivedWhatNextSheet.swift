@@ -384,8 +384,17 @@ struct ArchivedWhatNextSheet: View {
         let options = PrunePlan.Options(keepOne: keepOne, keeperVolume: keeperVolume, bar: model.importanceBar)
         applying = true
         let n = summary.count
-        fileOpsCenter.startPruneApply(shown: shown, selected: selected, recordIDs: request.recordIDs,
-                                      options: options, batchID: request.batchID, model: model)
+        let job = fileOpsCenter.startPruneApply(shown: shown, selected: selected, recordIDs: request.recordIDs,
+                                                options: options, batchID: request.batchID, model: model)
+        // The center refuses a second batch while one runs (and a
+        // read-only viewer): say so and stay open — nothing was started.
+        if job.wasRefused {
+            let why: String
+            if case .failed(let message) = job.state { why = message } else { why = "refused" }
+            model.log("Archived — what next?: not started — \(why)")
+            applying = false
+            return
+        }
         model.log("Archived — what next?: Trashing \(n) cop\(n == 1 ? "y" : "ies") in Media File Operations — each is checked byte-for-byte against the archive first")
         dismiss()
     }

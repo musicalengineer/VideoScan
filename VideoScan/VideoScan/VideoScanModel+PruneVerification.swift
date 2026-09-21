@@ -291,9 +291,20 @@ extension VideoScanModel {
         return nil
     }
 
-    /// On the main actor, just before the off-main pass: the live catalog
+    /// On the main actor, just before the off-main pass: the LIVE catalog
     /// must still say what the verdict rested on. nil = go.
+    ///
+    /// "Live" means looked up NOW by id and the very same instance the
+    /// verdict was reached on (QA 2026-09-20 on 476f82b9): a catalog
+    /// reload and the derivative jobs (Trim, Cleanup, Transcode, Reformat,
+    /// Balance, Rebuild) replace rows with new instances of the same id and
+    /// path. Judging the object the caller handed in would move the file
+    /// on a row the catalog no longer holds, stamp purgedAt on that
+    /// orphan, and leave the live row saying the file is there.
     func pruneProofProblemInCatalog(_ p: PruneProof, record rec: VideoRecord) -> String? {
+        guard let live = record(forID: p.copyID), live === rec, live.purgedAt == nil else {
+            return "the catalog row was rebuilt or retired since it was verified — nothing moved"
+        }
         guard rec.id == p.copyID, rec.purgedAt == nil else {
             return "no longer an active catalog record — nothing moved"
         }

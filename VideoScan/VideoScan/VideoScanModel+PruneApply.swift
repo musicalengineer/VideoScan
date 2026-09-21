@@ -486,21 +486,6 @@ extension VideoScanModel {
             return .held("stopped before it was moved", readInFull: verdict.readInFull, archiveReadInFull: archiveReadInFull)
         }
 
-        // Carry the person's marks (note, tags, people, stars…) to the
-        // family's archive copy BEFORE the file goes — the same union rules
-        // as duplicate deletion; nothing on the archive copy is ever
-        // clobbered. The row is stamped purged by the Trash routine below,
-        // so the carry happens while it is still live.
-        var carried = false
-        if archive.id != rec.id {
-            let fields = applyHumanMetadataInheritance(from: rec, to: archive)
-            if !fields.isEmpty {
-                carried = true
-                searchIndex.update(archive)
-                log("Archived — what next?: carried to \(archive.filename) from \(rec.filename): " + fields.joined(separator: ", "))
-            }
-        }
-
         // The ONE existing Trash routine does the file operation — with
         // the proof re-checked at the last moment (#3): the live catalog on
         // main just before the hop, both stat stamps immediately before
@@ -515,6 +500,25 @@ extension VideoScanModel {
                 return Self.pruneProofProblemOnDisk(proof)
             })
         let result = await deleteConfirmedJunk([rec], mode: mode, guard: fileGuard)
+
+        // Carry the person's marks (note, tags, people, stars…) to the
+        // family's archive copy — the same union rules as duplicate
+        // deletion; nothing on the archive copy is ever clobbered — ONLY
+        // once the file has actually gone (QA 2026-09-20 MINOR: a carry
+        // before the guard's last check wrote a held copy's marks onto the
+        // archive copy). A held copy keeps its own marks.
+        var carried = false
+        if result.succeeded == 1, archive.id != rec.id {
+            let fields = applyHumanMetadataInheritance(from: rec, to: archive)
+            if !fields.isEmpty {
+                carried = true
+                searchIndex.update(archive)
+                log("Archived — what next?: carried to \(archive.filename) from \(rec.filename): " + fields.joined(separator: ", "))
+            }
+        } else if result.succeeded == 0, archive.id != rec.id, !rec.userNotes.isEmpty {
+            log("Archived — what next?: \(rec.filename) keeps its note and marks (copy held)")
+        }
+
         let outcome: PruneCopyResult
         if let refused = result.refused.first {
             outcome = .held(refused.reason)

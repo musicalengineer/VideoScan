@@ -241,6 +241,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     appLog.write("quit dialog: user chose \(midPair ? "Stop now" : "Quit Anyway") — stopping \(running) operation(s)"
                                  + (suspending ? " (Delete Duplicates suspended, plan kept for resume)" : ""))
                     center.stopAllForQuit()
+                    // "Move to Trash" (Archived — what next?): Stop cancels
+                    // its reads at once, but a file already past its guard
+                    // is mid-trashItem on a detached task, and its purgedAt
+                    // + ledger line land only when the job's task returns.
+                    // Give it a bounded moment rather than terminateNow.
+                    if center.hasActivePruneApply {
+                        appLog.write("quit: waiting up to \(Int(Self.pruneApplySettleDeadline))s for Move to Trash to settle its file")
+                        Task { @MainActor [weak self] in
+                            let settled = await center.waitForPruneApplyToSettle(deadline: Self.pruneApplySettleDeadline)
+                            appLog.write(settled ? "quit: Move to Trash settled" : "quit: Move to Trash did not settle in time — proceeding")
+                            self?.captionOrchestrator?.beginShutdown()
+                            await self?.drainVLMForShutdownIfActive()
+                            NSApp.reply(toApplicationShouldTerminate: true)
+                        }
+                        return .terminateLater
+                    }
                 } else {
                     // Without this line, "Keep Working" is indistinguishable in
                     // the log from a hang before willTerminate: no "app
@@ -279,6 +295,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// file in flight after "Finish this file, then quit". A 50 GB tape
     /// at 200 MB/s is ~4 min; past this the file is put back instead.
     static let deleteDuplicatesFinishDeadline: TimeInterval = 15 * 60
+
+    /// Max seconds the quit path waits for "Move to Trash" to settle after
+    /// Stop: at most one trashItem already past its guard (a rename), plus
+    /// the catalog stamp and ledger line.
+    static let pruneApplySettleDeadline: TimeInterval = 30
 
     /// The VLM drain, shared by the immediate quit path and the
     /// finish-this-file-first path. No-op when no batch is active.

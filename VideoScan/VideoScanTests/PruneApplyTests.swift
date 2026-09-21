@@ -1020,4 +1020,68 @@ struct PruneApplyTests {
         #expect(job.contains("model.pruneOneCopy(item, batch: batch, mode: mode, hooks: jobHooks)"), "the job runs the one pipeline")
         #expect(sheet.contains("minWidth: 960") && sheet.contains("minHeight: 720"), "Rick: a bigger dialog box")
     }
+
+    @Test("QA MINOR: a held copy keeps its note — the carry to the archive copy happens only after the file has gone")
+    func aHeldCopyKeepsItsMarks() async throws {
+        let f = try await fixture("prune_qa_carry"); defer { f.sb.cleanup() }
+        f.model.record(forID: f.dup.id)?.userNotes = "Grandpa's 80th — keep"
+        let seen = await f.model.prunePlan(for: f.ids, options: .init(), isOnline: { _ in true })
+        let dupPath = f.dup.fullPath
+        var hooks = VideoScanModel.PruneVerifyHooks.live
+        hooks.beforeMutation = { path in
+            guard path == dupPath else { return }
+            try? MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: dupPath), bytes: 40 * 1024, seed: 606)
+        }
+        let out = await f.model.applyPrune(shown: seen, selected: [f.dup.id], recordIDs: f.ids, options: .init(),
+                                           batchID: "qa-carry", mode: .permanent, hooks: hooks)
+        #expect(out.trashed == 0 && out.carried == 0 && out.held.count == 1, "\(out)")
+        #expect(!f.archive.userNotes.contains("Grandpa"), "nothing carried for a held copy: \(f.archive.userNotes)")
+        #expect(f.model.record(forID: f.dup.id)?.userNotes.contains("Grandpa") == true)
+    }
+
+    @Test("QA MINOR: the quit path can wait for a stopped batch to settle its file (purgedAt + ledger land before terminate)")
+    func theCenterWaitsForAStoppedBatchToSettle() async throws {
+        let f = try await fixture("prune_qa_settle", extraCopies: 1); defer { f.sb.cleanup() }
+        let center = MediaFileOperationsCenter()
+        let dups = f.family.rows.filter { $0.kind == .duplicate }.map(\.copy)
+        let job = center.startPruneApply(shown: f.shown, selected: Set(dups.map(\.id)), recordIDs: f.ids,
+                                         options: .init(), batchID: "qa-settle", model: f.model, mode: .permanent)
+        #expect(center.hasActivePruneApply)
+        center.stopAllForQuit()
+        let settled = await center.waitForPruneApplyToSettle(deadline: 10)
+        #expect(settled && !center.hasActivePruneApply && !job.state.isActive, "\(job.state)")
+        await f.model.mediaLedger.waitForPendingWrites()
+        let deleted = f.model.mediaLedger.allEvents().filter { $0.event == .copyDeleted }
+        // Whatever moved before the Stop is fully recorded; nothing is half-done.
+        for id in dups.map(\.id) {
+            let gone = !FileManager.default.fileExists(atPath: f.model.record(forID: id)!.fullPath)
+            #expect(gone == (f.model.record(forID: id)?.purgedAt != nil), "disk and catalog agree for \(id)")
+            #expect(gone == deleted.contains { $0.recordID == id }, "ledger agrees for \(id)")
+        }
+    }
+
+    // MARK: QA RED (2026-09-20, review of 476f82b9) — the guard re-authorizes the caller's object, not the live row
+
+    @Test("QA RED: pruneProofProblemInCatalog judges the VideoRecord the caller handed in and never asks record(forID:) — a row rebuilt between verdict and mutation (same id, same path, new instance) is trashed and the LIVE row never learns (VideoScanModel+PruneVerification.swift:568-586)")
+    func aRebuiltCatalogRowIsNotTheOneThatWasVerified() async throws {
+        let f = try await fixture("prune_qa_stale_row"); defer { f.sb.cleanup() }
+        let dupID = f.dup.id
+        let model = f.model
+        var hooks = VideoScanModel.PruneVerifyHooks.live
+        hooks.beforeMutation = { path in
+            // Between the verdict and the move the catalog rebuilds the row:
+            // same id, same path, a NEW instance — what `records[i] = decoded`
+            // (VideoScanModel.swift:31) and `records[existing] = newRec`
+            // (TrimJob/CleanupJob/TranscodeJob…) do. Nothing on disk changes.
+            guard path == f.dup.fullPath,
+                  let i = model.records.firstIndex(where: { $0.id == dupID }) else { return }
+            model.records[i] = model.records[i].snapshotClone()
+        }
+        let out = await apply(f, selected: [dupID], hooks: hooks)
+        let live = try #require(model.record(forID: dupID), "the live row is the rebuilt one")
+        let onDisk = FileManager.default.fileExists(atPath: f.dup.fullPath)
+        #expect(!(onDisk == false && live.purgedAt == nil),
+                "the file left the disk while the LIVE catalog row still says it is there — the guard authorized on the caller's stale object: \(out)")
+        #expect(out.trashed == 0 && out.held.first?.contains("nothing moved") == true, "refused, named: \(out)")
+    }
 }
