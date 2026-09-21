@@ -1,5 +1,8 @@
 import importlib.util
+import json
+import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,3 +46,41 @@ class HarvestTests(unittest.TestCase):
         self.assertEqual(harvest.guess_expect("who are rick's brothers?"), "kinship")
         self.assertEqual(harvest.guess_expect("tell me about peter ronan"), "biography")
         self.assertEqual(harvest.guess_expect("how many videos in the archive now?"), "catalog")
+
+    def test_sibling_corpora_texts_count_as_already_harvested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            corpus = Path(tmp) / "hallie_eval_corpus.json"
+            corpus.write_text(json.dumps({"description": "1 questions", "questions": [
+                {"id": "a1", "text": "who is donna", "expect": "biography"}]}, indent=2) + "\n")
+            (Path(tmp) / "hallie_strict_regressions.json").write_text(json.dumps({"categories": [
+                {"id": "c", "prompts": ["what country was John Hastings born in?", {"text": "tell me about dad"}],
+                 "sessions": [{"id": "s", "turns": ["who is tim", {"text": "and his brother?"}]}]}]}))
+            self.assertEqual(harvest.sibling_texts(corpus), {
+                "what country was john hastings born in?", "tell me about dad",
+                "who is tim", "and his brother?"})
+            turns = [turn("who is tim"), turn("tell me about DAD"), turn("who is beth?")]
+            with patch.object(harvest, "read_turns", return_value=turns):
+                harvest.main(["--since", "2026-09-01", "--corpus", str(corpus), "--append"])
+            written = json.loads(corpus.read_text())
+            self.assertEqual([q["text"] for q in written["questions"]], ["who is donna", "who is beth?"])
+            self.assertEqual(written["description"], "2 questions")
+
+    def test_append_keeps_the_indent_the_file_already_uses(self):
+        for indent in (1, 2):
+            with tempfile.TemporaryDirectory() as tmp:
+                corpus = Path(tmp) / "hallie_eval_corpus.json"
+                body = {"description": "1 questions", "questions": [
+                    {"id": "a1", "text": "who is donna", "expect": "biography"}]}
+                before = json.dumps(body, indent=indent, ensure_ascii=False) + "\n"
+                corpus.write_text(before)
+                self.assertEqual(harvest.detect_indent(before), indent)
+                with patch.object(harvest, "read_turns", return_value=[turn("who is beth?")]):
+                    harvest.main(["--since", "2026-09-01", "--corpus", str(corpus), "--append"])
+                after = corpus.read_text()
+                # Every original line survives untouched (the last row only
+                # gains a comma); only rows were added.
+                before_lines, after_lines = before.splitlines(), after.splitlines()
+                self.assertIn('"2 questions"', after_lines[1])  # the count line is the one change
+                self.assertEqual(after_lines[2:len(before_lines) - 3], before_lines[2:-3], indent)
+                self.assertEqual(harvest.detect_indent(after), indent)
+                self.assertEqual(json.loads(after)["questions"][-1]["text"], "who is beth?")
