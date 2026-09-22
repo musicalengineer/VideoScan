@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 695 questions across fifteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 725 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -5561,6 +5561,241 @@
       "text": "was ma really recruited by the cia",
       "expect": "biography",
       "notes": "People profile notes: recruited in 1952, declined, married Richard Breen Sr. Report it as told by Rick, not as verified fact."
+    },
+    {
+      "id": "typo-001",
+      "category": "typos",
+      "text": "Hi Hallie how areyou?",
+      "expect": "social",
+      "notes": "clean: “Hi Hallie how are you?”. LIVE MISS 2026-09-21 18:52: 'areyou' run together; answer as small talk (I'm doing well…), never a transcript search for 'hi'. (typo front door, 2026-09-21)",
+      "mustNotContain": [
+        "where someone says",
+        "videos matched"
+      ]
+    },
+    {
+      "id": "typo-002",
+      "category": "typos",
+      "text": "howare u",
+      "expect": "social",
+      "notes": "clean: “how are you”. run-together + texting 'u'; small-talk wellbeing reply. (typo front door, 2026-09-21)",
+      "mustNotContain": [
+        "where someone says"
+      ]
+    },
+    {
+      "id": "typo-003",
+      "category": "typos",
+      "text": "how r u hallie",
+      "expect": "social",
+      "notes": "clean: “how are you hallie”. texting 'r'/'u'; small-talk wellbeing reply. (typo front door, 2026-09-21)",
+      "mustNotContain": [
+        "where someone says"
+      ]
+    },
+    {
+      "id": "typo-004",
+      "category": "typos",
+      "text": "thankyou hallie",
+      "expect": "social",
+      "notes": "clean: “thank you hallie”. run-together thanks; 'you're welcome' reply, no search. (typo front door, 2026-09-21)",
+      "mustNotContain": [
+        "where someone says"
+      ]
+    },
+    {
+      "id": "typo-005",
+      "category": "typos",
+      "text": "thanksss",
+      "expect": "social",
+      "notes": "clean: “thanks”. stretched letters; thanks reply. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-006",
+      "category": "typos",
+      "text": "helllo",
+      "expect": "social",
+      "notes": "clean: “hello”. stretched letters; greeting reply. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-007",
+      "category": "typos",
+      "text": "hiii hallie",
+      "expect": "social",
+      "notes": "clean: “hi hallie”. stretched greeting; greeting reply (and the user's kind word if one exists). (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-008",
+      "category": "typos",
+      "text": "goodmorning!",
+      "expect": "social",
+      "notes": "clean: “good morning!”. run-together greeting; greeting reply. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-009",
+      "category": "typos",
+      "text": "im good thx",
+      "expect": "social",
+      "notes": "clean: “I'm good thanks”. missing apostrophe + texting 'thx'; small-talk reply, no search. (typo front door, 2026-09-21)",
+      "mustNotContain": [
+        "where someone says"
+      ]
+    },
+    {
+      "id": "typo-010",
+      "category": "typos",
+      "text": "ur welcome",
+      "expect": "social",
+      "notes": "clean: “you're welcome”. texting 'ur'; acknowledgement, no search. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-011",
+      "category": "typos",
+      "text": "hows ur day going",
+      "expect": "social",
+      "notes": "clean: “how's your day going”. missing apostrophe + texting 'ur'; wellbeing reply. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-012",
+      "category": "typos",
+      "text": "wat time is it",
+      "expect": "social",
+      "notes": "clean: “what time is it”. texting 'wat'; local clock reply. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-013",
+      "category": "typos",
+      "text": "whats todays date",
+      "expect": "social",
+      "notes": "clean: “what's today's date”. missing apostrophes; local date reply. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-014",
+      "category": "typos",
+      "text": "wat can u do",
+      "expect": "social",
+      "notes": "clean: “what can you do”. texting; help card. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-015",
+      "category": "typos",
+      "text": "who r u",
+      "expect": "social",
+      "notes": "clean: “who are you”. texting; identity answer, not a search. (typo front door, 2026-09-21)",
+      "mustNotContain": [
+        "where someone says"
+      ]
+    },
+    {
+      "id": "typo-016",
+      "category": "typos",
+      "text": "whos donnas mom",
+      "expect": "kinship",
+      "notes": "clean: “who's Donna's mom”. missing apostrophes on a contraction and a name's possessive; Donna's mother from the tree. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-017",
+      "category": "typos",
+      "text": "shwo me vidoes of donna",
+      "expect": "catalog",
+      "notes": "clean: “show me videos of Donna”. two swapped-letter slips of command words; Donna's videos. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-018",
+      "category": "typos",
+      "text": "pls show me vids of tim",
+      "expect": "catalog",
+      "notes": "clean: “please show me videos of Tim”. texting 'pls'/'vids'; Tim's videos. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-019",
+      "category": "typos",
+      "text": "fnid videos of matt",
+      "expect": "catalog",
+      "notes": "clean: “find videos of Matt”. swapped letters in 'find'; Matt's videos. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-020",
+      "category": "typos",
+      "text": "tel me about ma",
+      "expect": "biography",
+      "notes": "clean: “tell me about Ma”. dropped letter; Ma's biography — 'Ma' is a name and is never read as 'me'. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-021",
+      "category": "typos",
+      "text": "tellme about libby",
+      "expect": "biography",
+      "notes": "clean: “tell me about Libby”. run-together 'tellme'; Libby's biography. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-022",
+      "category": "typos",
+      "text": "wat year was ma born",
+      "expect": "kinship",
+      "notes": "clean: “what year was Ma born”. texting 'wat'; Ma's birth year (1930). (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-023",
+      "category": "typos",
+      "text": "wehre was donna born",
+      "expect": "kinship",
+      "notes": "clean: “where was Donna born”. swapped letters in 'where' (not 'were'); Donna's birthplace. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-024",
+      "category": "typos",
+      "text": "whowas donnas father",
+      "expect": "kinship",
+      "notes": "clean: “who was Donna's father”. run-together 'whowas' + name possessive; Donna's father. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-025",
+      "category": "typos",
+      "text": "howold is donna",
+      "expect": "kinship",
+      "notes": "clean: “how old is Donna”. run-together 'howold'; Donna's age. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-026",
+      "category": "typos",
+      "text": "howmany vidoes are there",
+      "expect": "catalog",
+      "notes": "clean: “how many videos are there”. run-together + swapped letters; catalog count. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-027",
+      "category": "typos",
+      "text": "who maried donna",
+      "expect": "kinship",
+      "notes": "clean: “who married Donna”. dropped letter in 'married'; Donna's spouse. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "typo-028",
+      "category": "typos",
+      "text": "hi hallie, whos rick's brother",
+      "expect": "kinship",
+      "notes": "clean: “who's Rick's brother”. greeting peeled + 'whos'; Rick's brothers — the greeting is never a search keyword. (typo front door, 2026-09-21)",
+      "mustNotContain": [
+        "where someone says"
+      ]
+    },
+    {
+      "id": "typo-029",
+      "category": "typos",
+      "text": "hello hallie shwo me the family tree",
+      "expect": "kinship",
+      "notes": "clean: “show me the family tree”. greeting peeled + swapped letters; the family tree. (typo front door, 2026-09-21)",
+      "mustNotContain": [
+        "where someone says"
+      ]
+    },
+    {
+      "id": "typo-030",
+      "category": "typos",
+      "text": "videos of dan and tim",
+      "expect": "catalog",
+      "notes": "clean: “videos of Dan and Tim”. NAMES ARE NEVER CORRECTED: 'dan' is not 'and', 'tim' is not 'time'; Dan and Tim's videos. (typo front door, 2026-09-21)"
     }
   ]
 }

@@ -536,7 +536,13 @@ enum HallieAppTurnCoordinator {
             return handled
         }
 
-        let repair = HallieSpellingRecovery.repairRequestOpener(question)
+        // THE FRONT DOOR (2026-09-21): everyday typos read as their words
+        // and a leading greeting set aside, before any pre-model lane —
+        // "Hi Hallie how areyou?" was a transcript search for "hi". The
+        // typed `question` stays the transcript and the record-scope text.
+        let door = try await frontDoorOffMain(question: question, dependencies: dependencies)
+        for line in door.logLines { appLog.write(line) }
+        let repair = HallieSpellingRecovery.repairRequestOpener(door.routingText)
         let routingQuestion = repair.text
         if let original = repair.originalWord,
            let replacement = repair.replacementWord {
@@ -811,6 +817,37 @@ enum HallieAppTurnCoordinator {
                     candidateID,
                     pending.context)
             }
+    }
+
+    /// The front door's name oracle reads identity files, so it runs off
+    /// the main actor — and the sources are loaded only if a token would
+    /// otherwise be rewritten (a clean sentence reads nothing).
+    private static func frontDoorOffMain(
+        question: String,
+        dependencies: Dependencies
+    ) async throws -> HallieFrontDoor.Outcome {
+        let worker = Task.detached(priority: .userInitiated) {
+            () throws -> HallieFrontDoor.Outcome in
+            try Task.checkCancellation()
+            var loaded: HallieTurnExecutor.Context?
+            func sources() -> HallieTurnExecutor.Context {
+                if let loaded { return loaded }
+                let context = HallieTurnExecutor.Context(
+                    profiles: dependencies.loadProfiles(),
+                    graph: dependencies.loadGraph(),
+                    cyberBrain: dependencies.loadCyberBrain())
+                loaded = context
+                return context
+            }
+            return HallieFrontDoor.prepare(question) {
+                HallieFrontDoor.isProtectedName($0, context: sources())
+            }
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
 
     private static func preTranslationOffMain(

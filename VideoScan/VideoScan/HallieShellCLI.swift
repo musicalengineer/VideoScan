@@ -858,6 +858,24 @@ enum HallieShellCLI {
         }
     }
 
+    /// The typo front door (HallieFrontDoor) with its log lines, echoed
+    /// to the console under `--diagnostics`.
+    static func frontDoor(
+        _ question: String,
+        identity: HallieTurnExecutor.Context,
+        diagnostics: Bool,
+        output: (String) -> Void
+    ) -> HallieFrontDoor.Outcome {
+        let door = HallieFrontDoor.prepare(question) {
+            HallieFrontDoor.isProtectedName($0, context: identity)
+        }
+        for line in door.logLines {
+            appLog.write(line)
+            if diagnostics { output(line) }
+        }
+        return door
+    }
+
     static func answer(
         _ question: String,
         options: Options,
@@ -1030,7 +1048,12 @@ enum HallieShellCLI {
                     dependencies: dependencies)
             }
         }
-        let repair = HallieSpellingRecovery.repairRequestOpener(question)
+        // THE FRONT DOOR (2026-09-21), the same pass the app runs: typos
+        // read as their words, a leading greeting set aside. The typed
+        // `question` stays the transcript.
+        let door = frontDoor(question, identity: state.identityContext,
+                             diagnostics: options.diagnostics, output: output)
+        let repair = HallieSpellingRecovery.repairRequestOpener(door.routingText)
         let routingQuestion = repair.text
         if let original = repair.originalWord,
            let replacement = repair.replacementWord {
