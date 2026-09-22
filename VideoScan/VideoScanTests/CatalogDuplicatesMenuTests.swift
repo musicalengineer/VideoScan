@@ -121,7 +121,7 @@ struct CatalogDuplicatesMenuStructureTests {
     /// never an alert raised while the sheet is still up.
     @Test func confirmationIsRaisedFromThePickerOnDismiss() throws {
         let src = code(try appSource("ContentView.swift"))
-        #expect(src.contains(".sheet(isPresented: $showDeleteDuplicatesVolumePicker, onDismiss: {"))
+        #expect(src.contains(".sheet(item: $deleteDuplicatesVolumePicker, onDismiss: {"))
         #expect(src.contains("prepareDeleteDuplicatesConfirmation(path: vol.path, count: vol.count)"))
         // The only place that raises the alert is the helper.
         #expect(src.components(separatedBy: "showDeleteDuplicatesConfirm = true").count - 1 == 1)

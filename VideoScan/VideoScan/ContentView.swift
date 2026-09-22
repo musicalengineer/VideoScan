@@ -371,7 +371,9 @@ struct CatalogView: View {
     /// replaced a submenu that closed on every window update). The picked
     /// volume is held here until the sheet's onDismiss, which then shows
     /// the confirmation alert: one modal fully gone before the next.
-    @State private var showDeleteDuplicatesVolumePicker = false
+    /// Non-nil while the picker is up. `.sheet(item:)` rather than
+    /// `isPresented:` per the house rule (chained_sheet_isPresented lint).
+    @State private var deleteDuplicatesVolumePicker: DeleteDuplicatesVolumePickerRequest?
     @State private var pickedDeleteDuplicatesVolume: CatalogDuplicatesMenu.Volume?
     /// Confirmation body built once at click time from
     /// `duplicateDeletionSelection` (2026-08-18, "Also clean up working
@@ -659,7 +661,7 @@ struct CatalogView: View {
             volumesWithDeletableDups: model.deletableDupVolumes,
             onChooseVolumeToDeleteDuplicates: {
                 pickedDeleteDuplicatesVolume = nil
-                showDeleteDuplicatesVolumePicker = true
+                deleteDuplicatesVolumePicker = DeleteDuplicatesVolumePickerRequest()
             },
             onClearResults: { model.clearResults() },
             onClearCache: { _ = model.clearCache() },
@@ -992,13 +994,13 @@ struct CatalogView: View {
         } message: { notice in
             Text(volumeRenameNoticeMessage(notice))
         }
-        .sheet(isPresented: $showDeleteDuplicatesVolumePicker, onDismiss: {
+        .sheet(item: $deleteDuplicatesVolumePicker, onDismiss: {
             // Runs after the sheet is fully dismissed, so the alert below
             // never races the sheet (see the chained-sheet antipattern).
             guard let vol = pickedDeleteDuplicatesVolume else { return }
             pickedDeleteDuplicatesVolume = nil
             prepareDeleteDuplicatesConfirmation(path: vol.path, count: vol.count)
-        }) {
+        }) { _ in
             DeleteDuplicatesVolumePicker(
                 volumes: model.deletableDupVolumes.map {
                     CatalogDuplicatesMenu.Volume(path: $0.path, count: $0.count)
@@ -1006,11 +1008,11 @@ struct CatalogView: View {
                 onPick: { vol in
                     appLog.write("Delete Duplicates: picked \(vol.path) (\(vol.count) candidate(s)) in the volume picker")
                     pickedDeleteDuplicatesVolume = vol
-                    showDeleteDuplicatesVolumePicker = false
+                    deleteDuplicatesVolumePicker = nil
                 },
                 onCancel: {
                     pickedDeleteDuplicatesVolume = nil
-                    showDeleteDuplicatesVolumePicker = false
+                    deleteDuplicatesVolumePicker = nil
                 })
         }
         .alert("Delete Duplicates", isPresented: $showDeleteDuplicatesConfirm) {

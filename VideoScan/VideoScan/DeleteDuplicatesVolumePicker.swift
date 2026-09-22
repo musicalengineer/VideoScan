@@ -10,6 +10,13 @@
 
 import SwiftUI
 
+/// Drives `.sheet(item:)` for the picker. One fixed id: there is only
+/// ever one picker, and a constant id keeps SwiftUI from treating a
+/// re-request as a different sheet.
+struct DeleteDuplicatesVolumePickerRequest: Identifiable, Equatable {
+    let id = "deleteDuplicatesVolumePicker"
+}
+
 struct DeleteDuplicatesVolumePicker: View {
     let volumes: [CatalogDuplicatesMenu.Volume]
     let onPick: (CatalogDuplicatesMenu.Volume) -> Void
