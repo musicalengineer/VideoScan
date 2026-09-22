@@ -474,8 +474,10 @@ struct ArchiveAngelReviewSheet: View {
         // is a pass on it, the same as Skip — noted ONCE per batch and row.
         Self.noteUncheckedAtPromote(plan: &plan, model: model)
         var working = plan
-        let job = promoter.promote(plan: &working, model: model, center: fileOpsCenter) { settled in
-            plan = settled
+        let job = fileOpsCenter.startedByUser { center in
+            promoter.promote(plan: &working, model: model, center: center) { settled in
+                plan = settled
+            }
         }
         plan = working
         if job == nil {

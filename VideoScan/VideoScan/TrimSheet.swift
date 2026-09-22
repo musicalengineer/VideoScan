@@ -535,17 +535,16 @@ struct TrimSheet: View {
         // probed-false intra-named file needs the wider verification
         // tolerance so the honest keyframe snap can't false-fail a
         // completed multi-hour copy.
-        fileOpsCenter.startTrim(record: request.record,
-                                range: TrimRange(inSeconds: inSeconds, outSeconds: outSeconds),
-                                model: model,
-                                plannedOutput: request.destinationURL,
-                                probedIntra: probeAllKeyframes)
-        dismiss()
-        // Same handoff TranscodeSheet/CleanupSheet use: open the
-        // operations window (progress + Cancel live there) after the
-        // sheet's dismissal animation starts.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            openWindow(id: "combine")
+        fileOpsCenter.startedByUser {
+            $0.startTrim(record: request.record,
+                         range: TrimRange(inSeconds: inSeconds, outSeconds: outSeconds),
+                         model: model,
+                         plannedOutput: request.destinationURL,
+                         probedIntra: probeAllKeyframes)
         }
+        dismiss()
+        // No openWindow here any more (2026-09-21): a user-started job brings
+        // the Media File Operations window forward itself — in front but NOT
+        // key, and only when Settings allows (MediaFileOperationsWindowForwarder).
     }
 }

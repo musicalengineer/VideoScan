@@ -284,14 +284,14 @@ struct RipAllFramesSheet: View {
         let options = AllFramesRipper.Options(sampling: sampling,
                                               estimatedFrames: estimatedFrames,
                                               estimatedBytes: estimatedBytes)
-        fileOpsCenter.startRipAllFrames(record: record,
-                                        destinationParent: parent,
-                                        options: options)
-        dismiss()
-        // Same dismiss-then-open beat as CombinePairSheet — opening the
-        // window while the sheet is still up loses key focus.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            openWindow(id: "combine")
+        fileOpsCenter.startedByUser {
+            $0.startRipAllFrames(record: record,
+                                 destinationParent: parent,
+                                 options: options)
         }
+        dismiss()
+        // No openWindow here any more (2026-09-21): a user-started job brings
+        // the Media File Operations window forward itself — in front but NOT
+        // key, and only when Settings allows (MediaFileOperationsWindowForwarder).
     }
 }

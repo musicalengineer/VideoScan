@@ -580,8 +580,9 @@ extension CatalogContent {
                         // selected. Distinct from the volume-level
                         // Compare & Rescue feature.
                         Button("Compare These Two Files…") {
-                            fileOpsCenter.startCompare(
-                                recordA: fileA, recordB: fileB)
+                            fileOpsCenter.startedByUser {
+                                $0.startCompare(recordA: fileA, recordB: fileB)
+                            }
                             // The compare result lives in the job window — in front (codex #964).
                             MediaFileOperationsWindowOpener.openInFront(openWindow)
                         }
@@ -972,10 +973,11 @@ extension CatalogContent {
                         // v1: Donna is the only tuned recipe.
                         Menu("Find and Tag") {
                             Button("Donna") {
-                                fileOpsCenter.startFindPerson(
-                                    person: "Donna",
-                                    records: selectedRecs,
-                                    model: model)
+                                fileOpsCenter.startedByUser {
+                                    $0.startFindPerson(person: "Donna",
+                                                       records: selectedRecs,
+                                                       model: model)
+                                }
                                 MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // MFO window (legacy id)
                             }
                             Divider()
@@ -1229,9 +1231,12 @@ extension CatalogContent {
         Button(activeRecs.count > 1
                ? "Verify Audio (\(activeRecs.count) Files)"
                : "Verify Audio") {
-            for r in verifiableRecs {
-                model.noteMissingFileForUserAction(r)
-                fileOpsCenter.startVerifyAudio(record: r, model: model)
+            // One scope for the whole selection: N jobs, one raise.
+            fileOpsCenter.startedByUser { center in
+                for r in verifiableRecs {
+                    model.noteMissingFileForUserAction(r)
+                    center.startVerifyAudio(record: r, model: model)
+                }
             }
             MediaFileOperationsWindowOpener.openBehindMain(openWindow)
         }
@@ -1263,9 +1268,10 @@ extension CatalogContent {
             Button(damagedRecs.count > 1
                    ? "Repair Damaged Audio (\(damagedRecs.count) Files)"
                    : "Repair Damaged Audio") {
-                for r in damagedRecs {
-                    fileOpsCenter.startVerifyAudio(
-                        record: r, model: model, autoRepair: true)
+                fileOpsCenter.startedByUser { center in
+                    for r in damagedRecs {
+                        center.startVerifyAudio(record: r, model: model, autoRepair: true)
+                    }
                 }
                 MediaFileOperationsWindowOpener.openBehindMain(openWindow)
             }
@@ -1379,12 +1385,12 @@ extension CatalogContent {
         }
         let modern = reachable.filter { rec in !needsReformat.contains(where: { $0.id == rec.id }) }
 
-        for rec in modern {
-            fileOpsCenter.startAnalyzeOne(
-                record: rec, model: model,
-                orchestrator: captionOrchestrator,
-                stages: stages
-            )
+        fileOpsCenter.startedByUser { center in
+            for rec in modern {
+                center.startAnalyzeOne(record: rec, model: model,
+                                       orchestrator: captionOrchestrator,
+                                       stages: stages)
+            }
         }
         guard !needsReformat.isEmpty else {
             if !modern.isEmpty { MediaFileOperationsWindowOpener.openBehindMain(openWindow) }
@@ -1404,11 +1410,11 @@ extension CatalogContent {
         alert.addButton(withTitle: needsReformat.count == reachable.count ? "Cancel" : "Skip These")
         let reformat = alert.runModal() == .alertFirstButtonReturn
         if reformat {
-            for rec in needsReformat {
-                fileOpsCenter.startReformat(
-                    record: rec, model: model,
-                    orchestrator: captionOrchestrator
-                )
+            fileOpsCenter.startedByUser { center in
+                for rec in needsReformat {
+                    center.startReformat(record: rec, model: model,
+                                         orchestrator: captionOrchestrator)
+                }
             }
         }
         // Opened only AFTER the modal returns, whichever button was chosen:
@@ -1424,11 +1430,11 @@ extension CatalogContent {
                                      audioCodec: rec.audioCodec)
             && !rec.needsReformat {
             // Modern codec — analyze directly.
-            fileOpsCenter.startAnalyzeOne(
-                record: rec, model: model,
-                orchestrator: captionOrchestrator,
-                stages: stages
-            )
+            fileOpsCenter.startedByUser {
+                $0.startAnalyzeOne(record: rec, model: model,
+                                   orchestrator: captionOrchestrator,
+                                   stages: stages)
+            }
             MediaFileOperationsWindowOpener.openBehindMain(openWindow)
             return
         }
@@ -1454,10 +1460,10 @@ extension CatalogContent {
         alert.addButton(withTitle: "Reformat and Analyze")
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn {
-            fileOpsCenter.startReformat(
-                record: rec, model: model,
-                orchestrator: captionOrchestrator
-            )
+            fileOpsCenter.startedByUser {
+                $0.startReformat(record: rec, model: model,
+                                 orchestrator: captionOrchestrator)
+            }
             MediaFileOperationsWindowOpener.openBehindMain(openWindow)
         }
     }

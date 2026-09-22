@@ -71,6 +71,20 @@ enum MediaFileOperationsWindowOpener {
     /// A newer open supersedes any older open's pending retries.
     private static var generation = 0
 
+    /// Set by AppKitMediaFileOperationsWindowPresenter when a user-started
+    /// job has just brought the window forward (Rick 2026-09-21). Inside
+    /// that moment `openBehindMain` stands down, so the call site's legacy
+    /// "open behind" does not bury the window the forwarder just raised.
+    /// With the setting off nothing sets this and the behavior is unchanged.
+    static var forwardedAt: Date?
+
+    /// Pure, so the stand-down rule is table-testable.
+    nonisolated static func defersToForward(forwardedAt: Date?, now: Date) -> Bool {
+        guard let forwardedAt else { return false }
+        let age = now.timeIntervalSince(forwardedAt)
+        return age >= 0 && age < MediaFileOperationsWindowForwarder.debounceSeconds
+    }
+
     /// The job window is the RESULT the user asked for (Archive Helper's
     /// expanded row, Compare) — open it in front like any other window.
     static func openInFront(_ openWindow: OpenWindowAction) {
@@ -84,6 +98,7 @@ enum MediaFileOperationsWindowOpener {
     /// If the captured anchor has since closed, the current main window
     /// stands in.
     static func openBehindMain(_ openWindow: OpenWindowAction) {
+        if defersToForward(forwardedAt: forwardedAt, now: Date()) { return }
         let captured = MainWindowHelper.shared.findMainWindow() ?? NSApp.keyWindow
         generation += 1
         let mine = generation
@@ -146,7 +161,7 @@ struct MediaFileOperationsWindow: View {
             Divider()
             if let pending = model.pendingDeleteDuplicatesResume {
                 DeleteDuplicatesResumeBanner(plan: pending,
-                                             onResume: { center.resumeDeleteDuplicates(plan: pending, model: model) },
+                                             onResume: { center.startedByUser { $0.resumeDeleteDuplicates(plan: pending, model: model) } },
                                              onPutBack: { model.putBackStrandedDuplicates() },
                                              onDiscard: { model.discardPendingDeleteDuplicatesPlan() })
                 Divider()
