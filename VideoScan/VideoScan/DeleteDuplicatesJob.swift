@@ -431,6 +431,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// The main-actor task driving each pair in flight (settle + save).
     private var pairTasks: [UUID: Task<Void, Never>] = [:]
     private var inFlight: Set<UUID> = []
+    /// Sibling path → the pair in flight that may be reading it (one read
+    /// per sibling per run; cleared when that pair settles).
+    private var siblingReaders: [String: UUID] = [:]
+    /// Pairs that waited for another pair's sibling read (tests read it).
+    private(set) var siblingReadWaits = 0
     /// The most pairs that were ever in flight together (tests read it).
     private(set) var peakInFlight = 0
     private var pauseWaiter: CheckedContinuation<Void, Never>?
@@ -859,6 +864,20 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             let alsoPending = Set(current.entries.filter { !$0.status.isSettled && $0.id != entry.id }.map(\.id))
             let candidates = model.deletionTierCandidates(record: record, keeper: keeper, excluding: alsoPending)
 
+            // ONE READ PER SIBLING PER RUN: a sibling another pair in flight
+            // may be reading right now is not read twice beside it — this
+            // row gives its slots back, waits for that pair to settle (its
+            // fixity is then on the sibling's record) and is re-checked
+            // from the top with the fresh catalog.
+            if let owner = candidates.otherCopies.lazy.compactMap({ self.siblingReaders[$0.path] })
+                .first(where: { $0 != entry.id }), let running = pairTasks[owner] {
+                releaseSlots(weight)
+                cursor -= 1
+                siblingReadWaits += 1
+                await running.value
+                continue
+            }
+
             // PROVE SIBLINGS (2026-09-21): a sibling read occupies a slot
             // on the SIBLING's drive. When the stored evidence cannot
             // reach the goal and a sibling may need reading, the pair's
@@ -893,6 +912,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                         Self.slotWeight(for: mediaTech(for: $0)) <= reserved
                     }))
             }
+            // Claim the siblings this pair may read (no usable stored
+            // evidence, drive reserved) until it settles.
+            for path in needy where allowance.readablePaths.contains(path) { siblingReaders[path] = entry.id }
 
             mutatePlan { $0.set(entry.id, .verifying) }
             model.duplicateStatus = "Verifying duplicate \((plan?.counts.settled ?? 0) + 1) of \(current.entries.count)…"
@@ -1037,6 +1059,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                          item: DeleteDuplicatesWorkItem, weight: Int) async {
         defer {
             pairTasks[entry.id] = nil
+            siblingReaders = siblingReaders.filter { $0.value != entry.id }
         }
         guard let model, plan != nil else {
             inFlight.remove(entry.id); releaseSlots(weight); return
@@ -1425,7 +1448,14 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         return "delete duplicates \(how): \(volume) — " + parts.joined(separator: " · ")
     }
 
+    /// True once this job wrote its own terminal summary (done /
+    /// cancelled / stopped / suspended) — the MFO center then skips its
+    /// generic outcome line, so the log has ONE final line per run, the
+    /// one with per-outcome sizes.
+    private(set) var wroteOwnTerminalLine = false
+
     private func logSummary(_ how: String) {
+        if how != "paused" { wroteOwnTerminalLine = true }
         let line = Self.summaryLine(how: how, volume: volumeName, tally: tally)
         jobLog(line)
         deleteDupLog.notice("\(line, privacy: .public)")

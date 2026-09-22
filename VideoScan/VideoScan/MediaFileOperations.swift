@@ -901,6 +901,10 @@ final class MediaFileOperationsCenter: ObservableObject {
         guard !job.state.isActive, !terminalLogged.contains(job.id) else { return }
         terminalLogged.insert(job.id)
         terminalWatchers[job.id] = nil
+        // Delete Duplicates writes its own final line ("delete duplicates
+        // done: <volume> — deleted N (X) · trashed …", 2026-09-22): one
+        // line per run, not two.
+        if (job as? DeleteDuplicatesJob)?.wroteOwnTerminalLine == true { return }
         if let line = Self.terminalSummaryLine(verb: job.kind.logVerb,
                                               title: job.title,
                                               state: job.state,

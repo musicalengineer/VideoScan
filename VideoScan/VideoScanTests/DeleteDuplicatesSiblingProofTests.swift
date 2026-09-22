@@ -367,6 +367,25 @@ struct DeleteDuplicatesSiblingProofTests {
         #expect(quarantineFolders(in: dir).isEmpty)
     }
 
+    /// ONE READ PER SIBLING PER RUN: two SSD pairs in flight together
+    /// that both name the same unproven sibling — the second waits for
+    /// the first's read and reuses the stored fixity.
+    @Test func twoPairsNamingOneUnprovenSiblingReadItOnce() async throws {
+        let dir = tempDir("dedup"); defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let fam = addFamily(to: model, in: dir, name: "u", copies: 2, siblings: 1)
+        let probe = Probe(); probe.quarantineHold = 0.3
+        let job = makeJob(model, dir, probe, sink: InMemoryLogSink())
+        job.mediaTechForPath = { _ in .ssd }
+        job.start(); await job.task?.value
+
+        #expect(job.plan?.entries.map(\.status) == [.trashed, .trashed], "\(job.plan?.entries.map(\.note) ?? [])")
+        #expect(probe.blocks("sibling") == 3 && probe.opens("u-sib1.mov") == 1, "the sibling was read once, not twice")
+        #expect(job.siblingReadWaits == 1, "the second pair waited for the first's read")
+        #expect(job.runTally.siblingReads == 1)
+        #expect(FileManager.default.fileExists(atPath: fam.siblings[0].fullPath))
+    }
+
     /// The slot gate: a sibling read occupies a slot on the SIBLING's
     /// drive. SSD siblings → two SSD pairs overlap; HDD siblings → each
     /// pair runs alone.
@@ -480,13 +499,12 @@ struct DeleteDuplicatesForecastTests {
         #expect(forecast.bucket(for: alone.copies[0].id) == .leftAlone)
         #expect(forecast.bucket(for: notDup.copies[0].id) == .likelyNotDuplicate)
         #expect(forecast.siblingReads == 1 && forecast.siblingReadBytes == Int64(fileSize))
-        let text = forecast.confirmationText
-        #expect(text.contains("• will be deleted: 1 (\(sizeText))"), Comment(rawValue: text))
-        #expect(text.contains("• will move to the Trash: 1 (\(sizeText))"))
-        #expect(text.contains("• need 1 sibling read to decide: 1 (\(sizeText))"))
-        #expect(text.contains("• will be left alone — only the original remains elsewhere: 1 (\(sizeText))"))
-        #expect(text.contains("• likely not duplicates: 1 ("))
-
+        let text = forecast.confirmationText(volume: "FixtureDrive")
+        #expect(text.hasPrefix("Check 5 copies on FixtureDrive.\n\nForecast (from the catalog — no file read yet): "
+                               + "about 1 deleted (\(sizeText)), 1 to the Trash (\(sizeText)), 1 need other copies read first (\(sizeText) to read), "
+                               + "1 left alone — only the original remains elsewhere (\(sizeText)), 1 likely not duplicates ("), Comment(rawValue: text))
+        #expect(!text.contains("permanently delete") && !text.contains("Nothing can be removed"))
+        #expect(text.hasSuffix(DeleteDuplicatesForecast.decidesAtTheMoment))
         let sink = InMemoryLogSink()
         let job = makeJob(model, dir, Probe(), sink: sink)
         job.start(); await job.task?.value
@@ -499,6 +517,25 @@ struct DeleteDuplicatesForecastTests {
         #expect(status(notDup.copies[0]) == .refused)
         #expect(sink.lines.first { $0.hasPrefix("delete duplicates forecast: ") } == forecast.logLine(volume: dir.lastPathComponent),
                 "the run logs the same forecast as one line")
+    }
+
+    /// Honest when nothing can go yet — and still a Start (the button is
+    /// not "Delete N files").
+    @Test func zeroRemovableSaysSoInPlainWords() {
+        typealias F = DeleteDuplicatesForecast
+        let g = UUID()
+        let k = Self.copy(digest: "aa"), s1 = Self.copy(), row = UUID()
+        let f = F.compute(.init(rows: [.init(id: row, sizeBytes: 100, digest: nil, keeperID: k.id, groupID: g)],
+                                copies: [k.id: k, s1.id: s1, row: Self.copy(row)], members: [g: [k.id, row, s1.id]],
+                                preferTrash: false))
+        let text = f.confirmationText(volume: "SanDiskWorkspace")
+        #expect(text.hasPrefix("Check 1 copy on SanDiskWorkspace.\n\nForecast (from the catalog — no file read yet): about 0 deleted"),
+                Comment(rawValue: text))
+        #expect(text.contains("\n\nNothing can be removed yet — 1 copy needs its other copies read first."))
+        let alone = F.compute(.init(rows: [.init(id: row, sizeBytes: 100, digest: nil, keeperID: k.id, groupID: g)],
+                                    copies: [k.id: k, row: Self.copy(row)], members: [g: [k.id, row]], preferTrash: false))
+        #expect(alone.confirmationText(volume: "V").contains("Nothing can be removed — no copy here has enough proven copies elsewhere."))
+        #expect(!F.confirmationButtonTitle.lowercased().contains("delete"))
     }
 
     @Test func preferTrashMovesEveryForecastRemovalToTheTrash() {
@@ -607,6 +644,8 @@ struct DeleteDuplicatesRowLoggingTests {
         let summary = "delete duplicates done: \(dir.lastPathComponent) — deleted 1 (\(sizeText)) · trashed 2 (\(two)) · "
             + "left alone 1 (\(sizeText)) · refused 1 (\(sizeText)) · freed \(sizeText) · 1 sibling copy read (\(sizeText))"
         #expect(lines.contains(summary), "expected \(summary)\n got \(lines.filter { $0.hasPrefix("delete duplicates") })")
+        #expect(lines.filter { $0.hasPrefix("delete duplicates done: ") }.count == 1)
+        #expect(job.wroteOwnTerminalLine, "the MFO center's generic outcome line is skipped — one final line per run")
     }
 
     @Test func pauseAndCancelWritePartialTotals() async throws {
@@ -631,6 +670,7 @@ struct DeleteDuplicatesRowLoggingTests {
         let paused = "delete duplicates paused: \(volume) — deleted 0 (\(zero)) · trashed 1 (\(sizeText)) · left alone 0 (\(zero)) · "
             + "refused 0 (\(zero)) · freed \(zero) · 0 sibling copies read (\(zero))"
         #expect(sink.lines.contains(paused), "\(sink.lines.filter { $0.hasPrefix("delete duplicates") })")
+        #expect(!job.wroteOwnTerminalLine, "a pause is not the end of the run")
 
         // CANCEL (discard) with the second file in flight: partial totals.
         job.resume()

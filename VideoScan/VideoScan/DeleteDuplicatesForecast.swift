@@ -236,34 +236,40 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
 
     /// The Start confirmation's block: one line per non-empty bucket with
     /// the count and the size, then the bytes to read.
-    var confirmationText: String {
-        func line(_ bucket: Bucket, _ words: String) -> String? {
-            let t = tally(bucket)
-            guard t.files > 0 else { return nil }
-            return "• \(words): \(Self.number(t.files)) (\(Self.size(t.bytes)))"
+    static let confirmationButtonTitle = "Check and Remove Proven Copies"
+    static let decidesAtTheMoment = "The run decides each file at the moment it acts; nothing leaves unless the copies are proven."
+
+    /// The Start confirmation's lead, in plain words (2026-09-22: the old
+    /// "This will permanently delete N…" was untrue — the Trash at exactly
+    /// two, left-alone rows): what will be checked, the forecast with
+    /// sizes, an honest "nothing can be removed yet" when that is the
+    /// forecast, the bytes to read, and that the run decides each file.
+    func confirmationText(volume: String) -> String {
+        let n = total.files
+        var text = "Check \(Self.number(n)) cop\(n == 1 ? "y" : "ies") on \(volume).\n\n"
+        let p = tally(.permanent), t = tally(.trash), r = tally(.needsSiblingReads)
+        let l = tally(.leftAlone), x = tally(.likelyNotDuplicate), c = tally(.cannotCheck)
+        var parts = [
+            "about \(Self.number(p.files)) deleted (\(Self.size(p.bytes)))",
+            "\(Self.number(t.files)) to the Trash (\(Self.size(t.bytes)))",
+            "\(Self.number(r.files)) need other copies read first (\(Self.size(siblingReadBytes)) to read)",
+            "\(Self.number(l.files)) left alone — only the original remains elsewhere (\(Self.size(l.bytes)))",
+            "\(Self.number(x.files)) likely not duplicates (\(Self.size(x.bytes)))",
+        ]
+        if c.files > 0 {
+            parts.append("\(Self.number(c.files)) cannot be checked — keeper not connected or not in the catalog (\(Self.size(c.bytes)))")
         }
-        var lines = ["Forecast — from the catalog and stored fixities, no file read yet:"]
-        lines += [
-            line(.permanent, "will be deleted"),
-            line(.trash, "will move to the Trash"),
-            tally(.needsSiblingReads).files > 0
-                ? "• need \(Self.number(siblingReads)) sibling read\(siblingReads == 1 ? "" : "s") to decide: \(Self.number(tally(.needsSiblingReads).files)) (\(Self.size(tally(.needsSiblingReads).bytes)))"
-                : nil,
-            line(.leftAlone, "will be left alone — only the original remains elsewhere"),
-            line(.likelyNotDuplicate, "likely not duplicates"),
-            line(.cannotCheck, "cannot be checked — keeper not connected or not in the catalog"),
-        ].compactMap { $0 }
+        text += "Forecast (from the catalog — no file read yet): " + parts.joined(separator: ", ") + "."
         if trashMayBecomePermanent > 0 {
-            lines.append("  (\(Self.number(trashMayBecomePermanent)) of the Trash ones may be deleted outright once a sibling is proven)")
+            text += " \(Self.number(trashMayBecomePermanent)) of the Trash ones may be deleted outright once one more copy is proven."
         }
-        let deletable = tally(.permanent).files + tally(.trash).files
-        if deletable == 0 && tally(.needsSiblingReads).files == 0 {
-            lines.append("Nothing here is expected to be removed.")
+        if p.files + t.files == 0 {
+            text += r.files > 0
+                ? "\n\nNothing can be removed yet — \(Self.number(r.files)) cop\(r.files == 1 ? "y needs its" : "ies need their") other copies read first."
+                : "\n\nNothing can be removed — no copy here has enough proven copies elsewhere."
         }
-        lines.append("About \(Self.size(bytesToRead)) will be read in full"
-                     + (siblingReads > 0 ? ", including \(Self.number(siblingReads)) sibling cop\(siblingReads == 1 ? "y" : "ies") (\(Self.size(siblingReadBytes)))" : "")
-                     + ". Every file is still checked before anything is removed.")
-        return lines.joined(separator: "\n")
+        text += "\n\nAbout \(Self.size(bytesToRead)) will be read in full. " + Self.decidesAtTheMoment
+        return text
     }
 
     /// The same numbers as one app-log line.
