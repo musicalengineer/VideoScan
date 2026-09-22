@@ -191,23 +191,98 @@ enum HallieWebPeer {
     }
 }
 
+/// Start-up hand-off between the listener's queue, which learns `.ready` /
+/// `.failed`, and the thread in `HallieWebServer.start`, which waits for it.
+///
+/// Before 2026-09-22 this was a captured `var failure` plus `self.port`,
+/// written on the listener queue and read by the caller after
+/// `ready.wait(timeout: 5)`. On timeout the read raced a late `.failed`, and a
+/// listener that never became ready was kept without throwing. Now every
+/// field is behind one lock, the FIRST outcome wins, and once the caller has
+/// stopped waiting (`finishWaiting`) later outcomes are refused, so what the
+/// caller acted on can never change underneath it.
+/// (`@unchecked Sendable` ≈ "this class does its own locking" — the NSLock is
+/// the invariant.)
+final class HallieListenerStartup: @unchecked Sendable {
+    enum Outcome {
+        case ready(port: UInt16)
+        case failed(any Error)
+    }
+
+    private let lock = NSLock()
+    private let signal = DispatchSemaphore(value: 0)
+    private var outcome: Outcome?
+    private var lastState = "setup"
+    private var closed = false
+
+    /// Listener queue: record a state for the timeout diagnostic.
+    func note(state: String) {
+        lock.withLock { lastState = state }
+    }
+
+    /// Listener queue: report the outcome. Returns false (and changes
+    /// nothing) when an outcome already arrived or the caller gave up.
+    @discardableResult
+    func resolve(_ result: Outcome) -> Bool {
+        let accepted = lock.withLock { () -> Bool in
+            guard outcome == nil, !closed else { return false }
+            outcome = result
+            return true
+        }
+        if accepted { signal.signal() }
+        return accepted
+    }
+
+    /// Caller: wait up to `timeout`, then close the hand-off. Returns the
+    /// outcome, or nil when none arrived in time, plus the last state seen.
+    func finishWaiting(timeout: DispatchTimeInterval) -> (outcome: Outcome?, lastState: String) {
+        _ = signal.wait(timeout: .now() + timeout)
+        return lock.withLock {
+            closed = true
+            return (outcome, lastState)
+        }
+    }
+}
+
 /// The listener. Each connection: read one request, hand it to `handle`,
 /// write the response, close. `handle` runs on the main actor because the
 /// coordinator does; media streaming reads the file on a background queue.
 final class HallieWebServer: @unchecked Sendable {
     typealias Handler = @MainActor @Sendable (HallieHTTPRequest, _ peer: String) async -> HallieHTTPResponse
 
+    enum StartError: LocalizedError {
+        /// The listener reported neither `.ready` nor `.failed` in time.
+        case notReady(port: UInt16, seconds: Double, lastState: String)
+
+        var errorDescription: String? {
+            switch self {
+            case let .notReady(port, seconds, lastState):
+                let which = port == 0 ? "an ephemeral port" : "port \(port)"
+                return "the listener on \(which) was not ready after \(seconds) s (last state: \(lastState)); it was cancelled"
+            }
+        }
+    }
+
     private let queue = DispatchQueue(label: "Rick-Breen.VideoScan.HallieWeb")
+    // `listener` is touched only by start()/stop(), which callers make from
+    // one actor (HallieWebAccess and the tests are @MainActor); the listener
+    // queue never reads it.
     private var listener: NWListener?
     private let handler: Handler
-    private(set) var port: UInt16 = 0
+    // `port` is written on the listener queue (every `.ready`) and read by
+    // callers, so it lives behind a lock.
+    private let portLock = NSLock()
+    private var boundPort: UInt16 = 0
+    var port: UInt16 { portLock.withLock { boundPort } }
 
     init(handler: @escaping Handler) {
         self.handler = handler
     }
 
-    /// Start on `port` (0 = ephemeral, for tests). Throws if the port is busy.
-    func start(port requested: UInt16) throws {
+    /// Start on `port` (0 = ephemeral, for tests). Throws if the port is
+    /// busy, or if the listener is not ready within `readyTimeout` — in which
+    /// case it is cancelled, never kept half-started.
+    func start(port requested: UInt16, readyTimeout: DispatchTimeInterval = .seconds(5)) throws {
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
         let listener = try NWListener(
@@ -216,23 +291,44 @@ final class HallieWebServer: @unchecked Sendable {
         listener.newConnectionHandler = { [weak self] connection in
             self?.accept(connection)
         }
-        let ready = DispatchSemaphore(value: 0)
-        var failure: Error?
+        let startup = HallieListenerStartup()
         listener.stateUpdateHandler = { [weak self] state in
+            startup.note(state: "\(state)")
             switch state {
             case .ready:
-                self?.port = listener.port?.rawValue ?? requested
-                ready.signal()
+                let bound = listener.port?.rawValue ?? requested
+                if let self { self.portLock.withLock { self.boundPort = bound } }
+                startup.resolve(.ready(port: bound))
             case .failed(let error):
-                failure = error
-                ready.signal()
+                startup.resolve(.failed(error))
             default: break
             }
         }
         listener.start(queue: queue)
-        _ = ready.wait(timeout: .now() + 5)
-        if let failure { throw failure }
-        self.listener = listener
+        let (outcome, lastState) = startup.finishWaiting(timeout: readyTimeout)
+        switch outcome {
+        case .ready:
+            self.listener = listener
+        case .failed(let error):
+            listener.cancel()
+            throw error
+        case nil:
+            listener.cancel()
+            let error = StartError.notReady(port: requested, seconds: Self.seconds(readyTimeout),
+                                            lastState: lastState)
+            appLog.write("Hallie web: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    private static func seconds(_ interval: DispatchTimeInterval) -> Double {
+        switch interval {
+        case .seconds(let s): return Double(s)
+        case .milliseconds(let ms): return Double(ms) / 1_000
+        case .microseconds(let us): return Double(us) / 1_000_000
+        case .nanoseconds(let ns): return Double(ns) / 1_000_000_000
+        default: return .infinity
+        }
     }
 
     func stop() {

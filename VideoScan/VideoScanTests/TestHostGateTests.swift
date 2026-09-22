@@ -16,7 +16,11 @@ import Testing
 @Suite("Test host gate")
 struct TestHostGateTests {
 
+    // @MainActor: main.swift's top-level `isTestHost` is implicitly
+    // main-actor isolated, and strict concurrency (complete) makes reading
+    // it from a nonisolated test an error.
     @Test("isTestHost is true under the test runner — the real app must not boot")
+    @MainActor
     func gateDetectsTestHost() {
         #expect(isTestHost,
                 "main.swift's gate failed to detect the test host; VideoScanApp.main() ran and the full app booted under the tests")

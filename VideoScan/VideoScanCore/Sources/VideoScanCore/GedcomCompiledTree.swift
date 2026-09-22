@@ -175,11 +175,21 @@ public enum GedcomCompiledTree {
         guard length == available else { throw CodecError.corrupt("trailing bytes after checksum") }
         let payloadEnd = payloadStart + Int(length)
         return try data.withUnsafeBytes { whole -> GedcomFamilyGraph in
-            let payload = UnsafeRawBufferPointer(rebasing: whole[payloadStart..<payloadEnd])
+            // Strict concurrency: `payload` and `checksumOK` are shared with
+            // the hash worker below. `nonisolated(unsafe)` ≈ telling the
+            // compiler "I own the synchronization" (like a raw pointer handed
+            // to a pthread in C). Race-free because:
+            //  - `payload` is only READ, by both threads, and the bytes stay
+            //    alive until `hashGroup.wait()` (the `defer` below runs before
+            //    `withUnsafeBytes` returns);
+            //  - `checksumOK` is written once by the worker and read here only
+            //    after `hashGroup.wait()`, which is a happens-before edge
+            //    (every read site below is preceded by a wait).
+            nonisolated(unsafe) let payload = UnsafeRawBufferPointer(rebasing: whole[payloadStart..<payloadEnd])
             let stored = Array(whole[payloadEnd..<payloadEnd + 32])
             // Checksum on a worker while this thread parses.
             let hashGroup = DispatchGroup()
-            var checksumOK = false
+            nonisolated(unsafe) var checksumOK = false
             DispatchQueue.global(qos: .userInitiated).async(group: hashGroup) {
                 checksumOK = Array(SHA256.hash(data: payload)) == stored
             }
@@ -208,7 +218,9 @@ public enum GedcomCompiledTree {
         var r = Reader(bytes: raw)
         let stringCount = Int(try r.u32())
         let blobLength = Int(try r.u32())
-        let blob = try r.slice(blobLength)
+        // Read-only for the life of this function; shared by the parallel
+        // String build below (see its race-free note).
+        nonisolated(unsafe) let blob = try r.slice(blobLength)
         let offsets = try r.i32s(expected: stringCount + 1)
         // String table: offsets must be monotonic within the blob (one
         // sequential pass of integer compares), then the Strings are made
@@ -219,11 +231,18 @@ public enum GedcomCompiledTree {
         }
         let strings = [String](unsafeUninitializedCapacity: stringCount) { buffer, initialized in
             let chunks = Self.chunkCount(stringCount)
+            // Race-free: chunk c initializes slots [c*chunkSize, …) only —
+            // disjoint ranges, each slot written exactly once — and
+            // concurrentPerform returns only after every iteration finishes,
+            // so `initialized` is set after all writes. Copying the pointer
+            // (not the inout binding) into the closure is what strict
+            // concurrency needs; the pointee is unchanged.
+            nonisolated(unsafe) let slots = buffer
             DispatchQueue.concurrentPerform(iterations: chunks) { c in
                 let lo = c * chunkSize, hi = min(stringCount, lo + chunkSize)
                 for i in lo..<hi {
                     let a = Int(offsets[i]), b = Int(offsets[i + 1])
-                    (buffer.baseAddress! + i).initialize(
+                    (slots.baseAddress! + i).initialize(
                         to: String(decoding: UnsafeRawBufferPointer(rebasing: blob[a..<b]), as: UTF8.self))
                 }
             }
@@ -644,7 +663,11 @@ public enum GedcomCompiledTree {
         /// the chunks parse concurrently, each fenced to its byte range,
         /// and every chunk must consume EXACTLY its range. Returns the
         /// records in file order.
-        mutating func chunkedSection<T>(_ record: (inout Reader) throws -> T) throws -> [T] {
+        ///
+        /// `record` is `@Sendable` because it runs on several threads at
+        /// once: the compiler now proves each call site captures nothing
+        /// shared and mutable (today both capture nothing at all).
+        mutating func chunkedSection<T>(_ record: @Sendable (inout Reader) throws -> T) throws -> [T] {
             let count = Int(try u32())
             let size = Int(try u32())
             guard size > 0, size <= 1 << 20 else { throw CodecError.corrupt("chunk size \(size)") }
@@ -660,15 +683,24 @@ public enum GedcomCompiledTree {
                 throw CodecError.corrupt("chunk offsets")
             }
             if chunks > 0, starts[0] != recordsStart { throw CodecError.corrupt("chunk offsets") }
-            let template = self
+            let chunkStarts = starts          // immutable copy for the workers
+            // Race-free (strict-concurrency note): every worker COPIES
+            // `template` into its own `var r` (a struct copy — the shared
+            // parts, `bytes` and `strings`, are only read); worker c writes
+            // only slotBuffer[c] / failureBuffer[c] (disjoint slots); and
+            // concurrentPerform returns only after all workers finish, so the
+            // reads of `slots`/`failures` below happen after every write.
+            nonisolated(unsafe) let template = self
             var slots = [[T]](repeating: [], count: chunks)
             var failures = [CodecError?](repeating: nil, count: chunks)
-            slots.withUnsafeMutableBufferPointer { slotBuffer in
-                failures.withUnsafeMutableBufferPointer { failureBuffer in
+            slots.withUnsafeMutableBufferPointer { slotBufferBinding in
+                failures.withUnsafeMutableBufferPointer { failureBufferBinding in
+                    nonisolated(unsafe) let slotBuffer = slotBufferBinding
+                    nonisolated(unsafe) let failureBuffer = failureBufferBinding
                     DispatchQueue.concurrentPerform(iterations: chunks) { c in
                         var r = template
-                        r.cursor = starts[c]
-                        r.limit = starts[c + 1]
+                        r.cursor = chunkStarts[c]
+                        r.limit = chunkStarts[c + 1]
                         let lo = c * size, hi = min(count, lo + size)
                         var out: [T] = []
                         out.reserveCapacity(hi - lo)

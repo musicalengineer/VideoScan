@@ -14,6 +14,9 @@
 
 import AppKit
 
+// @MainActor: it draws with lockFocus and reads NSApp, both main-thread
+// AppKit; its only callers (VideoScanModel+MasterArchive) already run there.
+@MainActor
 enum MasterArchiveIcon {
 
     /// The badge image: the app icon with an archive-box badge in the

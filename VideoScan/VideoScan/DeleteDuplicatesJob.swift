@@ -467,7 +467,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// Slot gate: capacity 2; an SSD pair takes 1, anything else takes 2.
     private var slotsInUse = 0
     private var slotWaiters: [CheckedContinuation<Void, Never>] = []
-    static let slotCapacity = 2
+    // nonisolated: an immutable Int (Sendable), read by the nonisolated
+    // `slotWeight(for:)`. No main-actor state is involved.
+    nonisolated static let slotCapacity = 2
     /// Volume classification for the slot weight. nil → the model's scan
     /// targets (longest prefix). Tests inject.
     var mediaTechForPath: ((String) -> VolumeMediaTech)?

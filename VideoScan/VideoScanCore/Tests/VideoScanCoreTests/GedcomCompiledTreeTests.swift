@@ -348,7 +348,11 @@ final class GedcomCompiledTreeTests: XCTestCase {
             try box.write(GedcomSyntheticPedigree.gedcom(people: 150 + i * 10, generations: 5), as: "pull-\(i).ged")
         }
         let graphs = try sources.map { try XCTUnwrap(GedcomFamilyGraph(fileURL: $0)) }
-        let store = box.store()
+        // Shared on purpose by the reader thread and the concurrent writers:
+        // this test exists to prove the store's flock serializes them.
+        // `store` is an immutable struct value; its FileManager is
+        // `.default` (thread-safe) and its closures are the pure defaults.
+        nonisolated(unsafe) let store = box.store()
         let results = ResultSink(n)
         let stop = ResultSink(1)
         // A reader hammering the pointer while the writers run.

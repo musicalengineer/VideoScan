@@ -56,6 +56,7 @@
 // with no globals" layer — value types and static functions only.)
 
 import Foundation
+import VideoScanCore
 
 // MARK: - Designation (persisted)
 
@@ -840,9 +841,9 @@ enum ArchiveManifestCSV {
         }
     }
 
-    private static let iso8601: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }()
+    // `line(for:)` runs off the main actor (via the nonisolated `append`),
+    // so the shared formatter goes through VideoScanCore's lock-guarded
+    // wrapper — same options, same text. (ISO8601DateFormatter is not
+    // Sendable and documents no thread-safety guarantee.)
+    private static let iso8601 = LockedISO8601Formatter([.withInternetDateTime])
 }
