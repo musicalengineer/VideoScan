@@ -87,7 +87,7 @@ struct ArchiveAngelBalanceNoteTests {
     /// cached diagnosis in hand; without it the file is verified again.
     @Test func sensorAlreadyVerifiedRequiresTheDiagnosis() throws {
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        let job = try String(contentsOf: dir.appendingPathComponent("VideoScan/ArchiveAngelJob.swift"), encoding: .utf8)
+        let job = try String(contentsOf: dir.appendingPathComponent("VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift"), encoding: .utf8)
         #expect(job.contains("!rec.audioVerifyStatus.isEmpty, let cached = center.verifyDiagnosis(forRecordID: rec.id)"))
         #expect(!job.contains("note: \"Audio OK — nothing to fix\")"), "the bare fallthrough is gone")
         // Audit #5: a failed plan save stops the loop and success cannot overwrite it.

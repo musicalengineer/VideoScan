@@ -734,6 +734,9 @@ final class VideoScanModel: ObservableObject {
     /// Phase 1 attention memory — derived from the Media Ledger's
     /// angelProposed / angelSkipped / angelCleared lines.
     let archiveAngelAttention = ArchiveAngelAttentionStore()
+    /// The Archive Angel's front door (ArchiveAngel/Facade/ArchiveAngel.swift).
+    /// S1: forwards to the three properties above; S2 makes it their owner.
+    lazy var archiveAngel = ArchiveAngel(model: self)
 
     /// Content-keyed ignore list (2026-09-11): set-aside / removed content
     /// is never re-ingested under a new path. `var` so tests inject a

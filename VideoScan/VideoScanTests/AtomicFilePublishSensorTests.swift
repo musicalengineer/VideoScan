@@ -191,8 +191,8 @@ struct AtomicFilePublishSensorTests {
     /// sites with five different conventions. Pin the single entry point.
     @Test func sidecarStoresPublishThroughTheWrapper() throws {
         let stores = [
-            "VideoScan/VideoScan/ArchiveAngelPlan.swift",
-            "VideoScan/VideoScan/ArchiveAngelEvidenceStore.swift",
+            "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelPlan.swift",
+            "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelEvidenceStore.swift",
             "VideoScan/VideoScan/IgnoredContentStore.swift",
             "VideoScan/VideoScan/HoldoutClearStore.swift",
             "VideoScan/VideoScan/ResearchStore.swift",

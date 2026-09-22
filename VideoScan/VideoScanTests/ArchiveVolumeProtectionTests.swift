@@ -489,7 +489,7 @@ struct ArchiveVolumeProtectionSourceSensor {
     /// update this list.
     static let reviewed: [String: Int] = [
         "VideoScan/AdaFaceEngine.swift": 1, "VideoScan/ArcFaceEngine.swift": 1,
-        "VideoScan/ArchiveAngelJob.swift": 1, "VideoScan/ArchiveAngelPlan.swift": 2,
+        "VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift": 1, "VideoScan/ArchiveAngel/Prepare/ArchiveAngelPlan.swift": 2,
         "VideoScan/ArchivePromoteEngine.swift": 3, "VideoScan/AudioTranscriber.swift": 1,
         "VideoScan/BalanceAudioJob.swift": 1, "VideoScan/BundleExporter.swift": 1,
         "VideoScan/BundleImporter.swift": 2, "VideoScan/CaptionRunner.swift": 2,
@@ -596,10 +596,17 @@ struct ArchiveVolumeProtectionSourceSensor {
         let regex = try NSRegularExpression(pattern: pattern)
         let literal = try NSRegularExpression(pattern: #""(?:[^"\\]|\\.)*""#)
         var found: [String: Int] = [:]
-        let dirs = [("VideoScan", "VideoScan"), ("VideoScanCore", "VideoScanCore/Sources/VideoScanCore")]
-        for (label, rel) in dirs {
+        // The Archive Angel lives in its own subtree (VideoScan/ArchiveAngel/,
+        // consolidation S1 2026-09-22) — walked recursively so moving its
+        // files into subfolders did not blind this sensor to them. The other
+        // two roots stay one level deep, as they always were.
+        let dirs = [("VideoScan", "VideoScan", false), ("VideoScan/ArchiveAngel", "VideoScan/ArchiveAngel", true),
+                    ("VideoScanCore", "VideoScanCore/Sources/VideoScanCore", false)]
+        for (label, rel, recursive) in dirs {
             let dir = projectDir.appendingPathComponent(rel)
-            let names = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".swift") }
+            let names = try (recursive
+                ? (FileManager.default.subpathsOfDirectory(atPath: dir.path))
+                : FileManager.default.contentsOfDirectory(atPath: dir.path)).filter { $0.hasSuffix(".swift") }
             for name in names {
                 let text = try String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8)
                 var n = 0
