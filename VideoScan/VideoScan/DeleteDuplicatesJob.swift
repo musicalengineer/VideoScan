@@ -1283,7 +1283,13 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // reported — never moved, never removed.
             switch Self.recoverFromQuarantine(&plan.entries[i], facts: facts) {
             case .notInQuarantine:
-                break
+                // A recorded folder that is empty on a reachable drive owes
+                // nothing (reviewer G2) — same rule as Discard.
+                if let folder = Self.closeEmptyRecordedQuarantine(&plan.entries[i], volumePath: plan.volumePath,
+                                                                  volumeName: plan.volumeName) {
+                    model.log("  \(e.filename): its quarantine folder \(folder) is empty — nothing to put back")
+                    plan.log.append("\(e.filename): quarantine folder \(folder) empty at resume — nothing owed")
+                }
             case .restored(let folder, let directoryRemoved):
                 model.log("  Restored \(e.filename) from \(folder) (a crash left it in quarantine) — it will be verified again before anything is removed"
                           + (directoryRemoved ? "" : "; the quarantine folder was not empty and was left in place"))
@@ -1628,6 +1634,35 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         let rootIsDirectory = stat(volumePath, &root) == 0 && (root.st_mode & S_IFMT) == S_IFDIR
         return rootIsDirectory && (!volumePath.hasPrefix(volumesRoot)
                                    || (mountedRoots ?? VolumeReachability.currentMountedRoots()).contains(volumePath))
+    }
+
+    /// An UNSETTLED row whose recorded quarantine folder is still there but
+    /// holds nothing of this row's (reviewer G2, 2026-09-21): the file was
+    /// unlinked / moved to the Trash (or put back) just before a crash,
+    /// after the save that named the folder. Nothing is owed any more, so
+    /// the folder is taken off the row — otherwise, once the row is
+    /// skipped, it counts as stranded and Discard/Resume claim a file is
+    /// "still in quarantine" when none is. ONLY when absence is
+    /// established on a reachable drive (`strandedPresence` == .absent)
+    /// and the folder itself exists as a directory; an unreachable drive,
+    /// a missing folder or any other stat failure keeps the obligation.
+    /// The folder is left on disk untouched. Call only after
+    /// `recoverFromQuarantine` returned `.notInQuarantine` (neither the
+    /// recorded nor the derived folder held the file). Returns the
+    /// folder's name when the obligation was closed, nil otherwise.
+    nonisolated static func closeEmptyRecordedQuarantine(_ entry: inout DeleteDuplicatesPlan.Entry,
+                                                         volumePath: String, volumeName: String,
+                                                         mountedRoots: Set<String>? = nil,
+                                                         volumesRoot: String = "/Volumes/") -> String? {
+        guard !entry.status.isSettled,
+              let folder = entry.quarantineDirectory, let url = entry.quarantinedFileURL else { return nil }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: folder, isDirectory: &isDir), isDir.boolValue else { return nil }
+        guard strandedPresence(of: url, volumePath: volumePath, volumeName: volumeName,
+                               mountedRoots: mountedRoots, volumesRoot: volumesRoot) == .absent else { return nil }
+        entry.quarantineDirectory = nil
+        entry.quarantinedStamp = nil
+        return (folder as NSString).lastPathComponent
     }
 
     /// Retry the put-back of every STRANDED row (settled, file still in

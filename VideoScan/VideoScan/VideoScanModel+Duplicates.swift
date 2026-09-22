@@ -662,35 +662,50 @@ extension VideoScanModel {
 
     /// Look for unfinished plans at launch (called from VideoScanApp's
     /// onAppear, where the other launch settlements happen) and EXPOSE the
-    /// OLDEST one for this catalog — never start it. The MFO window and
-    /// the main window offer "Resume / Discard"; once that plan is settled
-    /// (resumed to the end, or discarded) the next check offers the next
-    /// one, oldest first, one at a time (QA MINOR 7). Plans made from
-    /// another catalog are left alone (they would re-validate to nothing
-    /// anyway).
+    /// OLDEST one for this catalog THAT CAN BE ACTED ON — never start it.
+    /// The MFO window and the main window offer "Resume / Discard"; once
+    /// that plan is settled (resumed to the end, or discarded) the next
+    /// check offers the next one, oldest first, one at a time (QA MINOR 7).
+    /// Plans made from another catalog are left alone (they would
+    /// re-validate to nothing anyway).
+    ///
+    /// Acted on = its volume is reachable (`volumeIsReachable`, the same
+    /// mount-table test Resume, Discard and Put Back use; a plan's targets
+    /// and quarantine folders all live on that volume). Resume and Discard
+    /// refuse while a plan's drive is away, so offering such a plan first
+    /// would hide every newer one — including a plan whose file a crash
+    /// left in quarantine on a drive that IS here (reviewer G1). Plans on
+    /// away drives stay on disk untouched and are offered again when their
+    /// drive returns; only when EVERY plan's drive is away is the oldest
+    /// offered anyway, so the user still hears that it is waiting.
     func checkForUnfinishedDeleteDuplicatesPlans(root: URL = DeleteDuplicatesPlanStore.defaultRoot) {
         guard !isReadOnly, !isDeletingDuplicates else { return }
         let plans = DeleteDuplicatesPlanStore.unfinishedPlans(root: root, log: { [weak self] in self?.log($0) })
-        let mine = plans.filter { $0.catalogLocation == catalogStore.fileLocation }
-        guard let oldest = mine.last else {   // unfinishedPlans is newest-first
+        let mine = Array(plans.filter { $0.catalogLocation == catalogStore.fileLocation }.reversed())   // oldest first
+        let actionable = mine.filter { DeleteDuplicatesJob.volumeIsReachable($0.volumePath) }
+        guard let oldest = actionable.first ?? mine.first else {
             pendingDeleteDuplicatesResume = nil
             return
         }
         pendingDeleteDuplicatesResume = oldest
-        let others = mine.count - 1
+        let chosenIsHere = !actionable.isEmpty
+        let others = chosenIsHere ? actionable.count - 1 : 0
+        let awayOthers = (mine.count - actionable.count) - (chosenIsHere ? 0 : 1)
         let stranded = oldest.strandedCount
+        let after = (others > 0 ? " \(others) more unfinished run\(others == 1 ? "" : "s") will be offered after it, oldest first." : "")
+            + (awayOthers > 0 ? " \(awayOthers) more on a drive that is not connected wait\(awayOthers == 1 ? "s" : "") until it returns — nothing on \(awayOthers == 1 ? "it" : "them") was changed." : "")
         if oldest.isResumable {
             log("\nDelete Duplicates: an unfinished run on \(oldest.volumeName) was found — "
                 + "\(oldest.remainingCount) of \(oldest.entries.count) still to do"
                 + (stranded > 0 ? ", and \(oldest.recoveryOffer)" : "")
                 + ". Nothing resumes on its own; use Resume\(stranded > 0 ? ", Put Back" : "") or Discard in Media File Operations."
-                + (others > 0 ? " \(others) more unfinished run\(others == 1 ? "" : "s") will be offered after it, oldest first." : ""))
+                + after)
         } else {
             // Only stranded files (codex 1606 #3): a run that ended with a
             // put-back it could not do. Nothing here is a deletion.
             log("\nDelete Duplicates: \(oldest.recoveryOffer) — the run on \(oldest.volumeName) is over; "
                 + "Put Back in Media File Operations moves the file\(stranded == 1 ? "" : "s") to where \(stranded == 1 ? "it" : "they") lived. Nothing is deleted or re-verified."
-                + (others > 0 ? " \(others) more unfinished run\(others == 1 ? "" : "s") will be offered after it, oldest first." : ""))
+                + after)
         }
     }
 
@@ -783,7 +798,16 @@ extension VideoScanModel {
                 let name = plan.entries[i].filename
                 switch DeleteDuplicatesJob.recoverFromQuarantine(&plan.entries[i], facts: facts) {
                 case .notInQuarantine:
-                    break
+                    // Recorded folder present but empty on a reachable
+                    // drive: the file already left (unlinked / trashed /
+                    // put back just before the crash) — nothing is owed,
+                    // so the skipped row must not count as stranded
+                    // (reviewer G2). An unreachable drive keeps it owed.
+                    if let folder = DeleteDuplicatesJob.closeEmptyRecordedQuarantine(
+                        &plan.entries[i], volumePath: plan.volumePath, volumeName: plan.volumeName) {
+                        log("  \(name): its quarantine folder \(folder) is empty — nothing to put back")
+                        plan.log.append("\(name): quarantine folder \(folder) empty at discard — nothing owed")
+                    }
                 case .restored(let folder, let directoryRemoved):
                     log("  Restored \(name) from \(folder) (a crash left it in quarantine) — put back before discarding"
                         + (directoryRemoved ? "" : "; the quarantine folder was not empty and was left in place"))

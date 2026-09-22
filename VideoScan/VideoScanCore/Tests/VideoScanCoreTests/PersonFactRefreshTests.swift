@@ -490,6 +490,105 @@ struct PersonFactOverlayStoreTests {
         #expect(log.lines.contains { $0.contains("unreadable") })
     }
 
+    /// Reflection review F1 (2026-09-21): an overlay that will not decode
+    /// used to load as EMPTY, and the next Apply saved one person over it —
+    /// every other person's refreshed facts gone. The store now refuses to
+    /// publish over a file it cannot read.
+    @Test func applyOverAnUnreadableOverlayRefusesInsteadOfErasingIt() throws {
+        let dir = F.tempDirectory("garbage-apply")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = PersonFactOverlayStore(directory: dir)
+        let original = Data("{ \"entries\": { \"WWWW-111\": ".utf8)
+        try original.write(to: store.fileURL)
+        var overlay = store.load()
+        overlay.record([PersonRefreshChange(field: .birthDate, label: "", old: nil, new: "1930")],
+                       familySearchID: "WWWW-222", displayName: "X", at: Date(timeIntervalSince1970: 2_000))
+        #expect(throws: (any Error).self) { try store.save(overlay) }
+        #expect(try Data(contentsOf: store.fileURL) == original, "the unreadable overlay must survive untouched")
+    }
+
+    @Test func loadForUpdateTellsNoFileFromUnreadable() throws {
+        let dir = F.tempDirectory("load-for-update")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = PersonFactOverlayStore(directory: dir)
+        // No file: empty is the truth, not an error.
+        #expect(try store.loadForUpdate() == PersonFactOverlay())
+        // A readable file round-trips.
+        var overlay = PersonFactOverlay()
+        overlay.record([PersonRefreshChange(field: .birthDate, label: "", old: nil, new: "1929")],
+                       familySearchID: "WWWW-111", displayName: "W", at: Date(timeIntervalSince1970: 1_000))
+        try store.save(overlay)
+        #expect(try store.loadForUpdate() == overlay)
+        // A file that will not decode throws.
+        try Data("{ not json".utf8).write(to: store.fileURL)
+        #expect(throws: PersonFactOverlayStore.UnreadableOverlay.self) { try store.loadForUpdate() }
+    }
+
+    @Test func updateOverAnUnreadableOverlayWritesNothing() throws {
+        let dir = F.tempDirectory("garbage-update")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = PersonFactOverlayStore(directory: dir)
+        let original = Data("{ \"entries\": ".utf8)
+        try original.write(to: store.fileURL)
+        var mutated = false
+        #expect(throws: PersonFactOverlayStore.UnreadableOverlay.self) {
+            try store.update { overlay -> Bool? in mutated = true; return true }
+        }
+        #expect(!mutated, "the mutation must not even run over an unreadable file")
+        #expect(try Data(contentsOf: store.fileURL) == original)
+    }
+
+    @Test func updateReturningNilWritesNothing() throws {
+        let dir = F.tempDirectory("update-nil")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = PersonFactOverlayStore(directory: dir)
+        #expect(try store.update { _ -> Int? in nil } == nil)
+        #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
+    }
+
+    @Test func setAsideKeepsTheUnreadableBytesAndFreesTheName() throws {
+        let dir = F.tempDirectory("set-aside")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = PersonFactOverlayStore(directory: dir)
+        let original = Data("{ garbage".utf8)
+        try original.write(to: store.fileURL)
+        let when = Date(timeIntervalSince1970: 1_790_000_000)
+        let kept = try store.setAsideUnreadable(at: when)
+        #expect(kept.lastPathComponent.hasPrefix("overlay.json.bad-"))
+        #expect(try Data(contentsOf: kept) == original)
+        #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
+        // A second set-aside in the same second never overwrites the first.
+        try original.write(to: store.fileURL)
+        let second = try store.setAsideUnreadable(at: when)
+        #expect(second != kept)
+        #expect(try Data(contentsOf: kept) == original)
+        #expect(try Data(contentsOf: second) == original)
+    }
+
+    /// F3: a read error other than "no such file" was swallowed by `try?`
+    /// and the tree silently showed no refreshed facts.
+    @Test func aNonMissingReadErrorIsLoggedOnTheReadPath() throws {
+        let dir = F.tempDirectory("unreadable-perm")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                                   ofItemAtPath: dir.appendingPathComponent("overlay.json").path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let log = OverlayLogBox()
+        let store = PersonFactOverlayStore(directory: dir, log: { log.append($0) })
+        try Data("{}".utf8).write(to: store.fileURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: store.fileURL.path)
+        #expect(store.load() == PersonFactOverlay())
+        #expect(log.lines.count == 1)
+        #expect(log.lines.first?.contains("unreadable") == true)
+        // And no-file stays silent.
+        let quiet = OverlayLogBox()
+        let empty = PersonFactOverlayStore(directory: F.tempDirectory("no-file"), log: { quiet.append($0) })
+        defer { try? FileManager.default.removeItem(at: empty.directory) }
+        #expect(empty.load() == PersonFactOverlay())
+        #expect(quiet.lines.isEmpty)
+    }
+
     @Test func effectiveRetiresSupersededEntriesWithALogLine() throws {
         let dir = F.tempDirectory("retire")
         defer { try? FileManager.default.removeItem(at: dir) }

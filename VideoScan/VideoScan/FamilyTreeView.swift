@@ -268,8 +268,11 @@ struct FamilyTreeView: View {
     }
 
     private func undoPersonRefresh(_ target: PersonRefreshCoordinator.Target) {
-        _ = refreshCenter.undoLast(familySearchID: target.familySearchID, personName: target.personName)
-        Task { await model.reloadAfterPersonRefresh(selecting: target.personID) }
+        // Undo's overlay write runs off the main actor; reload only after it lands.
+        Task {
+            _ = await refreshCenter.undoLast(familySearchID: target.familySearchID, personName: target.personName)
+            await model.reloadAfterPersonRefresh(selecting: target.personID)
+        }
     }
 
     /// The review sheet opens by itself ONCE when the file has been read —

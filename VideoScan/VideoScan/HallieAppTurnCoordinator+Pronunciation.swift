@@ -82,6 +82,12 @@ extension HallieAppTurnCoordinator {
             // carries (lexicon, People tab, tree, CyberBrain) is declined,
             // never written anywhere (GH #184 item 6: "pronounce KY as
             // Kentucky" must not become a record).
+            // An everyday word that is nobody's name gets the honest
+            // sentence, not "who is this for?" (GH #187).
+            if HalliePronunciationGuard.isCommonWord(told.word),
+               !guardKnownNames(dependencies).contains(told.word) {
+                return refusedTeachResponse(.commonWord(told.word), telling: telling, referent: referent)
+            }
             guard isKnownName(told.word, dependencies: dependencies) else {
                 return declinedTeachResponse(word: told.word, telling: telling, referent: referent)
             }
@@ -177,6 +183,30 @@ extension HallieAppTurnCoordinator {
             description: "pronunciation", telling: telling, referent: referent)
     }
 
+    /// A teach HalliePronunciationGuard refused: the guard's own sentence,
+    /// `.declined`, nothing written (GH #187).
+    private static func refusedTeachResponse(
+        _ refusal: HalliePronunciationGuard.Refusal,
+        telling: HallieTellingMode.Session?, referent: CapturedReferent
+    ) -> Response {
+        appLog.write("[hallie-voice] refused pronunciation teach: \(refusal.reply) nothing written")
+        return pronunciationReply(
+            refusal.reply, outcome: .declined,
+            basis: "listening — pronunciation NOT kept (\(refusal.shortReason))",
+            description: "pronunciation", telling: telling, referent: referent)
+    }
+
+    /// Known names for the write guard: People profiles, the tree, the
+    /// CyberBrain and the shipped table — never the learned lexicon, which
+    /// is what a poisoned entry lives in. Called only for a word on the
+    /// closed list, so the O(tree people) build is once per such teach.
+    static func guardKnownNames(_ dependencies: Dependencies) -> HallieKnownNames {
+        HallieKnownNames.from(
+            profiles: (dependencies.loadProfiles() ?? []).map { (primary: $0.canonicalName, aliases: $0.aliases) },
+            graph: dependencies.loadGraph(),
+            cyberBrainPeople: dependencies.loadCyberBrain()?.archive.people ?? [])
+    }
+
     /// A hint that did not land is not an answer. In particular, viewer
     /// mode must never say "noted" when its read-only boundary refused it.
     private static func hintSaveFailureResponse(
@@ -232,6 +262,8 @@ extension HallieAppTurnCoordinator {
                 basis: "listening — pronunciation kept (\(scope == .file ? "pronunciations.json" : "person record"))",
                 description: hint == nil ? "pronunciation" : "pronunciation hint",
                 telling: telling, referent: referent)
+        case .failure(let refusal as HalliePronunciationGuard.Refusal):
+            return refusedTeachResponse(refusal, telling: telling, referent: referent)
         case .failure(let error):
             // Honest failure (codex #700): no "OK, noted", not an answer, and
             // the basis says it was NOT kept.
