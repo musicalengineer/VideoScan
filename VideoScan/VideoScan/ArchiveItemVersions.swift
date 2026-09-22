@@ -117,7 +117,7 @@ enum ArchiveItemVersions {
         }
 
         return order.map { k in
-            let ms = groups[k]!.map { members[$0] }
+            let ms = groups[k, default: []].map { members[$0] }
             // The card's face: an original with a date prefix, else any
             // original, else the first dated member, else the first.
             let primary = ms.first { $0.role == .original && $0.dated }
