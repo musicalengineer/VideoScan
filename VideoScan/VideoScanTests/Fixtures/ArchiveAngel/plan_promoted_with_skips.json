@@ -1,0 +1,698 @@
+{
+  "batchDir": "/private/tmp/angel-fixture/batch-2026-09-19T12-49-52",
+  "consideredCount": 9378,
+  "createdAt": "2026-09-19T16:49:52Z",
+  "entries": [
+    {
+      "durationSeconds": 5732.633,
+      "evidence": [
+        {
+          "line": "fixture evidence 1",
+          "points": 8
+        },
+        {
+          "line": "fixture evidence 2",
+          "points": 17
+        },
+        {
+          "line": "fixture evidence 3",
+          "points": 10
+        },
+        {
+          "line": "fixture evidence 4",
+          "points": 5
+        },
+        {
+          "line": "fixture evidence 5",
+          "points": 60
+        }
+      ],
+      "failure": "fixture failure reason",
+      "filename": "clip_01.mov",
+      "id": "0B7F8A85-78D0-468F-AD90-EF8E644FA320",
+      "proposedName": "1990-01-01 Fixture event 1",
+      "score": 100,
+      "selected": true,
+      "sizeBytes": 41635303029,
+      "sourceContentHash": "",
+      "sourceModifiedAt": "2026-07-11T18:33:23Z",
+      "sourcePath": "/Volumes/FixtureVolume/Family/clip_01.mov",
+      "status": "failed",
+      "steps": [
+        {
+          "kind": "verifyAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "balanceAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "accessCopy",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "losslessCopy",
+          "note": "",
+          "state": "pending"
+        }
+      ],
+      "userNotes": ""
+    },
+    {
+      "durationSeconds": 5422.422422,
+      "evidence": [
+        {
+          "line": "fixture evidence 1",
+          "points": 14
+        },
+        {
+          "line": "fixture evidence 2",
+          "points": 5
+        },
+        {
+          "line": "fixture evidence 3",
+          "points": 20
+        },
+        {
+          "line": "fixture evidence 4",
+          "points": 60
+        }
+      ],
+      "filename": "clip_02.mov",
+      "id": "071D5761-57CB-4BFC-93AF-EF406DAEF671",
+      "promotedRelPath": "1990/1990-01-02 Fixture event 2.mov",
+      "proposedDate": "2009-12-02",
+      "proposedName": "1990-01-02 Fixture event 2",
+      "score": 99,
+      "selected": true,
+      "sizeBytes": 1079887259,
+      "sourceContentHash": "b4ccf1b5fe76e1d1b81e500ca814620f",
+      "sourceModifiedAt": "2009-12-02T06:18:25Z",
+      "sourcePath": "/Volumes/FixtureVolume/Family/clip_02.mov",
+      "status": "promoted",
+      "steps": [
+        {
+          "kind": "verifyAudio",
+          "note": "fixture verifyAudio note",
+          "state": "done"
+        },
+        {
+          "kind": "balanceAudio",
+          "note": "fixture balanceAudio note",
+          "state": "skipped"
+        },
+        {
+          "kind": "accessCopy",
+          "note": "fixture accessCopy note",
+          "outputRelPath": "071D5761-57CB-4BFC-93AF-EF406DAEF671/clip_02.accessCopy.mov",
+          "recordID": "2EBDAD13-203A-426D-B757-1523E64057D8",
+          "state": "done"
+        },
+        {
+          "kind": "losslessCopy",
+          "note": "fixture losslessCopy note",
+          "state": "skipped"
+        }
+      ],
+      "userNotes": ""
+    },
+    {
+      "durationSeconds": 4692.166,
+      "evidence": [
+        {
+          "line": "fixture evidence 1",
+          "points": 8
+        },
+        {
+          "line": "fixture evidence 2",
+          "points": 16
+        },
+        {
+          "line": "fixture evidence 3",
+          "points": 10
+        },
+        {
+          "line": "fixture evidence 4",
+          "points": 5
+        },
+        {
+          "line": "fixture evidence 5",
+          "points": 60
+        }
+      ],
+      "filename": "clip_03.mov",
+      "id": "498CF943-1CFF-418F-AA7B-0D0A1656FCD4",
+      "proposedName": "1990-01-03 Fixture event 3",
+      "score": 99,
+      "selected": true,
+      "sizeBytes": 39017629190,
+      "skipNote": "Skipped by you at 12:00 while it was pending — not in this batch",
+      "skippedAt": "2026-09-19T16:50:01Z",
+      "sourceContentHash": "",
+      "sourceModifiedAt": "2026-07-10T23:20:48Z",
+      "sourcePath": "/Volumes/FixtureVolume/Family/clip_03.mov",
+      "status": "skipped",
+      "steps": [
+        {
+          "kind": "verifyAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "balanceAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "accessCopy",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "losslessCopy",
+          "note": "",
+          "state": "pending"
+        }
+      ],
+      "userNotes": ""
+    },
+    {
+      "durationSeconds": 3604.036703,
+      "evidence": [
+        {
+          "line": "fixture evidence 1",
+          "points": 8
+        },
+        {
+          "line": "fixture evidence 2",
+          "points": 10
+        },
+        {
+          "line": "fixture evidence 3",
+          "points": 5
+        },
+        {
+          "line": "fixture evidence 4",
+          "points": 60
+        },
+        {
+          "line": "fixture evidence 5",
+          "points": 15
+        }
+      ],
+      "filename": "clip_04.mov",
+      "id": "EACAF925-B44D-4AE2-82D4-AE53933F20CB",
+      "proposedDate": "1997",
+      "proposedName": "1990-01-04 Fixture event 4",
+      "score": 98,
+      "selected": true,
+      "sizeBytes": 13653882760,
+      "skipNote": "Skipped by you at 12:00 while it was pending — not in this batch",
+      "skippedAt": "2026-09-19T16:50:03Z",
+      "sourceContentHash": "9e89205dd38c481a26222ba20cf4e708",
+      "sourceModifiedAt": "2008-11-17T05:12:10Z",
+      "sourcePath": "/Volumes/FixtureVolume/Family/clip_04.mov",
+      "status": "skipped",
+      "steps": [
+        {
+          "kind": "verifyAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "balanceAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "accessCopy",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "losslessCopy",
+          "note": "",
+          "state": "pending"
+        }
+      ],
+      "userNotes": ""
+    },
+    {
+      "durationSeconds": 3603.60327,
+      "evidence": [
+        {
+          "line": "fixture evidence 1",
+          "points": 8
+        },
+        {
+          "line": "fixture evidence 2",
+          "points": 10
+        },
+        {
+          "line": "fixture evidence 3",
+          "points": 5
+        },
+        {
+          "line": "fixture evidence 4",
+          "points": 60
+        },
+        {
+          "line": "fixture evidence 5",
+          "points": 15
+        }
+      ],
+      "filename": "clip_05.mov",
+      "id": "0D280D43-A923-4605-88DA-454CBCA98733",
+      "proposedDate": "1997",
+      "proposedName": "1990-01-05 Fixture event 5",
+      "score": 98,
+      "selected": true,
+      "sizeBytes": 13652238704,
+      "skipNote": "Skipped by you at 12:00 while it was pending — not in this batch",
+      "skippedAt": "2026-09-19T16:50:06Z",
+      "sourceContentHash": "a026f342d928a4ae6a9a6adde3334ec9",
+      "sourceModifiedAt": "2008-11-17T08:09:04Z",
+      "sourcePath": "/Volumes/FixtureVolume/Family/clip_05.mov",
+      "status": "skipped",
+      "steps": [
+        {
+          "kind": "verifyAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "balanceAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "accessCopy",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "losslessCopy",
+          "note": "",
+          "state": "pending"
+        }
+      ],
+      "userNotes": ""
+    },
+    {
+      "durationSeconds": 4853.915733,
+      "evidence": [
+        {
+          "line": "fixture evidence 1",
+          "points": 8
+        },
+        {
+          "line": "fixture evidence 2",
+          "points": 10
+        },
+        {
+          "line": "fixture evidence 3",
+          "points": 5
+        },
+        {
+          "line": "fixture evidence 4",
+          "points": 60
+        },
+        {
+          "line": "fixture evidence 5",
+          "points": 15
+        }
+      ],
+      "filename": "clip_06.mov",
+      "id": "27F99545-8BF7-4616-8A7F-F24F72A06FC8",
+      "proposedName": "1990-01-06 Fixture event 6",
+      "score": 98,
+      "selected": true,
+      "sizeBytes": 17457087073,
+      "skipNote": "Skipped by you at 12:00 while it was pending — not in this batch",
+      "skippedAt": "2026-09-19T16:50:09Z",
+      "sourceContentHash": "2c65d8e41a841251167ceab5ea50e2a9",
+      "sourceModifiedAt": "2011-05-22T04:06:15Z",
+      "sourcePath": "/Volumes/FixtureVolume/Family/clip_06.mov",
+      "status": "skipped",
+      "steps": [
+        {
+          "kind": "verifyAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "balanceAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "accessCopy",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "losslessCopy",
+          "note": "",
+          "state": "pending"
+        }
+      ],
+      "userNotes": ""
+    },
+    {
+      "durationSeconds": 3732.504,
+      "evidence": [
+        {
+          "line": "fixture evidence 1",
+          "points": 8
+        },
+        {
+          "line": "fixture evidence 2",
+          "points": 10
+        },
+        {
+          "line": "fixture evidence 3",
+          "points": 5
+        },
+        {
+          "line": "fixture evidence 4",
+          "points": 60
+        },
+        {
+          "line": "fixture evidence 5",
+          "points": 15
+        }
+      ],
+      "filename": "clip_07.mov",
+      "id": "E93B128E-E5A6-4BD6-992D-FB72B307957F",
+      "promotedRelPath": "1990/1990-01-07 Fixture event 7.mov",
+      "proposedDate": "2004",
+      "proposedName": "1990-01-07 Fixture event 7",
+      "score": 98,
+      "selected": true,
+      "sizeBytes": 2937976318,
+      "sourceContentHash": "d9b6667a131f64d1cc401d0f7e0dc565",
+      "sourceModifiedAt": "2007-10-16T03:11:40Z",
+      "sourcePath": "/Volumes/FixtureVolume/Family/clip_07.mov",
+      "status": "promoted",
+      "steps": [
+        {
+          "kind": "verifyAudio",
+          "note": "fixture verifyAudio note",
+          "state": "done"
+        },
+        {
+          "kind": "balanceAudio",
+          "note": "fixture balanceAudio note",
+          "state": "skipped"
+        },
+        {
+          "kind": "accessCopy",
+          "note": "fixture accessCopy note",
+          "outputRelPath": "E93B128E-E5A6-4BD6-992D-FB72B307957F/clip_07.accessCopy.mov",
+          "recordID": "09A01EB2-49B6-4F9E-A8EA-4DC0BEC9C6B4",
+          "state": "done"
+        },
+        {
+          "kind": "losslessCopy",
+          "note": "fixture losslessCopy note",
+          "outputRelPath": "E93B128E-E5A6-4BD6-992D-FB72B307957F/clip_07.losslessCopy.mov",
+          "recordID": "7724A4B9-EE78-4698-84E7-9768F37C8F7C",
+          "state": "done"
+        }
+      ],
+      "userNotes": ""
+    },
+    {
+      "durationSeconds": 5628.633333,
+      "evidence": [
+        {
+          "line": "fixture evidence 1",
+          "points": 8
+        },
+        {
+          "line": "fixture evidence 2",
+          "points": 10
+        },
+        {
+          "line": "fixture evidence 3",
+          "points": 5
+        },
+        {
+          "line": "fixture evidence 4",
+          "points": 60
+        },
+        {
+          "line": "fixture evidence 5",
+          "points": 15
+        }
+      ],
+      "filename": "clip_08.mov",
+      "id": "04B24547-78DF-4615-95AE-619929D05E29",
+      "proposedName": "1990-01-08 Fixture event 8",
+      "score": 98,
+      "selected": true,
+      "sizeBytes": 5078037412,
+      "skipNote": "Skipped by you at 12:00 while it was pending — not in this batch",
+      "skippedAt": "2026-09-19T16:51:48Z",
+      "sourceContentHash": "",
+      "sourceModifiedAt": "2026-06-15T15:48:45Z",
+      "sourcePath": "/Volumes/FixtureVolume/Family/clip_08.mov",
+      "status": "skipped",
+      "steps": [
+        {
+          "kind": "verifyAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "balanceAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "accessCopy",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "losslessCopy",
+          "note": "",
+          "state": "pending"
+        }
+      ],
+      "userNotes": ""
+    },
+    {
+      "durationSeconds": 6998.233333,
+      "evidence": [
+        {
+          "line": "fixture evidence 1",
+          "points": 8
+        },
+        {
+          "line": "fixture evidence 2",
+          "points": 10
+        },
+        {
+          "line": "fixture evidence 3",
+          "points": 5
+        },
+        {
+          "line": "fixture evidence 4",
+          "points": 60
+        },
+        {
+          "line": "fixture evidence 5",
+          "points": 15
+        }
+      ],
+      "filename": "clip_09.mov",
+      "id": "9F26780F-1F3D-44AB-BAC1-C780824AC968",
+      "proposedDate": "1994",
+      "proposedName": "1990-01-09 Fixture event 9",
+      "score": 98,
+      "selected": true,
+      "sizeBytes": 41587426633,
+      "skipNote": "Skipped by you at 12:00 while it was pending — not in this batch",
+      "skippedAt": "2026-09-19T16:51:53Z",
+      "sourceContentHash": "",
+      "sourceModifiedAt": "2026-08-04T22:11:38Z",
+      "sourcePath": "/Volumes/FixtureVolume/Family/clip_09.mov",
+      "status": "skipped",
+      "steps": [
+        {
+          "kind": "verifyAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "balanceAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "accessCopy",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "losslessCopy",
+          "note": "",
+          "state": "pending"
+        }
+      ],
+      "userNotes": ""
+    },
+    {
+      "durationSeconds": 4692.166,
+      "evidence": [
+        {
+          "line": "fixture evidence 1",
+          "points": 8
+        },
+        {
+          "line": "fixture evidence 2",
+          "points": 14
+        },
+        {
+          "line": "fixture evidence 3",
+          "points": 10
+        },
+        {
+          "line": "fixture evidence 4",
+          "points": 5
+        },
+        {
+          "line": "fixture evidence 5",
+          "points": 60
+        }
+      ],
+      "filename": "clip_10.mov",
+      "id": "8F6BAEE3-E230-472F-81DE-3968FDC4F658",
+      "proposedName": "1990-01-10 Fixture event 10",
+      "score": 97,
+      "selected": true,
+      "sizeBytes": 13343914797,
+      "skipNote": "Skipped by you at 12:00 while it was pending — not in this batch",
+      "skippedAt": "2026-09-19T16:50:19Z",
+      "sourceContentHash": "",
+      "sourceModifiedAt": "2026-07-11T00:00:59Z",
+      "sourcePath": "/Volumes/FixtureVolume/Family/clip_10.mov",
+      "status": "skipped",
+      "steps": [
+        {
+          "kind": "verifyAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "balanceAudio",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "accessCopy",
+          "note": "",
+          "state": "pending"
+        },
+        {
+          "kind": "losslessCopy",
+          "note": "",
+          "state": "pending"
+        }
+      ],
+      "userNotes": ""
+    }
+  ],
+  "finishedAt": "2026-09-19T17:01:55Z",
+  "id": "4C7A5373-7703-4C2C-914D-8D700E5918C2",
+  "log": [
+    "Archive Angel: fixture log line 1",
+    "Archive Angel: fixture log line 2",
+    "Archive Angel: fixture log line 3",
+    "Archive Angel: fixture log line 4",
+    "Archive Angel: fixture log line 5",
+    "Archive Angel: fixture log line 6",
+    "Archive Angel: fixture log line 7",
+    "Archive Angel: fixture log line 8",
+    "Archive Angel: fixture log line 9",
+    "Archive Angel: fixture log line 10",
+    "Archive Angel: fixture log line 11",
+    "Archive Angel: fixture log line 12",
+    "Archive Angel: fixture log line 13",
+    "Archive Angel: fixture log line 14",
+    "Archive Angel: fixture log line 15",
+    "Archive Angel: fixture log line 16",
+    "Archive Angel: fixture log line 17",
+    "Archive Angel: fixture log line 18",
+    "Archive Angel: fixture log line 19",
+    "Archive Angel: fixture log line 20",
+    "Archive Angel: fixture log line 21",
+    "Archive Angel: fixture log line 22",
+    "Archive Angel: fixture log line 23",
+    "Archive Angel: fixture log line 24",
+    "Archive Angel: fixture log line 25",
+    "Archive Angel: fixture log line 26",
+    "Archive Angel: fixture log line 27",
+    "Archive Angel: fixture log line 28",
+    "Archive Angel: fixture log line 29",
+    "Archive Angel: fixture log line 30",
+    "Archive Angel: fixture log line 31",
+    "Archive Angel: fixture log line 32",
+    "Archive Angel: fixture log line 33",
+    "Archive Angel: fixture log line 34",
+    "Archive Angel: fixture log line 35",
+    "Archive Angel: fixture log line 36",
+    "Archive Angel: fixture log line 37",
+    "Archive Angel: fixture log line 38",
+    "Archive Angel: fixture log line 39",
+    "Archive Angel: fixture log line 40",
+    "Archive Angel: fixture log line 41",
+    "Archive Angel: fixture log line 42",
+    "Archive Angel: fixture log line 43",
+    "Archive Angel: fixture log line 44",
+    "Archive Angel: fixture log line 45",
+    "Archive Angel: fixture log line 46",
+    "Archive Angel: fixture log line 47",
+    "Archive Angel: fixture log line 48"
+  ],
+  "makeLossless": true,
+  "overflow": 883,
+  "rejected": {
+    "A copy is already in the archive": 68,
+    "A derivative export — its original is in the catalog": 6,
+    "Already in a prepared batch": 5,
+    "Already in the archive": 1148,
+    "An app's cache / render file (name or folder), not an original": 613,
+    "Half of an A/V pair — combine first": 995,
+    "Looks like junk (machine evidence, unrated)": 1,
+    "Not a video": 3156,
+    "Not playable / un-probeable": 375,
+    "Too short (under 1 min — short clips are usually edits of a longer original)": 2092,
+    "Too small for its length — a thumbnail or proxy stream, not the original": 31
+  },
+  "report": {
+    "accessCopies": 2,
+    "balancedAudio": 0,
+    "failed": [],
+    "losslessCopies": 1,
+    "originalOnly": [],
+    "promotedOriginals": 2,
+    "skippedByUser": [
+      "clip_01.mov",
+      "clip_02.mov",
+      "clip_03.mov",
+      "clip_04.mov",
+      "clip_05.mov",
+      "clip_06.mov",
+      "clip_07.mov"
+    ]
+  },
+  "requestedCount": 10,
+  "startedAt": "2026-09-19T16:49:52Z",
+  "status": "promoted"
+}

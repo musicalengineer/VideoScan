@@ -1,0 +1,110 @@
+{
+  "batchDir": "/private/tmp/angel-fixture/batch-2026-09-20T17-25-00",
+  "consideredCount": 1,
+  "createdAt": "2026-09-20T21:25:00Z",
+  "entries": [
+    {
+      "durationSeconds": 568.568,
+      "evidence": [
+        {
+          "line": "fixture evidence 1",
+          "points": 8
+        },
+        {
+          "line": "fixture evidence 2",
+          "points": 10
+        },
+        {
+          "line": "fixture evidence 3",
+          "points": 20
+        },
+        {
+          "line": "fixture evidence 4",
+          "points": 10
+        },
+        {
+          "line": "fixture evidence 5",
+          "points": 15
+        }
+      ],
+      "filename": "clip_01.mov",
+      "id": "D014751B-A370-440C-8723-E5F2FEF722B3",
+      "promotedRelPath": "1990/1990-01-01 Fixture event 1.mov",
+      "proposedDate": "1998",
+      "proposedName": "1990-01-01 Fixture event 1",
+      "score": 63,
+      "selected": true,
+      "sizeBytes": 2044800000,
+      "sourceContentHash": "",
+      "sourceModifiedAt": "2002-09-01T01:52:35Z",
+      "sourcePath": "/Volumes/FixtureVolume/Family/clip_01.mov",
+      "status": "promoted",
+      "steps": [
+        {
+          "kind": "verifyAudio",
+          "note": "fixture verifyAudio note",
+          "seconds": 3.965841054916382,
+          "state": "done"
+        },
+        {
+          "kind": "balanceAudio",
+          "note": "fixture balanceAudio note",
+          "seconds": 7.092952728271484e-05,
+          "state": "skipped"
+        },
+        {
+          "kind": "accessCopy",
+          "note": "fixture accessCopy note",
+          "outputRelPath": "D014751B-A370-440C-8723-E5F2FEF722B3/clip_01.accessCopy.mov",
+          "recordID": "40CC6CB5-E6DB-464A-8219-B1CA05C91EFB",
+          "seconds": 12.093178987503052,
+          "state": "done"
+        },
+        {
+          "kind": "losslessCopy",
+          "note": "fixture losslessCopy note",
+          "outputRelPath": "D014751B-A370-440C-8723-E5F2FEF722B3/clip_01.losslessCopy.mov",
+          "recordID": "51225FAA-924B-4FF2-8E01-BA08202C99CC",
+          "seconds": 60.68604099750519,
+          "state": "done"
+        }
+      ],
+      "userEditedName": true,
+      "userNotes": ""
+    }
+  ],
+  "finishedAt": "2026-09-21T17:39:12Z",
+  "id": "2C5529CC-700E-40DB-AC7C-83719516968C",
+  "log": [
+    "Archive Angel: fixture log line 1",
+    "Archive Angel: fixture log line 2",
+    "Archive Angel: fixture log line 3",
+    "Archive Angel: fixture log line 4",
+    "Archive Angel: fixture log line 5",
+    "Archive Angel: fixture log line 6",
+    "Archive Angel: fixture log line 7",
+    "Archive Angel: fixture log line 8",
+    "Archive Angel: fixture log line 9",
+    "Archive Angel: fixture log line 10",
+    "Archive Angel: fixture log line 11",
+    "Archive Angel: fixture log line 12",
+    "Archive Angel: fixture log line 13",
+    "Archive Angel: fixture log line 14",
+    "Archive Angel: fixture log line 15",
+    "Archive Angel: fixture log line 16"
+  ],
+  "makeLossless": true,
+  "overflow": 0,
+  "rejected": {},
+  "report": {
+    "accessCopies": 1,
+    "balancedAudio": 0,
+    "failed": [],
+    "losslessCopies": 1,
+    "originalOnly": [],
+    "promotedOriginals": 1
+  },
+  "requestedCount": 1,
+  "startedAt": "2026-09-20T21:25:00Z",
+  "status": "promoted"
+}

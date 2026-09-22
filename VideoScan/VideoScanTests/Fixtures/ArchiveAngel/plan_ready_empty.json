@@ -1,0 +1,21 @@
+{
+  "batchDir": "/private/tmp/angel-fixture/batch-2026-09-22T16-23-04",
+  "consideredCount": 1,
+  "createdAt": "2026-09-22T20:23:04Z",
+  "entries": [],
+  "finishedAt": "2026-09-22T20:23:04Z",
+  "id": "DE1E2D69-8D1E-4CA2-B112-81E3097827DB",
+  "log": [
+    "Archive Angel: fixture log line 1",
+    "Archive Angel: fixture log line 2",
+    "Archive Angel: fixture log line 3"
+  ],
+  "makeLossless": true,
+  "overflow": 0,
+  "rejected": {
+    "Too short (under 2 min — short clips are usually pieces of a longer original)": 1
+  },
+  "requestedCount": 1,
+  "startedAt": "2026-09-22T20:23:04Z",
+  "status": "ready"
+}
