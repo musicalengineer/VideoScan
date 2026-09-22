@@ -34,6 +34,11 @@
 // row; the ledger line carries them too. Old plans decode with
 // `tier == nil` and are decided afresh.
 //
+// A sibling with no current evidence is PROVEN by the job — read in full
+// once and stamped, exactly like the keeper (2026-09-21) — and then counts
+// here through its fresh fixity like any other copy. `duplicateIdentity`
+// keeps a hard link of the file about to go from ever counting.
+//
 // THE REMOVAL BOUNDARY (codex 1611): the tier is decided, then the
 // ticket save is awaited — and the copies it rests on can change in that
 // window (a sibling rewritten in place, an archive copy pulled). So the
@@ -98,11 +103,20 @@ struct DeletionTierCandidates: Sendable, Equatable {
     }
     struct OtherCopy: Sendable, Equatable {
         let path: String
-        let fixity: ContentFixity?
+        /// `var` so a sibling PROVEN by a read this pair (2026-09-21) can
+        /// carry its fresh fixity into the ordinary gather.
+        var fixity: ContentFixity?
         /// "sibling copy.mov on M4drive" — for the row's reason.
         var label: String = "sibling"
         /// The catalog record, for the evidence on the row (codex 1611).
         var recordID: UUID? = nil
+        /// The catalog's size for the copy — what a sibling read costs
+        /// (for the log and the run's totals). 0 when unknown.
+        var sizeBytes: Int64 = 0
+        /// Why a copy WITHOUT a fixity was not proven this pass, when the
+        /// job knows ("offline — not counted"); nil keeps the plain
+        /// "not verified yet". Words only — never evidence.
+        var unverifiedNote: String? = nil
     }
     /// "keeper on LaCieWorkspace".
     var keeperLabel = "keeper"
@@ -121,6 +135,12 @@ struct DeletionTierCandidates: Sendable, Equatable {
     /// The keeper itself is the family's verified archive copy. It is
     /// counted once, as the keeper; this only says the archive exists.
     var keeperIsVerifiedArchive = false
+    /// The DUPLICATE's own identity (device + inode are what matter),
+    /// set by the worker once it has the file in hand. A candidate that
+    /// is the same inode — a hard link of the file about to go — is the
+    /// same bytes on the same platter, not a copy that remains
+    /// (2026-09-21, sibling proving). nil = not known; nothing excluded.
+    var duplicateIdentity: FileIdentityStamp? = nil
 }
 
 /// What the disk said about the candidates, once the duplicate's digest
@@ -198,6 +218,11 @@ struct DeletionTierFacts: Sendable, Equatable {
             seenInodes.insert(key(k))
         }
         func alreadyCounted(_ stamp: FileIdentityStamp, _ label: String) -> Bool {
+            if let dup = candidates.duplicateIdentity, stamp.isSameFile(as: dup) {
+                facts.unverifiedCopies += 1
+                facts.notCounted.append("\(label) is the same file as the duplicate (hard link) — not another copy")
+                return true
+            }
             guard seenInodes.contains(key(stamp)) else { seenInodes.insert(key(stamp)); return false }
             facts.unverifiedCopies += 1
             facts.notCounted.append("\(label) is the same file as one already counted (hard link)")
@@ -240,7 +265,7 @@ struct DeletionTierFacts: Sendable, Equatable {
         for copy in candidates.otherCopies {
             guard let fixity = copy.fixity, fixity.isUsableForVerification else {
                 facts.unverifiedCopies += 1
-                facts.notCounted.append("\(copy.label) not verified yet")
+                facts.notCounted.append("\(copy.label) \(copy.unverifiedNote ?? "not verified yet")")
                 continue
             }
             guard fixity.digest == wanted else {

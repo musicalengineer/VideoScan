@@ -360,6 +360,10 @@ struct CatalogView: View {
     @State private var showClearRecorrelateConfirm = false
     @State private var deleteTargetVolume: String = ""
     @State private var deleteTargetCount: Int = 0
+    /// The forecast block (2026-09-21: Rick should see "0 deletable" in
+    /// seconds, not after a 90-minute run) — built once at click time
+    /// from the catalog and stored fixities, no file reads.
+    @State private var deleteTargetForecast: String = ""
     /// Confirmation body built once at click time from
     /// `duplicateDeletionSelection` (2026-08-18, "Also clean up working
     /// copies" mode) — see WorkingCopyCleanupText.confirmation.
@@ -646,6 +650,9 @@ struct CatalogView: View {
                 deleteTargetSummary = selection.confirmationText(
                     volumeName: URL(fileURLWithPath: path).lastPathComponent)
                 deleteTargetCrossMode = selection.crossVolumeMode
+                let forecast = model.deleteDuplicatesForecast(onVolume: path)
+                deleteTargetForecast = forecast.confirmationText
+                appLog.write(forecast.logLine(volume: URL(fileURLWithPath: path).lastPathComponent) + " (Start confirmation)")
                 showDeleteDuplicatesConfirm = true
             },
             onClearResults: { model.clearResults() },
@@ -1572,6 +1579,9 @@ extension CatalogView {
             text += WorkingCopyCleanupText.confirmationOn + "\n\n"
         } else {
             text += WorkingCopyCleanupText.confirmationOff(volume: volume) + "\n\n"
+        }
+        if !deleteTargetForecast.isEmpty {
+            text += deleteTargetForecast + "\n\n"
         }
         text += "Are you sure? Do you have backups and/or are these really junk or duplicates?"
         return text
