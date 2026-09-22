@@ -129,7 +129,50 @@ enum HallieSocialShapeGuard {
            tokens.allSatisfy({ reactionWords.contains($0) || fillerWords.contains($0) }) {
             return Verdict(kind: .casual, reason: "a reaction (“\(reaction)”), not a search")
         }
+        // Nothing left to search for (2026-09-21 18:52, "Hi Hallie how
+        // areyou?" → keyword=hi keyword=how are you → "687 videos
+        // matched … where someone says “hi”"): every keyword the model
+        // picked, and every word of the sentence, is a greeting, filler or
+        // small-talk word. A sentence with one word of its own ("when did
+        // someone say hi" — "say", "someone") stays a search.
+        let terms = searchTerms(ast)
+        if !terms.isEmpty,
+           terms.allSatisfy(isConversationalWord),
+           tokens.allSatisfy(isConversationalWord) {
+            return Verdict(
+                kind: .casual,
+                reason: "only greetings and small talk to search for (“\(terms.joined(separator: " "))”)")
+        }
         return nil
+    }
+
+    /// Greetings and the words of everyday small talk ("how are you
+    /// doing today", "what's up"). Never a search term on their own.
+    static let smallTalkWords: Set<String> = [
+        "how", "are", "doing", "today", "going", "what", "whats", "up", "sup",
+        "been", "have", "has", "am", "im", "fine", "there", "here", "meet",
+        "see", "again", "talk", "glad", "hope", "day", "mae", "hows", "things",
+        "yourself", "tonight", "weekend", "everything", "well", "nice", "hiya",
+        "howdy", "heya", "hullo", "greetings", "good", "you're", "doin",
+    ]
+
+    static func isConversationalWord(_ word: String) -> Bool {
+        reactionWords.contains(word) || fillerWords.contains(word) || smallTalkWords.contains(word)
+    }
+
+    /// The words the AST would search for, split into single lower-case
+    /// words (a keyword may be a phrase: "how are you").
+    static func searchTerms(_ ast: ArchivistQueryAST) -> [String] {
+        let phrases: [String]
+        switch ast {
+        case .presence(let p): phrases = p.keywords ?? []
+        case .event(let p): phrases = (p.keywords ?? []) + (p.transcript ?? [])
+        case .cross(let p): phrases = (p.keywords ?? []) + (p.transcript ?? [])
+        case .aggregate, .graph, .temporal, .record: phrases = []
+        }
+        return phrases.flatMap {
+            HallieGeneralKnowledgeLane.words(HallieGeneralKnowledgeLane.normalize($0))
+        }
     }
 
     /// The first archive, media, family, date or capability cue in the

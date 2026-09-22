@@ -1030,7 +1030,18 @@ enum HallieShellCLI {
                     dependencies: dependencies)
             }
         }
-        let repair = HallieSpellingRecovery.repairRequestOpener(question)
+        // THE FRONT DOOR (2026-09-21), the same pass the app runs: typos
+        // read as their words, a leading greeting set aside. The typed
+        // `question` stays the transcript.
+        let doorIdentity = state.identityContext
+        let door = HallieFrontDoor.prepare(question) {
+            HallieFrontDoor.isProtectedName($0, context: doorIdentity)
+        }
+        for line in door.logLines {
+            appLog.write(line)
+            if options.diagnostics { output(line) }
+        }
+        let repair = HallieSpellingRecovery.repairRequestOpener(door.routingText)
         let routingQuestion = repair.text
         if let original = repair.originalWord,
            let replacement = repair.replacementWord {
