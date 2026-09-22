@@ -54,7 +54,7 @@ extension CatalogContent {
             : "Prepare with Archive Angel"
         Button(label) {
             let lossless = UserDefaults.standard.bool(forKey: "archiveAngel.makeLossless")
-            fileOpsCenter.startArchiveAngel(recordIDs: preparable.map(\.id), makeLossless: lossless, model: model)
+            fileOpsCenter.startedByUser { $0.startArchiveAngel(recordIDs: preparable.map(\.id), makeLossless: lossless, model: model) }
         }
         .disabled(!pureActive || preparable.isEmpty || model.masterArchive == nil || model.isReadOnly)
         .help(model.masterArchive == nil

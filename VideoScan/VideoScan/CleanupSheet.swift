@@ -191,16 +191,15 @@ struct CleanupSheet: View {
     }
 
     private func startCleanup() {
-        fileOpsCenter.startCleanup(record: request.record,
-                                   recipe: request.recipe,
-                                   model: model,
-                                   plannedOutput: request.destinationURL)
-        dismiss()
-        // Same handoff TranscodeSheet uses: open the operations window
-        // (progress + Cancel live there) after the sheet's dismissal
-        // animation starts.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            openWindow(id: "combine")
+        fileOpsCenter.startedByUser {
+            $0.startCleanup(record: request.record,
+                            recipe: request.recipe,
+                            model: model,
+                            plannedOutput: request.destinationURL)
         }
+        dismiss()
+        // No openWindow here any more (2026-09-21): a user-started job brings
+        // the Media File Operations window forward itself — in front but NOT
+        // key, and only when Settings allows (MediaFileOperationsWindowForwarder).
     }
 }

@@ -284,7 +284,7 @@ struct PromoteToArchiveSheet: View {
         confirmed.archiveDateOverrides = archiveDates.compactMapValues {
             ArchiveDateEntry.parse($0)?.hint
         }
-        fileOpsCenter.startPromote(plan: confirmed, model: model)
+        fileOpsCenter.startedByUser { $0.startPromote(plan: confirmed, model: model) }
         dismiss()
         MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // Media File Operations window (legacy id)
     }

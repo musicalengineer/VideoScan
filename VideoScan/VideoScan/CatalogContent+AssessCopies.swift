@@ -14,8 +14,10 @@ extension CatalogContent {
     func assessCopiesMenuItem(activeRecs: [VideoRecord], pureActive: Bool) -> some View {
         Button("Archive Helper…") {
             guard let seed = activeRecs.first else { return }
-            fileOpsCenter.startAssessCopies(seed: seed, model: model)
-            openWindow(id: "combine")
+            fileOpsCenter.startedByUser { $0.startAssessCopies(seed: seed, model: model) }
+            // The expanded Assess row IS the helper — in front (codex #964),
+            // same as the Archive tab's nudge.
+            MediaFileOperationsWindowOpener.openInFront(openWindow)
         }
         .disabled(!pureActive || activeRecs.count != 1)
         .help(activeRecs.count == 1

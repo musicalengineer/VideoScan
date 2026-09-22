@@ -23,6 +23,10 @@ struct SettingsTabView: View {
     /// same shape as the preview helper's.
     @Binding var findTagEnabled: Bool
     let isFindTagHelperRunning: () -> Bool
+    /// "Show Media File Operations when a job starts" (2026-09-21).
+    /// `@ObservedObject` ≈ "re-draw this view when that object's
+    /// @Published fields change"; the object is owned by the Center.
+    @ObservedObject var fileOpsForwarder: MediaFileOperationsWindowForwarder
 
     private func ramDiskColor(_ gb: Int) -> Color {
         let pct = Double(gb) / Double(totalRAMGB)
@@ -118,6 +122,28 @@ struct SettingsTabView: View {
                         ), in: 10...200, step: 10),
                         accentColor: .mint
                     )
+                }
+
+                Divider()
+
+                // Media File Operations (Rick 2026-09-21)
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Media File Operations", systemImage: "film.stack")
+                        .font(.headline)
+                        .foregroundColor(.blue)
+
+                    // A computed Binding (get/set closures ≈ a property
+                    // with accessor functions) so the checkbox writes
+                    // through setShowOnJobStart — the explicit save.
+                    Toggle("Show Media File Operations when a job starts", isOn: Binding(
+                        get: { fileOpsForwarder.setting.showOnJobStart },
+                        set: { fileOpsForwarder.setShowOnJobStart($0) }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .accessibilityIdentifier("settings.mfo.showOnJobStart")
+                    Text("When you start an operation — Trim, Promote, Delete Duplicates, Combine and the rest — its window comes to the front so you can watch the progress. It does not take the keyboard from the window you are working in, and work VideoScan does on its own never moves it.")
+                        .font(.footnote).foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Divider()

@@ -77,7 +77,7 @@ extension ArchiveView {
                     nudge: archiveNudge,
                     openHelper: { id in
                         guard let seed = model.record(forID: id) else { return }
-                        fileOpsCenter.startAssessCopies(seed: seed, model: model)
+                        fileOpsCenter.startedByUser { $0.startAssessCopies(seed: seed, model: model) }
                         // The expanded Assess row IS the helper — in front (codex #964).
                         MediaFileOperationsWindowOpener.openInFront(openWindow)   // Media File Operations window (legacy id)
                     },

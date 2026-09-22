@@ -414,7 +414,7 @@ struct ArchiveView: View {
                     // on a manifest match, flags mismatches loudly. The
                     // '· N unverified' count above is what it repairs.
                     Button("Verify copies…") {
-                        fileOpsCenter.startVerifyArchiveCopies(model: model)
+                        fileOpsCenter.startedByUser { $0.startVerifyArchiveCopies(model: model) }
                         MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // Media File Operations window (legacy id)
                     }
                     .disabled(model.isReadOnly)

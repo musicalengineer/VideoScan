@@ -187,15 +187,15 @@ struct TranscodeSheet: View {
         }
 
         TranscodeDestination.remember(directory: outputFolder)
-        fileOpsCenter.startTranscode(
-            record: request.record,
-            preset: preset,
-            outputURL: outputURL,
-            model: model
-        )
-        dismiss()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            openWindow(id: "combine")
+        fileOpsCenter.startedByUser {
+            $0.startTranscode(record: request.record,
+                              preset: preset,
+                              outputURL: outputURL,
+                              model: model)
         }
+        dismiss()
+        // No openWindow here any more (2026-09-21): a user-started job brings
+        // the Media File Operations window forward itself — in front but NOT
+        // key, and only when Settings allows (MediaFileOperationsWindowForwarder).
     }
 }

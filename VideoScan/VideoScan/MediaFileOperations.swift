@@ -622,6 +622,11 @@ final class MediaFileOperationsCenter: ObservableObject {
     /// Keep at most this many non-active jobs around.
     static let finishedCap = 50
 
+    /// Brings the window forward when a USER-started job registers
+    /// (Rick 2026-09-21; MediaFileOperationsWindowForwarder.swift). `var`
+    /// only so tests can swap in a forwarder with a fake presenter.
+    var windowForwarder = MediaFileOperationsWindowForwarder.makeDefault()
+
     /// Maps a file path to the user's media-tech classification for its
     /// volume (from the scan targets). Wired up by VideoScanApp at
     /// launch; nil / no match ⇒ `.unknown` (gate allows 2).
@@ -754,6 +759,9 @@ final class MediaFileOperationsCenter: ObservableObject {
         // will never publish another change, so check once right away.
         scheduleTerminalCheck(job)
         trimFinished()
+        // Origin is user only inside a `startedByUser { }` scope.
+        windowForwarder.jobStarted(id: job.id, title: job.title,
+                                   origin: windowForwarder.currentOrigin)
         return true
     }
 
