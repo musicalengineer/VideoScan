@@ -872,7 +872,18 @@ enum DeleteDuplicatesPlanStore {
     nonisolated static func unfinishedPlans(root: URL,
                                             log: (String) -> Void = { appLog.write($0) }) -> [DeleteDuplicatesPlan] {
         let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: root.path) else { return [] }
+        let names: [String]
+        do {
+            names = try fm.contentsOfDirectory(atPath: root.path)
+        } catch {
+            // No root yet = no plan ever made: quiet. A root that exists but
+            // can't be listed is named (reflection review F2, 2026-09-21).
+            if fm.fileExists(atPath: root.path) {
+                log("Delete Duplicates: plan folder \(root.path) can't be listed — \(error.localizedDescription); "
+                    + "no plan offered")
+            }
+            return []
+        }
         var plans: [DeleteDuplicatesPlan] = []
         for name in names where name != doneFolder && UUID(uuidString: name) != nil {
             let url = root.appendingPathComponent(name, isDirectory: true)

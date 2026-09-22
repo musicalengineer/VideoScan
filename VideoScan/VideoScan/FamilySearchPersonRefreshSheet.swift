@@ -160,7 +160,11 @@ struct PersonRefreshReviewSheet: View {
                     .accessibilityIdentifier("tree.personRefresh.cancelSheet")
                 if !diff.factsMatch {
                     Button("Apply \(selected.count)") {
-                        if coordinator.apply(selectedFieldKeys: selected) { onApplied() }
+                        // The overlay write runs off the main actor; hop back for onApplied.
+                        let keys = selected
+                        Task { @MainActor in
+                            if await coordinator.apply(selectedFieldKeys: keys) { onApplied() }
+                        }
                     }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
