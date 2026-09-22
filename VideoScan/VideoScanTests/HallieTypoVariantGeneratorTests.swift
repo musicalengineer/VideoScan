@@ -134,6 +134,7 @@ struct HallieTypoVariantGeneratorTests {
         let id: String
         let category: String
         let text: String
+        let notes: String?
     }
     private struct Corpus: Decodable { let questions: [Row] }
 
@@ -220,6 +221,28 @@ struct HallieTypoVariantGeneratorTests {
     }
 
     static let floor = 0.80
+
+    /// The corpus's typo rows (typo-NNN) route exactly as the clean form
+    /// written in their notes (`clean: “…”`).
+    @Test func theTypoCorpusRowsRouteLikeTheirCleanForms() throws {
+        let rows = try Self.corpusRows().filter { $0.category == "typos" }
+        #expect(rows.count >= 30)
+        var mismatches: [String] = []
+        for row in rows {
+            guard let notes = row.notes,
+                  let match = notes.firstMatch(of: /clean: “(.+?)”/) else {
+                mismatches.append("\(row.id): no clean form in the notes")
+                continue
+            }
+            let clean = String(match.1)
+            let typed = HallieTypoFixture.route(row.text)
+            let expected = HallieTypoFixture.route(clean)
+            if typed != expected {
+                mismatches.append("\(row.id) “\(row.text)” → \(typed); clean “\(clean)” → \(expected)")
+            }
+        }
+        #expect(mismatches.isEmpty, Comment(rawValue: mismatches.joined(separator: "\n")))
+    }
 
     /// The front door must not change how an ordinary corpus sentence
     /// routes — only sentences that carry a typo it reads. Every row whose
