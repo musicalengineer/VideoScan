@@ -230,9 +230,9 @@ struct ArchiveTimelinePane: View {
                 }
                 if !timeline.undated.isEmpty {
                     Section {
-                        ForEach(timeline.undated) { item in
-                            itemCard(item)
-                        }
+                        cardGrid(timeline.undated)
+                            .padding(.horizontal, 18)
+                            .padding(.top, 6)
                     } header: {
                         undatedHeader
                             .id(Self.undatedAnchor)
@@ -294,12 +294,24 @@ struct ArchiveTimelinePane: View {
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .padding(.top, 10)
-            ForEach(year.items) { item in
-                itemCard(item)
-            }
+            cardGrid(year.items)
         }
         .padding(.horizontal, 18)
         .padding(.bottom, 6)
+    }
+
+    /// A year's cards as a grid that fills the pane's width — one column
+    /// in a narrow window, two or three in a wide one (Rick 2026-09-22:
+    /// "a lot of space in black… use that extra horizontal space").
+    /// `.adaptive(minimum:)` ≈ "as many ≥ 340 pt columns as fit, then
+    /// stretch them evenly". LazyVGrid builds only visible cards.
+    private func cardGrid(_ items: [ArchiveTimelineItem]) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 340, maximum: 560), spacing: 10, alignment: .top)],
+                  alignment: .leading, spacing: 10) {
+            ForEach(items) { item in
+                itemCard(item)
+            }
+        }
     }
 
     // MARK: Item card
@@ -314,18 +326,31 @@ struct ArchiveTimelinePane: View {
         return Button {
             openItems([item.id])
         } label: {
-            HStack(spacing: 12) {
-                ZStack {
-                    Image(systemName: icon(for: item.kind))
-                        .font(.system(size: 20))
-                        .foregroundStyle(Color.accentColor)
-                }
-                .frame(width: 30)
+            // Play leads (the card's action), then the title with its seal
+            // right beside it — no glyphs stranded at the far edge of a
+            // wide pane.
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: playGlyph(for: item.kind))
+                    .font(.system(size: 26))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 30)
+                    .help(playHelp(for: item.kind))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(item.title)
-                        .font(.system(size: 16, weight: .medium))
-                        .lineLimit(1)
                     HStack(spacing: 6) {
+                        Text(item.title)
+                            .font(.system(size: 16, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if item.isVerified {
+                            Image(systemName: "checkmark.seal.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.green)
+                                .help("Byte-verified in the Master Archive")
+                        }
+                    }
+                    HStack(spacing: 6) {
+                        Image(systemName: icon(for: item.kind))
+                            .foregroundStyle(.secondary)
                         if !item.peopleText.isEmpty {
                             Text(item.peopleText)
                                 .foregroundStyle(.blue)
@@ -339,17 +364,9 @@ struct ArchiveTimelinePane: View {
                     }
                     .font(.system(size: 13))
                 }
-                Spacer()
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(Color.accentColor)
-                    .help(playHelp(for: item.kind))
-                if item.isVerified {
-                    Image(systemName: "checkmark.seal.fill")
-                        .foregroundStyle(.green)
-                        .help("Byte-verified in the Master Archive")
-                }
+                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(isSelected
@@ -375,6 +392,10 @@ struct ArchiveTimelinePane: View {
         case .audio: return "Play this recording"
         case .photo: return "Open this photo"
         }
+    }
+
+    private func playGlyph(for kind: ArchiveTimelineItem.Kind) -> String {
+        kind == .photo ? "eye.circle.fill" : "play.circle.fill"
     }
 
     private func icon(for kind: ArchiveTimelineItem.Kind) -> String {
