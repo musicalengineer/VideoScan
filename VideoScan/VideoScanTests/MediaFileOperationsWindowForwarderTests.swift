@@ -274,19 +274,21 @@ struct MediaFileOperationsWindowForwardIsolationTests {
         #expect(before == after, "real prefs untouched")
     }
 
-    @Test func poisonedRealPrefsDoNotLeakIntoTheTestHost() {
+    @Test func poisonedRealPrefsDoNotLeakIntoTheTestHost() throws {
         // Even if the developer's real prefs say OFF, a test-host Center
         // sees the default — no global state crosses into tests.
         let key = MediaFileOperationsForwardSetting.key
-        let scratch = UserDefaults(suiteName: "vs.test.mfo-forward.\(UUID().uuidString)")!
+        let suite = "vs.test.mfo-forward.\(UUID().uuidString)"
+        let scratch = try #require(UserDefaults(suiteName: suite))
+        defer { scratch.removePersistentDomain(forName: suite) }
         scratch.set(false, forKey: key)
         #expect(MediaFileOperationsForwardSetting.restored(from: scratch).showOnJobStart == false)
         #expect(MediaFileOperationsWindowForwarder.makeDefault().setting.showOnJobStart == true)
     }
 
-    @Test func settingRoundTripsThroughScratchDefaults() {
+    @Test func settingRoundTripsThroughScratchDefaults() throws {
         let suite = "vs.test.mfo-forward.\(UUID().uuidString)"
-        let scratch = UserDefaults(suiteName: suite)!
+        let scratch = try #require(UserDefaults(suiteName: suite))
         defer { scratch.removePersistentDomain(forName: suite) }
         #expect(MediaFileOperationsForwardSetting.restored(from: scratch).showOnJobStart == true, "absent ⇒ ON")
         MediaFileOperationsForwardSetting(showOnJobStart: false).save(to: scratch)
