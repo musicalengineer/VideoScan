@@ -39,6 +39,9 @@ struct ArchiveTimelineItem: Identifiable, Equatable {
     let peopleText: String
     /// Fixity recorded at promote time (byte-verified copy).
     let isVerified: Bool
+    /// The other versions folded into this card (ArchiveItemVersions),
+    /// this card's own file included. Empty = a single-file item.
+    var versions: [ArchiveItemVersion] = []
 
     enum Kind: Equatable {
         case video
@@ -120,12 +123,10 @@ enum ArchiveTimelinePath {
     /// underscores become spaces. The trailing year many names carry
     /// ("…_CapeCod_1997") is part of the name; it stays.
     static func title(fromArchiveFilename name: String) -> String {
-        var stem = (name as NSString).deletingPathExtension
-        // Date prefix: YYYY(-MM|-xx)(-DD|-xx) followed by _ or space.
-        if let range = stem.range(of: #"^\d{4}(-[0-9x]{2}){0,2}[_ ]+"#,
-                                  options: .regularExpression) {
-            stem.removeSubrange(range)
-        }
+        // Date prefix: YYYY(-MM|-xx)(-DD|-xx) followed by _ or space — every
+        // one of them ("1990-xx-xx_1990-xx-xx_Christmas" → "Christmas";
+        // promote once doubled the prefix).
+        let stem = ArchiveItemVersions.stripDatePrefixes((name as NSString).deletingPathExtension)
         let words = stem
             .replacingOccurrences(of: "_", with: " ")
             .split(separator: " ")
@@ -166,9 +167,21 @@ struct ArchiveTimeline: Equatable {
 
     /// Is this item on the timeline (after any search narrowing)? Used to
     /// decide whether a hand-off target can be scrolled to. O(archived).
-    func contains(_ id: UUID) -> Bool {
-        undated.contains { $0.id == id } ||
-        decades.contains { $0.years.contains { $0.items.contains { $0.id == id } } }
+    func contains(_ id: UUID) -> Bool { cardID(for: id) != nil }
+
+    /// The card that shows `id` — itself, or the card a version of it is
+    /// folded into (a hand-off to "…cleaned" lands on its item's card).
+    func cardID(for id: UUID) -> UUID? {
+        func hit(_ item: ArchiveTimelineItem) -> Bool {
+            item.id == id || item.versions.contains { $0.id == id }
+        }
+        if let c = undated.first(where: hit) { return c.id }
+        for d in decades {
+            for y in d.years {
+                if let c = y.items.first(where: hit) { return c.id }
+            }
+        }
+        return nil
     }
 
     /// O(n log n) in the number of ARCHIVED items (never the whole
@@ -213,7 +226,8 @@ struct ArchiveTimeline: Equatable {
             $0.title.lowercased().contains(q) ||
             $0.archiveFilename.lowercased().contains(q) ||
             $0.relPath.lowercased().contains(q) ||
-            $0.peopleText.lowercased().contains(q)
+            $0.peopleText.lowercased().contains(q) ||
+            $0.versions.contains { $0.archiveFilename.lowercased().contains(q) || $0.label.contains(q) }
         })
     }
 }
