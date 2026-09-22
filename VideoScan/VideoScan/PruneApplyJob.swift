@@ -42,6 +42,17 @@
 // (or taken out of the line) with its file count and bytes, to
 // videoscan.log, the catalog log, and os_log (Rick-Breen.VideoScan).
 //
+// Stop is stop (Rick 2026-09-22: "stop should stop the whole line … just
+// stop is stop, rather than having a stop or pause on every line"). Stop
+// on the RUNNING batch takes every batch that was waiting behind it (when
+// Stop was pressed) out of the line with it — nothing of theirs is
+// started, their rows leave the list, and each gets its own "taken out of
+// the line (stopped with the batch before)" log line. A batch that ENDS IN
+// ERROR is not a Stop, but it does not hand on either: refuse over guess —
+// the line is dropped the same way, each line naming the error. Only a
+// normal finish hands the turn to the next batch. Stop on a WAITING batch
+// still takes out only that one.
+//
 // (For Rick: the same shape as DeleteDuplicatesJob — an ObservableObject
 // the MFO window renders, a Task that runs the loop, a flag the off-main
 // reads poll for Stop. ≈ a worker thread with an atomic<bool> stop flag.)
@@ -196,6 +207,44 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     /// Called once the batch has fully settled (its task returned, or it
     /// was dropped while waiting) — the center starts the next in line.
     var onSettled: (() -> Void)?
+    /// Called when this batch is paused or resumed — the center refreshes
+    /// the waiting rows ("… (paused)").
+    var onPauseChanged: (() -> Void)?
+    /// Set when Stop is pressed on this batch while it RUNS: the newest
+    /// batch sequence that existed then. Batches waiting up to that
+    /// sequence leave the line with it; a batch queued after the Stop is
+    /// a new request and still gets its turn.
+    private(set) var stopLineCutoff: Int?
+
+    /// Why a waiting batch left the line — the log line's clause.
+    enum DropReason: Equatable, Sendable {
+        /// Stop on the waiting batch itself.
+        case stopped
+        /// Quit (the quit guard's stop-all).
+        case quit
+        /// Stop on the running batch ahead of it (Rick 2026-09-22).
+        case stoppedWithBatchBefore
+        /// The running batch ahead ended in error — not handed on.
+        case batchBeforeFailed(String)
+
+        var clause: String {
+            switch self {
+            case .stopped: return ""
+            case .quit: return " (quit)"
+            case .stoppedWithBatchBefore: return " (stopped with the batch before)"
+            case .batchBeforeFailed(let why): return " (the batch before failed: \(why))"
+            }
+        }
+
+        var tag: String {
+            switch self {
+            case .stopped: return "stop"
+            case .quit: return "quit"
+            case .stoppedWithBatchBefore: return "stopped-with-batch-before"
+            case .batchBeforeFailed: return "batch-before-failed"
+            }
+        }
+    }
 
     /// The tally — the same struct `applyPrune` returns; valid once the
     /// job is terminal (partial while it runs).
@@ -260,7 +309,11 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
 
     /// videoscan.log, when a waiting batch is taken out of the line.
     nonisolated static func droppedLine(title: String, count: Int, bytes: Int64, forQuit: Bool) -> String {
-        "trash copies taken out of the line\(forQuit ? " (quit)" : ""): \(title) — \(sizeClause(count: count, bytes: bytes)) — nothing was started, nothing to put back"
+        droppedLine(title: title, count: count, bytes: bytes, reason: forQuit ? .quit : .stopped)
+    }
+
+    nonisolated static func droppedLine(title: String, count: Int, bytes: Int64, reason: DropReason) -> String {
+        "trash copies taken out of the line\(reason.clause): \(title) — \(sizeClause(count: count, bytes: bytes)) — nothing was started, nothing to put back"
     }
 
     /// A cancelled row for a batch that never started is clutter — it
@@ -285,14 +338,14 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
 
     /// Park this batch behind the one running. Its row says what it waits
     /// for; nothing else happens until `start()`.
-    func enqueue(behind runningTitle: String, ahead: Int) {
+    func enqueue(behind runningTitle: String, ahead: Int, aheadIsPaused: Bool = false) {
         guard task == nil, state.isActive else { return }
         isQueued = true
         queuedAt = Date()
         // Not a spinner: nothing is happening yet, and the row says so.
         isIndeterminateValue = false
         fractionValue = 0
-        setWaitingSubtitle(behind: runningTitle, ahead: ahead)
+        setWaitingSubtitle(behind: runningTitle, ahead: ahead, aheadIsPaused: aheadIsPaused)
         let line = Self.queuedLine(title: title, count: selected.count, bytes: selectedBytes, behind: runningTitle)
         appLog.write(line)
         model?.log("Archived — what next?: \(line)")
@@ -302,13 +355,16 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     /// "Waiting — starts after Move 2 copies to the Trash" (+ how many
     /// other waiting batches go first). Refreshed by the center when the
     /// line moves.
-    func setWaitingSubtitle(behind runningTitle: String, ahead: Int) {
+    func setWaitingSubtitle(behind runningTitle: String, ahead: Int, aheadIsPaused: Bool = false) {
         guard isQueued else { return }
-        subtitleText = Self.waitingSubtitle(behind: runningTitle, ahead: ahead)
+        subtitleText = Self.waitingSubtitle(behind: runningTitle, ahead: ahead, aheadIsPaused: aheadIsPaused)
     }
 
-    nonisolated static func waitingSubtitle(behind runningTitle: String, ahead: Int) -> String {
+    /// "(paused)" when the running batch ahead is paused — the line is not
+    /// stuck, it is waiting on the person (QA 2026-09-22).
+    nonisolated static func waitingSubtitle(behind runningTitle: String, ahead: Int, aheadIsPaused: Bool = false) -> String {
         var text = "Waiting — starts after \(runningTitle)"
+        if aheadIsPaused { text += " (paused)" }
         if ahead > 0 { text += " and \(ahead) more waiting batch\(ahead == 1 ? "" : "es")" }
         return text
     }
@@ -334,23 +390,40 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     private func cancel(forQuit: Bool) {
         guard state.isActive else { return }
         if isQueued, task == nil {
-            let line = Self.droppedLine(title: title, count: selected.count, bytes: selectedBytes, forQuit: forQuit)
-            appLog.write(line)
-            model?.log("Archived — what next?: \(line)")
-            pruneApplyLog.notice("prune DROPPED-WHILE-QUEUED \(self.selected.count, privacy: .public) copies quit=\(forQuit, privacy: .public)")
-            droppedWhileQueued = true
-            isQueued = false
-            state = .cancelled
-            subtitleText = "Taken out of the line — nothing was started"
-            isIndeterminateValue = false
-            onSettled?()
+            dropFromLine(forQuit ? .quit : .stopped)
             return
         }
+        // Stop is stop: the batches waiting behind this one now leave the
+        // line with it when it settles (the center reads this cutoff).
+        if stopLineCutoff == nil { stopLineCutoff = Self.nextSequence }
         state = .cancelling
         cancelFlag.set()
         subtitleText = progress.subtitle(paused: false, stopping: true)
         task?.cancel()
         wakeIfPaused()
+    }
+
+    /// Take a WAITING batch out of the line: nothing was started, so there
+    /// is nothing to put back; the row leaves the list (vanishes on
+    /// cancel). One log line to videoscan.log, the catalog log and os_log.
+    /// `notifySettled: false` when the center is dropping a whole line and
+    /// must not start the next waiting batch from inside the loop.
+    func dropFromLine(_ reason: DropReason, notifySettled: Bool = true) {
+        guard state.isActive, isQueued, task == nil else { return }
+        let line = Self.droppedLine(title: title, count: selected.count, bytes: selectedBytes, reason: reason)
+        appLog.write(line)
+        model?.log("Archived — what next?: \(line)")
+        pruneApplyLog.notice("prune DROPPED-WHILE-QUEUED \(self.selected.count, privacy: .public) copies \(self.selectedBytes, privacy: .public) bytes quit=\(reason == .quit, privacy: .public) reason=\(reason.tag, privacy: .public)")
+        droppedWhileQueued = true
+        isQueued = false
+        state = .cancelled
+        switch reason {
+        case .stopped, .quit: subtitleText = "Taken out of the line — nothing was started"
+        case .stoppedWithBatchBefore: subtitleText = "Stopped with the batch before — nothing was started"
+        case .batchBeforeFailed: subtitleText = "Taken out of the line — the batch before failed; nothing was started"
+        }
+        isIndeterminateValue = false
+        if notifySettled { onSettled?() }
     }
 
     /// Quit = Stop. Nothing here is half-done (one atomic move per file)
@@ -365,6 +438,7 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
         isPausedValue = true
         publishProgress()
         model?.log("Archived — what next?: paused — will stop after the current file.")
+        onPauseChanged?()
     }
 
     func resume() {
@@ -373,6 +447,7 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
         model?.log("Archived — what next?: resumed.")
         publishProgress()
         wakeIfPaused()
+        onPauseChanged?()
     }
 
     private func wakeIfPaused() {
@@ -534,6 +609,13 @@ extension MediaFileOperationsCenter {
                          hooks: VideoScanModel.PruneVerifyHooks = .live) -> PruneApplyJob {
         let job = PruneApplyJob(model: model, shown: shown, selected: selected, recordIDs: recordIDs,
                                 options: options, batchID: batchID, mode: mode, hooks: hooks)
+        // Read the batch ahead BEFORE the new job joins the list: the list
+        // is newest-first and the new job is not marked waiting yet, so
+        // afterwards `runningPruneApply` would find the new job itself
+        // (QA 2026-09-22 — the queued line named the wrong batch).
+        let ahead = runningPruneApply
+        let aheadTitle = ahead?.title
+        let aheadIsPaused = ahead?.isPaused ?? false
         guard add(job) else { return job }
         // Weak captures ≈ non-owning raw pointers that read nil once the
         // object is gone — the center owns the job, not the other way round.
@@ -541,15 +623,25 @@ extension MediaFileOperationsCenter {
             guard let self, let job else { return }
             self.pruneApplyDidSettle(job)
         }
+        job.onPauseChanged = { [weak self] in self?.refreshPruneQueueSubtitles() }
         let others = pruneApplyJobs.filter { $0.id != job.id && $0.state.isActive }
         guard !others.isEmpty else {
             beginPruneApply(job)
             return job
         }
-        let ahead = queuedPruneApplies.filter { $0.id != job.id }.count
-        job.enqueue(behind: runningPruneApply?.title ?? "the batch before", ahead: ahead)
+        let waitingAhead = queuedPruneApplies.filter { $0.id != job.id }.count
+        job.enqueue(behind: aheadTitle ?? "the batch before", ahead: waitingAhead, aheadIsPaused: aheadIsPaused)
         // Defensive: waiting batches but nothing running can only mean a
-        // hand-off was missed — start the oldest now rather than stall.
+        // hand-off was missed — start the oldest now rather than stall,
+        // and say so: it inherits no "moved earlier" list (each copy is
+        // still re-checked at its turn, so a copy already gone is found
+        // missing, never moved twice).
+        if runningPruneApply == nil {
+            let line = "trash copies: WARNING — \(queuedPruneApplies.count) batch(es) waiting but none running (a hand-off was missed); starting the oldest now with no \"moved earlier\" list — every copy is re-checked at its turn"
+            appLog.write(line)
+            model.log("Archived — what next?: \(line)")
+            pruneApplyLog.error("prune QUEUE-STALL waiting=\(self.queuedPruneApplies.count, privacy: .public) none running — starting oldest with empty moved-earlier")
+        }
         startNextPruneApplyIfIdle(inheriting: [])
         return job
     }
@@ -577,10 +669,41 @@ extension MediaFileOperationsCenter {
                                                                          waitedSeconds: waited)))
     }
 
-    /// A batch settled (finished, stopped, or dropped while waiting): hand
-    /// what the chain has moved so far to the next in line and start it.
+    /// A batch settled. Only a NORMAL finish hands the turn on (with what
+    /// the chain has moved so far). Stop on the running batch takes the
+    /// batches that were waiting when Stop was pressed out of the line
+    /// (Rick 2026-09-22: "stop is stop"); an error drops the whole line —
+    /// an error is not a Stop, but refuse over guess. A batch dropped while
+    /// waiting changes nothing for the running one.
     private func pruneApplyDidSettle(_ job: PruneApplyJob) {
-        startNextPruneApplyIfIdle(inheriting: job.movedEarlier.union(job.trashedIDs))
+        let moved = job.movedEarlier.union(job.trashedIDs)
+        if job.droppedWhileQueued {
+            startNextPruneApplyIfIdle(inheriting: moved)
+            return
+        }
+        switch job.state {
+        case .finished:
+            startNextPruneApplyIfIdle(inheriting: moved)
+        case .cancelled:
+            dropPruneLine(.stoppedWithBatchBefore, upToSequence: job.stopLineCutoff ?? Int.max)
+            // Batches queued AFTER the Stop are new requests: they run.
+            startNextPruneApplyIfIdle(inheriting: moved)
+        case .failed(let message):
+            dropPruneLine(.batchBeforeFailed(message), upToSequence: Int.max)
+        case .running, .cancelling:
+            // Settled but still active cannot happen; if it ever does,
+            // hand nothing on.
+            dropPruneLine(.batchBeforeFailed("it settled without finishing"), upToSequence: Int.max)
+        }
+    }
+
+    /// Take every waiting batch (up to `upToSequence`) out of the line —
+    /// one log line each; none of them is started.
+    private func dropPruneLine(_ reason: PruneApplyJob.DropReason, upToSequence cutoff: Int) {
+        defer { refreshPruneQueueSubtitles() }
+        for waiting in queuedPruneApplies where waiting.sequence <= cutoff {
+            waiting.dropFromLine(reason, notifySettled: false)
+        }
     }
 
     private func startNextPruneApplyIfIdle(inheriting moved: Set<UUID>) {
@@ -593,7 +716,7 @@ extension MediaFileOperationsCenter {
     private func refreshPruneQueueSubtitles() {
         guard let running = runningPruneApply else { return }
         for (i, waiting) in queuedPruneApplies.enumerated() {
-            waiting.setWaitingSubtitle(behind: running.title, ahead: i)
+            waiting.setWaitingSubtitle(behind: running.title, ahead: i, aheadIsPaused: running.isPaused)
         }
     }
 

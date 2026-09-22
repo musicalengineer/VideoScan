@@ -856,6 +856,128 @@ struct PruneApplyTests {
         #expect(waiting.task == nil && FileManager.default.fileExists(atPath: hd[1].fullPath), "quit never starts a waiting batch")
     }
 
+    @Test("QUEUE STOP-RUNNING: Stop on the running batch does not launch the batch waiting behind it — it leaves the line (logged, row gone, file untouched); a batch queued AFTER the Stop still runs (Rick 2026-09-22: stop is stop)")
+    func stoppingTheRunningBatchDoesNotLaunchTheNext() async throws {
+        let f = try await fixture("prune_q_stoprun_a"); defer { f.sb.cleanup() }
+        let g = try await fixture("prune_q_stoprun_b"); defer { g.sb.cleanup() }
+        let h = try await fixture("prune_q_stoprun_c"); defer { h.sb.cleanup() }
+        let sink = InMemoryLogSink()
+        let previous = appLog
+        appLog = sink
+        defer { appLog = previous }
+        let center = MediaFileOperationsCenter()
+        let box = JobBox()
+        let late = JobBox()
+        var h1 = VideoScanModel.PruneVerifyHooks.live
+        h1.beforeMutation = { _ in
+            guard let job = box.job, job.state == .running else { return }
+            job.cancel()
+            // A new request made after the Stop is not part of the stopped line.
+            late.job = center.startPruneApply(shown: h.shown, selected: [h.dup.id], recordIDs: h.ids, options: .init(),
+                                              batchID: "sr3", model: h.model, mode: .permanent)
+        }
+        let first = center.startPruneApply(shown: f.shown, selected: [f.dup.id], recordIDs: f.ids, options: .init(),
+                                           batchID: "sr1", model: f.model, mode: .permanent, hooks: h1)
+        box.job = first
+        let second = center.startPruneApply(shown: g.shown, selected: [g.dup.id], recordIDs: g.ids, options: .init(),
+                                            batchID: "sr2", model: g.model, mode: .permanent)
+        #expect(second.isQueued)
+        await first.task?.value
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(first.state == .cancelled, "\(first.state)")
+        #expect(second.task == nil, "the batch waiting behind a stopped batch never starts")
+        #expect(second.state == .cancelled && second.droppedWhileQueued, "\(second.state)")
+        #expect(FileManager.default.fileExists(atPath: f.dup.fullPath), "the stopped batch's file stays")
+        #expect(FileManager.default.fileExists(atPath: g.dup.fullPath), "the waiting batch's file is untouched")
+        try await eventually("the dropped row leaves the list") { !center.jobs.contains { $0.id == second.id } }
+        let dropped = PruneApplyJob.droppedLine(title: second.title, count: 1, bytes: g.dup.sizeBytes, reason: .stoppedWithBatchBefore)
+        #expect(dropped.hasPrefix("trash copies taken out of the line (stopped with the batch before): Move 1 copy to the Trash — 1 copy, "), "\(dropped)")
+        #expect(sink.lines.filter { $0.contains(dropped) }.count == 1, "one line per dropped batch: \(sink.lines)")
+        // The batch queued after the Stop is a new request: it runs.
+        let third = try #require(late.job)
+        try await eventually("the batch queued after the Stop starts") { third.task != nil }
+        await third.task?.value
+        #expect(third.outcome.trashed == 1 && !FileManager.default.fileExists(atPath: h.dup.fullPath), "\(third.outcome)")
+        #expect(!center.hasActivePruneApply)
+    }
+
+    @Test("QUEUE ERROR: a running batch that ends in ERROR hands nothing on — the waiting batch leaves the line, logged with the error (refuse over guess)")
+    func anErrorInTheRunningBatchDropsTheLine() async throws {
+        let f = try await fixture("prune_q_err_a"); defer { f.sb.cleanup() }
+        let g = try await fixture("prune_q_err_b"); defer { g.sb.cleanup() }
+        let sink = InMemoryLogSink()
+        let previous = appLog
+        appLog = sink
+        defer { appLog = previous }
+        let center = MediaFileOperationsCenter()
+        f.model.isReadOnly = true   // the running batch fails at its start: read-only viewer
+        let first = center.startPruneApply(shown: f.shown, selected: [f.dup.id], recordIDs: f.ids, options: .init(),
+                                           batchID: "er1", model: f.model, mode: .permanent)
+        let second = center.startPruneApply(shown: g.shown, selected: [g.dup.id], recordIDs: g.ids, options: .init(),
+                                            batchID: "er2", model: g.model, mode: .permanent)
+        #expect(second.isQueued)
+        await first.task?.value
+        try await Task.sleep(for: .milliseconds(300))
+        guard case .failed(let why) = first.state else { Issue.record("the first batch failed: \(first.state)"); return }
+        #expect(second.task == nil && second.state == .cancelled && second.droppedWhileQueued, "\(second.state)")
+        #expect(FileManager.default.fileExists(atPath: g.dup.fullPath))
+        let line = PruneApplyJob.droppedLine(title: second.title, count: 1, bytes: g.dup.sizeBytes, reason: .batchBeforeFailed(why))
+        #expect(line.contains("(the batch before failed: Read-only viewer"), "\(line)")
+        #expect(sink.lines.contains { $0.contains(line) }, "logged with why: \(sink.lines)")
+        try await eventually("the dropped row leaves the list") { !center.jobs.contains { $0.id == second.id } }
+    }
+
+    @Test("QUEUE LOG: the queued line names the batch AHEAD, not the new one (QA MINOR — the list is newest-first)")
+    func theQueuedLineNamesTheBatchAhead() async throws {
+        let f = try await fixture("prune_q_name_a"); defer { f.sb.cleanup() }
+        let g = try await fixture("prune_q_name_b", extraCopies: 1); defer { g.sb.cleanup() }
+        let gd = g.family.rows.filter { $0.checkable && $0.id != g.keeper.id }.map(\.id)
+        try #require(gd.count == 2)
+        let sink = InMemoryLogSink()
+        let previous = appLog
+        appLog = sink
+        defer { appLog = previous }
+        let center = MediaFileOperationsCenter()
+        let first = center.startPruneApply(shown: f.shown, selected: [f.dup.id], recordIDs: f.ids, options: .init(),
+                                           batchID: "nm1", model: f.model, mode: .permanent)
+        let second = center.startPruneApply(shown: g.shown, selected: Set(gd), recordIDs: g.ids, options: .init(),
+                                            batchID: "nm2", model: g.model, mode: .permanent)
+        #expect(first.title == "Move 1 copy to the Trash" && second.title == "Move 2 copies to the Trash")
+        let queued = sink.lines.filter { $0.contains("trash copies queued:") }
+        #expect(queued.count == 1 && queued[0].contains("queued: Move 2 copies to the Trash")
+                && queued[0].contains("waits for Move 1 copy to the Trash"), "\(queued)")
+        #expect(second.subtitle == PruneApplyJob.waitingSubtitle(behind: "Move 1 copy to the Trash", ahead: 0), "\(second.subtitle)")
+        second.cancel()
+        await first.task?.value
+    }
+
+    @Test("QUEUE PAUSED: a waiting row says \"(paused)\" while the batch ahead is paused, and drops it on Resume")
+    func theWaitingRowSaysWhenTheBatchAheadIsPaused() async throws {
+        let f = try await fixture("prune_q_paused_a", extraCopies: 1); defer { f.sb.cleanup() }
+        let g = try await fixture("prune_q_paused_b"); defer { g.sb.cleanup() }
+        let dups = f.family.rows.filter { $0.kind == .duplicate }.map(\.copy)
+        try #require(dups.count == 2)
+        let center = MediaFileOperationsCenter()
+        let box = JobBox()
+        var h1 = VideoScanModel.PruneVerifyHooks.live
+        h1.beforeMutation = { path in if path == dups[0].fullPath { box.job?.pause() } }
+        let first = center.startPruneApply(shown: f.shown, selected: Set(dups.map(\.id)), recordIDs: f.ids, options: .init(),
+                                           batchID: "pz1", model: f.model, mode: .permanent, hooks: h1)
+        box.job = first
+        let second = center.startPruneApply(shown: g.shown, selected: [g.dup.id], recordIDs: g.ids, options: .init(),
+                                            batchID: "pz2", model: g.model, mode: .permanent)
+        #expect(!second.subtitle.contains("(paused)"), "\(second.subtitle)")
+        try await eventually("the first pauses") { first.isPaused }
+        #expect(second.subtitle == "Waiting — starts after Move 2 copies to the Trash (paused)", "\(second.subtitle)")
+        #expect(PruneApplyJob.waitingSubtitle(behind: "X", ahead: 1, aheadIsPaused: true) == "Waiting — starts after X (paused) and 1 more waiting batch")
+        first.resume()
+        #expect(second.subtitle == "Waiting — starts after Move 2 copies to the Trash", "\(second.subtitle)")
+        await first.task?.value
+        try await eventually("the second starts after a normal finish") { second.task != nil }
+        await second.task?.value
+        #expect(second.outcome.trashed == 1, "\(second.outcome)")
+    }
+
     @Test("QUEUE LOG LINES: queued / started / taken out of the line each carry the file count and bytes")
     func theQueueLogLinesCarryCountAndBytes() {
         let q = PruneApplyJob.queuedLine(title: "Move 1 copy to the Trash", count: 1, bytes: 6_000_000_000,
@@ -1217,8 +1339,9 @@ struct PruneApplyTests {
         let sheet = try source("ArchivedWhatNextSheet.swift")
         // (Since b58449ac the call sits inside `fileOpsCenter.startedByUser { $0.… }`
         // so the MFO window comes forward — same hand-off, new spelling.)
-        #expect(sheet.contains("fileOpsCenter.startedByUser {") && sheet.contains(".startPruneApply(shown: shown, selected: selected"),
-                "Apply hands the checklist to a Media File Operation (nothing long runs behind a modal)")
+        #expect(sheet.range(of: #"fileOpsCenter\.startedByUser \{\s*\$0\.startPruneApply\(shown: shown, selected: selected"#,
+                            options: .regularExpression) != nil,
+                "Apply hands the checklist to a Media File Operation inside startedByUser (nothing long runs behind a modal)")
         #expect(!sheet.contains("model.applyPrune("), "the sheet never runs the pipeline itself")
         #expect(sheet.contains("dismiss()"), "and closes")
         #expect(!sheet.contains(".permanent"), "the sheet only ever moves to the Trash")
