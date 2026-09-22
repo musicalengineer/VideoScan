@@ -153,7 +153,11 @@ struct ArchiveView: View {
                     modifiedAt: ArchiveAngelBufferHygiene.planModifiedAt,
                     diskFree: ArchiveAngelBufferHygiene.diskFree(bufferRoot: root))
                 hygiene.generation = generation
-                return (scan.plans.filter { $0.status == .ready }, scan.unreadable, settled, hygiene)
+                // A "ready" batch with no ready rows has nothing to review
+                // (Rick 2026-09-22: "Archive Angel has 0 videos ready" in
+                // orange) — it is not offered.
+                return (scan.plans.filter { $0.status == .ready && $0.readyCount > 0 },
+                        scan.unreadable, settled, hygiene)
             }.value
             var ready = readyPlans
             await MainActor.run {
@@ -373,6 +377,12 @@ struct ArchiveView: View {
                 // Green = designated and reachable; yellow = designated
                 // but offline; the "none" state below is yellow too —
                 // attention, not alarm (Rick 2026-08-16).
+                // One card: the volume, its state, one line of totals, and
+                // the three housekeeping actions behind one ⋯ menu (Rick
+                // 2026-09-22: "kind of disorganized looking"). Archive
+                // Angel lives in the right pane's strip now — this card is
+                // what the archive IS, not what to do next.
+                let totals = model.masterArchiveTotals
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: reachable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(reachable ? Color.green : Color.yellow)
@@ -381,93 +391,26 @@ struct ArchiveView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(VolumeReachability.displayLabel(forPath: designation.targetPath))
                             .font(.system(size: 17, weight: .semibold))
-                        Text(reachable ? "Breen_Family_Archive" : "offline")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 8)
-                let totals = model.masterArchiveTotals
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .foregroundStyle(totals.verified > 0 ? Color.green : Color.secondary)
-                        .font(.system(size: 14))
-                        .frame(width: 18)
-                    Text("\(totals.verified) verified · \(MediaBytes.display(totals.verifiedBytes))")
+                        HStack(spacing: 4) {
+                            if reachable {
+                                Text("\(totals.verified) verified · \(MediaBytes.display(totals.verifiedBytes))")
+                                    .help("Every promoted file is byte-verified: copied, then re-read and its SHA-256 compared before it is recorded. This count is those files.")
+                            } else {
+                                Text("offline")
+                            }
+                            if totals.unverified > 0 {
+                                Text("· \(totals.unverified) unverified")
+                                    .foregroundStyle(Color.yellow)
+                                    .help("Archive copies cataloged by rescan without a fixity record — Verify copies… restores the checksum from the manifest. (Promote skips files already in the archive.)")
+                            }
+                        }
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
-                    if totals.unverified > 0 {
-                        Text("· \(totals.unverified) unverified")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Color.yellow)
-                            .help("Archive copies cataloged by rescan without a fixity record — Verify copies… restores the checksum from the manifest. (Promote skips files already in the archive.)")
                     }
+                    Spacer(minLength: 4)
+                    masterArchiveActionsMenu(reachable: reachable)
                 }
-                .padding(.leading, 8)
-                .help("Every promoted file is byte-verified: copied, then re-read and its SHA-256 compared before it is recorded. This count is those files.")
-                HStack(spacing: 14) {
-                    Button("Reveal") { model.revealMasterArchiveInFinder() }
-                    Button("Manifest") { model.openMasterArchiveManifest() }
-                    // GH #167: manifest-driven fixity audit + recovery —
-                    // re-reads every archive copy, restores archiveFixity
-                    // on a manifest match, flags mismatches loudly. The
-                    // '· N unverified' count above is what it repairs.
-                    Button("Verify copies…") {
-                        fileOpsCenter.startedByUser { $0.startVerifyArchiveCopies(model: model) }
-                        MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // Media File Operations window (legacy id)
-                    }
-                    .disabled(model.isReadOnly)
-                    .help("Re-read every Master Archive copy end to end and compare its SHA-256 against the manifest. Matches restore the catalog's fixity record; a mismatch is flagged and never papered over.")
-                    // Archive Angel (2026-09-09): autonomous proposer —
-                    // finds important-but-unarchived videos, prepares
-                    // companions in a buffer, then asks for review.
-                    Button("Archive Angel…") {
-                        angelStartRequest = ArchiveAngelStartRequest()
-                    }
-                    .disabled(model.isReadOnly)
-                    .accessibilityIdentifier("archive.angelStart")
-                    .help("Walk the catalog for important videos not yet archived, prepare each in a buffer (audio verified, balanced if needed, access copy), and present a batch for review. Nothing reaches the archive until you press Promote.")
-                }
-                .buttonStyle(.link)
-                .font(.system(size: 13))
-                .disabled(!reachable)
-                .padding(.leading, 34)   // aligns under the volume name, not the icon
-                .padding(.top, 2)
-                // Archive Angel Assessment (2026-09-10): the always-on
-                // grades, right where the batches are reviewed.
-                ArchiveAngelAssessmentPanel(store: model.archiveAngelStore, sweep: model.archiveAngelSweep,
-                                            prepare: { angelStartRequest = ArchiveAngelStartRequest() })
-                    .padding(.leading, 34)
-                    .padding(.top, 8)
-                if let newest = angelReadyBatches.first {
-                    // Nag-button pattern: the badge performs the action.
-                    Button {
-                        openNewestAngelBatch()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "sparkles")
-                            Text(angelReadyBatches.count == 1
-                                 ? "\(newest.readyCount) ready to review"
-                                 : "\(newest.readyCount) ready to review (+\(angelReadyBatches.count - 1) more batch\(angelReadyBatches.count == 2 ? "" : "es"))")
-                        }
-                        .font(.system(size: 12, weight: .medium))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(Color.orange.opacity(0.18)))
-                        .foregroundStyle(Color.orange)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("archive.angelReview")
-                    .help("Archive Angel prepared a batch. Review the recommendations, rename or deselect, then Promote.")
-                    .padding(.leading, 34)
-                    .padding(.top, 6)
-                }
-                if !angelUnreadableBatches.isEmpty {
-                    ArchiveAngelUnreadableRow(batches: angelUnreadableBatches)
-                        .padding(.leading, 34)
-                        .padding(.top, 6)
-                }
+                .padding(.horizontal, 8)
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -488,6 +431,33 @@ struct ArchiveView: View {
             }
         }
         .padding(.top, 12)
+    }
+
+    /// Reveal / Manifest / Verify copies… — housekeeping, one click away
+    /// but out of the way.
+    private func masterArchiveActionsMenu(reachable: Bool) -> some View {
+        Menu {
+            Button("Reveal in Finder") { model.revealMasterArchiveInFinder() }
+            Button("Open Manifest") { model.openMasterArchiveManifest() }
+            Divider()
+            // GH #167: manifest-driven fixity audit + recovery — re-reads
+            // every archive copy, restores archiveFixity on a manifest
+            // match, flags mismatches loudly.
+            Button("Verify Copies…") {
+                fileOpsCenter.startedByUser { $0.startVerifyArchiveCopies(model: model) }
+                MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // Media File Operations window (legacy id)
+            }
+            .disabled(model.isReadOnly)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 17))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(!reachable)
+        .accessibilityIdentifier("archive.masterActions")
+        .help("Reveal the archive in Finder, open its manifest, or re-verify every copy against the manifest.")
     }
 
     @ViewBuilder

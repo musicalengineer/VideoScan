@@ -104,6 +104,17 @@ struct ArchiveAngelBufferHygieneReportTests {
         #expect(rows[tonight.batchID]?.line(now: now).contains("preparing now · untouched today") == true)
     }
 
+    @Test("a ready batch with no ready rows, nothing pending and only its plan.json is NOT a waiting batch (Rick 2026-09-22: '1 prepared batch (805 B) is waiting… nothing prepared')")
+    func emptyReadyBatchIsNotWaiting() {
+        let hollow = plan("batch-2026-09-22T12-00-00", .ready,
+                          rows: [entry(.skipped), entry(.failed, failure: "boom")], createdDaysAgo: 0.2)
+        let r = H.report(plans: [hollow], bytesOf: { _ in 805 }, isLive: { _ in false }, now: now)
+        #expect(r.batches.isEmpty && r.isEmpty, "nothing to decide → no card")
+        // A hollow batch that still holds real bytes is shown, so its files can be cleared.
+        let heavy = H.report(plans: [hollow], bytesOf: { _ in 4_000_000_000 }, isLive: { _ in false }, now: now)
+        #expect(heavy.waitingCount == 1)
+    }
+
     @Test("stale flag: 13 days is not stale, 14 is; plan.json's mtime wins over finishedAt / createdAt")
     func staleAt14Days() {
         let old = plan("batch-a", .ready, rows: [entry(.ready)], createdDaysAgo: 30)
@@ -117,7 +128,9 @@ struct ArchiveAngelBufferHygieneReportTests {
         #expect(rows["batch-a"]?.untouchedDays == 30 && rows["batch-a"]?.isStale == true)
         #expect(rows["batch-b"]?.untouchedDays == 13 && rows["batch-b"]?.isStale == false)
         #expect(rows["batch-c"]?.untouchedDays == 2 && rows["batch-c"]?.isStale == false)
-        var exactly = plan("batch-d", .ready, rows: [], createdDaysAgo: 14)
+        // One ready row: an EMPTY ready batch is no longer a card at all
+        // (emptyReadyBatchIsNotWaiting), and this test is about the clock.
+        var exactly = plan("batch-d", .ready, rows: [entry(.ready)], createdDaysAgo: 14)
         exactly.finishedAt = nil
         #expect(H.report(plans: [exactly], bytesOf: { _ in 1 }, isLive: { _ in false }, now: now).batches.first?.isStale == true)
     }

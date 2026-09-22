@@ -53,7 +53,9 @@ extension ArchiveView {
         let key = RecordsVersion(count: model.records.count,
                                  revision: model.volumeAggregatesRevision)
         return timelineItemMemo.value(for: key) {
-            snapshot.archived.map { Self.timelineItem(for: $0, model: model) }
+            // One card per item, its versions folded in as chips (Rick
+            // 2026-09-22) — app-side only, nothing on disk moves.
+            ArchiveItemVersions.group(snapshot.archived.map { Self.timelineItem(for: $0, model: model) })
         }
     }
 
@@ -114,9 +116,9 @@ struct ArchiveTimelinePane: View {
     /// inside the LazyVStack; SwiftUI resolves the scroll from the
     /// identifier even for cards not yet materialised.
     private func scrollToTarget(_ proxy: ScrollViewProxy) {
-        guard let target = scrollTarget, timeline.contains(target) else { return }
+        guard let target = scrollTarget, let card = timeline.cardID(for: target) else { return }
         DispatchQueue.main.async {
-            withAnimation { proxy.scrollTo(target, anchor: .center) }
+            withAnimation { proxy.scrollTo(card, anchor: .center) }
         }
     }
 
@@ -230,9 +232,9 @@ struct ArchiveTimelinePane: View {
                 }
                 if !timeline.undated.isEmpty {
                     Section {
-                        ForEach(timeline.undated) { item in
-                            itemCard(item)
-                        }
+                        cardGrid(timeline.undated)
+                            .padding(.horizontal, 18)
+                            .padding(.top, 6)
                     } header: {
                         undatedHeader
                             .id(Self.undatedAnchor)
@@ -294,12 +296,24 @@ struct ArchiveTimelinePane: View {
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .padding(.top, 10)
-            ForEach(year.items) { item in
-                itemCard(item)
-            }
+            cardGrid(year.items)
         }
         .padding(.horizontal, 18)
         .padding(.bottom, 6)
+    }
+
+    /// A year's cards as a grid that fills the pane's width — one column
+    /// in a narrow window, two or three in a wide one (Rick 2026-09-22:
+    /// "a lot of space in black… use that extra horizontal space").
+    /// `.adaptive(minimum:)` ≈ "as many ≥ 340 pt columns as fit, then
+    /// stretch them evenly". LazyVGrid builds only visible cards.
+    private func cardGrid(_ items: [ArchiveTimelineItem]) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 340, maximum: 560), spacing: 10, alignment: .top)],
+                  alignment: .leading, spacing: 10) {
+            ForEach(items) { item in
+                itemCard(item)
+            }
+        }
     }
 
     // MARK: Item card
@@ -310,22 +324,36 @@ struct ArchiveTimelinePane: View {
     /// means "select". The play glyph is the affordance; right-click
     /// keeps the full archive menu (journey, details, reveal).
     private func itemCard(_ item: ArchiveTimelineItem) -> some View {
-        let isSelected = selectedIDs.contains(item.id)
-        return Button {
-            openItems([item.id])
-        } label: {
-            HStack(spacing: 12) {
-                ZStack {
-                    Image(systemName: icon(for: item.kind))
-                        .font(.system(size: 20))
-                        .foregroundStyle(Color.accentColor)
-                }
-                .frame(width: 30)
+        let isSelected = selectedIDs.contains(item.id) || item.versions.contains { selectedIDs.contains($0.id) }
+        // A tap gesture, not a Button, so the version chips inside can be
+        // real buttons of their own (a Button inside a Button's label is
+        // unreliable on macOS).
+        return VStack(alignment: .leading, spacing: 8) {
+            // Play leads (the card's action), then the title with its seal
+            // right beside it — no glyphs stranded at the far edge of a
+            // wide pane.
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: playGlyph(for: item.kind))
+                    .font(.system(size: 26))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 30)
+                    .help(playHelp(for: item.kind))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(item.title)
-                        .font(.system(size: 16, weight: .medium))
-                        .lineLimit(1)
                     HStack(spacing: 6) {
+                        Text(item.title)
+                            .font(.system(size: 16, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if item.isVerified {
+                            Image(systemName: "checkmark.seal.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.green)
+                                .help("Byte-verified in the Master Archive")
+                        }
+                    }
+                    HStack(spacing: 6) {
+                        Image(systemName: icon(for: item.kind))
+                            .foregroundStyle(.secondary)
                         if !item.peopleText.isEmpty {
                             Text(item.peopleText)
                                 .foregroundStyle(.blue)
@@ -339,17 +367,14 @@ struct ArchiveTimelinePane: View {
                     }
                     .font(.system(size: 13))
                 }
-                Spacer()
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(Color.accentColor)
-                    .help(playHelp(for: item.kind))
-                if item.isVerified {
-                    Image(systemName: "checkmark.seal.fill")
-                        .foregroundStyle(.green)
-                        .help("Byte-verified in the Master Archive")
-                }
+                Spacer(minLength: 0)
             }
+            if !item.versions.isEmpty {
+                versionChips(item)
+                    .padding(.leading, 42)   // under the title, not the play glyph
+            }
+        }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(isSelected
@@ -362,8 +387,10 @@ struct ArchiveTimelinePane: View {
                               : Color.primary.opacity(0.08),
                               lineWidth: isSelected ? 1.5 : 1))
             .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+            .onTapGesture { openItems([item.id]) }
+            .accessibilityElement(children: .contain)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { openItems([item.id]) }
         .id(item.id)
         .help(item.relPath)
         .contextMenu { contextMenu([item.id]) }
@@ -375,6 +402,34 @@ struct ArchiveTimelinePane: View {
         case .audio: return "Play this recording"
         case .photo: return "Open this photo"
         }
+    }
+
+    /// "original · access · editable · preservation · restored" — each
+    /// chip plays (opens) that version. The card's own file is marked.
+    private func versionChips(_ item: ArchiveTimelineItem) -> some View {
+        FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+            ForEach(item.versions) { v in
+                Button {
+                    openItems([v.id])
+                } label: {
+                    Text(v.label)
+                        .font(.system(size: 12, weight: v.id == item.id ? .semibold : .regular))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(v.id == item.id
+                                                   ? Color.accentColor.opacity(0.22)
+                                                   : Color.secondary.opacity(0.14)))
+                        .foregroundStyle(v.id == item.id ? Color.accentColor : Color.primary)
+                }
+                .buttonStyle(.plain)
+                .help("\(v.role.help)\n\(v.archiveFilename)")
+                .contextMenu { contextMenu([v.id]) }
+            }
+        }
+    }
+
+    private func playGlyph(for kind: ArchiveTimelineItem.Kind) -> String {
+        kind == .photo ? "eye.circle.fill" : "play.circle.fill"
     }
 
     private func icon(for kind: ArchiveTimelineItem.Kind) -> String {

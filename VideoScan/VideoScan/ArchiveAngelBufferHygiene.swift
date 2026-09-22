@@ -239,6 +239,12 @@ enum ArchiveAngelBufferHygiene {
             let unsettled = plan.entries.filter { $0.status.isUnsettled }.count
             let parked = plan.bufferShortCount
             let failed = plan.entries.filter { $0.status == .failed }.count - parked
+            // Nothing ready, nothing pending, and only its plan.json on
+            // disk: there is no decision to ask for (Rick 2026-09-22: "1
+            // prepared batch (805 B) is waiting… nothing prepared").
+            if plan.readyCount == 0 && unsettled + parked == 0 && bytes < leftoverFloorBytes {
+                return nil
+            }
             return .waiting(ready: plan.readyCount, pending: unsettled + parked,
                             skipped: plan.skippedCount, failed: failed)
         case .promoting:
