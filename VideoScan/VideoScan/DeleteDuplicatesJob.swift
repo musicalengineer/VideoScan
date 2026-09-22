@@ -1404,7 +1404,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     nonisolated static func leftAloneWords(facts: DeletionTierFacts, reason: String) -> String {
         let tail = facts.notCounted.isEmpty ? "" : " (" + facts.notCounted.joined(separator: "; ") + ")"
         if facts.remainingVerifiedCopies <= 1 {
-            return "only the \(facts.counted.first ?? "keeper") would remain" + tail
+            // Say WHY when other copies exist but their drives are away —
+            // "only the original remains" would be untrue (QA round 3).
+            let offline = facts.notCounted.contains { $0.contains("offline") }
+            return (offline ? "other copies offline — " : "")
+                + "only the \(facts.counted.first ?? "keeper") would remain" + tail
         }
         return reason
     }

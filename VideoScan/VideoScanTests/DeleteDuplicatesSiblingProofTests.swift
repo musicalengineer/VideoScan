@@ -282,6 +282,8 @@ struct DeleteDuplicatesSiblingProofTests {
         #expect(row.status == .skipped && row.remainingVerifiedCopies == 1, "\(row.status): \(row.note)")
         #expect(row.note.contains("sibling d-sib.mov on ") && row.note.contains("offline — not counted"), Comment(rawValue: row.note))
         #expect(probe.blocks("sibling") == 0 && probe.blocks("quarantine") == 0, "decided by stat before the hold — nothing moved or read")
+        #expect(sink.joined.contains("[dupjob] left alone d-copy1.mov (\(sizeText)) — other copies offline — only the keeper on "),
+                Comment(rawValue: sink.joined))
         #expect(FileManager.default.fileExists(atPath: fam.copies[0].fullPath))
     }
 
@@ -321,6 +323,24 @@ struct DeleteDuplicatesSiblingProofTests {
         let facts = DeletionTierFacts.gather(c, digest: digest)
         #expect(facts.remainingVerifiedCopies == 1)
         #expect(facts.notCounted == ["sibling linked.mov on X is the same file as the duplicate (hard link) — not another copy"])
+    }
+
+    /// QA round 3 nit: the OPENED file must be the one stat'ed. A stamp of
+    /// another file stands for a symlink retargeted between the stat and
+    /// the open — refused, nothing to store; the honest stamp passes.
+    @Test func wholeFileFixityRefusesAFileSwappedBetweenStatAndOpen() throws {
+        let dir = tempDir("swap"); defer { try? FileManager.default.removeItem(at: dir) }
+        let a = dir.appendingPathComponent("a.mov"); write(a, [UInt8](repeating: 1, count: 8_192))
+        let b = dir.appendingPathComponent("b.mov"); write(b, [UInt8](repeating: 1, count: 8_192))
+        let link = dir.appendingPathComponent("link.mov")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: b.path)
+        let stampOfA = try #require(FileIdentityStamp.capture(path: a.path))
+        #expect(SignatureVerification.wholeFileFixity(path: link.path, label: "sibling", hooks: .live, before: stampOfA)
+                == .changedDuringRead)
+        guard case .fixity(let f) = SignatureVerification.wholeFileFixity(path: link.path, label: "sibling") else {
+            Issue.record("the unswapped link should read"); return
+        }
+        #expect(f.digest == plainSHA256(b))
     }
 
     @Test func aStoredSiblingFixityIsReusedOnTheNextRunWithoutAnyRead() async throws {
@@ -445,8 +465,13 @@ struct DeleteDuplicatesForecastTests {
         #expect(needs.rowBuckets == [.needsSiblingReads] && needs.siblingReads == 2, "reads stop at the goal (3)")
         #expect(needs.bytesToRead == 100 + 200, "the duplicate once + two siblings")
         // Only the original remains elsewhere.
-        let alone = run(keeper: k, row: (100, nil), siblings: [Self.copy(online: false), Self.copy(digest: "bb")])
-        #expect(alone.rowBuckets == [.leftAlone] && alone.bytesToRead == 0, "offline and different siblings never count; nothing read")
+        let alone = run(keeper: k, row: (100, nil), siblings: [Self.copy(digest: "bb")])
+        #expect(alone.rowBuckets == [.leftAlone] && alone.bytesToRead == 0, "a different sibling never counts; nothing read")
+        // Short only because another copy's drive is away: said so.
+        let away = run(keeper: k, row: (100, nil), siblings: [Self.copy(online: false)])
+        #expect(away.rowBuckets == [.leftAloneOffline] && away.bytesToRead == 0)
+        #expect(away.confirmationText(volume: "V").contains("1 left alone — other copies offline ("), Comment(rawValue: away.confirmationText(volume: "V")))
+        #expect(!alone.confirmationText(volume: "V").contains("other copies offline"))
         // Catalog already says different.
         #expect(run(keeper: k, row: (99, nil), siblings: [Self.copy(digest: "aa")]).rowBuckets == [.likelyNotDuplicate])
         #expect(run(keeper: k, row: (100, "cc"), siblings: [Self.copy(digest: "aa")]).rowBuckets == [.likelyNotDuplicate])
@@ -732,3 +757,209 @@ struct DeleteDuplicatesSiblingIsolationTests {
         #expect(job.plan?.entries.first?.status == .trashed, "\(job.plan?.entries.first?.note ?? "")")
     }
 }
+
+// MARK: - Forecast honesty (QA round 3, 2026-09-22 — reviewer's red tests,
+// copied verbatim with their helpers; suite renamed)
+
+private let r3Size = FileHasher.segmentSize * 3
+private func r3Dir(_ l: String) -> URL {
+    let d = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test_qa3_\(l)_\(UUID().uuidString.prefix(8))", isDirectory: true)
+    try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true); return d
+}
+private func r3Write(_ u: URL, _ b: [UInt8]) { FileManager.default.createFile(atPath: u.path, contents: Data(b)) }
+private func r3SHA(_ u: URL) -> String { SHA256.hash(data: (try? Data(contentsOf: u)) ?? Data()).map { String(format: "%02x", $0) }.joined() }
+@MainActor private func r3Model(_ d: URL) -> VideoScanModel {
+    let m = VideoScanModel()
+    m.catalogStore = CatalogStore(directory: d.appendingPathComponent("catalog", isDirectory: true))
+    m.mediaLedger = MediaLedger(directory: d.appendingPathComponent("ledger", isDirectory: true))
+    return m
+}
+@MainActor private func r3Rec(_ p: String, _ g: UUID, _ d: DuplicateDisposition, fixity: Bool = false) -> VideoRecord {
+    let r = VideoRecord()
+    r.fullPath = p; r.filename = (p as NSString).lastPathComponent; r.directory = (p as NSString).deletingLastPathComponent
+    r.sizeBytes = Int64(r3Size); r.partialMD5 = "same"; r.durationSeconds = 61
+    r.duplicateGroupID = g; r.duplicateDisposition = d; r.duplicateConfidence = .high
+    if fixity { r.contentFixity = ContentFixity.captured(path: p, digest: r3SHA(URL(fileURLWithPath: p)), byteCount: Int64(r3Size)) }
+    return r
+}
+private final class R3Probe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var blocks: [String: Int] = [:]
+    private var gate: DispatchSemaphore?
+    private var gateName: String?
+    private(set) var gated = false
+    func blocks(_ l: String) -> Int { lock.withLock { blocks[l] ?? 0 } }
+    func holdOpen(of name: String) { lock.withLock { gateName = name; gate = DispatchSemaphore(value: 0) } }
+    func release() { lock.withLock { gate }?.signal() }
+    var isGated: Bool { lock.withLock { gated } }
+    var hooks: SignatureVerification.Hooks {
+        SignatureVerification.Hooks(shouldCancel: { Task.isCancelled },
+            didReadBlock: { [self] l in lock.withLock { blocks[l, default: 0] += 1 } },
+            didOpen: { [self] path in
+                let g: DispatchSemaphore? = lock.withLock {
+                    guard let n = gateName, (path as NSString).lastPathComponent == n, !gated else { return nil }
+                    gated = true; return gate
+                }
+                g?.wait()
+            })
+    }
+}
+/// keeper (stored fixity) + one extra "copy.mov"; returns model, keeper, copy, bytes, group.
+@MainActor private func r3Family(_ dir: URL, keeperFixity: Bool = true) -> (VideoScanModel, VideoRecord, VideoRecord, [UInt8], UUID) {
+    let bytes = (0..<r3Size).map { UInt8($0 % 197) }
+    let g = UUID()
+    let k = dir.appendingPathComponent("keeper.mov"); r3Write(k, bytes)
+    let c = dir.appendingPathComponent("copy.mov"); r3Write(c, bytes)
+    let m = r3Model(dir)
+    let keeper = r3Rec(k.path, g, .keep, fixity: keeperFixity)
+    let copy = r3Rec(c.path, g, .extraCopy)
+    m.records = [keeper, copy]
+    return (m, keeper, copy, bytes, g)
+}
+@MainActor private func r3Job(_ m: VideoScanModel, _ dir: URL, _ p: R3Probe) -> DeleteDuplicatesJob {
+    let j = DeleteDuplicatesJob(model: m, volumePath: dir.path, hooks: p.hooks.withScratchTrash(in: dir),
+                                planRoot: dir.appendingPathComponent("plans", isDirectory: true))
+    j.appLogSink = InMemoryLogSink()
+    j.mediaTechForPath = { _ in .ssd }
+    return j
+}
+
+@Suite("Delete Duplicates — the forecast never promises what the run refuses (QA round 3)", .serialized)
+@MainActor
+struct DeleteDuplicatesForecastHonestyTests {
+    /// Keeper WITHOUT a stored fixity; a sibling with current stored evidence of DIFFERENT bytes. The forecast
+    /// counts the sibling (wanted == nil) → "to the Trash"; the run finds the digests differ → left alone.
+    @Test func unknownKeeperDigestDoesNotCountASiblingOfOtherBytes() async throws {
+        let dir = r3Dir("fc-digest"); defer { try? FileManager.default.removeItem(at: dir) }
+        let (m, _, copy, bytes, g) = r3Family(dir, keeperFixity: false)
+        var other = bytes; other[7] ^= 0x44
+        let s = dir.appendingPathComponent("sib.mov"); r3Write(s, other)
+        m.records.append(r3Rec(s.path, g, .review, fixity: true))
+        let forecast = m.deleteDuplicatesForecast(onVolume: dir.path)
+        let p = R3Probe(); let job = r3Job(m, dir, p)
+        job.start(); await job.task?.value
+        let row = try #require(job.plan?.entries.first)
+        #expect(row.status == .skipped, "precondition — the run leaves it alone: \(row.status) \(row.note)")
+        #expect(forecast.bucket(for: copy.id) == .leftAlone || forecast.bucket(for: copy.id) == .needsSiblingReads,
+                "forecast said \(String(describing: forecast.bucket(for: copy.id))) — \(forecast.confirmationText(volume: "V"))")
+    }
+
+    /// Two catalog records for ONE sibling file, both with stored evidence: the forecast counts 3 → "deleted";
+    /// the run counts the inode once → Trash.
+    @Test func oneSiblingFileUnderTwoRecordsIsForecastOnce() async throws {
+        let dir = r3Dir("fc-twice"); defer { try? FileManager.default.removeItem(at: dir) }
+        let (m, _, copy, bytes, g) = r3Family(dir)
+        let s = dir.appendingPathComponent("sib.mov"); r3Write(s, bytes)
+        m.records.append(r3Rec(s.path, g, .review, fixity: true))
+        m.records.append(r3Rec(s.path, g, .review, fixity: true))
+        let forecast = m.deleteDuplicatesForecast(onVolume: dir.path)
+        let p = R3Probe(); let job = r3Job(m, dir, p)
+        job.start(); await job.task?.value
+        let row = try #require(job.plan?.entries.first)
+        #expect(row.status == .trashed, "precondition — the run trashes it: \(row.status) \(row.tierReason ?? row.note)")
+        #expect(forecast.bucket(for: copy.id) == .trash, "forecast said \(String(describing: forecast.bucket(for: copy.id)))")
+    }
+}
+
+// Reviewer's round-3 adversarial suites (they pass; kept as sensors).
+
+@Suite("Delete Duplicates (QA round 3) — siblings that must never count", .serialized)
+@MainActor
+struct DeleteDuplicatesSiblingNeverCountsTests {
+
+    /// (a) a sibling record naming the DUPLICATE through a case variant, even with "current" stored evidence.
+    @Test func caseVariantOfTheDuplicateNeverCounts() async throws {
+        let dir = r3Dir("case"); defer { try? FileManager.default.removeItem(at: dir) }
+        let (m, _, copy, _, g) = r3Family(dir)
+        let variant = dir.appendingPathComponent("COPY.mov").path
+        try #require(FileManager.default.fileExists(atPath: variant), "needs a case-insensitive temp volume")
+        let sib = r3Rec(variant, g, .review, fixity: true)
+        m.records.append(sib)
+        let p = R3Probe(); let job = r3Job(m, dir, p)
+        job.start(); await job.task?.value
+        let row = try #require(job.plan?.entries.first)
+        #expect(row.status == .skipped && row.tier == nil, "\(row.status): \(row.note)")
+        #expect(FileManager.default.fileExists(atPath: copy.fullPath))
+    }
+
+    /// (a)/(b) symlinked siblings: one → keeper, one → the duplicate. Neither is another copy.
+    @Test func symlinksToTheKeeperOrTheDuplicateNeverCount() async throws {
+        let dir = r3Dir("symlink"); defer { try? FileManager.default.removeItem(at: dir) }
+        let (m, keeper, copy, _, g) = r3Family(dir)
+        let toKeeper = dir.appendingPathComponent("link-keeper.mov")
+        let toCopy = dir.appendingPathComponent("link-copy.mov")
+        try FileManager.default.createSymbolicLink(atPath: toKeeper.path, withDestinationPath: keeper.fullPath)
+        try FileManager.default.createSymbolicLink(atPath: toCopy.path, withDestinationPath: copy.fullPath)
+        m.records.append(r3Rec(toKeeper.path, g, .review))
+        m.records.append(r3Rec(toCopy.path, g, .review))
+        let p = R3Probe(); let job = r3Job(m, dir, p)
+        job.start(); await job.task?.value
+        let row = try #require(job.plan?.entries.first)
+        #expect(row.status == .skipped && row.tier == nil, "\(row.status): \(row.note)")
+        #expect(p.blocks("sibling") == 0, "neither link is read")
+        #expect(FileManager.default.fileExists(atPath: copy.fullPath))
+    }
+
+    /// (c) two catalog records for ONE sibling file, and a hard-linked pair: each counts once → Trash, never permanent.
+    @Test func oneSiblingInodeReachedTwiceCountsOnce() async throws {
+        let dir = r3Dir("twice"); defer { try? FileManager.default.removeItem(at: dir) }
+        let (m, _, copy, bytes, g) = r3Family(dir)
+        let s = dir.appendingPathComponent("sib.mov"); r3Write(s, bytes)
+        let h = dir.appendingPathComponent("sib-hardlink.mov")
+        try FileManager.default.linkItem(atPath: s.path, toPath: h.path)
+        m.records.append(r3Rec(s.path, g, .review))
+        m.records.append(r3Rec(s.path, g, .review))     // same path, second record
+        m.records.append(r3Rec(h.path, g, .review))     // hard link
+        let p = R3Probe(); let job = r3Job(m, dir, p)
+        job.start(); await job.task?.value
+        let row = try #require(job.plan?.entries.first)
+        #expect(row.status == .trashed && row.remainingVerifiedCopies == 2, "\(row.status): \(row.tierReason ?? row.note)")
+        #expect(!FileManager.default.fileExists(atPath: copy.fullPath))
+        #expect(FileManager.default.fileExists(atPath: s.path))
+    }
+
+    /// I/O failure on the sibling (permission): not counted, no fixity written, never a match.
+    @Test func anUnreadableSiblingIsNeverAMatch() async throws {
+        let dir = r3Dir("perm"); defer { try? FileManager.default.removeItem(at: dir) }
+        let (m, _, copy, bytes, g) = r3Family(dir)
+        let s = dir.appendingPathComponent("sib.mov"); r3Write(s, bytes)
+        chmod(s.path, 0)
+        defer { chmod(s.path, 0o644) }
+        let sib = r3Rec(s.path, g, .review); m.records.append(sib)
+        let p = R3Probe(); let job = r3Job(m, dir, p)
+        job.start(); await job.task?.value
+        let row = try #require(job.plan?.entries.first)
+        #expect(row.status == .skipped && row.tier == nil, "\(row.status): \(row.note)")
+        #expect(sib.contentFixity == nil, "nothing stored for a file that was not read")
+        #expect(FileManager.default.fileExists(atPath: copy.fullPath))
+    }
+}
+
+@Suite("Delete Duplicates (QA round 3) — the sibling claim never hangs", .serialized)
+@MainActor
+struct DeleteDuplicatesSiblingClaimTests {
+    /// Two SSD pairs share one unproven sibling; the first is held INSIDE the sibling read, the second waits on the
+    /// claim; Stop lands while it waits. The run must end, both copies at home, no quarantine left.
+    @Test(.timeLimit(.minutes(1))) func stopWhileASecondPairWaitsOnTheClaim() async throws {
+        let dir = r3Dir("claim"); defer { try? FileManager.default.removeItem(at: dir) }
+        let (m, _, copy, bytes, g) = r3Family(dir)
+        let c2 = dir.appendingPathComponent("copy2.mov"); r3Write(c2, bytes)
+        let copy2 = r3Rec(c2.path, g, .extraCopy); m.records.append(copy2)
+        let s = dir.appendingPathComponent("sib.mov"); r3Write(s, bytes)
+        m.records.append(r3Rec(s.path, g, .review))
+        let p = R3Probe(); p.holdOpen(of: "sib.mov")
+        let job = r3Job(m, dir, p)
+        job.start()
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline, !(p.isGated && job.siblingReadWaits > 0) { try await Task.sleep(nanoseconds: 20_000_000) }
+        #expect(p.isGated && job.siblingReadWaits == 1, "precondition: pair 1 inside the sibling read, pair 2 waiting on the claim")
+        job.cancel()
+        p.release()
+        await job.task?.value
+        #expect(!job.state.isActive)
+        #expect(FileManager.default.fileExists(atPath: copy.fullPath) && FileManager.default.fileExists(atPath: copy2.fullPath))
+        let q = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasPrefix(SignatureVerification.quarantineDirectoryPrefix) }
+        #expect(q.isEmpty, "\(q)")
+    }
+}
+

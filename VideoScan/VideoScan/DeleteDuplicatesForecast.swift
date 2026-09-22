@@ -13,6 +13,8 @@
 //                          N of them to decide
 //     leftAlone          — only the original remains elsewhere (with every
 //                          readable sibling, still fewer than two)
+//     leftAloneOffline   — short only because other copies sit on drives
+//                          that are not connected
 //     likelyNotDuplicate — the catalog already says the bytes differ
 //                          (sizes differ, or both stored digests differ)
 //     cannotCheck        — the keeper (or the row) is not in the catalog
@@ -48,6 +50,8 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         case trash
         case needsSiblingReads
         case leftAlone
+        /// Short only because other copies are on drives not connected.
+        case leftAloneOffline
         case likelyNotDuplicate
         case cannotCheck
     }
@@ -72,6 +76,14 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         /// read to prove it.
         let isArchive: Bool
         let archiveDigest: String?
+        /// The standardized, lower-cased path: two records naming ONE
+        /// file count once (QA round 3, F-2). Lower-casing merges names
+        /// that differ only in case, which on a case-sensitive volume
+        /// could undercount — the safe direction. Hard links (two paths,
+        /// one inode) cannot be seen without a stat; the forecast may
+        /// over-count those, and the run (which stats) counts them once.
+        /// Empty = unknown (the id stands in).
+        var pathKey: String = ""
     }
 
     /// One row of the run, in plan order.
@@ -147,23 +159,31 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
                 continue
             }
             let keeperKnown = keeper.digest != nil || learnedKeepers.contains(keeperID)
+            // With neither the keeper's nor the duplicate's digest known,
+            // a stored digest proves nothing about THESE bytes (QA round
+            // 3, F-1): such a sibling is unproven, never counted.
             let wanted = keeper.digest ?? row.digest
             var counted = 1
             var readable: [Copy] = []
+            var offline = 0
             var seen = Set<UUID>()
+            func key(_ c: Copy) -> String { c.pathKey.isEmpty ? c.id.uuidString : c.pathKey }
+            var seenPaths: Set<String> = [key(keeper)]
+            if let me = input.copies[row.id] { seenPaths.insert(key(me)) }
             for memberID in input.members[row.groupID ?? UUID()] ?? [] {
                 guard memberID != row.id, memberID != keeperID, seen.insert(memberID).inserted,
-                      let copy = input.copies[memberID] else { continue }
+                      let copy = input.copies[memberID], seenPaths.insert(key(copy)).inserted else { continue }
                 if copy.isArchive {
-                    if copy.online, let d = copy.digest, copy.archiveDigest == d, wanted == nil || d == wanted {
+                    if copy.online, let d = copy.digest, copy.archiveDigest == d, let wanted, d == wanted {
                         counted += 1
                     }
                     continue
                 }
                 if let p = position[memberID], p > i { continue }        // still to be decided in this run
-                if removed.contains(memberID) || notACopy.contains(memberID) || !copy.online { continue }
-                if let d = copy.digest {
-                    if wanted == nil || d == wanted { counted += 1 }
+                if removed.contains(memberID) || notACopy.contains(memberID) { continue }
+                guard copy.online else { offline += 1; continue }
+                if let d = copy.digest, let wanted {
+                    if d == wanted { counted += 1 }
                     continue
                 }
                 if proven.contains(memberID) { counted += 1; continue }
@@ -173,8 +193,10 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
             // The job's pre-check: with the keeper's digest known, a row
             // that cannot reach two even with every readable sibling is
             // left where it is — nothing moved, nothing read.
+            let aloneBucket: Bucket = counted + readable.count + offline >= DeletionTierDecision.minimumForTrash
+                ? .leftAloneOffline : .leftAlone
             if keeperKnown && counted + readable.count < DeletionTierDecision.minimumForTrash {
-                put(.leftAlone, row)
+                put(aloneBucket, row)
                 continue
             }
             // Different sizes are refused before a byte is read.
@@ -217,7 +239,7 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
                 read(min(readable.count, goal - counted))
                 removed.insert(row.id)
             } else {
-                put(.leftAlone, row)
+                put(aloneBucket, row)
             }
         }
         return out
@@ -248,18 +270,19 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         let n = total.files
         var text = "Check \(Self.number(n)) cop\(n == 1 ? "y" : "ies") on \(volume).\n\n"
         let p = tally(.permanent), t = tally(.trash), r = tally(.needsSiblingReads)
-        let l = tally(.leftAlone), x = tally(.likelyNotDuplicate), c = tally(.cannotCheck)
-        var parts = [
+        let l = tally(.leftAlone), o = tally(.leftAloneOffline), x = tally(.likelyNotDuplicate), c = tally(.cannotCheck)
+        var parts: [String?] = [
             "about \(Self.number(p.files)) deleted (\(Self.size(p.bytes)))",
             "\(Self.number(t.files)) to the Trash (\(Self.size(t.bytes)))",
             "\(Self.number(r.files)) need other copies read first (\(Self.size(siblingReadBytes)) to read)",
             "\(Self.number(l.files)) left alone — only the original remains elsewhere (\(Self.size(l.bytes)))",
+            o.files > 0 ? "\(Self.number(o.files)) left alone — other copies offline (\(Self.size(o.bytes)))" : nil,
             "\(Self.number(x.files)) likely not duplicates (\(Self.size(x.bytes)))",
         ]
         if c.files > 0 {
             parts.append("\(Self.number(c.files)) cannot be checked — keeper not connected or not in the catalog (\(Self.size(c.bytes)))")
         }
-        text += "Forecast (from the catalog — no file read yet): " + parts.joined(separator: ", ") + "."
+        text += "Forecast (from the catalog — no file read yet): " + parts.compactMap { $0 }.joined(separator: ", ") + "."
         if trashMayBecomePermanent > 0 {
             text += " \(Self.number(trashMayBecomePermanent)) of the Trash ones may be deleted outright once one more copy is proven."
         }
@@ -283,6 +306,7 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
             part(.trash, "trash"),
             part(.needsSiblingReads, "needs sibling reads") + " [\(siblingReads) reads, \(Self.size(siblingReadBytes))]",
             part(.leftAlone, "left alone"),
+            part(.leftAloneOffline, "left alone (other copies offline)"),
             part(.likelyNotDuplicate, "likely not duplicates"),
             part(.cannotCheck, "cannot check"),
             "to read \(Self.size(bytesToRead))",
@@ -352,7 +376,8 @@ extension VideoScanModel {
             guard copies[r.id] == nil else { return }
             let archive = isArchiveCopy(r) ? r.archiveFixity : nil
             copies[r.id] = .init(id: r.id, sizeBytes: r.sizeBytes, digest: usableDigest(r), online: online(r.fullPath),
-                                 isArchive: archive != nil, archiveDigest: archive?.digest.lowercased())
+                                 isArchive: archive != nil, archiveDigest: archive?.digest.lowercased(),
+                                 pathKey: (r.fullPath as NSString).standardizingPath.lowercased())
         }
         var groups = Set<UUID>()
         for row in rows { if let g = row.record?.duplicateGroupID { groups.insert(g) } }
