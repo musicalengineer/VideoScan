@@ -23,6 +23,19 @@
 // Trash is one atomic move per file, and there is no plan on disk to
 // resume). Pause takes effect between files.
 //
+// Queue, not refuse (Rick 2026-09-22: "blocked UI so you have to wait —
+// goes against best practices for UI"). A second batch started while one
+// runs used to be refused, and the sheet stayed open until the first
+// finished. Now it is QUEUED: its row says "Waiting — starts after …",
+// the sheet closes, and batches run strictly one after another, oldest
+// first. Nothing about a waiting batch is decided early — its fresh plan,
+// the live record re-lookups, the PruneProof and the byte-for-byte reads
+// all happen when ITS turn comes, exactly as for a batch started alone. A
+// copy the batch before already moved is skipped, named "already moved to
+// the Trash by the batch before" — never read, never counted twice. Stop
+// on a waiting batch just takes it out of the line (nothing was started,
+// so there is nothing to put back); Quit does the same, with a log line.
+//
 // (For Rick: the same shape as DeleteDuplicatesJob — an ObservableObject
 // the MFO window renders, a Task that runs the loop, a flag the off-main
 // reads poll for Stop. ≈ a worker thread with an atomic<bool> stop flag.)
@@ -114,6 +127,9 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     struct Row: Identifiable, Equatable, Sendable {
         enum Status: Equatable, Sendable {
             case pending, verifying, trashed, held, failed, alreadyMissing, skippedOffline, stopped
+            /// Named by this batch, but the batch before in the queue
+            /// already moved it — skipped, never read, never counted twice.
+            case movedEarlier
         }
         let id: UUID
         let filename: String
@@ -126,6 +142,14 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     let id = UUID()
     let kind: MediaFileOperationKind = .pruneCopies
     let startedAt = Date()
+
+    /// Row reason for a copy the batch before in the queue already moved.
+    static let movedEarlierReason = "already moved to the Trash by the batch before"
+
+    /// FIFO order of batches, independent of the window's list order.
+    /// (≈ a C++ static member counter; main-actor only, so no atomics.)
+    private static var nextSequence = 0
+    let sequence: Int
 
     weak var model: VideoScanModel?
     let shown: PrunePlan
@@ -147,6 +171,20 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     @Published private(set) var isPausedValue = false
     private(set) var wasRefused = false
 
+    /// True while this batch waits its turn behind another (nothing has
+    /// been read, checked or moved). Cleared the moment it starts.
+    @Published private(set) var isQueued = false
+    /// Stopped (or quit) while still waiting — nothing was ever started.
+    private(set) var droppedWhileQueued = false
+    /// Copies the batches before this one in the queue moved — handed
+    /// over when this batch starts; skipped with `movedEarlierReason`.
+    private(set) var movedEarlier: Set<UUID> = []
+    /// Copies THIS batch moved (handed on to the batch after it).
+    private(set) var trashedIDs: Set<UUID> = []
+    /// Called once the batch has fully settled (its task returned, or it
+    /// was dropped while waiting) — the center starts the next in line.
+    var onSettled: (() -> Void)?
+
     /// The tally — the same struct `applyPrune` returns; valid once the
     /// job is terminal (partial while it runs).
     private(set) var outcome = VideoScanModel.PruneApplyOutcome()
@@ -164,7 +202,8 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     var subtitle: String { subtitleText }
     var fraction: Double { fractionValue }
     var isIndeterminate: Bool { isIndeterminateValue }
-    var canPause: Bool { true }
+    /// A waiting batch has nothing to pause; it can only be stopped.
+    var canPause: Bool { !isQueued }
     var isPaused: Bool { isPausedValue }
 
     init(model: VideoScanModel, shown: PrunePlan, selected: Set<UUID>, recordIDs: [UUID],
@@ -179,17 +218,55 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
         self.batchID = batchID
         self.mode = mode
         self.hooks = hooks
+        Self.nextSequence += 1
+        self.sequence = Self.nextSequence
     }
+
+    /// A cancelled row for a batch that never started is clutter — it
+    /// leaves the list (the "trash copies cancelled:" line is still logged).
+    var vanishesWhenCancelled: Bool { droppedWhileQueued }
 
     // MARK: Lifecycle
 
-    /// Idempotent — a second call is a no-op.
+    /// Idempotent — a second call is a no-op. `onSettled` runs after the
+    /// pipeline has fully returned (ledger line written), never before.
     func start() {
-        guard task == nil else { return }
+        guard task == nil, state.isActive else { return }
+        isQueued = false
+        subtitleText = "Working out what may go…"
         task = Task { [weak self] in
             guard let self else { return }
             await self.run()
+            self.onSettled?()
         }
+    }
+
+    /// Park this batch behind the one running. Its row says what it waits
+    /// for; nothing else happens until `start()`.
+    func enqueue(behind runningTitle: String, ahead: Int) {
+        guard task == nil, state.isActive else { return }
+        isQueued = true
+        setWaitingSubtitle(behind: runningTitle, ahead: ahead)
+    }
+
+    /// "Waiting — starts after Move 2 copies to the Trash" (+ how many
+    /// other waiting batches go first). Refreshed by the center when the
+    /// line moves.
+    func setWaitingSubtitle(behind runningTitle: String, ahead: Int) {
+        guard isQueued else { return }
+        subtitleText = Self.waitingSubtitle(behind: runningTitle, ahead: ahead)
+    }
+
+    nonisolated static func waitingSubtitle(behind runningTitle: String, ahead: Int) -> String {
+        var text = "Waiting — starts after \(runningTitle)"
+        if ahead > 0 { text += " and \(ahead) more waiting batch\(ahead == 1 ? "" : "es")" }
+        return text
+    }
+
+    /// Copies the batches before this one moved; handed over at start.
+    func inheritMovedEarlier(_ ids: Set<UUID>) {
+        guard task == nil else { return }
+        movedEarlier.formUnion(ids)
     }
 
     func refuseToStart(reason: String) {
@@ -200,9 +277,20 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     }
 
     /// Stop: the file being checked is left alone, files already moved
-    /// stay moved, the rest are left alone.
+    /// stay moved, the rest are left alone. A WAITING batch is simply
+    /// taken out of the line — nothing was started, nothing is touched.
     func cancel() {
         guard state.isActive else { return }
+        if isQueued, task == nil {
+            droppedWhileQueued = true
+            isQueued = false
+            state = .cancelled
+            subtitleText = "Taken out of the line — nothing was started"
+            isIndeterminateValue = false
+            model?.log("Archived — what next?: \(title) taken out of the line — nothing was started.")
+            onSettled?()
+            return
+        }
         state = .cancelling
         cancelFlag.set()
         subtitleText = progress.subtitle(paused: false, stopping: true)
@@ -213,12 +301,17 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     /// Quit = Stop. Nothing here is half-done (one atomic move per file)
     /// and there is no plan on disk to resume, so a suspension would be
     /// a cancel with a longer name.
-    func stopForQuit() { cancel() }
+    func stopForQuit() {
+        if isQueued, task == nil, state.isActive {
+            appLog.write("quit: dropped waiting batch \(title) — nothing was started, nothing to put back")
+        }
+        cancel()
+    }
 
     /// Pause takes effect BETWEEN files: the file being checked is
     /// finished (or held) first, nothing is half-done.
     func pause() {
-        guard state == .running, !isPausedValue else { return }
+        guard state == .running, !isPausedValue, !isQueued else { return }
         isPausedValue = true
         publishProgress()
         model?.log("Archived — what next?: paused — will stop after the current file.")
@@ -256,13 +349,22 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
             finish(failed: "Read-only viewer — nothing is moved from here.")
             return
         }
+        // Stopped in the instant between its turn coming and the task
+        // running (a quit's stop-all): nothing to do, nothing touched.
+        if stopRequested { finishCancelled(); return }
         let n = selected.count
         model.log("\nArchived — what next?: Trashing \(n) cop\(n == 1 ? "y" : "ies") in Media File Operations — each is checked byte-for-byte against the archive first.")
         pruneApplyLog.notice("prune BEGIN \(n, privacy: .public) checked copies")
 
-        let prepared = await model.preparePrune(shown: shown, selected: selected, recordIDs: recordIDs, options: options)
+        // The fresh plan and every per-copy check happen HERE, at this
+        // batch's turn — never when it was queued.
+        let prepared = await model.preparePrune(shown: shown, selected: selected, recordIDs: recordIDs,
+                                                options: options, movedEarlier: movedEarlier)
         outcome.held = prepared.held.map(\.line)
-        rows = prepared.held.map { Row(id: $0.copyID, filename: $0.filename, path: "", sizeBytes: $0.sizeBytes,
+        outcome.movedByEarlierBatch = prepared.movedEarlier.count
+        rows = prepared.movedEarlier.map { Row(id: $0.copyID, filename: $0.filename, path: "", sizeBytes: $0.sizeBytes,
+                                               status: .movedEarlier, note: $0.reason) }
+            + prepared.held.map { Row(id: $0.copyID, filename: $0.filename, path: "", sizeBytes: $0.sizeBytes,
                                        status: .held, note: $0.reason) }
             + prepared.items.map { Row(id: $0.copyID, filename: $0.filename, path: $0.path, sizeBytes: $0.sizeBytes,
                                        status: .pending, note: "") }
@@ -295,7 +397,10 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
             let started = Date()
             let one = await model.pruneOneCopy(item, batch: batch, mode: mode, hooks: jobHooks)
             outcome.absorb(one, item: item)
-            if case .trashed = one.result, let rec = model.record(forID: item.copyID) { trashedRecords.append(rec) }
+            if case .trashed = one.result {
+                trashedIDs.insert(item.copyID)
+                if let rec = model.record(forID: item.copyID) { trashedRecords.append(rec) }
+            }
             switch one.result {
             case .trashed:          setRow(item.copyID, status: .trashed, note: one.readInFull ? "byte-identical to the archive copy" : (item.kind.isVersion ? "a version — on provenance" : "trusted on its promotion stamp"))
             case .held(let why):    setRow(item.copyID, status: .held, note: why)
@@ -365,32 +470,84 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
 extension MediaFileOperationsCenter {
 
     /// Start "Move N to Trash" as an MFO job (the sheet's confirmation
-    /// button). One at a time: a second request while one runs is parked
-    /// as refused with the reason — two batches could name the same copy.
+    /// button). One at a time — two batches could name the same copy — but
+    /// a second request while one runs is QUEUED, not refused (Rick
+    /// 2026-09-22): it waits in its row, the sheet closes, and it starts
+    /// when the batch before settles, re-checking every copy then.
     /// `mode` is `.toTrash` from the sheet; tests pass `.permanent` so
-    /// fixtures never reach the real Trash.
+    /// fixtures never reach the real Trash (and `hooks` to act mid-batch).
     @discardableResult
     func startPruneApply(shown: PrunePlan, selected: Set<UUID>, recordIDs: [UUID],
                          options: PrunePlan.Options, batchID: String?,
                          model: VideoScanModel,
-                         mode: VideoScanModel.JunkDeletionMode = .toTrash) -> PruneApplyJob {
+                         mode: VideoScanModel.JunkDeletionMode = .toTrash,
+                         hooks: VideoScanModel.PruneVerifyHooks = .live) -> PruneApplyJob {
         let job = PruneApplyJob(model: model, shown: shown, selected: selected, recordIDs: recordIDs,
-                                options: options, batchID: batchID, mode: mode)
+                                options: options, batchID: batchID, mode: mode, hooks: hooks)
         guard add(job) else { return job }
-        let duplicate = jobs.contains { other in
-            other.id != job.id && other.state.isActive && other is PruneApplyJob
+        // Weak captures ≈ non-owning raw pointers that read nil once the
+        // object is gone — the center owns the job, not the other way round.
+        job.onSettled = { [weak self, weak job] in
+            guard let self, let job else { return }
+            self.pruneApplyDidSettle(job)
         }
-        if duplicate {
-            job.refuseToStart(reason: "An \"Archived — what next?\" batch is already going — let it finish or stop it first. Nothing was started.")
+        let others = pruneApplyJobs.filter { $0.id != job.id && $0.state.isActive }
+        guard !others.isEmpty else {
+            beginPruneApply(job)
             return job
         }
-        job.start()
-        appLog.write(Self.startSummaryLine(verb: job.kind.logVerb, title: job.title,
-                                           plan: "verify each copy against its archive copy, then move it to the Trash"))
+        let ahead = queuedPruneApplies.filter { $0.id != job.id }.count
+        let running = runningPruneApply
+        job.enqueue(behind: running?.title ?? "the batch before", ahead: ahead)
+        appLog.write("trash copies queued: \(job.title) — waits for \(running?.title ?? "the batch before")")
+        // Defensive: waiting batches but nothing running can only mean a
+        // hand-off was missed — start the oldest now rather than stall.
+        startNextPruneApplyIfIdle(inheriting: [])
         return job
     }
 
-    /// True while a "Move to Trash" batch is live.
+    /// Every "Move to Trash" job in the list.
+    private var pruneApplyJobs: [PruneApplyJob] {
+        jobs.compactMap { $0 as? PruneApplyJob }
+    }
+
+    /// The batch actually working (started, still active) — at most one.
+    var runningPruneApply: PruneApplyJob? {
+        pruneApplyJobs.first { $0.state.isActive && !$0.isQueued }
+    }
+
+    /// Waiting batches, oldest first (FIFO).
+    var queuedPruneApplies: [PruneApplyJob] {
+        pruneApplyJobs.filter { $0.state.isActive && $0.isQueued }.sorted { $0.sequence < $1.sequence }
+    }
+
+    private func beginPruneApply(_ job: PruneApplyJob) {
+        job.start()
+        appLog.write(Self.startSummaryLine(verb: job.kind.logVerb, title: job.title,
+                                           plan: "verify each copy against its archive copy, then move it to the Trash"))
+    }
+
+    /// A batch settled (finished, stopped, or dropped while waiting): hand
+    /// what the chain has moved so far to the next in line and start it.
+    private func pruneApplyDidSettle(_ job: PruneApplyJob) {
+        startNextPruneApplyIfIdle(inheriting: job.movedEarlier.union(job.trashedIDs))
+    }
+
+    private func startNextPruneApplyIfIdle(inheriting moved: Set<UUID>) {
+        defer { refreshPruneQueueSubtitles() }
+        guard runningPruneApply == nil, let next = queuedPruneApplies.first else { return }
+        next.inheritMovedEarlier(moved)
+        beginPruneApply(next)
+    }
+
+    private func refreshPruneQueueSubtitles() {
+        guard let running = runningPruneApply else { return }
+        for (i, waiting) in queuedPruneApplies.enumerated() {
+            waiting.setWaitingSubtitle(behind: running.title, ahead: i)
+        }
+    }
+
+    /// True while a "Move to Trash" batch is live (working or waiting).
     var hasActivePruneApply: Bool {
         jobs.contains { $0.state.isActive && $0 is PruneApplyJob }
     }
@@ -400,8 +557,9 @@ extension MediaFileOperationsCenter {
     /// job's flag, so what remains is at most ONE detached trashItem that
     /// was already past its guard — and its purgedAt stamp + ledger line
     /// land only when the job's task returns (QA 2026-09-20 MINOR: a
-    /// terminateNow right after Stop lost both). Returns whether it
-    /// settled within `deadline`.
+    /// terminateNow right after Stop lost both). Waiting batches were
+    /// dropped by the stop (terminal at once), so this waits only for the
+    /// one that was running. Returns whether it settled within `deadline`.
     func waitForPruneApplyToSettle(deadline: TimeInterval) async -> Bool {
         let started = Date()
         while hasActivePruneApply, Date().timeIntervalSince(started) < deadline {
