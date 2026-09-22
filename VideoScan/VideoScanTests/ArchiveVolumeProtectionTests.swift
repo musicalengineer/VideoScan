@@ -12,8 +12,9 @@
 // (Under Construction) and "Archived — what next?" → Move to Trash.
 //
 // Now the WHOLE volume that hosts the Master Archive is protected from
-// every verb that removes files. Catalog-only verbs (Remove from Catalog,
-// Tidy) keep the tree-only rule — they never touch the disk.
+// every verb that removes files — and, since Rick's second ruling the
+// same day ("For now we won't Remove anything from FamilyArchive"), from
+// the catalog-only verbs too (Remove, Remove from Catalog, Tidy Catalog).
 //
 // Five dimensions (CLAUDE.md):
 //   Logic     — every disk verb refuses a file at <volume>/MoviesExpansion
@@ -659,7 +660,7 @@ struct ArchiveVolumeProtectionSourceSensor {
                    Self.reviewedClobberingRenames, Self.reviewedFFmpegOverwrites]
         for table in all {
             for (file, entry) in table {
-                #expect(entry.count > 0 && entry.reason.count >= 10, "\(file): a reviewed entry needs a count and a reason")
+                #expect(entry.count >= 1 && entry.reason.count >= 10, "\(file): a reviewed entry needs a count and a reason")
             }
         }
     }
