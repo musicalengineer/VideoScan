@@ -13,8 +13,10 @@
 //
 // That is right for views that SHOW jobs (the MFO window, the Archive
 // tab's progress), and wrong for views that only START one from a button.
-// CatalogView was the second kind, and its 4 Hz re-render kept collapsing
-// the toolbar's "Delete Duplicates on Volume…" submenu (Rick 2026-09-22).
+// CatalogView is the second kind: it re-ran its large body 4× a second
+// while any job ran, for nothing (found 2026-09-22 while chasing the
+// collapsing Duplicates submenu — which this did NOT fix on its own; see
+// CatalogDuplicatesMenu.swift).
 //
 // An environment VALUE holding a class reference gives the reference
 // without the subscription: SwiftUI compares environment values by

@@ -54,7 +54,9 @@ struct CatalogToolbar<Dashboard: View>: View {
     let onAnalyzeDuplicatesAll: () -> Void
     let onAnalyzeDuplicatesSelected: () -> Void
     let volumesWithDeletableDups: [(path: String, count: Int)]
-    let onDeleteDuplicates: (String, Int) -> Void
+    /// Opens the Delete Duplicates volume picker (a sheet, not a submenu —
+    /// see CatalogDuplicatesMenu.swift).
+    let onChooseVolumeToDeleteDuplicates: () -> Void
     let onClearResults: () -> Void
     let onClearCache: () -> Void
     let onScanAvidBins: () -> Void
@@ -338,14 +340,10 @@ struct CatalogToolbar<Dashboard: View>: View {
             .frame(minWidth: 120)
 
             VStack(spacing: 2) {
-                // Its own Equatable view (Rick 2026-09-22: the "Delete
-                // Duplicates on Volume" submenu flashed shut and could not
-                // be used). Inline, this menu was rebuilt on every
-                // re-render of this toolbar — any model publish, any
-                // parent re-render — and an open submenu collapses when
-                // that happens. `.equatable()` makes SwiftUI compare the
-                // plain values first and skip the menu's body when they
-                // match. See CatalogDuplicatesMenu.swift.
+                // Rick 2026-09-22: the "Delete Duplicates on Volume"
+                // submenu flashed shut on every window update and could
+                // not be used. The volume is now chosen in a sheet the
+                // menu item opens — see CatalogDuplicatesMenu.swift.
                 CatalogDuplicatesMenu(
                     isReadOnly: model.isReadOnly,
                     isAnalyzing: isAnalyzingDuplicates,
@@ -360,12 +358,11 @@ struct CatalogToolbar<Dashboard: View>: View {
                     reanalyzeHint: model.duplicateReanalyzeHint,
                     onFindDuplicates: onAnalyzeDuplicatesAll,
                     onFindDuplicatesOfSelected: onAnalyzeDuplicatesSelected,
-                    onDeleteDuplicates: onDeleteDuplicates,
+                    onChooseVolumeToDelete: onChooseVolumeToDeleteDuplicates,
                     onSetAlsoCleanUpWorkingCopies: { [model] on in
                         model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = on
                         model.noteDuplicateKeeperSettingsChanged()
                     })
-                .equatable()
 
                 if !duplicateStatus.isEmpty {
                     Text(duplicateStatus)

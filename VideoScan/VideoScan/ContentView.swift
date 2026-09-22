@@ -367,6 +367,12 @@ struct CatalogView: View {
     /// seconds, not after a 90-minute run) — built once at click time
     /// from the catalog and stored fixities, no file reads.
     @State private var deleteTargetForecast: String = ""
+    /// The Delete Duplicates volume picker sheet (Rick 2026-09-22 — it
+    /// replaced a submenu that closed on every window update). The picked
+    /// volume is held here until the sheet's onDismiss, which then shows
+    /// the confirmation alert: one modal fully gone before the next.
+    @State private var showDeleteDuplicatesVolumePicker = false
+    @State private var pickedDeleteDuplicatesVolume: CatalogDuplicatesMenu.Volume?
     /// Confirmation body built once at click time from
     /// `duplicateDeletionSelection` (2026-08-18, "Also clean up working
     /// copies" mode) — see WorkingCopyCleanupText.confirmation.
@@ -534,13 +540,14 @@ struct CatalogView: View {
     // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var captionOrchestrator: CaptionOrchestrator
     /// The Media File Operations center, held WITHOUT subscribing
-    /// (Rick 2026-09-22). This view only STARTS jobs (the two Delete
+    /// (2026-09-22). This view only STARTS jobs (the two Delete
     /// Duplicates alert buttons below); it never shows job state. As an
-    /// `@EnvironmentObject` it re-rendered at 4 Hz while any job ran —
-    /// the center re-broadcasts job progress — and every re-render
-    /// rebuilt the toolbar and collapsed its open "Delete Duplicates on
-    /// Volume…" submenu. Sheets presented from here still find the
+    /// `@EnvironmentObject` it re-ran this whole (large) body at 4 Hz
+    /// while any job ran — the center re-broadcasts job progress — for
+    /// nothing. Child views and sheets that show jobs still get the
     /// observed center through the window's environment (VideoScanApp).
+    /// This was NOT the fix for the collapsing Duplicates submenu (see
+    /// CatalogDuplicatesMenu.swift); it just removes needless churn.
     /// See MediaFileOperationsCenterReference.swift.
     @Environment(\.mediaFileOperationsCenterReference) private var fileOpsCenterReference
     @State var showCaptionProgress = false
@@ -650,19 +657,9 @@ struct CatalogView: View {
                 Task { await model.analyzeDuplicates(selectedIDs: selectedIDs) }
             },
             volumesWithDeletableDups: model.deletableDupVolumes,
-            onDeleteDuplicates: { path, count in
-                deleteTargetVolume = path
-                deleteTargetCount = count
-                // One O(records) pass at click time (not in a body) so
-                // the alert can state the mode and the split honestly.
-                let selection = model.duplicateDeletionSelection(onVolume: path)
-                deleteTargetSummary = selection.confirmationText(
-                    volumeName: URL(fileURLWithPath: path).lastPathComponent)
-                deleteTargetCrossMode = selection.crossVolumeMode
-                let forecast = model.deleteDuplicatesForecast(onVolume: path)
-                deleteTargetForecast = forecast.confirmationText(volume: URL(fileURLWithPath: path).lastPathComponent)
-                appLog.write(forecast.logLine(volume: URL(fileURLWithPath: path).lastPathComponent) + " (Start confirmation)")
-                showDeleteDuplicatesConfirm = true
+            onChooseVolumeToDeleteDuplicates: {
+                pickedDeleteDuplicatesVolume = nil
+                showDeleteDuplicatesVolumePicker = true
             },
             onClearResults: { model.clearResults() },
             onClearCache: { _ = model.clearCache() },
@@ -994,6 +991,27 @@ struct CatalogView: View {
             volumeRenameNoticeButtons(notice)
         } message: { notice in
             Text(volumeRenameNoticeMessage(notice))
+        }
+        .sheet(isPresented: $showDeleteDuplicatesVolumePicker, onDismiss: {
+            // Runs after the sheet is fully dismissed, so the alert below
+            // never races the sheet (see the chained-sheet antipattern).
+            guard let vol = pickedDeleteDuplicatesVolume else { return }
+            pickedDeleteDuplicatesVolume = nil
+            prepareDeleteDuplicatesConfirmation(path: vol.path, count: vol.count)
+        }) {
+            DeleteDuplicatesVolumePicker(
+                volumes: model.deletableDupVolumes.map {
+                    CatalogDuplicatesMenu.Volume(path: $0.path, count: $0.count)
+                },
+                onPick: { vol in
+                    appLog.write("Delete Duplicates: picked \(vol.path) (\(vol.count) candidate(s)) in the volume picker")
+                    pickedDeleteDuplicatesVolume = vol
+                    showDeleteDuplicatesVolumePicker = false
+                },
+                onCancel: {
+                    pickedDeleteDuplicatesVolume = nil
+                    showDeleteDuplicatesVolumePicker = false
+                })
         }
         .alert("Delete Duplicates", isPresented: $showDeleteDuplicatesConfirm) {
             Button(DeleteDuplicatesForecast.confirmationButtonTitle, role: .destructive) {
@@ -1601,6 +1619,27 @@ extension CatalogView {
         }
         text += "Are you sure? Do you have backups and/or are these really junk or duplicates?"
         return text
+    }
+}
+
+// MARK: - Delete Duplicates confirmation (after the volume picker)
+
+extension CatalogView {
+    /// Build the Delete Duplicates confirmation for `path` and show it.
+    /// Called from the volume picker's onDismiss. One O(records) pass at
+    /// click time (not in a body) so the alert can state the mode, the
+    /// split and the forecast honestly.
+    func prepareDeleteDuplicatesConfirmation(path: String, count: Int) {
+        deleteTargetVolume = path
+        deleteTargetCount = count
+        let volumeName = URL(fileURLWithPath: path).lastPathComponent
+        let selection = model.duplicateDeletionSelection(onVolume: path)
+        deleteTargetSummary = selection.confirmationText(volumeName: volumeName)
+        deleteTargetCrossMode = selection.crossVolumeMode
+        let forecast = model.deleteDuplicatesForecast(onVolume: path)
+        deleteTargetForecast = forecast.confirmationText(volume: volumeName)
+        appLog.write(forecast.logLine(volume: volumeName) + " (Start confirmation)")
+        showDeleteDuplicatesConfirm = true
     }
 }
 
