@@ -1,4 +1,7 @@
 import SwiftUI
+import os
+
+private let catalogViewLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "catalogView")
 
 // MARK: - Root (Tab switcher)
 
@@ -364,6 +367,14 @@ struct CatalogView: View {
     /// seconds, not after a 90-minute run) — built once at click time
     /// from the catalog and stored fixities, no file reads.
     @State private var deleteTargetForecast: String = ""
+    /// The Delete Duplicates volume picker sheet (Rick 2026-09-22 — it
+    /// replaced a submenu that closed on every window update). The picked
+    /// volume is held here until the sheet's onDismiss, which then shows
+    /// the confirmation alert: one modal fully gone before the next.
+    /// Non-nil while the picker is up. `.sheet(item:)` rather than
+    /// `isPresented:` per the house rule (chained_sheet_isPresented lint).
+    @State private var deleteDuplicatesVolumePicker: DeleteDuplicatesVolumePickerRequest?
+    @State private var pickedDeleteDuplicatesVolume: CatalogDuplicatesMenu.Volume?
     /// Confirmation body built once at click time from
     /// `duplicateDeletionSelection` (2026-08-18, "Also clean up working
     /// copies" mode) — see WorkingCopyCleanupText.confirmation.
@@ -530,10 +541,17 @@ struct CatalogView: View {
     /// actions) — the file-scoped lint can't see across the extension split.
     // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var captionOrchestrator: CaptionOrchestrator
-    /// Handed to the Promote confirmation sheet (Master Archive) so its
-    /// Confirm can enqueue the MFO job — intentional forwarding only.
-    // vs-lint:disable-next vs-env-object-unused
-    @EnvironmentObject var fileOpsCenter: MediaFileOperationsCenter
+    /// The Media File Operations center, held WITHOUT subscribing
+    /// (2026-09-22). This view only STARTS jobs (the two Delete
+    /// Duplicates alert buttons below); it never shows job state. As an
+    /// `@EnvironmentObject` it re-ran this whole (large) body at 4 Hz
+    /// while any job ran — the center re-broadcasts job progress — for
+    /// nothing. Child views and sheets that show jobs still get the
+    /// observed center through the window's environment (VideoScanApp).
+    /// This was NOT the fix for the collapsing Duplicates submenu (see
+    /// CatalogDuplicatesMenu.swift); it just removes needless churn.
+    /// See MediaFileOperationsCenterReference.swift.
+    @Environment(\.mediaFileOperationsCenterReference) private var fileOpsCenterReference
     @State var showCaptionProgress = false
     /// Opens an independent resizable window keyed by CatalogInfoItem value.
     /// Defined as a `WindowGroup(for:)` scene in VideoScanApp.
@@ -641,19 +659,9 @@ struct CatalogView: View {
                 Task { await model.analyzeDuplicates(selectedIDs: selectedIDs) }
             },
             volumesWithDeletableDups: model.deletableDupVolumes,
-            onDeleteDuplicates: { path, count in
-                deleteTargetVolume = path
-                deleteTargetCount = count
-                // One O(records) pass at click time (not in a body) so
-                // the alert can state the mode and the split honestly.
-                let selection = model.duplicateDeletionSelection(onVolume: path)
-                deleteTargetSummary = selection.confirmationText(
-                    volumeName: URL(fileURLWithPath: path).lastPathComponent)
-                deleteTargetCrossMode = selection.crossVolumeMode
-                let forecast = model.deleteDuplicatesForecast(onVolume: path)
-                deleteTargetForecast = forecast.confirmationText(volume: URL(fileURLWithPath: path).lastPathComponent)
-                appLog.write(forecast.logLine(volume: URL(fileURLWithPath: path).lastPathComponent) + " (Start confirmation)")
-                showDeleteDuplicatesConfirm = true
+            onChooseVolumeToDeleteDuplicates: {
+                pickedDeleteDuplicatesVolume = nil
+                deleteDuplicatesVolumePicker = DeleteDuplicatesVolumePickerRequest()
             },
             onClearResults: { model.clearResults() },
             onClearCache: { _ = model.clearCache() },
@@ -986,12 +994,35 @@ struct CatalogView: View {
         } message: { notice in
             Text(volumeRenameNoticeMessage(notice))
         }
+        .sheet(item: $deleteDuplicatesVolumePicker, onDismiss: {
+            // Runs after the sheet is fully dismissed, so the alert below
+            // never races the sheet (see the chained-sheet antipattern).
+            guard let vol = pickedDeleteDuplicatesVolume else { return }
+            pickedDeleteDuplicatesVolume = nil
+            prepareDeleteDuplicatesConfirmation(path: vol.path, count: vol.count)
+        }) { _ in
+            DeleteDuplicatesVolumePicker(
+                volumes: model.deletableDupVolumes.map {
+                    CatalogDuplicatesMenu.Volume(path: $0.path, count: $0.count)
+                },
+                onPick: { vol in
+                    appLog.write("Delete Duplicates: picked \(vol.path) (\(vol.count) candidate(s)) in the volume picker")
+                    pickedDeleteDuplicatesVolume = vol
+                    deleteDuplicatesVolumePicker = nil
+                },
+                onCancel: {
+                    pickedDeleteDuplicatesVolume = nil
+                    deleteDuplicatesVolumePicker = nil
+                })
+        }
         .alert("Delete Duplicates", isPresented: $showDeleteDuplicatesConfirm) {
             Button(DeleteDuplicatesForecast.confirmationButtonTitle, role: .destructive) {
                 // A Media File Operation since 2026-09-20: DELETE row,
                 // progress in bytes, rate + ETA, Pause/Stop, a saved plan
                 // for resume, and the file list on click.
-                fileOpsCenter.startedByUser { $0.startDeleteDuplicates(onVolume: deleteTargetVolume, model: model) }
+                startFileOperation("Delete Duplicates") {
+                    $0.startedByUser { $0.startDeleteDuplicates(onVolume: deleteTargetVolume, model: model) }
+                }
                 MediaFileOperationsWindowOpener.openInFront(openWindow)
             }
             .disabled(model.isReadOnly || model.isDeletingDuplicates)
@@ -1007,7 +1038,9 @@ struct CatalogView: View {
             if plan.isResumable {
                 Button("Resume") {
                     // The user ACCEPTED the offer — that is a user start.
-                    fileOpsCenter.startedByUser { $0.resumeDeleteDuplicates(plan: plan, model: model) }
+                    startFileOperation("Resume Deleting Duplicates") {
+                        $0.startedByUser { $0.resumeDeleteDuplicates(plan: plan, model: model) }
+                    }
                     MediaFileOperationsWindowOpener.openInFront(openWindow)
                 }
             }
@@ -1588,6 +1621,45 @@ extension CatalogView {
         }
         text += "Are you sure? Do you have backups and/or are these really junk or duplicates?"
         return text
+    }
+}
+
+// MARK: - Delete Duplicates confirmation (after the volume picker)
+
+extension CatalogView {
+    /// Build the Delete Duplicates confirmation for `path` and show it.
+    /// Called from the volume picker's onDismiss. One O(records) pass at
+    /// click time (not in a body) so the alert can state the mode, the
+    /// split and the forecast honestly.
+    func prepareDeleteDuplicatesConfirmation(path: String, count: Int) {
+        deleteTargetVolume = path
+        deleteTargetCount = count
+        let volumeName = URL(fileURLWithPath: path).lastPathComponent
+        let selection = model.duplicateDeletionSelection(onVolume: path)
+        deleteTargetSummary = selection.confirmationText(volumeName: volumeName)
+        deleteTargetCrossMode = selection.crossVolumeMode
+        let forecast = model.deleteDuplicatesForecast(onVolume: path)
+        deleteTargetForecast = forecast.confirmationText(volume: volumeName)
+        appLog.write(forecast.logLine(volume: volumeName) + " (Start confirmation)")
+        showDeleteDuplicatesConfirm = true
+    }
+}
+
+// MARK: - Starting a Media File Operation without observing the center
+
+extension CatalogView {
+    /// Hand the app's Media File Operations center to `start`. The center
+    /// is held without subscribing (see `fileOpsCenterReference`); nil
+    /// means this view is running outside the app's main window, so the
+    /// start is REFUSED and said out loud — never a silent no-op.
+    func startFileOperation(_ what: String,
+                            _ start: (MediaFileOperationsCenter) -> Void) {
+        guard let center = fileOpsCenterReference else {
+            catalogViewLog.error("\(what, privacy: .public): not started — Media File Operations is not available in this window")
+            model.log("\(what): not started — Media File Operations is not available in this window.")
+            return
+        }
+        start(center)
     }
 }
 
