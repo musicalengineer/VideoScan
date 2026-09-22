@@ -979,17 +979,19 @@ public struct FamilyGraphCompiledStore {
 /// (manifests carry a handful of dates; the lock is never contended in
 /// practice). Same formatter, same options, same output as before.
 /// `@unchecked Sendable` ≈ "this class does its own locking" — the NSLock
-/// below is the invariant.
-final class LockedISO8601Formatter: @unchecked Sendable {
+/// below is the invariant. Public so the app's Master Archive manifest
+/// writer can share it (same reasoning: rows are appended off the main
+/// actor by jobs).
+public final class LockedISO8601Formatter: @unchecked Sendable {
     private let lock = NSLock()
     private let formatter: ISO8601DateFormatter
 
-    init(_ options: ISO8601DateFormatter.Options) {
+    public init(_ options: ISO8601DateFormatter.Options) {
         let f = ISO8601DateFormatter()
         f.formatOptions = options
         formatter = f
     }
 
-    func string(from date: Date) -> String { lock.withLock { formatter.string(from: date) } }
-    func date(from string: String) -> Date? { lock.withLock { formatter.date(from: string) } }
+    public func string(from date: Date) -> String { lock.withLock { formatter.string(from: date) } }
+    public func date(from string: String) -> Date? { lock.withLock { formatter.date(from: string) } }
 }
