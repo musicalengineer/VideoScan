@@ -424,8 +424,20 @@ extension VideoScanModel {
               keeper.fullPath == e.keeperPath else {
             return .refuse(note: "keeper \(e.keeperFilename) is no longer this file's keeper — refused \(stage)")
         }
-        guard excludingMasterArchiveFiles([rec], verb: "Delete Duplicates").count == 1 else {
+        // The ONE bulk-delete rule, asked live for this file: the archive
+        // tree AND (2026-09-22) the rest of the Master Archive's volume.
+        let archiveVolume = archiveVolumeProtection()
+        switch bulkDeleteRefusal(rec, volume: archiveVolume) {
+        case nil: break
+        case .archiveTree?:
+            log(Self.masterArchiveRefusalLine(verb: "Delete Duplicates", count: 1))
             return .refuse(note: "now lives in the Master Archive — refused \(stage)")
+        case let refusal?:
+            let label = archiveVolume?.label ?? "the archive volume"
+            log(refusal == .archiveVolume
+                ? Self.masterArchiveVolumeRefusalLine(verb: "Delete Duplicates", count: 1, volume: label)
+                : Self.masterArchiveUnprovableRefusalLine(verb: "Delete Duplicates", count: 1, volume: label))
+            return .refuse(note: Self.bulkDeleteRefusalNote(refusal, volume: label) + " — refused \(stage)")
         }
         if !PathScope.contains(keeper.fullPath, within: volumePath) {
             // A working copy: the keeper is on another drive. The policy
@@ -871,7 +883,8 @@ extension VideoScanModel {
         let crossMode = duplicateKeeperSettings.alsoCleanUpWorkingCopies
         let policy = crossMode ? duplicateKeeperPolicy() : nil
         let hereRoot = volumeRoot(for: volumePath)
-        let hasMasterArchive = masterArchiveRootPath != nil
+        // One archive-volume snapshot for the whole pass (2026-09-22).
+        let archiveVolume = archiveVolumeProtection()
 
         var targets: [VideoRecord] = []
         var sameCount = 0
@@ -887,6 +900,13 @@ extension VideoScanModel {
         for rec in records where PathScope.contains(rec.fullPath, within: volumePath) {
             volumeRecordCount += 1
             guard rec.duplicateDisposition == .extraCopy else { continue }
+            // Never offered: the archive tree, and (Rick 2026-09-22) the
+            // rest of the Master Archive's volume — in EITHER mode, so the
+            // picker, this selection and the menu count agree.
+            if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {
+                skipped[WorkingCopyCleanupText.reason(for: refusal), default: 0] += 1
+                continue
+            }
             guard let groupID = rec.duplicateGroupID, let keeper = keepers[groupID] else {
                 skipped[WorkingCopyCleanupText.reasonNoMaster, default: 0] += 1
                 continue
@@ -898,13 +918,6 @@ extension VideoScanModel {
             }
             guard crossMode, let policy else {
                 skipped[WorkingCopyCleanupText.reasonMasterOnAnotherDrive, default: 0] += 1
-                continue
-            }
-            // A copy that lives in the Master Archive is never a working
-            // copy (the bulk-delete exclusion still applies downstream;
-            // this only names it in the skipped reasons).
-            if hasMasterArchive, isArchiveCopy(rec) || isInsideMasterArchive(path: rec.fullPath) {
-                skipped[WorkingCopyCleanupText.reasonMasterArchiveFile, default: 0] += 1
                 continue
             }
             let keeperRoot = volumeRoot(for: keeper.fullPath)
@@ -949,20 +962,23 @@ extension VideoScanModel {
         let keepers = keepersByGroupID()
         let crossMode = duplicateKeeperSettings.alsoCleanUpWorkingCopies
         let policy = crossMode ? duplicateKeeperPolicy() : nil
-        let hasMasterArchive = masterArchiveRootPath != nil
+        // One archive-volume snapshot for the whole pass (2026-09-22).
+        let archiveVolume = archiveVolumeProtection()
         var verdictByPair: [String: Bool] = [:]
         var volumeCounts: [String: Int] = [:]
         for rec in records {
             guard rec.duplicateDisposition == .extraCopy,
                   let groupID = rec.duplicateGroupID,
                   let keeper = keepers[groupID] else { continue }
+            // Rick 2026-09-22: "the app should never offer to delete from
+            // FamilyArchive" — the archive tree and the rest of its volume
+            // are never counted, in either mode (same rule as the
+            // selection, so menu count == alert count).
+            if bulkDeleteRefusal(rec, volume: archiveVolume) != nil { continue }
             let volume = volumeRoot(for: rec.fullPath)
             let keeperVolume = volumeRoot(for: keeper.fullPath)
             var deletable = volume == keeperVolume
             if !deletable, let policy {
-                // QA minor 6: same Master-Archive-copy skip as the
-                // selection, so menu count == alert count.
-                if hasMasterArchive, isArchiveCopy(rec) || isInsideMasterArchive(path: rec.fullPath) { continue }
                 let pairKey = volume + "\u{0}" + keeperVolume
                 if let cached = verdictByPair[pairKey] {
                     deletable = cached

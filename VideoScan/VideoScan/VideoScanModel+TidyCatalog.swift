@@ -318,8 +318,10 @@ extension VideoScanModel {
         var changed: [UUID] = []
         var remembered = 0
         let now = Date()
+        // Catalog-only (files untouched): the archive TREE rule applies,
+        // not the whole-volume rule for verbs that remove files.
         let allowed = Set(excludingMasterArchiveFiles(ids.compactMap { record(forID: $0) },
-                                                      verb: "Remove from Catalog").map(\.id))
+                                                      verb: "Remove from Catalog", effect: .catalogOnly).map(\.id))
         for id in ids where allowed.contains(id) {
             guard let rec = record(forID: id), !rec.isPurged, rec.setAsideReason == nil,
                   !CatalogScopePolicy.isPairProtected(rec) else { continue }

@@ -333,9 +333,9 @@ extension VideoScanModel {
     /// minus Master Archive files). Catalog only — one O(records) pass.
     func deleteDuplicatesForecast(onVolume volumePath: String) -> DeleteDuplicatesForecast {
         let selection = duplicateDeletionSelection(onVolume: volumePath)
-        let hasArchive = masterArchiveRootPath != nil
+        let archiveVolume = archiveVolumeProtection()
         let rows = selection.targets.compactMap { r -> DeleteDuplicatesForecastRow? in
-            if hasArchive && (isArchiveCopy(r) || isInsideMasterArchive(path: r.fullPath)) { return nil }
+            if bulkDeleteRefusal(r, volume: archiveVolume) != nil { return nil }
             return .init(id: r.id, sizeBytes: r.sizeBytes, record: r,
                          keeperID: r.duplicateGroupID.flatMap { selection.keepers[$0]?.id })
         }

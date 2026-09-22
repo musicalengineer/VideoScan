@@ -498,6 +498,14 @@ extension VideoScanModel {
         guard rec.fullPath == item.path else {
             return .held("moved in the catalog since the list was worked out")
         }
+        // The ONE bulk-delete rule, before a byte is read (Rick
+        // 2026-09-22: nothing on the Master Archive's volume is ever moved
+        // to the Trash by a bulk verb). deleteConfirmedJunk re-asks it at
+        // the moment of the move; this saves reading a file for nothing.
+        let archiveVolume = archiveVolumeProtection()
+        if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {
+            return .held(Self.bulkDeleteRefusalNote(refusal, volume: archiveVolume?.label ?? "the archive volume"))
+        }
         guard let archive = record(forID: item.archiveID), archive.purgedAt == nil,
               archive.fullPath == item.archivePath else {
             return .held("its archive copy is no longer an active catalog record at the verified path")

@@ -227,8 +227,12 @@ struct CatalogTrashShortcutTests {
         #expect(plan.contains("masterArchiveRefusalLine(verb: \"Move to Trash\""))
 
         let archive = try productionSource("VideoScanModel+MasterArchive.swift")
-        #expect(archive.contains("log(Self.masterArchiveRefusalLine(verb: verb, count: protected))"),
+        #expect(archive.contains("log(Self.masterArchiveRefusalLine(verb: verb, count: tree))"),
                 "excludingMasterArchiveFiles and ⌘⌫ share one sentence")
+        // 2026-09-22: the rest of the Master Archive's VOLUME has its own
+        // sentence, also shared by the choke point and ⌘⌫.
+        #expect(archive.contains("log(Self.masterArchiveVolumeRefusalLine(verb: verb, count: onVolume, volume: label))"))
+        #expect(plan.contains("masterArchiveVolumeRefusalLine(verb: \"Move to Trash\""))
         #expect(VideoScanModel.masterArchiveRefusalLine(verb: "Remove", count: 2)
                 == "Remove: left 2 file(s) alone — they live in the Master Archive, which only archive actions may change.")
     }

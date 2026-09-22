@@ -53,9 +53,11 @@ extension VideoScanModel {
     @discardableResult
     func purgeRecords(ids requestedIDs: Set<UUID>) -> Int {
         guard !requestedIDs.isEmpty else { return 0 }
-        // Master Archive files are never bulk-purged.
+        // Master Archive files are never bulk-purged. Catalog-only: the
+        // file stays on disk, so only the archive TREE is refused here
+        // (the whole archive volume is refused to verbs that remove files).
         let ids = Set(excludingMasterArchiveFiles(requestedIDs.compactMap { record(forID: $0) },
-                                                  verb: "Remove").map(\.id))
+                                                  verb: "Remove", effect: .catalogOnly).map(\.id))
         guard !ids.isEmpty else { return 0 }
         let now = Date()
         var changed: [UUID] = []

@@ -493,5 +493,16 @@ enum WorkingCopyCleanupText {
     static let reasonMasterNotMoreReliable = "master not more reliable"
     static let reasonMasterUnknownDrive = "master on a drive that isn't in your list"
     static let reasonMasterArchiveFile = "Master Archive file"
+    static let reasonMasterArchiveVolume = "on the Master Archive volume"
+    static let reasonMasterArchiveVolumeUnprovable = "Master Archive volume not connected — drive cannot be told apart from it"
+
+    /// The skipped-reason for a bulk-delete refusal (2026-09-22).
+    static func reason(for refusal: VideoScanModel.BulkDeleteRefusal) -> String {
+        switch refusal {
+        case .archiveTree: return reasonMasterArchiveFile
+        case .archiveVolume: return reasonMasterArchiveVolume
+        case .archiveVolumeUnprovable: return reasonMasterArchiveVolumeUnprovable
+        }
+    }
     static let reasonNoMaster = "no master to verify against"
 }

@@ -84,9 +84,12 @@ enum JunkDeleteAction {
             Task { @MainActor in
                 // Re-query the model so a record tagged after the sheet
                 // opened doesn't miss the pass.
-                let targets = model.records.filter {
+                // Master Archive files (the tree AND the rest of the
+                // archive's volume, 2026-09-22) are dropped HERE, logged,
+                // so the "freed N GB" estimate never counts them.
+                let targets = model.excludingMasterArchiveFiles(model.records.filter {
                     $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
-                }
+                }, verb: "Delete Confirmed Junk")
                 // bytesBefore covers only reachable records — offline
                 // ones get skipped without a disk op, so they shouldn't
                 // count toward the "freed N GB" reading.

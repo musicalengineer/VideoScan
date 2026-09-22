@@ -613,26 +613,92 @@ extension VideoScanModel {
 
     // MARK: Archive protection for bulk verbs
 
-    /// The Master Archive tree is app-managed: files under it leave ONLY
+    /// What a bulk verb does to the files it is handed. Verbs that REMOVE
+    /// files are refused the whole Master Archive VOLUME (Rick
+    /// 2026-09-22: "the app should never offer to delete from
+    /// FamilyArchive"); catalog-only verbs (Remove from Catalog, Tidy's
+    /// set-aside) never touch the disk and keep the tree-only rule.
+    /// The default is the stricter one, so a new caller that forgets to
+    /// say is protected, not exposed.
+    enum BulkVerbEffect: Sendable {
+        case removesFiles
+        case catalogOnly
+    }
+
+    /// Why a bulk verb must leave one record alone, or nil.
+    enum BulkDeleteRefusal: Equatable, Sendable {
+        /// A promoted archive copy, or a file inside Breen_Family_Archive.
+        case archiveTree
+        /// Elsewhere on the volume that hosts the Master Archive.
+        case archiveVolume
+        /// The archive volume is not connected and this file's drive
+        /// cannot be proven to be a different one.
+        case archiveVolumeUnprovable
+    }
+
+    /// The whole-volume snapshot for one verb (nil = no designation).
+    /// A few mount-table / UUID reads — build ONCE per verb, never per
+    /// record. See ArchiveVolumeProtection.swift.
+    func archiveVolumeProtection() -> ArchiveVolumeProtection? {
+        ArchiveVolumeProtection.make(designation: masterArchive)
+    }
+
+    /// THE ONE RULE for "may a bulk verb act on this record?". `volume`
+    /// is the verb's snapshot (pass the same one for every record of the
+    /// verb); nil with `.removesFiles` builds one here (single-record
+    /// callers). O(1) per record once the snapshot exists.
+    func bulkDeleteRefusal(_ r: VideoRecord, effect: BulkVerbEffect = .removesFiles,
+                           volume: ArchiveVolumeProtection? = nil) -> BulkDeleteRefusal? {
+        guard masterArchive != nil else { return nil }
+        if isArchiveCopy(r) || isInsideMasterArchive(path: r.fullPath) { return .archiveTree }
+        guard effect == .removesFiles,
+              let snapshot = volume ?? archiveVolumeProtection() else { return nil }
+        switch snapshot.verdict(forPath: r.fullPath) {
+        case .clear: return nil
+        case .onArchiveVolume: return .archiveVolume
+        case .unprovable: return .archiveVolumeUnprovable
+        }
+    }
+
+    /// The OFFER-side form of the rule: which of `recs` a verb that
+    /// removes files may be offered for. Silent (a menu being built is not
+    /// a refusal worth a console line); O(recs) after one snapshot.
+    func recordsBulkVerbsMayRemove(_ recs: [VideoRecord]) -> [VideoRecord] {
+        guard masterArchive != nil, !recs.isEmpty else { return recs }
+        let snapshot = archiveVolumeProtection()
+        return recs.filter { bulkDeleteRefusal($0, volume: snapshot) == nil }
+    }
+
+    /// The Master Archive is app-managed: files under its tree leave ONLY
     /// through explicit archive actions (a future "Withdraw from Archive"
-    /// that also updates the manifest). Every bulk verb — Remove from
-    /// Catalog, Delete Confirmed Junk, Delete Duplicates, purge — filters
-    /// through this (Rick 2026-08-17: "in archive master window we
-    /// shouldn't be bulk deleting so we'll check volume role"). Returns
-    /// the records that are safe to act on and logs what was protected.
-    func excludingMasterArchiveFiles(_ recs: [VideoRecord], verb: String) -> [VideoRecord] {
-        guard masterArchiveRootPath != nil else { return recs }
+    /// that also updates the manifest), and since 2026-09-22 nothing
+    /// anywhere on its VOLUME is removed by a bulk verb. Every bulk verb —
+    /// Remove from Catalog, Delete Confirmed Junk, Delete Duplicates,
+    /// ⌘⌫, Discard, Move to Trash, purge — filters through this (Rick
+    /// 2026-08-17: "in archive master window we shouldn't be bulk
+    /// deleting so we'll check volume role"). Returns the records that
+    /// are safe to act on and logs what was protected, one line per kind.
+    func excludingMasterArchiveFiles(_ recs: [VideoRecord], verb: String,
+                                     effect: BulkVerbEffect = .removesFiles) -> [VideoRecord] {
+        guard masterArchive != nil, !recs.isEmpty else { return recs }
+        let snapshot = effect == .removesFiles ? archiveVolumeProtection() : nil
         var kept: [VideoRecord] = []
-        var protected = 0
+        kept.reserveCapacity(recs.count)
+        var tree = 0, onVolume = 0, unprovable = 0
         for r in recs {
-            if isArchiveCopy(r) || isInsideMasterArchive(path: r.fullPath) {
-                protected += 1
-            } else {
-                kept.append(r)
+            switch bulkDeleteRefusal(r, effect: effect, volume: snapshot) {
+            case nil: kept.append(r)
+            case .archiveTree?: tree += 1
+            case .archiveVolume?: onVolume += 1
+            case .archiveVolumeUnprovable?: unprovable += 1
             }
         }
-        if protected > 0 {
-            log(Self.masterArchiveRefusalLine(verb: verb, count: protected))
+        let label = snapshot?.label ?? "the archive volume"
+        if tree > 0 { log(Self.masterArchiveRefusalLine(verb: verb, count: tree)) }
+        if onVolume > 0 { log(Self.masterArchiveVolumeRefusalLine(verb: verb, count: onVolume, volume: label)) }
+        if unprovable > 0 { log(Self.masterArchiveUnprovableRefusalLine(verb: verb, count: unprovable, volume: label)) }
+        if onVolume + unprovable > 0 {
+            masterArchiveLog.notice("bulk verb \(verb, privacy: .public): archive volume \(label, privacy: .public) protected \(onVolume) file(s), unprovable \(unprovable)")
         }
         return kept
     }
@@ -642,6 +708,26 @@ extension VideoScanModel {
     /// the console reads the same whichever path refused).
     nonisolated static func masterArchiveRefusalLine(verb: String, count: Int) -> String {
         "\(verb): left \(count) file(s) alone — they live in the Master Archive, which only archive actions may change."
+    }
+
+    /// The same sentence for files elsewhere on the archive's volume.
+    nonisolated static func masterArchiveVolumeRefusalLine(verb: String, count: Int, volume: String) -> String {
+        "\(verb): left \(count) file(s) alone — they live on \(volume), the Master Archive volume, which only archive actions may change."
+    }
+
+    /// …and for files whose drive cannot be told apart from it.
+    nonisolated static func masterArchiveUnprovableRefusalLine(verb: String, count: Int, volume: String) -> String {
+        "\(verb): left \(count) file(s) alone — \(volume), the Master Archive volume, is not connected, so VideoScan cannot prove their drive is not it."
+    }
+
+    /// Row/detail wording for one refused record (Delete Duplicates rows,
+    /// Move to Trash holds, ⌘⌫). `volume` names the archive volume.
+    nonisolated static func bulkDeleteRefusalNote(_ r: BulkDeleteRefusal, volume: String) -> String {
+        switch r {
+        case .archiveTree: return "lives in the Master Archive, which only archive actions may change"
+        case .archiveVolume: return "lives on \(volume), the Master Archive volume, which only archive actions may change"
+        case .archiveVolumeUnprovable: return "\(volume), the Master Archive volume, is not connected — cannot prove this drive is not it"
+        }
     }
 
     // MARK: Promote — plan + routing

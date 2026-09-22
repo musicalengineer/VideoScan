@@ -246,9 +246,14 @@ extension VideoScanModel {
         }
         var out: [ArchiveCopySnapshot] = []
         out.reserveCapacity(records.count)
+        // One archive-volume snapshot for the pass (Rick 2026-09-22: a
+        // copy elsewhere on FamilyArchive is never offered for the Trash).
+        let archiveVolumeGuard = archiveVolumeProtection()
         for r in records where !r.isPurged {
             let archiveCopy = isArchiveCopy(r)
             let inside = !archiveCopy && isInsideMasterArchive(path: r.fullPath)
+            let onArchiveVolume = !archiveCopy && !inside
+                && bulkDeleteRefusal(r, volume: archiveVolumeGuard) != nil
             let volume = r.volumeName
             let facts = volumes[volume]
             let online = isOnline(r)
@@ -276,7 +281,8 @@ extension VideoScanModel {
                 volumeFreeBytes: facts?.free,
                 isPurged: r.isPurged,
                 derivedFrom: r.derivedFrom,
-                derivationKind: kind))
+                derivationKind: kind,
+                isOnArchiveVolume: onArchiveVolume))
         }
         return out
     }

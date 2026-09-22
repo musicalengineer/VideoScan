@@ -693,7 +693,8 @@ struct CatalogToolbar<Dashboard: View>: View {
         .background(Color(NSColor.windowBackgroundColor))
         // Confirmation sheet — picks Move to Trash vs Delete Permanently.
         .sheet(isPresented: $showJunkConfirmSheet) {
-            let snapshot = confirmedJunk
+            // Never offer Master Archive files (tree or volume, 2026-09-22).
+            let snapshot = model.recordsBulkVerbsMayRemove(confirmedJunk)
             DeleteConfirmedJunkConfirmSheet(
                 records: snapshot,
                 onCancel: { /* dismiss is automatic */ },

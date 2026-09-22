@@ -370,7 +370,8 @@ struct TriageView: View {
             switch sheet {
             case .confirm:
                 DeleteConfirmedJunkConfirmSheet(
-                    records: confirmedJunk,
+                    // Never offer Master Archive files (tree or volume, 2026-09-22).
+                    records: model.recordsBulkVerbsMayRemove(confirmedJunk),
                     onCancel: { /* dismiss is automatic via @Environment(\.dismiss) */ },
                     onAct: JunkDeleteAction.makeOnAct(model: model) { result, mode, bytesSucceeded in
                         // Atomic content transition: confirm → result.
