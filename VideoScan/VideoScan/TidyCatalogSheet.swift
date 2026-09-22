@@ -12,10 +12,13 @@ import UniformTypeIdentifiers
 //
 // 2026-09-11: two more rows. "Junk that came back" is a real category
 // (set aside on confirm, with the original reason). "Copies of archived
-// media" is a NUMBER ONLY — count + GB, "(review coming)" — nothing is
-// set aside and nothing is touched; the deletion policy is a separate
-// design. Every tally is computed once in buildTidyPlan (no O(records)
-// work in this body).
+// media" is a count + GB here — THIS sheet never sets those aside or
+// touches them. Its "Review copies of archived media…" button opens the
+// "Archived — what next?" checklist (ArchivedWhatNextSheet, source
+// .tidyBacklog), which DOES move the copies Rick ticks to the Trash after
+// its own confirm and a byte-for-byte check against the archive. Every
+// tally is computed once in buildTidyPlan (no O(records) work in this
+// body).
 
 struct TidyCatalogSheet: View {
     @ObservedObject var model: VideoScanModel
@@ -69,7 +72,8 @@ struct TidyCatalogSheet: View {
                                  "Kept — part of a recovered A/V pair", plan.keptPairProtected)
                         Divider().padding(.vertical, 4)
                     }
-                    // Dry-run number only — never set aside by this sheet.
+                    // A number only in THIS sheet — never set aside here. The
+                    // review button below opens the checklist that acts on them.
                     countRow("archivebox", .indigo,
                              "Copies of archived media — \(Formatting.humanSize(plan.archivedCopyBytes)) outside the Master Archive",
                              plan.archivedCopyCount)
@@ -77,14 +81,16 @@ struct TidyCatalogSheet: View {
                 .font(.system(size: 14))
 
                 // Stage 2 (Rick 2026-09-12): the same "Archived — what next?"
-                // sheet Promote shows, for the backlog — dry run, Apply
-                // disabled. Hop a turn after dismiss (chained-sheet rule).
+                // sheet Promote shows, for the backlog. It is live: the
+                // copies Rick ticks go to the Trash after that sheet's own
+                // confirm (the label no longer says "dry run"). Hop a turn
+                // after dismiss (chained-sheet rule).
                 if plan.archivedCopyCount > 0 {
                     Button {
                         dismiss()
                         Task { @MainActor in await model.offerArchivedWhatNextForBacklog() }
                     } label: {
-                        Label("Review copies of archived media… (dry run)", systemImage: "archivebox")
+                        Label("Review copies of archived media…", systemImage: "archivebox")
                     }
                     .accessibilityIdentifier("tidy.reviewArchivedCopies")
                 }

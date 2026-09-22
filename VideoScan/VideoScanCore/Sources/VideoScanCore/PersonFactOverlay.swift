@@ -327,21 +327,100 @@ public struct PersonFactOverlayStore: Sendable {
 
     public var fileURL: URL { directory.appendingPathComponent(Self.fileName) }
 
-    /// The overlay on disk; empty when there is none. An unreadable file is
-    /// logged and treated as empty (the tree then shows the pull's facts —
-    /// the safe direction) and is NOT overwritten until the next apply.
+    /// Why the overlay on disk cannot be used for a read-modify-write.
+    /// "No file yet" is NOT an error (an empty overlay is the truth then);
+    /// only a file that exists and cannot be read or decoded is.
+    public struct UnreadableOverlay: Error, LocalizedError, Equatable, Sendable {
+        public let fileName: String
+        public let reason: String
+        public var errorDescription: String? { "\(fileName) can't be read (\(reason))" }
+    }
+
+    /// The overlay on disk, for SHOWING the tree: empty when there is none.
+    /// An unreadable file (bad JSON, or any read error other than "no such
+    /// file") is logged one line and treated as empty — the tree then shows
+    /// the pull's facts, the safe direction. Never use this before a save:
+    /// use `loadForUpdate()` / `update(_:)`, which refuse instead.
     public func load() -> PersonFactOverlay {
-        guard let data = try? Data(contentsOf: fileURL) else { return PersonFactOverlay() }
         do {
-            return try PersonFactOverlay.decode(data)
+            return try loadForUpdate()
+        } catch let unreadable as UnreadableOverlay {
+            log("[fs-refresh] overlay \(unreadable.fileName) unreadable (\(unreadable.reason)); applying none")
+            return PersonFactOverlay()
         } catch {
-            log("[fs-refresh] overlay \(fileURL.lastPathComponent) unreadable (\(error.localizedDescription)); applying none")
+            // loadForUpdate throws only UnreadableOverlay; keep the log honest anyway.
+            log("[fs-refresh] overlay \(Self.fileName) unreadable (\(error.localizedDescription)); applying none")
             return PersonFactOverlay()
         }
     }
 
+    /// The overlay on disk, for a read-modify-write. Empty when there is no
+    /// file; throws `UnreadableOverlay` when a file exists but cannot be read
+    /// or decoded — the caller must refuse rather than save a smaller
+    /// overlay over it (reflection review F1, 2026-09-21).
+    public func loadForUpdate() throws -> PersonFactOverlay {
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch {
+            if Self.isNoSuchFile(error) { return PersonFactOverlay() }
+            throw UnreadableOverlay(fileName: Self.fileName, reason: error.localizedDescription)
+        }
+        do {
+            return try PersonFactOverlay.decode(data)
+        } catch {
+            throw UnreadableOverlay(fileName: Self.fileName, reason: error.localizedDescription)
+        }
+    }
+
+    /// Publish `overlay`. Refuses (throws `UnreadableOverlay`) when the file
+    /// already on disk cannot be read: whatever the caller loaded, it cannot
+    /// have included that file's entries, so writing would erase them. The
+    /// check is one read + decode of a small JSON file.
     public func save(_ overlay: PersonFactOverlay) throws {
+        _ = try loadForUpdate()
         try AtomicFilePublish.write(try overlay.encoded(), to: fileURL, durability: .fullFsync)
+    }
+
+    /// Read-modify-write in one call: load (refusing an unreadable file),
+    /// let `mutate` change it, and save — unless `mutate` returns nil, which
+    /// means "nothing to write" (e.g. no refresh to undo). Blocking file
+    /// I/O with a full fsync: call it OFF the main actor.
+    public func update<T>(_ mutate: (inout PersonFactOverlay) throws -> T?) throws -> T? {
+        var overlay = try loadForUpdate()
+        guard let result = try mutate(&overlay) else { return nil }
+        try AtomicFilePublish.write(try overlay.encoded(), to: fileURL, durability: .fullFsync)
+        return result
+    }
+
+    /// Move an unreadable overlay aside as `overlay.json.bad-<UTC stamp>`
+    /// (plain rename(2) in the same folder — never deleted, never
+    /// `replaceItemAt`). The next apply then starts a fresh overlay while
+    /// the old bytes stay on disk for a human to inspect. Returns the new
+    /// URL. Throws when there is nothing to move or the rename fails.
+    public func setAsideUnreadable(at date: Date = Date(), fileManager: FileManager = .default) throws -> URL {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        let base = Self.fileName + ".bad-" + formatter.string(from: date)
+        var target = directory.appendingPathComponent(base)
+        var n = 2
+        while fileManager.fileExists(atPath: target.path) {
+            target = directory.appendingPathComponent("\(base)-\(n)")
+            n += 1
+        }
+        try fileManager.moveItem(at: fileURL, to: target)
+        return target
+    }
+
+    static func isNoSuchFile(_ error: Error) -> Bool {
+        let ns = error as NSError
+        if ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoSuchFileError { return true }
+        if ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOENT) { return true }
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError,
+           underlying.domain == NSPOSIXErrorDomain, underlying.code == Int(ENOENT) { return true }
+        return false
     }
 
     /// "mtime|size" of the overlay file (or "none") — part of the shared

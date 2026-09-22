@@ -338,7 +338,7 @@ struct PersonRefreshCoordinatorTests {
         guard case .ready(let diff) = coordinator.phase else { return }
         #expect(diff.changes.map(\.field.key) == ["birthDate", "deathPlace", "marriageDate:MMMM-222"])
 
-        #expect(coordinator.apply(selectedFieldKeys: Set(diff.changes.map(\.field.key))))
+        #expect(await coordinator.apply(selectedFieldKeys: Set(diff.changes.map(\.field.key))))
         #expect(coordinator.phase == .applied(fields: 3))
         #expect(rig.layout.overlayStore.load().entries["WWWW-111"]?.facts.count == 3)
 
@@ -379,13 +379,13 @@ struct PersonRefreshCoordinatorTests {
         try answer(coordinator, with: AF.onePerson())
         #expect(await AF.waitUntil { isReady(coordinator) })
         guard case .ready(let diff) = coordinator.phase else { return }
-        coordinator.apply(selectedFieldKeys: ["birthDate"])        // one box ticked
+        await coordinator.apply(selectedFieldKeys: ["birthDate"])        // one box ticked
         await rig.model.reloadAfterPersonRefresh(selecting: "@I1@")
         #expect(rig.model.personFacts(familySearchID: "WWWW-111")?.birthDate == "21 Feb 1929")
         #expect(rig.model.personFacts(familySearchID: "WWWW-111")?.deathPlace == nil)   // unticked
         #expect(diff.changes.count == 3)
 
-        let message = PersonRefreshCoordinator.undoLast(
+        let message = await PersonRefreshCoordinator.undoLast(
             familySearchID: "WWWW-111", personName: "Walter", overlayStore: rig.layout.overlayStore,
             journalDirectory: rig.layout.refreshRoot, log: { rig.lines.append($0) })
         #expect(message.contains("shows the pulled facts again"))
@@ -394,6 +394,101 @@ struct PersonRefreshCoordinatorTests {
         let journal = PersonRefreshAudit.entries(directory: rig.layout.refreshRoot)
         #expect(journal.map(\.action) == [.applied, .undone])
         #expect(journal.last?.changes == [PersonRefreshAudit.FieldChange(field: "birthDate", before: "21 Feb 1929", after: "21 Feb 1928")])
+    }
+
+    /// Reflection review F1 (2026-09-21): an unreadable overlay.json used
+    /// to load as empty and Apply saved ONE person over it, erasing every
+    /// other person's refreshed facts. Now Apply refuses with an honest
+    /// sentence, the bytes are set aside intact, and nothing is journaled.
+    @Test func applyOverAnUnreadableOverlayRefusesAndKeepsTheFile() async throws {
+        let rig = try rig("garbage-apply")
+        defer { rig.layout.remove() }
+        let coordinator = rig.coordinator()
+        coordinator.launch()
+        try answer(coordinator, with: AF.onePerson())
+        #expect(await AF.waitUntil { isReady(coordinator) })
+        guard case .ready(let diff) = coordinator.phase else { return }
+
+        let store = rig.layout.overlayStore
+        let original = Data("{ \"entries\": { \"ZZZZ-999\": { \"facts\": ".utf8)
+        try original.write(to: store.fileURL)
+
+        #expect(await coordinator.apply(selectedFieldKeys: Set(diff.changes.map(\.field.key))) == false)
+        guard case .failed(let message) = coordinator.phase else {
+            Issue.record("expected a refusal, got \(coordinator.phase)"); return
+        }
+        #expect(message.hasPrefix("The refresh record can't be read, so nothing was changed — it's kept as overlay.json.bad-"))
+        let kept = try FileManager.default.contentsOfDirectory(atPath: rig.layout.refreshRoot.path)
+            .filter { $0.hasPrefix("overlay.json.bad-") }
+        #expect(kept.count == 1)
+        if let name = kept.first {
+            #expect(message.contains(name))
+            #expect(try Data(contentsOf: rig.layout.refreshRoot.appendingPathComponent(name)) == original,
+                    "the unreadable overlay must survive byte-identical")
+        }
+        #expect(!FileManager.default.fileExists(atPath: store.fileURL.path), "nothing was written in its place")
+        #expect(PersonRefreshAudit.entries(directory: rig.layout.refreshRoot).isEmpty)
+        let refusals = rig.lines.all.filter { $0.hasPrefix("[fs-refresh] refused reason=overlay-unreadable apply for WWWW-111") }
+        #expect(refusals.count == 1)
+        #expect(!rig.lines.all.contains { $0.hasPrefix("[fs-refresh] applied") })
+
+        // The next refresh starts a fresh record; the set-aside file is untouched.
+        let again = rig.coordinator()
+        again.launch()
+        try answer(again, with: AF.onePerson())
+        #expect(await AF.waitUntil { isReady(again) })
+        guard case .ready(let second) = again.phase else { return }
+        #expect(await again.apply(selectedFieldKeys: Set(second.changes.map(\.field.key))))
+        #expect(store.load().entries["WWWW-111"]?.facts.count == 3)
+        if let name = kept.first {
+            #expect(try Data(contentsOf: rig.layout.refreshRoot.appendingPathComponent(name)) == original)
+        }
+    }
+
+    /// Reflection review F3: corrupt journal lines were dropped by a
+    /// silent `try?`. Still skipped (behaviour unchanged) — now counted
+    /// and logged in one line.
+    @Test func corruptJournalLinesAreCountedAndLogged() throws {
+        let layout = try AF.layout(tag: "journal-corrupt")
+        defer { layout.remove() }
+        let good = PersonRefreshAudit.Entry(
+            at: Date(timeIntervalSince1970: 1_000), action: .applied, familySearchID: "WWWW-111", person: "Walter",
+            changes: [PersonRefreshAudit.FieldChange(field: "birthDate", before: "1928", after: "1929")], source: nil)
+        try PersonRefreshAudit.append(good, directory: layout.refreshRoot)
+        let journal = layout.refreshRoot.appendingPathComponent(PersonRefreshPaths.journalFileName)
+        let handle = try FileHandle(forWritingTo: journal)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{ torn line\nnot json either\n".utf8))
+        try handle.close()
+        var lines: [String] = []
+        let entries = PersonRefreshAudit.entries(directory: layout.refreshRoot, log: { lines.append($0) })
+        #expect(entries.count == 1)
+        #expect(lines.count == 1)
+        #expect(lines.first?.contains("skipped 2 unreadable line(s) of 3") == true)
+        // A missing journal is quiet.
+        var quiet: [String] = []
+        #expect(PersonRefreshAudit.entries(directory: layout.bin, log: { quiet.append($0) }).isEmpty)
+        #expect(quiet.isEmpty)
+    }
+
+    @Test func undoOverAnUnreadableOverlayRefusesAndKeepsTheFile() async throws {
+        let rig = try rig("garbage-undo")
+        defer { rig.layout.remove() }
+        let store = rig.layout.overlayStore
+        let original = Data("not json at all".utf8)
+        try original.write(to: store.fileURL)
+        let message = await PersonRefreshCoordinator.undoLast(
+            familySearchID: "WWWW-111", personName: "Walter", overlayStore: store,
+            journalDirectory: rig.layout.refreshRoot, log: { rig.lines.append($0) })
+        #expect(message.hasPrefix("The refresh record can't be read, so nothing was changed — it's kept as overlay.json.bad-"))
+        let kept = try FileManager.default.contentsOfDirectory(atPath: rig.layout.refreshRoot.path)
+            .filter { $0.hasPrefix("overlay.json.bad-") }
+        #expect(kept.count == 1)
+        if let name = kept.first {
+            #expect(try Data(contentsOf: rig.layout.refreshRoot.appendingPathComponent(name)) == original)
+        }
+        #expect(PersonRefreshAudit.entries(directory: rig.layout.refreshRoot).isEmpty)
+        #expect(rig.lines.all.filter { $0.hasPrefix("[fs-refresh] refused reason=overlay-unreadable undo for WWWW-111") }.count == 1)
     }
 
     @Test(arguments: [
@@ -435,7 +530,7 @@ struct PersonRefreshCoordinatorTests {
         guard case .ready(let diff) = coordinator.phase else { return }
         #expect(diff.relationshipNotes.map(\.spouseFamilySearchID) == ["VVVV-777"])
         #expect(!diff.changes.contains { $0.field.key.contains("VVVV-777") })
-        coordinator.apply(selectedFieldKeys: Set(diff.changes.map(\.field.key)))
+        await coordinator.apply(selectedFieldKeys: Set(diff.changes.map(\.field.key)))
         await rig.model.reloadAfterPersonRefresh(selecting: "@I1@")
         let after = rig.model.personFacts(familySearchID: "WWWW-111")!.spouses
         #expect(after.map(\.familySearchID) == before.map(\.familySearchID))
@@ -515,7 +610,7 @@ struct PersonRefreshCoordinatorTests {
         try answer(coordinator, with: AF.onePerson())
         #expect(await AF.waitUntil { isReady(coordinator) })
         guard case .ready(let diff) = coordinator.phase else { return }
-        coordinator.apply(selectedFieldKeys: Set(diff.changes.map(\.field.key)))
+        await coordinator.apply(selectedFieldKeys: Set(diff.changes.map(\.field.key)))
         await rig.model.reloadAfterPersonRefresh(selecting: "@I1@")
         #expect(snapshot() == before)
     }

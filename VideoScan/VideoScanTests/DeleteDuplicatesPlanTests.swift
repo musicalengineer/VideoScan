@@ -187,6 +187,28 @@ struct DeleteDuplicatesPlanStoreTests {
         #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("plan.json").path))
     }
 
+    /// Reflection review F2 (2026-09-21): a plan ROOT that exists but
+    /// can't be listed returned [] silently — a stranded put-back would
+    /// never be offered and nothing said why.
+    @Test func anUnlistablePlanRootIsLoggedNotSilentlyEmpty() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ddp-unlistable-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: root.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path)
+                try? FileManager.default.removeItem(at: root) }
+        var lines: [String] = []
+        #expect(DeleteDuplicatesPlanStore.unfinishedPlans(root: root, log: { lines.append($0) }).isEmpty)
+        #expect(lines.count == 1)
+        #expect(lines.first?.contains("can't be listed") == true)
+    }
+
+    @Test func aMissingPlanRootIsQuiet() {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ddp-missing-\(UUID())")
+        var lines: [String] = []
+        #expect(DeleteDuplicatesPlanStore.unfinishedPlans(root: root, log: { lines.append($0) }).isEmpty)
+        #expect(lines.isEmpty, "no plan folder yet means no plan ever made — nothing to say")
+    }
+
     @Test func orderedWriterDropsStaleGenerations() async throws {
         let root = tempRoot("writer"); defer { try? FileManager.default.removeItem(at: root) }
         var p = plan([entry("a")])

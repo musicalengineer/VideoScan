@@ -382,6 +382,35 @@ struct FamilyDocumentStoreTests {
         #expect((try? fileManager.contentsOfDirectory(atPath: trash.path))?.count == 1)
     }
 
+    /// Reflection review F3 (2026-09-21): when the rollback's move to
+    /// .trash itself fails, the orphan used to be left behind by a silent
+    /// `try?`. Behaviour is unchanged (same error thrown, file left in
+    /// place) — but the log now names the file and why.
+    @Test func aFailedRollbackIsLoggedNotSilent() throws {
+        let sb = try sandbox()
+        defer { try? fileManager.removeItem(at: sb.base) }
+        let lock = NSLock()
+        var lines: [String] = []
+        PersonDocumentLog.shared.setExtraSink { line in lock.withLock { lines.append(line) } }
+        defer { PersonDocumentLog.shared.setExtraSink(nil) }
+        let folder = try sb.store.folderForPhotoRequest(person: mary)
+        let pdf = try write(try pdfData(), named: "bc.pdf", in: sb)
+        _ = try sb.store.importPersonDocument(from: pdf, kind: .birth, note: "", into: folder)
+        let docs = documentsDir(folder)
+        try Data("{ not json".utf8).write(to: docs.appendingPathComponent(FamilyAssetStore.documentsSidecarName))
+        // A FILE where .trash should be: the rollback's move refuses.
+        try Data("x".utf8).write(to: docs.appendingPathComponent(FamilyAssetStore.documentsTrashFolderName))
+        let before = Set(try fileManager.contentsOfDirectory(atPath: docs.path))
+        #expect(throws: FamilyAssetStore.DocumentError.sidecarUnreadable(FamilyAssetStore.documentsSidecarName)) {
+            try sb.store.importPersonDocument(from: pdf, kind: .death, note: "", into: folder)
+        }
+        let orphans = Set(try fileManager.contentsOfDirectory(atPath: docs.path)).subtracting(before)
+        #expect(orphans.count == 1, "behaviour unchanged: the orphan stays where it was written")
+        let logged = lock.withLock { lines }.filter { $0.contains("could not be moved to .trash") }
+        #expect(logged.count == 1)
+        if let orphan = orphans.first { #expect(logged.first?.contains(orphan) == true) }
+    }
+
     // MARK: Sensor — sidecar schema frozen
 
     @Test func sidecarSchemaIsFrozen() throws {
