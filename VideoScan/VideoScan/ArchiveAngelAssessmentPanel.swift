@@ -20,6 +20,10 @@ struct ArchiveAngelAssessmentPanel: View {
     @ObservedObject var sweep: ArchiveAngelSweep
     /// Opens the Archive Angel start sheet (pick 10/25/35/50 → prepare).
     let prepare: () -> Void
+    /// Prepared batches waiting for review: (rows ready in the newest,
+    /// number of batches). nil = nothing to review → no chip.
+    var review: (ready: Int, batches: Int)? = nil
+    var openReview: () -> Void = {}
 
     @State private var isOpen = false
     @State private var top: [Row] = []
@@ -35,9 +39,13 @@ struct ArchiveAngelAssessmentPanel: View {
         let why: String
     }
 
+    /// ONE strip in the Archive pane (Rick 2026-09-22: the sidebar had
+    /// three overlapping Angel entries). Left: the grades, click to open
+    /// the top-25 list. Right: the review chip (when a batch is waiting),
+    /// the two actions, and a ⋯ menu for the sweep controls.
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) { isOpen.toggle() }
                 } label: {
@@ -47,39 +55,70 @@ struct ArchiveAngelAssessmentPanel: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 10)
-                        Image(systemName: "sparkles").foregroundStyle(.secondary)
+                        Image(systemName: "sparkles").foregroundStyle(Color.orange)
+                        Text("Archive Angel")
+                            .font(.system(size: 14, weight: .semibold))
                         Text(headline)
-                            .font(.system(size: 12))
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("archive.angelAssessment")
                 .help(statusHelp)
-            }
-            HStack(spacing: 14) {
-                Button("Assess now") { sweep.rescoreNow() }
-                    .disabled(sweep.status.isRunning || !model.archiveAngelSweepSettings.enabled)
-                    .accessibilityIdentifier("archive.angelAssessNow")
-                    .help("Re-score every record now. A full pass takes a few seconds; it runs on its own every 15 minutes and a minute after any edit.")
-                Button("Show candidates in Catalog") { showCandidatesInCatalog() }
-                    .disabled(store.candidateCount == 0)
-                    .help("Focus the Catalog on every grade A and B record. Show ▸ Archive Candidates keeps the same view as a filter.")
-                Button("Prepare batch…") { prepare() }
+                .layoutPriority(1)
+
+                Spacer(minLength: 8)
+
+                if let review {
+                    // Nag-button pattern: the badge performs the action.
+                    Button(action: openReview) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "sparkles")
+                            Text(review.batches == 1
+                                 ? "\(review.ready) to review"
+                                 : "\(review.ready) to review (+\(review.batches - 1) more)")
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Color.orange.opacity(0.18)))
+                        .foregroundStyle(Color.orange)
+                    }
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .accessibilityIdentifier("archive.angelReview")
+                    .help("Archive Angel prepared a batch. Review the recommendations, rename or deselect, then Promote.")
+                }
+                Button("Prepare Batch…") { prepare() }
+                    .controlSize(.small)
+                    .fixedSize()
                     .disabled(model.isReadOnly)
                     .accessibilityIdentifier("archive.angelPrepare")
-                    .help("Pick how many to prepare (10/25/35/50); the Angel takes the top-graded candidates, verifies audio and makes access copies in the buffer, then asks for review.")
-                Toggle("Assess continuously", isOn: Binding(
-                    get: { model.archiveAngelSweepSettings.enabled },
-                    set: { model.setArchiveAngelSweepEnabled($0) }))
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 11))
-                    .help("Scores catalog fields and Spotlight play counts only — never media bytes — and parks whenever you are working or a job is running.")
+                    .help("Pick how many to prepare (10/25/35/50); the Angel takes the top-graded candidates, verifies audio and makes access copies in the buffer, then asks for review. Nothing reaches the archive until you press Promote.")
+                Button("Show in Catalog") { showCandidatesInCatalog() }
+                    .controlSize(.small)
+                    .fixedSize()
+                    .disabled(store.candidateCount == 0)
+                    .help("Focus the Catalog on every grade A and B record. Show ▸ Archive Candidates keeps the same view as a filter.")
+                Menu {
+                    Button("Assess Now") { sweep.rescoreNow() }
+                        .disabled(sweep.status.isRunning || !model.archiveAngelSweepSettings.enabled)
+                        .accessibilityIdentifier("archive.angelAssessNow")
+                    Toggle("Assess Continuously", isOn: Binding(
+                        get: { model.archiveAngelSweepSettings.enabled },
+                        set: { model.setArchiveAngelSweepEnabled($0) }))
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Assess now re-scores every record (a few seconds). Assess continuously scores catalog fields and Spotlight play counts only — never media bytes — and parks whenever you are working or a job is running.")
             }
-            .buttonStyle(.link)
-            .font(.system(size: 12))
-            .padding(.leading, 16)
             if isOpen {
                 list
                     .padding(.leading, 16)
@@ -91,25 +130,26 @@ struct ArchiveAngelAssessmentPanel: View {
 
     // MARK: Headline
 
+    /// "1 ready · 106 nearly · 394 candidates · updated 5 min ago" — the
+    /// Angel's own grades (A / B / C), nothing else.
     private var headline: String {
         let g = store.gradeCounts()
         let a = g[.a] ?? 0, b = g[.b] ?? 0, c = g[.c] ?? 0
         var s: String
         if store.isLoaded {
-            s = "Archive Angel Assessment: \(a.formatted()) ready · \(b.formatted()) nearly · \(c.formatted()) candidates"
-                + " · of \(store.consideredCount.formatted())"
+            s = "\(a.formatted()) ready · \(b.formatted()) nearly ready · \(c.formatted()) candidates"
             if let at = store.computedAt {
                 let f = RelativeDateTimeFormatter()
                 f.unitsStyle = .abbreviated
-                s += " · " + f.localizedString(for: at, relativeTo: Date())
+                s += " · assessed " + f.localizedString(for: at, relativeTo: Date())
             }
         } else {
-            s = "Archive Angel Assessment: not run yet"
+            s = "not assessed yet"
         }
         switch sweep.status {
         case .scoring(let done, let total): s += " · assessing \(done.formatted()) of \(total.formatted())…"
         case .paused(let r): s += " · paused — \(r)"
-        case .disabled: s += " · off"
+        case .disabled: s += " · assessment off"
         default: break
         }
         return s
