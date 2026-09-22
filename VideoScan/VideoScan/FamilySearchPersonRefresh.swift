@@ -290,12 +290,39 @@ enum PersonRefreshAudit {
         try MediaLedger.appendDurable(data, to: directory.appendingPathComponent(PersonRefreshPaths.journalFileName))
     }
 
-    nonisolated static func entries(directory: URL) -> [Entry] {
-        guard let text = try? String(contentsOf: directory.appendingPathComponent(PersonRefreshPaths.journalFileName),
-                                     encoding: .utf8) else { return [] }
+    /// Every readable journal line, oldest first. A missing journal is
+    /// simply empty; any other read failure, and every line that will not
+    /// decode, is still skipped — but now counted and logged one line
+    /// (reflection review F3, 2026-09-21), never silently dropped.
+    nonisolated static func entries(directory: URL,
+                                    log: (String) -> Void = { appLog.write($0) }) -> [Entry] {
+        let url = directory.appendingPathComponent(PersonRefreshPaths.journalFileName)
+        let text: String
+        do {
+            text = try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            if !FileManager.default.fileExists(atPath: url.path) { return [] }
+            log("[fs-refresh] journal \(url.lastPathComponent) can't be read (\(error.localizedDescription)); showing no entries")
+            return []
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return text.split(whereSeparator: \.isNewline).compactMap { try? decoder.decode(Entry.self, from: Data($0.utf8)) }
+        var entries: [Entry] = []
+        var dropped = 0
+        var firstReason: String?
+        for line in text.split(whereSeparator: \.isNewline) {
+            do {
+                entries.append(try decoder.decode(Entry.self, from: Data(line.utf8)))
+            } catch {
+                dropped += 1
+                if firstReason == nil { firstReason = error.localizedDescription }
+            }
+        }
+        if dropped > 0 {
+            log("[fs-refresh] journal \(url.lastPathComponent): skipped \(dropped) unreadable line(s) of "
+                + "\(dropped + entries.count) (first: \(firstReason ?? "unknown")); the file is left as it is")
+        }
+        return entries
     }
 
     private static func quote(_ value: String?) -> String {

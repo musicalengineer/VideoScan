@@ -290,7 +290,15 @@ extension FamilyAssetStore {
         guard let back = Self.regularFileData(at: written),
               back.count == data.count,
               Self.sha256Hex(back) == digest else {
-            try? Self.moveToTrash(written, in: documentsDir, fileManager: fileManager, at: when)
+            do {
+                try Self.moveToTrash(written, in: documentsDir, fileManager: fileManager, at: when)
+            } catch {
+                // Behaviour unchanged (the import still fails with EIO); the
+                // orphan is now named in the log instead of silently left.
+                PersonDocumentLog.shared.write(
+                    "[tree] document \(written.lastPathComponent) failed its read-back check and could not be moved "
+                    + "to .trash (\(error.localizedDescription)); it is left in \(documentsDir.lastPathComponent)/ unlisted")
+            }
             throw StoreError.createFailed(written.lastPathComponent, errno: EIO)
         }
 
@@ -312,7 +320,16 @@ extension FamilyAssetStore {
         } catch {
             // The file is on disk but unlisted: park it in .trash so the
             // archive never holds an orphan, then say why.
-            try? Self.moveToTrash(written, in: documentsDir, fileManager: fileManager, at: when)
+            do {
+                try Self.moveToTrash(written, in: documentsDir, fileManager: fileManager, at: when)
+            } catch let trashError {
+                // Behaviour unchanged (the sidecar error is still thrown);
+                // the orphan is now named in the log instead of silently left.
+                PersonDocumentLog.shared.write(
+                    "[tree] document \(written.lastPathComponent) could not be listed (\(error.localizedDescription)) "
+                    + "and could not be moved to .trash (\(trashError.localizedDescription)); it is left in "
+                    + "\(documentsDir.lastPathComponent)/ unlisted")
+            }
             throw error
         }
         document.fileURL = written

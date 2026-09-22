@@ -267,12 +267,74 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
 
     // MARK: Apply
 
+    /// What one read-modify-write of the overlay came to. Sendable: it is
+    /// built on a worker thread and read back on the main actor.
+    enum OverlayWrite<T: Sendable>: Sendable {
+        case written(T)
+        /// Nothing to write (e.g. no refresh to undo).
+        case nothingToDo
+        /// overlay.json exists but cannot be read; nothing was written.
+        /// `keptAs` is where it was set aside (nil when even that failed).
+        case unreadable(reason: String, keptAs: String?, setAsideError: String?)
+        case failed(String)
+    }
+
+    /// Load → mutate → fsync'd save, entirely OFF the main actor, and the
+    /// unreadable-file refusal (reflection review F1/F5, 2026-09-21).
+    ///
+    /// Idiom: `Task.detached { … }.value` ≈ post a job to a worker thread
+    /// and co_await its result — the main actor is free (UI keeps drawing)
+    /// for the length of the full fsync. Only Sendable values cross: the
+    /// store (a struct of a URL and a @Sendable closure), the mutation
+    /// closure (@Sendable — it captures only value types) and the result.
+    nonisolated static func writeOverlay<T: Sendable>(
+        _ store: PersonFactOverlayStore, now: Date,
+        _ mutate: @escaping @Sendable (inout PersonFactOverlay) -> T?) async -> OverlayWrite<T> {
+        await Task.detached(priority: .userInitiated) { () -> OverlayWrite<T> in
+            do {
+                guard let result = try store.update(mutate) else { return .nothingToDo }
+                return .written(result)
+            } catch let unreadable as PersonFactOverlayStore.UnreadableOverlay {
+                // Never saved over, never deleted: moved aside so the bytes
+                // survive and the NEXT apply can start a fresh record.
+                do {
+                    let kept = try store.setAsideUnreadable(at: now)
+                    return .unreadable(reason: unreadable.reason, keptAs: kept.lastPathComponent, setAsideError: nil)
+                } catch {
+                    return .unreadable(reason: unreadable.reason, keptAs: nil,
+                                       setAsideError: error.localizedDescription)
+                }
+            } catch {
+                return .failed(error.localizedDescription)
+            }
+        }.value
+    }
+
+    /// The honest strip sentence for an unreadable refresh record.
+    nonisolated static func unreadableSentence(keptAs: String?) -> String {
+        keptAs.map { "The refresh record can't be read, so nothing was changed — it's kept as \($0)." }
+            ?? "The refresh record can't be read, so nothing was changed — it's left in place as \(PersonFactOverlayStore.fileName)."
+    }
+
+    /// One app-log line for the refusal (what, why, where the bytes are).
+    nonisolated static func unreadableLogLine(action: String, familySearchID: String, reason: String,
+                                              keptAs: String?, setAsideError: String?) -> String {
+        "[fs-refresh] refused reason=overlay-unreadable \(action) for \(familySearchID): "
+            + "\(PersonFactOverlayStore.fileName) can't be read (\(reason)); nothing was changed; "
+            + (keptAs.map { "set aside as \($0)" }
+               ?? "could not set it aside (\(setAsideError ?? "unknown")), left in place")
+    }
+
+    /// True while an Apply's write is in flight — a second click is ignored.
+    private(set) var isApplying = false
+
     /// Write the ticked facts to the overlay. Returns false (and says why
     /// in `phase`) when nothing could be written. Relationship notes are
     /// never in `changes`, so nothing selectable here can change a link.
+    /// `async` because the fsync'd write runs off the main actor.
     @discardableResult
-    func apply(selectedFieldKeys: Set<String>) -> Bool {
-        guard case .ready(let diff) = phase else { return false }
+    func apply(selectedFieldKeys: Set<String>) async -> Bool {
+        guard case .ready(let diff) = phase, !isApplying else { return false }
         if ViewerWriteGuard.refuse("PersonRefresh.apply") {
             phase = .failed(message: "This Mac is a viewer; the tree is refreshed on the master.")
             return false
@@ -283,17 +345,28 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             phase = .applied(fields: 0)
             return true
         }
-        var overlay = overlayStore.load()
-        overlay.record(chosen, familySearchID: target.familySearchID, displayName: target.personName, at: now())
-        do {
-            try overlayStore.save(overlay)
-        } catch {
-            phase = .failed(message: "Could not save the refreshed facts: \(error.localizedDescription). Nothing was changed.")
-            log("[fs-refresh] refused reason=overlay-write-failed for \(target.familySearchID): \(error.localizedDescription)")
+        isApplying = true
+        defer { isApplying = false }
+        let fsid = target.familySearchID, name = target.personName, at = now()
+        let outcome = await Self.writeOverlay(overlayStore, now: at) { overlay -> Bool? in
+            overlay.record(chosen, familySearchID: fsid, displayName: name, at: at)
+            return true
+        }
+        switch outcome {
+        case .written, .nothingToDo:
+            break
+        case .unreadable(let reason, let keptAs, let setAsideError):
+            phase = .failed(message: Self.unreadableSentence(keptAs: keptAs))
+            log(Self.unreadableLogLine(action: "apply", familySearchID: fsid, reason: reason,
+                                       keptAs: keptAs, setAsideError: setAsideError))
+            return false
+        case .failed(let message):
+            phase = .failed(message: "Could not save the refreshed facts: \(message). Nothing was changed.")
+            log("[fs-refresh] refused reason=overlay-write-failed for \(fsid): \(message)")
             return false
         }
         let entry = PersonRefreshAudit.Entry(
-            at: now(), action: .applied, familySearchID: target.familySearchID, person: target.personName,
+            at: now(), action: .applied, familySearchID: fsid, person: name,
             changes: PersonRefreshAudit.applyChanges(chosen),
             source: stagingFolder.map { $0.lastPathComponent + "/" + PersonRefreshPaths.outputFileName })
         log(PersonRefreshAudit.line(entry))
@@ -307,20 +380,31 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     // MARK: Undo (static — no download involved)
 
     /// "Undo last refresh for this person": pop the newest overlay state
-    /// for `familySearchID`. Returns the sentence to show.
+    /// for `familySearchID`. Returns the sentence to show. `async` because
+    /// the fsync'd write runs off the main actor.
     @discardableResult
     static func undoLast(familySearchID: String, personName: String,
                          overlayStore: PersonFactOverlayStore, journalDirectory: URL,
-                         log: (String) -> Void = { appLog.write($0) }, now: Date = Date()) -> String {
+                         log: (String) -> Void = { appLog.write($0) }, now: Date = Date()) async -> String {
         if ViewerWriteGuard.refuse("PersonRefresh.undo") {
             return "This Mac is a viewer; the tree is refreshed on the master."
         }
-        var overlay = overlayStore.load()
-        guard let (undone, restored) = overlay.undoLast(familySearchID: familySearchID) else {
-            return "There is no FamilySearch refresh to undo for \(personName)."
+        typealias Popped = (undone: PersonFactOverlay.Entry, restored: PersonFactOverlay.Entry?)
+        let outcome = await writeOverlay(overlayStore, now: now) { overlay -> Popped? in
+            overlay.undoLast(familySearchID: familySearchID).map { (undone: $0.before, restored: $0.after) }
         }
-        do { try overlayStore.save(overlay) } catch {
-            return "Could not undo: \(error.localizedDescription)"
+        let undone: PersonFactOverlay.Entry, restored: PersonFactOverlay.Entry?
+        switch outcome {
+        case .written(let popped):
+            (undone, restored) = (popped.undone, popped.restored)
+        case .nothingToDo:
+            return "There is no FamilySearch refresh to undo for \(personName)."
+        case .unreadable(let reason, let keptAs, let setAsideError):
+            log(unreadableLogLine(action: "undo", familySearchID: familySearchID, reason: reason,
+                                  keptAs: keptAs, setAsideError: setAsideError))
+            return unreadableSentence(keptAs: keptAs)
+        case .failed(let message):
+            return "Could not undo: \(message)"
         }
         let entry = PersonRefreshAudit.Entry(
             at: now, action: .undone, familySearchID: undone.familySearchID, person: personName,
@@ -403,8 +487,8 @@ final class PersonRefreshCenter: ObservableObject {
     /// After an Apply: the overlay changed.
     func noteApplied() { reloadRefreshedIDs() }
 
-    func undoLast(familySearchID: String, personName: String) -> String {
-        let message = PersonRefreshCoordinator.undoLast(
+    func undoLast(familySearchID: String, personName: String) async -> String {
+        let message = await PersonRefreshCoordinator.undoLast(
             familySearchID: familySearchID, personName: personName,
             overlayStore: overlayStore, journalDirectory: root)
         reloadRefreshedIDs()
