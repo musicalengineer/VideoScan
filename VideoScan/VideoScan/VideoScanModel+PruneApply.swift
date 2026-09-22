@@ -89,6 +89,19 @@
 //      copies to Trash" with the ACTUAL count moved — and `override` when
 //      the choice went against the bar ("2 copies — ★★★ / Important — no
 //      cloud or off-site copy attested").
+//   7. THE COPIES YOU LEFT UNCHECKED ARE STILL THERE (2026-09-22, when a
+//      second "Move to Trash" batch began to QUEUE behind the first). The
+//      confirmation says "so is every copy you left unchecked". The fresh
+//      plan drops a purged copy and elects a new keeper, so without this a
+//      batch whose working copy was moved by the batch before it (or went
+//      missing, or went offline) would take the family down to the archive
+//      copy alone — which is not what the person confirmed. Any unchecked
+//      copy that is gone from the fresh plan, or is now missing or offline,
+//      holds every checked copy in its family, named. Judged on the fresh
+//      plan (the catalog and a real stat), never on what a queue says.
+//      A checked copy the batch before already moved is skipped and named
+//      ("already moved to the Trash by the batch before") — never read,
+//      never counted twice, not a hold.
 // The PrunePlan rules themselves (fixity-verified archive copy, online,
 // not a pair member, never inside the archive) are PrunePlan.compute's,
 // unchanged. Unchecked copies are NEVER moved, even when the plan's
@@ -120,9 +133,13 @@ extension VideoScanModel {
         var held: [String] = []
         /// "filename — error" for copies the Trash routine could not move.
         var failed: [String] = []
+        /// Checked here, but the batch before in the queue already moved
+        /// them — skipped, never read, never counted as moved here.
+        var movedByEarlierBatch = 0
 
         var summary: String {
             var parts = ["Moved \(trashed) cop\(trashed == 1 ? "y" : "ies") to the Trash (\(MediaBytes.display(trashedBytes)))"]
+            if movedByEarlierBatch > 0 { parts.append("\(movedByEarlierBatch) already moved by the batch before") }
             if overrideCount > 0 { parts.append("\(overrideCount) against the bar you set") }
             if verified > 0 { parts.append("\(verified) checked byte-for-byte against the archive") }
             if archiveReads > 0 { parts.append("\(archiveReads) archive cop\(archiveReads == 1 ? "y" : "ies") read in full") }
@@ -231,6 +248,59 @@ extension VideoScanModel {
         return (go, held)
     }
 
+    /// Row reason for a checked copy the batch before in the queue moved.
+    nonisolated static let pruneMovedEarlierReason = "already moved to the Trash by the batch before"
+
+    /// Rule 7 (see the header): the overlap with batches that ran before
+    /// this one, judged on the FRESH plan at this batch's turn.
+    ///   A. a checked copy in `movedEarlier` leaves `go` and `held` and is
+    ///      returned in `movedEarlier` — skipped, named, never read;
+    ///   B. a shown family in which a copy the person LEFT UNCHECKED (a
+    ///      checkable row then) is now gone from the fresh plan, missing or
+    ///      offline holds every checked copy in it — the survivors the
+    ///      confirmation promised are not all there any more.
+    /// Pure, so it is table-testable. O(rows in the shown families).
+    nonisolated static func pruneOverlap(shown: PrunePlan, selected: Set<UUID>, fresh: PrunePlan,
+                                         go: [PrunePlan.CopyRef], held: [PruneHeld], movedEarlier: Set<UUID>)
+        -> (go: [PrunePlan.CopyRef], held: [PruneHeld], movedEarlier: [PrunePlan.CopyRef]) {
+        var freshRows: [UUID: PrunePlan.CopyRow] = [:]
+        for family in fresh.families { for row in family.rows { freshRows[row.id] = row } }
+
+        // A. Moved by the batch before — out of the way first, so it is
+        // never mistaken for a hold (or read) below.
+        var already: [PrunePlan.CopyRef] = []
+        let alreadyIDs = selected.intersection(movedEarlier)
+        if !alreadyIDs.isEmpty {
+            for family in shown.families {
+                for row in family.rows where alreadyIDs.contains(row.id) { already.append(row.copy) }
+            }
+        }
+        var go = go.filter { !alreadyIDs.contains($0.id) }
+        var held = held.filter { !alreadyIDs.contains($0.copy.id) }
+
+        // B. The unchecked survivors must all still be there.
+        for family in shown.families {
+            let members = Set(family.rows.map(\.id))
+            guard go.contains(where: { members.contains($0.id) }) else { continue }
+            var gone: (row: PrunePlan.CopyRow, why: String)?
+            for row in family.rows where row.checkable && !selected.contains(row.id) {
+                guard let now = freshRows[row.id] else {
+                    gone = (row, movedEarlier.contains(row.id) ? "was moved to the Trash by the batch before"
+                                                               : "is no longer in the catalog")
+                    break
+                }
+                if now.role == .kept(.fileMissing) { gone = (row, "is no longer on disk"); break }
+                if now.role == .kept(.offline) { gone = (row, "is on a drive that is no longer connected"); break }
+            }
+            guard let gone else { continue }
+            let reason = "\(gone.row.copy.filename), a copy you left unchecked to keep, \(gone.why) — "
+                + "the list you confirmed has changed, so nothing in this family is moved"
+            held += go.filter { members.contains($0.id) }.map { PruneHeld(copy: $0, reason: reason) }
+            go.removeAll { members.contains($0.id) }
+        }
+        return (go, held, already)
+    }
+
     /// One copy's on-disk safety check, as plain paths and sizes so it can
     /// run off the main actor.
     struct PruneDiskCheck: Sendable {
@@ -293,6 +363,8 @@ extension VideoScanModel {
         let fresh: PrunePlan
         let items: [PruneItem]
         let held: [PruneHeldCopy]
+        /// Checked copies the batch before in the queue already moved.
+        var movedEarlier: [PruneHeldCopy] = []
         static let nothing = PrunePrepared(fresh: .empty, items: [], held: [])
     }
 
@@ -309,8 +381,10 @@ extension VideoScanModel {
     /// The fresh plan, the person's checks against it, and the cheap
     /// stat checks → the copies to work through, in the order the sheet
     /// listed them, plus what is held before any byte is read.
+    /// `movedEarlier` = copies the batches before this one in the queue
+    /// moved (rule 7). Called at the batch's TURN, never at enqueue.
     func preparePrune(shown: PrunePlan, selected: Set<UUID>, recordIDs: [UUID],
-                      options: PrunePlan.Options) async -> PrunePrepared {
+                      options: PrunePlan.Options, movedEarlier: Set<UUID> = []) async -> PrunePrepared {
         guard !isReadOnly else {
             log("Archived — what next?: Apply refused — read-only viewer mode.")
             return .nothing
@@ -320,7 +394,13 @@ extension VideoScanModel {
             return .nothing
         }
         let fresh = await prunePlan(for: recordIDs, options: options)
-        let (go, changed) = Self.pruneTargets(shown: shown, selected: selected, fresh: fresh)
+        let targets = Self.pruneTargets(shown: shown, selected: selected, fresh: fresh)
+        let (go, changed, already) = Self.pruneOverlap(shown: shown, selected: selected, fresh: fresh,
+                                                       go: targets.go, held: targets.held,
+                                                       movedEarlier: movedEarlier)
+        let movedBefore = already.map { PruneHeldCopy(copyID: $0.id, filename: $0.filename, sizeBytes: $0.sizeBytes,
+                                                      reason: Self.pruneMovedEarlierReason) }
+        for m in movedBefore { log("Archived — what next?: skipped \(m.line)") }
         var held = changed.map { PruneHeldCopy(copyID: $0.copy.id, filename: $0.copy.filename,
                                                sizeBytes: $0.copy.sizeBytes, reason: $0.reason) }
 
@@ -375,7 +455,7 @@ extension VideoScanModel {
             return itemOf[c.copyID]
         }
         for h in held { log("Archived — what next?: held back \(h.line)") }
-        return PrunePrepared(fresh: fresh, items: items, held: held)
+        return PrunePrepared(fresh: fresh, items: items, held: held, movedEarlier: movedBefore)
     }
 
     // MARK: Step 2: one copy

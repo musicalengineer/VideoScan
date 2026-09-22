@@ -411,8 +411,11 @@ struct ArchivedWhatNextSheet: View {
             $0.startPruneApply(shown: shown, selected: selected, recordIDs: request.recordIDs,
                                options: options, batchID: request.batchID, model: model)
         }
-        // The center refuses a second batch while one runs (and a
-        // read-only viewer): say so and stay open — nothing was started.
+        // A second batch while one runs is QUEUED, not refused (Rick
+        // 2026-09-22: "blocked UI … goes against best practices") — its
+        // row waits in Media File Operations and the sheet closes like any
+        // other start. A refusal can still come from a safety gate; then
+        // say so and stay open — nothing was started.
         if job.wasRefused {
             let why: String
             if case .failed(let message) = job.state { why = message } else { why = "refused" }
@@ -420,7 +423,11 @@ struct ArchivedWhatNextSheet: View {
             applying = false
             return
         }
-        model.log("Archived — what next?: Trashing \(n) cop\(n == 1 ? "y" : "ies") in Media File Operations — each is checked byte-for-byte against the archive first")
+        if job.isQueued {
+            model.log("Archived — what next?: \(n) cop\(n == 1 ? "y" : "ies") queued in Media File Operations — starts when the batch before finishes, and each is checked then")
+        } else {
+            model.log("Archived — what next?: Trashing \(n) cop\(n == 1 ? "y" : "ies") in Media File Operations — each is checked byte-for-byte against the archive first")
+        }
         dismiss()
     }
 
