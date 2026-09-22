@@ -319,6 +319,16 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
         return result.outcome?.needsRecompile ?? []
     }
 
+    /// The graph already decoded in this process, or nil — never loads and
+    /// never waits: if a load holds the lock right now the answer is nil
+    /// (the voice's pronunciation guard asks from the main actor and must
+    /// not block behind a 40k-person decode; GH #187).
+    func cachedGraph() -> (graph: GedcomFamilyGraph, token: UUID)? {
+        guard lock.try() else { return nil }
+        defer { lock.unlock() }
+        return entry.map { ($0.graph, $0.token) }
+    }
+
     /// Forget the cached graph (tests; or after an in-app ingest when the
     /// caller wants the next turn to see it without waiting for a key miss —
     /// the pointer change already forces one).

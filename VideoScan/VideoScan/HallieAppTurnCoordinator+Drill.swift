@@ -229,6 +229,14 @@ extension HallieAppTurnCoordinator {
         let phonemes = explicit ?? derivePhonemes(
             alternatives: alternatives, hint: hint,
             gold: dependencies.loadPronunciationGold())
+        // The write-time guard (GH #187), shared by one-off, drill and
+        // picker teaches: no everyday word unless it is somebody's name, no
+        // bare Roman numeral, nothing empty. Nothing is written on refusal.
+        if let refusal = HalliePronunciationGuard.refusal(
+            written: word, spoken: saidAs, phonemes: phonemes,
+            isKnownName: { guardKnownNames(dependencies).contains($0) }) {
+            return .failure(refusal)
+        }
         do {
             try dependencies.recordPronunciation(PronunciationWrite(word: word, saidAs: saidAs, phonemes: phonemes,
                                                                     target: target, origin: origin))

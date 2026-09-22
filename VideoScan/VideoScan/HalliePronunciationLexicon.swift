@@ -332,20 +332,62 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
     /// ties between records that claim the same word. A viewer passes
     /// `allowDefaultWrite: false`; a missing file then contributes shipped
     /// defaults without creating the file or any parent directory.
+    ///
+    /// The LEARNED layers (person records, the file) pass through
+    /// `speakable` first (GH #187): an entry for an everyday word that is
+    /// nobody's name, a bare Roman numeral, or an empty spoken form is left
+    /// out of what Hallie says — and a lower layer's entry for the same word
+    /// takes over — but the file itself is never touched. `knownNames`
+    /// defaults to the live source (CyberBrain + the tree if already in
+    /// memory), consulted only when a learned entry is on the closed list.
     static func resolved(
         fileURL: URL = defaultFileURL,
         cyberBrainRootURL: URL? = defaultCyberBrainRootURL,
         subject: String? = nil,
         allowDefaultWrite: Bool = true,
+        knownNames: HallieKnownNames? = nil,
+        ignoredLog: HalliePronunciationGuard.OnceLog = .shared,
         log: LogSink? = appLog
     ) -> HalliePronunciationLexicon {
-        var layers: [HalliePronunciationLexicon] = []
+        var learned: [HalliePronunciationLexicon] = []
         if let root = cyberBrainRootURL {
-            layers.append(PersonPronunciationCache.shared.layer(rootURL: root, subject: subject, log: log))
+            learned.append(PersonPronunciationCache.shared.layer(rootURL: root, subject: subject, log: log))
         }
-        layers.append(load(from: fileURL, allowDefaultWrite: allowDefaultWrite, log: log))
-        layers.append(shipped)
-        return merged(layers)
+        learned.append(load(from: fileURL, allowDefaultWrite: allowDefaultWrite, log: log))
+        // Lazy: the tree/CyberBrain name set is built only if some learned
+        // entry is actually an everyday word (≈ a memoised thunk).
+        var names = knownNames
+        let isKnownName: (String) -> Bool = { word in
+            if names == nil {
+                names = HallieKnownNamesLive.shared.current(cyberBrainRootURL: cyberBrainRootURL, log: log)
+            }
+            return names?.contains(word) ?? false
+        }
+        let guarded = learned.map { $0.speakable(isKnownName: isKnownName, ignoredLog: ignoredLog, log: log) }
+        return merged(guarded + [shipped])
+    }
+
+    /// This table without the entries HalliePronunciationGuard refuses,
+    /// each refusal logged once per launch. Provenance is kept.
+    func speakable(
+        isKnownName: (String) -> Bool,
+        ignoredLog: HalliePronunciationGuard.OnceLog = .shared,
+        log: LogSink? = appLog
+    ) -> HalliePronunciationLexicon {
+        var kept: [Entry] = []
+        var sources: [String: Source] = [:]
+        for entry in entries {
+            if let refusal = HalliePronunciationGuard.refusal(
+                written: entry.written, spoken: entry.spoken, phonemes: entry.phonemes,
+                isKnownName: isKnownName) {
+                ignoredLog.note(refusal, entry: entry, log: log)
+                continue
+            }
+            kept.append(entry)
+            let wordKey = Self.key(entry.written)
+            sources[wordKey] = sourcesByWord[wordKey] ?? .file
+        }
+        return kept.count == entries.count ? self : HalliePronunciationLexicon(entries: kept, sources: sources)
     }
 
     /// The user's table, or the shipped default when the file does not exist
@@ -438,6 +480,13 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
             throw CocoaError(.fileWriteInvalidFileName)
         }
         let said = spoken?.trimmingCharacters(in: .whitespaces) ?? ""
+        // Last line of defence under every teach path (GH #187): a bare
+        // Roman numeral is never a respelling, phonemes or not — those were
+        // derived FROM the numeral. (The common-word test needs the name
+        // list, so it runs in the teach paths, which hold it.)
+        if let first = alternatives(said).first, isRegnalNumeralRespelling(first) {
+            throw HalliePronunciationGuard.Refusal.numeral(word: word, spoken: first)
+        }
         try setAsideIfMalformed(url, log: log)
         let current = load(from: url, log: log)
         var kept = current.entries.filter { key($0.written) != key(word) }
@@ -499,6 +548,30 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
             .joined(separator: alternativesSeparator)
     }
 
+    /// A historical teach stored Edward → III, replacing the NAME after
+    /// the suffix had already become "the Third". These common multi-letter
+    /// suffixes are not respellings. Keep single-letter sounds (I, V, X),
+    /// ordinary stressed syllables (MIX, LIV), and phoneme strings separate.
+    /// Upper-case only, so "Vi" (VY, for Violet) is still a respelling;
+    /// compatibility mapping folds the Unicode numeral "Ⅲ" to "III", and
+    /// trailing sentence punctuation ("III.") is ignored.
+    static func isRegnalNumeralRespelling(_ text: String) -> Bool {
+        let token = text.precomposedStringWithCompatibilityMapping
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?\"'\u{201C}\u{201D}"))
+        return ["II", "III", "IV", "VI", "VII", "VIII", "IX"].contains(token)
+    }
+
+    /// What an entry says on the respelling path: its first alternative;
+    /// the written word itself when that is empty or a bare numeral, so a
+    /// table built in code (not through `resolved`) still never speaks one.
+    private static func speechRespelling(for entry: Entry) -> String {
+        guard let said = alternatives(entry.spoken).first, !isRegnalNumeralRespelling(said) else {
+            return entry.written
+        }
+        return said
+    }
+
     // MARK: - Applying
 
     /// Substitute every entry on whole-word boundaries, case-insensitively.
@@ -510,7 +583,13 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
         var spoken = Self.expandingRegnalNumerals(text)
         var fired: [Entry] = []
         for entry in entries {
-            let said = Self.alternatives(entry.spoken).first ?? entry.spoken
+            // A numeral entry is out entirely — its phonemes too, which were
+            // derived from the numeral (GH #187; `resolved` already drops it,
+            // this covers tables built directly).
+            if case .numeral? = HalliePronunciationGuard.refusal(
+                written: entry.written, spoken: entry.spoken, phonemes: entry.phonemes,
+                isKnownName: { _ in true }) { continue }
+            let said = Self.speechRespelling(for: entry)
             let replacement: String
             if style == .kokoro, let phonemes = entry.phonemes {
                 replacement = "[\(entry.written)](/\(phonemes)/)"
@@ -565,7 +644,7 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
     func strippingPhonemeLinks(_ text: String) -> String {
         Self.strippingPhonemeLinks(text) { written in
             entries.first { Self.key($0.written) == Self.key(written) }
-                .map { Self.alternatives($0.spoken).first ?? $0.spoken }
+                .map { Self.speechRespelling(for: $0) }
         }
     }
 
@@ -611,17 +690,32 @@ final class PersonPronunciationCache: @unchecked Sendable {
     private let lock = NSLock()
     private var stamp: Stamp?
     private var carriers: [CyberBrainPerson] = []
+    /// Name words of EVERY CyberBrain person (not just the carriers) — the
+    /// voice guard's CyberBrain share of "is this word somebody's name"
+    /// (GH #187). A few short strings per person.
+    private var names = HallieKnownNames()
 
     func layer(rootURL: URL, subject: String? = nil, log: LogSink?) -> HalliePronunciationLexicon {
+        .personLayer(people: refreshed(rootURL: rootURL, log: log).carriers, subject: subject, log: log)
+    }
+
+    /// The CyberBrain's known names, from the same mtime-keyed read.
+    func knownNames(rootURL: URL, log: LogSink?) -> HallieKnownNames {
+        refreshed(rootURL: rootURL, log: log).names
+    }
+
+    private func refreshed(rootURL: URL, log: LogSink?) -> (carriers: [CyberBrainPerson], names: HallieKnownNames) {
         let file = rootURL.appendingPathComponent(CyberBrainLoader.defaultFilename, isDirectory: false)
         let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         let now = Stamp(path: file.path, modified: values?.contentModificationDate, size: values?.fileSize)
-        let people: [CyberBrainPerson] = lock.withLock {
-            if now == stamp { return carriers }
+        return lock.withLock {
+            if now == stamp { return (carriers, names) }
             var loaded: [CyberBrainPerson] = []
+            var known = HallieKnownNames()
             do {
                 let archive = try CyberBrainLoader(rootURL: rootURL).load()
                 loaded = archive.people.filter { $0.pronunciations != nil }
+                known = HallieKnownNames.from(cyberBrainPeople: archive.people)
             } catch CyberBrainError.missingArchive {
                 // No brain yet: nothing person-level to say.
             } catch {
@@ -629,9 +723,9 @@ final class PersonPronunciationCache: @unchecked Sendable {
             }
             stamp = now
             carriers = loaded
-            return loaded
+            names = known
+            return (loaded, known)
         }
-        return .personLayer(people: people, subject: subject, log: log)
     }
 
     /// Tests and the inspector call this after a write so the next

@@ -137,7 +137,9 @@ final class HallieSpeaker: NSObject, ObservableObject {
         lexicon: HalliePronunciationLexicon = .shipped,
         phonemeLinks: Bool = false
     ) -> String {
-        var spoken = text
+        // Arrows first (2026-09-21): a lineage chain is spoken as "child of"
+        // / "whose mother is", any other arrow as "to" — never the symbol.
+        var spoken = HallieSpokenArrows.spoken(text)
         let suffixes = [(#"\bJr\.?(?=[\s,;:!?)]|['’]s\b|$)"#, "Junior"),
                         (#"\bSr\.?(?=[\s,;:!?)]|['’]s\b|$)"#, "Senior")]
         for (pattern, replacement) in suffixes {
@@ -224,13 +226,19 @@ final class HallieSpeaker: NSObject, ObservableObject {
         subject: String? = nil,
         fileURL: URL = HalliePronunciationLexicon.defaultFileURL,
         cyberBrainRootURL: URL? = HalliePronunciationLexicon.defaultCyberBrainRootURL,
-        viewerMode: Bool = ViewerModeCenter.shared.isViewer
+        viewerMode: Bool = ViewerModeCenter.shared.isViewer,
+        knownNames: HallieKnownNames? = nil,
+        ignoredLog: HalliePronunciationGuard.OnceLog = .shared,
+        log: LogSink? = appLog
     ) -> HalliePronunciationLexicon {
         HalliePronunciationLexicon.resolved(
             fileURL: fileURL,
             cyberBrainRootURL: cyberBrainRootURL,
             subject: subject,
-            allowDefaultWrite: !viewerMode)
+            allowDefaultWrite: !viewerMode,
+            knownNames: knownNames,
+            ignoredLog: ignoredLog,
+            log: log)
     }
 
     /// `subject` is who the text is about (a CyberBrain id or name), so a
