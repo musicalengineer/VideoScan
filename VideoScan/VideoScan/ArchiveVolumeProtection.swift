@@ -11,12 +11,22 @@
 // Discard and "Archived — what next?" → Move to Trash.
 //
 // This file is the ONE rule: "is this path on the Master Archive's
-// volume?" — answered from a snapshot taken once per verb (a handful of
-// mount-table / volume-UUID reads, never one per record), so the question
-// itself is a couple of string operations and is safe to ask of 100k
-// records. The model's `bulkDeleteRefusal` / `excludingMasterArchiveFiles`
+// volume?" — answered from a snapshot (a handful of mount-table /
+// volume-UUID reads, never one per record), so the question itself is a
+// couple of string operations and is safe to ask of 100k records. The
+// model's `bulkDeleteRefusal` / `excludingMasterArchiveFiles`
 // (VideoScanModel+MasterArchive.swift) are the only callers that turn it
 // into a refusal; every verb that removes files goes through them.
+//
+// Where the snapshot comes from (2026-09-22 follow-up, QA MAJOR 2): the
+// model holds ONE cached snapshot, rebuilt OFF the main thread when the
+// designation changes and on every mount / unmount / rename
+// (VideoScanModel+ArchiveVolumeSnapshot.swift). Until a fresh one lands,
+// callers get `provisional(designation:)` — built with NO disk access —
+// which refuses whatever it cannot prove (refuse over guess). The build
+// itself (`make`) reads volume UUIDs and must never run on the main
+// thread: with FamilyArchive offline it reads every mounted root, and a
+// hung SMB server there used to beachball the app (GH #104 class).
 //
 // Identity, strongest first (the designation's own rules):
 //   1. the volume UUID captured at Initialize — a renamed or remounted
@@ -25,7 +35,8 @@
 //      different disk is mounted there (refuse over guess).
 // When a UUID is recorded but the archive volume cannot be found mounted,
 // a /Volumes path whose drive cannot be PROVEN to be another volume is
-// refused ("unprovable") rather than guessed about.
+// refused ("unprovable") rather than guessed about. Network mounts are
+// never read (a hung server) and so are never proven: they stay refused.
 //
 // An archive designated on the boot disk (a folder, not a /Volumes
 // volume — what the test sandboxes do) protects that FOLDER, not the
@@ -65,35 +76,31 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
     /// Lower-cased mounted /Volumes roots whose UUID was read and differs.
     let provenOtherRoots: Set<String>
 
-    // MARK: Building (once per verb)
+    // MARK: Building
 
-    /// Mounted /Volumes roots. Task-local test seam (never process-global).
+    /// Mounted LOCAL /Volumes roots — network mounts are left out so a
+    /// hung server is never read. Task-local test seam (never
+    /// process-global).
     @TaskLocal static var mountedVolumeRootsProbe: @Sendable () -> [String] = {
-        VolumeReachability.currentMountedRoots().filter { $0.hasPrefix("/Volumes/") }.sorted()
+        VolumeReachability.currentLocalMountedRoots().filter { $0.hasPrefix("/Volumes/") }.sorted()
     }
 
-    /// nil when no Master Archive is designated (nothing beyond the old
-    /// tree rule applies). `probe` = the volume-UUID read
-    /// (`MasterArchiveDesignation.volumeUUID(forPath:)` in production).
+    /// The full build: reads the designated root's volume UUID and, when
+    /// the archive is not found there, every mounted local root's. DISK
+    /// I/O — call it off the main thread (the model's cache does).
+    /// nil when no Master Archive is designated. `probe` = the volume-UUID
+    /// read (`MasterArchiveDesignation.volumeUUID(forPath:)` in production).
     static func make(designation d: MasterArchiveDesignation?,
                      mountedRoots: () -> [String] = { mountedVolumeRootsProbe() },
                      probe: (String) -> String? = { MasterArchiveDesignation.volumeUUID(forPath: $0) })
         -> ArchiveVolumeProtection? {
         guard let d else { return nil }
+        if let exact = withoutDiskAccess(d) { return exact }
+        // Only a /Volumes archive with a recorded UUID reaches here.
         let target = canonical(d.targetPath)
-        guard let targetRoot = externalVolumeRoot(of: target) else {
-            // Boot-disk archive: the designated folder only.
-            return ArchiveVolumeProtection(label: (target as NSString).lastPathComponent,
-                                           archiveRoots: [], protectedFolder: target,
-                                           expectedUUID: d.volumeUUID, isResolved: true,
-                                           provenOtherRoots: [])
-        }
+        guard let targetRoot = externalVolumeRoot(of: target), let uuid = d.volumeUUID else { return nil }
         let label = String(targetRoot.dropFirst("/Volumes/".count))
         var roots: Set<String> = [targetRoot.lowercased()]
-        guard let uuid = d.volumeUUID else {
-            return ArchiveVolumeProtection(label: label, archiveRoots: roots, protectedFolder: nil,
-                                           expectedUUID: nil, isResolved: true, provenOtherRoots: [])
-        }
         // The usual case costs ONE read: the designated root is mounted
         // and carries the UUID, so no other volume can.
         if probe(targetRoot) == uuid {
@@ -115,6 +122,38 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
         }
         return ArchiveVolumeProtection(label: label, archiveRoots: roots, protectedFolder: nil,
                                        expectedUUID: uuid, isResolved: resolved, provenOtherRoots: others)
+    }
+
+    /// The snapshot to use while the real one is being (re)built: NO disk
+    /// access at all, so it is safe on the main thread. Exact for a
+    /// boot-disk archive and for a /Volumes archive without a UUID (they
+    /// never needed the disk); for a /Volumes archive WITH a UUID it
+    /// protects the designated root and refuses every other /Volumes path
+    /// as unprovable — refuse over guess, never "clear" by default.
+    static func provisional(designation d: MasterArchiveDesignation?) -> ArchiveVolumeProtection? {
+        guard let d else { return nil }
+        if let exact = withoutDiskAccess(d) { return exact }
+        let target = canonical(d.targetPath)
+        guard let targetRoot = externalVolumeRoot(of: target) else { return nil }
+        return ArchiveVolumeProtection(label: String(targetRoot.dropFirst("/Volumes/".count)),
+                                       archiveRoots: [targetRoot.lowercased()], protectedFolder: nil,
+                                       expectedUUID: d.volumeUUID, isResolved: false, provenOtherRoots: [])
+    }
+
+    /// The designations whose snapshot needs no disk read, else nil.
+    private static func withoutDiskAccess(_ d: MasterArchiveDesignation) -> ArchiveVolumeProtection? {
+        let target = canonical(d.targetPath)
+        guard let targetRoot = externalVolumeRoot(of: target) else {
+            // Boot-disk archive: the designated folder only.
+            return ArchiveVolumeProtection(label: (target as NSString).lastPathComponent,
+                                           archiveRoots: [], protectedFolder: target,
+                                           expectedUUID: d.volumeUUID, isResolved: true,
+                                           provenOtherRoots: [])
+        }
+        guard d.volumeUUID == nil else { return nil }
+        return ArchiveVolumeProtection(label: String(targetRoot.dropFirst("/Volumes/".count)),
+                                       archiveRoots: [targetRoot.lowercased()], protectedFolder: nil,
+                                       expectedUUID: nil, isResolved: true, provenOtherRoots: [])
     }
 
     // MARK: Asking (per record — string work only)
@@ -139,7 +178,8 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
 
     /// The last word, immediately before a file's own trash/remove, off
     /// the main actor: the snapshot's verdict, then a fresh read of the
-    /// file's OWN volume UUID (a volume mounted since the snapshot).
+    /// file's OWN volume UUID (a volume mounted since the snapshot, or a
+    /// symlinked / custom mount path whose text hides the volume).
     func verdictAtRemoval(path: String, probe: (String) -> String?) -> Verdict {
         let v = verdict(forPath: path)
         guard v == .clear else { return v }
@@ -175,5 +215,46 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
             return canonical(path)
         }
         return path
+    }
+}
+
+// MARK: - The removal-time check, packaged to cross to a disk thread
+
+/// A snapshot plus the volume-UUID probe, captured on the main actor and
+/// handed to the thread that performs a removal. Task-local seams do not
+/// follow a `Task.detached`, so the probe is captured HERE, where they
+/// are visible, not looked up on the disk thread.
+///
+/// `refusalNote(forPath:)` is the exact wording the bulk verbs use
+/// (`VideoScanModel.bulkDeleteRefusalNote`), so a Delete Duplicates row,
+/// a Junk row and a Transcode "kept beside" line read the same.
+struct ArchiveRemovalCheck: Sendable {
+    let protection: ArchiveVolumeProtection
+    let probe: @Sendable (String) -> String?
+    /// Captured while the model's snapshot was being rebuilt (the
+    /// provisional one). Its "unprovable" is then TRANSIENT — the caller
+    /// leaves the file alone and must not record a refusal (QA 2026-09-22).
+    var isProvisional: Bool = false
+
+    /// nil = may be removed; else the note, and whether the refusal is
+    /// only transient (provisional snapshot + unprovable).
+    func refusal(forPath path: String) -> (note: String, transient: Bool)? {
+        let verdict = protection.verdictAtRemoval(path: path, probe: probe)
+        guard let note = Self.note(verdict, label: protection.label) else { return nil }
+        return (note, isProvisional && verdict == .unprovable)
+    }
+
+    private static func note(_ verdict: ArchiveVolumeProtection.Verdict, label: String) -> String? {
+        switch verdict {
+        case .clear: return nil
+        case .onArchiveVolume: return VideoScanModel.bulkDeleteRefusalNote(.archiveVolume, volume: label)
+        case .unprovable: return VideoScanModel.bulkDeleteRefusalNote(.archiveVolumeUnprovable, volume: label)
+        }
+    }
+
+    /// nil = this file may be removed; else why not. DISK I/O (one UUID
+    /// read of `path`'s own volume) — call it off the main thread.
+    func refusalNote(forPath path: String) -> String? {
+        refusal(forPath: path)?.note
     }
 }

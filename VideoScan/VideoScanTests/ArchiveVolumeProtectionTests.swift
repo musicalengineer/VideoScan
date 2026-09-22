@@ -12,8 +12,9 @@
 // (Under Construction) and "Archived — what next?" → Move to Trash.
 //
 // Now the WHOLE volume that hosts the Master Archive is protected from
-// every verb that removes files. Catalog-only verbs (Remove from Catalog,
-// Tidy) keep the tree-only rule — they never touch the disk.
+// every verb that removes files — and, since Rick's second ruling the
+// same day ("For now we won't Remove anything from FamilyArchive"), from
+// the catalog-only verbs too (Remove, Remove from Catalog, Tidy Catalog).
 //
 // Five dimensions (CLAUDE.md):
 //   Logic     — every disk verb refuses a file at <volume>/MoviesExpansion
@@ -307,17 +308,19 @@ struct ArchiveVolumeProtectionTests {
 
 /// Injects the mount table and the volume-UUID probe for one scope
 /// (task-local — never process-global; parallel suites cannot see it).
+/// A path's UUID is its /Volumes root's (the real probe reads the file's
+/// own volume the same way). Async since 2026-09-22: the snapshot is built
+/// OFF the main thread, so identity tests await a forced rebuild inside the
+/// probe scope — the task-local probes follow the awaited build.
 @MainActor
 private func withVolumes<T>(mounted: [String], uuids: [String: String],
-                            _ body: () throws -> T) rethrows -> T {
-    try ArchiveVolumeProtection.$mountedVolumeRootsProbe.withValue({ mounted }) {
-        try MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
-            // A path's UUID is its /Volumes root's (the real probe reads
-            // the file's own volume the same way).
+                            _ body: () async throws -> T) async rethrows -> T {
+    try await ArchiveVolumeProtection.$mountedVolumeRootsProbe.withValue({ mounted }) {
+        try await MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
             guard let root = ArchiveVolumeProtection.externalVolumeRoot(of: path) else { return "BOOT-UUID" }
             return uuids[root]
         }) {
-            try body()
+            try await body()
         }
     }
 }
@@ -326,11 +329,12 @@ private func withVolumes<T>(mounted: [String], uuids: [String: String],
 @MainActor
 struct ArchiveVolumeProtectionIdentityTests {
 
-    @Test func renamedMountIsStillProtectedByUUID() {
+    @Test func renamedMountIsStillProtectedByUUID() async {
         let model = isolatedModel()
         designateFamilyArchive(model, uuid: "UUID-ARCH")
-        withVolumes(mounted: ["/Volumes/FamilyArchive 1", "/Volumes/CrucialX10"],
-                    uuids: ["/Volumes/FamilyArchive 1": "UUID-ARCH", "/Volumes/CrucialX10": "UUID-X10"]) {
+        await withVolumes(mounted: ["/Volumes/FamilyArchive 1", "/Volumes/CrucialX10"],
+                          uuids: ["/Volumes/FamilyArchive 1": "UUID-ARCH", "/Volumes/CrucialX10": "UUID-X10"]) {
+            await model.refreshArchiveVolumeSnapshot(force: true)
             let recs = [record("/Volumes/FamilyArchive 1/MoviesExpansion/a.mov"),
                         record("/Volumes/FamilyArchive/MoviesExpansion/a.mov"),   // stale path: still refused
                         record("/Volumes/CrucialX10/a.mov"),
@@ -344,13 +348,14 @@ struct ArchiveVolumeProtectionIdentityTests {
         }
     }
 
-    @Test func unresolvableDesignationRefusesWhatItCannotProve() {
+    @Test func unresolvableDesignationRefusesWhatItCannotProve() async {
         let model = isolatedModel()
         designateFamilyArchive(model, uuid: "UUID-ARCH")
         // The archive volume is NOT mounted anywhere.
-        withVolumes(mounted: ["/Volumes/CrucialX10", "/Volumes/NoUUID"],
-                    uuids: ["/Volumes/CrucialX10": "UUID-X10"]) {
-            let snap = model.archiveVolumeProtection()
+        await withVolumes(mounted: ["/Volumes/CrucialX10", "/Volumes/NoUUID"],
+                          uuids: ["/Volumes/CrucialX10": "UUID-X10"]) {
+            let snap = await model.refreshArchiveVolumeSnapshot(force: true)
+            #expect(snap == model.archiveVolumeProtection(), "the verbs read the cached build")
             #expect(snap?.isResolved == false)
             let x10 = record("/Volumes/CrucialX10/a.mov")          // proven another volume
             let noUUID = record("/Volumes/NoUUID/a.mov")           // cannot prove
@@ -405,14 +410,18 @@ struct ArchiveVolumeProtectionIdentityTests {
         #expect(s?.verdict(forPath: "/Users/rickb/ArchiveHereToo/a.mov") == .clear, "component-wise, not a string prefix")
     }
 
-    @Test func catalogOnlyVerbsKeepTheTreeOnlyRule() {
+    /// Reversed by Rick's ruling, 2026-09-22: "For now we won't Remove
+    /// anything from FamilyArchive." Remove from Catalog used to keep the
+    /// tree-only rule (it never touches the disk); now the whole volume is
+    /// refused to it too. See CatalogRemovalArchiveVolumeTests.
+    @Test func catalogRemovalVerbsRefuseTheWholeArchiveVolume() {
         let model = isolatedModel()
         designateFamilyArchive(model)
-        let vol = record(onVolume), tree = record(inTree)
-        model.records = [vol, tree]
-        // Remove from Catalog never touches the disk: allowed off-tree…
-        #expect(model.purgeRecords(ids: [vol.id, tree.id]) == 1)
-        #expect(vol.purgedAt != nil && tree.purgedAt == nil, "…and the tree stays refused")
+        let vol = record(onVolume), tree = record(inTree), other = record(elsewhere)
+        model.records = [vol, tree, other]
+        #expect(model.purgeRecords(ids: [vol.id, tree.id, other.id]) == 1)
+        #expect(vol.purgedAt == nil && tree.purgedAt == nil, "the volume and the tree both stay")
+        #expect(other.purgedAt != nil)
     }
 
     @Test func junkEngineReChecksTheFilesOwnVolumeAtTheMomentOfRemoval() async throws {
@@ -464,7 +473,16 @@ struct ArchiveVolumeProtectionSourceSensor {
     ///                                     removal-time volume re-check
     ///   VideoScanModel+Workbench.swift   (Discard) — choke point
     ///   SignatureVerification.swift      (Delete Duplicates) — behind
-    ///                                     authorizeDuplicateDeletion
+    ///                                     authorizeDuplicateDeletion + the
+    ///                                     removal-time volume re-check
+    /// and one that may Trash a file the USER chose to replace:
+    ///   DerivativeOutputPublish.swift    (Transcode "Replace") — only
+    ///                                     after the new output exists, only
+    ///                                     to the Trash, never on the archive
+    ///                                     volume (bulkDeleteRefusal + UUID)
+    /// Counts are EXACT (2026-09-22 follow-up): a site that disappears must
+    /// be taken off the list too, so the list never silently grows slack
+    /// that a new, unreviewed site could hide in.
     /// A NEW call site, or more of them in a file, fails here: if it can
     /// remove a catalog record's file, route it through
     /// `excludingMasterArchiveFiles` / `bulkDeleteRefusal` first; then
@@ -477,7 +495,11 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/BundleImporter.swift": 2, "VideoScan/CaptionRunner.swift": 2,
         "VideoScan/CatalogStore.swift": 1, "VideoScan/CatalogSync.swift": 3,
         "VideoScan/CatalogWriteError.swift": 1, "VideoScan/CleanupJob.swift": 4,
-        "VideoScan/CouplePortrait.swift": 2, "VideoScan/FamilyAssetStore.swift": 2,
+        "VideoScan/CouplePortrait.swift": 2,
+        // trashItem (Replace, the user's choice, never on the archive volume)
+        // + removeItem of this app's OWN stale `.vs-partial.` leftovers (sweep).
+        "VideoScan/DerivativeOutputPublish.swift": 2,
+        "VideoScan/FamilyAssetStore.swift": 2,
         "VideoScan/FamilySearchPullCoordinator.swift": 6, "VideoScan/FindPersonJob.swift": 1,
         "VideoScan/HallieNeuralSpeech.swift": 7, "VideoScan/HalliePhotoImport.swift": 1,
         "VideoScan/HalliePronunciationLexicon.swift": 1, "VideoScan/HallieWebPoster.swift": 3,
@@ -486,16 +508,76 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/POIProfileFileStore.swift": 2, "VideoScan/POIStorage.swift": 1,
         "VideoScan/PerceptualFingerprinter.swift": 1, "VideoScan/PersonEditSheet.swift": 1,
         "VideoScan/PersonFinderCompilation.swift": 7, "VideoScan/RebuildAudioJob.swift": 1,
-        "VideoScan/RecipeGenderAgeGate.swift": 1, "VideoScan/ReformatJob.swift": 8,
+        "VideoScan/RecipeGenderAgeGate.swift": 1,
+        // 8 → 5 (2026-09-22): the output-name pre-delete, the replacing
+        // publish and the delete-on-collision are gone; what remains
+        // removes this run's own partial after a stall / cancel / failure.
+        "VideoScan/ReformatJob.swift": 5,
         "VideoScan/RelocateEngine.swift": 1, "VideoScan/RescueFileCopier.swift": 3,
         "VideoScan/ReviewThumbnailRenderer.swift": 1, "VideoScan/ScanCheckpoint.swift": 1,
         "VideoScan/ScanJobsStorage.swift": 2, "VideoScan/SignatureVerification.swift": 2,
-        "VideoScan/TranscodeJob.swift": 7, "VideoScan/TrimJob.swift": 1,
+        // 7 → 4 (2026-09-22): no pre-delete of the output name or of a
+        // fixed-name partial; the four left remove this run's own
+        // uniquely named partial after a stall / cancel / failed encode.
+        "VideoScan/TranscodeJob.swift": 4,
+        "VideoScan/TrimJob.swift": 1,
         "VideoScan/VideoScanModel+Combine.swift": 3, "VideoScan/VideoScanModel+JunkDelete.swift": 2,
         "VideoScan/VideoScanModel+ProbeEngine.swift": 1, "VideoScan/VideoScanModel+Workbench.swift": 1,
         "VideoScanCore/AtomicFilePublish.swift": 2, "VideoScanCore/CyberBrainWriter.swift": 3,
         "VideoScanCore/FFmpegFrameRip.swift": 1, "VideoScanCore/FamilyGraphCompiledStore.swift": 5,
         "VideoScanCore/PreviewDiskCache.swift": 4,
+    ]
+
+    /// A second family of ways to make a file disappear, each with a
+    /// reviewed reason per site (2026-09-22 follow-up, QA MINOR 4).
+    struct Reviewed { let count: Int; let reason: String }
+
+    /// `moveItem(` on a line that names a trash folder — a hand-rolled
+    /// "delete" that the removal regex above cannot see.
+    static let reviewedTrashMoves: [String: Reviewed] = [
+        "VideoScan/BundleImporter.swift": Reviewed(count: 1, reason:
+            "a POI bundle import moves the EXISTING POI folder aside into the POI trash dir (never rm -rf) before swapping the new one in; POI data under App Support, never catalog media"),
+        "VideoScan/POIStorage.swift": Reviewed(count: 1, reason:
+            "restores a POI folder FROM the POI trash (the undo direction); POI data under App Support, not media"),
+    ]
+
+    /// `NSWorkspace.recycle(` — none today.
+    static let reviewedRecycles: [String: Reviewed] = [:]
+
+    /// `rename(` / `renameat(` (or `renamex_np` / `renameatx_np` without
+    /// RENAME_EXCL): these REPLACE whatever is at the destination.
+    /// `RENAME_EXCL` renames are no-clobber and are not counted.
+    static let reviewedClobberingRenames: [String: Reviewed] = [
+        "VideoScan/MediaLedger.swift": Reviewed(count: 1, reason:
+            "publishes the ledger's own index mirror from its own partial (dirfd-relative); app data"),
+        "VideoScan/POIStorage.swift": Reviewed(count: 1, reason:
+            "swaps a POI folder symlink to a fresh temp link; the link is app data, the target is untouched"),
+        "VideoScan/RescueFileCopier.swift": Reviewed(count: 1, reason:
+            "repairs a KNOWN-INCOMPLETE earlier rescue copy (previousSize != nil) by renaming the verified partial over it; a fresh destination uses RENAME_EXCL"),
+        "VideoScanCore/AtomicFilePublish.swift": Reviewed(count: 1, reason:
+            "the app-wide atomic save for sidecars/stores (never RENAME_SWAP); callers publish app data, not catalogued media"),
+        "VideoScanCore/CyberBrainWriter.swift": Reviewed(count: 1, reason:
+            "publishes CyberBrain's own knowledge file from its temp; app data"),
+    ]
+
+    /// `"-y"` — ffmpeg's "overwrite the output without asking".
+    static let reviewedFFmpegOverwrites: [String: Reviewed] = [
+        "VideoScan/AllFramesRipper.swift": Reviewed(count: 1, reason: "frames into its own fresh temp folder"),
+        "VideoScan/BalanceAudioJob.swift": Reviewed(count: 1, reason: "writes its own .vs-partial; published with a non-clobbering moveItem + re-uniquify"),
+        "VideoScan/CaptionRunner.swift": Reviewed(count: 1, reason: "a frame PNG in its own temp folder"),
+        "VideoScan/CleanupFFmpegEngine.swift": Reviewed(count: 1, reason: "renders into the job's scratch dir; CleanupJob publishes non-clobbering"),
+        "VideoScan/CombineEngine.swift": Reviewed(count: 1, reason:
+            "writes <video>_combined.mov straight to the output folder after a skip-if-exists check (not atomic — see the 2026-09-22 audit note in the follow-up report; the failure path removes that name)"),
+        "VideoScan/HallieWebPoster.swift": Reviewed(count: 1, reason: "poster frame in Hallie's own cache"),
+        "VideoScan/HallieWebProxy.swift": Reviewed(count: 1, reason: "proxy clip in Hallie's own cache"),
+        "VideoScan/PerceptualFingerprinter.swift": Reviewed(count: 1, reason: "its own temp output"),
+        "VideoScan/PersonFinderCompilation.swift": Reviewed(count: 3, reason: "clips / concat / chapters in the compilation's own output folder, named by the job"),
+        "VideoScan/RebuildAudioJob.swift": Reviewed(count: 1, reason: "writes its own .vs-partial; published with a non-clobbering moveItem + re-uniquify"),
+        "VideoScan/ReformatJob.swift": Reviewed(count: 1, reason: "writes its own timestamped .vs-partial; published with RENAME_EXCL"),
+        "VideoScan/ReviewThumbnailRenderer.swift": Reviewed(count: 1, reason: "a thumbnail PNG in its own temp"),
+        "VideoScan/TranscodeJob+Args.swift": Reviewed(count: 3, reason: "writes a uniquely named partial; DerivativeOutputPublish never clobbers"),
+        "VideoScan/TrimEngine.swift": Reviewed(count: 1, reason: "writes its own partial; TrimJob publishes non-clobbering"),
+        "VideoScanCore/FFmpegFrameRip.swift": Reviewed(count: 1, reason: "a frame PNG in its own temp"),
     ]
 
     private static var projectDir: URL {
@@ -506,29 +588,84 @@ struct ArchiveVolumeProtectionSourceSensor {
         try String(contentsOf: projectDir.appendingPathComponent(rel), encoding: .utf8)
     }
 
-    @Test func noUnreviewedFileRemovalCallSite() throws {
-        let pattern = try NSRegularExpression(pattern: #"\b(trashItem|removeItem|unlink|unlinkat|removefile)\("#)
+    /// Per-file match counts over non-comment lines. `stripStrings` blanks
+    /// string literals first, so a log message saying "rename(2) failed"
+    /// is not a call.
+    private static func scan(_ pattern: String, stripStrings: Bool,
+                             lineFilter: (String) -> Bool = { _ in true }) throws -> [String: Int] {
+        let regex = try NSRegularExpression(pattern: pattern)
+        let literal = try NSRegularExpression(pattern: #""(?:[^"\\]|\\.)*""#)
         var found: [String: Int] = [:]
         let dirs = [("VideoScan", "VideoScan"), ("VideoScanCore", "VideoScanCore/Sources/VideoScanCore")]
         for (label, rel) in dirs {
-            let dir = Self.projectDir.appendingPathComponent(rel)
+            let dir = projectDir.appendingPathComponent(rel)
             let names = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".swift") }
             for name in names {
                 let text = try String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8)
                 var n = 0
                 for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
                     if line.trimmingCharacters(in: .whitespaces).hasPrefix("//") { continue }
-                    let s = String(line)
-                    n += pattern.numberOfMatches(in: s, range: NSRange(s.startIndex..., in: s))
+                    var s = String(line)
+                    if stripStrings {
+                        s = literal.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s),
+                                                             withTemplate: "\"\"")
+                    }
+                    guard lineFilter(s) else { continue }
+                    n += regex.numberOfMatches(in: s, range: NSRange(s.startIndex..., in: s))
                 }
                 if n > 0 { found["\(label)/\(name)"] = n }
             }
         }
+        return found
+    }
+
+    /// Exact equality both ways: every found site is reviewed at its
+    /// count, and every reviewed file still has exactly that many.
+    private static func expectExact(_ found: [String: Int], _ reviewed: [String: Int], what: String) {
+        for file in Set(found.keys).union(reviewed.keys).sorted() {
+            let n = found[file] ?? 0, pinned = reviewed[file] ?? 0
+            #expect(n == pinned,
+                    "\(file) has \(n) \(what) call(s), reviewed \(pinned). If it can remove or replace a catalog record's file, route it through excludingMasterArchiveFiles / bulkDeleteRefusal (the Master Archive volume rule), then update ArchiveVolumeProtectionSourceSensor with the count AND the reason.")
+        }
+    }
+
+    @Test func noUnreviewedFileRemovalCallSite() throws {
+        let found = try Self.scan(#"\b(trashItem|removeItem|unlink|unlinkat|removefile)\("#, stripStrings: false)
         #expect(found.count >= 40, "the scan found the sources — \(found.count) files")
-        for (file, n) in found.sorted(by: { $0.key < $1.key }) {
-            let pinned = Self.reviewed[file] ?? 0
-            #expect(n <= pinned,
-                    "\(file) has \(n) file-removal call(s), reviewed \(pinned). If it can remove a catalog record's file, route it through excludingMasterArchiveFiles / bulkDeleteRefusal (the Master Archive volume rule), then update ArchiveVolumeProtectionSourceSensor.reviewed.")
+        Self.expectExact(found, Self.reviewed, what: "file-removal")
+    }
+
+    @Test func noUnreviewedMoveIntoATrashFolder() throws {
+        let found = try Self.scan(#"\bmoveItem\("#, stripStrings: true,
+                                  lineFilter: { $0.lowercased().contains("trash") })
+        Self.expectExact(found, Self.reviewedTrashMoves.mapValues(\.count), what: "move-into-trash")
+    }
+
+    @Test func noUnreviewedWorkspaceRecycle() throws {
+        let found = try Self.scan(#"\brecycle\("#, stripStrings: true)
+        Self.expectExact(found, Self.reviewedRecycles.mapValues(\.count), what: "NSWorkspace.recycle")
+    }
+
+    @Test func noUnreviewedClobberingRename() throws {
+        let found = try Self.scan(#"\b(rename|renameat|renamex_np|renameatx_np)\("#, stripStrings: true,
+                                  lineFilter: { !$0.contains("RENAME_EXCL") })
+        #expect(!found.isEmpty, "the scan sees the known rename(2) sites")
+        Self.expectExact(found, Self.reviewedClobberingRenames.mapValues(\.count), what: "clobbering rename")
+    }
+
+    @Test func noUnreviewedFFmpegOverwriteFlag() throws {
+        let found = try Self.scan(#""-y""#, stripStrings: false)
+        #expect(found.count >= 10, "the scan sees the known ffmpeg -y sites — \(found.count)")
+        Self.expectExact(found, Self.reviewedFFmpegOverwrites.mapValues(\.count), what: "ffmpeg -y")
+    }
+
+    @Test func everyReviewedEntryHasAReason() {
+        let all = [Self.reviewedTrashMoves, Self.reviewedRecycles,
+                   Self.reviewedClobberingRenames, Self.reviewedFFmpegOverwrites]
+        for table in all {
+            for (file, entry) in table {
+                #expect(entry.count >= 1 && entry.reason.count >= 10, "\(file): a reviewed entry needs a count and a reason")
+            }
         }
     }
 
@@ -550,5 +687,18 @@ struct ArchiveVolumeProtectionSourceSensor {
         #expect(prune.contains("if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume)"))
         let selection = try Self.source("VideoScan/VideoScanModel+TrashSelection.swift")
         #expect(selection.contains("self.bulkDeleteRefusal($0, volume: archiveVolume) != nil"))
+        // 2026-09-22 follow-ups: the Delete Duplicates pair carries the
+        // removal-time volume re-check; Transcode never deletes first.
+        #expect(job.contains("archiveCheck: model.archiveRemovalCheck()"),
+                "every Delete Duplicates pair carries the file's-own-volume re-check")
+        let transcode = try Self.source("VideoScan/TranscodeJob.swift")
+        #expect(!transcode.contains("removeItem(atPath: outputPath)"), "Transcode never clears its output name first")
+        #expect(!transcode.contains("ReformatJob.atomicPublish"), "Transcode publishes through DerivativeOutputPublish")
+        let publish = try Self.source("VideoScan/DerivativeOutputPublish.swift")
+        let sweep = try #require(publish.range(of: "static func sweepStalePartials("))
+        #expect(publish.components(separatedBy: "removeItem(").count - 1 == 1
+                && (publish.range(of: "removeItem(")?.lowerBound ?? publish.startIndex) > sweep.lowerBound,
+                "the ONE removeItem is the stale-partial sweep; a replaced file only ever goes to the Trash")
+        #expect(publish.contains("UInt32(RENAME_EXCL)") && !publish.contains("RENAME_SWAP)"))
     }
 }

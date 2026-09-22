@@ -374,8 +374,12 @@ struct TidyIgnoredContentCategoryTests {
         let plan = await model.computeTidyCatalogPlan()
         #expect(plan.archivedCopyCount == 3, "source (promote link) + outside (fingerprint) + staging (content hash)")
         #expect(plan.archivedCopyBytes == 1_000 + 2_000 + 1_000)
-        // DRY RUN ONLY: no rows for them, nothing set aside on apply.
-        #expect(plan.rows.map(\.filename) == ["IMG_9.cr3"])
+        // DRY RUN ONLY: no rows for them, nothing set aside on apply. The
+        // still inside the archive root used to be a row; since Rick's
+        // 2026-09-22 ruling ("For now we won't Remove anything from
+        // FamilyArchive") nothing on the archive volume is.
+        #expect(plan.rows.isEmpty, "\(plan.rows.map(\.filename))")
+        #expect(plan.keptOnArchiveVolume == 3, "copy + inside + IMG_9.cr3")
         #expect(plan.junkCameBackCount == 0)
         model.applyTidyCatalog(plan)
         #expect(source.setAsideReason == nil)

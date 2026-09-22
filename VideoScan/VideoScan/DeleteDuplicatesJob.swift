@@ -128,6 +128,14 @@ struct DeleteDuplicatesWorkItem: Sendable {
     /// Which siblings the worker may READ to prove them (2026-09-21), and
     /// when to stop. `.none` = stat only, as before.
     var siblingAllowance: SiblingProver.Allowance = .none
+    /// The Master Archive VOLUME re-check (2026-09-22 follow-up, QA
+    /// MINOR 3), captured on the main actor: the snapshot plus the UUID
+    /// probe. Asked of the file's OWN volume before it is moved into
+    /// quarantine and again as the final verdict before removal — so a
+    /// symlinked scan root or custom mount path to FamilyArchive, whose
+    /// path text says "boot disk", is still refused (as Junk does).
+    /// nil = no Master Archive designated.
+    var archiveCheck: ArchiveRemovalCheck? = nil
 }
 
 enum DeleteDuplicatesDiskOutcome: Sendable {
@@ -201,6 +209,17 @@ enum DeleteDuplicatesDiskWorker {
     /// snapshots — never VideoRecord instances.
     static func verifyAndQuarantine(_ item: DeleteDuplicatesWorkItem,
                                     hooks: SignatureVerification.Hooks) -> DeleteDuplicatesPhaseOne {
+        // The Master Archive volume, by the file's OWN volume UUID —
+        // before anything is read or moved (a quarantine folder on
+        // FamilyArchive is itself a change to FamilyArchive).
+        if let check = item.archiveCheck, let refusal = check.refusal(forPath: item.path) {
+            // A provisional snapshot's "unprovable" is transient: left
+            // alone, never a refusal that re-marks the record Review.
+            let outcome: DeleteDuplicatesDiskOutcome = refusal.transient
+                ? .leftAlone(reason: Self.driveListRefreshing, facts: DeletionTierFacts())
+                : .refused(reason: refusal.note + " — nothing moved", cancelled: false)
+            return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: nil)
+        }
         let box = FixityBox()
         var observing = hooks
         let downstream = hooks.didComputeKeeperFixity
@@ -315,7 +334,8 @@ enum DeleteDuplicatesDiskWorker {
     static func deleteQuarantined(_ ticket: QuarantineTicket, decided: DeletionTierDecision,
                                   facts: DeletionTierFacts, preferTrash: Bool,
                                   keeperFilename: String,
-                                  hooks: SignatureVerification.Hooks) -> DeleteDuplicatesPhaseTwo {
+                                  hooks: SignatureVerification.Hooks,
+                                  archiveCheck: ArchiveRemovalCheck? = nil) -> DeleteDuplicatesPhaseTwo {
         guard let decidedTier = decided.tier else {
             // Never reached — the caller releases a nil tier itself — but
             // a nil tier must never default to an unlink.
@@ -329,7 +349,14 @@ enum DeleteDuplicatesDiskWorker {
         // closure may write a local of its caller (for Rick: a lambda
         // capturing by reference).
         var boundary: (decision: DeletionTierDecision, facts: DeletionTierFacts)?
+        // Set by the final verdict when the file's own volume turns out to
+        // be the Master Archive's (the same last word Junk has).
+        var archiveRefusal: (note: String, transient: Bool)?
         let result = SignatureVerification.deleteQuarantined(ticket, disposal: recorded, hooks: hooks) {
+            if let archiveCheck, let refusal = archiveCheck.refusal(forPath: ticket.quarantinedPath) {
+                archiveRefusal = refusal
+                return .putBack(reason: refusal.note)
+            }
             let now = facts.recheck()
             guard !now.droppedAtBoundary.isEmpty else {
                 // Every counted copy still reproduces its stamp: the
@@ -353,6 +380,17 @@ enum DeleteDuplicatesDiskWorker {
             return .proceed(tier == .trash ? .trash : .permanent)
         }
         var outcome = map(result, proof: ticket.proof, keeper: keeperFilename)
+        if let archiveRefusal {
+            // Put back at its path: a REFUSAL of this pair (the row goes to
+            // Review with the reason), not a cancel. A failed put-back
+            // stays `.retained`, named.
+            if case .refused(_, true) = outcome {
+                outcome = archiveRefusal.transient
+                    ? .leftAlone(reason: Self.driveListRefreshing, facts: facts)
+                    : .refused(reason: archiveRefusal.note + " — put back, nothing removed", cancelled: false)
+            }
+            return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false)
+        }
         guard let boundary else {
             return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false)
         }
@@ -364,6 +402,10 @@ enum DeleteDuplicatesDiskWorker {
         return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: boundary.decision, facts: boundary.facts,
                                         evidenceChanged: true)
     }
+
+    /// The row note for a pair left alone because the archive-volume
+    /// snapshot was being rebuilt (a drive just came or went).
+    static let driveListRefreshing = "the drive list was refreshing (a drive was just mounted or unmounted) — left alone; try again"
 
     /// Put a quarantined file back without deleting it (the plan could not
     /// record the quarantine, the run is stopping, or the tier said no).
@@ -831,6 +873,13 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             }
             cursor += 1
 
+            // A drive came or went since the archive-volume snapshot was
+            // built: wait for the fresh one (off-main, milliseconds) rather
+            // than judge this pair by the provisional snapshot, which calls
+            // every other /Volumes path "unprovable" (QA 2026-09-22).
+            if model.masterArchive != nil, !model.isArchiveVolumeSnapshotFresh {
+                await model.refreshArchiveVolumeSnapshot()
+            }
             // LIVE authorization, this instant — never the plan's or the
             // preflight's answer (#3).
             let record: VideoRecord
@@ -918,13 +967,21 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // evidence, drive reserved) until it settles.
             for path in needy where allowance.readablePaths.contains(path) { siblingReaders[path] = entry.id }
 
+            // The pair's removal-time check must come from a FRESH
+            // snapshot; awaits above (slots, a sibling's pair) may have
+            // spanned a mount.
+            if model.masterArchive != nil, !model.isArchiveVolumeSnapshotFresh {
+                await model.refreshArchiveVolumeSnapshot()
+            }
             mutatePlan { $0.set(entry.id, .verifying) }
             model.duplicateStatus = "Verifying duplicate \((plan?.counts.settled ?? 0) + 1) of \(current.entries.count)…"
             let item = DeleteDuplicatesWorkItem(
                 path: entry.path, keeperPath: keeper.fullPath, keeperFilename: keeper.filename,
                 keeperFixity: keeper.contentFixity,
                 quarantineDirectoryName: Self.quarantineDirectoryName(planID: current.id, entryID: entry.id),
-                tierCandidates: candidates, siblingAllowance: allowance)
+                tierCandidates: candidates, siblingAllowance: allowance,
+                // The volume re-check travels with the pair (off-main).
+                archiveCheck: model.archiveRemovalCheck())
             inFlight.insert(entry.id)
             peakInFlight = max(peakInFlight, inFlight.count)
             // The pair runs as its own main-actor task so a second SSD pair
@@ -1139,10 +1196,12 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 // 1611), re-check the file and the keeper, unlink or move
                 // to the Trash.
                 let preferTrash = model.duplicateKeeperSettings.preferTrashForEveryDuplicate
+                let archiveCheck = item.archiveCheck
                 let phaseTwo = await runDetached(entryID: entry.id) { [hooks] in
                     DeleteDuplicatesDiskWorker.deleteQuarantined(ticket, decided: decided, facts: facts,
                                                                  preferTrash: preferTrash,
-                                                                 keeperFilename: keeperName, hooks: hooks)
+                                                                 keeperFilename: keeperName, hooks: hooks,
+                                                                 archiveCheck: archiveCheck)
                 }
                 outcome = phaseTwo.outcome
                 if phaseTwo.evidenceChanged {
@@ -1527,6 +1586,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         // folder the plan names for each of those (QA MINOR 6, #2).
         let unsettled = plan.entries.filter { !$0.status.isSettled }
         let facts = await Self.resumeDiskFacts(planID: plan.id, entries: unsettled)
+        // Judge the rows by a FRESH archive-volume snapshot, not the
+        // provisional one a recent mount left behind (QA 2026-09-22).
+        if model.masterArchive != nil, !model.isArchiveVolumeSnapshotFresh {
+            await model.refreshArchiveVolumeSnapshot()
+        }
         for i in plan.entries.indices where !plan.entries[i].status.isSettled {
             let e = plan.entries[i]
             func skip(_ why: String, log line: String) {

@@ -1098,6 +1098,7 @@ final class VideoScanModel: ObservableObject {
         migrateVolumeRoles()
         detectResumableTargets()
         installVolumeMountObservers()
+        installArchiveVolumeSnapshotObservers()
         refreshTargetReachability()
         // Warm the per-volume retire-status cache so the Volumes window
         // has real numbers on first open (until then rows read .empty —
@@ -1418,8 +1419,21 @@ final class VideoScanModel: ObservableObject {
             catalogStore.masterArchive = masterArchive
             // Family photos / crests follow the same archive authority.
             publishFamilyAssetConfiguration()
+            // The whole-volume protection snapshot is rebuilt off-main;
+            // until it lands, bulk deletes refuse what they cannot prove.
+            if oldValue != masterArchive { noteArchiveVolumeSnapshotStale(reason: "designation changed") }
         }
     }
+
+    /// The cached Master Archive VOLUME snapshot every bulk verb reads
+    /// (2026-09-22 follow-up, QA MAJOR 2). Built off the main thread —
+    /// see VideoScanModel+ArchiveVolumeSnapshot.swift; never read it
+    /// directly, call `archiveVolumeProtection()`.
+    var archiveVolumeSnapshotCache = ArchiveVolumeSnapshotCache()
+    /// The in-flight off-main rebuild, if any.
+    var archiveVolumeSnapshotTask: Task<Void, Never>?
+    /// NSWorkspace mount / unmount / rename observers for the snapshot.
+    var archiveVolumeSnapshotObservers: [NSObjectProtocol] = []
 
     /// Reverse index source-id → promoted-copy record (and copy-id →
     /// source-id), memoized on `RecordsVersion` like the CatalogHelpers

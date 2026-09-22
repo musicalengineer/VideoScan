@@ -71,6 +71,18 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
     /// source volume.
     let outputURL: URL
 
+    /// True when the user answered "Replace" to "Replace Existing
+    /// Transcode?". Even then the existing file is never deleted: it goes
+    /// to the Trash, only after the new output exists, and only when the
+    /// Master Archive rule allows it — otherwise the new file is published
+    /// beside it (DerivativeOutputPublish.swift, 2026-09-22).
+    let replaceExisting: Bool
+
+    /// Where the derivative actually landed — `outputURL`, or a free name
+    /// beside it when that name was taken and kept. Verify, sidecars, the
+    /// catalog and the summary all use THIS after the publish.
+    private(set) var publishedURL: URL
+
     /// Weak refs — the model holds Jobs via MediaFileOperationsCenter, the
     /// orchestrator isn't actually used by Transcode (we don't auto-queue
     /// Analyze) but we keep the parameter for parity with startReformat's
@@ -150,11 +162,14 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         record: VideoRecord,
         preset: TranscodePreset,
         outputURL: URL,
-        model: VideoScanModel
+        model: VideoScanModel,
+        replaceExisting: Bool = false
     ) {
         self.record = record
         self.preset = preset
         self.outputURL = outputURL.standardizedFileURL
+        self.publishedURL = outputURL.standardizedFileURL
+        self.replaceExisting = replaceExisting
         self.model = model
         self.subtitleText = preset.subtitle
     }
@@ -189,13 +204,21 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         totalDurationSeconds = max(0, record.durationSeconds)
 
         let inputPath = record.fullPath
-        let outputPath = outputURL.path
-        // ffmpeg encodes here; we atomic-rename to outputPath only after a
-        // COMPLETE, non-trivial encode (#6.3). A killed/stalled encode leaves
-        // only this partial, which we delete — never a truncated master at
-        // the real output path. The verify phase (preservation) runs against
-        // the promoted FINAL file, and only ever reads it.
-        let partialPath = ReformatJob.partialURL(for: outputURL).path
+        // ffmpeg encodes here — a partial with a UNIQUE name beside the
+        // destination — and it is published only after a COMPLETE,
+        // non-trivial encode (#6.3). A killed/stalled encode leaves only
+        // this partial, which we delete — never a truncated master at the
+        // real output path. The verify phase (preservation) runs against
+        // the published FINAL file, and only ever reads it.
+        //
+        // NOTHING at the output name is touched before the publish
+        // (2026-09-22): this used to remove it here, before the source
+        // check and before any encode, which permanently deleted a
+        // catalogued file on FamilyArchive when "Replace" was answered.
+        let partialPath = DerivativeOutputPublish.uniquePartialURL(for: outputURL).path
+        // Crash / force-quit leftovers of THIS output name (>24 h old, our
+        // own incomplete encodes only) — swept off-main, logged.
+        await Self.sweepStalePartialsOffMain(beside: outputURL)
 
         let volumeLabel = VolumeReachability.displayLabel(forPath: inputPath)
         transcodeLog.info("transcode START: \(self.record.filename, privacy: .public) preset=\(self.preset.rawValue, privacy: .public) on \(volumeLabel, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public)")
@@ -203,10 +226,6 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         if preset == .preservation {
             transcodeLog.info("preservation: starting FFV1 v3 master for \(self.record.filename, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public)")
         }
-
-        // Clean up any prior derivative + stale partial (resumed from a cancel).
-        try? FileManager.default.removeItem(atPath: outputPath)
-        try? FileManager.default.removeItem(atPath: partialPath)
 
         guard FileManager.default.fileExists(atPath: inputPath) else {
             await finish(failed: "Source file missing on disk")
@@ -330,16 +349,26 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             return
         }
 
-        // Atomic publish: a complete, non-trivial encode — promote the
-        // partial to the real output name in one rename (#6.3). Verify (if
-        // any) then reads the FINAL file, which it only ever reads.
+        // Publish: a complete, non-trivial encode takes the output name in
+        // one no-clobber rename (#6.3) — or, when the name is taken, the
+        // existing file is kept (or, with Replace allowed, Trashed first)
+        // and the job says which. Verify (if any) then reads the PUBLISHED
+        // file, which it only ever reads.
+        let publishNote: String
         do {
-            try ReformatJob.atomicPublish(from: partialPath, to: outputPath)
+            let outcome = try await Self.publishOffMain(
+                partial: partialPath, final: outputURL, policy: existingFilePolicy(),
+                archiveCheck: model?.archiveRemovalCheck(), trash: DerivativeOutputPublish.trashItem)
+            publishedURL = outcome.url
+            publishNote = logPublishOutcome(outcome)
         } catch {
-            try? FileManager.default.removeItem(atPath: partialPath)
-            await finish(failed: "Could not finalize output file: \(error.localizedDescription)")
+            // The partial is our own complete encode: kept, named, so the
+            // work is not lost. Nothing else was changed by a failed publish.
+            transcodeLog.error("transcode FAILED (publish): \(self.record.filename, privacy: .public) — \(error.localizedDescription, privacy: .public)")
+            await finish(failed: "Could not finalize output file: \(error.localizedDescription) — the encode is at \(partialPath)")
             return
         }
+        let finalPath = publishedURL.path
 
         // Preservation: PROVE the master is bit-exact before we declare
         // success. Any non-match keeps the file and fails loudly. For
@@ -348,7 +377,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         if preset == .preservation {
             let verdict = await verifyLossless(ffmpeg: ffmpeg,
                                                source: inputPath,
-                                               output: outputPath)
+                                               output: finalPath)
             // A stall DURING verify (the literal 14 h framemd5 incident) must
             // fail loudly with attribution — not masquerade as a clean
             // cancel. The master is left on disk; the user can re-verify.
@@ -367,7 +396,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             case .verified:
                 logPreservationSummary(outputSize: size, verified: true, sidecarName: nil)
                 await catalogTranscodeOutput()
-                await finish(success: "✓ Verified bit-exact lossless (frame MD5) → \(outputURL.lastPathComponent) (\(Self.humanBytes(size)))")
+                await finish(success: "✓ Verified bit-exact lossless (frame MD5) → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size)))\(publishNote)")
                 return
             case .failed(let sidecarName):
                 // Output kept on disk; sidecar written; loud failure.
@@ -378,8 +407,65 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         }
 
         await catalogTranscodeOutput()
-        transcodeLog.info("transcode DONE: \(self.record.filename, privacy: .public) preset=\(self.preset.rawValue, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) encode \(self.encodeElapsed, format: .fixed(precision: 1), privacy: .public)s")
-        await finish(success: "Transcoded → \(outputURL.lastPathComponent) (\(Self.humanBytes(size))).")
+        transcodeLog.info("transcode DONE: \(self.record.filename, privacy: .public) preset=\(self.preset.rawValue, privacy: .public) → \(self.publishedURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) encode \(self.encodeElapsed, format: .fixed(precision: 1), privacy: .public)s")
+        await finish(success: "Transcoded → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size))).\(publishNote)")
+    }
+
+    // MARK: Publish (2026-09-22 — never delete first)
+
+    /// What happens to a file already at the output name. Replace must
+    /// have been chosen AND the Master Archive rule must allow removing
+    /// that file (a catalogued record is asked as a record — archive
+    /// copies included — anything else by its path); otherwise it is kept
+    /// and the new derivative is published beside it.
+    private func existingFilePolicy() -> DerivativeOutputPublish.ExistingFilePolicy {
+        guard replaceExisting else {
+            return .keep(reason: "a file already has that name and Replace was not chosen")
+        }
+        guard let model else { return .keep(reason: "the catalog is not available to check the Master Archive rule") }
+        let path = outputURL.path
+        let refusal = model.records.first(where: { $0.fullPath == path && !$0.isPurged })
+            .map { model.bulkDeleteRefusal($0) } ?? model.bulkDeleteRefusal(forPath: path)
+        if let refusal {
+            let label = model.archiveVolumeProtection()?.label ?? "the archive volume"
+            return .keep(reason: VideoScanModel.bulkDeleteRefusalNote(refusal, volume: label))
+        }
+        return .replaceViaTrash
+    }
+
+    @concurrent
+    nonisolated private static func sweepStalePartialsOffMain(beside output: URL) async {
+        DerivativeOutputPublish.sweepStalePartials(beside: output)
+    }
+
+    /// The disk half of the publish, off the main thread.
+    @concurrent
+    nonisolated private static func publishOffMain(
+        partial: String, final: URL, policy: DerivativeOutputPublish.ExistingFilePolicy,
+        archiveCheck: ArchiveRemovalCheck?, trash: @escaping @Sendable (URL) throws -> URL?
+    ) async throws -> DerivativeOutputPublish.Outcome {
+        try DerivativeOutputPublish.publish(partial: partial, as: final, policy: policy,
+                                            archiveCheck: archiveCheck, trash: trash)
+    }
+
+    /// Log where the derivative went; returns the sentence the job's
+    /// summary appends ("" for the plain case).
+    private func logPublishOutcome(_ outcome: DerivativeOutputPublish.Outcome) -> String {
+        switch outcome {
+        case .published:
+            return ""
+        case .publishedBeside(let url, let kept, let reason):
+            let line = "transcode: \(kept.lastPathComponent) kept (\(reason)) — new \(preset.rawValue) derivative published beside it as \(url.lastPathComponent)"
+            transcodeLog.notice("\(line, privacy: .public)")
+            appLog.write(line)
+            return " Kept the existing \(kept.lastPathComponent) — \(reason)."
+        case .replaced(let url, let trashedTo):
+            let whereTo = trashedTo?.path ?? "the Trash"
+            let line = "transcode: new \(preset.rawValue) derivative took the name \(url.lastPathComponent); the previous file is at \(whereTo)"
+            transcodeLog.notice("\(line, privacy: .public)")
+            appLog.write(line)
+            return " The previous file is in the Trash."
+        }
     }
 
     // MARK: Preservation verification
@@ -398,7 +484,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
     private func verifyLossless(ffmpeg: String,
                                 source: String,
                                 output: String) async -> VerifyOutcome {
-        transcodeLog.info("preservation verify: starting frame-MD5 comparison for \(self.outputURL.lastPathComponent, privacy: .public)")
+        transcodeLog.info("preservation verify: starting frame-MD5 comparison for \(self.publishedURL.lastPathComponent, privacy: .public)")
         let verifyStart = Date()
         defer { verifyElapsed = Date().timeIntervalSince(verifyStart) }
 
@@ -422,7 +508,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             return .failed(sidecarName: name)
         }
         verifiedVideoFrames = Self.frameCount(srcVideoMD5)
-        transcodeLog.info("preservation verify: video stream bit-exact (\(self.verifiedVideoFrames, privacy: .public) frames, \(self.outputURL.lastPathComponent, privacy: .public))")
+        transcodeLog.info("preservation verify: video stream bit-exact (\(self.verifiedVideoFrames, privacy: .public) frames, \(self.publishedURL.lastPathComponent, privacy: .public))")
 
         // ---- Audio stream ----
         // Skip cleanly if the source has no audio (video-only master).
@@ -473,12 +559,12 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             }
             audioStreamMD5 = srcAudioMD5
             audioVerifyDetail = "whole-stream MD5 \(srcAudioMD5) @\(pcmCodec)"
-            transcodeLog.info("preservation verify: audio stream bit-exact (whole-stream MD5 \(srcAudioMD5, privacy: .public) @\(pcmCodec, privacy: .public), \(self.outputURL.lastPathComponent, privacy: .public))")
+            transcodeLog.info("preservation verify: audio stream bit-exact (whole-stream MD5 \(srcAudioMD5, privacy: .public) @\(pcmCodec, privacy: .public), \(self.publishedURL.lastPathComponent, privacy: .public))")
         } else {
             audioVerifyDetail = "(no audio stream)"
         }
 
-        transcodeLog.info("preservation verify: PASS — \(self.outputURL.lastPathComponent, privacy: .public) is bit-exact lossless")
+        transcodeLog.info("preservation verify: PASS — \(self.publishedURL.lastPathComponent, privacy: .public) is bit-exact lossless")
         return .verified
     }
 
@@ -642,13 +728,13 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
                                       verdict: FrameMD5Verdict,
                                       sourceStream: String,
                                       outputStream: String) -> String {
-        let sidecarURL = URL(fileURLWithPath: outputURL.path + ".framemd5-MISMATCH.log")
+        let sidecarURL = URL(fileURLWithPath: publishedURL.path + ".framemd5-MISMATCH.log")
 
         var body = ""
         body += "VideoScan — Preservation master lossless verification FAILED\n"
         body += "Generated: \(ISO8601DateFormatter().string(from: Date()))\n"
         body += "Source:  \(record.fullPath)\n"
-        body += "Master:  \(outputURL.path)\n"
+        body += "Master:  \(publishedURL.path)\n"
         body += "Stream:  \(stream)\n"
         switch verdict {
         case .match:
@@ -680,13 +766,13 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
     /// record the two hashes. An empty hash means ffmpeg failed to decode
     /// that side at all (called out explicitly).
     private func writeAudioMismatchSidecar(source: String, output: String, pcmCodec: String) -> String {
-        let sidecarURL = URL(fileURLWithPath: outputURL.path + ".framemd5-MISMATCH.log")
+        let sidecarURL = URL(fileURLWithPath: publishedURL.path + ".framemd5-MISMATCH.log")
 
         var body = ""
         body += "VideoScan — Preservation master lossless verification FAILED\n"
         body += "Generated: \(ISO8601DateFormatter().string(from: Date()))\n"
         body += "Source:  \(record.fullPath)  (audio \(record.audioCodec))\n"
-        body += "Master:  \(outputURL.path)\n"
+        body += "Master:  \(publishedURL.path)\n"
         body += "Stream:  audio (whole-stream MD5)\n"
         body += "Compared as: \(pcmCodec) — both sides decoded to this integer PCM format\n"
         body += "Verdict: MISMATCH\n"
@@ -727,7 +813,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
     /// note on BOTH records.
     private func catalogTranscodeOutput() async {
         guard let model = model else { return }
-        let newURL = outputURL
+        let newURL = publishedURL
         let newRec = await model.probeFile(url: newURL)
 
         // Lineage + workspace state.
@@ -843,7 +929,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         logField("Result:", verified
             ? "✓ VERIFIED bit-exact lossless (frame MD5)"
             : "✗ VERIFICATION FAILED — master kept, see sidecar")
-        logField("Master:", outputURL.path)
+        logField("Master:", publishedURL.path)
         logField("Master size:", "\(Self.humanBytes(outputSize)) (\(outputSize) bytes)")
         logField("Source size:", "\(Self.humanBytes(src)) (\(src) bytes)")
         let delta = "\(outputSize >= src ? "+" : "−")\(Self.humanBytes(abs(outputSize - src)))"
@@ -859,9 +945,9 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
 
         // Mirror the headline to the unified log too.
         if verified {
-            transcodeLog.info("preservation SUMMARY: VERIFIED \(self.outputURL.lastPathComponent, privacy: .public) — \(Self.humanBytes(outputSize), privacy: .public), \(String(format: "%.2f", ratio), privacy: .public)× source, encode \(String(format: "%.1f", self.encodeElapsed), privacy: .public)s, verify \(String(format: "%.1f", self.verifyElapsed), privacy: .public)s")
+            transcodeLog.info("preservation SUMMARY: VERIFIED \(self.publishedURL.lastPathComponent, privacy: .public) — \(Self.humanBytes(outputSize), privacy: .public), \(String(format: "%.2f", ratio), privacy: .public)× source, encode \(String(format: "%.1f", self.encodeElapsed), privacy: .public)s, verify \(String(format: "%.1f", self.verifyElapsed), privacy: .public)s")
         } else {
-            transcodeLog.error("preservation SUMMARY: FAILED \(self.outputURL.lastPathComponent, privacy: .public) — see \(sidecarName ?? "sidecar", privacy: .public)")
+            transcodeLog.error("preservation SUMMARY: FAILED \(self.publishedURL.lastPathComponent, privacy: .public) — see \(sidecarName ?? "sidecar", privacy: .public)")
         }
     }
 }

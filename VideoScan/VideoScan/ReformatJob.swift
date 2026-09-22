@@ -68,6 +68,11 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
     /// Where the new .mp4 will land. Computed once at init.
     let outputURL: URL
 
+    /// Where it actually landed: `outputURL`, or "name 2.mp4" beside it
+    /// when that name was taken (2026-09-22 — the finished encode is kept,
+    /// never deleted, and nothing already there is replaced).
+    private(set) var publishedURL: URL
+
     /// Weak reference to the model so the success-side wiring can
     /// catalog the new file and queue it for analyze. Avoids a retain
     /// cycle since the model holds Jobs via MediaFileOperationsCenter.
@@ -149,6 +154,7 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
             codec: "hevc",
             ext: "mp4"
         )
+        self.publishedURL = self.outputURL
     }
 
     /// Start the reformat. Idempotent — a second call is a no-op.
@@ -189,14 +195,14 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
         }
 
         let inputPath = record.fullPath
-        let outputPath = outputURL.path
-        // ffmpeg writes here; we atomic-rename to outputPath only on success
+        // ffmpeg writes here; we publish to outputURL only on success
         // (#6.3). A killed/stalled op leaves only this partial, which we
         // delete — never a truncated file at the real output path.
         let partialPath = Self.partialURL(for: outputURL).path
 
-        // Clean up any prior derivative + stale partial (resumed from a cancel).
-        try? FileManager.default.removeItem(atPath: outputPath)
+        // A stale partial of THIS run's timestamped name is our own litter
+        // (resumed from a cancel). The output name itself is never cleared
+        // first (2026-09-22): the publish below refuses to clobber.
         try? FileManager.default.removeItem(atPath: partialPath)
 
         let volumeLabel = VolumeReachability.displayLabel(forPath: inputPath)
@@ -337,19 +343,33 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
 
         // Atomic publish: the encode is complete and non-trivial — promote
         // the partial to the real output name in one rename (#6.3).
+        // A taken name keeps BOTH files: the new one lands beside it.
         do {
-            try Self.atomicPublish(from: partialPath, to: outputPath)
+            let outcome = try await Self.publishOffMain(partial: partialPath, final: outputURL)
+            publishedURL = outcome.url
+            if case .publishedBeside(let url, let kept, _) = outcome {
+                reformatLog.notice("reformat: \(kept.lastPathComponent, privacy: .public) already existed — kept; new file published as \(url.lastPathComponent, privacy: .public)")
+            }
         } catch {
-            try? FileManager.default.removeItem(atPath: partialPath)
-            await finish(failed: "Could not finalize output file: \(error.localizedDescription)")
+            // The finished encode is kept at its partial name, named.
+            await finish(failed: "Could not finalize output file: \(error.localizedDescription) — the encode is at \(partialPath)")
             return
         }
 
         // Catalog + queue for analyze.
         await catalogAndQueueAnalyze()
 
-        reformatLog.info("reformat DONE: \(self.record.filename, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) in \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
-        await finish(success: "Reformatted → \(outputURL.lastPathComponent) (\(Self.humanBytes(size))). Queued for analysis.")
+        reformatLog.info("reformat DONE: \(self.record.filename, privacy: .public) → \(self.publishedURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) in \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
+        await finish(success: "Reformatted → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size))). Queued for analysis.")
+    }
+
+    /// The disk half of the publish, off the main thread. Never replaces.
+    @concurrent
+    nonisolated private static func publishOffMain(partial: String, final: URL) async throws
+        -> DerivativeOutputPublish.Outcome {
+        try DerivativeOutputPublish.publish(partial: partial, as: final,
+                                            policy: .keep(reason: "a file already has that name"),
+                                            archiveCheck: nil, trash: { _ in nil })
     }
 
     // MARK: Stall handling
@@ -375,7 +395,7 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
     /// after the reformat lands.
     private func catalogAndQueueAnalyze() async {
         guard let model = model else { return }
-        let newURL = outputURL
+        let newURL = publishedURL
         // Probe synchronously (well, async-await) — same path the
         // catalog scan uses.
         let newRec = await model.probeFile(url: newURL)
@@ -517,15 +537,14 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
             .appendingPathExtension(ext)
     }
 
-    /// Promote a completed partial to its final name in one atomic rename.
-    /// If a file already sits at `to` (a prior derivative we cleaned up but
-    /// that reappeared), it's replaced. Throws on failure so the caller
-    /// fails loudly rather than catalog a file that isn't there.
+    /// Promote a completed partial to its final name in one atomic,
+    /// NO-CLOBBER rename (`RENAME_EXCL`). A file already at `to` is never
+    /// replaced (2026-09-22: this used to `removeItem` it first — a
+    /// permanent delete of whatever had the name, catalogued or not); the
+    /// publish fails loudly instead and the partial stays for the caller.
     nonisolated static func atomicPublish(from partialPath: String, to finalPath: String) throws {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: finalPath) {
-            try fm.removeItem(atPath: finalPath)
+        guard try DerivativeOutputPublish.renameNoClobber(partialPath, finalPath) else {
+            throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: finalPath])
         }
-        try fm.moveItem(atPath: partialPath, toPath: finalPath)
     }
 }

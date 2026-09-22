@@ -432,6 +432,13 @@ extension VideoScanModel {
         case .archiveTree?:
             log(Self.masterArchiveRefusalLine(verb: "Delete Duplicates", count: 1))
             return .refuse(note: "now lives in the Master Archive — refused \(stage)")
+        case .archiveVolumeUnprovable? where !isArchiveVolumeSnapshotFresh:
+            // Unprovable only because the snapshot is being rebuilt (a
+            // drive was just mounted / unmounted / renamed): a transient
+            // SKIP — never a refusal, so the extra copy is NOT re-marked
+            // Review (QA 2026-09-22). The row says to try again.
+            return .skip(note: "skipped — the drive list was refreshing; try again",
+                         log: "Skipped \(e.filename): the drive list was refreshing (a drive was just mounted or unmounted) — try again")
         case let refusal?:
             let label = archiveVolume?.label ?? "the archive volume"
             log(refusal == .archiveVolume

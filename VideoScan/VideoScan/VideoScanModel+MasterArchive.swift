@@ -616,12 +616,19 @@ extension VideoScanModel {
     /// What a bulk verb does to the files it is handed. Verbs that REMOVE
     /// files are refused the whole Master Archive VOLUME (Rick
     /// 2026-09-22: "the app should never offer to delete from
-    /// FamilyArchive"); catalog-only verbs (Remove from Catalog, Tidy's
-    /// set-aside) never touch the disk and keep the tree-only rule.
+    /// FamilyArchive"). Since Rick's second ruling the same day ("For now
+    /// we won't Remove anything from FamilyArchive") Remove from Catalog,
+    /// Tidy Catalog and Remove (purge) pass `.catalogRemoval`: the tree
+    /// AND the proven archive volume are refused, but never a file that
+    /// is merely unprovable (a network share, a drive with no UUID, a
+    /// snapshot still being rebuilt) — the ruling is about FamilyArchive.
+    /// No verb passes `.catalogOnly` today; it is kept for a verb that
+    /// deliberately wants the tree-only rule again.
     /// The default is the stricter one, so a new caller that forgets to
     /// say is protected, not exposed.
     enum BulkVerbEffect: Sendable {
         case removesFiles
+        case catalogRemoval
         case catalogOnly
     }
 
@@ -636,12 +643,8 @@ extension VideoScanModel {
         case archiveVolumeUnprovable
     }
 
-    /// The whole-volume snapshot for one verb (nil = no designation).
-    /// A few mount-table / UUID reads — build ONCE per verb, never per
-    /// record. See ArchiveVolumeProtection.swift.
-    func archiveVolumeProtection() -> ArchiveVolumeProtection? {
-        ArchiveVolumeProtection.make(designation: masterArchive)
-    }
+    // The whole-volume snapshot, `archiveVolumeProtection()`, is cached
+    // and rebuilt off the main thread — VideoScanModel+ArchiveVolumeSnapshot.swift.
 
     /// THE ONE RULE for "may a bulk verb act on this record?". `volume`
     /// is the verb's snapshot (pass the same one for every record of the
@@ -650,13 +653,22 @@ extension VideoScanModel {
     func bulkDeleteRefusal(_ r: VideoRecord, effect: BulkVerbEffect = .removesFiles,
                            volume: ArchiveVolumeProtection? = nil) -> BulkDeleteRefusal? {
         guard masterArchive != nil else { return nil }
-        if isArchiveCopy(r) || isInsideMasterArchive(path: r.fullPath) { return .archiveTree }
-        guard effect == .removesFiles,
+        if isArchiveCopy(r) { return .archiveTree }
+        return bulkDeleteRefusal(forPath: r.fullPath, effect: effect, volume: volume)
+    }
+
+    /// The same rule for a bare PATH — a file that may or may not be in
+    /// the catalog (Transcode's "Replace Existing" target, 2026-09-22).
+    func bulkDeleteRefusal(forPath path: String, effect: BulkVerbEffect = .removesFiles,
+                           volume: ArchiveVolumeProtection? = nil) -> BulkDeleteRefusal? {
+        guard masterArchive != nil else { return nil }
+        if isInsideMasterArchive(path: path) { return .archiveTree }
+        guard effect != .catalogOnly,
               let snapshot = volume ?? archiveVolumeProtection() else { return nil }
-        switch snapshot.verdict(forPath: r.fullPath) {
+        switch snapshot.verdict(forPath: path) {
         case .clear: return nil
         case .onArchiveVolume: return .archiveVolume
-        case .unprovable: return .archiveVolumeUnprovable
+        case .unprovable: return effect == .catalogRemoval ? nil : .archiveVolumeUnprovable
         }
     }
 
@@ -681,7 +693,7 @@ extension VideoScanModel {
     func excludingMasterArchiveFiles(_ recs: [VideoRecord], verb: String,
                                      effect: BulkVerbEffect = .removesFiles) -> [VideoRecord] {
         guard masterArchive != nil, !recs.isEmpty else { return recs }
-        let snapshot = effect == .removesFiles ? archiveVolumeProtection() : nil
+        let snapshot = effect != .catalogOnly ? archiveVolumeProtection() : nil
         var kept: [VideoRecord] = []
         kept.reserveCapacity(recs.count)
         var tree = 0, onVolume = 0, unprovable = 0

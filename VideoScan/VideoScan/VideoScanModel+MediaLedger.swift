@@ -402,9 +402,18 @@ extension VideoScanModel {
         guard !gone.isEmpty else { return 0 }
         let n = purgeRecords(ids: Set(gone.map(\.id)))
         noteCatalogRecordsMutated()
-        log("what-next: removed \(n) missing row\(n == 1 ? "" : "s") from the catalog — nothing on disk was touched: "
-            + gone.prefix(5).map { "\($0.filename) (\($0.volume))" }.joined(separator: ", ")
-            + (gone.count > 5 ? " and \(gone.count - 5) more" : ""))
+        // Name only the rows ACTUALLY purged: purgeRecords leaves anything
+        // on the Master Archive volume alone (Rick 2026-09-22), and says so.
+        let removed = gone.filter { record(forID: $0.id)?.isPurged == true }
+        let leftAlone = gone.count - removed.count
+        if !removed.isEmpty {
+            log("what-next: removed \(n) missing row\(n == 1 ? "" : "s") from the catalog — nothing on disk was touched: "
+                + removed.prefix(5).map { "\($0.filename) (\($0.volume))" }.joined(separator: ", ")
+                + (removed.count > 5 ? " and \(removed.count - 5) more" : ""))
+        }
+        if leftAlone > 0 {
+            log("what-next: left \(leftAlone) missing row\(leftAlone == 1 ? "" : "s") in the catalog — on the Master Archive volume, which only archive actions may change")
+        }
         return n
     }
 

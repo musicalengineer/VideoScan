@@ -114,6 +114,10 @@ struct TriageView: View {
     // item-binding mutation and SwiftUI swaps content inside the same
     // modal presentation. See JunkSheet definition in JunkDeleteAction.swift.
     @State private var junkSheet: JunkSheet? = nil
+    /// What the confirm sheet offers, computed ONCE when it opens — never
+    /// in the sheet body, which SwiftUI re-runs on every pass (2026-09-22:
+    /// the Master Archive filter is O(records), no work in view bodies).
+    @State private var junkConfirmRecords: [VideoRecord] = []
 
     // Pass B — Import-to-Workspace sheet state. Same Identifiable-enum
     // pattern as JunkSheet to avoid chained-.sheet races. Set by the
@@ -370,8 +374,8 @@ struct TriageView: View {
             switch sheet {
             case .confirm:
                 DeleteConfirmedJunkConfirmSheet(
-                    // Never offer Master Archive files (tree or volume, 2026-09-22).
-                    records: model.recordsBulkVerbsMayRemove(confirmedJunk),
+                    // Computed when the sheet opened (the Delete Junk button).
+                    records: junkConfirmRecords,
                     onCancel: { /* dismiss is automatic via @Environment(\.dismiss) */ },
                     onAct: JunkDeleteAction.makeOnAct(model: model) { result, mode, bytesSucceeded in
                         // Atomic content transition: confirm → result.
@@ -470,6 +474,8 @@ struct TriageView: View {
             // be reused (confirmedJunk + DeleteConfirmedJunkConfirmSheet).
             if !confirmedJunk.isEmpty {
                 Button {
+                    // Never offer Master Archive files (tree or volume, 2026-09-22).
+                    junkConfirmRecords = model.recordsBulkVerbsMayRemove(confirmedJunk)
                     junkSheet = .confirm
                 } label: {
                     Label("Delete Junk (\(confirmedJunk.count))",

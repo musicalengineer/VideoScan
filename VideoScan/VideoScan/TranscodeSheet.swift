@@ -176,14 +176,22 @@ struct TranscodeSheet: View {
     private func startTranscode() {
         guard let outputFolder, let outputURL else { return }
 
+        // "Replace" never deletes (2026-09-22): the new file is written
+        // first; then the old one goes to the Trash — unless it is on the
+        // Master Archive volume, where it is kept and the new file gets a
+        // free name beside it. The job's summary says which happened.
+        var replaceExisting = false
         if FileManager.default.fileExists(atPath: outputURL.path) {
             let alert = NSAlert()
             alert.messageText = "Replace Existing Transcode?"
             alert.informativeText = outputURL.path
+                + "\n\nThe existing file is moved to the Trash only after the new one is finished. "
+                + "On the Master Archive volume it is never removed — the new file is saved beside it instead."
             alert.alertStyle = .warning
             alert.addButton(withTitle: "Replace")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
+            replaceExisting = true
         }
 
         TranscodeDestination.remember(directory: outputFolder)
@@ -191,7 +199,8 @@ struct TranscodeSheet: View {
             $0.startTranscode(record: request.record,
                               preset: preset,
                               outputURL: outputURL,
-                              model: model)
+                              model: model,
+                              replaceExisting: replaceExisting)
         }
         dismiss()
         // No openWindow here any more (2026-09-21): a user-started job brings

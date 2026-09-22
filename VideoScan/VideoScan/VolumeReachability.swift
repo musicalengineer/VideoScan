@@ -261,6 +261,20 @@ enum VolumeReachability {
     /// Read the kernel mount table. Internal so tests can sanity-check it
     /// ("/" must always be present) without faking mounts.
     static func currentMountedRoots() -> Set<String> {
+        mountTable(localOnly: false)
+    }
+
+    /// Mounted roots whose filesystem is LOCAL (`MNT_LOCAL`): internal,
+    /// USB/Thunderbolt, RAID, disk images. SMB/AFP/NFS mounts are left out.
+    /// The flag comes from the same in-memory `getmntinfo(MNT_NOWAIT)` read
+    /// — no statfs, no round-trip to a server — so a hung network share
+    /// cannot stall the caller (2026-09-22 archive-protection follow-up:
+    /// the archive-volume snapshot reads a UUID off every root it lists).
+    static func currentLocalMountedRoots() -> Set<String> {
+        mountTable(localOnly: true)
+    }
+
+    private static func mountTable(localOnly: Bool) -> Set<String> {
         getmntinfoLock.withLockUnchecked {
             var mntPtr: UnsafeMutablePointer<statfs>?
             let count = getmntinfo(&mntPtr, MNT_NOWAIT)
@@ -268,6 +282,7 @@ enum VolumeReachability {
             var roots = Set<String>()
             for i in 0..<Int(count) {
                 var fs = mntPtr[i]
+                if localOnly, (fs.f_flags & UInt32(MNT_LOCAL)) == 0 { continue }
                 let mountPoint = withUnsafePointer(to: &fs.f_mntonname) {
                     $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
                         String(cString: $0)
