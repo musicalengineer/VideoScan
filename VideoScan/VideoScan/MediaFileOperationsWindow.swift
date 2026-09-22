@@ -107,6 +107,10 @@ enum MediaFileOperationsWindowOpener {
         for delay in [0.0, 0.15, 0.5] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 guard mine == generation else { return }   // a newer open owns the window now
+                // A user-started job raised the window AFTER this open was
+                // scheduled: a late retry must not bury it (2026-09-22 fix —
+                // the forwarder re-asserts for ~1 s, well inside this window).
+                if defersToForward(forwardedAt: forwardedAt, now: Date()) { return }
                 sendBehind(captured, ledger: ledger)
             }
         }

@@ -21,11 +21,24 @@ import Foundation
 
 // MARK: - Fakes
 
+/// Counts raises and reports a canned "it worked" state synchronously.
 @MainActor
 private final class CountingPresenter: MediaFileOperationsWindowPresenting {
     var raises = 0
-    func bringForwardWithoutFocus() { raises += 1 }
+    static let canned = MediaFileOperationsForwardReport(
+        was: .behind,
+        diagnostics: MediaFileOperationsForwardDiagnostics(
+            found: true, isVisible: true, miniaturized: false, frontmost: true,
+            screen: "BenQ MA320U", mainWindowScreen: "BenQ MA320U", level: 0,
+            occlusionVisible: true, onActiveSpace: true),
+        raises: 1, standDown: nil)
+    func bringForwardWithoutFocus(report: @escaping (MediaFileOperationsForwardReport) -> Void) {
+        raises += 1
+        report(Self.canned)
+    }
 }
+
+private let cannedTail = " — visible: yes (found: yes, was: behind, front: yes, screen: BenQ MA320U, level: 0, occlusion: visible, space: active, raises: 1)"
 
 /// Settable clock — the debounce is tested without sleeping.
 @MainActor
@@ -86,7 +99,7 @@ struct MediaFileOperationsWindowForwardLogicTests {
         let rig = Rig()
         rig.center.startedByUser { $0.add(ForwardFakeJob(title: "Trim tape 3")) }
         #expect(rig.presenter.raises == 1)
-        #expect(rig.logBox.lines == ["[mfo] brought Media File Operations forward for Trim tape 3"])
+        #expect(rig.logBox.lines == ["[mfo] brought Media File Operations forward for Trim tape 3" + cannedTail])
     }
 
     @Test func backgroundJobNeverRaises() {
@@ -213,7 +226,7 @@ struct MediaFileOperationsWindowForwardLogicTests {
         rig.center.noteUserStartedOutsideCenter(title: "Combine 3 pairs")
         rig.center.noteUserStartedOutsideCenter(title: "Combine 1 pair")
         #expect(rig.presenter.raises == 1)
-        #expect(rig.logBox.lines == ["[mfo] brought Media File Operations forward for Combine 3 pairs"])
+        #expect(rig.logBox.lines == ["[mfo] brought Media File Operations forward for Combine 3 pairs" + cannedTail])
     }
 
     @Test func decideTable() {
@@ -408,5 +421,440 @@ struct MediaFileOperationsWindowForwardSensorTests {
     @Test func theCenterReportsEveryAddToTheForwarder() throws {
         let s = try source("MediaFileOperations.swift")
         #expect(s.contains("windowForwarder.jobStarted(id: job.id, title: job.title,"))
+    }
+}
+
+// MARK: - 2026-09-22 fix: deferred, re-asserting, honest raise
+//
+// Rick (Release b334247b): "didn't seem like the MFO window jumped in front"
+// although the log said it had. The raise ran synchronously inside the
+// sheet button's action (before `dismiss()`), and the log line was written
+// before anything checked the result. These suites drive the REAL presenter
+// (AppKitMediaFileOperationsWindowPresenter) through its two seams — a fake
+// window system and a manual clock — so the scheduling rules are tested
+// without real windows. Real AppKit ordering (what a sheet's end does to
+// its parent) cannot be exercised in a unit test; the honest log line is
+// the field sensor for that.
+
+/// A scripted window system. `obs` is what the next `observe()` returns;
+/// `onPerform` lets a test model AppKit's reaction to an action.
+@MainActor
+private final class FakeWindowing: MediaFileOperationsForwardWindowing {
+    typealias Obs = MediaFileOperationsForwardSession.Observation
+    var obs = Obs()
+    var own: Set<Int> = []
+    var performed: [MediaFileOperationsForwardSession.Action] = []
+    var opens = 0
+    var begins = 0
+    var ends = 0
+    var diag = MediaFileOperationsForwardDiagnostics()
+    var onPerform: ((MediaFileOperationsForwardSession.Action, FakeWindowing) -> Void)?
+
+    func beginRaise() -> (observation: Obs, ownWindowNumbers: Set<Int>) {
+        begins += 1
+        return (obs, own)
+    }
+    func observe() -> Obs { obs }
+    func perform(_ action: MediaFileOperationsForwardSession.Action) {
+        performed.append(action)
+        onPerform?(action, self)
+    }
+    func openJobWindow() { opens += 1 }
+    func diagnostics() -> MediaFileOperationsForwardDiagnostics { diag }
+    func endRaise() { ends += 1 }
+}
+
+/// Manual clock: `run(until:)` fires every scheduled item due by then, in
+/// time order (stable for equal times, like the main queue).
+@MainActor
+private final class ManualScheduler: MediaFileOperationsForwardScheduling {
+    private var items: [(at: TimeInterval, seq: Int, work: @MainActor () -> Void)] = []
+    private var seq = 0
+    private(set) var now: TimeInterval = 0
+    var scheduledDelays: [TimeInterval] = []
+
+    func schedule(after seconds: TimeInterval, _ work: @escaping @MainActor () -> Void) {
+        seq += 1
+        scheduledDelays.append(seconds)
+        items.append((now + seconds, seq, work))
+    }
+    func run(until t: TimeInterval) {
+        while let next = items.filter({ $0.at <= t }).min(by: { ($0.at, $0.seq) < ($1.at, $1.seq) }) {
+            items.removeAll { $0.seq == next.seq }
+            now = next.at
+            next.work()
+        }
+        now = t
+    }
+    var pending: Int { items.count }
+}
+
+private let jobNo = 50, mainNo = 10, sheetNo = 11, otherNo = 77
+
+@MainActor
+private struct PresenterRig {
+    let windowing = FakeWindowing()
+    let scheduler = ManualScheduler()
+    let stamps = Box()
+    let reports = ReportBox()
+    let presenter: AppKitMediaFileOperationsWindowPresenter
+
+    final class Box { var count = 0 }
+    final class ReportBox { var items: [MediaFileOperationsForwardReport] = [] }
+
+    /// Default scene: Promote — Confirm clicked in a SHEET (11) on the main
+    /// window (10); the job window (50) is open but behind.
+    init() {
+        let stamps = self.stamps
+        presenter = AppKitMediaFileOperationsWindowPresenter(
+            windowing: windowing, scheduler: scheduler, stampForward: { stamps.count += 1 })
+        windowing.own = [sheetNo, mainNo]
+        windowing.obs = .init(jobFound: true, jobVisible: true, jobMiniaturized: false,
+                              jobIsFrontmost: false, jobIsKey: false,
+                              jobWindowNumber: jobNo, keyWindowNumber: sheetNo,
+                              anchorWindowNumber: sheetNo)
+        // Model AppKit: orderFront puts the job window on top; makeKey on
+        // the anchor moves the keyboard there.
+        windowing.onPerform = { action, w in
+            switch action {
+            case .orderFront: w.obs.jobIsFrontmost = true
+            case .restoreKeyToAnchor:
+                w.obs.jobIsKey = false
+                w.obs.keyWindowNumber = w.obs.anchorWindowNumber
+            case .deminiaturize: w.obs.jobMiniaturized = false; w.obs.jobIsFrontmost = true
+            }
+        }
+    }
+
+    func raise() {
+        let reports = self.reports
+        presenter.bringForwardWithoutFocus { reports.items.append($0) }
+    }
+
+    /// What AppKit does when the sheet finishes dismissing: the sheet's
+    /// parent takes the keyboard back and lands on top of the job window.
+    func sheetEndsAndBuriesTheJobWindow() {
+        windowing.obs.jobIsFrontmost = false
+        windowing.obs.keyWindowNumber = mainNo
+        windowing.obs.anchorWindowNumber = mainNo
+    }
+}
+
+@MainActor
+@Suite("MFO window forward — deferred presenter")
+struct MediaFileOperationsWindowForwardPresenterTests {
+
+    @Test func nothingMovesSynchronouslyInsideTheStartCall() {
+        let rig = PresenterRig()
+        rig.raise()
+        #expect(rig.windowing.performed.isEmpty, "the sheet is still up — wait a turn")
+        #expect(rig.stamps.count == 1, "legacy open-behind is told to stand down at once")
+        #expect(rig.windowing.opens == 0, "an open window is never re-opened")
+        #expect(rig.scheduler.scheduledDelays == [0, 0.3, 0.9, 1.15])
+    }
+
+    @Test func reassertsAfterTheSheetDismissBuriesIt() {
+        let rig = PresenterRig()
+        rig.raise()
+        rig.scheduler.run(until: 0)
+        #expect(rig.windowing.performed == [.orderFront])
+        rig.sheetEndsAndBuriesTheJobWindow()     // Rick's symptom
+        rig.scheduler.run(until: 0.3)
+        #expect(rig.windowing.performed == [.orderFront, .orderFront], "sheet parent taking key is NOT the user moving focus")
+        rig.scheduler.run(until: 0.9)
+        #expect(rig.windowing.performed.count == 2, "already frontmost ⇒ no third orderFront")
+        #expect(rig.reports.items.isEmpty, "no log line before the last attempt")
+        rig.scheduler.run(until: 1.15)
+        #expect(rig.reports.items.count == 1)
+        #expect(rig.reports.items.first?.raises == 2)
+        #expect(rig.reports.items.first?.was == .behind)
+        #expect(rig.reports.items.first?.standDown == nil)
+        #expect(rig.windowing.ends == 1)
+        #expect(rig.scheduler.pending == 0)
+    }
+
+    @Test func aUserClickStopsEveryLaterReassert() {
+        let rig = PresenterRig()
+        rig.raise()
+        rig.scheduler.run(until: 0)
+        // The user clicks the main window on purpose; it comes front.
+        rig.windowing.obs.userClickedSinceRaise = true
+        rig.sheetEndsAndBuriesTheJobWindow()
+        rig.scheduler.run(until: 1.15)
+        #expect(rig.windowing.performed == [.orderFront], "never fight the user")
+        #expect(rig.reports.items.first?.standDown == .userMovedFocus)
+        #expect(rig.reports.items.first?.raises == 1)
+    }
+
+    @Test func keyboardMovedToAnUnrelatedWindowStandsDown() {
+        let rig = PresenterRig()
+        rig.raise()
+        rig.scheduler.run(until: 0)
+        rig.windowing.obs.jobIsFrontmost = false
+        rig.windowing.obs.keyWindowNumber = otherNo    // ⌘` to Hallie, say
+        rig.scheduler.run(until: 1.15)
+        #expect(rig.windowing.performed == [.orderFront])
+        #expect(rig.reports.items.first?.standDown == .userMovedFocus)
+    }
+
+    @Test func closedWindowIsOpenedThenKeyboardHandedBackOnce() {
+        let rig = PresenterRig()
+        rig.windowing.own = [mainNo]
+        rig.windowing.obs = .init(jobFound: false, keyWindowNumber: mainNo, anchorWindowNumber: mainNo)
+        rig.raise()
+        #expect(rig.windowing.opens == 1, "closed ⇒ SwiftUI creates it right away")
+        rig.scheduler.run(until: 0)
+        #expect(rig.windowing.performed.isEmpty, "still being created")
+        // SwiftUI created it in front AND made it key.
+        rig.windowing.obs.jobFound = true
+        rig.windowing.obs.jobVisible = true
+        rig.windowing.obs.jobIsFrontmost = true
+        rig.windowing.obs.jobIsKey = true
+        rig.windowing.obs.jobWindowNumber = jobNo
+        rig.windowing.obs.keyWindowNumber = jobNo
+        rig.scheduler.run(until: 0.3)
+        #expect(rig.windowing.performed == [.restoreKeyToAnchor, .orderFront])
+        rig.scheduler.run(until: 1.15)
+        #expect(rig.windowing.performed.count == 2)
+        #expect(rig.reports.items.first?.was == .closed)
+        #expect(rig.reports.items.first?.standDown == nil, "our own key hand-back is not the user moving focus")
+    }
+
+    @Test func alreadyFrontDoesNothingAndSaysSo() {
+        let rig = PresenterRig()
+        rig.windowing.obs.jobIsFrontmost = true   // e.g. Transcode sheet ON the MFO window
+        rig.windowing.obs.keyWindowNumber = jobNo
+        rig.raise()
+        rig.scheduler.run(until: 1.15)
+        #expect(rig.windowing.performed.isEmpty)
+        #expect(rig.reports.items.first?.was == .front)
+        #expect(rig.reports.items.first?.raises == 0)
+    }
+
+    @Test func minimizedIsDeminiaturizedOnce() {
+        let rig = PresenterRig()
+        rig.windowing.obs.jobVisible = false
+        rig.windowing.obs.jobMiniaturized = true
+        rig.windowing.onPerform = nil               // the Dock animation is slow
+        rig.raise()
+        #expect(rig.windowing.opens == 0, "minimized is not closed")
+        rig.scheduler.run(until: 0.9)
+        #expect(rig.windowing.performed == [.deminiaturize])
+        rig.scheduler.run(until: 1.15)
+        #expect(rig.reports.items.first?.was == .minimized)
+    }
+
+    @Test func aModalAlertSkipsTheTurnWithoutStandingDown() {
+        let rig = PresenterRig()
+        rig.windowing.obs.modalRunning = true
+        rig.raise()
+        rig.scheduler.run(until: 0.3)
+        #expect(rig.windowing.performed.isEmpty)
+        rig.windowing.obs.modalRunning = false
+        rig.scheduler.run(until: 1.15)
+        #expect(rig.windowing.performed == [.orderFront])
+        #expect(rig.reports.items.first?.standDown == nil)
+    }
+
+    @Test func aNewerRaiseSupersedesTheOlderOnesTurns() {
+        let rig = PresenterRig()
+        rig.raise()
+        rig.scheduler.run(until: 0.1)
+        #expect(rig.windowing.performed == [.orderFront])
+        rig.windowing.obs.jobIsFrontmost = false
+        rig.raise()                                 // second raise at t = 0.1
+        rig.scheduler.run(until: 2)
+        #expect(rig.reports.items.count == 2, "each raise reports once")
+        #expect(rig.reports.items.first?.standDown == .superseded)
+        #expect(rig.reports.items.last?.standDown == nil)
+        #expect(rig.windowing.ends == 1, "only the current raise stops the click watch")
+        #expect(rig.windowing.begins == 2)
+    }
+
+    @Test func theReportCarriesTheFinalDiagnostics() throws {
+        let rig = PresenterRig()
+        rig.windowing.diag = .init(found: true, isVisible: true, frontmost: true,
+                                   screen: "LG", mainWindowScreen: "BenQ", level: 0,
+                                   occlusionVisible: true, onActiveSpace: false)
+        rig.raise()
+        rig.scheduler.run(until: 1.15)
+        let r = try #require(rig.reports.items.first)
+        #expect(r.diagnostics.screen == "LG")
+        #expect(r.visible == false, "on another Space ⇒ Rick cannot see it")
+    }
+}
+
+@Suite("MFO window forward — session state machine")
+struct MediaFileOperationsWindowForwardSessionTests {
+    typealias S = MediaFileOperationsForwardSession
+
+    private func behind() -> S.Observation {
+        .init(jobFound: true, jobVisible: true, jobIsFrontmost: false,
+              jobWindowNumber: jobNo, keyWindowNumber: mainNo, anchorWindowNumber: mainNo)
+    }
+
+    @Test func behindOrdersFrontWithoutKey() {
+        var s = S(ownWindowNumbers: [mainNo])
+        #expect(s.step(behind()) == [.orderFront])
+        #expect(s.raises == 1)
+    }
+
+    @Test func frontmostDoesNothing() {
+        var s = S(ownWindowNumbers: [mainNo])
+        var o = behind(); o.jobIsFrontmost = true
+        #expect(s.step(o) == [])
+        #expect(s.raises == 0)
+    }
+
+    @Test func notFoundOrNotYetVisibleWaits() {
+        var s = S(ownWindowNumbers: [mainNo])
+        var o = behind(); o.jobFound = false
+        #expect(s.step(o) == [])
+        o.jobFound = true; o.jobVisible = false
+        #expect(s.step(o) == [])
+        #expect(s.standDown == nil)
+    }
+
+    @Test func standDownIsPermanent() {
+        var s = S(ownWindowNumbers: [mainNo])
+        var o = behind(); o.userClickedSinceRaise = true
+        #expect(s.step(o) == [])
+        o.userClickedSinceRaise = false
+        #expect(s.step(o) == [], "a click once is enough")
+        #expect(s.standDown == .userMovedFocus)
+    }
+
+    @Test func keyOnTheJobWindowIsNotAForeignWindow() {
+        var s = S(ownWindowNumbers: [mainNo])
+        var o = behind(); o.keyWindowNumber = jobNo; o.jobIsKey = true
+        #expect(s.step(o) == [.restoreKeyToAnchor, .orderFront])
+        #expect(s.standDown == nil)
+    }
+
+    @Test func keyHandBackHappensOnceAndNeedsAnAnchor() {
+        var s = S(ownWindowNumbers: [mainNo])
+        var o = behind(); o.jobIsKey = true; o.keyWindowNumber = jobNo; o.jobIsFrontmost = true
+        o.anchorWindowNumber = nil
+        #expect(s.step(o) == [], "no visible anchor ⇒ leave the keyboard where it is")
+        o.anchorWindowNumber = mainNo
+        #expect(s.step(o) == [.restoreKeyToAnchor, .orderFront])
+        #expect(s.step(o) == [], "only once")
+    }
+
+    @Test func supersedeStopsFurtherSteps() {
+        var s = S(ownWindowNumbers: [mainNo])
+        s.supersede()
+        #expect(s.step(behind()) == [])
+        #expect(s.standDown == .superseded)
+    }
+
+    @Test func pinnedTimings() {
+        #expect(S.attemptDelays == [0, 0.3, 0.9])
+        #expect(S.reportDelay > S.attemptDelays.last!)
+        #expect(S.reportDelay < MediaFileOperationsWindowForwarder.debounceSeconds,
+                "the legacy opener's stand-down (2 s) covers every attempt")
+    }
+}
+
+@Suite("MFO window forward — honest log line")
+struct MediaFileOperationsWindowForwardLogLineTests {
+    typealias R = MediaFileOperationsForwardReport
+    typealias D = MediaFileOperationsForwardDiagnostics
+
+    private func report(_ d: D, was: R.Before = .behind, raises: Int = 2,
+                        standDown: MediaFileOperationsForwardSession.StandDown? = nil) -> R {
+        R(was: was, diagnostics: d, raises: raises, standDown: standDown)
+    }
+
+    private let seen = D(found: true, isVisible: true, miniaturized: false, frontmost: true,
+                         screen: "BenQ MA320U", mainWindowScreen: "BenQ MA320U", level: 0,
+                         occlusionVisible: true, onActiveSpace: true)
+
+    @Test func visibleYes() {
+        #expect(R.logLine(title: "promote x", report: report(seen))
+                == "[mfo] brought Media File Operations forward for promote x — visible: yes (found: yes, was: behind, front: yes, screen: BenQ MA320U, level: 0, occlusion: visible, space: active, raises: 2)")
+    }
+
+    @Test func buriedBehindAnotherWindow() {
+        var d = seen; d.frontmost = false; d.occlusionVisible = false
+        #expect(R.logLine(title: "t", report: report(d))
+                == "[mfo] brought Media File Operations forward for t — visible: no (found: yes, was: behind, front: no, screen: BenQ MA320U, level: 0, occlusion: hidden, space: active, raises: 2)")
+    }
+
+    @Test func otherScreenAndOtherSpaceAreNamed() {
+        var d = seen; d.screen = "LG UltraFine"; d.onActiveSpace = false; d.level = 3
+        let line = R.logLine(title: "t", report: report(d))
+        #expect(line.contains("visible: no"))
+        #expect(line.contains("screen: LG UltraFine, main window screen: BenQ MA320U, level: 3"))
+        #expect(line.contains("space: other"))
+    }
+
+    @Test func notFound() {
+        #expect(R.logLine(title: "t", report: report(D(), was: .closed, raises: 0))
+                == "[mfo] brought Media File Operations forward for t — visible: no (found: no, was: closed, raises: 0)")
+    }
+
+    @Test func standDownIsNamed() {
+        let line = R.logLine(title: "t", report: report(seen, raises: 1, standDown: .userMovedFocus))
+        #expect(line.hasSuffix("raises: 1, stood down: user moved focus)"))
+    }
+
+    @Test func minimizedStaysInvisible() {
+        var d = seen; d.miniaturized = true
+        let line = R.logLine(title: "t", report: report(d, was: .minimized))
+        #expect(line.contains("visible: no"))
+        #expect(line.contains("minimized: yes"))
+    }
+
+    @Test func beforeClassification() {
+        typealias O = MediaFileOperationsForwardSession.Observation
+        #expect(R.before(O()) == .closed)
+        #expect(R.before(O(jobFound: true, jobVisible: false)) == .closed)
+        #expect(R.before(O(jobFound: true, jobVisible: false, jobMiniaturized: true)) == .minimized)
+        #expect(R.before(O(jobFound: true, jobVisible: true, jobIsFrontmost: false)) == .behind)
+        #expect(R.before(O(jobFound: true, jobVisible: true, jobIsFrontmost: true)) == .front)
+    }
+}
+
+@MainActor
+@Suite("MFO window forward — log timing + legacy opener sensor")
+struct MediaFileOperationsWindowForwardTimingSensorTests {
+
+    /// Holds the report callback instead of calling it — like the real
+    /// presenter, which reports ~1.2 s later.
+    @MainActor
+    private final class DeferredPresenter: MediaFileOperationsWindowPresenting {
+        var pending: [(MediaFileOperationsForwardReport) -> Void] = []
+        func bringForwardWithoutFocus(report: @escaping (MediaFileOperationsForwardReport) -> Void) {
+            pending.append(report)
+        }
+    }
+
+    @Test func theLogLineWaitsForThePresentersReport() {
+        let presenter = DeferredPresenter()
+        var lines: [String] = []
+        let f = MediaFileOperationsWindowForwarder(presenter: presenter, log: { lines.append($0) })
+        f.jobStarted(id: UUID(), title: "Promote tape", origin: .user)
+        #expect(lines.isEmpty, "the old bug: logging success before anything moved")
+        presenter.pending.first?(CountingPresenter.canned)
+        #expect(lines == ["[mfo] brought Media File Operations forward for Promote tape" + cannedTail])
+    }
+
+    @Test func legacyOpenBehindChecksTheForwardAtEntryAndOnEveryRetry() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan/MediaFileOperationsWindow.swift")
+        let s = try String(contentsOf: url, encoding: .utf8)
+        #expect(s.components(separatedBy: "defersToForward(forwardedAt: forwardedAt, now: Date())").count - 1 == 2)
+    }
+
+    @Test func productionPresenterIsTheDeferredOne() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan/MediaFileOperationsWindowForwarder.swift")
+        let s = try String(contentsOf: url, encoding: .utf8)
+        #expect(s.contains("presenter: AppKitMediaFileOperationsWindowPresenter()"))
+        // The honest line is composed only from a report, never logged inline.
+        #expect(s.components(separatedBy: "log(\"[mfo] brought").count - 1 == 0)
     }
 }

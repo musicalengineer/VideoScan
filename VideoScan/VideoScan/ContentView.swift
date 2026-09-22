@@ -363,6 +363,10 @@ struct CatalogView: View {
     @State private var showClearRecorrelateConfirm = false
     @State private var deleteTargetVolume: String = ""
     @State private var deleteTargetCount: Int = 0
+    /// The forecast block (2026-09-21: Rick should see "0 deletable" in
+    /// seconds, not after a 90-minute run) — built once at click time
+    /// from the catalog and stored fixities, no file reads.
+    @State private var deleteTargetForecast: String = ""
     /// Confirmation body built once at click time from
     /// `duplicateDeletionSelection` (2026-08-18, "Also clean up working
     /// copies" mode) — see WorkingCopyCleanupText.confirmation.
@@ -655,6 +659,9 @@ struct CatalogView: View {
                 deleteTargetSummary = selection.confirmationText(
                     volumeName: URL(fileURLWithPath: path).lastPathComponent)
                 deleteTargetCrossMode = selection.crossVolumeMode
+                let forecast = model.deleteDuplicatesForecast(onVolume: path)
+                deleteTargetForecast = forecast.confirmationText(volume: URL(fileURLWithPath: path).lastPathComponent)
+                appLog.write(forecast.logLine(volume: URL(fileURLWithPath: path).lastPathComponent) + " (Start confirmation)")
                 showDeleteDuplicatesConfirm = true
             },
             onClearResults: { model.clearResults() },
@@ -989,7 +996,7 @@ struct CatalogView: View {
             Text(volumeRenameNoticeMessage(notice))
         }
         .alert("Delete Duplicates", isPresented: $showDeleteDuplicatesConfirm) {
-            Button("Delete \(deleteTargetCount) Files", role: .destructive) {
+            Button(DeleteDuplicatesForecast.confirmationButtonTitle, role: .destructive) {
                 // A Media File Operation since 2026-09-20: DELETE row,
                 // progress in bytes, rate + ETA, Pause/Stop, a saved plan
                 // for resume, and the file list on click.
@@ -1580,7 +1587,12 @@ extension CatalogView {
     /// removal. Off = the pre-existing same-drive-only wording.
     var deleteDuplicatesConfirmMessage: String {
         let volume = URL(fileURLWithPath: deleteTargetVolume).lastPathComponent
-        var text = "This will permanently delete \(deleteTargetCount) high-confidence duplicate(s) on:\n\n\(deleteTargetVolume)\n\n"
+        // Lead with the forecast in plain words (2026-09-22) — the old
+        // "This will permanently delete N…" was untrue with the Trash
+        // tier and left-alone rows.
+        var text = deleteTargetForecast.isEmpty
+            ? "Check \(deleteTargetCount) high-confidence duplicate(s) on \(volume).\n\n"
+            : deleteTargetForecast + "\n\n"
         if deleteTargetCrossMode {
             text += "\(deleteTargetSummary)\n\n"
             text += WorkingCopyCleanupText.confirmationOn + "\n\n"

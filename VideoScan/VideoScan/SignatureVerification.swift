@@ -918,7 +918,8 @@ enum SignatureVerification {
     /// size change mid-read.
     private static func cancellableFullHash(path: String, label: String,
                                             hooks: Hooks,
-                                            blockSize: Int = FileHasher.segmentSize) -> String {
+                                            blockSize: Int = FileHasher.segmentSize,
+                                            acceptOpened: ((stat) -> Bool)? = nil) -> String {
         guard blockSize > 0 else { return "" }
         let fd = open(path, O_RDONLY)
         guard fd >= 0 else { return "" }
@@ -928,6 +929,9 @@ enum SignatureVerification {
         guard fstat(fd, &info) == 0,
               (info.st_mode & S_IFMT) == S_IFREG,
               info.st_size > 0 else { return "" }
+        // The caller may insist the OPENED file is the one it stat'ed (a
+        // symlink retargeted between the stat and the open).
+        if let acceptOpened, !acceptOpened(info) { return "" }
         let expectedSize = Int(info.st_size)
         var sha = SHA256()
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: blockSize, alignment: 16)
@@ -948,6 +952,53 @@ enum SignatureVerification {
         }
         guard !hooks.shouldCancel(), total == expectedSize else { return "" }
         return sha.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// What reading one whole file for its stamp-bound fixity found.
+    enum WholeFileFixity: Equatable, Sendable {
+        case fixity(ContentFixity)
+        /// The path could not be stat'ed (offline drive, gone).
+        case unavailable
+        /// Opened but not read to the end (I/O error, not a regular file).
+        case unreadable
+        /// The stat after the read did not reproduce the stat before it.
+        case changedDuringRead
+        case cancelled
+    }
+
+    /// Read `path` IN FULL and bind the digest to its stat stamp — exactly
+    /// the way `verify` produces a keeper's fixity: stamp before, stream
+    /// the whole file (bounded 1 MiB buffer), stamp after, and the two
+    /// stamps must be identical (ctime included). The Delete Duplicates
+    /// job uses it to PROVE a sibling copy (2026-09-21): a sibling with no
+    /// current evidence is read once on its own drive and, when its
+    /// digest is the duplicate's, counts through the ordinary
+    /// stamp-bound-fixity path. `label` is what `didReadBlock` reports
+    /// ("sibling").
+    static func wholeFileFixity(path: String, label: String, hooks: Hooks = .live) -> WholeFileFixity {
+        guard !hooks.shouldCancel() else { return .cancelled }
+        guard let before = FileIdentityStamp.capture(path: path) else { return .unavailable }
+        return wholeFileFixity(path: path, label: label, hooks: hooks, before: before)
+    }
+
+    /// The body, with the pre-read stamp supplied (tests hand in a stamp
+    /// of ANOTHER file to stand for a symlink retargeted between the stat
+    /// and the open). The file actually opened must be `before`'s device
+    /// + inode (fstat on the descriptor, QA round 3 nit) — otherwise
+    /// `.changedDuringRead`, nothing stored.
+    static func wholeFileFixity(path: String, label: String, hooks: Hooks, before: FileIdentityStamp) -> WholeFileFixity {
+        var swapped = false
+        let digest = cancellableFullHash(path: path, label: label, hooks: hooks) { opened in
+            let same = UInt64(opened.st_dev) == before.device && UInt64(opened.st_ino) == before.inode
+            if !same { swapped = true }
+            return same
+        }
+        if hooks.shouldCancel() { return .cancelled }
+        if swapped { return .changedDuringRead }
+        guard !digest.isEmpty else { return .unreadable }
+        guard let fixity = ContentFixity.captured(path: path, digest: digest, byteCount: before.size, before: before)
+        else { return .changedDuringRead }
+        return .fixity(fixity)
     }
 
     /// Human-facing description of what a matching signature does and

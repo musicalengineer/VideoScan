@@ -51,6 +51,21 @@
 // then unlink or move to the Trash. Then the catalog settles (carry-over,
 // row removal, ledger, log), the row is updated and the plan saved again.
 //
+// PROVE SIBLINGS + FORECAST + ONE LINE PER ROW (Rick's SanDisk run,
+// 2026-09-21: 2,898 rows, 1.5 hours, zero deleted — the siblings every
+// row named had no current evidence, so none counted). When a row's
+// count falls short, phase one reads each named sibling that lacks
+// current evidence IN FULL, once, on its own drive, and stamps it
+// (DeleteDuplicatesSiblingProof.swift); the fixity is stored on the
+// sibling's record so no later row or run reads it again while its stamp
+// holds, and a matching sibling counts through the ordinary gather and
+// the removal-boundary re-check. The pair reserves the sibling drive's
+// slot weight at dispatch (an HDD sibling → the pair runs alone). Before
+// the run, a forecast from the catalog alone (DeleteDuplicatesForecast)
+// is logged as one line — the Start confirmation shows the same. Every
+// decided row writes ONE `[dupjob]` line to videoscan.log, and the run
+// ends (or pauses, or stops) with counts AND sizes for every outcome.
+//
 // PARALLELISM: pairs whose duplicate lives on an SSD may run two at a
 // time; on anything else (HDD, RAID, network, unknown) one at a time —
 // two sequential readers on one spinning disk thrash it. A weighted slot
@@ -110,6 +125,9 @@ struct DeleteDuplicatesWorkItem: Sendable {
     let quarantineDirectoryName: String
     /// The family's other copies, for the copy-count tier.
     let tierCandidates: DeletionTierCandidates
+    /// Which siblings the worker may READ to prove them (2026-09-21), and
+    /// when to stop. `.none` = stat only, as before.
+    var siblingAllowance: SiblingProver.Allowance = .none
 }
 
 enum DeleteDuplicatesDiskOutcome: Sendable {
@@ -142,6 +160,11 @@ struct DeleteDuplicatesPhaseOne: Sendable {
     /// drive is gone). The row records both so the plan owes a put-back
     /// (QA 2026-09-21 F1). nil for every other outcome.
     var retainedInQuarantine: RetainedInQuarantine? = nil
+    /// Every sibling this pair read in full to prove it (2026-09-21),
+    /// WHATEVER the verdict — each fresh fixity is stored on the
+    /// sibling's record so no later row or run reads it again while its
+    /// stamp holds.
+    var siblingReads: [SiblingRead] = []
 
     struct RetainedInQuarantine: Sendable, Equatable {
         let directory: String
@@ -185,9 +208,11 @@ enum DeleteDuplicatesDiskWorker {
             box.set(fixity)
             downstream?(fixity)
         }
-        let outcome = phaseOne(item, hooks: observing)
+        var reads: [SiblingRead] = []
+        let outcome = phaseOne(item, hooks: observing, siblingReads: &reads)
         return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: box.value,
-                                        retainedInQuarantine: retainedInQuarantine(outcome))
+                                        retainedInQuarantine: retainedInQuarantine(outcome),
+                                        siblingReads: reads)
     }
 
     /// The quarantine folder a `.retained` outcome left the file in, with
@@ -204,18 +229,39 @@ enum DeleteDuplicatesDiskWorker {
     }
 
     private static func phaseOne(_ item: DeleteDuplicatesWorkItem,
-                                 hooks: SignatureVerification.Hooks) -> DeleteDuplicatesDiskOutcome {
+                                 hooks: SignatureVerification.Hooks,
+                                 siblingReads: inout [SiblingRead]) -> DeleteDuplicatesDiskOutcome {
+        var candidates = item.tierCandidates
+        // The duplicate's own inode, before anything moves: a sibling that
+        // is a hard link of it is never read and never counted.
+        candidates.duplicateIdentity = FileIdentityStamp.capture(path: item.path)
         // Before moving or reading anything: with the keeper's digest
         // already known (a usable stored fixity), the family's other copies
         // can be stat'ed now. If fewer than two verified copies could
-        // remain, the file is left where it is — no move, no read (QA #5:
-        // an offline archive copy is found out here, not after a hash).
-        // The decision after the hash is still the one that counts.
+        // remain — even after reading every sibling a read could prove —
+        // the file is left where it is: no move, no read (QA #5: an
+        // offline archive copy is found out here, not after a hash). The
+        // decision after the hash is still the one that counts.
         if let fixity = item.keeperFixity, fixity.isUsableForVerification {
-            let pre = DeletionTierFacts.gather(item.tierCandidates, digest: fixity.digest)
+            let pre = DeletionTierFacts.gather(candidates, digest: fixity.digest)
             if pre.remainingVerifiedCopies < DeletionTierDecision.minimumForTrash {
-                return .leftAlone(reason: DeletionTierDecision.decide(facts: pre, preferTrash: false).reason, facts: pre)
+                let (readable, offline) = SiblingProver.readableSiblings(candidates, allowance: item.siblingAllowance)
+                if pre.remainingVerifiedCopies + readable.count < DeletionTierDecision.minimumForTrash {
+                    for i in offline { candidates.otherCopies[i].unverifiedNote = "offline — not counted" }
+                    let noted = offline.isEmpty ? pre : DeletionTierFacts.gather(candidates, digest: fixity.digest)
+                    return .leftAlone(reason: DeletionTierDecision.decide(facts: noted, preferTrash: false).reason,
+                                      facts: noted)
+                }
             }
+        }
+        // With the duplicate verified and in quarantine: prove siblings
+        // that lack current evidence (reads, stopping at the goal), then
+        // count — the ordinary gather, now with their fresh fixities.
+        func proveThenGather(_ ticket: QuarantineTicket) -> DeletionTierFacts {
+            candidates.duplicateIdentity = ticket.baseline
+            siblingReads += SiblingProver.prove(&candidates, digest: ticket.proof.fullHash,
+                                                allowance: item.siblingAllowance, hooks: hooks)
+            return DeletionTierFacts.gather(candidates, digest: ticket.proof.fullHash)
         }
         switch SignatureVerification.holdForSingleRead(keeperPath: item.keeperPath, keeperFixity: item.keeperFixity,
                                                        duplicatePath: item.path,
@@ -223,7 +269,7 @@ enum DeleteDuplicatesDiskWorker {
         case .held(let hold):
             switch SignatureVerification.verifyHeld(hold, hooks: hooks) {
             case .verified(let ticket):
-                return .quarantined(ticket, facts: DeletionTierFacts.gather(item.tierCandidates, digest: ticket.proof.fullHash))
+                return .quarantined(ticket, facts: proveThenGather(ticket))
             case .refused(let failure):
                 return .refused(reason: duplicateRefusalNote(failure, keeper: item.keeperFilename),
                                 cancelled: failure == .cancelled)
@@ -238,7 +284,7 @@ enum DeleteDuplicatesDiskWorker {
             case .success(let proof):
                 switch SignatureVerification.quarantine(proof, directoryName: item.quarantineDirectoryName, hooks: hooks) {
                 case .quarantined(let ticket):
-                    return .quarantined(ticket, facts: DeletionTierFacts.gather(item.tierCandidates, digest: proof.fullHash))
+                    return .quarantined(ticket, facts: proveThenGather(ticket))
                 case .refused(let failure):
                     return .refused(reason: duplicateRefusalNote(failure, keeper: item.keeperFilename),
                                     cancelled: failure == .cancelled)
@@ -385,6 +431,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// The main-actor task driving each pair in flight (settle + save).
     private var pairTasks: [UUID: Task<Void, Never>] = [:]
     private var inFlight: Set<UUID> = []
+    /// Sibling path → the pair in flight that may be reading it (one read
+    /// per sibling per run; cleared when that pair settles).
+    private var siblingReaders: [String: UUID] = [:]
+    /// Pairs that waited for another pair's sibling read (tests read it).
+    private(set) var siblingReadWaits = 0
     /// The most pairs that were ever in flight together (tests read it).
     private(set) var peakInFlight = 0
     private var pauseWaiter: CheckedContinuation<Void, Never>?
@@ -420,6 +471,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// Volume classification for the slot weight. nil → the model's scan
     /// targets (longest prefix). Tests inject.
     var mediaTechForPath: ((String) -> VolumeMediaTech)?
+    /// Where the one-line-per-row `[dupjob]` lines, the forecast and the
+    /// counts-and-sizes summary go: nil → `appLog` (videoscan.log). Tests
+    /// inject an in-memory sink so nothing touches the global.
+    var appLogSink: (any LogSink)?
     /// Test seam: runs just before the final save (finding #6 regression
     /// makes that save fail and checks the last good plan stays put).
     var testHookBeforeFinalSave: (@MainActor () -> Void)?
@@ -585,6 +640,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         isPausedValue = true
         publishProgress()
         model?.log("  Delete Duplicates on \(volumeName): paused at \(progressText()) — plan kept; quit is safe, Resume continues.")
+        logSummary("paused")
     }
 
     /// The quit guard's log line for a paused, idle job.
@@ -637,6 +693,27 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// slots (one at a time; unknown counts as HDD).
     nonisolated static func slotWeight(for tech: VolumeMediaTech) -> Int {
         tech == .ssd ? 1 : slotCapacity
+    }
+
+    /// Catalog only, no disk: the siblings a read might have to prove for
+    /// this row — none when the copies with stored evidence (usable
+    /// fixity, this digest) already reach `goal`; otherwise every sibling
+    /// without usable stored evidence. Siblings whose stored stamp turns
+    /// out stale are found by the worker's stat and may be read only if
+    /// their drive fits the weight reserved from this list.
+    nonisolated static func siblingsThatMayNeedReading(_ candidates: DeletionTierCandidates,
+                                                       keeperDigest keeperFixity: ContentFixity?,
+                                                       goal: Int) -> [String] {
+        let wanted = keeperFixity.flatMap { $0.isUsableForVerification ? $0.digest : nil }
+        func holds(_ f: ContentFixity?) -> Bool {
+            guard let f, f.isUsableForVerification else { return false }
+            return wanted == nil || f.digest == wanted
+        }
+        var stored = 1
+        stored += candidates.archiveCopies.filter { holds($0.fixity) }.count
+        stored += candidates.otherCopies.filter { holds($0.fixity) }.count
+        guard stored < goal else { return [] }
+        return candidates.otherCopies.filter { !($0.fixity?.isUsableForVerification ?? false) }.map(\.path)
     }
 
     private func mediaTech(for path: String) -> VolumeMediaTech {
@@ -705,6 +782,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         }
         await savePlan(context: "plan made")
         publishProgress()
+        // The honest forecast, from the catalog + stored fixities alone
+        // (no file reads) — the same numbers the Start confirmation showed.
+        let forecast = model.deleteDuplicatesForecast(for: prepared)
+        jobLog(forecast.logLine(volume: volumeName))
+        model.log("  " + forecast.logLine(volume: volumeName))
 
         tally = PairTally()
         settledSinceCheckpoint = 0
@@ -737,7 +819,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // second pair cannot read the same keeper again beside it.
             // Every later pair of that keeper stats it and may overlap.
             let keeperHasFixity = model.record(forID: entry.keeperID)?.contentFixity?.isUsableForVerification == true
-            let weight = keeperHasFixity ? Self.slotWeight(for: mediaTech(for: entry.path)) : Self.slotCapacity
+            var weight = keeperHasFixity ? Self.slotWeight(for: mediaTech(for: entry.path)) : Self.slotCapacity
             await acquireSlots(weight)
             if pauseRequested || stopRequested || planSaveFailed {
                 // Asked to hold / stop while waiting for a slot: give it
@@ -759,10 +841,15 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             case .skip(let note, let line):
                 mutatePlan { $0.set(entry.id, .skipped, note: note) }
                 model.log("  " + line)
+                tally.skipped += 1
+                tally.bytesSkipped += entry.sizeBytes
+                rowLog("skipped", entry, note)
                 releaseSlots(weight)
                 continue
             case .refuse(let note):
                 tally.refused += 1
+                tally.bytesRefused += entry.sizeBytes
+                rowLog("refused", entry, note)
                 let mutated = model.noteRefusedDuplicate(expectedID: entry.id, expectedPath: entry.path,
                                                          filename: entry.filename, reason: note)
                 tally.catalogMutated = tally.catalogMutated || mutated
@@ -777,13 +864,65 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             let alsoPending = Set(current.entries.filter { !$0.status.isSettled && $0.id != entry.id }.map(\.id))
             let candidates = model.deletionTierCandidates(record: record, keeper: keeper, excluding: alsoPending)
 
+            // ONE READ PER SIBLING PER RUN: a sibling another pair in flight
+            // may be reading right now is not read twice beside it — this
+            // row gives its slots back, waits for that pair to settle (its
+            // fixity is then on the sibling's record) and is re-checked
+            // from the top with the fresh catalog.
+            if let owner = candidates.otherCopies.lazy.compactMap({ self.siblingReaders[$0.path] })
+                .first(where: { $0 != entry.id }), let running = pairTasks[owner] {
+                releaseSlots(weight)
+                cursor -= 1
+                siblingReadWaits += 1
+                await running.value
+                continue
+            }
+
+            // PROVE SIBLINGS (2026-09-21): a sibling read occupies a slot
+            // on the SIBLING's drive. When the stored evidence cannot
+            // reach the goal and a sibling may need reading, the pair's
+            // weight grows to the heaviest drive it may read (an HDD
+            // sibling → the pair runs alone). Only siblings whose drive
+            // fits the reserved weight may be read.
+            let preferTrash = model.duplicateKeeperSettings.preferTrashForEveryDuplicate
+            let goal = SiblingProver.Allowance.goal(preferTrash: preferTrash)
+            var allowance = SiblingProver.Allowance.none
+            let needy = Self.siblingsThatMayNeedReading(candidates, keeperDigest: keeper.contentFixity, goal: goal)
+            if !needy.isEmpty {
+                let wanted = needy.map { Self.slotWeight(for: mediaTech(for: $0)) }.max() ?? weight
+                if wanted > weight {
+                    let extra = wanted - weight
+                    await acquireSlots(extra)
+                    weight += extra
+                    if pauseRequested || stopRequested || planSaveFailed {
+                        // Asked to hold / stop while waiting for the
+                        // sibling drive's slot: give everything back and
+                        // re-check this same row from the top.
+                        releaseSlots(weight)
+                        cursor -= 1
+                        continue
+                    }
+                }
+            }
+            if !candidates.otherCopies.isEmpty {
+                let reserved = weight
+                allowance = SiblingProver.Allowance(
+                    goal: goal,
+                    readablePaths: Set(candidates.otherCopies.map(\.path).filter {
+                        Self.slotWeight(for: mediaTech(for: $0)) <= reserved
+                    }))
+            }
+            // Claim the siblings this pair may read (no usable stored
+            // evidence, drive reserved) until it settles.
+            for path in needy where allowance.readablePaths.contains(path) { siblingReaders[path] = entry.id }
+
             mutatePlan { $0.set(entry.id, .verifying) }
             model.duplicateStatus = "Verifying duplicate \((plan?.counts.settled ?? 0) + 1) of \(current.entries.count)…"
             let item = DeleteDuplicatesWorkItem(
                 path: entry.path, keeperPath: keeper.fullPath, keeperFilename: keeper.filename,
                 keeperFixity: keeper.contentFixity,
                 quarantineDirectoryName: Self.quarantineDirectoryName(planID: current.id, entryID: entry.id),
-                tierCandidates: candidates)
+                tierCandidates: candidates, siblingAllowance: allowance)
             inFlight.insert(entry.id)
             peakInFlight = max(peakInFlight, inFlight.count)
             // The pair runs as its own main-actor task so a second SSD pair
@@ -823,6 +962,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                          : "kept; Resume in Media File Operations, or at the next launch.")
                       + (freed.isEmpty ? "" : " (\(freed))"))
             model.duplicateStatus = "\(tally.removed) deleted — \(remaining) remaining, resume offered"
+            logSummary(quitRequested ? "suspended for quit" : "stopped")
             if !(await savePlan(context: "suspended for \(how)")) {
                 model.log("  The suspended plan could not be saved — the last saved plan stays in place and will be offered instead.")
             }
@@ -836,8 +976,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             let reason = planSaveFailed
                 ? "stopped — the plan could not be saved, so the rest was left alone"
                 : "cancelled before verification"
+            let leftBytes = finalPlan.entries.reduce(Int64(0)) { $0 + ($1.status.isSettled ? 0 : $1.sizeBytes) }
             let left = finalPlan.skipRemaining(reason: reason)
             tally.failed += left
+            tally.bytesFailed += leftBytes
             if !planSaveFailed {
                 model.log("  Duplicate deletion cancelled before verification completed")
             }
@@ -900,6 +1042,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         if failed > 0 { summaryParts.append("\(failed) not done") }
         if leftAlone > 0 { summaryParts.append("\(leftAlone) left alone") }
         let summary = summaryParts.joined(separator: " · ")
+        logSummary(planSaveFailed ? "stopped (plan not saved)" : (stopRequested ? "cancelled" : "done"))
         if planSaveFailed {
             finish(failed: "Stopped after \(deleted + trashed) deleted — the plan could not be saved (\(summary))")
         } else if state.cancelWasRequested || Task.isCancelled {
@@ -916,6 +1059,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                          item: DeleteDuplicatesWorkItem, weight: Int) async {
         defer {
             pairTasks[entry.id] = nil
+            siblingReaders = siblingReaders.filter { $0.value != entry.id }
         }
         guard let model, plan != nil else {
             inFlight.remove(entry.id); releaseSlots(weight); return
@@ -949,7 +1093,14 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
            model.storeContentFixity(recordID: keeper.id, path: keeper.fullPath, fixity: learned) {
             tally.catalogMutated = true
         }
+        // Every sibling read to prove it: its fresh fixity goes on ITS
+        // record now (where the keeper's goes), whatever it said and
+        // whatever this pair's verdict — the next row naming it, or the
+        // next run, only stats it (2026-09-21).
+        noteSiblingReads(phaseOne.siblingReads, for: entry, model: model)
+        var finalFacts: DeletionTierFacts?
         if case .quarantined(let ticket, let facts) = outcome {
+            finalFacts = facts
             // COPY-COUNT TIER, part 2 — with the digest in hand.
             let decided = DeletionTierDecision.decide(
                 facts: facts, preferTrash: model.duplicateKeeperSettings.preferTrashForEveryDuplicate)
@@ -993,6 +1144,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 }
                 outcome = phaseTwo.outcome
                 if phaseTwo.evidenceChanged {
+                    finalFacts = phaseTwo.facts
                     // The count the file goes by is the boundary's, not the
                     // save's: the row, the log and (through `decision`) the
                     // ledger line say so, naming the copy that changed.
@@ -1032,7 +1184,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         let concurrency = inFlight.count
 
         settle(outcome, entry: entry, keeper: keeper, preAwait: preAwait, decision: decision,
-               trashVolume: trashVolume, model: model)
+               facts: finalFacts, trashVolume: trashVolume, model: model)
 
         rate.add(bytes: entry.sizeBytes, seconds: seconds, concurrency: concurrency)
         publishProgress()
@@ -1059,32 +1211,48 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     }
 
     /// The run's counters (the old loop's five locals).
-    private struct PairTally {
+    struct PairTally: Equatable, Sendable {
         var deleted = 0
         var trashed = 0
         var failed = 0
         var refused = 0
         var leftAlone = 0
+        /// Rows the catalog no longer authorised (gone, re-decided).
+        var skipped = 0
         var bytesFreed: Int64 = 0
         var bytesTrashed: Int64 = 0
+        var bytesFailed: Int64 = 0
+        var bytesRefused: Int64 = 0
+        var bytesLeftAlone: Int64 = 0
+        var bytesSkipped: Int64 = 0
+        /// Siblings read in full to prove them, and the bytes read.
+        var siblingReads = 0
+        var siblingBytes: Int64 = 0
         var catalogMutated = false
         var removed: Int { deleted + trashed }
     }
+
+    /// This run's counters so far (tests read them).
+    var runTally: PairTally { tally }
 
     /// The catalog + plan side of one pair's outcome: counters, the row's
     /// status and note, the keeper's fixity, the ledger line, the log.
     private func settle(_ outcome: DeleteDuplicatesDiskOutcome, entry: DeleteDuplicatesPlan.Entry,
                         keeper: VideoRecord, preAwait: VideoRecord, decision: DeletionTierDecision?,
-                        trashVolume: String, model: VideoScanModel) {
+                        facts: DeletionTierFacts?, trashVolume: String, model: VideoScanModel) {
         switch outcome {
         case .quarantined:
             // Unreachable — phase 2 always settles a ticket.
             tally.failed += 1
+            tally.bytesFailed += entry.sizeBytes
+            rowLog("failed", entry, "left in quarantine (internal: phase 2 did not run)")
             mutatePlan { $0.set(entry.id, .failed, note: "left in quarantine (internal: phase 2 did not run)") }
         case .refused(let reason, let cancelled):
             settleRefused(reason: reason, cancelled: cancelled, entry: entry, model: model)
         case .leftAlone(let reason, let facts):
             tally.leftAlone += 1
+            tally.bytesLeftAlone += entry.sizeBytes
+            rowLog("left alone", entry, Self.leftAloneWords(facts: facts, reason: reason))
             mutatePlan {
                 $0.set(entry.id, .skipped, note: reason)
                 $0.setTier(entry.id, DeletionTierDecision(tier: nil, remainingVerifiedCopies: facts.remainingVerifiedCopies, reason: reason),
@@ -1093,10 +1261,14 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             model.log("  Left alone \(entry.filename): \(reason)")
         case .failed(let reason):
             tally.failed += 1
+            tally.bytesFailed += entry.sizeBytes
+            rowLog("failed", entry, reason)
             model.log("  FAILED to delete \(entry.filename): \(reason)")
             mutatePlan { $0.set(entry.id, .failed, note: reason) }
         case .retained(let path, let reason):
             tally.failed += 1
+            tally.bytesFailed += entry.sizeBytes
+            rowLog("failed", entry, "retained safely at \(path): \(reason)")
             model.log("  RETAINED safely at \(path): \(reason)")
             mutatePlan { $0.set(entry.id, .failed, note: "retained safely at \(path): \(reason)") }
             if stopRequested {
@@ -1105,6 +1277,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         case .deleted(let bytes, let proof):
             tally.bytesFreed += bytes
             tally.deleted += 1
+            rowLog("deleted", entry, Self.remainWords(facts: facts, decision: decision))
             settleRemoved(entry: entry, keeper: keeper, preAwait: preAwait, proof: proof, tier: .permanent,
                           decision: decision, trashVolume: nil, model: model)
             mutatePlan {
@@ -1114,6 +1287,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         case .trashed(let bytes, _, let proof):
             tally.bytesTrashed += bytes
             tally.trashed += 1
+            rowLog("trashed", entry, Self.remainWords(facts: facts, decision: decision)
+                   + " — \(DeletionTierText.inTheTrashOf(trashVolume))")
             settleRemoved(entry: entry, keeper: keeper, preAwait: preAwait, proof: proof, tier: .trash,
                           decision: decision, trashVolume: trashVolume, model: model)
             mutatePlan {
@@ -1129,21 +1304,28 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // Suspended, not decided: back to pending for the resume.
             let how = quitRequested ? "quit" : "Stop"
             mutatePlan { $0.set(entry.id, .pending, note: "interrupted by \(how) — will be re-checked at resume") }
+            rowLog("put back", entry, "interrupted by \(how) — will be re-checked at resume")
             model.log("  \(quitRequested ? "Quit" : "Stopped") while verifying \(entry.filename) — put back; it will be re-checked at resume")
             interruptedFileOutcomes.append("put back \(entry.filename) at \(entry.path)")
         } else if cancelled && planSaveFailed {
             tally.failed += 1
+            tally.bytesFailed += entry.sizeBytes
+            rowLog("skipped", entry, "the plan could not be saved after quarantine — put back and left alone")
             mutatePlan { $0.set(entry.id, .skipped, note: "the plan could not be saved after quarantine — put back and left alone") }
             model.log("  Put back \(entry.filename): the plan could not be saved after quarantine — left alone")
         } else if cancelled {
             // Not done, not refused: the file is untouched and
             // keeps its disposition; it counts with the rest.
             tally.failed += 1
+            tally.bytesFailed += entry.sizeBytes
+            rowLog("skipped", entry, "cancelled during verification — left alone")
             mutatePlan { $0.set(entry.id, .skipped, note: "cancelled during verification — left alone") }
             model.log("  Stopped while verifying \(entry.filename) — left alone")
             interruptedFileOutcomes.append("put back \(entry.filename) at \(entry.path)")
         } else {
             tally.refused += 1
+            tally.bytesRefused += entry.sizeBytes
+            rowLog("refused", entry, reason)
             let mutated = model.noteRefusedDuplicate(expectedID: entry.id, expectedPath: entry.path,
                                                      filename: entry.filename, reason: reason)
             tally.catalogMutated = tally.catalogMutated || mutated
@@ -1187,6 +1369,100 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         let outcome = await worker.value
         if workerTokens[entryID] == token { workers[entryID] = nil; workerTokens[entryID] = nil }
         return outcome
+    }
+
+    // MARK: App-log lines (2026-09-21 — one line per decided row)
+
+    private func jobLog(_ line: String) {
+        (appLogSink ?? appLog).write(line)
+    }
+
+    /// "[dupjob] trashed copy.mov (1.2 GB) — 2 verified copies remain: …".
+    private func rowLog(_ verb: String, _ entry: DeleteDuplicatesPlan.Entry, _ detail: String) {
+        jobLog(Self.rowLine(verb: verb, filename: entry.filename, bytes: entry.sizeBytes, detail: detail))
+    }
+
+    nonisolated static func rowLine(verb: String, filename: String, bytes: Int64, detail: String) -> String {
+        "[dupjob] \(verb) \(filename) (\(sizeText(bytes)))" + (detail.isEmpty ? "" : " — \(detail)")
+    }
+
+    nonisolated static func sizeText(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    /// "2 verified copies remain: keeper on LaCieWorkspace, sibling b.mov
+    /// on CrucialX9" — from the facts the file actually went by.
+    nonisolated static func remainWords(facts: DeletionTierFacts?, decision: DeletionTierDecision?) -> String {
+        guard let facts else { return decision?.reason ?? "" }
+        let n = facts.remainingVerifiedCopies
+        return "\(n) verified cop\(n == 1 ? "y remains" : "ies remain"): " + facts.counted.joined(separator: ", ")
+    }
+
+    /// "only the keeper on LaCieWorkspace would remain (sibling b.mov on
+    /// X differs …)" — or the reason as recorded when more than one copy
+    /// was counted (a boundary put-back).
+    nonisolated static func leftAloneWords(facts: DeletionTierFacts, reason: String) -> String {
+        let tail = facts.notCounted.isEmpty ? "" : " (" + facts.notCounted.joined(separator: "; ") + ")"
+        if facts.remainingVerifiedCopies <= 1 {
+            // Say WHY when other copies exist but their drives are away —
+            // "only the original remains" would be untrue (QA round 3).
+            let offline = facts.notCounted.contains { $0.contains("offline") }
+            return (offline ? "other copies offline — " : "")
+                + "only the \(facts.counted.first ?? "keeper") would remain" + tail
+        }
+        return reason
+    }
+
+    /// Sibling reads of one pair: store each fresh fixity on the
+    /// sibling's record (id AND path must still match), count them, and
+    /// log one line each.
+    private func noteSiblingReads(_ reads: [SiblingRead], for entry: DeleteDuplicatesPlan.Entry, model: VideoScanModel) {
+        for read in reads {
+            if read.bytes > 0 {
+                tally.siblingReads += 1
+                tally.siblingBytes += read.bytes
+            }
+            if let fixity = read.fixity, let id = read.recordID,
+               model.storeContentFixity(recordID: id, path: read.path, fixity: fixity) {
+                tally.catalogMutated = true
+            }
+            let line = "[dupjob] read \(read.label) (\(Self.sizeText(read.bytes))) for \(entry.filename) — \(read.result.word)"
+            jobLog(line)
+            model.log("  Read \(read.label) to prove it for \(entry.filename): \(read.result.word)")
+            deleteDupLog.info("\(line, privacy: .public)")
+        }
+    }
+
+    /// "delete duplicates done: SanDiskWorkspace — deleted 3 (1.2 GB) ·
+    /// trashed 1 (400 MB) · left alone 2 (800 MB) · refused 1 (400 MB) ·
+    /// freed 1.2 GB · 4 sibling copies read (1.6 GB)" — counts AND sizes
+    /// for every outcome of THIS run (partial when stopped or paused);
+    /// failed / skipped only when there were any.
+    nonisolated static func summaryLine(how: String, volume: String, tally t: PairTally) -> String {
+        var parts = [
+            "deleted \(t.deleted) (\(sizeText(t.bytesFreed)))",
+            "trashed \(t.trashed) (\(sizeText(t.bytesTrashed)))",
+            "left alone \(t.leftAlone) (\(sizeText(t.bytesLeftAlone)))",
+            "refused \(t.refused) (\(sizeText(t.bytesRefused)))",
+        ]
+        if t.failed > 0 { parts.append("not done \(t.failed) (\(sizeText(t.bytesFailed)))") }
+        if t.skipped > 0 { parts.append("skipped \(t.skipped) (\(sizeText(t.bytesSkipped)))") }
+        parts.append("freed \(sizeText(t.bytesFreed))")
+        parts.append("\(t.siblingReads) sibling cop\(t.siblingReads == 1 ? "y" : "ies") read (\(sizeText(t.siblingBytes)))")
+        return "delete duplicates \(how): \(volume) — " + parts.joined(separator: " · ")
+    }
+
+    /// True once this job wrote its own terminal summary (done /
+    /// cancelled / stopped / suspended) — the MFO center then skips its
+    /// generic outcome line, so the log has ONE final line per run, the
+    /// one with per-outcome sizes.
+    private(set) var wroteOwnTerminalLine = false
+
+    private func logSummary(_ how: String) {
+        if how != "paused" { wroteOwnTerminalLine = true }
+        let line = Self.summaryLine(how: how, volume: volumeName, tally: tally)
+        jobLog(line)
+        deleteDupLog.notice("\(line, privacy: .public)")
     }
 
     // MARK: Slot gate (main actor)
