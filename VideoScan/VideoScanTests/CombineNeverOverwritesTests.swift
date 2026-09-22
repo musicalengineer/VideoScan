@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import os
 @testable import VideoScan
 
 // MARK: - CombineNeverOverwritesTests
@@ -135,10 +136,14 @@ struct CombineNeverOverwritesTests {
                     expectedDuration: Double? = nil) async -> Bool {
         let job = addJob(model, pair: pair, outputFolder: out,
                          expectedDuration: expectedDuration ?? pair.video.durationSeconds)
+        // Same per-batch index combineAllPairsInternal builds.
+        let index = VideoScanModel.combineOutputIndex(records: model.records, outputFolder: out)
         return await model.processCombinePair(
             video: pair.video, audio: pair.audio, outputFolder: out,
             tempBase: FileManager.default.temporaryDirectory, hasRAMDisk: false,
-            jobIndex: job
+            jobIndex: job,
+            priorOutputPath: pair.video.pairGroupID.flatMap { index.byGroup[$0] },
+            existingOutputOwners: index.ownerByPath
         )
     }
 
@@ -238,9 +243,11 @@ struct CombineNeverOverwritesTests {
 
     // MARK: - A file already at (or appearing at) the final name
 
-    @Test func preExistingFinal_isUntouched_andOutputPublishedBeside() async throws {
+    /// Unknown provenance (legacy record, no record, nil pair group):
+    /// assume it is this pair's — skip BEFORE any work, touch nothing.
+    @Test func preExistingFinal_unattributed_isSkipped_andUntouched() async throws {
         try #require(Self.toolsPresent, "ffmpeg/ffprobe not found")
-        let root = try Self.makeDir("pre_existing")
+        let root = try Self.makeDir("pre_existing_unattributed")
         defer { try? FileManager.default.removeItem(at: root) }
         let out = root.appendingPathComponent("out")
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
@@ -249,6 +256,39 @@ struct CombineNeverOverwritesTests {
         try Self.sentinel.write(to: final)
 
         let model = VideoScanModel()
+        let muxStarted = OSAllocatedUnfairLock(initialState: false)
+        let ok = await CombineTestSeams.$beforeMux.withValue({ _, _ in muxStarted.withLock { $0 = true } }) {
+            await Self.run(model, pair, into: out)
+        }
+        #expect(ok)
+        #expect(!muxStarted.withLock { $0 }, "skip must happen before staging/ffmpeg")
+        #expect(model.dashboard.combineSkipped == 1)
+        #expect(try Data(contentsOf: final) == Self.sentinel, "pre-existing file was modified")
+        #expect(Self.names(in: out) == ["test_clip_combined.mov"])
+        try await Task.sleep(nanoseconds: 400_000_000)   // console flushes every 0.15 s
+        #expect(model.dashboard.consoleLines.contains { $0.contains("already exists; not re-made") })
+    }
+
+    /// The catalog PROVES the file at the name came from a different pair
+    /// → make this pair's output and publish it beside ("… 2.mov").
+    @Test func preExistingFinal_provenOtherPair_isUntouched_andOutputPublishedBeside() async throws {
+        try #require(Self.toolsPresent, "ffmpeg/ffprobe not found")
+        let root = try Self.makeDir("pre_existing_other_pair")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let out = root.appendingPathComponent("out")
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let pair = try Self.makePair(.movProRes, in: root, stem: "test_clip", seconds: 2)
+        let final = out.appendingPathComponent("test_clip_combined.mov")
+        try Self.sentinel.write(to: final)
+
+        let model = VideoScanModel()
+        let other = VideoRecord()
+        other.filename = final.lastPathComponent
+        other.fullPath = final.path
+        other.directory = out.path
+        other.combinedFromPairID = UUID()          // a DIFFERENT pair
+        model.records = [other]
+
         let ok = await Self.run(model, pair, into: out)
         #expect(ok)
         #expect(try Data(contentsOf: final) == Self.sentinel, "pre-existing file was modified")
@@ -336,6 +376,62 @@ struct CombineNeverOverwritesTests {
         #expect(ok)
         #expect(model.dashboard.combineSkipped == 1)
         #expect(Self.names(in: out) == ["test_clip_combined.mov"])
+    }
+
+    /// QA red test (2026-09-22): legacy combined records carry no
+    /// combinedFromPairID, and UMID-substitute videos have nil pairGroupID.
+    /// A re-run must not re-mux them into " 2.mov" copies.
+    @Test(arguments: [false, true])
+    func rerun_legacyOrUngroupedOutput_isNotRecombined(_ legacyRecord: Bool) async throws {
+        try #require(Self.toolsPresent, "ffmpeg/ffprobe not found")
+        let root = try Self.makeDir("rerun_dup_\(legacyRecord)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let out = root.appendingPathComponent("out")
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let p = try Self.makePair(.movProRes, in: root, stem: "test_clip", seconds: 2)
+        let pair = legacyRecord ? p : Pair(video: Self.record(path: URL(fileURLWithPath: p.video.fullPath), streamType: .videoOnly, videoCodec: "prores", seconds: 2, group: nil).snapshot(), audio: p.audio)
+        let model = VideoScanModel()
+        #expect(await Self.run(model, pair, into: out))
+        if legacyRecord { model.records.last?.combinedFromPairID = nil }
+        let prior = VideoScanModel.priorCombinedOutputs(records: model.records, outputFolder: out)
+        let job = Self.addJob(model, pair: pair, outputFolder: out, expectedDuration: 2)
+        _ = await model.processCombinePair(video: pair.video, audio: pair.audio, outputFolder: out, tempBase: FileManager.default.temporaryDirectory, hasRAMDisk: false, jobIndex: job, priorOutputPath: pair.video.pairGroupID.flatMap { prior[$0] })
+        #expect(Self.names(in: out) == ["test_clip_combined.mov"], "re-run duplicated: \(Self.names(in: out))")
+    }
+
+    // MARK: - Publish failure keeps the verified output
+
+    /// RENAME_EXCL fails with a hard error (not EEXIST/ENOTSUP) for the
+    /// final names: the verified output must NOT be deleted — it is moved
+    /// to `.vs-kept.` (off the sweep pattern) and its path reported.
+    @Test func publishError_keepsVerifiedOutput_neverDeletesIt() async throws {
+        try #require(Self.toolsPresent, "ffmpeg/ffprobe not found")
+        let root = try Self.makeDir("publish_error")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let out = root.appendingPathComponent("out")
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let pair = try Self.makePair(.movProRes, in: root, stem: "test_clip", seconds: 2)
+
+        let model = VideoScanModel()
+        let failFinals: @Sendable (String, String) -> Int32 = { src, dst in
+            if dst.contains(".vs-kept.") {
+                return renamex_np(src, dst, UInt32(RENAME_EXCL)) == 0 ? 0 : errno
+            }
+            return EIO
+        }
+        let ok = await CombineOutputPublish.$renameExclSyscall.withValue(failFinals) {
+            await Self.run(model, pair, into: out)
+        }
+        #expect(!ok)
+        let names = Self.names(in: out)
+        let kept = names.filter { $0.contains(".vs-kept.") }
+        #expect(kept.count == 1, "verified output must be kept: \(names)")
+        if let k = kept.first {
+            #expect(Self.probeDuration(out.appendingPathComponent(k)).map { abs($0 - 2) < 0.5 } == true)
+        }
+        #expect(Self.partials(in: out).isEmpty)
+        try await Task.sleep(nanoseconds: 400_000_000)   // console flushes every 0.15 s
+        #expect(model.dashboard.consoleLines.contains { $0.contains("finished but not published") && $0.contains("output kept at") })
     }
 
     // MARK: - Cancel

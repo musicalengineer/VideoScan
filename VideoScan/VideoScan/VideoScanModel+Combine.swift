@@ -102,17 +102,21 @@ extension VideoScanModel {
         return (localVideo, localAudio, tempDir)
     }
 
-    /// Where each pair already has a combined output in `outputFolder`,
-    /// keyed by the pair group it was combined from. One pass over the
-    /// catalog per BATCH (never per pair, never in a view body).
-    ///
-    /// This replaces "skip if <video>_combined.mov exists": a same-named
-    /// file there may belong to a DIFFERENT pair (videos that share a base
-    /// name in different source folders), so only a catalogued output that
-    /// was combined from THIS pair counts as "already done".
-    static func priorCombinedOutputs(records: [VideoRecord], outputFolder: URL) -> [UUID: String] {
+    /// What the catalog knows about combined outputs already in one output
+    /// folder. Built with ONE pass over the catalog per BATCH (never per
+    /// pair, never in a view body).
+    struct CombineOutputIndex: Sendable, Equatable {
+        /// pair group → the output combined from it (first seen).
+        var byGroup: [UUID: String] = [:]
+        /// standardized output path → the pair group it was combined from.
+        /// Only records WITH a combinedFromPairID appear; a file absent
+        /// from this map has unknown provenance.
+        var ownerByPath: [String: UUID] = [:]
+    }
+
+    static func combineOutputIndex(records: [VideoRecord], outputFolder: URL) -> CombineOutputIndex {
         let folder = outputFolder.standardizedFileURL.path
-        var map: [UUID: String] = [:]
+        var index = CombineOutputIndex()
         for rec in records {
             guard let group = rec.combinedFromPairID else { continue }
             // Cheap string compare first; standardize only a near miss
@@ -121,19 +125,55 @@ extension VideoScanModel {
             guard dir == folder
                     || URL(fileURLWithPath: dir).standardizedFileURL.path == folder
             else { continue }
-            if map[group] == nil { map[group] = rec.fullPath }
+            if index.byGroup[group] == nil { index.byGroup[group] = rec.fullPath }
+            index.ownerByPath[URL(fileURLWithPath: rec.fullPath).standardizedFileURL.path] = group
         }
-        return map
+        return index
     }
 
-    /// Process one video/audio pair end-to-end: skip-if-already-combined,
-    /// pause-gate, stage inputs, mux, clean up. Returns true on success.
+    /// pair group → this pair's already-catalogued output in `outputFolder`.
+    static func priorCombinedOutputs(records: [VideoRecord], outputFolder: URL) -> [UUID: String] {
+        combineOutputIndex(records: records, outputFolder: outputFolder).byGroup
+    }
+
+    enum CombineSkipDecision: Equatable {
+        /// Nothing there (or only outputs PROVEN to be other pairs') — make it.
+        case proceed
+        /// This pair's catalogued output is still on disk.
+        case skipAlreadyCombined(path: String)
+        /// A file with this pair's output name exists and the catalog can't
+        /// prove it came from a DIFFERENT pair — assume it is this pair's.
+        case skipNameExists(path: String)
+    }
+
+    /// The skip rule (Manager ruling 2026-09-22, conservative — a re-run
+    /// must never re-mux and publish " 2.mov" copies of what is already
+    /// there): walk `<name>.mov`, `<name> 2.mov`, … while each exists.
+    /// Skip unless EVERY existing one is proven (catalog combinedFromPairID,
+    /// non-nil and ≠ this pair's group) to be another pair's output; only
+    /// then proceed — and the publish lands beside them.
+    static func combineSkipDecision(outURL: URL, priorOutputPath: String?, pairGroupID: UUID?,
+                                    owners: [String: UUID],
+                                    fileExists: (String) -> Bool) -> CombineSkipDecision {
+        if let prior = priorOutputPath, fileExists(prior) { return .skipAlreadyCombined(path: prior) }
+        for n in 1...200 {
+            let candidate = n == 1 ? outURL : CombineOutputPublish.besideURL(for: outURL, attempt: n)
+            let path = candidate.standardizedFileURL.path
+            guard fileExists(path) else { return .proceed }
+            guard let owner = owners[path], owner != pairGroupID else {
+                return .skipNameExists(path: path)
+            }
+        }
+        return .proceed
+    }
+
+    /// Process one video/audio pair end-to-end: skip rule, pause-gate,
+    /// stage inputs, mux, clean up. Returns true on success or skip.
     ///
-    /// `priorOutputPath`: this pair's already-catalogued combined output in
-    /// `outputFolder` (see `priorCombinedOutputs`). The pair is skipped only
-    /// when that file is still on disk. A file that merely has the expected
-    /// NAME is never a reason to skip — or to overwrite: the new output is
-    /// published beside it (CombineOutputPublish).
+    /// `priorOutputPath` / `existingOutputOwners` come from the batch's
+    /// `combineOutputIndex`; the skip decision (`combineSkipDecision`) is
+    /// made BEFORE any staging or ffmpeg work. When the name appears while
+    /// the pair runs, the publish still never overwrites (" 2.mov").
     func processCombinePair(
         video: VideoRecordSnapshot,
         audio: VideoRecordSnapshot,
@@ -141,7 +181,8 @@ extension VideoScanModel {
         tempBase: URL,
         hasRAMDisk: Bool,
         jobIndex: Int,
-        priorOutputPath: String? = nil
+        priorOutputPath: String? = nil,
+        existingOutputOwners: [String: UUID] = [:]
     ) async -> Bool {
         if Task.isCancelled { return false }
         await combinePauseGate.waitIfPaused()
@@ -167,16 +208,24 @@ extension VideoScanModel {
             return false
         }
 
-        // Skip if THIS pair was already combined into this folder (re-run
-        // after Stop). Not "a file has the name" — see priorCombinedOutputs.
-        let fm = FileManager.default
-        if let prior = priorOutputPath, fm.fileExists(atPath: prior) {
-            let priorName = (prior as NSString).lastPathComponent
+        let decision = Self.combineSkipDecision(
+            outURL: outURL, priorOutputPath: priorOutputPath, pairGroupID: video.pairGroupID,
+            owners: existingOutputOwners, fileExists: { FileManager.default.fileExists(atPath: $0) })
+        if decision != .proceed {
+            let message: String
+            switch decision {
+            case .skipAlreadyCombined(let path):
+                message = "\((path as NSString).lastPathComponent) — already combined from this pair, skipping"
+            case .skipNameExists(let path):
+                message = "\(outName) — skipped — \((path as NSString).lastPathComponent) already exists; not re-made"
+            case .proceed:
+                message = ""
+            }
             await MainActor.run {
                 self.dashboard.combineCompleted += 1
                 self.dashboard.combineSkipped += 1
                 self.updateJobPhase(jobIndex, .skipped)
-                self.log("  [\(self.dashboard.combineCompleted)/\(self.dashboard.combineTotal)] \(priorName) — already combined from this pair, skipping")
+                self.log("  [\(self.dashboard.combineCompleted)/\(self.dashboard.combineTotal)] \(message)")
             }
             return true
         }
@@ -275,9 +324,10 @@ extension VideoScanModel {
             ffprobePath: ffprobePath, ffmpegPath: CombineEngine.ffmpegPath
         )
         if !verified.ok || Task.isCancelled {
-            let reason = verified.ok ? "stopped before publish" : verified.reason
             removeCombinePartial(partialURL)
-            await failCombineJob(jobIndex, "    ✗ VERIFY FAILED: \(outName) — \(reason)")
+            await failCombineJob(jobIndex, verified.ok
+                                 ? "    ✗ STOPPED: \(outName) — not published"
+                                 : "    ✗ VERIFY FAILED: \(outName) — \(verified.reason)")
             return false
         }
 
@@ -338,8 +388,11 @@ extension VideoScanModel {
         do {
             outcome = try CombineOutputPublish.publish(partial: partial.path, as: outURL)
         } catch {
-            removeCombinePartial(partial)
-            await failCombineJob(jobIndex, "    ✗ FAILED: \(outName) — could not publish: \(error.localizedDescription)")
+            // NEVER delete a verified partial on a publish error — it may
+            // be hours of work. Keep it and say exactly where it is.
+            let kept = CombineOutputPublish.keepUnpublished(partial)
+            appLog.write("combine: \(outName) finished but not published (\(error.localizedDescription)) — output kept at \(kept.path)")
+            await failCombineJob(jobIndex, "    ✗ \(outName) — finished but not published: \(error.localizedDescription) — output kept at \(kept.path)")
             return nil
         }
         if case .publishedBeside(let beside, let kept, let reason) = outcome {
@@ -347,6 +400,24 @@ extension VideoScanModel {
             appLog.write("combine: \(kept.path) already existed (kept) — published as \(beside.lastPathComponent)")
         }
         return outcome.url
+    }
+
+    /// Remove partials a crashed/killed earlier run left in the output
+    /// folder (older than 6 h, exact partial pattern, not reserved by a
+    /// running job — CombineOutputPublish.sweepStalePartials). Directory
+    /// I/O runs off the main actor; each removal is logged with its size.
+    func sweepStaleCombinePartials(in folder: URL) async {
+        let result = await Task.detached(priority: .utility) {
+            CombineOutputPublish.sweepStalePartials(in: folder)
+        }.value
+        for swept in result.removed {
+            let line = "combine: removed stale partial \(folder.path)/\(swept.name) (\(Formatting.humanSize(swept.sizeBytes)))"
+            log("  \(line)")
+            appLog.write(line)
+        }
+        for failure in result.errors {
+            log("  ⚠ could not remove stale partial \(failure)")
+        }
     }
 
     /// Count a pair as failed and say why (one line in the dashboard log).
@@ -630,9 +701,10 @@ extension VideoScanModel {
             filteredPairs.map { (video: $0.video.snapshot(), audio: $0.audio.snapshot()) }
         // One catalog pass per batch: which pairs already have a combined
         // output in this folder (the only valid reason to skip a pair).
-        let priorOutputs = Self.priorCombinedOutputs(records: records, outputFolder: outputFolder)
+        let outputIndex = Self.combineOutputIndex(records: records, outputFolder: outputFolder)
 
         let newTask = Task {
+            await sweepStaleCombinePartials(in: outputFolder)
             let (tempBase, hasRAMDisk) = await mountCombineRAMDisk()
             let semaphore = AsyncSemaphore(limit: maxConcurrency ?? self.perfSettings.combineConcurrency)
 
@@ -640,7 +712,7 @@ extension VideoScanModel {
                 for (i, (video, audio)) in snapshotPairs.enumerated() {
                     if Task.isCancelled { break }
                     let jobIndex = jobOffset + i
-                    let priorOutputPath = video.pairGroupID.flatMap { priorOutputs[$0] }
+                    let priorOutputPath = video.pairGroupID.flatMap { outputIndex.byGroup[$0] }
                     group.addTask { [self] in
                         do {
                             return try await semaphore.withPermit {
@@ -649,7 +721,8 @@ extension VideoScanModel {
                                     outputFolder: outputFolder,
                                     tempBase: tempBase, hasRAMDisk: hasRAMDisk,
                                     jobIndex: jobIndex,
-                                    priorOutputPath: priorOutputPath
+                                    priorOutputPath: priorOutputPath,
+                                    existingOutputOwners: outputIndex.ownerByPath
                                 )
                             }
                         } catch {
