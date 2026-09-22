@@ -135,7 +135,7 @@ struct ArchiveAngelStartSheet: View {
     }
 
     private func start() {
-        fileOpsCenter.startArchiveAngel(count: count, makeLossless: makeLossless, model: model)
+        fileOpsCenter.startedByUser { $0.startArchiveAngel(count: count, makeLossless: makeLossless, model: model) }
         dismiss()
         // Rick 2026-09-10: "the MFO window immediately drops behind the main
         // window, as if nothing is happening" — the user pressed Start; the

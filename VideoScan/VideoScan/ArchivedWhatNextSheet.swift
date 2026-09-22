@@ -407,8 +407,10 @@ struct ArchivedWhatNextSheet: View {
         let options = PrunePlan.Options(keepOne: keepOne, keeperVolume: keeperVolume, bar: model.importanceBar)
         applying = true
         let n = summary.count
-        let job = fileOpsCenter.startPruneApply(shown: shown, selected: selected, recordIDs: request.recordIDs,
-                                                options: options, batchID: request.batchID, model: model)
+        let job = fileOpsCenter.startedByUser {
+            $0.startPruneApply(shown: shown, selected: selected, recordIDs: request.recordIDs,
+                               options: options, batchID: request.batchID, model: model)
+        }
         // The center refuses a second batch while one runs (and a
         // read-only viewer): say so and stay open — nothing was started.
         if job.wasRefused {

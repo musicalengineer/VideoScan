@@ -142,10 +142,10 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         }
         let phrase = words.joined(separator: " ")
 
-        if helpPhrases.contains(phrase) { return .help() }
-        if resetPhrases.contains(phrase) { return .reset }
+        if helpPhrases.contains(phrase) || helpPhrases.contains(unapostrophized(phrase)) { return .help() }
+        if resetPhrases.contains(phrase) || resetPhrases.contains(unapostrophized(phrase)) { return .reset }
         if let scoped = detectHelpTopic(words: words) { return scoped }
-        if let smalltalk = smalltalkPhrases[phrase] { return .smalltalk(smalltalk) }
+        if let smalltalk = smalltalkPhrase(phrase) { return .smalltalk(smalltalk) }
 
         // Family members naturally combine a salutation and a social
         // question: "Hi Hallie, how are you today?" Hallie's name has
@@ -155,7 +155,7 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         // and actual catalog questions on the ordinary query path.
         if let first = words.first, leadingSalutations.contains(first) {
             let remainder = words.dropFirst().joined(separator: " ")
-            if let smalltalk = smalltalkPhrases[remainder] {
+            if let smalltalk = smalltalkPhrase(remainder) {
                 return .smalltalk(smalltalk)
             }
         }
@@ -176,8 +176,8 @@ enum ArchivistConversationCommand: Equatable, Sendable {
                         .map(String.init)
                         .filter { $0 != "hallie" && $0 != "please" }
                 }
-            let hits = clauses.compactMap { smalltalkPhrases[$0.joined(separator: " ")] }
-            let leftovers = clauses.filter { smalltalkPhrases[$0.joined(separator: " ")] == nil }
+            let hits = clauses.compactMap { smalltalkPhrase($0.joined(separator: " ")) }
+            let leftovers = clauses.filter { smalltalkPhrase($0.joined(separator: " ")) == nil }
             if let smalltalk = hits.first,
                leftovers.allSatisfy({ $0.count <= 1 }) {
                 return .smalltalk(smalltalk)
@@ -777,4 +777,55 @@ enum ArchivistConversationCommand: Equatable, Sendable {
 
     static let resetReply =
         "Okay — I've cleared what we were talking about. Ask me anything."
+}
+
+// MARK: - The tables' own words (for the typo front door)
+
+extension ArchivistConversationCommand {
+    /// The small-talk table lists some phrases with and some without
+    /// apostrophes ("whats todays date" but "what's today's date"); once
+    /// the typo front door restores "whats" → "what's", a half-restored
+    /// phrase ("what's todays date") must still match (2026-09-21). Exact
+    /// match first; then the apostrophe-free form against an apostrophe-
+    /// free copy of the table.
+    static func smalltalkPhrase(_ phrase: String) -> Smalltalk? {
+        smalltalkPhrases[phrase] ?? unapostrophizedSmalltalk[unapostrophized(phrase)]
+    }
+
+    static func unapostrophized(_ phrase: String) -> String {
+        phrase.replacingOccurrences(of: "'", with: "")
+    }
+
+    private static let unapostrophizedSmalltalk: [String: Smalltalk] = {
+        var table: [String: Smalltalk] = [:]
+        for (phrase, kind) in smalltalkPhrases {
+            table[unapostrophized(phrase)] = table[unapostrophized(phrase)] ?? kind
+        }
+        return table
+    }()
+
+    /// Every word of the deterministic phrase tables above — help, reset,
+    /// small talk and the social-line vocabularies. HallieTypoNormalizer
+    /// reads a one-keyboard-slip misspelling of one of these as the word
+    /// (2026-09-21: "Good mornng!" and "Thansk, that's really helpful."
+    /// went to the translator because the tables match exact tokens).
+    /// Read-only: nothing here changes what the tables match.
+    static let phraseVocabulary: Set<String> = {
+        let phrases = Array(smalltalkPhrases.keys) + Array(helpPhrases) + Array(resetPhrases)
+            + farewellPhrases + holdOnPhrases + apologyLeads + howToLeads
+        var words = Set(phrases.flatMap {
+            $0.split(whereSeparator: { !$0.isLetter && $0 != "'" }).map(String.init)
+        })
+        words.formUnion(apologyTailVocabulary)
+        words.formUnion(thanksWords)
+        words.formUnion(farewellWords)
+        words.formUnion(helpVocabulary)
+        words.formUnion(howToTopicVocabulary)
+        return words.filter { !$0.contains("'") }
+    }()
+
+    /// Everyday words the weather-aside grammar knows. Real words, never
+    /// "corrected" into anything else ("snow" is not "show").
+    static let everydayWords: Set<String> = weatherWords
+        .union(weatherDayAdjectives).union(weatherTimeWords).union(weatherGlue)
 }

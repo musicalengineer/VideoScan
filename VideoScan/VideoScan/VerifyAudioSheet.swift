@@ -549,28 +549,29 @@ struct VerifyAudioSheet: View {
     }
 
     private func startBalance(_ diagnosis: AudioVerifyDiagnosis) {
-        fileOpsCenter.startBalanceAudio(record: request.record,
-                                        fromDiagnosis: diagnosis,
-                                        model: model,
-                                        plannedOutput: plannedBalanceDestination)
-        dismiss()
-        // Same handoff CleanupSheet uses: open the operations window
-        // (progress + Cancel live there) after the dismissal starts.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            openWindow(id: "combine")
+        fileOpsCenter.startedByUser {
+            $0.startBalanceAudio(record: request.record,
+                                 fromDiagnosis: diagnosis,
+                                 model: model,
+                                 plannedOutput: plannedBalanceDestination)
         }
+        dismiss()
+        // No openWindow here any more (2026-09-21): a user-started job brings
+        // the Media File Operations window forward itself — in front but NOT
+        // key, and only when Settings allows (MediaFileOperationsWindowForwarder).
     }
 
     private func startRebuild(finding: AudioVerifyFinding,
                               diagnosis: AudioVerifyDiagnosis) {
-        fileOpsCenter.startRebuildAudio(
-            record: request.record,
-            reason: VerifyAudioRules.noteFragment(for: finding),
-            shape: diagnosis.shape,
-            model: model)
-        dismiss()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            openWindow(id: "combine")
+        fileOpsCenter.startedByUser {
+            $0.startRebuildAudio(record: request.record,
+                                 reason: VerifyAudioRules.noteFragment(for: finding),
+                                 shape: diagnosis.shape,
+                                 model: model)
         }
+        dismiss()
+        // No openWindow here any more (2026-09-21): a user-started job brings
+        // the Media File Operations window forward itself — in front but NOT
+        // key, and only when Settings allows (MediaFileOperationsWindowForwarder).
     }
 }

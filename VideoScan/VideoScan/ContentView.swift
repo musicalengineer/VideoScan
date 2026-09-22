@@ -991,7 +991,7 @@ struct CatalogView: View {
                 // A Media File Operation since 2026-09-20: DELETE row,
                 // progress in bytes, rate + ETA, Pause/Stop, a saved plan
                 // for resume, and the file list on click.
-                fileOpsCenter.startDeleteDuplicates(onVolume: deleteTargetVolume, model: model)
+                fileOpsCenter.startedByUser { $0.startDeleteDuplicates(onVolume: deleteTargetVolume, model: model) }
                 MediaFileOperationsWindowOpener.openInFront(openWindow)
             }
             .disabled(model.isReadOnly || model.isDeletingDuplicates)
@@ -1006,7 +1006,8 @@ struct CatalogView: View {
                presenting: model.pendingDeleteDuplicatesResume) { plan in
             if plan.isResumable {
                 Button("Resume") {
-                    fileOpsCenter.resumeDeleteDuplicates(plan: plan, model: model)
+                    // The user ACCEPTED the offer — that is a user start.
+                    fileOpsCenter.startedByUser { $0.resumeDeleteDuplicates(plan: plan, model: model) }
                     MediaFileOperationsWindowOpener.openInFront(openWindow)
                 }
             }

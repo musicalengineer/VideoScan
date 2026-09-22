@@ -900,7 +900,8 @@ struct VideoScanApp: App {
                     get: { catalogModel.findTagBackgroundSetting.enabled },
                     set: { catalogModel.setFindTagBackgroundEnabled($0) }
                 ),
-                isFindTagHelperRunning: { catalogModel.isFindTagHelperRunning }
+                isFindTagHelperRunning: { catalogModel.isFindTagHelperRunning },
+                fileOpsForwarder: fileOpsCenter.windowForwarder
             )
             .frame(minWidth: 500, idealWidth: 620, minHeight: 400, idealHeight: 620)
         }

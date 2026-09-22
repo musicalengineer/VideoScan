@@ -440,7 +440,7 @@ refresh_hallie_replay() {
     # the older NIGHTLY_HALLIE_HOST / _MODEL, for a manual run against the M5.
     local host="${VIDEOSCAN_HALLIE_REPLAY_HOST:-${NIGHTLY_HALLIE_HOST:-}}"
     local model="${VIDEOSCAN_HALLIE_REPLAY_MODEL:-${NIGHTLY_HALLIE_MODEL:-}}"
-    log "Hallie replay: strict manifest + advisory corpus, budget ${budget}s, host ${host:-http://127.0.0.1:11434 (the M4's own ollama, replay default)}, model ${model:-the app's selected brain (replay default)}"
+    log "Hallie replay: strict manifest + advisory corpus, budget ${budget}s, host ${host:-http://127.0.0.1:11434 (the M4 local ollama, replay default)}, model ${model:-the selected app brain (replay default)}"
     run_with_process_group_watchdog         $((budget + 180)) "$NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS"         "$LOGFILE.hallie-replay"         "$REPO/scripts/nightly_hallie_replay.sh"             --out "$out" --bin "$app"             ${host:+--host "$host"}             ${model:+--model "$model"}             --budget-seconds "$budget"
     local rc=$?
     if [ -s "$out" ] && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$out" 2>/dev/null; then

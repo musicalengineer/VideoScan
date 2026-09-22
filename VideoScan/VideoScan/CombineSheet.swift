@@ -5,6 +5,11 @@ private let combineOutputFolderKey = "combineOutputFolder"
 
 struct CombineSheet: View {
     @EnvironmentObject var model: VideoScanModel
+    /// Only for the "bring the operations window forward" request —
+    /// combine rows live in the dashboard queue, not the Center's list.
+    /// (`@EnvironmentObject` ≈ a dependency the parent view hierarchy
+    /// injects by type; the catalog's ContentView provides it.)
+    @EnvironmentObject var fileOpsCenter: MediaFileOperationsCenter
     let selectedIDs: Set<UUID>
     @Environment(\.dismiss) var dismiss
     @Environment(\.openWindow) var openWindow
@@ -419,9 +424,10 @@ struct CombineSheet: View {
         let runAndDismiss = {
             model.combineSelectedPairs(selectedPairs, outputFolder: folder, technique: technique)
             dismiss()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                openWindow(id: "combine")
-            }
+            // Combine doesn't register with the Center, so ask for the raise
+            // directly: in front, NOT key, Settings-gated (2026-09-21).
+            fileOpsCenter.noteUserStartedOutsideCenter(
+                title: "Combine \(selectedPairs.count) pair\(selectedPairs.count == 1 ? "" : "s")")
         }
 
         if plan.substituted.isEmpty && plan.blocked.isEmpty {
@@ -473,6 +479,7 @@ struct CombineSheet: View {
 /// Picks output folder + technique, then launches to Combine & Render window.
 struct CombinePairSheet: View {
     @EnvironmentObject var model: VideoScanModel
+    @EnvironmentObject var fileOpsCenter: MediaFileOperationsCenter
     let originalVideo: VideoRecord
     let originalAudio: VideoRecord
     @Environment(\.dismiss) var dismiss
@@ -620,9 +627,7 @@ struct CombinePairSheet: View {
                     guard let folder = outputFolder else { return }
                     model.combineSelectedPairs([(video: video, audio: audio)], outputFolder: folder, technique: technique)
                     dismiss()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        openWindow(id: "combine")
-                    }
+                    fileOpsCenter.noteUserStartedOutsideCenter(title: "Combine \(video.filename)")
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(outputFolder == nil || !videoOnline || !audioOnline)

@@ -208,9 +208,11 @@ struct ArchiveAngelReadyDisclosure: View {
 
     private func promote() {
         var working = plan
-        let job = promoter.promote(plan: &working, model: model, center: fileOpsCenter) { settled in
-            plan = settled
-            batchesChanged()
+        let job = fileOpsCenter.startedByUser { center in
+            promoter.promote(plan: &working, model: model, center: center) { settled in
+                plan = settled
+                batchesChanged()
+            }
         }
         plan = working
         if job == nil {
