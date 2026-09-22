@@ -552,6 +552,10 @@ struct VideoScanApp: App {
                     .environmentObject(captionOrchestrator)
                     .environmentObject(volumeRescue)
                     .environmentObject(fileOpsCenter)
+                    // The same center, NON-observing — for views that only
+                    // start jobs (CatalogView). See
+                    // MediaFileOperationsCenterReference.swift (2026-09-22).
+                    .environment(\.mediaFileOperationsCenterReference, fileOpsCenter)
                     .onAppear {
                         appDelegate.catalogModel = catalogModel
                         appDelegate.fileOpsCenter = fileOpsCenter

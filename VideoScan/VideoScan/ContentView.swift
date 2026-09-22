@@ -1,4 +1,7 @@
 import SwiftUI
+import os
+
+private let catalogViewLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "catalogView")
 
 // MARK: - Root (Tab switcher)
 
@@ -526,10 +529,16 @@ struct CatalogView: View {
     /// actions) — the file-scoped lint can't see across the extension split.
     // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var captionOrchestrator: CaptionOrchestrator
-    /// Handed to the Promote confirmation sheet (Master Archive) so its
-    /// Confirm can enqueue the MFO job — intentional forwarding only.
-    // vs-lint:disable-next vs-env-object-unused
-    @EnvironmentObject var fileOpsCenter: MediaFileOperationsCenter
+    /// The Media File Operations center, held WITHOUT subscribing
+    /// (Rick 2026-09-22). This view only STARTS jobs (the two Delete
+    /// Duplicates alert buttons below); it never shows job state. As an
+    /// `@EnvironmentObject` it re-rendered at 4 Hz while any job ran —
+    /// the center re-broadcasts job progress — and every re-render
+    /// rebuilt the toolbar and collapsed its open "Delete Duplicates on
+    /// Volume…" submenu. Sheets presented from here still find the
+    /// observed center through the window's environment (VideoScanApp).
+    /// See MediaFileOperationsCenterReference.swift.
+    @Environment(\.mediaFileOperationsCenterReference) private var fileOpsCenterReference
     @State var showCaptionProgress = false
     /// Opens an independent resizable window keyed by CatalogInfoItem value.
     /// Defined as a `WindowGroup(for:)` scene in VideoScanApp.
@@ -984,7 +993,9 @@ struct CatalogView: View {
                 // A Media File Operation since 2026-09-20: DELETE row,
                 // progress in bytes, rate + ETA, Pause/Stop, a saved plan
                 // for resume, and the file list on click.
-                fileOpsCenter.startedByUser { $0.startDeleteDuplicates(onVolume: deleteTargetVolume, model: model) }
+                startFileOperation("Delete Duplicates") {
+                    $0.startedByUser { $0.startDeleteDuplicates(onVolume: deleteTargetVolume, model: model) }
+                }
                 MediaFileOperationsWindowOpener.openInFront(openWindow)
             }
             .disabled(model.isReadOnly || model.isDeletingDuplicates)
@@ -1000,7 +1011,9 @@ struct CatalogView: View {
             if plan.isResumable {
                 Button("Resume") {
                     // The user ACCEPTED the offer — that is a user start.
-                    fileOpsCenter.startedByUser { $0.resumeDeleteDuplicates(plan: plan, model: model) }
+                    startFileOperation("Resume Deleting Duplicates") {
+                        $0.startedByUser { $0.resumeDeleteDuplicates(plan: plan, model: model) }
+                    }
                     MediaFileOperationsWindowOpener.openInFront(openWindow)
                 }
             }
@@ -1576,6 +1589,24 @@ extension CatalogView {
         }
         text += "Are you sure? Do you have backups and/or are these really junk or duplicates?"
         return text
+    }
+}
+
+// MARK: - Starting a Media File Operation without observing the center
+
+extension CatalogView {
+    /// Hand the app's Media File Operations center to `start`. The center
+    /// is held without subscribing (see `fileOpsCenterReference`); nil
+    /// means this view is running outside the app's main window, so the
+    /// start is REFUSED and said out loud — never a silent no-op.
+    func startFileOperation(_ what: String,
+                            _ start: (MediaFileOperationsCenter) -> Void) {
+        guard let center = fileOpsCenterReference else {
+            catalogViewLog.error("\(what, privacy: .public): not started — Media File Operations is not available in this window")
+            model.log("\(what): not started — Media File Operations is not available in this window.")
+            return
+        }
+        start(center)
     }
 }
 

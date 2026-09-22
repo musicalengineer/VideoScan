@@ -338,50 +338,34 @@ struct CatalogToolbar<Dashboard: View>: View {
             .frame(minWidth: 120)
 
             VStack(spacing: 2) {
-                Menu {
-                    Button("Find Duplicates", action: onAnalyzeDuplicatesAll)
-                    Button("Find Duplicates of Selected", action: onAnalyzeDuplicatesSelected)
-                        .disabled(selectedIDs.isEmpty)
-
-                    if !model.isReadOnly && !volumesWithDeletableDups.isEmpty {
-                        Divider()
-                        Menu("Delete Duplicates on Volume…") {
-                            ForEach(volumesWithDeletableDups, id: \.path) { vol in
-                                Button("\(URL(fileURLWithPath: vol.path).lastPathComponent) — \(vol.count) file\(vol.count == 1 ? "" : "s")") {
-                                    onDeleteDuplicates(vol.path, vol.count)
-                                }
-                            }
-                        }
-                    }
-                    if !model.isReadOnly {
-                        Divider()
-                        // "Also clean up working copies" (2026-08-18) —
-                        // same persisted setting as the Volumes sheet; the
-                        // caption lives there. Default OFF.
-                        Toggle(WorkingCopyCleanupText.toggleLabel, isOn: Binding(
-                            get: { model.duplicateKeeperSettings.alsoCleanUpWorkingCopies },
-                            set: { on in
-                                model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = on
-                                model.noteDuplicateKeeperSettingsChanged()
-                            }))
-                        if let hint = model.duplicateReanalyzeHint {
-                            Text(hint)
-                        }
-                    }
-                } label: {
-                    if isAnalyzingDuplicates || model.isDeletingDuplicates {
-                        HStack(spacing: 4) {
-                            ProgressView().controlSize(.small)
-                            Text(isAnalyzingDuplicates ? "Analyzing…" : "Deleting…")
-                        }
-                    } else {
-                        Label("Duplicates", systemImage: "doc.on.doc")
-                    }
-                }
-                .menuStyle(.borderlessButton)
-                .disabled(isScanning || isAnalyzingDuplicates
-                          || model.isDeletingDuplicates || !hasRecords)
-                .help("Find duplicate files by comparing hash, duration, filename, resolution, and other signals")
+                // Its own Equatable view (Rick 2026-09-22: the "Delete
+                // Duplicates on Volume" submenu flashed shut and could not
+                // be used). Inline, this menu was rebuilt on every
+                // re-render of this toolbar — any model publish, any
+                // parent re-render — and an open submenu collapses when
+                // that happens. `.equatable()` makes SwiftUI compare the
+                // plain values first and skip the menu's body when they
+                // match. See CatalogDuplicatesMenu.swift.
+                CatalogDuplicatesMenu(
+                    isReadOnly: model.isReadOnly,
+                    isAnalyzing: isAnalyzingDuplicates,
+                    isDeleting: model.isDeletingDuplicates,
+                    isDisabled: isScanning || isAnalyzingDuplicates
+                        || model.isDeletingDuplicates || !hasRecords,
+                    hasSelection: !selectedIDs.isEmpty,
+                    volumes: volumesWithDeletableDups.map {
+                        CatalogDuplicatesMenu.Volume(path: $0.path, count: $0.count)
+                    },
+                    alsoCleanUpWorkingCopies: model.duplicateKeeperSettings.alsoCleanUpWorkingCopies,
+                    reanalyzeHint: model.duplicateReanalyzeHint,
+                    onFindDuplicates: onAnalyzeDuplicatesAll,
+                    onFindDuplicatesOfSelected: onAnalyzeDuplicatesSelected,
+                    onDeleteDuplicates: onDeleteDuplicates,
+                    onSetAlsoCleanUpWorkingCopies: { [model] on in
+                        model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = on
+                        model.noteDuplicateKeeperSettingsChanged()
+                    })
+                .equatable()
 
                 if !duplicateStatus.isEmpty {
                     Text(duplicateStatus)
