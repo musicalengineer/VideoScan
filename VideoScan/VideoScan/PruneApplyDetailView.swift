@@ -42,7 +42,9 @@ struct PruneApplyDetailView: View {
                 .overlay(RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(Color.primary.opacity(0.14)))
             } else {
-                Text(job.state.isActive ? "Working out what may go…" : "Nothing was moved.")
+                Text(job.isQueued
+                     ? "Waiting its turn — nothing is checked or moved until the batch before finishes. Every copy is checked when this batch starts."
+                     : (job.state.isActive ? "Working out what may go…" : "Nothing was moved."))
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
             }
@@ -85,6 +87,7 @@ struct PruneApplyDetailView: View {
         case .alreadyMissing: return ("Already gone", .secondary)
         case .skippedOffline: return ("Drive not connected", .secondary)
         case .stopped:        return ("Stopped — left alone", .blue)
+        case .movedEarlier:   return ("Already moved by the batch before", .secondary)
         }
     }
 }

@@ -32,9 +32,15 @@
 // the live record re-lookups, the PruneProof and the byte-for-byte reads
 // all happen when ITS turn comes, exactly as for a batch started alone. A
 // copy the batch before already moved is skipped, named "already moved to
-// the Trash by the batch before" — never read, never counted twice. Stop
-// on a waiting batch just takes it out of the line (nothing was started,
-// so there is nothing to put back); Quit does the same, with a log line.
+// the Trash by the batch before" — never read, never counted twice. And a
+// copy this batch LEFT UNCHECKED that the batch before moved (or that went
+// missing / offline while it waited) holds every checked copy in its
+// family: the survivors the person confirmed are not all there any more
+// (rule 7 in VideoScanModel+PruneApply). Stop on a waiting batch just
+// takes it out of the line (nothing was started, so there is nothing to
+// put back); Quit does the same. Every batch logs queued / started / done
+// (or taken out of the line) with its file count and bytes, to
+// videoscan.log, the catalog log, and os_log (Rick-Breen.VideoScan).
 //
 // (For Rick: the same shape as DeleteDuplicatesJob — an ObservableObject
 // the MFO window renders, a Task that runs the loop, a flag the off-main
@@ -144,7 +150,13 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     let startedAt = Date()
 
     /// Row reason for a copy the batch before in the queue already moved.
-    static let movedEarlierReason = "already moved to the Trash by the batch before"
+    static let movedEarlierReason = VideoScanModel.pruneMovedEarlierReason
+
+    /// Bytes of the copies the person checked, as the sheet listed them —
+    /// for the queued / started log lines (the done line has the actual).
+    let selectedBytes: Int64
+    /// When the batch was put in the line (nil = it never waited).
+    private(set) var queuedAt: Date?
 
     /// FIFO order of batches, independent of the window's list order.
     /// (≈ a C++ static member counter; main-actor only, so no atomics.)
@@ -220,6 +232,35 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
         self.hooks = hooks
         Self.nextSequence += 1
         self.sequence = Self.nextSequence
+        var bytes: Int64 = 0
+        for family in shown.families {
+            for row in family.rows where selected.contains(row.id) { bytes += row.copy.sizeBytes }
+        }
+        self.selectedBytes = bytes
+    }
+
+    // MARK: Log lines (pure — pinned by tests)
+
+    /// "2 copies, 83 GB".
+    nonisolated static func sizeClause(count: Int, bytes: Int64) -> String {
+        "\(count) cop\(count == 1 ? "y" : "ies"), \(MediaBytes.display(bytes))"
+    }
+
+    /// videoscan.log, when a batch is put in the line.
+    nonisolated static func queuedLine(title: String, count: Int, bytes: Int64, behind: String) -> String {
+        "trash copies queued: \(title) — \(sizeClause(count: count, bytes: bytes)) — waits for \(behind); nothing is checked or moved until then"
+    }
+
+    /// The START line's plan clause (after "trash copies: <title> — ").
+    nonisolated static func startPlan(count: Int, bytes: Int64, waitedSeconds: Double?) -> String {
+        var text = "\(sizeClause(count: count, bytes: bytes)) — verify each copy against its archive copy, then move it to the Trash"
+        if let w = waitedSeconds { text += " (waited \(Int(w.rounded())) s in line; every copy is checked now, at its turn)" }
+        return text
+    }
+
+    /// videoscan.log, when a waiting batch is taken out of the line.
+    nonisolated static func droppedLine(title: String, count: Int, bytes: Int64, forQuit: Bool) -> String {
+        "trash copies taken out of the line\(forQuit ? " (quit)" : ""): \(title) — \(sizeClause(count: count, bytes: bytes)) — nothing was started, nothing to put back"
     }
 
     /// A cancelled row for a batch that never started is clutter — it
@@ -233,6 +274,7 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     func start() {
         guard task == nil, state.isActive else { return }
         isQueued = false
+        isIndeterminateValue = true
         subtitleText = "Working out what may go…"
         task = Task { [weak self] in
             guard let self else { return }
@@ -246,7 +288,15 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     func enqueue(behind runningTitle: String, ahead: Int) {
         guard task == nil, state.isActive else { return }
         isQueued = true
+        queuedAt = Date()
+        // Not a spinner: nothing is happening yet, and the row says so.
+        isIndeterminateValue = false
+        fractionValue = 0
         setWaitingSubtitle(behind: runningTitle, ahead: ahead)
+        let line = Self.queuedLine(title: title, count: selected.count, bytes: selectedBytes, behind: runningTitle)
+        appLog.write(line)
+        model?.log("Archived — what next?: \(line)")
+        pruneApplyLog.notice("prune QUEUED \(self.selected.count, privacy: .public) copies \(self.selectedBytes, privacy: .public) bytes behind=\(runningTitle, privacy: .public)")
     }
 
     /// "Waiting — starts after Move 2 copies to the Trash" (+ how many
@@ -279,15 +329,20 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     /// Stop: the file being checked is left alone, files already moved
     /// stay moved, the rest are left alone. A WAITING batch is simply
     /// taken out of the line — nothing was started, nothing is touched.
-    func cancel() {
+    func cancel() { cancel(forQuit: false) }
+
+    private func cancel(forQuit: Bool) {
         guard state.isActive else { return }
         if isQueued, task == nil {
+            let line = Self.droppedLine(title: title, count: selected.count, bytes: selectedBytes, forQuit: forQuit)
+            appLog.write(line)
+            model?.log("Archived — what next?: \(line)")
+            pruneApplyLog.notice("prune DROPPED-WHILE-QUEUED \(self.selected.count, privacy: .public) copies quit=\(forQuit, privacy: .public)")
             droppedWhileQueued = true
             isQueued = false
             state = .cancelled
             subtitleText = "Taken out of the line — nothing was started"
             isIndeterminateValue = false
-            model?.log("Archived — what next?: \(title) taken out of the line — nothing was started.")
             onSettled?()
             return
         }
@@ -301,12 +356,7 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     /// Quit = Stop. Nothing here is half-done (one atomic move per file)
     /// and there is no plan on disk to resume, so a suspension would be
     /// a cancel with a longer name.
-    func stopForQuit() {
-        if isQueued, task == nil, state.isActive {
-            appLog.write("quit: dropped waiting batch \(title) — nothing was started, nothing to put back")
-        }
-        cancel()
-    }
+    func stopForQuit() { cancel(forQuit: true) }
 
     /// Pause takes effect BETWEEN files: the file being checked is
     /// finished (or held) first, nothing is half-done.
@@ -354,7 +404,7 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
         if stopRequested { finishCancelled(); return }
         let n = selected.count
         model.log("\nArchived — what next?: Trashing \(n) cop\(n == 1 ? "y" : "ies") in Media File Operations — each is checked byte-for-byte against the archive first.")
-        pruneApplyLog.notice("prune BEGIN \(n, privacy: .public) checked copies")
+        pruneApplyLog.notice("prune BEGIN \(n, privacy: .public) checked copies \(self.selectedBytes, privacy: .public) bytes inherited-moved=\(self.movedEarlier.count, privacy: .public)")
 
         // The fresh plan and every per-copy check happen HERE, at this
         // batch's turn — never when it was queued.
@@ -415,7 +465,7 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
 
         outcome.overrideCount = model.finishPrune(fresh: prepared.fresh, trashed: trashedRecords, batchID: batchID, mode: mode)
         model.log("Archived — what next?: " + outcome.summary)
-        pruneApplyLog.notice("prune DONE trashed=\(self.outcome.trashed, privacy: .public) held=\(self.outcome.held.count, privacy: .public) failed=\(self.outcome.failed.count, privacy: .public) stopped=\(self.stopRequested, privacy: .public)")
+        pruneApplyLog.notice("prune DONE trashed=\(self.outcome.trashed, privacy: .public) bytes=\(self.outcome.trashedBytes, privacy: .public) movedEarlier=\(self.outcome.movedByEarlierBatch, privacy: .public) held=\(self.outcome.held.count, privacy: .public) failed=\(self.outcome.failed.count, privacy: .public) stopped=\(self.stopRequested, privacy: .public)")
         if stopRequested { finishCancelled() } else { finish(success: outcome.summary) }
     }
 
@@ -497,9 +547,7 @@ extension MediaFileOperationsCenter {
             return job
         }
         let ahead = queuedPruneApplies.filter { $0.id != job.id }.count
-        let running = runningPruneApply
-        job.enqueue(behind: running?.title ?? "the batch before", ahead: ahead)
-        appLog.write("trash copies queued: \(job.title) — waits for \(running?.title ?? "the batch before")")
+        job.enqueue(behind: runningPruneApply?.title ?? "the batch before", ahead: ahead)
         // Defensive: waiting batches but nothing running can only mean a
         // hand-off was missed — start the oldest now rather than stall.
         startNextPruneApplyIfIdle(inheriting: [])
@@ -522,9 +570,11 @@ extension MediaFileOperationsCenter {
     }
 
     private func beginPruneApply(_ job: PruneApplyJob) {
+        let waited = job.queuedAt.map { Date().timeIntervalSince($0) }
         job.start()
         appLog.write(Self.startSummaryLine(verb: job.kind.logVerb, title: job.title,
-                                           plan: "verify each copy against its archive copy, then move it to the Trash"))
+                                           plan: PruneApplyJob.startPlan(count: job.selected.count, bytes: job.selectedBytes,
+                                                                         waitedSeconds: waited)))
     }
 
     /// A batch settled (finished, stopped, or dropped while waiting): hand
