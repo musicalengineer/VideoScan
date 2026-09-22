@@ -424,7 +424,11 @@ struct ReformatAtomicOutputTests {
         #expect(try String(contentsOf: finalURL, encoding: .utf8) == "complete-encode")
     }
 
-    @Test func atomicPublishReplacesExistingFinal() throws {
+    /// Reversed 2026-09-22: the publish used to `removeItem` whatever sat
+    /// at the final name first — a permanent delete of a file that may be
+    /// catalogued (Transcode published through this onto the archive's
+    /// own year folder). It now refuses to clobber and leaves both files.
+    @Test func atomicPublishNeverReplacesAnExistingFinal() throws {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("vs-atomic-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -432,10 +436,13 @@ struct ReformatAtomicOutputTests {
 
         let finalURL = dir.appendingPathComponent("out.mp4")
         let partialURL = ReformatJob.partialURL(for: finalURL)
-        try "stale".write(to: finalURL, atomically: true, encoding: .utf8)
+        try "existing".write(to: finalURL, atomically: true, encoding: .utf8)
         try "fresh".write(to: partialURL, atomically: true, encoding: .utf8)
 
-        try ReformatJob.atomicPublish(from: partialURL.path, to: finalURL.path)
-        #expect(try String(contentsOf: finalURL, encoding: .utf8) == "fresh")
+        #expect(throws: (any Error).self) {
+            try ReformatJob.atomicPublish(from: partialURL.path, to: finalURL.path)
+        }
+        #expect(try String(contentsOf: finalURL, encoding: .utf8) == "existing")
+        #expect(try String(contentsOf: partialURL, encoding: .utf8) == "fresh")
     }
 }

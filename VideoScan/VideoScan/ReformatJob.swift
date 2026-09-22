@@ -195,8 +195,9 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
         // delete — never a truncated file at the real output path.
         let partialPath = Self.partialURL(for: outputURL).path
 
-        // Clean up any prior derivative + stale partial (resumed from a cancel).
-        try? FileManager.default.removeItem(atPath: outputPath)
+        // A stale partial of THIS run's timestamped name is our own litter
+        // (resumed from a cancel). The output name itself is never cleared
+        // first (2026-09-22): the publish below refuses to clobber.
         try? FileManager.default.removeItem(atPath: partialPath)
 
         let volumeLabel = VolumeReachability.displayLabel(forPath: inputPath)
@@ -517,15 +518,14 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
             .appendingPathExtension(ext)
     }
 
-    /// Promote a completed partial to its final name in one atomic rename.
-    /// If a file already sits at `to` (a prior derivative we cleaned up but
-    /// that reappeared), it's replaced. Throws on failure so the caller
-    /// fails loudly rather than catalog a file that isn't there.
+    /// Promote a completed partial to its final name in one atomic,
+    /// NO-CLOBBER rename (`RENAME_EXCL`). A file already at `to` is never
+    /// replaced (2026-09-22: this used to `removeItem` it first — a
+    /// permanent delete of whatever had the name, catalogued or not); the
+    /// publish fails loudly instead and the partial stays for the caller.
     nonisolated static func atomicPublish(from partialPath: String, to finalPath: String) throws {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: finalPath) {
-            try fm.removeItem(atPath: finalPath)
+        guard try DerivativeOutputPublish.renameNoClobber(partialPath, finalPath) else {
+            throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: finalPath])
         }
-        try fm.moveItem(atPath: partialPath, toPath: finalPath)
     }
 }

@@ -136,6 +136,9 @@ struct CatalogToolbar<Dashboard: View>: View {
     static var archivistGap: CGFloat { 70 }
 
     @State private var showJunkConfirmSheet = false
+    /// What the confirm sheet offers, computed ONCE when it opens
+    /// (`openJunkConfirmSheet`) — never in the sheet body (2026-09-22).
+    @State private var junkConfirmRecords: [VideoRecord] = []
     @State private var showJunkResultSheet = false
     @State private var junkResult: VideoScanModel.JunkDeletionResult?
     @State private var junkResultMode: VideoScanModel.JunkDeletionMode = .toTrash
@@ -146,6 +149,14 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// Family Archivist ask popover (P2 front door) — plain English in,
     /// composed search grammar out, visible in the search field.
     @State private var showAskPopover = false
+
+    /// Open the Delete Confirmed Junk confirm sheet. The Master Archive
+    /// filter (tree or volume, 2026-09-22) runs here, once, not in the
+    /// sheet's body.
+    private func openJunkConfirmSheet() {
+        junkConfirmRecords = model.recordsBulkVerbsMayRemove(confirmedJunk)
+        showJunkConfirmSheet = true
+    }
 
     /// Active (non-purged) records currently marked .confirmedJunk. This is
     /// the same query the model exposes via `confirmedJunkRecords`; we read
@@ -693,10 +704,8 @@ struct CatalogToolbar<Dashboard: View>: View {
         .background(Color(NSColor.windowBackgroundColor))
         // Confirmation sheet — picks Move to Trash vs Delete Permanently.
         .sheet(isPresented: $showJunkConfirmSheet) {
-            // Never offer Master Archive files (tree or volume, 2026-09-22).
-            let snapshot = model.recordsBulkVerbsMayRemove(confirmedJunk)
             DeleteConfirmedJunkConfirmSheet(
-                records: snapshot,
+                records: junkConfirmRecords,
                 onCancel: { /* dismiss is automatic */ },
                 onAct: JunkDeleteAction.makeOnAct(model: model) { result, mode, bytesSucceeded in
                     junkResult = result

@@ -128,6 +128,14 @@ struct DeleteDuplicatesWorkItem: Sendable {
     /// Which siblings the worker may READ to prove them (2026-09-21), and
     /// when to stop. `.none` = stat only, as before.
     var siblingAllowance: SiblingProver.Allowance = .none
+    /// The Master Archive VOLUME re-check (2026-09-22 follow-up, QA
+    /// MINOR 3), captured on the main actor: the snapshot plus the UUID
+    /// probe. Asked of the file's OWN volume before it is moved into
+    /// quarantine and again as the final verdict before removal — so a
+    /// symlinked scan root or custom mount path to FamilyArchive, whose
+    /// path text says "boot disk", is still refused (as Junk does).
+    /// nil = no Master Archive designated.
+    var archiveCheck: ArchiveRemovalCheck? = nil
 }
 
 enum DeleteDuplicatesDiskOutcome: Sendable {
@@ -201,6 +209,13 @@ enum DeleteDuplicatesDiskWorker {
     /// snapshots — never VideoRecord instances.
     static func verifyAndQuarantine(_ item: DeleteDuplicatesWorkItem,
                                     hooks: SignatureVerification.Hooks) -> DeleteDuplicatesPhaseOne {
+        // The Master Archive volume, by the file's OWN volume UUID —
+        // before anything is read or moved (a quarantine folder on
+        // FamilyArchive is itself a change to FamilyArchive).
+        if let check = item.archiveCheck, let note = check.refusalNote(forPath: item.path) {
+            return DeleteDuplicatesPhaseOne(outcome: .refused(reason: note + " — nothing moved", cancelled: false),
+                                            learnedKeeperFixity: nil)
+        }
         let box = FixityBox()
         var observing = hooks
         let downstream = hooks.didComputeKeeperFixity
@@ -315,7 +330,8 @@ enum DeleteDuplicatesDiskWorker {
     static func deleteQuarantined(_ ticket: QuarantineTicket, decided: DeletionTierDecision,
                                   facts: DeletionTierFacts, preferTrash: Bool,
                                   keeperFilename: String,
-                                  hooks: SignatureVerification.Hooks) -> DeleteDuplicatesPhaseTwo {
+                                  hooks: SignatureVerification.Hooks,
+                                  archiveCheck: ArchiveRemovalCheck? = nil) -> DeleteDuplicatesPhaseTwo {
         guard let decidedTier = decided.tier else {
             // Never reached — the caller releases a nil tier itself — but
             // a nil tier must never default to an unlink.
@@ -329,7 +345,14 @@ enum DeleteDuplicatesDiskWorker {
         // closure may write a local of its caller (for Rick: a lambda
         // capturing by reference).
         var boundary: (decision: DeletionTierDecision, facts: DeletionTierFacts)?
+        // Set by the final verdict when the file's own volume turns out to
+        // be the Master Archive's (the same last word Junk has).
+        var archiveRefusal: String?
         let result = SignatureVerification.deleteQuarantined(ticket, disposal: recorded, hooks: hooks) {
+            if let archiveCheck, let note = archiveCheck.refusalNote(forPath: ticket.quarantinedPath) {
+                archiveRefusal = note
+                return .putBack(reason: note)
+            }
             let now = facts.recheck()
             guard !now.droppedAtBoundary.isEmpty else {
                 // Every counted copy still reproduces its stamp: the
@@ -353,6 +376,15 @@ enum DeleteDuplicatesDiskWorker {
             return .proceed(tier == .trash ? .trash : .permanent)
         }
         var outcome = map(result, proof: ticket.proof, keeper: keeperFilename)
+        if let archiveRefusal {
+            // Put back at its path: a REFUSAL of this pair (the row goes to
+            // Review with the reason), not a cancel. A failed put-back
+            // stays `.retained`, named.
+            if case .refused(_, true) = outcome {
+                outcome = .refused(reason: archiveRefusal + " — put back, nothing removed", cancelled: false)
+            }
+            return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false)
+        }
         guard let boundary else {
             return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false)
         }
@@ -922,7 +954,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 path: entry.path, keeperPath: keeper.fullPath, keeperFilename: keeper.filename,
                 keeperFixity: keeper.contentFixity,
                 quarantineDirectoryName: Self.quarantineDirectoryName(planID: current.id, entryID: entry.id),
-                tierCandidates: candidates, siblingAllowance: allowance)
+                tierCandidates: candidates, siblingAllowance: allowance,
+                // The volume re-check travels with the pair (off-main).
+                archiveCheck: model.archiveRemovalCheck())
             inFlight.insert(entry.id)
             peakInFlight = max(peakInFlight, inFlight.count)
             // The pair runs as its own main-actor task so a second SSD pair
@@ -1137,10 +1171,12 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 // 1611), re-check the file and the keeper, unlink or move
                 // to the Trash.
                 let preferTrash = model.duplicateKeeperSettings.preferTrashForEveryDuplicate
+                let archiveCheck = item.archiveCheck
                 let phaseTwo = await runDetached(entryID: entry.id) { [hooks] in
                     DeleteDuplicatesDiskWorker.deleteQuarantined(ticket, decided: decided, facts: facts,
                                                                  preferTrash: preferTrash,
-                                                                 keeperFilename: keeperName, hooks: hooks)
+                                                                 keeperFilename: keeperName, hooks: hooks,
+                                                                 archiveCheck: archiveCheck)
                 }
                 outcome = phaseTwo.outcome
                 if phaseTwo.evidenceChanged {

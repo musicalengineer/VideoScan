@@ -269,7 +269,12 @@ extension VideoScanModel {
         var changed: [UUID] = []
         var remembered = 0
         let now = Date()
-        for row in plan.rows {
+        // Nothing on the Master Archive volume is set aside (Rick
+        // 2026-09-22: "For now we won't Remove anything from
+        // FamilyArchive") — asked once for the whole plan, logged once.
+        let allowed = Set(excludingMasterArchiveFiles(plan.rows.compactMap { record(forID: $0.id) },
+                                                      verb: "Tidy Catalog").map(\.id))
+        for row in plan.rows where allowed.contains(row.id) {
             guard let rec = record(forID: row.id),
                   !rec.isPurged,
                   rec.setAsideReason == nil,
@@ -318,10 +323,11 @@ extension VideoScanModel {
         var changed: [UUID] = []
         var remembered = 0
         let now = Date()
-        // Catalog-only (files untouched): the archive TREE rule applies,
-        // not the whole-volume rule for verbs that remove files.
+        // Files are untouched, but (Rick 2026-09-22: "For now we won't
+        // Remove anything from FamilyArchive") the whole Master Archive
+        // VOLUME is refused here too, not just the tree.
         let allowed = Set(excludingMasterArchiveFiles(ids.compactMap { record(forID: $0) },
-                                                      verb: "Remove from Catalog", effect: .catalogOnly).map(\.id))
+                                                      verb: "Remove from Catalog").map(\.id))
         for id in ids where allowed.contains(id) {
             guard let rec = record(forID: id), !rec.isPurged, rec.setAsideReason == nil,
                   !CatalogScopePolicy.isPairProtected(rec) else { continue }

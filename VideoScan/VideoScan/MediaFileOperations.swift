@@ -1038,12 +1038,14 @@ final class MediaFileOperationsCenter: ObservableObject {
     func startTranscode(record: VideoRecord,
                         preset: TranscodePreset,
                         outputURL: URL,
-                        model: VideoScanModel) -> TranscodeJob {
+                        model: VideoScanModel,
+                        replaceExisting: Bool = false) -> TranscodeJob {
         let job = TranscodeJob(
             record: record,
             preset: preset,
             outputURL: outputURL,
-            model: model
+            model: model,
+            replaceExisting: replaceExisting
         )
         guard add(job) else { return job }
         job.start()
