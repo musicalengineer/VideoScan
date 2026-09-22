@@ -43,8 +43,14 @@ extension VideoScanModel {
     /// `purgedAt`. The trash step is best-effort — if the file is already
     /// gone or the trash op fails, the record is still purged so the row
     /// doesn't linger in the UI. Returns the number actually deleted.
+    ///
+    /// Master Archive files — the tree AND anything else on the archive's
+    /// volume (Rick 2026-09-22) — are left alone, row and file, through
+    /// the one bulk-verb rule (before 2026-09-22 this path had no archive
+    /// check at all).
     @discardableResult
-    func discardWorkbench(_ recs: [VideoRecord]) -> Int {
+    func discardWorkbench(_ requested: [VideoRecord]) -> Int {
+        let recs = excludingMasterArchiveFiles(requested, verb: "Discard")
         var count = 0
         let now = Date()
         var trashed: [VideoRecord] = []

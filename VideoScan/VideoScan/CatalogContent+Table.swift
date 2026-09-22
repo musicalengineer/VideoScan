@@ -491,6 +491,11 @@ extension CatalogContent {
         let purgedRecs = selectedRecs.filter { $0.isPurged }
         let setAsideRecs = selectedRecs.filter { $0.isSetAside && !$0.isPurged }
         let supersededRecs = selectedRecs.filter { $0.isSuperseded && !$0.isPurged && !$0.isSetAside }
+        // Delete File is never OFFERED for Master Archive files — the tree
+        // or anywhere else on the archive's volume (Rick 2026-09-22). One
+        // snapshot per menu open (right-click time, O(selection)); the
+        // engine re-checks at the moment of the move regardless.
+        let deletableRecs = model.recordsBulkVerbsMayRemove(activeRecs)
         if let id = ids.first,
            let rec = records.first(where: { $0.id == id }) {
             // Pure-purged selection: minimal menu (Restore + Reveal).
@@ -1109,10 +1114,10 @@ extension CatalogContent {
                     // already handles offline-skip, already-missing, and
                     // per-file failures on a detached task. Distinct from
                     // Remove from Catalog (above) which only hides the row.
-                    if !activeRecs.isEmpty {
+                    if !deletableRecs.isEmpty {
                         Menu {
                             Button(role: .destructive) {
-                                let targets = activeRecs
+                                let targets = deletableRecs
                                 Task { @MainActor in
                                     let result = await model.deleteConfirmedJunk(targets, mode: .toTrash)
                                     reportDeleteResult(result, mode: .toTrash)
@@ -1123,7 +1128,7 @@ extension CatalogContent {
                             .accessibilityIdentifier("catalog.row.deleteToTrash")
 
                             Button(role: .destructive) {
-                                let targets = activeRecs
+                                let targets = deletableRecs
                                 let count = targets.count
                                 let alert = NSAlert()
                                 alert.messageText = count == 1
@@ -1144,8 +1149,8 @@ extension CatalogContent {
                             }
                             .accessibilityIdentifier("catalog.row.deletePermanently")
                         } label: {
-                            Label(activeRecs.count > 1
-                                  ? "Delete \(activeRecs.count) Files"
+                            Label(deletableRecs.count > 1
+                                  ? "Delete \(deletableRecs.count) Files"
                                   : "Delete File",
                                   systemImage: "xmark.bin")
                         }

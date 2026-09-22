@@ -274,6 +274,14 @@ extension VideoScanModel {
         // -------------------------------------------------------------
         let mode = mode  // capture-in
         let beforeRemoval = fileGuard?.beforeRemoval   // the only part of the guard that crosses
+        // The Master Archive VOLUME, re-asked per file at the moment of
+        // removal (Rick 2026-09-22): the snapshot's verdict plus a fresh
+        // read of the file's own volume UUID, so a FamilyArchive mounted
+        // (or renamed) since the plan is still refused. The probe is the
+        // task-local seam captured HERE — a detached task does not
+        // inherit task-locals.
+        let archiveVolume = archiveVolumeProtection()
+        let uuidProbe = MasterArchiveDesignation.volumeUUIDProbe
         let detachedResults: [(Int, JunkDeletionOutcome)] =
             await Task.detached(priority: .userInitiated) {
                 let fm = FileManager.default
@@ -291,6 +299,22 @@ extension VideoScanModel {
                     if let beforeRemoval, let why = beforeRemoval(path) {
                         results.append((item.index, .refused(why)))
                         continue
+                    }
+
+                    // The archive volume's last word, in the same
+                    // synchronous stretch as the removal below.
+                    if let archiveVolume {
+                        switch archiveVolume.verdictAtRemoval(path: path, probe: uuidProbe) {
+                        case .clear: break
+                        case .onArchiveVolume:
+                            results.append((item.index, .refused(Self.bulkDeleteRefusalNote(
+                                .archiveVolume, volume: archiveVolume.label) + " — nothing moved")))
+                            continue
+                        case .unprovable:
+                            results.append((item.index, .refused(Self.bulkDeleteRefusalNote(
+                                .archiveVolumeUnprovable, volume: archiveVolume.label) + " — nothing moved")))
+                            continue
+                        }
                     }
 
                     // Missing-file branch. We do NOT pre-flight every

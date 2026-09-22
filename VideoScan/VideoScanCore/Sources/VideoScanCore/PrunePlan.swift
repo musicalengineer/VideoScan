@@ -88,6 +88,12 @@ public struct ArchiveCopySnapshot: Equatable, Sendable, Identifiable {
     /// The archive copy carries a read-back fixity record.
     public var fixityVerified: Bool
     public var isInsideArchiveRoot: Bool
+    /// Elsewhere on the volume that hosts the Master Archive (outside its
+    /// tree) — or on a drive that cannot be told apart from it while the
+    /// archive volume is not connected. Never offered, never moved (Rick
+    /// 2026-09-22: "the app should never offer to delete from
+    /// FamilyArchive"). Not archive-side: it is still a working copy row.
+    public var isOnArchiveVolume: Bool
     /// The VOLUME holding the file is mounted (never "the file exists").
     public var isOnline: Bool
     /// The file is on disk where the catalog says — meaningful only when
@@ -123,11 +129,13 @@ public struct ArchiveCopySnapshot: Equatable, Sendable, Identifiable {
                 starRating: Int = 0, disposition: MediaDisposition = .unreviewed,
                 attestations: [BackupAttestation] = [], volumeIsConnectedWorking: Bool = true,
                 volumeFreeBytes: Int64? = nil, isPurged: Bool = false,
-                derivedFrom: UUID? = nil, derivationKind: String? = nil) {
+                derivedFrom: UUID? = nil, derivationKind: String? = nil,
+                isOnArchiveVolume: Bool = false) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.volumeName = volumeName
         self.sizeBytes = sizeBytes; self.contentKey = contentKey; self.promotedFromID = promotedFromID
         self.isArchiveCopy = isArchiveCopy; self.fixityVerified = fixityVerified
         self.isInsideArchiveRoot = isInsideArchiveRoot; self.isOnline = isOnline
+        self.isOnArchiveVolume = isOnArchiveVolume
         self.fileExists = fileExists; self.isPairMember = isPairMember; self.isVersion = isVersion; self.hasHumanNote = hasHumanNote
         self.starRating = starRating; self.disposition = disposition; self.attestations = attestations
         self.volumeIsConnectedWorking = volumeIsConnectedWorking; self.volumeFreeBytes = volumeFreeBytes
@@ -476,6 +484,9 @@ public struct PrunePlan: Equatable, Sendable {
         /// The volume is connected but the file is not where the catalog
         /// says (moved or deleted outside the app) — not a copy at all.
         case fileMissing
+        /// On the Master Archive's volume, outside its tree — only archive
+        /// actions change that volume (Rick 2026-09-22).
+        case onArchiveVolume
 
         public var displayText: String {
             switch self {
@@ -483,6 +494,7 @@ public struct PrunePlan: Equatable, Sendable {
             case .insideArchiveRoot: return "inside the Master Archive"
             case .offline:           return "drive not connected"
             case .fileMissing:       return "file not found — moved or deleted outside the app?"
+            case .onArchiveVolume:   return "on the Master Archive volume — only archive actions change it"
             case .pairMember:        return "part of a recovered A/V pair Combine still needs"
             case .version:           return "a version — the original is in the archive"
             case .humanNote:         return "has your note"
@@ -970,7 +982,7 @@ public struct PrunePlan: Equatable, Sendable {
     /// candidates (Rick's ruling 2026-09-20) — unchecked by default, see
     /// `isPlainCandidate`.
     public static func isCandidate(_ c: ArchiveCopySnapshot) -> Bool {
-        !c.isPurged && !c.isArchiveSide && c.isOnline && c.fileExists && !c.isPairMember
+        !c.isPurged && !c.isArchiveSide && !c.isOnArchiveVolume && c.isOnline && c.fileExists && !c.isPairMember
     }
 
     /// A candidate the bar-respecting plan may elect or Trash by default:
@@ -1021,7 +1033,12 @@ public struct PrunePlan: Equatable, Sendable {
                 kept.append(KeptCopy(copy: CopyRef(c), reason: locked))
                 // A missing file holds no device (an offline copy does —
                 // it exists, on a drive that is not here).
-                if locked != .fileMissing, !c.volumeName.isEmpty { devicesKept.insert(c.volumeName) }
+                // Nor does a copy on the archive's own volume: it is not an
+                // EXTRA device beyond the archive (conservative — the bar
+                // counts fewer devices, so fewer copies are offered).
+                if locked != .fileMissing, locked != .onArchiveVolume, !c.volumeName.isEmpty {
+                    devicesKept.insert(c.volumeName)
+                }
             } else if softReason(c) != nil {
                 // Listed in `kept` below with its reason (or the family's
                 // no-archive reason); it still counts as a device.
@@ -1180,6 +1197,8 @@ public struct PrunePlan: Equatable, Sendable {
     /// recovered A/V pair half. Offline is judged first: an unmounted
     /// volume cannot say whether the file exists.
     static func lockedReason(_ c: ArchiveCopySnapshot) -> KeepReason? {
+        // First: a settled fact about the copy, whatever the drive's state.
+        if c.isOnArchiveVolume { return .onArchiveVolume }
         if !c.isOnline { return .offline }
         if !c.fileExists { return .fileMissing }
         if c.isPairMember { return .pairMember }
