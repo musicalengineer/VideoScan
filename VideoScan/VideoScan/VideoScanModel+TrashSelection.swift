@@ -108,24 +108,7 @@ extension VideoScanModel {
             return nothing
         }
         let plan = catalogTrashPlan(for: requested)
-        if plan.refusedCount(.masterArchive) > 0 {
-            // The SAME sentences excludingMasterArchiveFiles writes, one
-            // per kind (tree / rest of the archive volume / unprovable).
-            let archiveVolume = archiveVolumeProtection()
-            let label = archiveVolume?.label ?? "the archive volume"
-            let byID = Dictionary(uniqueKeysWithValues: requested.map { ($0.id, $0) })
-            var tree = 0, onVolume = 0, unprovable = 0
-            for r in plan.refused where r.reason == .masterArchive {
-                switch byID[r.id].flatMap({ bulkDeleteRefusal($0, volume: archiveVolume) }) {
-                case .archiveVolume?: onVolume += 1
-                case .archiveVolumeUnprovable?: unprovable += 1
-                default: tree += 1
-                }
-            }
-            if tree > 0 { log(Self.masterArchiveRefusalLine(verb: "Move to Trash", count: tree)) }
-            if onVolume > 0 { log(Self.masterArchiveVolumeRefusalLine(verb: "Move to Trash", count: onVolume, volume: label)) }
-            if unprovable > 0 { log(Self.masterArchiveUnprovableRefusalLine(verb: "Move to Trash", count: unprovable, volume: label)) }
-        }
+        logMasterArchiveRefusals(plan, requested: requested)
         let paired = plan.refusedCount(.pairMember)
         if paired > 0 {
             log("Move to Trash: left \(paired) file(s) alone — each is half of a recovered audio/video pair, which Combine still needs.")
@@ -157,5 +140,26 @@ extension VideoScanModel {
             log("Move to Trash: remembered \(remembered) file(s) as ignored content — a rescan will not catalog them again (Tidy → Ignored content to put back).")
         }
         return result
+    }
+
+    /// The SAME sentences excludingMasterArchiveFiles writes, one per kind
+    /// (tree / rest of the archive volume / unprovable), for the rows the
+    /// ⌘⌫ plan refused as Master Archive files.
+    private func logMasterArchiveRefusals(_ plan: CatalogTrashPlan, requested: [VideoRecord]) {
+        guard plan.refusedCount(.masterArchive) > 0 else { return }
+        let archiveVolume = archiveVolumeProtection()
+        let label = archiveVolume?.label ?? "the archive volume"
+        let byID = Dictionary(requested.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var tree = 0, onVolume = 0, unprovable = 0
+        for r in plan.refused where r.reason == .masterArchive {
+            switch byID[r.id].flatMap({ bulkDeleteRefusal($0, volume: archiveVolume) }) {
+            case .archiveVolume?: onVolume += 1
+            case .archiveVolumeUnprovable?: unprovable += 1
+            default: tree += 1
+            }
+        }
+        if tree > 0 { log(Self.masterArchiveRefusalLine(verb: "Move to Trash", count: tree)) }
+        if onVolume > 0 { log(Self.masterArchiveVolumeRefusalLine(verb: "Move to Trash", count: onVolume, volume: label)) }
+        if unprovable > 0 { log(Self.masterArchiveUnprovableRefusalLine(verb: "Move to Trash", count: unprovable, volume: label)) }
     }
 }
