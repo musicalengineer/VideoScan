@@ -578,7 +578,13 @@ struct DeleteDuplicatesTierAndSpeedTests {
                 s.contentFixity = ContentFixity.captured(path: url.path, digest: plainSHA256(url), byteCount: Int64(fileSize))
                 rig.model.records.append(s)
             }
-            let unverified = rig.dir.appendingPathComponent("unverified.mov"); write(unverified, rig.bytes)
+            // Since sibling proving (2026-09-21) a sibling with no fixity is
+            // READ when the count falls short of three — so this one holds
+            // DIFFERENT bytes: read (with one verified sibling) and named
+            // "holds different bytes", or not needed (with two) and named
+            // "not verified yet". Either way it never counts.
+            var otherBytes = rig.bytes; otherBytes[7] ^= 0x5A
+            let unverified = rig.dir.appendingPathComponent("unverified.mov"); write(unverified, otherBytes)
             rig.model.records.append(dupRecord(path: unverified.path, size: Int64(fileSize), group: group, disposition: .review))
             let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path,
                                           hooks: SignatureVerification.Hooks.live.withScratchTrash(in: rig.dir), planRoot: rig.root)
@@ -591,7 +597,8 @@ struct DeleteDuplicatesTierAndSpeedTests {
             #expect(row.hasVerifiedArchive == false && row.tierLabel.hasSuffix(" · not yet archived"))
             let reason = try #require(row.tierReason)
             #expect(reason.contains("keeper on ") && reason.contains("sibling sibling0.mov on ") && reason.contains("sibling unverified.mov on "))
-            #expect(reason.contains("unverified.mov on") && reason.hasSuffix("not verified yet)"), Comment(rawValue: reason))
+            let unverifiedWords = verifiedSiblings == 1 ? "holds different bytes)" : "not verified yet)"
+            #expect(reason.contains("unverified.mov on") && reason.hasSuffix(unverifiedWords), Comment(rawValue: reason))
             #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
             #expect(FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/copy1.mov").path) == (expected == .trash))
         }
