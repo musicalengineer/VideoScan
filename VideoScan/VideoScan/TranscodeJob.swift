@@ -216,6 +216,9 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         // check and before any encode, which permanently deleted a
         // catalogued file on FamilyArchive when "Replace" was answered.
         let partialPath = DerivativeOutputPublish.uniquePartialURL(for: outputURL).path
+        // Crash / force-quit leftovers of THIS output name (>24 h old, our
+        // own incomplete encodes only) — swept off-main, logged.
+        await Self.sweepStalePartialsOffMain(beside: outputURL)
 
         let volumeLabel = VolumeReachability.displayLabel(forPath: inputPath)
         transcodeLog.info("transcode START: \(self.record.filename, privacy: .public) preset=\(self.preset.rawValue, privacy: .public) on \(volumeLabel, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public)")
@@ -430,6 +433,11 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         return .replaceViaTrash
     }
 
+    @concurrent
+    nonisolated private static func sweepStalePartialsOffMain(beside output: URL) async {
+        DerivativeOutputPublish.sweepStalePartials(beside: output)
+    }
+
     /// The disk half of the publish, off the main thread.
     @concurrent
     nonisolated private static func publishOffMain(
@@ -453,7 +461,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             return " Kept the existing \(kept.lastPathComponent) — \(reason)."
         case .replaced(let url, let trashedTo):
             let whereTo = trashedTo?.path ?? "the Trash"
-            let line = "transcode: previous \(url.lastPathComponent) moved to \(whereTo) after the new derivative was complete"
+            let line = "transcode: new \(preset.rawValue) derivative took the name \(url.lastPathComponent); the previous file is at \(whereTo)"
             transcodeLog.notice("\(line, privacy: .public)")
             appLog.write(line)
             return " The previous file is in the Trash."

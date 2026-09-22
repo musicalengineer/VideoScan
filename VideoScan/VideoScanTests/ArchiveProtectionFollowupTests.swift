@@ -188,10 +188,10 @@ struct ArchiveSnapshotMainThreadTests {
         model.records = catalog
         let counter = ProbeCounter()
         // FamilyArchive is OFFLINE (the slow path: every mount is probed).
-        await ArchiveVolumeProtection.$mountedVolumeRootsProbe.withValue({
+        ArchiveVolumeProtection.$mountedVolumeRootsProbe.withValue({
             counter.note(); return ["/Volumes/CrucialX9", "/Volumes/SlowSMB"]
         }) {
-            await MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
+            MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
                 counter.note()
                 return path.hasPrefix("/Volumes/CrucialX9") ? "UUID-X9" : nil
             }) {
@@ -331,8 +331,12 @@ struct CatalogRemovalArchiveVolumeTests {
         let vol = still("/Volumes/FamilyArchive/MoviesExpansion/IMG_1.cr3", md5: "s1")
         let other = still("/Volumes/CrucialX10/IMG_2.cr3", md5: "s2")
         model.records = [vol, other]
-        let plan = await model.computeTidyCatalogPlan()
-        #expect(Set(plan.rows.map(\.id)) == [vol.id, other.id], "fixture: Tidy proposes both stills")
+        var plan = await model.computeTidyCatalogPlan()
+        #expect(plan.rows.map(\.id) == [other.id], "the preview leaves the archive-volume still out")
+        // A plan built before the ruling / designation still lists it:
+        // Apply refuses it anyway.
+        plan.rows.append(.init(id: vol.id, filename: vol.filename, fullPath: vol.fullPath,
+                               sizeBytes: vol.sizeBytes, reason: .stillImage))
         #expect(model.applyTidyCatalog(plan) == 1)
         #expect(vol.setAsideReason == nil && vol.purgedAt == nil, "the MoviesExpansion still is untouched")
         #expect(other.setAsideReason != nil, "the still on another volume is set aside")
@@ -483,5 +487,233 @@ struct TranscodeReplaceTrashTests {
         #expect(job.publishedURL != target.standardizedFileURL)
         #expect(FileManager.default.fileExists(atPath: job.publishedURL.path))
         #expect(summary.contains("Master Archive volume"), "\(summary)")
+    }
+}
+
+// MARK: - QA round 2 (2026-09-22): a stale snapshot never writes to the catalog
+
+@Suite("QA archfu — a stale snapshot must not re-mark an ordinary duplicate", .serialized)
+@MainActor
+struct ArchiveSnapshotStaleWindowQATests {
+
+    /// QA's red test, adapted to (b): while the snapshot is stale the
+    /// pair is a transient SKIP (never `.refuse`, which re-marks Review);
+    /// once fresh (a) it is authorized again.
+    @Test func aMountMidRunDoesNotRefuseAnOrdinaryExtraCopy() async {
+        let model = isolatedModel()
+        designateFamilyArchive(model, uuid: "UUID-ARCH")
+        let g = UUID()
+        let keeper = record("/Volumes/CrucialX10/a.mov", group: g, disposition: .keep)
+        let extra = record("/Volumes/CrucialX10/a copy.mov", group: g, disposition: .extraCopy)
+        model.records = [keeper, extra]
+        let entry = DeleteDuplicatesPlan.Entry(id: extra.id, path: extra.fullPath, filename: extra.filename, sizeBytes: 1,
+                                               keeperID: keeper.id, keeperPath: keeper.fullPath,
+                                               keeperFilename: keeper.filename, keeperStamp: nil)
+        await ArchiveVolumeProtection.$mountedVolumeRootsProbe.withValue({ ["/Volumes/CrucialX10"] }) {
+            await MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
+                if path.hasPrefix("/Volumes/FamilyArchive") { return "UUID-ARCH" }
+                return path.hasPrefix("/Volumes/CrucialX10") ? "UUID-X10" : nil
+            }) {
+                await model.refreshArchiveVolumeSnapshot(force: true)
+                guard case .authorized = model.authorizeDuplicateDeletion(entry: entry, volumePath: "/Volumes/CrucialX10",
+                                                                          crossVolumeMode: false, stage: "t") else {
+                    Issue.record("fixture"); return
+                }
+                model.noteArchiveVolumeSnapshotStale(reason: "didMount (test)")
+                switch model.authorizeDuplicateDeletion(entry: entry, volumePath: "/Volumes/CrucialX10",
+                                                        crossVolumeMode: false, stage: "t") {
+                case .refuse(let note):
+                    Issue.record("stale snapshot refused (and re-marks Review) an X10 extra copy: \(note)")
+                case .skip(let note, _):
+                    #expect(note.contains("refreshing"), "\(note)")
+                case .authorized:
+                    break
+                }
+                await model.refreshArchiveVolumeSnapshot()
+                guard case .authorized = model.authorizeDuplicateDeletion(entry: entry, volumePath: "/Volumes/CrucialX10",
+                                                                          crossVolumeMode: false, stage: "t") else {
+                    Issue.record("a fresh snapshot authorizes the pair again"); return
+                }
+            }
+        }
+        #expect(extra.duplicateDisposition == .extraCopy, "never re-marked")
+    }
+
+    /// Whole job: a mount lands while a run is verifying. Sensor only —
+    /// the provisional snapshot refuses only /Volumes paths and a test
+    /// cannot put real files there, so this pins "a mount mid-run changes
+    /// nothing" rather than reproducing the refusal.
+    @Test func aMountNotificationMidRunReMarksNothing() async throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("test_archfu_mount_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bytes = Data((0..<(FileHasher.segmentSize * 2)).map { UInt8($0 % 193) })
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: dir.appendingPathComponent("catalog", isDirectory: true))
+        model.mediaLedger = MediaLedger(directory: dir.appendingPathComponent("ledger", isDirectory: true))
+        let g = UUID()
+        let keeperURL = dir.appendingPathComponent("test_keeper.mov")
+        FileManager.default.createFile(atPath: keeperURL.path, contents: bytes)
+        let keeper = record(keeperURL.path, group: g, disposition: .keep)
+        var copies: [VideoRecord] = []
+        for i in 1...3 {
+            let u = dir.appendingPathComponent("test_copy\(i).mov")
+            FileManager.default.createFile(atPath: u.path, contents: bytes)
+            copies.append(record(u.path, group: g, disposition: .extraCopy))
+        }
+        for r in [keeper] + copies { r.sizeBytes = Int64(bytes.count); r.partialMD5 = "same" }
+        model.records = [keeper] + copies
+        addVerifiedArchiveFamily(to: model, keeper: keeper)
+        designateFamilyArchive(model, uuid: "UUID-ARCH")
+        await model.refreshArchiveVolumeSnapshot(force: true)
+
+        final class Once: @unchecked Sendable { var fired = false }
+        let once = Once()
+        var hooks = SignatureVerification.Hooks(shouldCancel: { Task.isCancelled })
+        hooks.didReadBlock = { _ in
+            guard !once.fired else { return }
+            once.fired = true
+            DispatchQueue.main.async {
+                NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didMountNotification, object: nil)
+            }
+        }
+        let job = DeleteDuplicatesJob(model: model, volumePath: dir.path, hooks: hooks,
+                                      planRoot: dir.appendingPathComponent("plans"))
+        job.start()
+        await job.task?.value
+        #expect(once.fired, "fixture: the mount landed mid-run")
+        #expect(copies.allSatisfy { $0.duplicateDisposition != .review }, "no extra copy was re-marked Review")
+        #expect(job.result.deleted == 3, "\(job.state)")
+    }
+}
+
+@Suite("QA archfu — catalog removal refuses FamilyArchive only, preview matches apply", .serialized)
+@MainActor
+struct CatalogRemovalUnprovableQATests {
+
+    @Test func removeFromCatalogStillRemovesAnUnprovableRecord() async {
+        let model = tidyModel()
+        designateFamilyArchive(model, uuid: "UUID-ARCH")
+        let share = record("/Volumes/NetworkShare/a.mov"), onArch = record("/Volumes/FamilyArchive/MoviesExpansion/b.mov")
+        model.records = [share, onArch]
+        await ArchiveVolumeProtection.$mountedVolumeRootsProbe.withValue({ [] }) {
+            await MasterArchiveDesignation.$volumeUUIDProbe.withValue({ _ in nil }) {
+                await model.refreshArchiveVolumeSnapshot(force: true)
+                #expect(model.bulkDeleteRefusal(share) == .archiveVolumeUnprovable, "fixture: unprovable for a bulk DELETE")
+                #expect(model.purgeRecords(ids: [share.id, onArch.id]) == 1)
+            }
+        }
+        #expect(share.purgedAt != nil, "a network-share record is not FamilyArchive — Remove works")
+        #expect(onArch.purgedAt == nil)
+    }
+
+    @Test func tidyPreviewLeavesOutArchiveVolumeRowsAndTheSummaryCountsWhatWasDone() async {
+        let model = tidyModel()
+        designateFamilyArchive(model)
+        let vol = still("/Volumes/FamilyArchive/MoviesExpansion/IMG_1.cr3", md5: "s1")
+        let other = still("/Volumes/CrucialX10/IMG_2.cr3", md5: "s2")
+        let other2 = still("/Volumes/CrucialX10/IMG_3.cr3", md5: "s3")
+        model.records = [vol, other, other2]
+        let plan = await model.computeTidyCatalogPlan()
+        #expect(Set(plan.rows.map(\.id)) == [other.id, other2.id], "the preview never lists an archive-volume file")
+        #expect(plan.keptOnArchiveVolume == 1)
+        #expect(plan.stillCount == 2)
+        // A row the apply-time re-check drops (set aside meanwhile) is not counted.
+        other2.setAsideReason = "removed-by-user"
+        #expect(model.applyTidyCatalog(plan) == 1)
+        let text = await consoleText(model)
+        #expect(text.contains("Tidy Catalog: set aside 1 file(s) — 1 photos,"), "\(text)")
+    }
+
+    @Test func whatNextNamesOnlyTheRowsItRemoved() async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("whatnext"); defer { sb.cleanup() }
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let onArch = MasterArchiveTestSupport.makeRecord(
+            path: sb.archiveVolume.appendingPathComponent("MoviesExpansion/test_gone_arch.mov").path)
+        let elsewhere = MasterArchiveTestSupport.makeRecord(path: sb.sources.appendingPathComponent("test_gone_src.mov").path)
+        model.records = [onArch, elsewhere]
+        let n = await model.removeMissingCopiesFromCatalog(recordIDs: [onArch.id, elsewhere.id], fileExists: { _ in false })
+        #expect(n == 1)
+        #expect(onArch.purgedAt == nil && elsewhere.purgedAt != nil)
+        let text = await consoleText(model)
+        let removedLine = text.split(separator: "\n").first { $0.contains("what-next: removed") }.map(String.init) ?? ""
+        #expect(removedLine.contains("test_gone_src.mov") && !removedLine.contains("test_gone_arch.mov"), "\(removedLine)")
+        #expect(text.contains("what-next: left 1 missing row in the catalog — on the Master Archive volume"), "\(text)")
+    }
+}
+
+@Suite("QA archfu — publish leftovers and failure wording", .serialized)
+struct DerivativePublishQATests {
+
+    private func tempDir() throws -> URL {
+        let d = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("test_archfu_pub_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+
+    @Test func aRenameThatFailsAfterTheTrashSaysWhereThePreviousFileIs() throws {
+        let d = try tempDir(); defer { try? FileManager.default.removeItem(at: d) }
+        let final = d.appendingPathComponent("test_x.vs.edit.mov")
+        let partial = DerivativeOutputPublish.uniquePartialURL(for: final)
+        try Data([1]).write(to: final); try Data([2]).write(to: partial)
+        let trashDir = d.appendingPathComponent("FakeTrash", isDirectory: true)
+        try FileManager.default.createDirectory(at: trashDir, withIntermediateDirectories: true)
+        do {
+            _ = try DerivativeOutputPublish.publish(partial: partial.path, as: final, policy: .replaceViaTrash,
+                                                    archiveCheck: nil, trash: { url in
+                let dest = trashDir.appendingPathComponent(url.lastPathComponent)
+                try FileManager.default.moveItem(at: url, to: dest)
+                try FileManager.default.moveItem(at: partial, to: trashDir.appendingPathComponent("gone"))  // rename will now fail
+                return dest
+            })
+            Issue.record("the rename should have failed")
+        } catch {
+            #expect(error.localizedDescription.contains("is in the Trash at \(trashDir.path)"), "\(error.localizedDescription)")
+        }
+    }
+
+    @Test func stalePartialsOfThisOutputAreSweptAndNothingElse() throws {
+        let d = try tempDir(); defer { try? FileManager.default.removeItem(at: d) }
+        let out = d.appendingPathComponent("test_x.vs.edit.mov")
+        let old = Date().addingTimeInterval(-48 * 3600)
+        func make(_ name: String, _ date: Date) throws -> URL {
+            let u = d.appendingPathComponent(name); try Data([0]).write(to: u)
+            try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: u.path); return u
+        }
+        let stale = try make("test_x.vs.edit.abcdef12.vs-partial.mov", old)
+        let fresh = try make("test_x.vs.edit.12345678.vs-partial.mov", Date())
+        let otherStem = try make("test_y.vs.edit.abcdef12.vs-partial.mov", old)
+        let notOurs = try make("test_x.vs.edit.notahex!.vs-partial.mov", old)
+        let media = try make("test_x.vs.edit.mov", old)
+        let swept = DerivativeOutputPublish.sweepStalePartials(beside: out)
+        #expect(swept == [stale.lastPathComponent])
+        for u in [fresh, otherStem, notOurs, media] { #expect(FileManager.default.fileExists(atPath: u.path), "\(u.lastPathComponent)") }
+    }
+
+    @Test func thePartialNameCarriesTheMarkerTheScannerSkips() throws {
+        let p = DerivativeOutputPublish.uniquePartialURL(for: URL(fileURLWithPath: "/tmp/a.vs.edit.mov"))
+        #expect(p.lastPathComponent.contains(DerivativeOutputPublish.partialMarker))
+        #expect(p.pathExtension == "mov")
+        let walker = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("VideoScan/FilesystemWalker.swift"), encoding: .utf8)
+        #expect(walker.contains("url.lastPathComponent.contains(\"\(DerivativeOutputPublish.partialMarker)\")"),
+                "FilesystemWalker skips the same marker")
+    }
+
+    /// Reformat publishes through `.keep`: a taken name keeps BOTH files.
+    @Test func keepPolicyPublishesBesideAndDeletesNothing() throws {
+        let d = try tempDir(); defer { try? FileManager.default.removeItem(at: d) }
+        let final = d.appendingPathComponent("test_r.vs.hevc.20260922-120000.mp4")
+        let partial = ReformatJob.partialURL(for: final)
+        try Data([1]).write(to: final); try Data([2]).write(to: partial)
+        let outcome = try DerivativeOutputPublish.publish(partial: partial.path, as: final,
+                                                          policy: .keep(reason: "a file already has that name"),
+                                                          archiveCheck: nil, trash: { _ in Issue.record("never trashes"); return nil })
+        #expect(outcome.url.lastPathComponent == "test_r.vs.hevc.20260922-120000 2.mp4")
+        #expect(try Data(contentsOf: final) == Data([1]))
+        #expect(try Data(contentsOf: outcome.url) == Data([2]))
     }
 }

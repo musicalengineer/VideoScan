@@ -212,9 +212,13 @@ enum DeleteDuplicatesDiskWorker {
         // The Master Archive volume, by the file's OWN volume UUID —
         // before anything is read or moved (a quarantine folder on
         // FamilyArchive is itself a change to FamilyArchive).
-        if let check = item.archiveCheck, let note = check.refusalNote(forPath: item.path) {
-            return DeleteDuplicatesPhaseOne(outcome: .refused(reason: note + " — nothing moved", cancelled: false),
-                                            learnedKeeperFixity: nil)
+        if let check = item.archiveCheck, let refusal = check.refusal(forPath: item.path) {
+            // A provisional snapshot's "unprovable" is transient: left
+            // alone, never a refusal that re-marks the record Review.
+            let outcome: DeleteDuplicatesDiskOutcome = refusal.transient
+                ? .leftAlone(reason: Self.driveListRefreshing, facts: DeletionTierFacts())
+                : .refused(reason: refusal.note + " — nothing moved", cancelled: false)
+            return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: nil)
         }
         let box = FixityBox()
         var observing = hooks
@@ -347,11 +351,11 @@ enum DeleteDuplicatesDiskWorker {
         var boundary: (decision: DeletionTierDecision, facts: DeletionTierFacts)?
         // Set by the final verdict when the file's own volume turns out to
         // be the Master Archive's (the same last word Junk has).
-        var archiveRefusal: String?
+        var archiveRefusal: (note: String, transient: Bool)?
         let result = SignatureVerification.deleteQuarantined(ticket, disposal: recorded, hooks: hooks) {
-            if let archiveCheck, let note = archiveCheck.refusalNote(forPath: ticket.quarantinedPath) {
-                archiveRefusal = note
-                return .putBack(reason: note)
+            if let archiveCheck, let refusal = archiveCheck.refusal(forPath: ticket.quarantinedPath) {
+                archiveRefusal = refusal
+                return .putBack(reason: refusal.note)
             }
             let now = facts.recheck()
             guard !now.droppedAtBoundary.isEmpty else {
@@ -381,7 +385,9 @@ enum DeleteDuplicatesDiskWorker {
             // Review with the reason), not a cancel. A failed put-back
             // stays `.retained`, named.
             if case .refused(_, true) = outcome {
-                outcome = .refused(reason: archiveRefusal + " — put back, nothing removed", cancelled: false)
+                outcome = archiveRefusal.transient
+                    ? .leftAlone(reason: Self.driveListRefreshing, facts: facts)
+                    : .refused(reason: archiveRefusal.note + " — put back, nothing removed", cancelled: false)
             }
             return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false)
         }
@@ -396,6 +402,10 @@ enum DeleteDuplicatesDiskWorker {
         return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: boundary.decision, facts: boundary.facts,
                                         evidenceChanged: true)
     }
+
+    /// The row note for a pair left alone because the archive-volume
+    /// snapshot was being rebuilt (a drive just came or went).
+    static let driveListRefreshing = "the drive list was refreshing (a drive was just mounted or unmounted) — left alone; try again"
 
     /// Put a quarantined file back without deleting it (the plan could not
     /// record the quarantine, the run is stopping, or the tier said no).
@@ -863,6 +873,13 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             }
             cursor += 1
 
+            // A drive came or went since the archive-volume snapshot was
+            // built: wait for the fresh one (off-main, milliseconds) rather
+            // than judge this pair by the provisional snapshot, which calls
+            // every other /Volumes path "unprovable" (QA 2026-09-22).
+            if model.masterArchive != nil, !model.isArchiveVolumeSnapshotFresh {
+                await model.refreshArchiveVolumeSnapshot()
+            }
             // LIVE authorization, this instant — never the plan's or the
             // preflight's answer (#3).
             let record: VideoRecord
@@ -950,6 +967,12 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // evidence, drive reserved) until it settles.
             for path in needy where allowance.readablePaths.contains(path) { siblingReaders[path] = entry.id }
 
+            // The pair's removal-time check must come from a FRESH
+            // snapshot; awaits above (slots, a sibling's pair) may have
+            // spanned a mount.
+            if model.masterArchive != nil, !model.isArchiveVolumeSnapshotFresh {
+                await model.refreshArchiveVolumeSnapshot()
+            }
             mutatePlan { $0.set(entry.id, .verifying) }
             model.duplicateStatus = "Verifying duplicate \((plan?.counts.settled ?? 0) + 1) of \(current.entries.count)…"
             let item = DeleteDuplicatesWorkItem(
@@ -1563,6 +1586,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         // folder the plan names for each of those (QA MINOR 6, #2).
         let unsettled = plan.entries.filter { !$0.status.isSettled }
         let facts = await Self.resumeDiskFacts(planID: plan.id, entries: unsettled)
+        // Judge the rows by a FRESH archive-volume snapshot, not the
+        // provisional one a recent mount left behind (QA 2026-09-22).
+        if model.masterArchive != nil, !model.isArchiveVolumeSnapshotFresh {
+            await model.refreshArchiveVolumeSnapshot()
+        }
         for i in plan.entries.indices where !plan.entries[i].status.isSettled {
             let e = plan.entries[i]
             func skip(_ why: String, log line: String) {

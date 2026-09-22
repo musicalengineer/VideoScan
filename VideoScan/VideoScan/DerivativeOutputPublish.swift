@@ -31,6 +31,9 @@
 
 import Darwin
 import Foundation
+import os
+
+private let publishLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "fileOps")
 
 enum DerivativeOutputPublish {
 
@@ -74,6 +77,11 @@ enum DerivativeOutputPublish {
         try FileManager.default.trashItem(at: url, resultingItemURL: &resulting)
         return resulting as URL?
     }
+
+    /// The marker every in-flight partial carries. FilesystemWalker skips
+    /// any name containing it, so a crash-leftover partial is never
+    /// catalogued (pinned by a test against the walker's source).
+    static let partialMarker = ".vs-partial."
 
     /// `<stem>.<8 hex>.vs-partial.<ext>` beside `output`: unique per run
     /// (two jobs, or a stale partial from a crash, never share a name),
@@ -132,14 +140,9 @@ enum DerivativeOutputPublish {
             } else if !fm.fileExists(atPath: partial) {
                 throw Failure(message: "the finished output vanished before it could replace \(final.lastPathComponent)")
             } else {
-                do {
-                    let trashedTo = try trash(final)
-                    if try renameNoClobber(partial, final.path) { return .replaced(final, trashedTo: trashedTo) }
-                    keepReason = "another file took the name while the previous one was moved to the Trash"
-                } catch let failure as Failure {
-                    throw failure
-                } catch {
-                    keepReason = "the previous file could not be moved to the Trash (\(error.localizedDescription))"
+                switch try trashThenTake(partial: partial, final: final, trash: trash) {
+                case .taken(let outcome): return outcome
+                case .keep(let reason): keepReason = reason
                 }
             }
         }
@@ -150,5 +153,79 @@ enum DerivativeOutputPublish {
             }
         }
         throw Failure(message: "no free name beside \(final.lastPathComponent) after 199 tries")
+    }
+
+    private enum TrashStep {
+        case taken(Outcome)
+        case keep(String)
+    }
+
+    /// Replace: Trash the previous file, logging it BEFORE the rename, then
+    /// take its name. A rename that then throws says where the previous
+    /// file went — it is in the Trash, not lost.
+    private static func trashThenTake(partial: String, final: URL,
+                                      trash: @Sendable (URL) throws -> URL?) throws -> TrashStep {
+        let trashedTo: URL?
+        do {
+            trashedTo = try trash(final)
+        } catch {
+            return .keep("the previous file could not be moved to the Trash (\(error.localizedDescription))")
+        }
+        let whereTo = trashedTo?.path ?? "the Trash"
+        let line = "publish: moved the previous \(final.lastPathComponent) to \(whereTo); the new output takes its name next"
+        publishLog.notice("\(line, privacy: .public)")
+        appLog.write(line)
+        do {
+            if try renameNoClobber(partial, final.path) { return .taken(.replaced(final, trashedTo: trashedTo)) }
+        } catch {
+            throw Failure(message: "\(error.localizedDescription) — the previous \(final.lastPathComponent) is in the Trash at \(whereTo); the new output is still at \(partial)")
+        }
+        return .keep("another file took the name while the previous one was moved to the Trash (it is at \(whereTo))")
+    }
+
+    // MARK: Crash leftovers
+
+    /// Partials of THIS output name (`<stem>.<8 hex>.vs-partial.<ext>`)
+    /// left by a crash or force-quit, older than `olderThan`. A live job's
+    /// partial is written continuously, so its mtime is always fresh.
+    /// Pure name + date test — exposed for tests.
+    static func isStalePartial(name: String, of output: URL, modified: Date,
+                               now: Date, olderThan: TimeInterval) -> Bool {
+        let stem = output.deletingPathExtension().lastPathComponent
+        let ext = output.pathExtension
+        guard name.hasPrefix(stem + "."), name.hasSuffix(partialMarker + ext) else { return false }
+        let token = name.dropFirst(stem.count + 1).dropLast(partialMarker.count + ext.count)
+        guard token.count == 8, token.allSatisfy({ $0.isHexDigit }) else { return false }
+        return now.timeIntervalSince(modified) > olderThan
+    }
+
+    /// Remove stale partials of `output` in its folder; returns their
+    /// names. Only this app's own incomplete encodes match (the scanner
+    /// never catalogues a `.vs-partial.` name). DISK I/O — off-main.
+    @discardableResult
+    static func sweepStalePartials(beside output: URL, olderThan: TimeInterval = 24 * 3600,
+                                   now: Date = Date()) -> [String] {
+        let fm = FileManager.default
+        let dir = output.deletingLastPathComponent()
+        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return [] }
+        var swept: [String] = []
+        for name in names where name.contains(partialMarker) {
+            let path = dir.appendingPathComponent(name).path
+            guard let modified = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
+                  isStalePartial(name: name, of: output, modified: modified, now: now, olderThan: olderThan)
+            else { continue }
+            do {
+                try fm.removeItem(atPath: path)
+                swept.append(name)
+            } catch {
+                publishLog.error("stale partial \(name, privacy: .public) could not be removed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        if !swept.isEmpty {
+            let line = "publish: removed \(swept.count) stale partial(s) left by an interrupted run beside \(output.lastPathComponent): \(swept.joined(separator: ", "))"
+            publishLog.notice("\(line, privacy: .public)")
+            appLog.write(line)
+        }
+        return swept
     }
 }

@@ -618,13 +618,17 @@ extension VideoScanModel {
     /// 2026-09-22: "the app should never offer to delete from
     /// FamilyArchive"). Since Rick's second ruling the same day ("For now
     /// we won't Remove anything from FamilyArchive") Remove from Catalog,
-    /// Tidy Catalog and Remove (purge) use the whole-volume rule too, so
-    /// no verb passes `.catalogOnly` today; it is kept for a verb that
+    /// Tidy Catalog and Remove (purge) pass `.catalogRemoval`: the tree
+    /// AND the proven archive volume are refused, but never a file that
+    /// is merely unprovable (a network share, a drive with no UUID, a
+    /// snapshot still being rebuilt) — the ruling is about FamilyArchive.
+    /// No verb passes `.catalogOnly` today; it is kept for a verb that
     /// deliberately wants the tree-only rule again.
     /// The default is the stricter one, so a new caller that forgets to
     /// say is protected, not exposed.
     enum BulkVerbEffect: Sendable {
         case removesFiles
+        case catalogRemoval
         case catalogOnly
     }
 
@@ -659,12 +663,12 @@ extension VideoScanModel {
                            volume: ArchiveVolumeProtection? = nil) -> BulkDeleteRefusal? {
         guard masterArchive != nil else { return nil }
         if isInsideMasterArchive(path: path) { return .archiveTree }
-        guard effect == .removesFiles,
+        guard effect != .catalogOnly,
               let snapshot = volume ?? archiveVolumeProtection() else { return nil }
         switch snapshot.verdict(forPath: path) {
         case .clear: return nil
         case .onArchiveVolume: return .archiveVolume
-        case .unprovable: return .archiveVolumeUnprovable
+        case .unprovable: return effect == .catalogRemoval ? nil : .archiveVolumeUnprovable
         }
     }
 
@@ -689,7 +693,7 @@ extension VideoScanModel {
     func excludingMasterArchiveFiles(_ recs: [VideoRecord], verb: String,
                                      effect: BulkVerbEffect = .removesFiles) -> [VideoRecord] {
         guard masterArchive != nil, !recs.isEmpty else { return recs }
-        let snapshot = effect == .removesFiles ? archiveVolumeProtection() : nil
+        let snapshot = effect != .catalogOnly ? archiveVolumeProtection() : nil
         var kept: [VideoRecord] = []
         kept.reserveCapacity(recs.count)
         var tree = 0, onVolume = 0, unprovable = 0

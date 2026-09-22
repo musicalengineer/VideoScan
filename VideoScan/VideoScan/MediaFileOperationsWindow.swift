@@ -669,8 +669,8 @@ struct MediaFileOperationRow: View {
                     // jump straight to the new catalog row. Both
                     // affordances inline on the finished row.
                     finishedChip(summary)
-                    revealButton(reformat.outputURL)
-                    showInCatalogButton(reformat.outputURL)
+                    revealButton(reformat.publishedURL)
+                    showInCatalogButton(reformat.publishedURL)
                 } else if let transcode = job as? TranscodeJob {
                     // Pass C (Rick 2026-06-14): same finished treatment
                     // as Reformat — Reveal the new ProRes/HEVC file in
@@ -678,8 +678,8 @@ struct MediaFileOperationRow: View {
                     // is the affordance that proves the workspaceActive
                     // + derivedFrom wiring took effect.
                     finishedChip(summary)
-                    revealButton(transcode.outputURL)
-                    showInCatalogButton(transcode.outputURL)
+                    revealButton(transcode.publishedURL)
+                    showInCatalogButton(transcode.publishedURL)
                 } else if let analyze = job as? AnalyzeJob {
                     // Same treatment for Analyze — the user wants to
                     // verify the catalog row got captions + transcript

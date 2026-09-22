@@ -81,6 +81,10 @@ extension VideoScanModel {
         /// Archive whose content has a copy inside it. NOT in `rows`.
         var archivedCopyCount = 0
         var archivedCopyBytes: Int64 = 0
+        /// Records left alone because they live on the Master Archive's
+        /// volume (Rick 2026-09-22: "For now we won't Remove anything from
+        /// FamilyArchive"). NOT in `rows` — the preview matches Apply.
+        var keptOnArchiveVolume = 0
     }
 
     /// Compute the dry-run plan. Snapshot on the main actor (cheap value
@@ -97,6 +101,10 @@ extension VideoScanModel {
         // record after one rebuild) plus the archive copies' partialMD5 +
         // size fingerprints for records that never got a content hash.
         var archiveFingerprints = Set<ScanMergeFingerprint>()
+        // One archive-volume snapshot for the pass: the same catalog-
+        // removal rule Apply uses, so the preview never lists a file Apply
+        // would then leave alone.
+        let archiveVolume = archiveVolumeProtection()
         for rec in records where !rec.isPurged && !rec.isSetAside {
             let archiveSelf = isArchiveCopy(rec) || isInsideMasterArchive(path: rec.fullPath)
             if archiveSelf {
@@ -112,7 +120,8 @@ extension VideoScanModel {
                 pairProtected: CatalogScopePolicy.isPairProtected(rec),
                 partialMD5: rec.partialMD5,
                 isArchiveSelf: archiveSelf,
-                hasArchivedCopy: !archiveSelf && archivedCopy(of: rec) != nil))
+                hasArchivedCopy: !archiveSelf && archivedCopy(of: rec) != nil,
+                onArchiveVolume: bulkDeleteRefusal(rec, effect: .catalogRemoval, volume: archiveVolume) != nil))
         }
         // Evidence pool: ALL active video-only records — deliberately
         // INCLUDING pair members. The evidence question is "does this
@@ -148,6 +157,9 @@ extension VideoScanModel {
         /// archivedCopy(of:) found a master copy (promote link, content
         /// hash, or high-confidence hash-backed dup group).
         var hasArchivedCopy: Bool = false
+        /// Refused by the catalog-removal rule (the archive tree or the
+        /// proven archive volume) — never a row.
+        var onArchiveVolume: Bool = false
     }
 
     /// Pure off-main plan builder: classification + indexed evidence.
@@ -168,6 +180,11 @@ extension VideoScanModel {
             // HARD INVARIANT: pair members exit before classification.
             if c.pairProtected {
                 plan.keptPairProtected += 1
+                continue
+            }
+            // Nothing on the Master Archive volume is set aside.
+            if c.onArchiveVolume {
+                plan.keptOnArchiveVolume += 1
                 continue
             }
             // Copies of archived media — a TALLY, never a row (dry run;
@@ -273,7 +290,7 @@ extension VideoScanModel {
         // 2026-09-22: "For now we won't Remove anything from
         // FamilyArchive") — asked once for the whole plan, logged once.
         let allowed = Set(excludingMasterArchiveFiles(plan.rows.compactMap { record(forID: $0.id) },
-                                                      verb: "Tidy Catalog").map(\.id))
+                                                      verb: "Tidy Catalog", effect: .catalogRemoval).map(\.id))
         for row in plan.rows where allowed.contains(row.id) {
             guard let rec = record(forID: row.id),
                   !rec.isPurged,
@@ -302,10 +319,30 @@ extension VideoScanModel {
             if let rec = record(forID: row.id) { byReason[row.reason.rawValue, default: []].append(rec) }
         }
         for (reason, recs) in byReason { ledgerSetAside(recs, reason: reason, by: .tidy, at: now, batchID: tidyBatchID) }
-        log("Tidy Catalog: set aside \(changed.count) file(s) — \(plan.stillCount) photos, \(plan.musicCount) music, \(plan.unlinkedAudioCount) audio with no matching video, \(plan.livePhotoComplementCount) Live Photo halves, \(plan.junkCameBackCount) that came back after being set aside. Nothing was deleted; flip “Show set-aside files” to browse or put any of them back. A rescan will not bring them back (Tidy → Ignored content to put back).")
-        appLog.write("Tidy Catalog applied: \(changed.count) record(s) set aside (stills \(plan.stillCount), music \(plan.musicCount), unlinked audio \(plan.unlinkedAudioCount), live photo \(plan.livePhotoComplementCount), came back \(plan.junkCameBackCount)); \(remembered) new ignore-list entr\(remembered == 1 ? "y" : "ies"); records untouched on disk")
+        // What was ACTUALLY set aside — rows the archive rule (or an
+        // apply-time re-check) left alone are not counted.
+        let done = Self.tidyAppliedCounts(plan, changed: changedIDs)
+        log("Tidy Catalog: set aside \(changed.count) file(s) — \(done.still) photos, \(done.music) music, \(done.unlinkedAudio) audio with no matching video, \(done.livePhoto) Live Photo halves, \(done.cameBack) that came back after being set aside. Nothing was deleted; flip “Show set-aside files” to browse or put any of them back. A rescan will not bring them back (Tidy → Ignored content to put back).")
+        appLog.write("Tidy Catalog applied: \(changed.count) record(s) set aside (stills \(done.still), music \(done.music), unlinked audio \(done.unlinkedAudio), live photo \(done.livePhoto), came back \(done.cameBack)); \(remembered) new ignore-list entr\(remembered == 1 ? "y" : "ies"); records untouched on disk")
         tidyCatalogLog.info("Tidy applied: setAside=\(changed.count) of planned \(plan.rows.count) remembered=\(remembered)")
         return changed.count
+    }
+
+    /// Per-category counts of the rows that were actually set aside.
+    nonisolated static func tidyAppliedCounts(_ plan: TidyCatalogPlan, changed: Set<UUID>)
+        -> (still: Int, music: Int, unlinkedAudio: Int, livePhoto: Int, cameBack: Int) {
+        var out = (still: 0, music: 0, unlinkedAudio: 0, livePhoto: 0, cameBack: 0)
+        for row in plan.rows where changed.contains(row.id) {
+            if row.cameBack { out.cameBack += 1; continue }
+            switch row.reason {
+            case .stillImage: out.still += 1
+            case .musicFormat: out.music += 1
+            case .unlinkedAudio: out.unlinkedAudio += 1
+            case .livePhotoComplement: out.livePhoto += 1
+            default: break
+            }
+        }
+        return out
     }
 
     /// "Remove from Catalog" for an explicit selection: set aside with
@@ -327,7 +364,7 @@ extension VideoScanModel {
         // Remove anything from FamilyArchive") the whole Master Archive
         // VOLUME is refused here too, not just the tree.
         let allowed = Set(excludingMasterArchiveFiles(ids.compactMap { record(forID: $0) },
-                                                      verb: "Remove from Catalog").map(\.id))
+                                                      verb: "Remove from Catalog", effect: .catalogRemoval).map(\.id))
         for id in ids where allowed.contains(id) {
             guard let rec = record(forID: id), !rec.isPurged, rec.setAsideReason == nil,
                   !CatalogScopePolicy.isPairProtected(rec) else { continue }

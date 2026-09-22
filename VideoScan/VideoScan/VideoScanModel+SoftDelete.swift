@@ -58,7 +58,7 @@ extension VideoScanModel {
         // FamilyArchive") neither is anything else on the archive's
         // VOLUME, even though Remove only touches the catalog.
         let ids = Set(excludingMasterArchiveFiles(requestedIDs.compactMap { record(forID: $0) },
-                                                  verb: "Remove").map(\.id))
+                                                  verb: "Remove", effect: .catalogRemoval).map(\.id))
         guard !ids.isEmpty else { return 0 }
         let now = Date()
         var changed: [UUID] = []

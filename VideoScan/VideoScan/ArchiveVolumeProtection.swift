@@ -231,17 +231,30 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
 struct ArchiveRemovalCheck: Sendable {
     let protection: ArchiveVolumeProtection
     let probe: @Sendable (String) -> String?
+    /// Captured while the model's snapshot was being rebuilt (the
+    /// provisional one). Its "unprovable" is then TRANSIENT — the caller
+    /// leaves the file alone and must not record a refusal (QA 2026-09-22).
+    var isProvisional: Bool = false
+
+    /// nil = may be removed; else the note, and whether the refusal is
+    /// only transient (provisional snapshot + unprovable).
+    func refusal(forPath path: String) -> (note: String, transient: Bool)? {
+        let verdict = protection.verdictAtRemoval(path: path, probe: probe)
+        guard let note = Self.note(verdict, label: protection.label) else { return nil }
+        return (note, isProvisional && verdict == .unprovable)
+    }
+
+    private static func note(_ verdict: ArchiveVolumeProtection.Verdict, label: String) -> String? {
+        switch verdict {
+        case .clear: return nil
+        case .onArchiveVolume: return VideoScanModel.bulkDeleteRefusalNote(.archiveVolume, volume: label)
+        case .unprovable: return VideoScanModel.bulkDeleteRefusalNote(.archiveVolumeUnprovable, volume: label)
+        }
+    }
 
     /// nil = this file may be removed; else why not. DISK I/O (one UUID
     /// read of `path`'s own volume) — call it off the main thread.
     func refusalNote(forPath path: String) -> String? {
-        switch protection.verdictAtRemoval(path: path, probe: probe) {
-        case .clear:
-            return nil
-        case .onArchiveVolume:
-            return VideoScanModel.bulkDeleteRefusalNote(.archiveVolume, volume: protection.label)
-        case .unprovable:
-            return VideoScanModel.bulkDeleteRefusalNote(.archiveVolumeUnprovable, volume: protection.label)
-        }
+        refusal(forPath: path)?.note
     }
 }

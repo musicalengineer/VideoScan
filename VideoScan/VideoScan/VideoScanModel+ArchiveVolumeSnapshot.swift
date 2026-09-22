@@ -74,7 +74,8 @@ extension VideoScanModel {
     /// on a disk thread. nil = no designation.
     func archiveRemovalCheck() -> ArchiveRemovalCheck? {
         guard let protection = archiveVolumeProtection() else { return nil }
-        return ArchiveRemovalCheck(protection: protection, probe: MasterArchiveDesignation.volumeUUIDProbe)
+        return ArchiveRemovalCheck(protection: protection, probe: MasterArchiveDesignation.volumeUUIDProbe,
+                                   isProvisional: !isArchiveVolumeSnapshotFresh)
     }
 
     /// Something the snapshot depends on changed (designation, a mount, an

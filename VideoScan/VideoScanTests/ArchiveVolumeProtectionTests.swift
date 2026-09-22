@@ -495,7 +495,10 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/BundleImporter.swift": 2, "VideoScan/CaptionRunner.swift": 2,
         "VideoScan/CatalogStore.swift": 1, "VideoScan/CatalogSync.swift": 3,
         "VideoScan/CatalogWriteError.swift": 1, "VideoScan/CleanupJob.swift": 4,
-        "VideoScan/CouplePortrait.swift": 2, "VideoScan/DerivativeOutputPublish.swift": 1,
+        "VideoScan/CouplePortrait.swift": 2,
+        // trashItem (Replace, the user's choice, never on the archive volume)
+        // + removeItem of this app's OWN stale `.vs-partial.` leftovers (sweep).
+        "VideoScan/DerivativeOutputPublish.swift": 2,
         "VideoScan/FamilyAssetStore.swift": 2,
         "VideoScan/FamilySearchPullCoordinator.swift": 6, "VideoScan/FindPersonJob.swift": 1,
         "VideoScan/HallieNeuralSpeech.swift": 7, "VideoScan/HalliePhotoImport.swift": 1,
@@ -506,9 +509,10 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/PerceptualFingerprinter.swift": 1, "VideoScan/PersonEditSheet.swift": 1,
         "VideoScan/PersonFinderCompilation.swift": 7, "VideoScan/RebuildAudioJob.swift": 1,
         "VideoScan/RecipeGenderAgeGate.swift": 1,
-        // 8 → 6 (2026-09-22): the output-name pre-delete and the replacing
-        // publish are gone; what remains removes this run's own partial.
-        "VideoScan/ReformatJob.swift": 6,
+        // 8 → 5 (2026-09-22): the output-name pre-delete, the replacing
+        // publish and the delete-on-collision are gone; what remains
+        // removes this run's own partial after a stall / cancel / failure.
+        "VideoScan/ReformatJob.swift": 5,
         "VideoScan/RelocateEngine.swift": 1, "VideoScan/RescueFileCopier.swift": 3,
         "VideoScan/ReviewThumbnailRenderer.swift": 1, "VideoScan/ScanCheckpoint.swift": 1,
         "VideoScan/ScanJobsStorage.swift": 2, "VideoScan/SignatureVerification.swift": 2,
@@ -691,7 +695,10 @@ struct ArchiveVolumeProtectionSourceSensor {
         #expect(!transcode.contains("removeItem(atPath: outputPath)"), "Transcode never clears its output name first")
         #expect(!transcode.contains("ReformatJob.atomicPublish"), "Transcode publishes through DerivativeOutputPublish")
         let publish = try Self.source("VideoScan/DerivativeOutputPublish.swift")
-        #expect(!publish.contains("removeItem("), "a replaced file only ever goes to the Trash")
+        let sweep = try #require(publish.range(of: "static func sweepStalePartials("))
+        #expect(publish.components(separatedBy: "removeItem(").count - 1 == 1
+                && (publish.range(of: "removeItem(")?.lowerBound ?? publish.startIndex) > sweep.lowerBound,
+                "the ONE removeItem is the stale-partial sweep; a replaced file only ever goes to the Trash")
         #expect(publish.contains("UInt32(RENAME_EXCL)") && !publish.contains("RENAME_SWAP)"))
     }
 }
