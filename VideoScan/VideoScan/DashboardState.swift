@@ -569,8 +569,10 @@ struct CombineJobStatus: Identifiable {
     let pairIndex: Int
     let videoFilename: String
     let audioFilename: String
-    let outputFilename: String
-    let outputPath: String
+    /// Predicted at enqueue; replaced with the name actually published
+    /// (may be "… 2.mov" — Combine never overwrites, CombineOutputPublish).
+    var outputFilename: String
+    var outputPath: String
     let videoSizeBytes: Int64
     let audioSizeBytes: Int64
     let totalDurationSeconds: Double

@@ -102,15 +102,46 @@ extension VideoScanModel {
         return (localVideo, localAudio, tempDir)
     }
 
-    /// Process one video/audio pair end-to-end: skip-if-exists, pause-gate,
-    /// stage inputs, mux, clean up. Returns true on success.
+    /// Where each pair already has a combined output in `outputFolder`,
+    /// keyed by the pair group it was combined from. One pass over the
+    /// catalog per BATCH (never per pair, never in a view body).
+    ///
+    /// This replaces "skip if <video>_combined.mov exists": a same-named
+    /// file there may belong to a DIFFERENT pair (videos that share a base
+    /// name in different source folders), so only a catalogued output that
+    /// was combined from THIS pair counts as "already done".
+    static func priorCombinedOutputs(records: [VideoRecord], outputFolder: URL) -> [UUID: String] {
+        let folder = outputFolder.standardizedFileURL.path
+        var map: [UUID: String] = [:]
+        for rec in records {
+            guard let group = rec.combinedFromPairID else { continue }
+            // Cheap string compare first; standardize only a near miss
+            // (trailing slash, "..") — keeps a 100k catalog pass cheap.
+            let dir = rec.directory
+            guard dir == folder
+                    || URL(fileURLWithPath: dir).standardizedFileURL.path == folder
+            else { continue }
+            if map[group] == nil { map[group] = rec.fullPath }
+        }
+        return map
+    }
+
+    /// Process one video/audio pair end-to-end: skip-if-already-combined,
+    /// pause-gate, stage inputs, mux, clean up. Returns true on success.
+    ///
+    /// `priorOutputPath`: this pair's already-catalogued combined output in
+    /// `outputFolder` (see `priorCombinedOutputs`). The pair is skipped only
+    /// when that file is still on disk. A file that merely has the expected
+    /// NAME is never a reason to skip — or to overwrite: the new output is
+    /// published beside it (CombineOutputPublish).
     func processCombinePair(
         video: VideoRecordSnapshot,
         audio: VideoRecordSnapshot,
         outputFolder: URL,
         tempBase: URL,
         hasRAMDisk: Bool,
-        jobIndex: Int
+        jobIndex: Int,
+        priorOutputPath: String? = nil
     ) async -> Bool {
         if Task.isCancelled { return false }
         await combinePauseGate.waitIfPaused()
@@ -136,14 +167,16 @@ extension VideoScanModel {
             return false
         }
 
-        // Skip if already completed (resume after pause)
+        // Skip if THIS pair was already combined into this folder (re-run
+        // after Stop). Not "a file has the name" — see priorCombinedOutputs.
         let fm = FileManager.default
-        if fm.fileExists(atPath: outURL.path) {
+        if let prior = priorOutputPath, fm.fileExists(atPath: prior) {
+            let priorName = (prior as NSString).lastPathComponent
             await MainActor.run {
                 self.dashboard.combineCompleted += 1
                 self.dashboard.combineSkipped += 1
                 self.updateJobPhase(jobIndex, .skipped)
-                self.log("  [\(self.dashboard.combineCompleted)/\(self.dashboard.combineTotal)] \(outName) — already exists, skipping")
+                self.log("  [\(self.dashboard.combineCompleted)/\(self.dashboard.combineTotal)] \(priorName) — already combined from this pair, skipping")
             }
             return true
         }
@@ -206,28 +239,30 @@ extension VideoScanModel {
             }
         }
 
+        // ffmpeg never writes the final name: it writes a partial reserved
+        // (O_EXCL) beside it, and only a verified partial is published.
+        guard let partialURL = await reserveCombinePartial(
+            for: outURL, outName: outName, tempDir: staged.tempDir, jobIndex: jobIndex
+        ) else { return false }
+
+        CombineTestSeams.beforeMux?(outURL, partialURL)
         let result = await CombineEngine.runFFMpeg(
             videoPath: staged.video.path,
             audioPath: staged.audio.path,
-            outputPath: outURL.path,
+            outputPath: partialURL.path,
             technique: technique,
             durationSeconds: duration,
             onProgress: progressFn,
             log: logFn
         )
 
-        if let tempDir = staged.tempDir {
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-        if !result.success {
-            try? FileManager.default.removeItem(at: outURL)
-            log("ffmpeg exit code \(result.exitCode)")
-            await MainActor.run {
-                self.dashboard.combineCompleted += 1
-                self.dashboard.combineFailed += 1
-                self.updateJobPhase(jobIndex, .failed)
-                self.log("    ✗ FAILED: \(outName)")
-            }
+        removeCombineTempDir(staged.tempDir)
+        if !result.success || Task.isCancelled {
+            let stopped = Task.isCancelled
+            removeCombinePartial(partialURL)
+            if !stopped { log("ffmpeg exit code \(result.exitCode)") }
+            await failCombineJob(jobIndex, stopped ? "    ✗ STOPPED: \(outName) — partial removed"
+                                 : "    ✗ FAILED: \(outName)")
             return false
         }
 
@@ -236,24 +271,24 @@ extension VideoScanModel {
             self.log("    Verifying output…")
         }
         let verified = await CombineVerifier.verifyCombineOutput(
-            url: outURL, expectedDuration: duration,
+            url: partialURL, expectedDuration: duration,
             ffprobePath: ffprobePath, ffmpegPath: CombineEngine.ffmpegPath
         )
-        if !verified.ok {
-            try? FileManager.default.removeItem(at: outURL)
-            await MainActor.run {
-                self.dashboard.combineCompleted += 1
-                self.dashboard.combineFailed += 1
-                self.updateJobPhase(jobIndex, .failed)
-                self.log("    ✗ VERIFY FAILED: \(outName) — \(verified.reason)")
-            }
+        if !verified.ok || Task.isCancelled {
+            let reason = verified.ok ? "stopped before publish" : verified.reason
+            removeCombinePartial(partialURL)
+            await failCombineJob(jobIndex, "    ✗ VERIFY FAILED: \(outName) — \(reason)")
             return false
         }
+
+        guard let publishedURL = await publishCombineOutput(
+            partial: partialURL, as: outURL, outName: outName, jobIndex: jobIndex
+        ) else { return false }
 
         // Build the Sendable spec off-actor; construct + stamp the
         // (non-Sendable) VideoRecord on the main actor at the insertion point.
         let combinedSpec = await buildCombinedRecord(
-            outputURL: outURL, video: video, audio: audio, summary: verified.summary
+            outputURL: publishedURL, video: video, audio: audio, summary: verified.summary
         )
         await MainActor.run {
             self.dashboard.combineCompleted += 1
@@ -261,12 +296,15 @@ extension VideoScanModel {
             self.updateJobPhase(jobIndex, .done)
             if jobIndex < self.dashboard.combineJobs.count {
                 self.dashboard.combineJobs[jobIndex].progressFraction = 1.0
+                // The name actually published (may be "… 2.mov").
+                self.dashboard.combineJobs[jobIndex].outputFilename = publishedURL.lastPathComponent
+                self.dashboard.combineJobs[jobIndex].outputPath = publishedURL.path
                 if let warning = verified.warning {
                     self.dashboard.combineJobs[jobIndex].warningMessage = warning
                     self.log("    ⚠ \(warning)")
                 }
             }
-            self.log("    ✓ Verified: \(outURL.path) (\(verified.summary))")
+            self.log("    ✓ Verified: \(publishedURL.path) (\(verified.summary))")
             if let spec = combinedSpec {
                 let rec = VideoRecord()
                 rec.apply(spec)
@@ -275,6 +313,71 @@ extension VideoScanModel {
             }
         }
         return true
+    }
+
+    /// Reserve this run's partial beside `outURL` (O_EXCL). On failure the
+    /// staging dir is removed and the job counted failed; returns nil.
+    private func reserveCombinePartial(for outURL: URL, outName: String,
+                                       tempDir: URL?, jobIndex: Int) async -> URL? {
+        do {
+            return try CombineOutputPublish.reservePartial(for: outURL)
+        } catch {
+            removeCombineTempDir(tempDir)
+            await failCombineJob(jobIndex, "    ✗ FAILED: \(outName) — \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Publish a verified partial: atomic rename that never replaces an
+    /// existing file ("… 2.mov" when the name is taken — logged). Returns
+    /// the URL actually published, or nil after counting the job failed
+    /// (the partial is removed; nothing else is touched).
+    private func publishCombineOutput(partial: URL, as outURL: URL,
+                                      outName: String, jobIndex: Int) async -> URL? {
+        let outcome: CombineOutputPublish.Outcome
+        do {
+            outcome = try CombineOutputPublish.publish(partial: partial.path, as: outURL)
+        } catch {
+            removeCombinePartial(partial)
+            await failCombineJob(jobIndex, "    ✗ FAILED: \(outName) — could not publish: \(error.localizedDescription)")
+            return nil
+        }
+        if case .publishedBeside(let beside, let kept, let reason) = outcome {
+            log("    ⚠ \(reason) — kept it; published as \(beside.lastPathComponent)")
+            appLog.write("combine: \(kept.path) already existed (kept) — published as \(beside.lastPathComponent)")
+        }
+        return outcome.url
+    }
+
+    /// Count a pair as failed and say why (one line in the dashboard log).
+    private func failCombineJob(_ jobIndex: Int, _ message: String) async {
+        await MainActor.run {
+            self.dashboard.combineCompleted += 1
+            self.dashboard.combineFailed += 1
+            self.updateJobPhase(jobIndex, .failed)
+            self.log(message)
+        }
+    }
+
+    /// Remove the staging temp dir (our own VS_<uuid> dir, created by
+    /// stageCombineInputs). A failure is logged, not swallowed.
+    private func removeCombineTempDir(_ tempDir: URL?) {
+        guard let tempDir else { return }
+        do {
+            try FileManager.default.removeItem(at: tempDir)
+        } catch {
+            log("    ⚠ could not remove staging dir \(tempDir.path): \(error.localizedDescription)")
+        }
+    }
+
+    /// Remove the partial THIS run reserved — never a final name
+    /// (CombineOutputPublish.removePartial refuses non-partials).
+    private func removeCombinePartial(_ partial: URL) {
+        do {
+            try CombineOutputPublish.removePartial(partial)
+        } catch {
+            log("    ⚠ could not remove partial \(partial.lastPathComponent): \(error.localizedDescription)")
+        }
     }
 
     @MainActor
@@ -525,6 +628,9 @@ extension VideoScanModel {
         // capture it freely.
         let snapshotPairs: [(video: VideoRecordSnapshot, audio: VideoRecordSnapshot)] =
             filteredPairs.map { (video: $0.video.snapshot(), audio: $0.audio.snapshot()) }
+        // One catalog pass per batch: which pairs already have a combined
+        // output in this folder (the only valid reason to skip a pair).
+        let priorOutputs = Self.priorCombinedOutputs(records: records, outputFolder: outputFolder)
 
         let newTask = Task {
             let (tempBase, hasRAMDisk) = await mountCombineRAMDisk()
@@ -534,6 +640,7 @@ extension VideoScanModel {
                 for (i, (video, audio)) in snapshotPairs.enumerated() {
                     if Task.isCancelled { break }
                     let jobIndex = jobOffset + i
+                    let priorOutputPath = video.pairGroupID.flatMap { priorOutputs[$0] }
                     group.addTask { [self] in
                         do {
                             return try await semaphore.withPermit {
@@ -541,7 +648,8 @@ extension VideoScanModel {
                                     video: video, audio: audio,
                                     outputFolder: outputFolder,
                                     tempBase: tempBase, hasRAMDisk: hasRAMDisk,
-                                    jobIndex: jobIndex
+                                    jobIndex: jobIndex,
+                                    priorOutputPath: priorOutputPath
                                 )
                             }
                         } catch {
