@@ -285,9 +285,8 @@
 </div>
 
 <!-- ============ TESTDRIVER (LOCAL RUNS) SECTION ============ -->
-<!-- Real test runs (XCTest + Swift Testing) on Rick's Mac hardware via
-     TestDriver. This is the only place real coverage and pass/fail counts
-     show up; GitHub-hosted CI skips unit tests entirely. -->
+<!-- XCTest + Swift Testing runs on Rick's Mac hardware via TestDriver.
+     These complement the pure-logic suites exercised by GitHub-hosted CI. -->
 <h3 class="section-heading">Local Test Runs &mdash; TestDriver on Mac hardware</h3>
 
 <!-- TestDriver cards -->
@@ -316,10 +315,9 @@
 </div>
 
 <!-- ============ PER-PUSH SECTION ============ -->
-<!-- Demoted to the bottom: GitHub-hosted CI on every push to main.
-     Coverage is always 0% here because real unit tests don't run on
-     virtualized M1 runners; useful for lint/LOC/fat-file trends only. -->
-<h3 class="section-heading">Per-Push CI &mdash; GitHub Actions (lint &amp; LOC trends; no unit tests)</h3>
+<!-- GitHub-hosted CI on every push to main. Coverage is available only
+     when the run produces a readable coverage report. Missing is not zero. -->
+<h3 class="section-heading">Per-Push CI &mdash; GitHub Actions (build, pure-logic tests &amp; code metrics)</h3>
 
 <!-- Summary cards -->
 <div class="cards" id="cards"></div>
@@ -330,14 +328,14 @@
     <h2>Logic-Only Coverage %</h2>
     <canvas id="chart-coverage"></canvas>
     <div id="chart-coverage-note" class="chart-note hidden">
-      Coverage is unavailable from GitHub-hosted CI because unit tests are disabled there. See the Local Test Runs section above for real coverage from Mac hardware.
+      No readable CI coverage report is available. See the workflow result for build or test failures and Local Test Runs above for coverage from Mac hardware.
     </div>
   </div>
   <div class="chart-box"><h2>SwiftLint Warnings + Errors</h2><canvas id="chart-swiftlint"></canvas></div>
   <div class="chart-box"><h2>Periphery — Unused Code</h2><canvas id="chart-periphery"></canvas></div>
-  <div class="chart-box"><h2>Total Swift Lines of Code</h2><canvas id="chart-loc"></canvas></div>
+  <div class="chart-box"><h2>Total Swift Source Lines (including tests)</h2><canvas id="chart-loc"></canvas></div>
   <div class="chart-box"><h2>Files Over 1,000 Lines</h2><canvas id="chart-fat-files"></canvas></div>
-  <div class="chart-box"><h2>Test Count</h2><canvas id="chart-tests"></canvas></div>
+  <div class="chart-box"><h2>Test Declarations (source count)</h2><canvas id="chart-tests"></canvas></div>
   <div class="chart-box"><h2>Regression Tests Locked-In</h2><canvas id="chart-regressions"></canvas></div>
 </div>
 
@@ -582,9 +580,9 @@ async function loadData() {
   const cardsEl = document.getElementById("cards");
   const hasCoverage = rows.some(r => r.coverage_logic_pct != null);
   cardsEl.appendChild(card("Logic Coverage",
-    last.coverage_logic_pct != null ? last.coverage_logic_pct.toFixed(1) + "%" : "Mac only",
+    last.coverage_logic_pct != null ? last.coverage_logic_pct.toFixed(1) + "%" : "Unavailable",
     prev.coverage_logic_pct, last.coverage_logic_pct, false, "var(--good)"));
-  cardsEl.appendChild(card("Swift LOC",
+  cardsEl.appendChild(card("Swift Source Lines",
     last.total_swift_lines?.toLocaleString(), prev.total_swift_lines, last.total_swift_lines, false, "var(--muted)"));
   cardsEl.appendChild(card("Open Issues",
     last.open_issues, prev.open_issues, last.open_issues, true, "var(--bad)"));
@@ -594,7 +592,7 @@ async function loadData() {
     last.swiftlint_errors, prev.swiftlint_errors, last.swiftlint_errors, true, "var(--bad)"));
   cardsEl.appendChild(card("Unused Code",
     last.periphery_findings, prev.periphery_findings, last.periphery_findings, true, "var(--accent)"));
-  cardsEl.appendChild(card("Tests",
+  cardsEl.appendChild(card("Test Declarations",
     last.test_count, prev.test_count, last.test_count, false, "var(--good)"));
   cardsEl.appendChild(card("Regression Tests",
     last.regression_count, prev.regression_count, last.regression_count, false, "var(--purple)"));

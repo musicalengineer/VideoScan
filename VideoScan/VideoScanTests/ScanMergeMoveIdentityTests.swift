@@ -83,6 +83,7 @@ struct ScanMergeMoveIdentityTests {
         let model = makeMovePipelineModel()
         let t1 = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [t1]
+        await t1.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(t1)
         _ = await t1.scanTask?.value
 
@@ -101,6 +102,7 @@ struct ScanMergeMoveIdentityTests {
 
         let t2 = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [t1, t2]
+        await t2.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(t2)
         _ = await t2.scanTask?.value
 
@@ -148,6 +150,7 @@ struct ScanMergeMoveIdentityTests {
         let model = makeMovePipelineModel()
         let t1 = CatalogScanTarget(searchPath: rootX.path)
         model.scanTargets = [t1]
+        await t1.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(t1)
         _ = await t1.scanTask?.value
 
@@ -166,6 +169,7 @@ struct ScanMergeMoveIdentityTests {
         // Scan the NEW root — the old root has not been rescanned.
         let t2 = CatalogScanTarget(searchPath: rootY.path)
         model.scanTargets = [t1, t2]
+        await t2.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(t2)
         _ = await t2.scanTask?.value
 
@@ -188,6 +192,7 @@ struct ScanMergeMoveIdentityTests {
         // longer lives under rootX, and the anchor is re-seen.
         let t3 = CatalogScanTarget(searchPath: rootX.path)
         model.scanTargets = [t1, t2, t3]
+        await t3.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(t3)
         _ = await t3.scanTask?.value
 

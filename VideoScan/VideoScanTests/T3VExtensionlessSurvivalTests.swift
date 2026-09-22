@@ -82,6 +82,7 @@ struct T3VExtensionlessSurvivalTests {
         model.scanOptions = scanOptions(probeExtensionless: probeExtensionless)
         let target = CatalogScanTarget(searchPath: root)
         model.scanTargets.append(target)
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(target)
         _ = await target.scanTask?.value
     }
@@ -178,6 +179,7 @@ struct T3VExtensionlessSurvivalTests {
         model.scanOptions = scanOptions(probeExtensionless: true)
         let resumed = CatalogScanTarget(searchPath: rescuedDir.path)
         model.scanTargets.append(resumed)
+        await resumed.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.resumeTarget(resumed)
         _ = await resumed.scanTask?.value
 

@@ -508,17 +508,23 @@ jobs:
 
       - name: Install tools
         run: |
-          brew install swiftlint || true
+          brew install swiftlint
           # Use the homebrew-core formula (3.x), not the cask (stuck at 2.21.2).
-          brew install periphery || true
+          brew install periphery
           echo "Periphery: $(periphery version)"
           echo "SwiftLint: $(swiftlint version)"
 
       - name: SwiftLint --strict
+        id: swiftlint
+        continue-on-error: true
         run: |
-          # --strict promotes warnings to errors, but we just want to count
-          # them. Don't fail the step on non-zero exit.
-          swiftlint lint --strict --reporter xcode > swiftlint-strict.txt 2>&1 || true
+          # Preserve the real outcome for the reporter while allowing the
+          # independent Periphery scan and artifact upload to continue.
+          set +e
+          swiftlint lint --strict --reporter xcode > swiftlint-strict.txt 2>&1
+          scan_exit=$?
+          echo "exit_code=$scan_exit" >> "$GITHUB_OUTPUT"
+          exit "$scan_exit"
 
       - name: Build (Periphery needs the build for index data)
         run: |
@@ -535,60 +541,25 @@ jobs:
             -derivedDataPath periphery-dd 2>&1 | tail -300
 
       - name: Periphery aggressive (no --retain-public)
+        id: periphery
+        continue-on-error: true
         run: |
           # `--retain-public` is OFF — for a single-app codebase, public API
           # that nothing inside calls is genuinely unused.
           periphery scan \
-            --project VideoScan/VideoScan.xcodeproj \
-            --schemes VideoScan \
-            --targets VideoScan \
+            --skip-build \
+            --index-store-path periphery-dd/Index.noindex/DataStore \
             --format xcode \
-            > periphery-strict.txt 2>&1 || true
+            > periphery-strict.txt 2>&1
 
       - name: Count + summarise findings
         id: count
         if: always()
-        run: |
-          # `grep -c` already prints "0" on no-match (and exits 1).
-          # Pairing that with `|| echo 0` was producing "0\n0" — a
-          # multi-line value GH Actions then rejected as malformed
-          # output ("Invalid format '0'"). Using `|| true` swallows
-          # the exit code without re-printing.
-          SL=$(grep -c ": warning:\|: error:" swiftlint-strict.txt 2>/dev/null || true)
-          PF=$(grep -c "^/" periphery-strict.txt 2>/dev/null || true)
-          SL=${SL:-0}
-          PF=${PF:-0}
-          echo "swiftlint=$SL" >> "$GITHUB_OUTPUT"
-          echo "periphery=$PF" >> "$GITHUB_OUTPUT"
-
-          {
-            echo "## SwiftLint --strict + Periphery aggressive"
-            echo ""
-            echo "| Tool | Findings |"
-            echo "|---|---:|"
-            echo "| SwiftLint --strict | $SL |"
-            echo "| Periphery (no --retain-public) | $PF |"
-            echo ""
-            if [ "$SL" != "0" ]; then
-              echo "<details><summary>SwiftLint findings ($SL)</summary>"
-              echo ""
-              echo '```'
-              head -100 swiftlint-strict.txt
-              echo '```'
-              echo ""
-              echo "</details>"
-              echo ""
-            fi
-            if [ "$PF" != "0" ]; then
-              echo "<details><summary>Periphery findings ($PF)</summary>"
-              echo ""
-              echo '```'
-              head -100 periphery-strict.txt
-              echo '```'
-              echo ""
-              echo "</details>"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          SWIFTLINT_OUTCOME: ${{ steps.swiftlint.outcome }}
+          SWIFTLINT_EXIT_CODE: ${{ steps.swiftlint.outputs.exit_code }}
+          PERIPHERY_OUTCOME: ${{ steps.periphery.outcome }}
+        run: python3 scripts/nightly_lint_report.py
 
       - name: Upload lint logs
         if: always()
@@ -639,8 +610,8 @@ jobs:
 
       - name: Install tools
         run: |
-          brew install swiftlint || true
-          brew install periphery || true
+          brew install swiftlint
+          brew install periphery
           echo "Periphery: $(periphery version)"
           echo "SwiftLint: $(swiftlint version)"
 
@@ -671,11 +642,12 @@ jobs:
         run: |
           echo "## Periphery — unused code (warn-only)" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          set -o pipefail
           periphery scan \
             --skip-build \
             --index-store-path DerivedData/Index.noindex/DataStore \
             --format xcode \
-            2>&1 | tee periphery-raw.txt | tee -a $GITHUB_STEP_SUMMARY || true
+            2>&1 | tee periphery-raw.txt | tee -a $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Upload warn-only logs

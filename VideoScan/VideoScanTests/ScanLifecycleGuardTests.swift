@@ -73,6 +73,7 @@ struct ScanLifecycleGuardTests {
 
         let model = makeGuardTestModel()
         let target = CatalogScanTarget(searchPath: dir.path)
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.scanTargets = [target]
 
         model.startTarget(target)
@@ -118,6 +119,7 @@ struct ScanLifecycleGuardTests {
 
         let model = makeGuardTestModel()
         let target = CatalogScanTarget(searchPath: dir.path)
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.scanTargets = [target]
 
         // Start AFTER any stale checkpoint would have been cleared, then

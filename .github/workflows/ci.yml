@@ -40,7 +40,11 @@ jobs:
           python3 -m unittest \
             tests/test_person_eval_metrics.py \
             tests/test_person_metrics_integration.py \
-            tests/test_ci_test_verdict.py
+            tests/test_ci_test_verdict.py \
+            tests/test_ci_workflow_contract.py \
+            tests/test_nightly_workflow_contract.py \
+            tests/test_nightly_lint_report.py \
+            tests/test_collect_metrics.py
 
       # The Xcode selector's own regression suite. Runs here rather than on
       # the macOS job because it works entirely on fixtures — it needs no
@@ -61,7 +65,7 @@ jobs:
     # on hosted runners (actions/runner-images#13096). The build has no
     # choice but to use 26.x — see Select Xcode — so the budget has to
     # absorb it. Revisit once a real run gives us the actual number.
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: write
 
@@ -97,9 +101,10 @@ jobs:
           xcodebuild build-for-testing \
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \
-            -configuration Debug \
+            -configuration Release \
             -destination 'platform=macOS' \
             -derivedDataPath DerivedData \
+            -enableCodeCoverage YES \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             2>&1 | tee xcodebuild-build.log
@@ -111,8 +116,8 @@ jobs:
 
       # ── Unit Tests ──────────────────────────────────────────────────
       # Uses test-without-building to skip the redundant rebuild.
-      # GH-hosted virt-M1 runners run ~2s/test (vs 7ms local). At ~400
-      # tests that's ~13 min execution. 20 min timeout gives headroom.
+      # The suite has grown beyond the original ~400 tests. Release matches
+      # the production-scale budgets; 40 minutes bounds the complete suite.
       #
       # PROBE 2026-05-19 (iter 2): Previous attempt with
       # -parallel-testing-enabled NO produced 0-suite ghost-pass — the
@@ -124,10 +129,11 @@ jobs:
       # xcodebuild's multi-process worker pool without breaking Swift
       # Testing's own discovery. Goal: get 60 suites running sequentially.
       # See docs/gh-testing-19-may.md for prior binary-search findings.
-      - name: Unit tests — pure-logic suites
-        timeout-minutes: 20
+      - name: App tests — Release
+        timeout-minutes: 40
         run: |
-          echo "## Unit Tests — Pure-Logic Suites" >> $GITHUB_STEP_SUMMARY
+          set -o pipefail
+          echo "## App Tests — Release" >> $GITHUB_STEP_SUMMARY
           START=$(date +%s)
           # TEST_RUNNER_ prefix: xcodebuild strips it and injects the var
           # into the test host process. CICanaryTests.mustFail is gated on
@@ -139,7 +145,7 @@ jobs:
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \
             -testPlan VideoScan-CI \
-            -configuration Debug \
+            -configuration Release \
             -destination 'platform=macOS' \
             -derivedDataPath DerivedData \
             -enableCodeCoverage YES \
@@ -244,7 +250,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: TestResults.xcresult
+          path: |
+            TestResults.xcresult
+            test-output.log
+            xcodebuild-build.log
           retention-days: 14
 
       # ── Metrics ─────────────────────────────────────────────────────

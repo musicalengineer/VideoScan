@@ -46,6 +46,7 @@ struct LocalProbeGroupCatalogGateTests {
         model.scanOptions.skipChecksums = true
         model.scanOptions.skipSmallFiles = false
         let target = CatalogScanTarget(searchPath: dir.path)
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         let result = await model.runTargetProbeGroup(
             target: target,
             root: dir.path,

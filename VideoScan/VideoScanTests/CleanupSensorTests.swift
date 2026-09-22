@@ -27,7 +27,11 @@ struct CleanupSensorTests {
 
     // MARK: - (a) Original byte-identical after a full REAL job
 
+    // Hosted VMs expose Apple Silicon but no ProRes hardware encoder.
+    // These real-engine checks remain mandatory on the physical nightly fleet.
     @Test("the original file is byte-identical (sha256 + mtime) after a full real-engine job",
+          .disabled(if: ProcessInfo.processInfo.environment["VS_VIRT_M1"] == "1",
+                    "ProRes VideoToolbox encoding requires a physical Mac; exercised by local nightly"),
           .timeLimit(.minutes(2)))
     func originalUntouchedAfterFullRealJob() async throws {
         try #require(CleanupTestMedia.toolsAvailable,

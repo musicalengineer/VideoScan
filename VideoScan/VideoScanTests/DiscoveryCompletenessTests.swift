@@ -259,6 +259,7 @@ struct DiscoveryCompletenessPipelineTests {
     private func runScan(_ model: VideoScanModel, root: String) async {
         let target = CatalogScanTarget(searchPath: root)
         model.scanTargets.append(target)
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(target)
         _ = await target.scanTask?.value
     }
@@ -539,6 +540,7 @@ struct DiscoveryQAFixBatchPipelineTests {
     private func runScan(_ model: VideoScanModel, root: String) async {
         let target = CatalogScanTarget(searchPath: root)
         model.scanTargets.append(target)
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(target)
         _ = await target.scanTask?.value
     }
@@ -570,6 +572,7 @@ struct DiscoveryQAFixBatchPipelineTests {
 
         let target = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [target]
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.resumeTarget(target)
         _ = await target.scanTask?.value
 

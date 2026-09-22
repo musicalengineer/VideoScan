@@ -108,9 +108,16 @@ extension GedcomFamilyGraph {
                 grouped[Int(partner)] = true
                 members.append(partner)
             }
-            let persons = members.compactMap { people[index.ids[Int($0)]] }
-                .sorted { ($0.sex == "M" ? 0 : $0.sex == "F" ? 1 : 2, $0.name, $0.id)
-                    < ($1.sex == "M" ? 0 : $1.sex == "F" ? 1 : 2, $1.name, $1.id) }
+            // Explicit comparison keeps the Swift 6.2 constraint solver from
+            // timing out on nested ternaries inside an inferred tuple sort.
+            let persons: [Person] = members.compactMap { people[index.ids[Int($0)]] }
+                .sorted { left, right in
+                    let leftRank: Int = left.sex == "M" ? 0 : (left.sex == "F" ? 1 : 2)
+                    let rightRank: Int = right.sex == "M" ? 0 : (right.sex == "F" ? 1 : 2)
+                    if leftRank != rightRank { return leftRank < rightRank }
+                    if left.name != right.name { return left.name < right.name }
+                    return left.id < right.id
+                }
             guard let first = persons.first, let o = index.ordinal(of: first.id),
                   let pathA = indexA.path(fromOrdinal: o),
                   let pathB = indexB.path(fromOrdinal: o) else { continue }

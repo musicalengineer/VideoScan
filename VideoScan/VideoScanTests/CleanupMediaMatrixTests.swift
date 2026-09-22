@@ -111,7 +111,11 @@ struct CleanupMediaMatrixTests {
 
     private let fixtureDuration = 2.0
 
+    // Hosted VMs expose Apple Silicon but no ProRes hardware encoder.
+    // These real-engine checks remain mandatory on the physical nightly fleet.
     @Test("VHS Quick Clean renders every matrix container faithfully",
+          .disabled(if: ProcessInfo.processInfo.environment["VS_VIRT_M1"] == "1",
+                    "ProRes VideoToolbox encoding requires a physical Mac; exercised by local nightly"),
           .timeLimit(.minutes(2)),
           arguments: matrixCases)
     func vhsQuickCleanAcrossTheMatrix(testCase: CleanupMatrixCase) async throws {

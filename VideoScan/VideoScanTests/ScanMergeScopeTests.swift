@@ -93,6 +93,7 @@ struct ScanMergeScopeTests {
 
         let target = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [target]
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(target)
         _ = await target.scanTask?.value
 
@@ -134,6 +135,7 @@ struct ScanMergeScopeTests {
 
         let target = CatalogScanTarget(searchPath: subA.path)
         model.scanTargets = [target]
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(target)
         _ = await target.scanTask?.value
 
@@ -165,6 +167,7 @@ struct ScanMergeScopeTests {
 
         let target = CatalogScanTarget(searchPath: vol.path)
         model.scanTargets = [target]
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(target)
         _ = await target.scanTask?.value
 
@@ -433,6 +436,7 @@ struct ScanMergeScopeTests {
 
         let target = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [target]
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(target)
         _ = await target.scanTask?.value
 
@@ -491,6 +495,7 @@ struct ScanMergeScopeTests {
 
         let target = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [target]
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.resumeTarget(target)
         _ = await target.scanTask?.value
 
@@ -535,6 +540,7 @@ struct ScanMergeScopeTests {
 
         let target = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [target]
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(target)
         _ = await target.scanTask?.value
 
@@ -729,6 +735,7 @@ struct ScanMergeScopeTests {
 
         let target = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [target]
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.resumeTarget(target)
         _ = await target.scanTask?.value
 
@@ -776,6 +783,7 @@ struct ScanMergeScopeTests {
         let target = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [target]
         await target.pauseGate.pause()      // park the probes…
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.resumeTarget(target)
         let task = target.scanTask
         model.stopTarget(target)            // …then cancel (also releases the gate)
@@ -811,6 +819,7 @@ struct ScanMergeScopeTests {
 
         let target = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [target]
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(target)
         _ = await target.scanTask?.value
 
@@ -989,6 +998,7 @@ struct ScanMergeRobustnessTests {
 
         let target = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [target]
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.resumeTarget(target)
         _ = await target.scanTask?.value
 

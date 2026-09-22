@@ -1214,6 +1214,7 @@ struct RescanPreservationTests {
 
         let target = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [target]
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(target)
         _ = await target.scanTask?.value
 
@@ -1268,6 +1269,7 @@ struct RescanPreservationTests {
         model.records = [seed]
         let target = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [target]
+        await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(target)
         _ = await target.scanTask?.value
 
@@ -1314,6 +1316,7 @@ struct RescanPreservationTests {
         // and remembers its content.
         let tA = CatalogScanTarget(searchPath: dirA.path)
         model.scanTargets = [tA]
+        await tA.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(tA)
         _ = await tA.scanTask?.value
         let original = try #require(model.records.first { $0.fullPath == pathA })
@@ -1326,6 +1329,7 @@ struct RescanPreservationTests {
         try bytes.write(to: URL(fileURLWithPath: pathB))
         let tB = CatalogScanTarget(searchPath: dirB.path)
         model.scanTargets = [tA, tB]
+        await tB.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(tB)
         _ = await tB.scanTask?.value
         #expect(!model.records.contains { $0.fullPath == pathB },
@@ -1343,6 +1347,7 @@ struct RescanPreservationTests {
         // aside (rescan preservation), never dropped by the gate.
         let tA2 = CatalogScanTarget(searchPath: dirA.path)
         model.scanTargets = [tA2, tB]
+        await tA2.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(tA2)
         _ = await tA2.scanTask?.value
         let stillThere = try #require(model.records.first { $0.fullPath == pathA })
@@ -1354,6 +1359,7 @@ struct RescanPreservationTests {
         #expect(model.putBackIgnoredContent(id: entry.id))
         let tB2 = CatalogScanTarget(searchPath: dirB.path)
         model.scanTargets = [tA2, tB2]
+        await tB2.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(tB2)
         _ = await tB2.scanTask?.value
         #expect(model.records.contains { $0.fullPath == pathB }, "after Put back the copy is ingested")

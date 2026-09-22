@@ -77,6 +77,46 @@ final class GedcomCommonAncestryTests: XCTestCase {
         XCTAssertEqual(nearest.pathB.map(\.name), ["Hugh Hill", "Clara Hill", "Bea Bell", "Bo Bell", "Ben Bell"])
     }
 
+    /// Regression: spelling out the comparator to avoid the Swift 6.2
+    /// type-checker timeout must preserve sex rank, then name, then ID.
+    func testSharedCoupleOrderingUsesSexThenNameThenID() throws {
+        let cases: [(label: String, sexA: String, sexZ: String, nameA: String, nameZ: String, first: String)] = [
+            ("male before female despite name and ID", "F", "M", "Amy /Test/", "Zoe /Test/", "Z"),
+            ("female before unknown despite name and ID", "U", "F", "Amy /Test/", "Zoe /Test/", "Z"),
+            ("male before unknown despite name and ID", "U", "M", "Amy /Test/", "Zoe /Test/", "Z"),
+            ("equal male sex uses name before ID", "M", "M", "Zoe /Test/", "Amy /Test/", "Z"),
+            ("equal female sex uses name before ID", "F", "F", "Zoe /Test/", "Amy /Test/", "Z"),
+            ("equal unknown sex uses name before ID", "U", "U", "Zoe /Test/", "Amy /Test/", "Z"),
+            ("different unknown values have equal rank", "U", "X", "Zoe /Test/", "Amy /Test/", "Z"),
+            ("equal names and male sex use ID", "M", "M", "Alex /Test/", "Alex /Test/", "A"),
+            ("equal names and unknown sex use ID", "U", "U", "Alex /Test/", "Alex /Test/", "A"),
+        ]
+        for c in cases {
+            // Reverse both GEDCOM insertion and parent slots so dictionary
+            // traversal or HUSB/WIFE order cannot accidentally satisfy the test.
+            for reverse in [false, true] {
+                var records = [
+                    Self.indi("A", c.nameA, c.sexA, fams: ["F"]),
+                    Self.indi("Z", c.nameZ, c.sexZ, fams: ["F"]),
+                    Self.indi("C1", "Child One /Test/", "U", famc: ["F"]),
+                    Self.indi("C2", "Child Two /Test/", "U", famc: ["F"]),
+                    Self.fam("F", husb: reverse ? "Z" : "A", wife: reverse ? "A" : "Z", children: ["C1", "C2"]),
+                ]
+                if reverse { records.reverse() }
+                let graph = GedcomFamilyGraph(gedcomText: "0 HEAD\n" + records.joined(separator: "\n") + "\n0 TRLR\n")
+                let expected = c.first == "A" ? ["@A@", "@Z@"] : ["@Z@", "@A@"]
+                for (a, b) in [("@C1@", "@C2@"), ("@C2@", "@C1@")] {
+                    let ancestry = try XCTUnwrap(graph.commonAncestry(of: a, and: b), c.label)
+                    let meeting = try XCTUnwrap(ancestry.nearest, c.label)
+                    XCTAssertEqual(ancestry.meetings.count, 1, c.label)
+                    XCTAssertEqual(meeting.ancestors.map(\.id), expected, c.label)
+                    XCTAssertEqual(meeting.pathA.map(\.id), [expected[0], a], c.label)
+                    XCTAssertEqual(meeting.pathB.map(\.id), [expected[0], b], c.label)
+                }
+            }
+        }
+    }
+
     func testSeparateLinesCountOnlyTheLowestMeetingPoints() throws {
         let ancestry = try XCTUnwrap(Self.tree.commonAncestry(of: "@A@", and: "@B@"))
         XCTAssertEqual(ancestry.sharedAncestorCount, 4, "Hugh, Wanda, Gus and Otto")

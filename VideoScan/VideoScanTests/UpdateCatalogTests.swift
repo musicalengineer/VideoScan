@@ -56,6 +56,7 @@ private func distinctBytes(_ index: Int) -> Data {
 /// for the deferred scan → return the previewed row.
 @MainActor
 private func previewThroughTheDoor(_ model: VideoScanModel, target: CatalogScanTarget) async throws -> UpdateCatalogRow {
+    await target.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
     model.openUpdateCatalog(preselecting: [target.id])
     model.startUpdateCatalogPreview()
     _ = await target.scanTask?.value
@@ -92,6 +93,7 @@ struct UpdateCatalogDoorTests {
         let model = makePipelineModel()
         let t1 = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [t1]
+        await t1.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(t1)
         _ = await t1.scanTask?.value
         let original = try #require(model.records.first { $0.fullPath == oldURL.path })
@@ -151,8 +153,10 @@ struct UpdateCatalogDoorTests {
         let tA = CatalogScanTarget(searchPath: rootA.path)
         let tB = CatalogScanTarget(searchPath: rootB.path)
         model.scanTargets = [tA, tB]
+        await tA.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(tA)
         _ = await tA.scanTask?.value
+        await tB.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(tB)
         _ = await tB.scanTask?.value
         let rec = try #require(model.records.first { $0.fullPath == tapeA.path })
@@ -197,6 +201,7 @@ struct UpdateCatalogDoorTests {
         let model = makePipelineModel()
         let t1 = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [t1]
+        await t1.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(t1)
         _ = await t1.scanTask?.value
         let originalID = try #require(model.records.first).id
@@ -601,6 +606,7 @@ struct UpdateCatalogScaleTests {
         model.scanTargets = [t1]
         model.updateCatalogDeferredRoots.insert(PathScope.normalize(dir.path))   // poison
         #expect(!model.isUpdateCatalogDeferred(root: dir.path), "No live .scanning row → not deferred")
+        await t1.pauseGate.setAutoPause(false) // Tiny fixtures must not wait for host RAM.
         model.startTarget(t1)
         _ = await t1.scanTask?.value
         #expect(model.records.count == 1 && t1.status == .complete,
