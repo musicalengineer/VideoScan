@@ -11,6 +11,15 @@ import PackageDescription
 // pre-extraction app build. Platform floor is intentionally low (the domain
 // uses only long-stable Foundation API); the app declares the real, higher
 // deployment target.
+//
+// Strict concurrency = COMPLETE for every target (stage 1 of the
+// strict-concurrency rollout, Rick 2026-09-22). Still Swift 5 language mode,
+// so findings are warnings, not errors. With swift-tools-version 6.0 the
+// setting is the upcoming feature "StrictConcurrency" (SE-0337), which is
+// what `-strict-concurrency=complete` maps to; it keeps the manifest free of
+// `unsafeFlags`. Swift 6 mode would turn it on implicitly.
+let strictConcurrency: [SwiftSetting] = [.enableUpcomingFeature("StrictConcurrency")]
+
 let package = Package(
     name: "VideoScanCore",
     platforms: [.macOS(.v13)],
@@ -28,18 +37,21 @@ let package = Package(
         .executable(name: "videoscan-tree-ingest", targets: ["videoscan-tree-ingest"]),
     ],
     targets: [
-        .target(name: "VideoScanCore"),
+        .target(name: "VideoScanCore", swiftSettings: strictConcurrency),
         .executableTarget(
             name: "videoscan-preview-sweep",
-            dependencies: ["VideoScanCore"]
+            dependencies: ["VideoScanCore"],
+            swiftSettings: strictConcurrency
         ),
         .executableTarget(
             name: "videoscan-tree-ingest",
-            dependencies: ["VideoScanCore"]
+            dependencies: ["VideoScanCore"],
+            swiftSettings: strictConcurrency
         ),
         .testTarget(
             name: "VideoScanCoreTests",
-            dependencies: ["VideoScanCore"]
+            dependencies: ["VideoScanCore"],
+            swiftSettings: strictConcurrency
         ),
     ],
     swiftLanguageModes: [.v5]

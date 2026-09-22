@@ -944,8 +944,7 @@ public struct FamilyGraphCompiledStore {
     /// both spellings so every manifest written before today still reads.
     static let encoder: JSONEncoder = {
         let e = JSONEncoder()
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let f = LockedISO8601Formatter([.withInternetDateTime, .withFractionalSeconds])
         e.dateEncodingStrategy = .custom { date, encoder in
             var c = encoder.singleValueContainer()
             try c.encode(f.string(from: date))
@@ -957,10 +956,8 @@ public struct FamilyGraphCompiledStore {
         let d = JSONDecoder()
         // Tolerant BOTH ways: fractional (written from 2026-09-17) and
         // whole-second (every manifest before it).
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
+        let withFraction = LockedISO8601Formatter([.withInternetDateTime, .withFractionalSeconds])
+        let plain = LockedISO8601Formatter([.withInternetDateTime])
         d.dateDecodingStrategy = .custom { decoder in
             let text = try decoder.singleValueContainer().decode(String.self)
             if let date = withFraction.date(from: text) ?? plain.date(from: text) { return date }
@@ -970,4 +967,31 @@ public struct FamilyGraphCompiledStore {
         }
         return d
     }()
+}
+
+/// One `ISO8601DateFormatter`, usable from any thread.
+///
+/// The static encoder/decoder above are shared process-wide, and their
+/// `.custom` date strategies are `@Sendable` closures — any thread encoding
+/// or decoding a manifest runs them. `ISO8601DateFormatter` is not declared
+/// `Sendable`, and unlike `DateFormatter` its header makes no thread-safety
+/// promise, so rather than assume one, every use goes through a lock
+/// (manifests carry a handful of dates; the lock is never contended in
+/// practice). Same formatter, same options, same output as before.
+/// `@unchecked Sendable` ≈ "this class does its own locking" — the NSLock
+/// below is the invariant. Public so the app's Master Archive manifest
+/// writer can share it (same reasoning: rows are appended off the main
+/// actor by jobs).
+public final class LockedISO8601Formatter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let formatter: ISO8601DateFormatter
+
+    public init(_ options: ISO8601DateFormatter.Options) {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = options
+        formatter = f
+    }
+
+    public func string(from date: Date) -> String { lock.withLock { formatter.string(from: date) } }
+    public func date(from string: String) -> Date? { lock.withLock { formatter.date(from: string) } }
 }
