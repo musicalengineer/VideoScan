@@ -53,7 +53,8 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
     }
 
     struct Tally: Equatable, Sendable {
-        var count = 0
+        /// Rows in the bucket.
+        var files = 0
         var bytes: Int64 = 0
     }
 
@@ -115,7 +116,7 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
 
     func tally(_ bucket: Bucket) -> Tally { buckets[bucket] ?? Tally() }
     var total: Tally {
-        buckets.values.reduce(into: Tally()) { $0.count += $1.count; $0.bytes += $1.bytes }
+        buckets.values.reduce(into: Tally()) { $0.files += $1.files; $0.bytes += $1.bytes }
     }
 
     // MARK: The simulation (pure)
@@ -136,7 +137,7 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         func put(_ bucket: Bucket, _ row: Row) {
             out.rowIDs.append(row.id)
             out.rowBuckets.append(bucket)
-            out.buckets[bucket, default: Tally()].count += 1
+            out.buckets[bucket, default: Tally()].files += 1
             out.buckets[bucket, default: Tally()].bytes += row.sizeBytes
         }
 
@@ -238,15 +239,15 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
     var confirmationText: String {
         func line(_ bucket: Bucket, _ words: String) -> String? {
             let t = tally(bucket)
-            guard t.count > 0 else { return nil }
-            return "• \(words): \(Self.number(t.count)) (\(Self.size(t.bytes)))"
+            guard t.files > 0 else { return nil }
+            return "• \(words): \(Self.number(t.files)) (\(Self.size(t.bytes)))"
         }
         var lines = ["Forecast — from the catalog and stored fixities, no file read yet:"]
         lines += [
             line(.permanent, "will be deleted"),
             line(.trash, "will move to the Trash"),
-            tally(.needsSiblingReads).count > 0
-                ? "• need \(Self.number(siblingReads)) sibling read\(siblingReads == 1 ? "" : "s") to decide: \(Self.number(tally(.needsSiblingReads).count)) (\(Self.size(tally(.needsSiblingReads).bytes)))"
+            tally(.needsSiblingReads).files > 0
+                ? "• need \(Self.number(siblingReads)) sibling read\(siblingReads == 1 ? "" : "s") to decide: \(Self.number(tally(.needsSiblingReads).files)) (\(Self.size(tally(.needsSiblingReads).bytes)))"
                 : nil,
             line(.leftAlone, "will be left alone — only the original remains elsewhere"),
             line(.likelyNotDuplicate, "likely not duplicates"),
@@ -255,8 +256,8 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         if trashMayBecomePermanent > 0 {
             lines.append("  (\(Self.number(trashMayBecomePermanent)) of the Trash ones may be deleted outright once a sibling is proven)")
         }
-        let deletable = tally(.permanent).count + tally(.trash).count
-        if deletable == 0 && tally(.needsSiblingReads).count == 0 {
+        let deletable = tally(.permanent).files + tally(.trash).files
+        if deletable == 0 && tally(.needsSiblingReads).files == 0 {
             lines.append("Nothing here is expected to be removed.")
         }
         lines.append("About \(Self.size(bytesToRead)) will be read in full"
@@ -269,7 +270,7 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
     func logLine(volume: String) -> String {
         func part(_ bucket: Bucket, _ words: String) -> String {
             let t = tally(bucket)
-            return "\(words) \(t.count) (\(Self.size(t.bytes)))"
+            return "\(words) \(t.files) (\(Self.size(t.bytes)))"
         }
         let parts = [
             part(.permanent, "delete"),
