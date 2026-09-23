@@ -49,8 +49,10 @@ struct ArchiveAngelCodex1654Tests {
         return (a, b)
     }
 
-    private func relatives(_ model: VideoScanModel, _ rec: VideoRecord) -> ArchiveAngelFamilyFacts.Relatives {
-        ArchiveAngelFamilyFacts.relatives(of: rec, index: ArchiveAngelCopyFamily.Index(active: model.records), catalog: model)
+    private func relatives(_ model: VideoScanModel, _ rec: VideoRecord,
+                           fresh: Set<UUID> = []) -> ArchiveAngelFamilyFacts.Relatives {
+        ArchiveAngelFamilyFacts.relatives(of: rec, index: ArchiveAngelCopyFamily.Index(active: model.records),
+                                          catalog: model, fresh: fresh)
     }
 
     // MARK: P1-1
@@ -122,20 +124,21 @@ struct ArchiveAngelCodex1654Tests {
     }
 
     @Test("P1-1 positive: a stale whole-file digest (size changed since it was read) is not identity")
-    func staleDigestIsNotIdentity() throws {
+    func staleDigestIsNotIdentity() async throws {
         let (sb, model) = try sandboxModel("c1654_stale"); defer { sb.cleanup() }
-        let a = MasterArchiveTestSupport.makeRecord(path: "/Volumes/A/x.mov")
-        let b = MasterArchiveTestSupport.makeRecord(path: "/Volumes/B/x.mov")
-        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 100, mtimeNs: 0)
-        for r in [a, b] {
-            r.sizeBytes = 100
-            r.contentFixity = ContentFixity(digest: String(repeating: "ef", count: 32), byteCount: 100, stamp: stamp)
-        }
+        let file = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent("test_x.mov"), bytes: 100, seed: 3)
+        let a = MasterArchiveTestSupport.makeRecord(path: file.path)
+        let b = try AngelTestFixity.verifiedTwin(of: a, named: "test_x_copy.mov", in: sb.sources)
         b.userDate = "1990"
         model.records = [a, b]
-        #expect(ArchiveAngelFamilyFacts.inherited(for: a, relatives: relatives(model, a)).date?.value == "1990")
-        a.sizeBytes = 200                                  // rewritten since the digest was taken
-        #expect(ArchiveAngelFamilyFacts.inherited(for: a, relatives: relatives(model, a)).date == nil)
+        let index = ArchiveAngelCopyFamily.Index(active: model.records)
+        let fresh = await ArchiveAngelFixityCheck.verify(targets: [a], index: index, catalog: model)
+        #expect(fresh == [a.id, b.id], "both stamps describe their files now")
+        #expect(ArchiveAngelFamilyFacts.inherited(for: a, relatives: relatives(model, a, fresh: fresh)).date?.value == "1990")
+        #expect(ArchiveAngelFamilyFacts.inherited(for: a, relatives: relatives(model, a)).date == nil,
+                "no stat, no lending")
+        a.sizeBytes = 200                                  // the catalogue says it changed since the digest
+        #expect(ArchiveAngelFamilyFacts.inherited(for: a, relatives: relatives(model, a, fresh: fresh)).date == nil)
     }
 
     // MARK: P1-3
@@ -181,13 +184,9 @@ struct ArchiveAngelCodex1654Tests {
         let file = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent("tape.mov"), bytes: 4096, seed: 11)
         let rec = MasterArchiveTestSupport.makeRecord(path: file.path, starRating: 3)
         rec.contentHash = "v1:tape"
-        let sibling = MasterArchiveTestSupport.makeRecord(path: "/Volumes/OldMyBook/Christmas copy.mov")
-        sibling.contentHash = "v1:tape"; sibling.sizeBytes = 4096
+        // A REAL byte-identical copy with real fixity (codex #1659).
+        let sibling = try AngelTestFixity.verifiedTwin(of: rec, named: "Christmas copy.mov", in: sb.sources)
         sibling.userDate = "1987-06"; sibling.userDateConfidence = "known"
-        let digest = try #require(try ArchivePromoteEngine.sha256(path: file.path))
-        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 4096, mtimeNs: 0)
-        rec.contentFixity = ContentFixity(digest: digest, byteCount: 4096, stamp: stamp)
-        sibling.contentFixity = ContentFixity(digest: digest, byteCount: 4096, stamp: stamp)
         model.records = [rec, sibling]
         let entry = ArchiveAngelPlan.Entry(
             id: rec.id, sourcePath: file.path, filename: "tape.mov", sizeBytes: 4096,
@@ -201,18 +200,20 @@ struct ArchiveAngelCodex1654Tests {
     }
 
     @Test("P1-4 control: a verified full-content twin DOES lend its known date at promote")
-    func verifiedTwinLends() throws {
+    func verifiedTwinLends() async throws {
         let (sb, model, rec, fixturePlan) = try promoteFixture("c1654_control"); defer { sb.cleanup() }
         var plan = fixturePlan
         try MasterArchiveTestSupport.initialize(model, in: sb)
-        let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter()) { _ in }
+        let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)
+        let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter(),
+                                                 freshFixity: fresh) { _ in }
         #expect(job != nil)
         #expect(rec.userDate == "1987-06" && rec.userDateConfidence == "known")
         job?.cancel()
     }
 
     @Test("RED P1-4a: the promote never starts when its journal (plan.json) cannot be saved — and nothing is stamped")
-    func noJournalNoPromote() throws {
+    func noJournalNoPromote() async throws {
         let sbLabel = "c1654_nojournal"
         let blockerParent = FileManager.default.temporaryDirectory.appendingPathComponent("test_c1654_blocker_\(UUID().uuidString)")
         try Data([0]).write(to: blockerParent)                 // a FILE where the batch's parent folder should be
@@ -222,7 +223,9 @@ struct ArchiveAngelCodex1654Tests {
         var plan = fixturePlan
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let center = MediaFileOperationsCenter()
-        let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: center) { _ in }
+        let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)
+        #expect(!fresh.isEmpty, "the donor is verified — the stamp would happen")
+        let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: center, freshFixity: fresh) { _ in }
         #expect(job == nil, "a promote started without a durable journal")
         #expect(center.jobs.isEmpty)
         #expect(rec.userDate == nil, "an inherited fact was left on the record with no journal to undo it")
@@ -234,8 +237,11 @@ struct ArchiveAngelCodex1654Tests {
         var plan = fixturePlan
         try MasterArchiveTestSupport.initialize(model, in: sb)
         var settled: ArchiveAngelPlan?
+        let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)
         let job = try #require(ArchiveAngelPromoter().promote(plan: &plan, model: model,
-                                                              center: MediaFileOperationsCenter()) { settled = $0 })
+                                                              center: MediaFileOperationsCenter(),
+                                                              freshFixity: fresh) { settled = $0 })
+        #expect(rec.userDate == "1987-06", "stamped from the verified twin")
         // The catalog cannot be saved (a full or read-only volume) while
         // the cancel settles — the restore is NOT durable yet.
         model.catalogStore.isReadOnly = true
@@ -244,6 +250,8 @@ struct ArchiveAngelCodex1654Tests {
         for _ in 0..<500 where settled == nil {
             await Task.yield(); try? await Task.sleep(for: .milliseconds(2))
         }
+        // Let the (refused — read-only) acknowledged save run its course.
+        try? await Task.sleep(for: .milliseconds(100))
         #expect(rec.userDate == nil, "restored in memory")
         let onDisk = try ArchiveAngelPlanStore.load(batchDir: plan.batchDir)
         #expect(onDisk.entries.first?.stampedFacts?.isEmpty == false,
@@ -255,7 +263,13 @@ struct ArchiveAngelCodex1654Tests {
         // RELAUNCH: the settle pass re-applies the pending restore.
         _ = ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: sb.root, model: model)
         #expect(rec.userDate == nil, "the relaunch re-applied the pending restore")
-        let after = try ArchiveAngelPlanStore.load(batchDir: plan.batchDir)
+        // The acknowledged save runs OFF the main actor (codex #1659): the
+        // journal is cleared only once it confirms — poll for it.
+        var after = try ArchiveAngelPlanStore.load(batchDir: plan.batchDir)
+        for _ in 0..<300 where after.entries.first?.stampedFacts != nil {
+            try? await Task.sleep(for: .milliseconds(10))
+            after = try ArchiveAngelPlanStore.load(batchDir: plan.batchDir)
+        }
         #expect(after.entries.first?.stampedFacts == nil, "cleared once the catalog save was confirmed")
     }
 }

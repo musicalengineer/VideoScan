@@ -54,10 +54,11 @@ enum ArchiveAngelCopyFamily {
         let children: [UUID: [VideoRecord]]
         let byHash: [String: [VideoRecord]]
         let byGroup: [UUID: [VideoRecord]]
-        /// WHOLE-FILE digests (ContentFixity / ArchiveFixity — every byte
-        /// read), keyed by `ArchiveAngelCopyFamily.fullDigestKeys`. The ONLY
-        /// content evidence that may authorise fact inheritance (codex
-        /// #1654 P1-1: `contentHash` is a SAMPLED signature).
+        /// WHOLE-FILE digest candidates (ContentFixity), keyed by
+        /// `ArchiveAngelCopyFamily.fullDigestKeys`. The only content evidence
+        /// that may authorise fact inheritance (codex #1654 P1-1: `contentHash`
+        /// is a SAMPLED signature) — and only for records whose fixity a stat
+        /// confirmed fresh (codex #1659, ArchiveAngelFixityCheck).
         let byDigest: [String: [VideoRecord]]
 
         @MainActor
@@ -100,22 +101,19 @@ enum ArchiveAngelCopyFamily {
         walk(seed: seed, index: index, catalog: catalog)
     }
 
-    /// The whole-file digest keys a record carries ("sha256:<hex>:<bytes>"),
-    /// each only while it still describes the catalogued size — a stale
-    /// digest is not identity. Empty = no full-content evidence.
+    /// The whole-file digest key a record's catalogue CLAIMS
+    /// ("sha256:<hex>:<bytes>") — a CANDIDATE only. It may authorise
+    /// anything only once `ArchiveAngelFixityCheck` has confirmed, with a
+    /// stat, that the stored ContentFixity still describes the file NOW
+    /// (`describesFileNow`: device, inode, size, mtime AND ctime) — codex
+    /// #1659: a same-size rewrite keeps the size but not the stamp. A bare
+    /// ArchiveFixity (no stamp) never counts on its own; an archive copy
+    /// joins through its own verified ContentFixity or the promotion link.
     @MainActor
     static func fullDigestKeys(_ r: VideoRecord) -> [String] {
-        var keys: [String] = []
-        if let f = r.contentFixity, f.algorithm == ContentFixity.sha256, !f.digest.isEmpty,
-           f.byteCount > 0, f.byteCount == r.sizeBytes {
-            keys.append("sha256:\(f.digest.lowercased()):\(f.byteCount)")
-        }
-        if let f = r.archiveFixity, f.algorithm == "sha256", !f.digest.isEmpty,
-           f.sizeBytes > 0, f.sizeBytes == r.sizeBytes {
-            let k = "sha256:\(f.digest.lowercased()):\(f.sizeBytes)"
-            if !keys.contains(k) { keys.append(k) }
-        }
-        return keys
+        guard let f = r.contentFixity, f.isUsableForVerification, !f.digest.isEmpty,
+              f.byteCount > 0, f.byteCount == r.sizeBytes else { return [] }
+        return ["sha256:\(f.digest.lowercased()):\(f.byteCount)"]
     }
 
     @MainActor

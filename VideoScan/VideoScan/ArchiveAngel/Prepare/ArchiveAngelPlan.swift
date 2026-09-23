@@ -116,6 +116,11 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         var writtenConfidence: String?
         var previousAttestations: [BackupAttestation]?
         var writtenAttestations: [BackupAttestation]?
+        /// Already restored in memory; waiting for the catalog save that
+        /// makes the restore durable (codex #1659). Re-applied (compare-
+        /// before-restore) by every settle until that save is acknowledged,
+        /// then removed. Never "kept" as a landed fact.
+        var awaitingSave: Bool?
     }
 
     struct Entry: Codable, Sendable, Identifiable, Equatable {

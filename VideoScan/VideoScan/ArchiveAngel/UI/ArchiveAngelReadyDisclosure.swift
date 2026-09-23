@@ -26,6 +26,8 @@ struct ArchiveAngelReadyDisclosure: View {
 
     @StateObject private var promoter = ArchiveAngelPromoter()
     @State private var isOpen = false
+    /// The pre-Promote fixity stat is running (codex #1659).
+    @State private var verifyingFixity = false
 
     private var ready: [ArchiveAngelPlan.Entry] { plan.entries.filter { $0.status == .ready } }
     private var selectedCount: Int { plan.selectedEntries.count }
@@ -200,16 +202,29 @@ struct ArchiveAngelReadyDisclosure: View {
             } else {
                 Button("Promote \(selectedCount)") { promote() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(isPromoting || model.isReadOnly)
+                    .disabled(isPromoting || model.isReadOnly || verifyingFixity)
                     .help("Runs the normal Promote job: originals from their source volume, companions from the buffer. Byte-verified, manifest rows, linked catalog records.")
             }
         }
     }
 
+    /// Stat the rows' whole-file fixity off the main actor first (codex
+    /// #1659: only copies whose digest still describes the file may lend
+    /// Rick's facts), then promote in the same main-actor turn.
     private func promote() {
+        guard !verifyingFixity else { return }
+        verifyingFixity = true
+        Task { @MainActor in
+            let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)
+            verifyingFixity = false
+            runPromote(freshFixity: fresh)
+        }
+    }
+
+    private func runPromote(freshFixity: Set<UUID>) {
         var working = plan
         let job = fileOpsCenter.startedByUser { center in
-            promoter.promote(plan: &working, model: model, center: center) { settled in
+            promoter.promote(plan: &working, model: model, center: center, freshFixity: freshFixity) { settled in
                 plan = settled
                 batchesChanged()
             }

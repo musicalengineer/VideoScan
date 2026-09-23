@@ -5,10 +5,13 @@
 // direction:
 //
 //   EQUIVALENT (undirected — either may lend to the other)
-//     • the same WHOLE-FILE digest: ContentFixity / ArchiveFixity (every
-//       byte read, still describing the catalogued size). `contentHash` is
-//       a SAMPLED head/middle/tail signature (FileHasher.segmentedHash):
-//       two different 6 MiB files can share it — P1-1. Never enough.
+//     • the same WHOLE-FILE digest (ContentFixity) on BOTH records, each
+//       confirmed fresh NOW by a stat (`describesFileNow` — device, inode,
+//       size, mtime, ctime; ArchiveAngelFixityCheck, off the main actor).
+//       A copy rewritten since its digest was taken keeps its size but not
+//       its stamp — codex #1659. `contentHash` is a SAMPLED head/middle/
+//       tail signature (FileHasher.segmentedHash): two different 6 MiB
+//       files can share it — codex #1654 P1-1. Never enough.
 //     • an archive copy ↔ its promotion source (Promote verified the bytes).
 //     • a WHOLE-FILE equivalent derivation ↔ its source: balanceAudio,
 //       rebuildAudio or externalRepair, with no trim range and the same
@@ -46,16 +49,25 @@ enum ArchiveAngelFactLenders {
 
     /// The equivalence class of `seed` (seed included). `derivations` =
     /// also follow whole-file equivalent derivations (false = bytes only).
+    /// `fresh` = records whose ContentFixity a stat confirmed describes the
+    /// file now; a digest edge needs BOTH ends in it. nil = DISCOVERY only
+    /// (every claimed digest followed — to learn which files to stat;
+    /// never used to lend).
     @MainActor
     static func equivalents(of seed: VideoRecord, index: ArchiveAngelCopyFamily.Index,
-                            catalog: any AngelCatalog, derivations: Bool) -> [UUID: VideoRecord] {
+                            catalog: any AngelCatalog, derivations: Bool,
+                            fresh: Set<UUID>?) -> [UUID: VideoRecord] {
         var found: [UUID: VideoRecord] = [seed.id: seed]
         var queue = [seed]
         var hops = 0
         while let r = queue.popLast(), hops < 10_000 {
             hops += 1
             var next: [VideoRecord] = []
-            for k in ArchiveAngelCopyFamily.fullDigestKeys(r) { next += index.byDigest[k] ?? [] }
+            if fresh?.contains(r.id) ?? true {
+                for k in ArchiveAngelCopyFamily.fullDigestKeys(r) {
+                    next += (index.byDigest[k] ?? []).filter { fresh?.contains($0.id) ?? true }
+                }
+            }
             if let copy = catalog.masterArchiveCopy(of: r) { next.append(copy) }
             if let src = catalog.promotionSource(of: r) { next.append(src) }
             if derivations {
@@ -76,18 +88,18 @@ enum ArchiveAngelFactLenders {
     /// lend backup attestations (same bytes only). Both in path order.
     @MainActor
     static func lenders(for target: VideoRecord, index: ArchiveAngelCopyFamily.Index,
-                        catalog: any AngelCatalog) -> (facts: [VideoRecord], sameBytes: [VideoRecord]) {
-        var facts = equivalents(of: target, index: index, catalog: catalog, derivations: true)
+                        catalog: any AngelCatalog, fresh: Set<UUID>?) -> (facts: [VideoRecord], sameBytes: [VideoRecord]) {
+        var facts = equivalents(of: target, index: index, catalog: catalog, derivations: true, fresh: fresh)
         // Ancestors lend DOWN (a derivative may take its source's facts).
         var cursor = target
         var seen: Set<UUID> = [target.id]
         while let d = cursor.derivedFrom, let parent = index.byID[d], seen.insert(parent.id).inserted {
-            for (id, r) in equivalents(of: parent, index: index, catalog: catalog, derivations: true) where facts[id] == nil {
+            for (id, r) in equivalents(of: parent, index: index, catalog: catalog, derivations: true, fresh: fresh) where facts[id] == nil {
                 facts[id] = r
             }
             cursor = parent
         }
-        let bytes = equivalents(of: target, index: index, catalog: catalog, derivations: false)
+        let bytes = equivalents(of: target, index: index, catalog: catalog, derivations: false, fresh: fresh)
         func ordered(_ m: [UUID: VideoRecord]) -> [VideoRecord] {
             m.values.filter { $0.id != target.id }.sorted { $0.fullPath < $1.fullPath }
         }

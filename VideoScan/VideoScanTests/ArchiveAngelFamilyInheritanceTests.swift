@@ -55,17 +55,6 @@ struct ArchiveAngelFamilyInheritanceTests {
         return url
     }
 
-    /// Both records carry the same WHOLE-FILE digest — the only content
-    /// evidence that lets facts travel (codex #1654 P1-1).
-    private func verifiedSameBytes(_ a: VideoRecord, _ b: VideoRecord) {
-        let size = max(a.sizeBytes, 1)
-        a.sizeBytes = size; b.sizeBytes = size
-        let stamp = FileIdentityStamp(device: 1, inode: 1, size: size, mtimeNs: 0)
-        let digest = String(repeating: "ab", count: 32)
-        a.contentFixity = ContentFixity(digest: digest, byteCount: size, stamp: stamp)
-        b.contentFixity = ContentFixity(digest: digest, byteCount: size, stamp: stamp)
-    }
-
     private func run(_ b: Bench, pick: [VideoRecord], catalog: [VideoRecord]) async -> ArchiveAngelJob {
         b.model.records = catalog
         let job = ArchiveAngelJob(model: b.model, center: b.center, count: pick.count, makeLossless: false,
@@ -84,9 +73,9 @@ struct ArchiveAngelFamilyInheritanceTests {
         let rec = MasterArchiveTestSupport.makeRecord(path: a.path, starRating: 2)   // NO date of its own
         rec.durationSeconds = 600; rec.videoCodec = "h264"; rec.audioCodec = "aac"; rec.isPlayable = "Yes"
         rec.contentHash = "v1:tape"
-        let sibling = MasterArchiveTestSupport.makeRecord(path: "/Volumes/OldMyBook/test_inh_tape.mp4")
-        sibling.contentHash = "v1:tape"
-        verifiedSameBytes(rec, sibling)                      // the same recording, PROVEN (codex #1654)
+        // The same recording, PROVEN: a real byte copy with real, fresh
+        // whole-file fixity (codex #1654 / #1659).
+        let sibling = try AngelTestFixity.verifiedTwin(of: rec, named: "test_inh_tape_copy.mp4", in: b.sb.sources)
         sibling.userDate = "1987-06"; sibling.userDateConfidence = "known"
         let job = await run(b, pick: [rec], catalog: [rec, sibling])
         guard case .finished = job.state else { Issue.record("\(job.state) — \(job.plan.log.suffix(5))"); return }
@@ -105,9 +94,7 @@ struct ArchiveAngelFamilyInheritanceTests {
         let model = MasterArchiveTestSupport.makeModel(sb)
         let rec = MasterArchiveTestSupport.makeRecord(path: file.path, starRating: 3)
         rec.contentHash = "v1:tape"
-        let sibling = MasterArchiveTestSupport.makeRecord(path: "/Volumes/OldMyBook/Christmas copy.mov")
-        sibling.contentHash = "v1:tape"
-        verifiedSameBytes(rec, sibling)
+        let sibling = try AngelTestFixity.verifiedTwin(of: rec, named: "Christmas copy.mov", in: sb.sources)
         sibling.userDate = "1987-06"; sibling.userDateConfidence = "known"
         sibling.userPlace = "Cape Cod"; sibling.userPlaceConfidence = "known"
         sibling.backupAttestations = [BackupAttestation(kind: .offsite, answer: .yes,
@@ -131,7 +118,8 @@ struct ArchiveAngelFamilyInheritanceTests {
         var plan = fixturePlan
         defer { sb.cleanup() }
         try MasterArchiveTestSupport.initialize(model, in: sb)
-        let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter()) { _ in }
+        let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)   // codex #1659
+        let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter(), freshFixity: fresh) { _ in }
         #expect(job != nil, "\(plan.log)")
         #expect(rec.userDate == "1987-06" && rec.userDateConfidence == "known")
         #expect(rec.userPlace == "Cape Cod" && rec.userPlaceConfidence == "known")
@@ -151,7 +139,8 @@ struct ArchiveAngelFamilyInheritanceTests {
         rec.userPlace = "Montana"; rec.userPlaceConfidence = "estimated"
         plan.entries[0].proposedDate = "1990"
         try MasterArchiveTestSupport.initialize(model, in: sb)
-        let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter()) { _ in }
+        let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)   // codex #1659
+        let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter(), freshFixity: fresh) { _ in }
         #expect(rec.userDate == "1990" && rec.userDateConfidence == "estimated", "own date kept")
         #expect(rec.userPlace == "Montana" && rec.userPlaceConfidence == "estimated", "own place kept")
         await job?.task?.value
@@ -167,7 +156,8 @@ struct ArchiveAngelFamilyInheritanceTests {
         sibling.contentFixity = nil                          // not proven the same bytes
         let g = UUID(); rec.duplicateGroupID = g; sibling.duplicateGroupID = g
         try MasterArchiveTestSupport.initialize(model, in: sb)
-        let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter()) { _ in }
+        let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)   // codex #1659
+        let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter(), freshFixity: fresh) { _ in }
         #expect(rec.userDate == nil || rec.userDateConfidence != "known")
         #expect(rec.userPlace == nil, "nor its place")
         await job?.task?.value
@@ -179,8 +169,9 @@ struct ArchiveAngelFamilyInheritanceTests {
         var plan = fixturePlan; defer { sb.cleanup() }
         try MasterArchiveTestSupport.initialize(model, in: sb)
         var settled: ArchiveAngelPlan?
+        let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)   // codex #1659
         let job = try #require(ArchiveAngelPromoter().promote(plan: &plan, model: model,
-                                                              center: MediaFileOperationsCenter()) { settled = $0 })
+                                                              center: MediaFileOperationsCenter(), freshFixity: fresh) { settled = $0 })
         job.cancel()
         await job.task?.value
         for _ in 0..<500 where settled == nil {
@@ -200,8 +191,9 @@ struct ArchiveAngelFamilyInheritanceTests {
         var plan = fixturePlan; defer { sb.cleanup() }
         try MasterArchiveTestSupport.initialize(model, in: sb)
         var settled: ArchiveAngelPlan?
+        let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)   // codex #1659
         let job = try #require(ArchiveAngelPromoter().promote(plan: &plan, model: model,
-                                                              center: MediaFileOperationsCenter()) { settled = $0 })
+                                                              center: MediaFileOperationsCenter(), freshFixity: fresh) { settled = $0 })
         await job.task?.value
         for _ in 0..<500 where settled == nil {
             await Task.yield(); try? await Task.sleep(for: .milliseconds(2))

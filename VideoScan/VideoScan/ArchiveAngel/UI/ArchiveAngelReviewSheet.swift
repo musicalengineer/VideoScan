@@ -33,6 +33,8 @@ struct ArchiveAngelReviewSheet: View {
     @State private var showSettled = false
     /// "Copies…" on a row (S4): Show Copies… presented over this sheet.
     @State private var copiesRequest: ArchiveAngelShowCopiesRequest?
+    /// The pre-Promote fixity stat is running (codex #1659).
+    @State private var verifyingFixity = false
 
     init(plan: ArchiveAngelPlan) {
         _plan = State(initialValue: plan)
@@ -442,7 +444,7 @@ struct ArchiveAngelReviewSheet: View {
                     } else {
                         Button("Promote \(selectedCount)") { promote() }
                             .keyboardShortcut(.defaultAction)
-                            .disabled(model.isReadOnly || isPromoting)
+                            .disabled(model.isReadOnly || isPromoting || verifyingFixity)
                             .accessibilityIdentifier("archiveAngel.promote")
                     }
                 }
@@ -478,7 +480,20 @@ struct ArchiveAngelReviewSheet: View {
         dismiss()
     }
 
+    /// Stat the rows' whole-file fixity off the main actor first (codex
+    /// #1659: only copies whose digest still describes the file may lend
+    /// Rick's facts), then promote in the same main-actor turn.
     private func promote() {
+        guard !verifyingFixity else { return }
+        verifyingFixity = true
+        Task { @MainActor in
+            let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)
+            verifyingFixity = false
+            runPromote(freshFixity: fresh)
+        }
+    }
+
+    private func runPromote(freshFixity: Set<UUID>) {
         for i in plan.entries.indices where plan.entries[i].status == .ready && plan.entries[i].selected {
             let note = plan.entries[i].userNotes.trimmingCharacters(in: .whitespacesAndNewlines)
             if !note.isEmpty, let rec = model.record(forID: plan.entries[i].id) {
@@ -497,7 +512,7 @@ struct ArchiveAngelReviewSheet: View {
         Self.noteUncheckedAtPromote(plan: &plan, model: model)
         var working = plan
         let job = fileOpsCenter.startedByUser { center in
-            promoter.promote(plan: &working, model: model, center: center) { settled in
+            promoter.promote(plan: &working, model: model, center: center, freshFixity: freshFixity) { settled in
                 plan = settled
             }
         }
