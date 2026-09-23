@@ -175,6 +175,18 @@ public enum LedgerNarrator {
 
         case .angelCleared:
             return "\(who) cleared the Archive Angel batch it was in on \(d), undecided."
+
+        case .footageDecided:
+            let other = detail[MediaLedgerEvent.Detail.label] ?? ""
+            let otherText = other.isEmpty ? "another file" : other
+            switch detail[MediaLedgerEvent.Detail.answer] ?? "" {
+            case "same":
+                return "\(who) said it is the same footage as \(otherText) on \(d)."
+            case "notSame":
+                return "\(who) said it is not the same footage as \(otherText) on \(d)."
+            default:
+                return "\(who) took back the footage answer about \(otherText) on \(d)."
+            }
         }
     }
 

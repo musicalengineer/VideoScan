@@ -145,6 +145,12 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// instant before the move; one file at a time, Pause/Stop between
     /// files, held copies named in the row. PruneApplyJob.
     case pruneCopies
+    /// "Find Similar Footage" (Rick 2026-09-23, docs/find_original_design.md):
+    /// walks the catalog METADATA — no media is read — and records which
+    /// files are probably the same footage (copies, re-encodes, transcodes,
+    /// exports). Pause/Stop between phases and apply slices.
+    /// FindSimilarFootageJob.
+    case findSimilarFootage
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -177,6 +183,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         // own high-contrast fill) so it is never mistaken for a verb that
         // only reads.
         case .pruneCopies: return "TRASH"
+        case .findSimilarFootage: return "Footage"
         }
     }
 
@@ -206,6 +213,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .archiveAngel: return "archive angel"
         case .deleteDuplicates: return "delete duplicates"
         case .pruneCopies: return "trash copies"
+        case .findSimilarFootage: return "find similar footage"
         }
     }
 }

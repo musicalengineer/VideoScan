@@ -50,6 +50,15 @@ struct CatalogDuplicatesMenu: View {
     /// Opens the volume picker sheet (the choice is made there).
     let onChooseVolumeToDelete: () -> Void
     let onSetAlsoCleanUpWorkingCopies: (Bool) -> Void
+    /// Find Similar Footage (2026-09-23) — same family of catalog verbs as
+    /// Find Duplicates: the whole catalog, or the selection. Defaulted so
+    /// existing constructions (tests) keep compiling.
+    var onFindSimilarFootage: () -> Void = {}
+    var onFindSimilarFootageOfSelected: () -> Void = {}
+
+    /// Rick's convention: no ellipsis — the job starts at once (no sheet).
+    static let findSimilarFootageTitle = "Find Similar Footage"
+    static let findSimilarFootageOfSelectedTitle = "Find Similar Footage of Selected"
 
     /// Title of the menu item that opens the picker.
     static let deleteOnVolumeTitle = "Delete Duplicates on Volume…"
@@ -69,6 +78,16 @@ struct CatalogDuplicatesMenu: View {
             Button("Find Duplicates", action: onFindDuplicates)
             Button("Find Duplicates of Selected", action: onFindDuplicatesOfSelected)
                 .disabled(!hasSelection)
+
+            // Same footage (copies, re-encodes, transcodes, exports) from
+            // catalog metadata only — an MFO job, no media read.
+            Divider()
+            Button(Self.findSimilarFootageTitle, action: onFindSimilarFootage)
+                .disabled(isReadOnly)
+                .accessibilityIdentifier("catalog.duplicates.findSimilarFootage")
+                .help("Walk the catalog's metadata and record which files are probably the same footage — copies, re-encodes, transcodes, exports. No media is read.")
+            Button(Self.findSimilarFootageOfSelectedTitle, action: onFindSimilarFootageOfSelected)
+                .disabled(isReadOnly || !hasSelection)
 
             if Self.offersDelete(isReadOnly: isReadOnly, volumes: volumes) {
                 Divider()

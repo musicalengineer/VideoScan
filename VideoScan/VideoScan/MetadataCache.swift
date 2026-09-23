@@ -105,6 +105,7 @@ final class MetadataCache {
                 origin_make TEXT,
                 origin_model TEXT,
                 origin_encoder TEXT,
+                proapps_media_identifier TEXT,
                 PRIMARY KEY (path, file_size, mod_date)
             )
         """)
@@ -120,6 +121,10 @@ final class MetadataCache {
         migrateAddColumn("origin_make", type: "TEXT")
         migrateAddColumn("origin_model", type: "TEXT")
         migrateAddColumn("origin_encoder", type: "TEXT")
+        // FCP media identifier (Find Similar Footage, 2026-09-23) — same
+        // load-bearing reason: without it a rescan cache hit would erase a
+        // captured identifier. Additive, appended, NULL for older rows.
+        migrateAddColumn("proapps_media_identifier", type: "TEXT")
     }
 
     /// Additive migration for databases created before 2026-08-11.
@@ -225,6 +230,7 @@ final class MetadataCache {
         o.probe.originMake             = optCol(stmt, 35)
         o.probe.originModel            = optCol(stmt, 36)
         o.probe.originEncoder          = optCol(stmt, 37)
+        o.probe.proAppsMediaIdentifier = optCol(stmt, 38)
         return o
     }
 
@@ -236,7 +242,7 @@ final class MetadataCache {
         guard let db = db else { return }
         let sql = """
             INSERT OR REPLACE INTO probe_cache VALUES (
-                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
             )
         """
         var stmt: OpaquePointer?
@@ -281,6 +287,7 @@ final class MetadataCache {
         bindOpt(stmt, 36, o.probe.originMake)
         bindOpt(stmt, 37, o.probe.originModel)
         bindOpt(stmt, 38, o.probe.originEncoder)
+        bindOpt(stmt, 39, o.probe.proAppsMediaIdentifier)
 
         sqlite3_step(stmt)
     }
@@ -307,6 +314,21 @@ final class MetadataCache {
         bindOpt(stmt, 4, model)
         bindOpt(stmt, 5, encoder)
         bind(stmt, 6, path)
+        sqlite3_step(stmt)
+    }
+
+    /// Write a backfilled FCP media identifier onto an existing cache row
+    /// (Find Similar Footage, 2026-09-23). Same write-through rationale as
+    /// `updateEmbeddedDate`. Updates only — never inserts.
+    func updateMediaIdentifier(path: String, identifier: String?) {
+        lock.lock(); defer { lock.unlock() }
+        guard let db = db else { return }
+        let sql = "UPDATE probe_cache SET proapps_media_identifier = ? WHERE path = ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindOpt(stmt, 1, identifier)
+        bind(stmt, 2, path)
         sqlite3_step(stmt)
     }
 
@@ -449,6 +471,7 @@ final class MetadataCache {
             rec.originMake             = optCol(stmt, 35)
             rec.originModel            = optCol(stmt, 36)
             rec.originEncoder          = optCol(stmt, 37)
+            rec.proAppsMediaIdentifier = optCol(stmt, 38)
             out.append(rec)
         }
         return out

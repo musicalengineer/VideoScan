@@ -80,6 +80,7 @@ enum CatalogShowingSummary {
         case .hasMasterCopy:        return "Already archived"
         case .archiveCandidates:    return "Archive Angel candidates"
         case .noPlaceYet:           return "No place yet"
+        case .onePerFootage:        return "One per footage"
         }
     }
 

@@ -50,7 +50,7 @@ So the smallest useful file is:
 | **Worth a look** | Grade B, nobody vouched |
 | **Not now** | Grade C/D, or nothing recommends it |
 | **Excluded** | A floor fired (including the default `extraCopy` floor: a copy you marked Extra copy — switchable, not a safety floor), or an `exclude` rule matched |
-| **Another copy** | The same recording as a recommended copy (same duplicate group, or same name + length). The copy you marked Keep wins; otherwise the best-ranked copy does. |
+| **Another copy** | The same recording as a recommended copy (same footage group from Find Similar Footage, same duplicate group, or same name + length). The copy you marked Keep wins; then, in a footage group, its likely original; otherwise the best-ranked copy does. |
 | **Prepared** | Sitting in a prepared batch, waiting for your review |
 
 archiveStage Ready/Master is a **vote** to archive. Only a real Master Archive copy (`onMasterArchive`, `archivedCopy`) means "already archived".
@@ -130,10 +130,29 @@ A condition is `{ "field": …, "op": …, "value": … }`. To say "any of these
 | `vouch` | Important 3 · ★★+ 1 per star · stage Ready 2 · stage Master 1 · Keep (a note) | Who vouched, and how strongly |
 | `date.minimum` | `"year"` | `day` / `month` / `year` / `decade`, or `readinessKnown`, which asks Promote's own date check (ArchiveReadiness) |
 | `classes` | Ready, Needs a date, Worth a look (see above) | Ordered. The first match wins; no match means Not now. |
-| `copies.collapseBy` | `duplicateGroup`, `nameAndDuration` | How copies of one recording are recognised (`sharedDuplicateGroup` = only groups of two or more) |
-| `copies.prefer` | `userKeeper`, `best` | Which copy stays |
+| `copies.collapseBy` | `footageGroup`, `duplicateGroup`, `nameAndDuration` | How copies of one recording are recognised. `footageGroup` = the group **Find Similar Footage** recorded (copies, re-encodes, transcodes, exports of one recording); `sharedDuplicateGroup` = only duplicate groups of two or more |
+| `copies.prefer` | `userKeeper`, `footageOriginal`, `best` | Which copy stays. `footageOriginal` = the footage group's likely original (the lowest rank Find Similar Footage gave) |
 | `order` | `angelRank` | The order of the lists: `angelRank` (score, then most original) or `vouchPoints` (the old nudge's order) |
 | `prepare` | `["ready", "worthALook"]` | The classes Prepare Batch takes, in this order: class first, then score. Add `"needsDate"` to opt in to undated keepers. Within a duplicate group, the copy you marked Keep is prepared. |
+
+### One recommendation per footage group (Find Similar Footage, 2026-09-23)
+
+When **Find Similar Footage** has run, every file it grouped carries its footage group and its rank in it (0 = the likely original). With the defaults above:
+
+- only groups Find Similar Footage rated **Likely or stronger** collapse; a Possible group is shown to you, never decided for you;
+- keys are merged: a file in a footage group AND a duplicate group joins both, so a byte copy seen only through its duplicate group and its twin seen through the footage group are one recording (never two Ready rows, never both in a batch);
+- the recommended lists, the counts, the catalog badge and Show ▸ Archive Candidates show **one** file per footage group — the copy you marked Keep, else the group's likely original, else the best-ranked — and the others become **Another copy** ("Same footage as X — that one is recommended");
+- a prepared batch takes at most one member of a footage group (the same rule as a duplicate group).
+
+**To turn it off**, list the collapse keys without it:
+
+```json
+{ "schemaVersion": 2, "name": "no footage groups",
+  "recommend": { "copies": { "collapseBy": ["duplicateGroup", "nameAndDuration"],
+                             "prefer": ["userKeeper", "best"] } } }
+```
+
+The groups are metadata guesses (Identical / You confirmed / Likely / Possible). Nothing about them lets the Angel archive, delete or date anything; they only decide which copy is *recommended*.
 
 ## `grades` and `tables`
 

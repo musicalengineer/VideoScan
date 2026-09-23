@@ -338,6 +338,31 @@ public enum EmbeddedOriginTags {
     }
 }
 
+// MARK: - Final Cut Pro media identifier (Find Similar Footage, 2026-09-23)
+
+extension EmbeddedOriginTags {
+    /// The tag key, lowercased (tags are matched case-insensitively).
+    public static let proAppsMediaIdentifierKey = "com.apple.proapps.mediaidentifier"
+
+    /// FCP's `com.apple.proapps.mediaIdentifier` — format tags first, then
+    /// the first stream carrying it. nil when absent or blank. An ADDITIVE
+    /// capture: it does not change `extract(formatTags:streamTags:)`'s
+    /// `Origin` (whose `isEmpty` the backfill relies on).
+    public static func proAppsMediaIdentifier(formatTags: [String: String],
+                                              streamTags: [[String: String]]) -> String? {
+        func value(_ tags: [String: String]) -> String? {
+            for (k, v) in tags where k.lowercased() == proAppsMediaIdentifierKey {
+                let t = v.trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
+                if !t.isEmpty { return t.count > 128 ? String(t.prefix(128)) : t }
+            }
+            return nil
+        }
+        if let v = value(formatTags) { return v }
+        for tags in streamTags { if let v = value(tags) { return v } }
+        return nil
+    }
+}
+
 // MARK: - Entry point
 
 /// The one call ScanEngine / the backfill make: ffprobe tags in, a

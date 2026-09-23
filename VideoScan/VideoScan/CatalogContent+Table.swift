@@ -1060,6 +1060,16 @@ extension CatalogContent {
                         // relocate history (the timeline just shows
                         // Origin → Current). Active-only — purged
                         // rows don't need it.
+                        // Find Similar Footage (2026-09-23): the group this
+                        // file is in — likely original, roles, evidence —
+                        // in a read-only sheet (ellipsis: a sheet opens).
+                        Button {
+                            footageSheetRequest = FootageSheetRequest(recordID: rec.id)
+                        } label: {
+                            Label("Find Similar Footage…", systemImage: "square.stack.3d.up")
+                        }
+                        .help("Show the files that are probably the same footage as this one — copies, re-encodes, transcodes, exports — and which is likely the original.")
+                        .accessibilityIdentifier("catalog.row.findSimilarFootage")
                         Button {
                             fileJourneyPayload = model.makeFileJourney(for: rec)
                         } label: {
@@ -1751,6 +1761,11 @@ extension CatalogContent {
             if let badge = model.archiveAngel.badge(for: rec.id) {
                 ArchiveAngelCatalogBadgeView(badge: badge, revision: angelBadgeRevision)
             }
+            // Find Similar Footage (2026-09-23): "3 copies" — the group
+            // size read straight off the record (O(1), no scan).
+            if let f = rec.footage, f.groupSize > 1 {
+                FootageGroupBadge(membership: f)
+            }
         }
         .help(tagColumnHelp(for: rec))
     }
@@ -1761,6 +1776,9 @@ extension CatalogContent {
         var lines = [rec.mediaDisposition.rawValue]
         if let badge = model.archiveAngel.badge(for: rec.id) {
             lines.append(badge.help + " — Assess in the Archive tab to prepare it.")
+        }
+        if let f = rec.footage, f.groupSize > 1 {
+            lines.append(FootageGroupBadge.help(f))
         }
         if !rec.tags.isEmpty {
             lines.append("Tags: \(rec.tags.joined(separator: ", "))")

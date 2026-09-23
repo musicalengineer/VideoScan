@@ -152,6 +152,8 @@ struct CatalogContent: View {
     /// value on dismiss. Swift's `Identifiable?` ≈ a nullable handle that
     /// drives a sheet present/dismiss cycle.
     @State var fileJourneyPayload: FileJourney?
+    /// "Find Similar Footage…" sheet (2026-09-23) — .sheet(item:).
+    @State var footageSheetRequest: FootageSheetRequest?
 
     /// Stable snapshot the Table reads from. Decoupled from `records` so the
     /// Table never sees the data array mutate mid-gesture (which races with
@@ -597,6 +599,12 @@ struct CatalogContent: View {
         if viewFilters.contains(.noPlaceYet) {
             out = out.filter(pfRecordHasNoPlace)
         }
+        // "One per footage" (Find Similar Footage, 2026-09-23): LAST, so it
+        // picks the best-ranked member among the rows every other filter
+        // left visible. One O(rows) dictionary pass.
+        if viewFilters.contains(.onePerFootage) {
+            out = FootageOnePerGroup.filter(out)
+        }
         return out
     }
 
@@ -809,6 +817,12 @@ struct CatalogContent: View {
         // §2 Provenance & Audit Trail — File Journey sheet.
         .sheet(item: $fileJourneyPayload) { payload in
             FileJourneySheet(journey: payload)
+        }
+        // Find Similar Footage — the read-only group sheet.
+        .sheet(item: $footageSheetRequest) { request in
+            FootageGroupSheet(request: request, model: model, startRun: { [fileOpsCenter, model] scope in
+                fileOpsCenter.startFindSimilarFootage(scope: scope, model: model)
+            })
         }
         // "Extract Frames…" options sheet (sampling + disk estimate).
         // .sheet(item:) per the chained-sheet antipattern memo —
