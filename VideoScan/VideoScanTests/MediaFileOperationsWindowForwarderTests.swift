@@ -374,9 +374,7 @@ struct MediaFileOperationsWindowForwardSensorTests {
         "ArchiveAngel/UI/ArchiveAngelReadyDisclosure.swift": 1,   // Promote (Angel batch)
         "ArchiveAngel/UI/ArchiveAngelReviewSheet.swift": 1,      // Promote (Angel review)
         "ArchivedWhatNextSheet.swift": 1,         // Move N to Trash (prune apply)
-        "ArchiveView+Table.swift": 1,             // Archive Helper from the nudge
         "ArchiveView.swift": 1,                   // Verify copies…
-        "CatalogContent+AssessCopies.swift": 1,   // Archive Helper…
         // Archive Angel Start (start sheet) + Prepare with Archive Angel
         // (catalog menu) — both through ArchiveAngel.prepare since S2.
         "ArchiveAngel/Seams/AppConformances.swift": 2,

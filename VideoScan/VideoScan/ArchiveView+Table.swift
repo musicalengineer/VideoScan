@@ -53,20 +53,9 @@ extension ArchiveView {
                 // Archive Angel — ONE strip (Rick 2026-09-22), its cards and
                 // sheets (ArchiveAngel/UI/ArchiveAngelStrip.swift, S2).
                 ArchiveAngelStrip(angel: model.archiveAngel, revealArchived: { revealArchivedForAngel() })
-                // The nudge reads the Angel's ONE set of numbers (S3b) —
-                // the same counts as the strip above and the catalog filter.
-                ArchiveNudgeHost(
-                    angel: model.archiveAngel,
-                    openHelper: { id in
-                        guard let seed = model.record(forID: id) else { return }
-                        fileOpsCenter.startedByUser { $0.startAssessCopies(seed: seed, model: model) }
-                        // The expanded Assess row IS the helper — in front (codex #964).
-                        MediaFileOperationsWindowOpener.openInFront(openWindow)   // Media File Operations window (legacy id)
-                    },
-                    showInCatalog: { id in
-                        guard let rec = model.record(forID: id) else { return }
-                        showInCatalog(rec)
-                    })
+                // The Helper's nudge list ("It looks like N files are
+                // ready…") was retired in S4 — the strip above carries the
+                // same Ready / Needs a date numbers.
                 Divider()
             }
 
