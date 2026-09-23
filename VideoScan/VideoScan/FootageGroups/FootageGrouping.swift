@@ -314,7 +314,9 @@ enum FootageGrouping {
         var sampledConflicts = 0
         /// Normalized-name buckets sorted by length (built by nameAndDuration).
         var byKey: [String: [Int]] = [:]
-        var genericCache: [Int: Bool] = [:]
+        /// isGenericStem compiles its regexes per call — cache per NAME KEY
+        /// (one call per distinct name, not per matched pair).
+        var genericCache: [String: Bool] = [:]
 
         init(p: Prepared) {
             self.p = p
@@ -414,8 +416,14 @@ enum FootageGrouping {
 
         /// "<name>_NN" beside "<name>" in the same folder, same length.
         mutating func promoteCollisions() {
+            // Index only files whose name some "_NN" file points at.
+            let wanted = Set(idx.compactMap { p.analyses[$0].collisionBaseFilename })
+            guard !wanted.isEmpty else { return }
             var byFolderName: [String: Int] = [:]
-            for i in idx { byFolderName[folderKey(xs[i].fullPath) + "/" + xs[i].filename.lowercased()] = i }
+            for i in idx {
+                let name = xs[i].filename.lowercased()
+                if wanted.contains(name) { byFolderName[folderKey(xs[i].fullPath) + "/" + name] = i }
+            }
             for i in idx {
                 guard let base = p.analyses[i].collisionBaseFilename,
                       let j = byFolderName[folderKey(xs[i].fullPath) + "/" + base],
@@ -425,9 +433,10 @@ enum FootageGrouping {
         }
 
         mutating func isGeneric(_ i: Int) -> Bool {
-            if let g = genericCache[i] { return g }
-            let g = ArchiveNameAdvisor.isGenericStem(p.analyses[i].strippedStem) || p.analyses[i].key.count < 6
-            genericCache[i] = g
+            let key = p.analyses[i].key
+            if let g = genericCache[key] { return g }
+            let g = key.count < 6 || ArchiveNameAdvisor.isGenericStem(p.analyses[i].strippedStem)
+            genericCache[key] = g
             return g
         }
 
@@ -688,6 +697,7 @@ enum FootageGrouping {
 
     /// "<event dir>|<stem>" for a file inside `folder` of an FCP library.
     static func fcpKey(_ path: String, folder: String) -> String? {
+        guard FootageStem.asciiContains(path, ".fcpbundle/") else { return nil }
         let lower = path.lowercased()
         guard lower.contains(".fcpbundle/"), let r = lower.range(of: folder) else { return nil }
         let event = String(lower[..<r.lowerBound])

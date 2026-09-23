@@ -87,7 +87,7 @@ struct FootageGroupSheet: View {
                          : "The camera original is probably not in the catalog. Best available: \(o.filename)")
                         .foregroundColor(f.originalInCatalog ? .primary : .orange)
                 }
-                Text("Checked \(f.scannedAt.formatted(date: .abbreviated, time: .shortened)). Nothing here changes a file or a date.")
+                Text("Grouped \(f.scannedAt.formatted(date: .abbreviated, time: .shortened)) from catalog metadata. Nothing here changes a file or a date.")
                     .font(.caption).foregroundColor(.secondary)
             }
         }

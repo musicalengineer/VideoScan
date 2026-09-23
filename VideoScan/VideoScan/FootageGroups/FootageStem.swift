@@ -62,11 +62,13 @@ enum FootageStem {
 
         var stem = stripDatePrefixes(rawStem)
         var stripped = false
-        if stem.range(of: "-vs-", options: .caseInsensitive) != nil {
+        if asciiContains(stem, "-vs-") {
             let r = vsDashRegex.stringByReplacingMatches(in: stem, range: NSRange(stem.startIndex..., in: stem),
                                                          withTemplate: "")
             if r != stem { stem = r; stripped = true }
         }
+        // (Measured 2026-09-23, Debug, 100k names: the compiled regex costs
+        // 0.13 s; Foundation `contains` pre-checks cost more than it.)
         while let base = ArchiveAngel.derivativeBaseStem(stem) {
             stem = base
             stripped = true
@@ -78,17 +80,14 @@ enum FootageStem {
         let key = alnumLower(stem)
 
         var counterBase: String?
-        if let r = counterRegex.firstMatch(in: stem, range: NSRange(stem.startIndex..., in: stem)),
-           let range = Range(r.range, in: stem) {
-            let base = alnumLower(String(stem[..<range.lowerBound]))
+        if let cut = trailingCounterStart(stem) {
+            let base = alnumLower(String(stem[..<cut]))
             if base.count >= 6, base != key { counterBase = base }
         }
 
         var collision: String?
-        if let r = collisionRegex.firstMatch(in: rawStem, range: NSRange(rawStem.startIndex..., in: rawStem)),
-           let range = Range(r.range, in: rawStem),
-           let nn = Int(rawStem[range].dropFirst()), nn >= 2 {
-            let baseStem = String(rawStem[..<range.lowerBound])
+        if let (cut, nn) = collisionSuffix(rawStem), nn >= 2 {
+            let baseStem = String(rawStem[..<cut])
             if !baseStem.isEmpty {
                 collision = (ext.isEmpty ? baseStem : baseStem + "." + ext).lowercased()
             }
@@ -97,7 +96,7 @@ enum FootageStem {
         return Analysis(key: key.isEmpty ? alnumLower(rawStem) : key,
                         strippedStem: stem,
                         hasDerivativeToken: stripped,
-                        nameRole: nameRole(lowerRaw),
+                        nameRole: stripped || asciiContains(rawStem, ".vs.") ? nameRole(lowerRaw) : nil,
                         counterBaseKey: counterBase,
                         collisionBaseFilename: collision)
     }
@@ -115,6 +114,53 @@ enum FootageStem {
             s = String(rest)
         }
         return s
+    }
+
+    /// Case-insensitive ASCII substring test over UTF-8 bytes — the
+    /// Foundation `contains` / `range(of:)` path measured ~5× slower in
+    /// Debug on a 100k-name pass. `needle` must be lowercase ASCII.
+    static func asciiContains(_ haystack: String, _ needle: StaticString) -> Bool {
+        let n = UnsafeBufferPointer(start: needle.utf8Start, count: needle.utf8CodeUnitCount)
+        guard let first = n.first else { return true }
+        let h = Array(haystack.utf8)
+        guard h.count >= n.count else { return false }
+        @inline(__always) func lower(_ c: UInt8) -> UInt8 { c >= 65 && c <= 90 ? c + 32 : c }
+        var i = 0
+        while i + n.count <= h.count {
+            if lower(h[i]) == first {
+                var k = 1
+                while k < n.count, lower(h[i + k]) == n[k] { k += 1 }
+                if k == n.count { return true }
+            }
+            i += 1
+        }
+        return false
+    }
+
+    /// Index where a trailing "[-_ ]\d{1,2}" starts ("Tape-3" → at "-"),
+    /// or nil. Hand-rolled (no regex): 1–2 ASCII digits after a separator.
+    static func trailingCounterStart(_ s: String) -> String.Index? {
+        var i = s.endIndex
+        var digits = 0
+        while i > s.startIndex {
+            let j = s.index(before: i)
+            guard let c = s[j].asciiValue, c >= 48, c <= 57 else { break }
+            digits += 1
+            i = j
+            if digits > 2 { return nil }
+        }
+        guard digits >= 1, i > s.startIndex else { return nil }
+        let sep = s.index(before: i)
+        return "-_ ".contains(s[sep]) ? sep : nil
+    }
+
+    /// "<name>_NN" → (index of "_", NN), or nil. Exactly two ASCII digits.
+    static func collisionSuffix(_ s: String) -> (String.Index, Int)? {
+        let chars = Array(s.utf8.suffix(3))
+        guard chars.count == 3, chars[0] == UInt8(ascii: "_"),
+              (48...57).contains(chars[1]), (48...57).contains(chars[2]) else { return nil }
+        let cut = s.index(s.endIndex, offsetBy: -3)
+        return (cut, Int(chars[1] - 48) * 10 + Int(chars[2] - 48))
     }
 
     /// Lowercase letters and digits only ("Rick's Guitars-2024" → "ricksguitars2024").
@@ -166,8 +212,4 @@ enum FootageStem {
         pattern: #"^(\d{4}|xxxx)(-[0-9x]{2}){0,2}[_ ]+"#, options: [.caseInsensitive])
     private static let vsDashRegex = try! NSRegularExpression(
         pattern: #"-vs-(edit|preserve|archive)(_\d{2})?$"#, options: [.caseInsensitive])
-    private static let counterRegex = try! NSRegularExpression(
-        pattern: #"[-_ ]\d{1,2}$"#)
-    private static let collisionRegex = try! NSRegularExpression(
-        pattern: #"_\d{2}$"#)
 }

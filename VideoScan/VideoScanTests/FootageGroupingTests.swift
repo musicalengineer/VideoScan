@@ -523,7 +523,7 @@ struct FootageDurationAloneSensorTests {
 struct FootageScaleTests {
 
     /// 100k records shaped like the catalog: ~20% byte copies, ~10% name+length
-    /// versions, ~5% lineage, the rest unique. Budget: < 4 s in Debug on the
+    /// versions, ~5% lineage, the rest unique. Budget: < 3 s in Debug on the
     /// M4 Max (the spec's ~2 s target is for the grouping phases; the budget
     /// leaves headroom for a loaded machine), and it must not go quadratic.
     @Test("group 100k records inside the budget", .timeLimit(.minutes(1)))
@@ -551,9 +551,18 @@ struct FootageScaleTests {
             }
         }
         let t0 = Date()
-        let r = F.run(xs)
+        var stats = FootageGrouping.Stats()
+        let p = FootageGrouping.prepare(xs, options: .init(), stats: &stats)
+        let t1 = Date()
+        let e = FootageGrouping.edges(p, stats: &stats)
+        let t2 = Date()
+        let c = FootageGrouping.components(p, edges: e, options: .init(), stats: &stats)
+        let t3 = Date()
+        let r = FootageGrouping.assemble(p, edges: e, components: c, now: Date(), stats: stats)
         let elapsed = Date().timeIntervalSince(t0)
-        #expect(elapsed < 4.0, "100k grouping took \(elapsed) s")
+        print(String(format: "FootageScaleTests phases: prepare %.2f s, edges %.2f s, components %.2f s, assemble %.2f s",
+                     t1.timeIntervalSince(t0), t2.timeIntervalSince(t1), t3.timeIntervalSince(t2), Date().timeIntervalSince(t3)))
+        #expect(elapsed < 3.0, "100k grouping took \(elapsed) s")
         #expect(r.stats.groups > 1000, "expected thousands of groups, got \(r.stats.groups)")
         #expect(r.stats.largestGroup <= FootageGrouping.defaultCap)
         print("FootageScaleTests: 100k records → \(r.stats.groups) groups, \(r.stats.members) members in \(String(format: "%.2f", elapsed)) s")
