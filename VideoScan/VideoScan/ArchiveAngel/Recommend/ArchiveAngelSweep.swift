@@ -88,6 +88,11 @@ final class ArchiveAngelSweep: ObservableObject {
         /// The recommendation policy the run scores AND classifies with
         /// (the façade's; S3b). `weights` is kept as a view onto it.
         var policy: AngelRecommendationPolicy = .builtIn
+        /// Awaited at the start of every run, BEFORE `policy` is read (codex
+        /// #1643: the façade loads policy.json off the main actor; a run
+        /// requested meanwhile waits for it, then reads the loaded rules
+        /// through `setPolicy`). Default: nothing to wait for.
+        var policyReady: @MainActor () async -> Void = {}
         var weights: ArchiveAngelWeights {
             get { policy.weights }
             set { policy.weights = newValue }
@@ -135,6 +140,13 @@ final class ArchiveAngelSweep: ObservableObject {
     func configure(_ configuration: Configuration, enabled: Bool) {
         self.configuration = configuration
         setEnabled(enabled)
+    }
+
+    /// The façade's policy finished loading (off-main): later runs score
+    /// with it. A run already past its snapshot keeps the rules it began
+    /// with — a batch never sees the rules change mid-way.
+    func setPolicy(_ policy: AngelRecommendationPolicy) {
+        configuration?.policy = policy
     }
 
     func setEnabled(_ on: Bool) {
@@ -241,6 +253,10 @@ final class ArchiveAngelSweep: ObservableObject {
     }
 
     private func perform(reason: String) async {
+        guard let first = configuration else { return }
+        // The policy may still be loading (off-main, at launch): wait, then
+        // read the configuration again — it now carries the loaded rules.
+        await first.policyReady()
         guard let cfg = configuration else { return }
         let clock = ContinuousClock()
         let started = clock.now
@@ -297,12 +313,33 @@ final class ArchiveAngelSweep: ObservableObject {
             let now = cfg.now()
             for i in index..<end {
                 let c = all[i]
-                if let hit = ArchiveAngelScorer.floorHit(c, policy: policy, now: now) {
-                    records[c.id] = .init(score: 0, lines: [], rejection: hit.rejection,
-                                          useCount: 0, lastUsed: nil, computedAt: now,
-                                          timesProposed: c.attention.timesProposed,
-                                          familySkips: c.familySkips, bands: policy.grades,
-                                          excludedBy: Self.excludedBy(hit))
+                // codex #1643 A2: the safety floors in their OWN pass, kept
+                // apart from the first floor in policy order (the reason
+                // shown), so no optional floor can mask one.
+                // (When the first floor hit IS a safety floor it is also the
+                // first safety floor — they keep their relative order — so
+                // the separate pass runs only when it could differ.)
+                let hit = ArchiveAngelScorer.floorHit(c, policy: policy, now: now)
+                let safety = hit.flatMap { AngelPolicyDefaults.safetyFloorIDs.contains($0.rule.id) ? $0.rejection : nil }
+                    ?? ArchiveAngelScorer.safetyHit(c, now: now)
+                if let hit {
+                    var rec = ArchiveAngelEvidenceRecord(score: 0, lines: [], rejection: hit.rejection,
+                                                         useCount: 0, lastUsed: nil, computedAt: now,
+                                                         timesProposed: c.attention.timesProposed,
+                                                         familySkips: c.familySkips, bands: policy.grades,
+                                                         excludedBy: Self.excludedBy(hit))
+                    rec.safetyRejection = safety
+                    records[c.id] = rec
+                } else if let safety {
+                    // Unreachable under a validated policy (every safety
+                    // floor is in `floors`, intact) — a hand-built one
+                    // without them still never recommends the file.
+                    var rec = ArchiveAngelEvidenceRecord(score: 0, lines: [], rejection: safety,
+                                                         useCount: 0, lastUsed: nil, computedAt: now,
+                                                         timesProposed: c.attention.timesProposed,
+                                                         familySkips: c.familySkips, bands: policy.grades)
+                    rec.safetyRejection = safety
+                    records[c.id] = rec
                 } else {
                     pending.append(i)
                 }
@@ -373,6 +410,7 @@ final class ArchiveAngelSweep: ObservableObject {
                 rec.reasons = v.reasons.isEmpty ? nil : v.reasons
                 rec.year = v.year
                 rec.copies = v.copies > 1 ? v.copies : nil
+                rec.copyKey = v.copyKey
                 records[id] = rec
             }
             noteSlice(clock.now - t)

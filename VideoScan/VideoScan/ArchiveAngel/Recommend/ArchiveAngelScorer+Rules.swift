@@ -52,6 +52,32 @@ extension ArchiveAngelScorer {
         }
     }
 
+    /// The SAFETY pass (codex #1643 A2): the first of the CANONICAL safety
+    /// floors (AngelPolicyDefaults.safetyFloors — not the policy's copy,
+    /// so no rule set can reorder or reach them) that fires on `c`, or nil.
+    /// Its own pass, independent of the optional floors: `floorHit` reports
+    /// the first floor in POLICY order (the reason a person should hear —
+    /// "Too short" outlives a drive being unplugged), and a record with an
+    /// optional floor recorded first used to hide an offline volume from a
+    /// classifier told to ignore the Angel's floors. Five cheap checks per
+    /// record; none reads a weight or table.
+    static func safetyHit(_ c: ArchiveAngelCandidate, now: Date = Date()) -> ArchiveAngelRejection? {
+        var ctx = AngelEvalContext(now: now)
+        let policy = AngelRecommendationPolicy.builtIn
+        return AngelPolicyDefaults.safetyFloors.withUnsafeBufferPointer { buffer -> ArchiveAngelRejection? in
+            guard let floors = buffer.baseAddress else { return nil }
+            for i in 0..<buffer.count {
+                guard let kind = floors[i].resolvedKind else { continue }
+                if kind == .match {
+                    guard !floors[i].when.isEmpty, AngelCondition.all(floors[i].when, c, &ctx) else { continue }
+                    return floors[i].rejection.flatMap(ArchiveAngelRejection.named) ?? .policyRule
+                }
+                if let rejection = floorFires(kind, c, policy: policy, now: now) { return rejection }
+            }
+            return nil
+        }
+    }
+
     /// One built-in floor's verdict on `c` (nil = passes); thresholds come
     /// from `weights` and `tables`. A `match` floor is decided by its `when`
     /// in `floorHit` (never here — an empty `when` matches nothing).

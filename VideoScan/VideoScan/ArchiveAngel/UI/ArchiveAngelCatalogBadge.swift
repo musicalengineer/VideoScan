@@ -22,16 +22,24 @@ struct ArchiveAngelCatalogBadge: Equatable {
     /// classifier never saw falls back to its grade (A → Ready, B → Worth a
     /// look).
     static func make(for record: ArchiveAngelEvidenceRecord?, prepared: Bool = false) -> ArchiveAngelCatalogBadge? {
-        if prepared {
+        if prepared { return make(kind: .prepared, record: record) }
+        guard let record else { return nil }
+        return make(kind: record.recommendationClass, record: record)
+    }
+
+    /// The chip for an EFFECTIVE class (codex #1643 A3 — the façade's
+    /// `badge(for:)` passes the class the counts use; `record` only
+    /// supplies the tooltip).
+    static func make(kind: ArchiveAngelRecommendationClass, record: ArchiveAngelEvidenceRecord?) -> ArchiveAngelCatalogBadge? {
+        let help = record?.summary() ?? ""
+        switch kind {
+        case .prepared:
             return .init(text: "Prepared", color: .blue,
                          help: "Archive Angel prepared this in a batch — review it in the Archive tab, then Promote.")
-        }
-        guard let record else { return nil }
-        switch record.recommendationClass {
-        case .ready: return .init(text: "Promote me", color: .green, help: record.summary())
-        case .needsDate: return .init(text: "Needs a date", color: .orange, help: record.summary())
-        case .worthALook: return .init(text: "Worth a look", color: .orange, help: record.summary())
-        case .notNow, .excluded, .anotherCopy, .prepared, .promoted: return nil
+        case .ready: return .init(text: "Promote me", color: .green, help: help)
+        case .needsDate: return .init(text: "Needs a date", color: .orange, help: help)
+        case .worthALook: return .init(text: "Worth a look", color: .orange, help: help)
+        case .notNow, .excluded, .anotherCopy, .promoted: return nil
         }
     }
 }
