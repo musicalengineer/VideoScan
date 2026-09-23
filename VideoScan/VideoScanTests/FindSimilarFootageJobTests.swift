@@ -206,6 +206,146 @@ struct FindSimilarFootageJobModelTests {
     }
 }
 
+// MARK: - Rescan (QA MAJOR 1)
+
+@Suite("Find Similar Footage — the person's answers survive a real rescan cycle", .serialized)
+@MainActor
+struct FootageRescanSurvivalTests {
+
+    @Test("decisions follow BOTH records to their fresh ids; the machine answer is carried")
+    func rescanCycle() async throws {
+        let model = VideoScanModel()
+        let a = FJ.rec("Birthday1979.mov", dir: "/Volumes/T", dur: 300, hash: "v1:r")
+        let b = FJ.rec("Other1979.mov", dir: "/Volumes/T", dur: 300, hash: "v1:r")
+        model.records = [a, b]
+        a.setFootageDecision(FootageDecision(otherID: b.id, verdict: .notSame))
+        b.setFootageDecision(FootageDecision(otherID: a.id, verdict: .notSame))
+        a.footage = FootageMembership(groupID: a.id, groupSize: 2, confidence: .likely, role: .original, rank: 0,
+                                      likelyOriginalID: a.id, originalInCatalog: true, evidence: [],
+                                      scannedAt: Date(), algorithmVersion: 1)
+        let target = CatalogScanTarget(searchPath: "/Volumes/T")
+        model.snapshotPreservedFieldsForRescan(of: target)
+        let fresh: [VideoRecord] = [a.fullPath, b.fullPath].map { path in
+            let r = VideoRecord()
+            r.fullPath = path
+            r.filename = (path as NSString).lastPathComponent
+            r.directory = "/Volumes/T"
+            r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            return r
+        }
+        model.applyPreservedFieldsAfterRescan(of: target, onto: fresh)
+        _ = await model.commitScanResults(root: "/Volumes/T", volName: "T", targetRecords: fresh, scanWasComplete: true)
+        let na = fresh[0], nb = fresh[1]
+        #expect(na.id != a.id, "the scan minted fresh ids")
+        #expect(na.footageDecision(about: nb.id)?.verdict == .notSame, "a's answer now names b's NEW id")
+        #expect(nb.footageDecision(about: na.id)?.verdict == .notSame, "and b's names a's")
+        #expect(na.footage?.likelyOriginalID == na.id, "the machine answer's pointer is re-linked too")
+    }
+}
+
+// MARK: - QA 2026-09-23 fixes (red first)
+
+@Suite("Find Similar Footage — QA fixes (MAJOR 2/3 + minors)")
+@MainActor
+struct FootageQAFixTests {
+
+    @Test("MAJOR 2: a footage key never splits a duplicate group — one recommendation")
+    func footageKeyDoesNotSplitDuplicateGroup() {
+        let dup = UUID()
+        let a = ArchiveAngelCandidate(filename: "Tape.mov", starRating: 3, userDate: "1990", videoCodec: "dvvideo",
+                                      duplicateGroupID: dup, footageGroupID: UUID(), footageRank: 0,
+                                      footageConfidence: .likely)
+        let b = ArchiveAngelCandidate(filename: "Tape copy.mov", starRating: 3, userDate: "1990", videoCodec: "dvvideo",
+                                      duplicateGroupID: dup)
+        var rules = AngelRecommendationPolicy.builtIn.recommend
+        rules.useAngelFloors = false
+        let r = ArchiveAngelRecommendations.classify([a, b], rules: rules)
+        #expect(r.verdicts.filter { $0.kind == .anotherCopy }.count == 1)
+    }
+
+    @Test("MAJOR 2: the batch filter also merges footage + duplicate keys; the person's Keep wins")
+    func batchMergesKeys() {
+        let dup = UUID(), g = UUID()
+        var keep = ArchiveAngelCandidate(filename: "Keep.mov", duplicateGroupID: dup)
+        keep.duplicateDisposition = .keep
+        let orig = ArchiveAngelCandidate(filename: "Orig.mov", duplicateGroupID: dup, footageGroupID: g,
+                                         footageRank: 0, footageConfidence: .likely)
+        let exp = ArchiveAngelCandidate(filename: "Export.mp4", footageGroupID: g, footageRank: 1, footageConfidence: .likely)
+        let picks = [exp, orig, keep].map { ArchiveAngelPick(candidate: $0, score: 1, evidence: []) }
+        var rejected: [ArchiveAngelRejection: Int] = [:]
+        let kept = ArchiveAngelScorer.onePerDuplicateGroup(picks, rejected: &rejected,
+                                                           collapseBy: ["footageGroup", "duplicateGroup"])
+        #expect(kept.map(\.candidate.filename) == ["Keep.mov"])
+    }
+
+    @Test("minor: a Possible footage group is shown, not collapsed")
+    func possibleNotCollapsed() {
+        let g = UUID()
+        let a = ArchiveAngelCandidate(filename: "A.mov", starRating: 3, userDate: "1990", videoCodec: "dvvideo",
+                                      footageGroupID: g, footageRank: 0, footageConfidence: .possible)
+        let b = ArchiveAngelCandidate(filename: "B.mov", starRating: 3, userDate: "1990", videoCodec: "dvvideo",
+                                      footageGroupID: g, footageRank: 1, footageConfidence: .possible)
+        var rules = AngelRecommendationPolicy.builtIn.recommend
+        rules.useAngelFloors = false
+        #expect(!ArchiveAngelRecommendations.classify([a, b], rules: rules).verdicts.contains { $0.kind == .anotherCopy })
+    }
+
+    @Test("MAJOR 3: a sampled signature is refused on a whole-file SHA-256 conflict")
+    func sampledSignatureRefusedOnFixityConflict() {
+        let a = FootageInput(filename: "Tape.mov", durationSeconds: 600, sizeBytes: 1000, partialMD5: "abc", fixityDigest: "sha-A")
+        let b = FootageInput(filename: "Other.mov", durationSeconds: 900, sizeBytes: 1000, partialMD5: "abc", fixityDigest: "sha-B")
+        #expect(FootageGrouping.run([a, b]).memberships.isEmpty)
+        #expect(!a.sameBytes(as: b))
+    }
+
+    @Test("MAJOR 3: a segmented content hash is not Identical when the whole-file digests differ")
+    func contentHashRefusedOnFixityConflict() {
+        let a = FootageInput(filename: "A.mxf", durationSeconds: 60, sizeBytes: 9, contentHash: "v1:h", fixityDigest: "sha-A")
+        let b = FootageInput(filename: "B.mxf", durationSeconds: 70, sizeBytes: 9, contentHash: "v1:h", fixityDigest: "sha-B")
+        #expect(FootageGrouping.run([a, b]).memberships.isEmpty)
+        #expect(!a.sameBytes(as: b))
+    }
+
+    @Test("minor: different date prefixes block a name + length link; unknown (xx) parts don't")
+    func datePrefixesBlock() {
+        let a = FootageInput(filename: "1990-12-25 Christmas.mov", durationSeconds: 600)
+        let b = FootageInput(filename: "1994-12-25 Christmas.mov", durationSeconds: 600)
+        #expect(FootageGrouping.run([a, b]).memberships.isEmpty)
+        let c = FootageInput(filename: "1990-xx-xx_Christmas.mov", durationSeconds: 600)
+        let r = FootageGrouping.run([a, c])
+        #expect(r.memberships[a.id] != nil && r.memberships[a.id]?.groupID == r.memberships[c.id]?.groupID)
+    }
+
+    @Test("minor: Stop between apply slices never leaves a group half-written")
+    func applyByGroup() async throws {
+        let (m, sb) = try FJ.model("slices")
+        defer { sb.cleanup() }
+        var recs: [VideoRecord] = []
+        for i in 0..<6 {  // three groups of two
+            recs.append(FJ.rec("G\(i / 2)a.mov", dur: 10, hash: "v1:g\(i / 2)"))
+        }
+        m.records = recs
+        let result = FootageGrouping.run(m.footageInputs())
+        var calls = 0
+        let out = await m.applyFootage(result, touched: Set(recs.map(\.id)), sliceSize: 1,
+                                       checkpoint: { calls += 1; return calls <= 1 })
+        #expect(out.stopped)
+        for i in stride(from: 0, to: 6, by: 2) {
+            #expect((recs[i].footage == nil) == (recs[i + 1].footage == nil), "group \(i / 2) half-written")
+        }
+        #expect(out.changed > 0)
+    }
+
+    @Test("minor: the chip says 'Same footage ×N', never 'copies'")
+    func chipWording() {
+        let f = FootageMembership(groupID: UUID(), groupSize: 3, confidence: .likely, role: .avHalf, rank: 2,
+                                  likelyOriginalID: UUID(), originalInCatalog: true, evidence: [],
+                                  scannedAt: Date(), algorithmVersion: 1)
+        #expect(FootageGroupBadge.text(f) == "Same footage ×3")
+        #expect(!FootageGroupBadge.help(f).lowercased().contains("copies"))
+    }
+}
+
 // MARK: - One per footage
 
 @Suite("Find Similar Footage — catalog 'One per footage' filter")
@@ -254,7 +394,7 @@ struct FootageArchiveAngelTests {
 
     private func candidate(_ name: String, group: UUID?, rank: Int?, score: Int) -> ArchiveAngelCandidate {
         ArchiveAngelCandidate(filename: name, starRating: 3, userDate: "1990", videoCodec: "dvvideo",
-                              footageGroupID: group, footageRank: rank)
+                              footageGroupID: group, footageRank: rank, footageConfidence: group == nil ? nil : .likely)
     }
 
     @Test("the likely original is recommended; the others become Another copy with a footage reason")

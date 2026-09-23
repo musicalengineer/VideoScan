@@ -139,6 +139,8 @@ A condition is `{ "field": …, "op": …, "value": … }`. To say "any of these
 
 When **Find Similar Footage** has run, every file it grouped carries its footage group and its rank in it (0 = the likely original). With the defaults above:
 
+- only groups Find Similar Footage rated **Likely or stronger** collapse; a Possible group is shown to you, never decided for you;
+- keys are merged: a file in a footage group AND a duplicate group joins both, so a byte copy seen only through its duplicate group and its twin seen through the footage group are one recording (never two Ready rows, never both in a batch);
 - the recommended lists, the counts, the catalog badge and Show ▸ Archive Candidates show **one** file per footage group — the copy you marked Keep, else the group's likely original, else the best-ranked — and the others become **Another copy** ("Same footage as X — that one is recommended");
 - a prepared batch takes at most one member of a footage group (the same rule as a duplicate group).
 

@@ -171,37 +171,63 @@ extension VideoScanModel {
     }
 
     /// Write the run's answers onto records — only where they changed.
-    /// Slices of `sliceSize` with a yield between (the UI stays live on a
-    /// 100k catalog). `shouldStop` is polled per slice (Stop / pause wait).
+    /// Slices of about `sliceSize` records with a yield between (the UI
+    /// stays live on a 100k catalog), cut at GROUP boundaries: every member
+    /// of a group — new, or the old group a record is leaving — is written
+    /// in the same slice, so a Stop never leaves a group half-written (QA
+    /// 2026-09-23). `checkpoint` is polled per slice (Stop / pause wait).
     func applyFootage(_ result: FootageGrouping.Result, touched: Set<UUID>, sliceSize: Int = 2000,
                       progress: ((Double) -> Void)? = nil,
                       checkpoint: (() async -> Bool)? = nil) async -> (changed: Int, cleared: Int, stopped: Bool) {
-        let ids = Array(touched)
-        var changed = 0, cleared = 0
-        var start = 0
-        while start < ids.count {
+        let units = footageApplyUnits(result, touched: touched)
+        var changed = 0, cleared = 0, done = 0
+        var u = 0
+        while u < units.count {
             if let checkpoint, await !checkpoint() {
                 finishFootageApply(changed: changed, cleared: cleared)
                 return (changed, cleared, true)
             }
-            let end = min(start + sliceSize, ids.count)
-            for id in ids[start..<end] {
-                guard let rec = record(forID: id) else { continue }
-                if let new = result.memberships[id] {
-                    if let old = rec.footage, old.sameAnswer(as: new) { continue }
-                    rec.footage = new
-                    changed += 1
-                } else if rec.footage != nil {
-                    rec.footage = nil
-                    cleared += 1
+            var inSlice = 0
+            while u < units.count, inSlice == 0 || inSlice + units[u].count <= sliceSize {
+                for id in units[u] {
+                    guard let rec = record(forID: id) else { continue }
+                    if let new = result.memberships[id] {
+                        if let old = rec.footage, old.sameAnswer(as: new) { continue }
+                        rec.footage = new
+                        changed += 1
+                    } else if rec.footage != nil {
+                        rec.footage = nil
+                        cleared += 1
+                    }
                 }
+                inSlice += units[u].count
+                u += 1
             }
-            start = end
-            progress?(Double(start) / Double(max(ids.count, 1)))
+            done += inSlice
+            progress?(Double(done) / Double(max(touched.count, 1)))
             await Task.yield()
         }
         finishFootageApply(changed: changed, cleared: cleared)
         return (changed, cleared, false)
+    }
+
+    /// Touched ids partitioned into write units: one per NEW group (its
+    /// members), one per OLD group being dissolved (its members that join
+    /// no new group), and singletons for the rest. Deterministic order.
+    func footageApplyUnits(_ result: FootageGrouping.Result, touched: Set<UUID>) -> [[UUID]] {
+        var byGroup: [String: [UUID]] = [:]
+        for id in touched {
+            let key: String
+            if let g = result.memberships[id]?.groupID {
+                key = "n:" + g.uuidString
+            } else if let old = record(forID: id)?.footage?.groupID {
+                key = "o:" + old.uuidString
+            } else {
+                key = "s:" + id.uuidString
+            }
+            byGroup[key, default: []].append(id)
+        }
+        return byGroup.keys.sorted().compactMap { k in byGroup[k]?.sorted { $0.uuidString < $1.uuidString } }
     }
 
     private func finishFootageApply(changed: Int, cleared: Int) {

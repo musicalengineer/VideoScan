@@ -106,6 +106,9 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     /// per footage group. Additive, defaulted nil (no group).
     var footageGroupID: UUID?
     var footageRank: Int?
+    /// The group's confidence — only Likely or stronger groups collapse
+    /// (a Possible group is shown to the person, not decided for them).
+    var footageConfidence: FootageConfidence?
 
     /// Rick 2026-09-21: a Live Photo's motion half
     /// (`jpegvideocomplement_*.mov`, ~3 s) is part of a photo, not a video.
@@ -172,7 +175,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
          familyKey: String = "", deviceModel: String = "", captureDate: Date? = nil,
          duplicateGroupCount: Int = 0, duplicateDisposition: DuplicateDisposition = .none,
          userDateConfidence: String? = nil, originMake: String? = nil, originEncoder: String? = nil,
-         footageGroupID: UUID? = nil, footageRank: Int? = nil) {
+         footageGroupID: UUID? = nil, footageRank: Int? = nil, footageConfidence: FootageConfidence? = nil) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds; self.streamTypeRaw = streamTypeRaw; self.isPlayable = isPlayable
         self.starRating = starRating; self.mediaDisposition = mediaDisposition; self.archiveStage = archiveStage
@@ -194,6 +197,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         self.userDateConfidence = userDateConfidence; self.originMake = originMake
         self.originEncoder = originEncoder
         self.footageGroupID = footageGroupID; self.footageRank = footageRank
+        self.footageConfidence = footageConfidence
     }
 }
 
@@ -746,21 +750,27 @@ enum ArchiveAngelScorer {
         // copy the person marked KEEP wins its group wherever it ranks
         // (the rest of the group still yields to it); otherwise the
         // best-ranked member, as before.
-        // Find Similar Footage (2026-09-23): with `footageGroup` in the
-        // policy's collapseBy, a footage group is one recording too, and its
-        // likely original (lowest footageRank present) is the preferred
-        // member unless the person marked a Keep.
-        let key = { (p: ArchiveAngelPick) in ArchiveAngelCopyChooser.key(p.candidate, collapseBy: collapseBy) }
+        // Find Similar Footage (2026-09-23; QA): with `footageGroup` in the
+        // policy's collapseBy, a footage group is one recording too — and
+        // keys are merged by union-find (a footage key and a duplicate-group
+        // key on one record join both sets), so a byte copy and its twin can
+        // never both ride one batch. The person's Keep wins its merged set;
+        // else the set's likely original (lowest footageRank) when the set
+        // includes a footage key; else the best-ranked member (first seen).
+        let comps = ArchiveAngelCopyChooser.components(
+            picks.map { ArchiveAngelCopyChooser.keys($0.candidate, collapseBy: collapseBy) })
+        let compKey: [UUID: String] = Dictionary(
+            picks.indices.compactMap { i in comps[i].map { (picks[i].id, $0.key) } }, uniquingKeysWith: { a, _ in a })
+        let key = { (p: ArchiveAngelPick) in compKey[p.id] }
         var keepers: [String: UUID] = [:]
         for p in picks where p.candidate.duplicateDisposition == .keep {
             if let k = key(p), keepers[k] == nil { keepers[k] = p.id }
         }
         var bestRank: [String: (rank: Int, id: UUID)] = [:]
-        for p in picks {
-            guard let k = key(p), k.hasPrefix(ArchiveAngelCopyChooser.footagePrefix),
-                  let r = p.candidate.footageRank else { continue }
-            if let cur = bestRank[k], cur.rank <= r { continue }
-            bestRank[k] = (r, p.id)
+        for (i, p) in picks.enumerated() {
+            guard let comp = comps[i], comp.footage, let r = p.candidate.footageRank else { continue }
+            if let cur = bestRank[comp.key], cur.rank <= r { continue }
+            bestRank[comp.key] = (r, p.id)
         }
         for (k, v) in bestRank where keepers[k] == nil { keepers[k] = v.id }
         let preferred = keepers.isEmpty ? picks : picks.filter { p in

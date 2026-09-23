@@ -1,7 +1,9 @@
 // FootageGroupBadge.swift
 // The catalog's footage-group chip (Find Similar Footage, 2026-09-23):
-// "3 copies" beside a file that is one of three files of the same footage,
-// starred on the likely original. Reads only the record's own
+// "Same footage ×3" beside a file that is one of three files of the same
+// footage, starred on the likely original. Never "copies" (QA 2026-09-23,
+// the delete-safety principle): A/V halves, trims and transcodes are the
+// same FOOTAGE, not deletable copies of each other. Reads only the record's own
 // `footage` (O(1)) — safe in a table cell.
 
 import SwiftUI
@@ -25,14 +27,14 @@ struct FootageGroupBadge: View {
         .accessibilityLabel(Self.help(membership))
     }
 
-    /// "3 copies" (the group counts this file too).
-    static func text(_ f: FootageMembership) -> String { "\(f.groupSize) copies" }
+    /// "Same footage ×3" (the group counts this file too).
+    static func text(_ f: FootageMembership) -> String { "Same footage ×\(f.groupSize)" }
 
     /// Tooltip / accessibility sentence.
     static func help(_ f: FootageMembership) -> String {
         let who = f.rank == 0
             ? (f.originalInCatalog ? "This is the likely original." : "This is the best available — the camera original is probably not in the catalog.")
             : "This one is a \(f.role.label)."
-        return "\(f.groupSize) copies of this footage (\(f.confidence.label)). \(who) Right-click → Find Similar Footage… to compare them; Show → One Per Footage hides the repeats."
+        return "\(f.groupSize) files are probably the same footage (\(f.confidence.label)). \(who) Right-click → Find Similar Footage… to compare them; Show → One Per Footage hides the repeats. They are not all the same bytes — never delete on this alone."
     }
 }

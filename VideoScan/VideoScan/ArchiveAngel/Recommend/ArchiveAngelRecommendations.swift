@@ -340,23 +340,71 @@ enum ArchiveAngelCopyChooser {
     static let footagePrefix = "footage:"
 
     static func key(_ c: ArchiveAngelCandidate, collapseBy: [String]) -> String? {
+        keys(c, collapseBy: collapseBy).first
+    }
+
+    /// EVERY recording key `c` carries under `collapseBy`, in policy order.
+    /// A footage group counts only when it is Likely or stronger — a
+    /// Possible group is shown to the person, never decided for them.
+    static func keys(_ c: ArchiveAngelCandidate, collapseBy: [String]) -> [String] {
+        var out: [String] = []
         for kind in collapseBy {
             switch kind {
             case "footageGroup":
-                if let g = c.footageGroupID { return footagePrefix + g.uuidString }
+                if let g = c.footageGroupID, let conf = c.footageConfidence, conf != .possible {
+                    out.append(footagePrefix + g.uuidString)
+                }
             case "duplicateGroup":
-                if let g = c.duplicateGroupID { return "group:" + g.uuidString }
+                if let g = c.duplicateGroupID { out.append("group:" + g.uuidString) }
             case "sharedDuplicateGroup":
-                if let g = c.duplicateGroupID, c.duplicateGroupCount > 1 { return "group:" + g.uuidString }
+                if let g = c.duplicateGroupID, c.duplicateGroupCount > 1 { out.append("group:" + g.uuidString) }
             case "nameAndDuration":
                 if !c.filename.isEmpty, c.durationSeconds > 0 {
-                    return "name:\(c.filename.lowercased())|\(Int(c.durationSeconds.rounded()))"
+                    out.append("name:\(c.filename.lowercased())|\(Int(c.durationSeconds.rounded()))")
                 }
             default:
                 continue
             }
         }
-        return nil
+        return out
+    }
+
+    /// One recording per CONNECTED set of keys (QA 2026-09-23): a record
+    /// carrying a footage key AND a duplicate-group key joins both, so a
+    /// byte copy seen only through its duplicate group and its twin seen
+    /// through the footage group are one recording — never two Ready rows,
+    /// never both in a batch. Union-find over every key each item carries.
+    /// Returns, per item, the component's key (its smallest key string —
+    /// stable across the sweep and Prepare's live re-decision) and whether
+    /// the component includes a footage key; nil when the item carries none.
+    /// O(n·k) with k ≤ 3 keys per item.
+    static func components(_ itemKeys: [[String]]) -> [(key: String, footage: Bool)?] {
+        var parent = Array(itemKeys.indices)
+        func find(_ x: Int) -> Int {
+            var x = x
+            while parent[x] != x { parent[x] = parent[parent[x]]; x = parent[x] }
+            return x
+        }
+        var owner: [String: Int] = [:]
+        for (i, ks) in itemKeys.enumerated() {
+            for k in ks {
+                if let j = owner[k] { let (a, b) = (find(i), find(j)); if a != b { parent[b] = a } } else { owner[k] = i }
+            }
+        }
+        var best: [Int: String] = [:]
+        var footage: [Int: Bool] = [:]
+        for (i, ks) in itemKeys.enumerated() {
+            let r = find(i)
+            for k in ks {
+                if best[r].map({ k < $0 }) ?? true { best[r] = k }
+                if k.hasPrefix(footagePrefix) { footage[r] = true }
+            }
+        }
+        return itemKeys.indices.map { i in
+            let r = find(i)
+            guard !itemKeys[i].isEmpty, let k = best[r] else { return nil }
+            return (k, footage[r] ?? false)
+        }
     }
 
     /// The member to keep, by `prefer`: indices into `members` (input
@@ -478,21 +526,26 @@ enum ArchiveAngelRecommendations {
         // Copies → one per recording.
         let byOrder = comparator(rules.order, candidates: candidates, verdicts: verdicts)
         let collapsing = Set(rules.copies.classes.compactMap(ArchiveAngelRecommendationClass.init(rawValue:)))
+        let eligible = verdicts.indices.filter { collapsing.contains(verdicts[$0].kind) }
+        let comps = ArchiveAngelCopyChooser.components(
+            eligible.map { ArchiveAngelCopyChooser.keys(candidates[$0], collapseBy: rules.copies.collapseBy) })
         var groups: [String: [Int]] = [:]
         var groupOrder: [String] = []
-        for (i, v) in verdicts.enumerated() where collapsing.contains(v.kind) {
-            guard let k = ArchiveAngelCopyChooser.key(candidates[i], collapseBy: rules.copies.collapseBy) else { continue }
-            if groups[k] == nil { groupOrder.append(k) }
-            groups[k, default: []].append(i)
+        var footageGroups: Set<String> = []
+        for (n, i) in eligible.enumerated() {
+            guard let comp = comps[n] else { continue }
+            if groups[comp.key] == nil { groupOrder.append(comp.key) }
+            groups[comp.key, default: []].append(i)
+            if comp.footage { footageGroups.insert(comp.key) }
         }
         for k in groupOrder {
+            let footage = footageGroups.contains(k)
             guard let members = groups[k], members.count > 1,
                   let kept = ArchiveAngelCopyChooser.choose(
                     members, prefer: rules.copies.prefer,
                     isKeeper: { candidates[$0].duplicateDisposition == .keep },
-                    footageRank: { k.hasPrefix(ArchiveAngelCopyChooser.footagePrefix) ? candidates[$0].footageRank : nil },
+                    footageRank: { footage ? candidates[$0].footageRank : nil },
                     isBetter: byOrder) else { continue }
-            let footage = k.hasPrefix(ArchiveAngelCopyChooser.footagePrefix)
             for m in members {
                 verdicts[m].copyKey = k
                 guard m != kept else { continue }

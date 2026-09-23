@@ -52,6 +52,10 @@ enum FootageStem {
         /// with NN ≥ 02 — a promote collision IF that file is in the same
         /// folder (checked by FootageGrouping). nil otherwise.
         let collisionBaseFilename: String?
+        /// The first date prefix, lowercased ("1990-12-25", "1990-xx-xx"),
+        /// or nil. Two names whose prefixes disagree are different days —
+        /// never linked by name (ArchiveItemVersions.datesCompatible).
+        let datePrefix: String?
     }
 
     static func analyze(_ filename: String) -> Analysis {
@@ -98,7 +102,9 @@ enum FootageStem {
                         hasDerivativeToken: stripped,
                         nameRole: stripped || asciiContains(rawStem, ".vs.") ? nameRole(lowerRaw) : nil,
                         counterBaseKey: counterBase,
-                        collisionBaseFilename: collision)
+                        collisionBaseFilename: collision,
+                        datePrefix: rawStem.first.map { $0.isNumber || $0 == "x" || $0 == "X" } == true
+                            ? ArchiveItemVersions.datePrefix(filename) : nil)
     }
 
     /// "1990-xx-xx_1990-xx-xx_Christmas" → "Christmas". Same rule as

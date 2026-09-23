@@ -240,6 +240,15 @@ struct RescanPreservedFields: Sendable {
     /// (sensor: rescanNeverDropsAttestations).
     let backupAttestations: [BackupAttestation]
 
+    /// Find Similar Footage (2026-09-23): the person's "same footage" /
+    /// "not the same" answers — a user edit that must survive every
+    /// rescan (spec: human answers override forever) — and the machine's
+    /// last answer (a derived product like the dossier fields; the next
+    /// run rewrites it). Record-id pointers inside both are re-linked by
+    /// relinkLifecyclePointersAfterRescan when the rescan mints new ids.
+    let footageDecisions: [FootageDecision]
+    let footage: FootageMembership?
+
     /// True if this snapshot carries anything worth restoring.
     /// Records that have only scan-derived data don't need to be in
     /// the snapshot map at all — caller can use this to filter and
@@ -281,6 +290,8 @@ struct RescanPreservedFields: Sendable {
             || userPlace != nil
             || userPlaceConfidence != nil
             || !backupAttestations.isEmpty
+            || !footageDecisions.isEmpty
+            || footage != nil
     }
 
     @MainActor
@@ -326,6 +337,8 @@ struct RescanPreservedFields: Sendable {
         self.userPlace = rec.userPlace
         self.userPlaceConfidence = rec.userPlaceConfidence
         self.backupAttestations = rec.backupAttestations
+        self.footageDecisions = rec.footageDecisions
+        self.footage = rec.footage
     }
 
     // MARK: Fixity identity guard
@@ -425,6 +438,8 @@ struct RescanPreservedFields: Sendable {
         rec.userPlace = self.userPlace
         rec.userPlaceConfidence = self.userPlaceConfidence
         rec.backupAttestations = self.backupAttestations
+        rec.footageDecisions = self.footageDecisions
+        rec.footage = self.footage
         return carry
     }
 }
@@ -580,6 +595,18 @@ extension VideoScanModel {
             }
             if let src = rec.derivedFrom, let fresh = oldToNew[src], fresh != src {
                 rec.derivedFrom = fresh
+            }
+            // Find Similar Footage: the person's answers name the OTHER
+            // record by id (both sides hold one) — follow it to its new id.
+            if rec.footageDecisions.contains(where: { oldToNew[$0.otherID] != nil }) {
+                rec.footageDecisions = rec.footageDecisions.map { d in
+                    guard let fresh = oldToNew[d.otherID] else { return d }
+                    return FootageDecision(otherID: fresh, verdict: d.verdict, decidedAt: d.decidedAt)
+                }
+            }
+            if var f = rec.footage, let fresh = oldToNew[f.likelyOriginalID], fresh != f.likelyOriginalID {
+                f.likelyOriginalID = fresh
+                rec.footage = f
             }
         }
         for rec in targetRecords { relink(rec) }

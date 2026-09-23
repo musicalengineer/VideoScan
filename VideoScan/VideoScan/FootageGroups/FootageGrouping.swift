@@ -21,7 +21,8 @@
 //              a promote collision "<name>_02" beside "<name>" in the same
 //                folder (ArchiveItemVersions' rule) AND the same length
 //              same normalized name (FootageStem) AND length within ±2
-//                frames at the record's own frame rate
+//                frames at the record's own frame rate AND no conflicting
+//                date prefixes ("1990-12-25 X" ≠ "1994-12-25 X")
 //              same sampled signature (partialMD5 + size) — a NOMINATION:
 //                refused when the two full hashes are known and differ,
 //                never "Identical" (codex, #1633 review)
@@ -129,8 +130,12 @@ struct FootageInput: Sendable, Equatable {
     /// hash or whole-file digest, or the same sampled signature + size when
     /// at least one side has no full hash (a nomination, never a conflict).
     func sameBytes(as o: FootageInput) -> Bool {
+        // A whole-file digest outranks every other key: two known, different
+        // SHA-256s are different bytes, whatever the sampled keys say (QA
+        // 2026-09-23 — a segmented contentHash can collide on files that
+        // differ outside the sampled regions).
+        if let f = fixityDigest, !f.isEmpty, let g = o.fixityDigest, !g.isEmpty { return f == g }
         if !contentHash.isEmpty, contentHash == o.contentHash { return true }
-        if let f = fixityDigest, !f.isEmpty, f == o.fixityDigest { return true }
         if !contentHash.isEmpty, !o.contentHash.isEmpty { return false }
         return !partialMD5.isEmpty && partialMD5 == o.partialMD5 && sizeBytes > 0 && sizeBytes == o.sizeBytes
     }
@@ -209,6 +214,8 @@ enum FootageGrouping {
         var acceptedByReason: [Reason: Int] = [:]
         /// Sampled-signature buckets whose full hashes disagreed.
         var sampledConflicts = 0
+        /// Content-hash buckets whose whole-file digests disagreed.
+        var fullHashConflicts = 0
         var refusedByCap = 0
         var refusedPossibleChain = 0
         var refusedByPerson = 0
@@ -299,6 +306,7 @@ enum FootageGrouping {
         b.personSaidSame()
         for (r, n) in b.counts { stats.edgesByReason[r, default: 0] += n }
         stats.sampledConflicts += b.sampledConflicts
+        stats.fullHashConflicts += b.fullHashConflicts
         return b.out
     }
 
@@ -312,6 +320,7 @@ enum FootageGrouping {
         var out: [Edge] = []
         var counts: [Reason: Int] = [:]
         var sampledConflicts = 0
+        var fullHashConflicts = 0
         /// Normalized-name buckets sorted by length (built by nameAndDuration).
         var byKey: [String: [Int]] = [:]
         /// isGenericStem compiles its regexes per call — cache per NAME KEY
@@ -344,9 +353,19 @@ enum FootageGrouping {
             }
         }
 
+        /// Same whole-file digest; same segmented content hash UNLESS the
+        /// members' whole-file digests disagree (then each digest class is
+        /// its own identity and members without a digest join none — a
+        /// conflict is never guessed through).
         mutating func identical() {
             let xs = self.xs
-            star(buckets { xs[$0].contentHash }, .sameContentHash)
+            let byHash = buckets { xs[$0].contentHash }
+            for key in byHash.keys.sorted() {
+                guard let m = byHash[key], m.count > 1 else { continue }
+                let digests = Set(m.compactMap { xs[$0].fixityDigest }.filter { !$0.isEmpty })
+                if digests.count > 1 { fullHashConflicts += 1; continue }
+                if let hub = m.first { for i in m.dropFirst() { add(i, hub, .sameContentHash) } }
+            }
             star(buckets { xs[$0].fixityDigest }, .sameFixity)
         }
 
@@ -359,8 +378,11 @@ enum FootageGrouping {
             }
             for key in sampled.keys.sorted() {
                 guard let m = sampled[key], let first = m.first, m.count > 1 else { continue }
+                // Refused when EITHER full-hash kind disagrees inside the
+                // bucket: the segmented content hash or the whole-file digest.
                 let known = Set(m.map { xs[$0].contentHash }.filter { !$0.isEmpty })
-                if known.count > 1 { sampledConflicts += 1; continue }
+                let digests = Set(m.compactMap { xs[$0].fixityDigest }.filter { !$0.isEmpty })
+                if known.count > 1 || digests.count > 1 { sampledConflicts += 1; continue }
                 let hub = m.first { !xs[$0].contentHash.isEmpty } ?? first
                 for i in m where i != hub && xs[i].contentHash.isEmpty { add(i, hub, .sampledSignature) }
             }
@@ -460,7 +482,7 @@ enum FootageGrouping {
                 let j = m[q]
                 let delta = xs[j].durationSeconds - xs[i].durationSeconds
                 if delta > FootageStem.maxDurationTolerance { break }
-                if delta <= max(p.tolerance[i], p.tolerance[j]) {
+                if delta <= max(p.tolerance[i], p.tolerance[j]), datesAgree(i, j, p) {
                     let generic = isGeneric(i) || isGeneric(j)
                     add(j, i, generic ? .genericNameAndDuration : .nameAndDuration, frameDelta(i, j, p))
                     partners += 1
@@ -484,7 +506,7 @@ enum FootageGrouping {
                 var q = lo
                 while q < m.count, partners < 8, xs[m[q]].durationSeconds <= d + FootageStem.maxDurationTolerance {
                     let j = m[q]
-                    if j != i, lengthsMatch(i, j, p) {
+                    if j != i, lengthsMatch(i, j, p), datesAgree(i, j, p) {
                         add(i, j, .counterNameAndDuration, frameDelta(i, j, p))
                         partners += 1
                     }
@@ -701,6 +723,12 @@ enum FootageGrouping {
         let event = String(lower[..<r.lowerBound])
         let stem = ((lower as NSString).lastPathComponent as NSString).deletingPathExtension
         return stem.isEmpty ? nil : event + "|" + stem
+    }
+
+    /// Date prefixes that both exist must be compatible ("xx" = unknown).
+    /// "1990-12-25 Christmas" and "1994-12-25 Christmas" are two Christmases.
+    static func datesAgree(_ i: Int, _ j: Int, _ p: Prepared) -> Bool {
+        ArchiveItemVersions.datesCompatible(p.analyses[i].datePrefix, p.analyses[j].datePrefix)
     }
 
     static func folderKey(_ path: String) -> String {
