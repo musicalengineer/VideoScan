@@ -395,7 +395,6 @@ struct MediaFileOperationsWindowForwardSensorTests {
     static let backgroundStartFiles = [
         "ArchiveAngel/Prepare/ArchiveAngelJob.swift",        // Angel's child verify/balance/transcode
         "ArchiveAngel/Promote/ArchiveAngelPromoter.swift",   // the promote the Angel hands off
-        "HelperAudioRepair.swift",      // runs inside the already-visible MFO window
         "ArchiveAngel/Facade/VideoScanModel+ArchiveAngelSweep.swift",
     ]
 

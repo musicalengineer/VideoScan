@@ -631,7 +631,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                 step(idx, .verifyAudio, .skipped, note: skipStepNote)
             } else if let d = vj.diagnosis {
                 diagnosis = d
-                step(idx, .verifyAudio, .done, note: HelperAudioOutcome.from(d).headline)
+                step(idx, .verifyAudio, .done, note: ArchiveAngelAudioOutcome.from(d).headline)
             } else if case .failed(let m) = vj.state {
                 step(idx, .verifyAudio, .failed, note: m)
             } else {
