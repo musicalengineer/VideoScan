@@ -53,6 +53,29 @@ class TeamChannelTests(unittest.TestCase):
         self.assertEqual([message_id], [row["id"] for row in claude])
         self.assertEqual([], bob)
 
+    def test_awaiting_lists_acknowledged_requests_with_no_reply(self) -> None:
+        # 2026-09-23: six review requests were acknowledged on sight and never
+        # answered; the inbox hid them. `awaiting` must still show them.
+        answered = self.post(author="claude", recipients=["codex"], subject="A")
+        silent = self.post(author="claude", recipients=["codex"], subject="B")
+        unread = self.post(author="claude", recipients=["codex"], subject="C")
+        team_channel.post_message(self.connection, "codex", ["claude"], "re A", "done", answered)
+        team_channel.acknowledge(self.connection, "codex", [answered, silent])
+        rows = team_channel.awaiting_replies(self.connection, "claude", "codex", 7)
+        self.assertEqual([silent, unread], [row["id"] for row in rows])
+        self.assertIsNotNone(rows[0]["acknowledged_at"])
+        # A reply from someone else does not count as the recipient's answer.
+        team_channel.post_message(self.connection, "bob", ["claude"], "re B", "not me", silent)
+        rows = team_channel.awaiting_replies(self.connection, "claude", "codex", 7)
+        self.assertIn(silent, [row["id"] for row in rows])
+
+    def test_hook_notice_says_acknowledge_only_after_replying(self) -> None:
+        self.post(author="claude", recipients=["codex"])
+        out = io.StringIO()
+        with redirect_stdout(out):
+            team_channel.hook_output(self.connection, "codex", "plain")
+        self.assertIn("never acknowledge a request you have not answered", out.getvalue())
+
     def test_all_expands_to_every_other_manager(self) -> None:
         recipients = team_channel.expand_recipients("bob", "all")
         self.assertEqual(["codex", "claude", "rick"], recipients)
