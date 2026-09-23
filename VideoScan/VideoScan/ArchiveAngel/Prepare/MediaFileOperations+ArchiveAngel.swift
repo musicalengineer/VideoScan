@@ -8,11 +8,15 @@ extension MediaFileOperationsCenter {
     /// Start one Archive Angel batch: consider `count` candidates, prepare
     /// their companions in the buffer, stop for review. One active Angel
     /// at a time; a second request is parked as refused.
+    ///
+    /// `bufferRoot` and `weights` come from the façade (its AngelEnvironment
+    /// and recommendation policy) — the center hard-codes neither.
     @discardableResult
-    func startArchiveAngel(count: Int, makeLossless: Bool, model: VideoScanModel) -> ArchiveAngelJob {
+    func startArchiveAngel(count: Int, makeLossless: Bool, model: VideoScanModel,
+                           bufferRoot: URL, weights: ArchiveAngelWeights) -> ArchiveAngelJob {
         launchArchiveAngel(
             ArchiveAngelJob(model: model, center: self, count: count, makeLossless: makeLossless,
-                            bufferRoot: ArchiveAngelPlanStore.defaultBufferRoot),
+                            bufferRoot: bufferRoot, weights: weights),
             model: model,
             plan: "consider \(count) candidates, lossless \(makeLossless ? "on" : "off")")
     }
@@ -20,10 +24,11 @@ extension MediaFileOperationsCenter {
     /// "Prepare with Archive Angel" on a catalog selection (Rick
     /// 2026-09-11): exactly these records, same batch/review flow.
     @discardableResult
-    func startArchiveAngel(recordIDs: [UUID], makeLossless: Bool, model: VideoScanModel) -> ArchiveAngelJob {
+    func startArchiveAngel(recordIDs: [UUID], makeLossless: Bool, model: VideoScanModel,
+                           bufferRoot: URL, weights: ArchiveAngelWeights) -> ArchiveAngelJob {
         launchArchiveAngel(
             ArchiveAngelJob(model: model, center: self, count: recordIDs.count, makeLossless: makeLossless,
-                            bufferRoot: ArchiveAngelPlanStore.defaultBufferRoot, explicitRecordIDs: recordIDs),
+                            bufferRoot: bufferRoot, explicitRecordIDs: recordIDs, weights: weights),
             model: model,
             plan: "prepare \(recordIDs.count) selected record(s), lossless \(makeLossless ? "on" : "off")")
     }

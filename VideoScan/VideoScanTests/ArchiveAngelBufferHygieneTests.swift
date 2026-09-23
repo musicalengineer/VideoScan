@@ -334,9 +334,9 @@ struct ArchiveAngelBufferHygieneClearTests {
         #expect(Set(lines.map(\.recordID)) == [a.id, b.id], "\(lines.map(\.filename))")
         #expect(lines.allSatisfy { $0.batchID == "batch-2026-09-15T18-18-14" && $0.by == .rick })
         #expect(lines.first?.detail[MediaLedgerEvent.Detail.reason] == "test clear")
-        #expect(model.archiveAngelAttention.summary(recordID: a.id, contentKey: "").timesCleared == 1, "the attention memory saw it")
-        #expect(model.archiveAngelAttention.summary(recordID: skipped.id, contentKey: "").isNew, "SENSOR: a skipped row is already decided")
-        #expect(model.archiveAngelAttention.summary(recordID: promoted.id, contentKey: "").isNew, "SENSOR: a promoted row is already decided")
+        #expect(model.archiveAngel.attention.summary(recordID: a.id, contentKey: "").timesCleared == 1, "the attention memory saw it")
+        #expect(model.archiveAngel.attention.summary(recordID: skipped.id, contentKey: "").isNew, "SENSOR: a skipped row is already decided")
+        #expect(model.archiveAngel.attention.summary(recordID: promoted.id, contentKey: "").isNew, "SENSOR: a promoted row is already decided")
     }
 
     @Test("the decision is durable: plan.json reads .discarded even when the folder removal fails")
@@ -490,7 +490,7 @@ struct ArchiveAngelBufferHygieneClearTests {
 
         let lines = await clearedLines(model)
         #expect(lines.count == 1, "SENSOR: one half-skip per clear, got \(lines.count)")
-        #expect(model.archiveAngelAttention.summary(recordID: a.id, contentKey: "").timesCleared == 1)
+        #expect(model.archiveAngel.attention.summary(recordID: a.id, contentKey: "").timesCleared == 1)
     }
 
     @Test("QA RED: the verb refuses a plan whose batchDir is not a batch-… folder (defense for the ONE delete entry point; ArchiveAngelPlan.swift:543)")
@@ -597,7 +597,7 @@ struct ArchiveAngelBufferHygieneClearTests {
         #expect(comp.isPurged)
         let lines = await clearedLines(model)
         #expect(lines.count == 2 && Set(lines.map(\.recordID)) == [a.id, b.id], "exactly one line per ready row: \(lines.map(\.filename))")
-        #expect(model.archiveAngelAttention.summary(recordID: a.id, contentKey: "").timesCleared == 1)
+        #expect(model.archiveAngel.attention.summary(recordID: a.id, contentKey: "").timesCleared == 1)
         #expect(!fm.fileExists(atPath: plan.batchDir), "the retry's removal landed")
     }
 

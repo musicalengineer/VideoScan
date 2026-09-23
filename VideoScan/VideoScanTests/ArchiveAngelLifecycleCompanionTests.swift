@@ -40,7 +40,7 @@ struct ArchiveAngelLifecycleCompanionTests {
         model.mediaLedger = MediaLedger(directory: sb.root.appendingPathComponent("ledger", isDirectory: true))
         model.scanTargets = []
         model.previewSweep.stop()
-        model.archiveAngelSweep.stop()
+        model.archiveAngel.sweep.stop()
         model.masterArchive = MasterArchiveDesignation(targetPath: sb.archiveVolume.path,
                                                        rootPath: sb.archiveRoot.path, volumeUUID: nil)
         let buffer = sb.root.appendingPathComponent("Buffer", isDirectory: true)

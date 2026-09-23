@@ -592,7 +592,7 @@ struct CatalogContent: View {
         }
         // Archive Angel phase 2: Set lookup in the evidence sidecar — O(1).
         if viewFilters.contains(.archiveCandidates) {
-            let ids = model.archiveAngelStore.candidateIDs
+            let ids = model.archiveAngel.candidateIDs
             out = out.filter { ids.contains($0.id) }
         }
         // "No place yet" (2026-09-12): the place review queue. nil check.
@@ -612,8 +612,8 @@ struct CatalogContent: View {
 
     /// Archive Angel Assessment verdict for the selected record — O(1)
     /// sidecar lookup, resolved here (not in InspectorPanel).
-    private var selectedAngelEvidence: ArchiveAngelEvidenceRecord? {
-        selectedRecord.flatMap { model.archiveAngelStore.record(for: $0.id) }
+    private var selectedAngelEvidence: ArchiveAngel.Evidence? {
+        selectedRecord.flatMap { model.archiveAngel.evidence(for: $0.id) }
     }
 
     /// Extracted 2026-09-09 (with `inspectorPanelView`): the body was one

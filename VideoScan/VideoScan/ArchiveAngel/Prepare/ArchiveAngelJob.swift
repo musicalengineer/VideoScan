@@ -48,6 +48,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     /// a 40-second clip is refused with its reason, never silently — but
     /// nothing else is ranked or dropped.
     let explicitRecordIDs: [UUID]?
+    /// The recommendation policy's scorer table (the façade's
+    /// AngelRecommendationPolicy; `.standard` by default = today's rules).
+    let weights: ArchiveAngelWeights
 
     /// The batch plan — rewritten (and saved) after every step.
     @Published private(set) var plan: ArchiveAngelPlan
@@ -84,7 +87,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
     init(model: VideoScanModel, center: MediaFileOperationsCenter,
          count: Int, makeLossless: Bool, bufferRoot: URL,
-         explicitRecordIDs: [UUID]? = nil) {
+         explicitRecordIDs: [UUID]? = nil, weights: ArchiveAngelWeights = .standard) {
         self.model = model
         self.center = center
         let wanted = max(1, explicitRecordIDs?.count ?? count)
@@ -92,6 +95,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         self.makeLossless = makeLossless
         self.bufferRoot = bufferRoot
         self.explicitRecordIDs = explicitRecordIDs
+        self.weights = weights
         let dir = ArchiveAngelPlanStore.newBatchDir(bufferRoot: bufferRoot)
         self.plan = ArchiveAngelPlan(batchDir: dir, requestedCount: wanted, makeLossless: makeLossless)
     }
@@ -118,12 +122,13 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     /// and recent-phone-clip exclusions are off here for the same reason.
     nonisolated static func explicitSelection(
         ids: [UUID], inFlight: Set<UUID>, now: Date = Date(),
+        weights base: ArchiveAngelWeights = .standard,
         project: (UUID) -> ArchiveAngelCandidate?
     ) -> ArchiveAngelSelection {
         var picks: [ArchiveAngelPick] = []
         var rejected: [ArchiveAngelRejection: Int] = [:]
         var seen = Set<UUID>()
-        var weights = ArchiveAngelWeights.standard
+        var weights = base
         weights.minimumDurationSeconds = weights.explicitPickMinimumDurationSeconds
         // Rick 2026-09-21: the Live Photo / recent-phone-clip rules keep
         // the Angel from PROPOSING such files; a hand-picked one goes.
@@ -359,17 +364,17 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         if !inFlight.isEmpty { note("Archive Angel: \(inFlight.count) record(s) already in a prepared batch — skipping them") }
         if let ids = explicitRecordIDs {
             selection = Self.explicitSelection(
-                ids: ids, inFlight: inFlight,
+                ids: ids, inFlight: inFlight, weights: weights,
                 project: { id in model.record(forID: id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } })
             consideredCount = ids.count
             note("Archive Angel: preparing \(selection.picks.count) of \(ids.count) selected record(s)")
         } else if let fromEvidence = Self.selectFromEvidence(
-            store: model.archiveAngelStore, count: requestedCount, now: Date(), excluding: inFlight,
-            attentionChangedAt: model.archiveAngelAttention.lastEventAt,
-            attentionRevision: model.archiveAngelAttention.revision,
+            store: model.archiveAngel.store, count: requestedCount, now: Date(), weights: weights, excluding: inFlight,
+            attentionChangedAt: model.archiveAngel.attention.lastEventAt,
+            attentionRevision: model.archiveAngel.attention.revision,
             project: { id in model.record(forID: id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
             selection = fromEvidence.selection
-            consideredCount = model.archiveAngelStore.consideredCount
+            consideredCount = model.archiveAngel.store.consideredCount
             let age = max(0, Int(Date().timeIntervalSince(fromEvidence.computedAt) / 60))
             note("Archive Angel: picked from evidence computed \(age) min ago")
         } else {
@@ -389,11 +394,11 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                 }
             }
             if stopRequested { finishCancelled(); return }
-            ArchiveAngelScorer.markDerivatives(&candidates)   // T10 H3: same rule as the sweep
-            ArchiveAngelScorer.applyFamilyAttention(&candidates)   // Phase 1: same rule as the sweep
+            ArchiveAngelScorer.markDerivatives(&candidates, weights: weights)   // T10 H3: same rule as the sweep
+            ArchiveAngelScorer.applyFamilyAttention(&candidates, weights: weights)   // Phase 1: same rule as the sweep
 
             // Spotlight play history for the eligible ones only, off-main.
-            let eligiblePaths = candidates.filter { ArchiveAngelScorer.hardFloor($0) == nil }.map(\.fullPath)
+            let eligiblePaths = candidates.filter { ArchiveAngelScorer.hardFloor($0, weights: weights) == nil }.map(\.fullPath)
             subtitleText = "Reading play history for \(eligiblePaths.count) eligible files…"
             let readings = await Self.readPlayHistoryOffMain(paths: eligiblePaths)
             for i in candidates.indices {
@@ -404,7 +409,8 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             }
             if stopRequested { finishCancelled(); return }
             let skipped = candidates.filter { inFlight.contains($0.id) }.count
-            var walked = ArchiveAngelScorer.select(candidates.filter { !inFlight.contains($0.id) }, count: requestedCount)
+            var walked = ArchiveAngelScorer.select(candidates.filter { !inFlight.contains($0.id) }, count: requestedCount,
+                                                   weights: weights)
             if skipped > 0 { walked.rejected[.inAnotherBatch, default: 0] += skipped }
             selection = walked
             consideredCount = candidates.count
@@ -651,7 +657,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                         step(idx, .balanceAudio, .skipped, note: skipStepNote)
                     } else if case .finished = bj.state, let out = bj.publishedURL,
                        await Self.fileSizeOffMain(out) > 0 {
-                        let companion = model.records.first { $0.fullPath == out.path }
+                        // O(1) (AngelCatalog.record(forPath:) — the indexed
+                        // lookup; was an O(records) `records.first` scan).
+                        let companion = (model as any AngelCatalog).record(forPath: out.path)
                         balancedRecord = companion
                         step(idx, .balanceAudio, .done, note: "Audio balanced (\(analysis.classification.rawValue))",
                                               output: Self.relPath(out, in: plan.batchDir))
@@ -722,7 +730,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         }
         let outBytes = await Self.fileSizeOffMain(tj.outputURL)
         if case .finished = tj.state, outBytes > 0 {
-            let companion = model.records.first { $0.fullPath == tj.outputURL.path }
+            let companion = (model as any AngelCatalog).record(forPath: tj.outputURL.path)   // O(1), indexed
             step(idx, kind, .done, note: doneNote, output: Self.relPath(tj.outputURL, in: plan.batchDir),
                  startedAt: startedAt, outputBytes: outBytes)
             if let i = plan.entries[idx].steps.firstIndex(where: { $0.kind == kind }) {

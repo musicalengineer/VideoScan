@@ -371,14 +371,15 @@ struct MediaFileOperationsWindowForwardSensorTests {
 
     /// File → how many `startedByUser` scopes it must contain.
     static let userStartSites: [String: Int] = [
-        "ArchiveAngelReadyDisclosure.swift": 1,   // Promote (Angel batch)
-        "ArchiveAngelReviewSheet.swift": 1,       // Promote (Angel review)
-        "ArchiveAngelStartSheet.swift": 1,        // Archive Angel… Start
+        "ArchiveAngel/UI/ArchiveAngelReadyDisclosure.swift": 1,   // Promote (Angel batch)
+        "ArchiveAngel/UI/ArchiveAngelReviewSheet.swift": 1,      // Promote (Angel review)
         "ArchivedWhatNextSheet.swift": 1,         // Move N to Trash (prune apply)
         "ArchiveView+Table.swift": 1,             // Archive Helper from the nudge
         "ArchiveView.swift": 1,                   // Verify copies…
         "CatalogContent+AssessCopies.swift": 1,   // Archive Helper…
-        "CatalogContent+Promote.swift": 1,        // Prepare with Archive Angel
+        // Archive Angel Start (start sheet) + Prepare with Archive Angel
+        // (catalog menu) — both through ArchiveAngel.prepare since S2.
+        "ArchiveAngel/Seams/AppConformances.swift": 2,
         "CatalogContent+Table.swift": 8,          // compare, find, verify×2, analyze×2, reformat×2
         "CatalogHelpers.swift": 1,                // Extract Facial Frames
         "CleanupSheet.swift": 1,
@@ -394,10 +395,10 @@ struct MediaFileOperationsWindowForwardSensorTests {
     /// Starts that happen on the app's own initiative — must never claim
     /// user origin.
     static let backgroundStartFiles = [
-        "ArchiveAngelJob.swift",        // Angel's child verify/balance/transcode
-        "ArchiveAngelPromoter.swift",   // the promote the Angel hands off
+        "ArchiveAngel/Prepare/ArchiveAngelJob.swift",        // Angel's child verify/balance/transcode
+        "ArchiveAngel/Promote/ArchiveAngelPromoter.swift",   // the promote the Angel hands off
         "HelperAudioRepair.swift",      // runs inside the already-visible MFO window
-        "VideoScanModel+ArchiveAngelSweep.swift",
+        "ArchiveAngel/Facade/VideoScanModel+ArchiveAngelSweep.swift",
     ]
 
     @Test func userStartSitesAreMarked() throws {

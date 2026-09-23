@@ -165,7 +165,7 @@ enum ArchiveItemVersions {
         var base = stem
         base = base.replacingOccurrences(of: #"-vs-(edit|preserve|archive)(_\d{2})?$"#, with: "",
                                          options: [.regularExpression, .caseInsensitive])
-        while let b = ArchiveAngelNaming.derivativeBaseStem(base) { base = b }
+        while let b = ArchiveAngel.derivativeBaseStem(base) { base = b }
         base = base.replacingOccurrences(of: #" cleaned$"#, with: "", options: [.regularExpression, .caseInsensitive])
         if base.range(of: #"_\d{2}$"#, options: .regularExpression) != nil, role == .original {
             base = String(base.dropLast(3))

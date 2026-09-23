@@ -38,33 +38,6 @@ extension CatalogContent {
         .accessibilityIdentifier("catalog.row.promoteToArchive")
     }
 
-    /// "Prepare with Archive Angel" (Rick 2026-09-11): hand exactly this
-    /// selection to the Angel — companions prepared in the buffer, then
-    /// the same review sheet as an assessed batch. Enabled for a
-    /// pure-active selection with at least one reachable, not-yet-archived
-    /// record and a designated Master Archive. Lossless follows the
-    /// Assess sheet's remembered choice. O(selection).
-    @ViewBuilder
-    func prepareWithArchiveAngelMenuItem(activeRecs: [VideoRecord], pureActive: Bool) -> some View {
-        let preparable = activeRecs.filter { rec in
-            model.pfNotYetArchived(rec) && VolumeReachability.isReachable(path: rec.fullPath)
-        }
-        let label = activeRecs.count > 1
-            ? "Prepare \(preparable.count) with Archive Angel"
-            : "Prepare with Archive Angel"
-        Button(label) {
-            let lossless = UserDefaults.standard.bool(forKey: "archiveAngel.makeLossless")
-            fileOpsCenter.startedByUser { $0.startArchiveAngel(recordIDs: preparable.map(\.id), makeLossless: lossless, model: model) }
-        }
-        .disabled(!pureActive || preparable.isEmpty || model.masterArchive == nil || model.isReadOnly)
-        .help(model.masterArchive == nil
-              ? "Designate a Master Archive first (Archive tab)."
-              : (preparable.isEmpty
-                 ? "Nothing here needs preparing (already archived, or the volume is offline)."
-                 : "Archive Angel prepares the selected file(s) — verifies, makes companions in the buffer — and opens them for review under the Archive tab. Nothing is promoted until you approve."))
-        .accessibilityIdentifier("catalog.row.prepareWithArchiveAngel")
-    }
-
     /// "Remove from Catalog (keep files)" — the app forgets these rows;
     /// nothing on disk changes. Distinct from every Delete verb on purpose.
     @ViewBuilder

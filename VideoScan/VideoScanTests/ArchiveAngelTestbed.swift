@@ -176,7 +176,7 @@ struct ArchiveAngelTestbed {
                     let model = MasterArchiveTestSupport.makeModel(sb)
                     model.scanTargets = []
                     model.previewSweep.stop()
-                    model.archiveAngelSweep.stop()
+                    model.archiveAngel.sweep.stop()
                     model.masterArchive = MasterArchiveDesignation(targetPath: sb.archiveVolume.path,
                                                                    rootPath: sb.archiveRoot.path, volumeUUID: nil)
                     let rec = MasterArchiveTestSupport.makeRecord(path: src.path, userDate: "1995", starRating: 2)

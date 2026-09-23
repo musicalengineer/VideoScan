@@ -14,12 +14,22 @@ struct ArchiveAngelStartRequest: Identifiable {
 
 struct ArchiveAngelStartSheet: View {
     @EnvironmentObject var model: VideoScanModel
+    /// Handed to ArchiveAngel.prepare(using:) as the job runner — intentional.
+    // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var fileOpsCenter: MediaFileOperationsCenter
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
 
-    @AppStorage("archiveAngel.count") private var count: Int = 25
-    @AppStorage("archiveAngel.makeLossless") private var makeLossless: Bool = false
+    /// The façade owns the two preferences (ArchiveAngelSettings keys
+    /// archiveAngel.count / archiveAngel.makeLossless — unchanged since
+    /// they were @AppStorage here). Observed so the picker re-renders.
+    @ObservedObject var angel: ArchiveAngel
+    private var count: Binding<Int> {
+        Binding(get: { angel.batchCount }, set: { angel.setBatchCount($0) })
+    }
+    private var makeLossless: Binding<Bool> {
+        Binding(get: { angel.makeLossless }, set: { angel.setMakeLossless($0) })
+    }
 
     /// Buffer hygiene (curation Phase 2, Rick 2026-09-19): what is already
     /// waiting in the buffer. When it is not empty a banner above Start
@@ -31,7 +41,7 @@ struct ArchiveAngelStartSheet: View {
 
     static let choices = [10, 25, 35, 50]
 
-    private var bufferRoot: URL { ArchiveAngelPlanStore.defaultBufferRoot }
+    private var bufferRoot: URL { angel.environment.bufferRoot }
     private var freeText: String {
         let probe = FileManager.default.fileExists(atPath: bufferRoot.path)
             ? bufferRoot
@@ -52,7 +62,7 @@ struct ArchiveAngelStartSheet: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Picker("Consider", selection: $count) {
+            Picker("Consider", selection: count) {
                 ForEach(Self.choices, id: \.self) { n in
                     Text("\(n) videos").tag(n)
                 }
@@ -60,7 +70,7 @@ struct ArchiveAngelStartSheet: View {
             .pickerStyle(.segmented)
             .frame(maxWidth: 360)
 
-            Toggle("Also make a lossless (FFV1) copy for at-risk formats", isOn: $makeLossless)
+            Toggle("Also make a lossless (FFV1) copy for at-risk formats", isOn: makeLossless)
                 .font(.system(size: 12))
             Text("AMPAS / Library of Congress practice keeps a lossless preservation copy of formats at risk (DV, MPEG-2, Sorenson…). It is slow and large, so it is off by default — a later pass can add them to files already in the archive.")
                 .font(.system(size: 11))
@@ -85,7 +95,7 @@ struct ArchiveAngelStartSheet: View {
             // assessment's evidence, its age, and "Assess Now". Fresh
             // evidence (< 24 h) lets the Angel pick its batch without
             // walking the catalog first.
-            ArchiveAngelEvidenceLine(store: model.archiveAngelStore, sweep: model.archiveAngelSweep)
+            ArchiveAngelEvidenceLine(angel: angel, store: angel.store, sweep: angel.sweep)
             if model.masterArchiveRootPath == nil {
                 Label("Designate a Master Archive first (Archive tab → Initialize Master Archive…).", systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 11))
@@ -135,7 +145,7 @@ struct ArchiveAngelStartSheet: View {
     }
 
     private func start() {
-        fileOpsCenter.startedByUser { $0.startArchiveAngel(count: count, makeLossless: makeLossless, model: model) }
+        angel.prepare(count: angel.batchCount, lossless: angel.makeLossless, using: fileOpsCenter)
         dismiss()
         // Rick 2026-09-10: "the MFO window immediately drops behind the main
         // window, as if nothing is happening" — the user pressed Start; the
@@ -147,6 +157,8 @@ struct ArchiveAngelStartSheet: View {
 
 /// "Evidence: 1,203 candidates of 18,142 · computed 12 min ago · Rescore now"
 struct ArchiveAngelEvidenceLine: View {
+    /// Assess Now goes through the façade (logged, S2).
+    let angel: ArchiveAngel
     @ObservedObject var store: ArchiveAngelEvidenceStore
     @ObservedObject var sweep: ArchiveAngelSweep
 
@@ -174,7 +186,7 @@ struct ArchiveAngelEvidenceLine: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            Button("Assess Now") { sweep.rescoreNow() }
+            Button("Assess Now") { angel.assessNow() }
                 .buttonStyle(.link)
                 .font(.system(size: 11))
                 .disabled(sweep.status.isRunning)

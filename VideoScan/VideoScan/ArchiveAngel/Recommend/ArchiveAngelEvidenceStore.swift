@@ -124,10 +124,16 @@ struct ArchiveAngelEvidenceFile: Codable, Sendable, Equatable {
     /// `computedAt`.
     var attentionRevision: Int?
     var attentionLastEventAt: Date?
+    /// The recommendation policy the records were scored under
+    /// (`AngelRecommendationPolicy.fingerprint`, S2 2026-09-22). nil = a
+    /// file written before the stamp existed: accepted only while the
+    /// DEFAULT policy is active (no forced re-score on upgrade).
+    var policyFingerprint: String?
 
     init(computedAt: Date = Date(), complete: Bool = true, considered: Int = 0,
          eligible: Int = 0, records: [UUID: ArchiveAngelEvidenceRecord] = [:],
-         attentionRevision: Int? = nil, attentionLastEventAt: Date? = nil) {
+         attentionRevision: Int? = nil, attentionLastEventAt: Date? = nil,
+         policyFingerprint: String? = nil) {
         self.computedAt = computedAt
         self.complete = complete
         self.considered = considered
@@ -135,6 +141,7 @@ struct ArchiveAngelEvidenceFile: Codable, Sendable, Equatable {
         self.records = records
         self.attentionRevision = attentionRevision
         self.attentionLastEventAt = attentionLastEventAt
+        self.policyFingerprint = policyFingerprint
     }
 }
 
@@ -146,23 +153,11 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
 
     static let filename = "evidence.json"
 
-    /// App Support/VideoScan/archive-angel/ — the production home. Under
-    /// a test host: a per-process scratch folder (the MediaLedger /
-    /// IgnoredContentStore discipline). Found 2026-09-19: every test that
-    /// builds a VideoScanModel enables the sweep, and a 60 s debounce or
-    /// the 15 min periodic run wrote a 1.7 KB evidence.json over Rick's
-    /// real one from inside the unit suite (CleanupIsolationTests caught
-    /// the write; the nightly had been doing it since 09-14).
-    nonisolated static var defaultDirectory: URL {
-        if TestEnvironment.isTestHost {
-            return URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("VideoScan-tests/archive-angel-\(ProcessInfo.processInfo.processIdentifier)",
-                                        isDirectory: true)
-        }
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("VideoScan/archive-angel", isDirectory: true)
-    }
+    /// App Support/VideoScan/archive-angel/ — the production home; under a
+    /// test host a per-process scratch folder. The formula and the reason
+    /// (the 2026-09-19 evidence.json overwrite from inside the unit suite)
+    /// live in AngelEnvironment (S2); the façade injects the directory.
+    nonisolated static var defaultDirectory: URL { AngelEnvironment.currentEvidenceDirectory }
 
     let directory: URL
     nonisolated var fileURL: URL { directory.appendingPathComponent(Self.filename) }
@@ -178,8 +173,17 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     /// Rows re-render on this; the filter recomputes on `candidateIDs`.
     @Published private(set) var revision: Int = 0
 
-    init(directory: URL = ArchiveAngelEvidenceStore.defaultDirectory) {
+    /// The fingerprint of the policy this store's sweep scores with; a
+    /// loaded file stamped with another is treated like old rules.
+    let policyFingerprint: String
+    /// Where "policy changed" / load refusals are said (console + file log
+    /// via the façade). Default: the unified log only.
+    var log: (String) -> Void = { _ in }
+
+    init(directory: URL = ArchiveAngelEvidenceStore.defaultDirectory,
+         policyFingerprint: String = AngelRecommendationPolicy.defaultFingerprint) {
         self.directory = directory
+        self.policyFingerprint = policyFingerprint
     }
 
     // MARK: Reads (O(1))
@@ -256,8 +260,19 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     func load() async -> Bool {
         let url = fileURL
         guard let loaded = await Self.loadOffMain(url) else { return false }
+        if let why = Self.policyMismatch(stamped: loaded.policyFingerprint, current: policyFingerprint) {
+            log("Archive Angel Assessment: evidence.json ignored — " + why + "; re-scoring")
+            return false
+        }
         replace(with: loaded)
         return true
+    }
+
+    /// nil = the file's grades were computed under the current policy.
+    /// An unstamped (pre-S2) file counts as the DEFAULT policy's.
+    nonisolated static func policyMismatch(stamped: String?, current: String) -> String? {
+        let old = stamped ?? AngelRecommendationPolicy.defaultFingerprint
+        return old == current ? nil : "policy changed: \(stamped ?? "unstamped (default)") → \(current)"
     }
 
     /// Save the current file off-main (atomic replace). No-op when empty.

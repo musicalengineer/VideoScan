@@ -116,7 +116,7 @@ extension ArchiveAngelCandidate {
                                       volumeName: name, volumeOnline: online)
         // Phase 1 attention memory: what the Angel already showed about
         // this file or any copy of its content.
-        c.attention = model.archiveAngelAttention.summary(recordID: r.id, contentKey: c.contentKey)
+        c.attention = model.archiveAngel.attention.summary(recordID: r.id, contentKey: c.contentKey)
         return c
     }
 }

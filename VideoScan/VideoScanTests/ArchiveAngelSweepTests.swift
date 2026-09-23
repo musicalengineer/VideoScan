@@ -303,13 +303,11 @@ struct ArchiveAngelSweepTests {
     func settings() {
         let suite = UserDefaults(suiteName: "test_angel_sweep_settings_\(UUID().uuidString)")!
         defer { suite.removePersistentDomain(forName: suite.description) }
-        #expect(ArchiveAngelSweepSettings.restored(from: suite).enabled)
-        var s = ArchiveAngelSweepSettings()
-        s.enabled = false
-        s.save(to: suite)
-        #expect(!ArchiveAngelSweepSettings.restored(from: suite).enabled)
-        s.enabled = true
-        s.save(to: suite)
-        #expect(ArchiveAngelSweepSettings.restored(from: suite).enabled)
+        // The setting lives in ArchiveAngelSettings since consolidation S2 (same key).
+        #expect(ArchiveAngelSettings.restored(from: suite).sweepEnabled)
+        ArchiveAngelSettings.saveSweepEnabled(false, to: suite)
+        #expect(!ArchiveAngelSettings.restored(from: suite).sweepEnabled)
+        ArchiveAngelSettings.saveSweepEnabled(true, to: suite)
+        #expect(ArchiveAngelSettings.restored(from: suite).sweepEnabled)
     }
 }

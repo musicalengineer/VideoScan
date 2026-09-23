@@ -536,7 +536,7 @@ struct ArchiveAngelUncheckedAtPromoteTests {
         let linesForB = model.mediaLedger.allEvents().filter { $0.event == .angelSkipped && $0.recordID == recB.id }
         #expect(linesForB.count == 1, "one decision, one line — not one per click")
         #expect(linesForB.first?.detail[MediaLedgerEvent.Detail.reason] == "unchecked")
-        #expect(model.archiveAngelAttention.summary(recordID: recB.id, contentKey: "").timesSkipped == 1)
+        #expect(model.archiveAngel.attention.summary(recordID: recB.id, contentKey: "").timesSkipped == 1)
         #expect(model.mediaLedger.allEvents().filter { $0.event == .angelSkipped && $0.recordID == recA.id }.isEmpty, "the checked row is never a pass")
     }
 }
