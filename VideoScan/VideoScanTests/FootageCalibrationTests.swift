@@ -9,6 +9,9 @@
 // ISOLATION: it refuses any path inside "Application Support" (the live
 // catalog), decodes the copy in memory, runs the pure core, and writes
 // only the report file named by FOOTAGE_CALIBRATION_OUT. Nothing is saved.
+// Like the app, it stats (never reads) each record carrying a stored
+// whole-file digest, so "Identical" means what it means in the app
+// (codex #1674 F1).
 
 import Foundation
 import Testing
@@ -26,7 +29,7 @@ struct FootageCalibrationTests {
 
     @Test("group a copy of the real catalog and write the report", .timeLimit(.minutes(2)),
           .enabled(if: FootageCalibrationTests.catalogPath != nil))
-    func calibrate() throws {
+    func calibrate() async throws {
         let path = try #require(Self.catalogPath)
         try #require(!path.contains("Application Support"), "calibrate a COPY, never the live catalog")
         let data = try Data(contentsOf: URL(fileURLWithPath: path))
@@ -43,9 +46,12 @@ struct FootageCalibrationTests {
                 if r.pairedWith == nil { r.pairGroupID = nil; r.pairConfidence = nil }
             }
         }
-        let inputs = records.map { FootageInput(record: $0) }
+        let probes = records.compactMap { VideoScanModel.footageFixityProbe($0) }
+        let current = await VideoScanModel.footageCurrentDigests(probes) ?? []
+        let inputs = VideoScanModel.markCurrentDigests(records.map { FootageInput(record: $0) }, current: current)
         var out = "Find Similar Footage — calibration on \(path)\n"
-        out += "records: \(records.count)\n\n"
+        out += "records: \(records.count)\n"
+        out += "stored whole-file digests: \(probes.count) usable, \(current.count) still current (stat)\n\n"
 
         let t0 = Date()
         let result = FootageGrouping.run(inputs)
@@ -77,7 +83,7 @@ struct FootageCalibrationTests {
         // A/V-pair-only groups (the Avid MXF halves) dominate a plain draw;
         // they are listed by count, and the draw is from the rest.
         let avOnly: (FootageGrouping.Group) -> Bool = { g in
-            g.reasons.keys.allSatisfy { [.sameContentHash, .sameFixity, .avPairHigh, .avPairWeak].contains($0) }
+            g.reasons.keys.allSatisfy { [.sampledSignature, .recordedDigest, .sameFixity, .avPairHigh, .avPairWeak].contains($0) }
         }
         let likelyOrPossible = result.groups.filter { $0.confidence == .likely || $0.confidence == .possible }
         out += "(\(likelyOrPossible.filter(avOnly).count) of \(likelyOrPossible.count) Likely/Possible groups are A/V pairs + their copies; drawn from the other \(likelyOrPossible.filter { !avOnly($0) }.count))\n"
@@ -113,7 +119,9 @@ struct FootageCalibrationTests {
         t += "links accepted: " + FootageGrouping.Reason.allCases.compactMap { r in
             s.acceptedByReason[r].map { "\(r.rawValue) \($0)" } }.joined(separator: ", ") + "\n"
         t += "refused: cap \(s.refusedByCap), possible-chain \(s.refusedPossibleChain), person \(s.refusedByPerson), "
-            + "sampled-hash conflicts \(s.sampledConflicts)\n"
+            + "sampled-hash conflicts \(s.sampledConflicts), full-hash conflicts \(s.fullHashConflicts), "
+            + "different dates \(s.refusedByDate)\n"
+        t += "name window: \(s.windowExamined) candidates examined\n"
         if let e = elapsed { t += String(format: "grouping time: %.3f s (Debug)\n", e) }
         return t + "\n"
     }

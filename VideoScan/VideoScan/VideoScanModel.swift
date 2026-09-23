@@ -1489,6 +1489,13 @@ final class VideoScanModel: ObservableObject {
     /// scratch folder). Injectable so a test can point it at a sandbox.
     var mediaLedger = MediaLedger()
 
+    /// Find Similar Footage: bumped by every "same footage" / "not the
+    /// same" / "forget" answer (codex #1674 F4). A run records the value
+    /// when it snapshots the catalog; an apply whose snapshot predates the
+    /// latest answer is discarded and a fresh run is queued. In memory
+    /// only (a relaunch starts every run from a fresh snapshot anyway).
+    var footageDecisionRevision = 0
+
     /// Alert driver: "You need to designate a volume as the master
     /// archive." Carries the ids the user tried to promote so the fix-it
     /// button can re-offer the promotion after Initialize.
