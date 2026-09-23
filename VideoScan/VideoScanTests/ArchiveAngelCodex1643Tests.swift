@@ -547,3 +547,62 @@ struct ArchiveAngelCodex1643ScaleTests {
         #expect(elapsed < .seconds(2), "\(elapsed)")
     }
 }
+
+// MARK: - codex #1650: a prefix of a copy group is never the whole group
+
+@Suite("codex #1650 — an oversized copy group is never judged from a 64-member prefix", .serialized)
+@MainActor
+struct ArchiveAngelOversizedGroupTests {
+
+    /// `n` copies of one recording, ids sorted (the order the live chooser
+    /// reads them); member 0 is the cached Ready pick, the rest Another copy.
+    private func group(_ n: Int, now: Date) -> (ArchiveAngelEvidenceStore, [UUID], [UUID: ArchiveAngelCandidate], URL) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("angel-1650-\(UUID().uuidString.prefix(8))")
+        let store = ArchiveAngelEvidenceStore(directory: dir)
+        let ids = (0..<n).map { _ in UUID() }.sorted { $0.uuidString < $1.uuidString }
+        let g = UUID(), d = Date(timeIntervalSince1970: 773_000_000)
+        var records: [UUID: ArchiveAngelEvidenceRecord] = [:]
+        var live: [UUID: ArchiveAngelCandidate] = [:]
+        for (i, id) in ids.enumerated() {
+            var r = ArchiveAngelEvidenceRecord(score: i == 0 ? 150 : 140, lines: [], rejection: nil, useCount: 0, lastUsed: nil, computedAt: now)
+            r.recommendation = i == 0 ? .ready : .anotherCopy
+            r.copyKey = "group:" + g.uuidString
+            records[id] = r
+            live[id] = ArchiveAngelCandidate(id: id, filename: "xmas.mov", fullPath: "/Volumes/V\(i)/xmas.mov", durationSeconds: 1800,
+                                             starRating: 3, duplicateGroupID: g, captureDate: d, duplicateGroupCount: n)
+        }
+        store.replace(with: ArchiveAngelEvidenceFile(computedAt: now, complete: true, considered: n, eligible: n, records: records))
+        return (store, ids, live, dir)
+    }
+
+    @Test("RED #1650: 65 copies, the person's Keep is member 64 — the cached pick (member 0) is not prepared")
+    func keepBeyondPrefix() {
+        let now = Date()
+        var (store, ids, live, dir) = group(65, now: now)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        live[ids[64]]?.duplicateDisposition = .keep
+        let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 1, now: now) { live[$0] }
+        let picked = pick?.selection.picks.map(\.id)
+        #expect(picked == nil || picked == [ids[64]], "the Keep copy or the full walk — never the cached member 0 (got \(String(describing: picked)))")
+    }
+
+    @Test("RED #1650: 71 copies, member 70 is already in a batch — this recording is not prepared again")
+    func inFlightBeyondPrefix() {
+        let now = Date()
+        let (store, ids, live, dir) = group(71, now: now)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 1, now: now, excluding: [ids[70]]) { live[$0] }
+        #expect(pick == nil || pick?.selection.picks.isEmpty == true,
+                "a copy is in flight: no other copy of it may be prepared (got \(String(describing: pick?.selection.picks.map(\.id))))")
+    }
+
+    @Test("a 64-copy group (at the bound) still decides live from the cache: the Keep at the last member wins")
+    func atTheBound() {
+        let now = Date()
+        var (store, ids, live, dir) = group(64, now: now)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        live[ids[63]]?.duplicateDisposition = .keep
+        let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 1, now: now) { live[$0] }
+        #expect(pick?.selection.picks.map(\.id) == [ids[63]])
+    }
+}

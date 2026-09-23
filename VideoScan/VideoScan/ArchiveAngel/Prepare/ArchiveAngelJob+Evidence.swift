@@ -123,6 +123,10 @@ extension ArchiveAngelJob {
                 let group = Self.liveGroupChoice(members: groupIndex?[key] ?? [id], anchor: id, store: store,
                                                  policy: policy, now: now, excluding: excluding, project: project)
                 projections += group.projections
+                // codex #1650: a group too large to decide live is never
+                // judged from a prefix — the cached selection is declined
+                // and the job walks the whole catalog instead.
+                if group.oversized { return nil }
                 guard let choice = group.choice else {
                     if group.inFlight { rejected[.inAnotherBatch, default: 0] += 1 }
                     continue
@@ -200,8 +204,11 @@ extension ArchiveAngelJob {
         return out
     }
 
-    /// A duplicate group's live members this far (bounds the projections
-    /// for one pick; a real recording has a handful of copies).
+    /// The largest copy group decided live from the cache (bounds the
+    /// projections for one pick; a real recording has a handful of copies).
+    /// A larger group is NEVER judged from a prefix (codex #1650: a Keep or
+    /// an in-flight copy past the prefix was ignored) — the cached
+    /// selection is declined and the job walks.
     static let maxLiveGroupMembers = 64
 
     struct LiveGroupChoice {
@@ -210,6 +217,8 @@ extension ArchiveAngelJob {
         var projections: Int
         /// A member is already in a batch — the recording is in flight.
         var inFlight: Bool
+        /// More members than `maxLiveGroupMembers`: not decided here.
+        var oversized = false
     }
 
     /// The group's LIVE answer: every member projected now (refused live
@@ -225,8 +234,14 @@ extension ArchiveAngelJob {
                                 policy: AngelRecommendationPolicy, now: Date, excluding: Set<UUID>,
                                 project: (UUID) -> ArchiveAngelCandidate?) -> LiveGroupChoice {
         var ids = [anchor]
-        for m in members where m != anchor && ids.count < maxLiveGroupMembers { ids.append(m) }
+        for m in members where m != anchor { ids.append(m) }
+        // In flight: checked across the WHOLE group (set lookups, no
+        // projection) — never two copies of one recording in batches.
         if ids.contains(where: excluding.contains) { return LiveGroupChoice(choice: nil, projections: 0, inFlight: true) }
+        // Too many to project for one pick: never decide from a prefix.
+        guard ids.count <= maxLiveGroupMembers else {
+            return LiveGroupChoice(choice: nil, projections: 0, inFlight: false, oversized: true)
+        }
         var live: [ArchiveAngelCandidate] = []
         var evidence: [UUID: ArchiveAngelEvidenceRecord] = [:]
         var projections = 0
