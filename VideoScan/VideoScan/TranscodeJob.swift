@@ -215,9 +215,10 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         // (2026-09-22): this used to remove it here, before the source
         // check and before any encode, which permanently deleted a
         // catalogued file on FamilyArchive when "Replace" was answered.
-        let partialPath = DerivativeOutputPublish.uniquePartialURL(for: outputURL).path
+        //
         // Crash / force-quit leftovers of THIS output name (>24 h old, our
-        // own incomplete encodes only) — swept off-main, logged.
+        // own incomplete encodes only, never one a running job reserved) —
+        // swept off-main, logged.
         await Self.sweepStalePartialsOffMain(beside: outputURL)
 
         let volumeLabel = VolumeReachability.displayLabel(forPath: inputPath)
@@ -237,6 +238,22 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             await finish(failed: "ffmpeg not found (set VS_FFMPEG_PATH or install via Homebrew)")
             return
         }
+
+        // Reserve this run's partial (O_EXCL + registered live in the ONE
+        // registry Combine uses too — PartialFileNaming): no sweep, either
+        // job's, can remove it while this run lives, however long it is
+        // paused (fix/one-partial-registry, 2026-09-22). Every exit of this
+        // run releases it; removals go through PartialFileNaming.remove.
+        let partialURL: URL
+        do {
+            partialURL = try DerivativeOutputPublish.reservePartial(for: outputURL)
+        } catch {
+            transcodeLog.error("transcode FAILED (reserve partial): \(self.record.filename, privacy: .public) — \(error.localizedDescription, privacy: .public)")
+            await finish(failed: "Could not create the output file: \(error.localizedDescription)")
+            return
+        }
+        defer { PartialFileNaming.unregisterLive(partialURL) }
+        let partialPath = partialURL.path
 
         // Match-source audio decision (preservation only): PCM source →
         // verbatim copy, anything else → FLAC. ffprobe codec names for
@@ -305,7 +322,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         // Watchdog stall wins over a generic cancel (the watchdog cancels
         // the Task) — surface the specific cause, not "Cancelled".
         if let stallReason {
-            try? FileManager.default.removeItem(atPath: partialPath)
+            discardPartial(partialURL)
             transcodeLog.error("transcode FAILED (stall, encode): \(self.record.filename, privacy: .public) — \(stallReason, privacy: .public)")
             await finish(failed: stallReason)
             return
@@ -313,7 +330,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
 
         // Cancelled mid-run?
         if Task.isCancelled || state == .cancelling {
-            try? FileManager.default.removeItem(atPath: partialPath)
+            discardPartial(partialURL)
             await finish(cancelled: true)
             return
         }
@@ -326,7 +343,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         if FileManager.default.fileExists(atPath: partialPath),
            let failure = await FFmpegEncodeCheck.verdict(for: encodeResult, sourcePath: inputPath,
                                                         outputPath: partialPath) {
-            try? FileManager.default.removeItem(atPath: partialPath)
+            discardPartial(partialURL)
             transcodeLog.error("transcode FAILED (encode): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
             await finish(failed: failure.prefix(1).uppercased() + failure.dropFirst())
             return
@@ -337,14 +354,17 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             await finish(failed: failure.prefix(1).uppercased() + failure.dropFirst())
             return
         }
-        guard FileManager.default.fileExists(atPath: partialPath) else {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: partialPath)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        // The reservation is an empty file: still empty (or gone) ⇒ ffmpeg
+        // wrote nothing — the same verdict as before reservations existed.
+        guard attrs != nil, size > 0 else {
+            discardPartial(partialURL)
             await finish(failed: "ffmpeg finished but no output file was produced")
             return
         }
-        let attrs = try? FileManager.default.attributesOfItem(atPath: partialPath)
-        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
         if size < 10_000 {
-            try? FileManager.default.removeItem(atPath: partialPath)
+            discardPartial(partialURL)
             await finish(failed: "ffmpeg output too small (\(size) bytes) — likely a codec failure")
             return
         }
@@ -431,6 +451,17 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             return .keep(reason: VideoScanModel.bulkDeleteRefusalNote(refusal, volume: label))
         }
         return .replaceViaTrash
+    }
+
+    /// Remove this run's own partial after a stall / cancel / failed
+    /// encode (name-guarded, releases the reservation). A failure is
+    /// logged, never swallowed; a leftover is a later sweep's to remove.
+    private func discardPartial(_ partial: URL) {
+        do {
+            try PartialFileNaming.remove(partial)
+        } catch {
+            transcodeLog.error("transcode: could not remove partial \(partial.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     @concurrent

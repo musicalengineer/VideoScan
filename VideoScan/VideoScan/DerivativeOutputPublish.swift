@@ -86,14 +86,23 @@ enum DerivativeOutputPublish {
     /// `<stem>.<8 hex>.vs-partial.<ext>` beside `output`: unique per run
     /// (two jobs, or a stale partial from a crash, never share a name),
     /// same directory (the publish is a same-volume rename), and the final
-    /// extension kept so ffmpeg still infers the muxer.
+    /// extension kept so ffmpeg still infers the muxer. The one naming rule
+    /// Combine uses too (PartialFileNaming).
     static func uniquePartialURL(for output: URL) -> URL {
-        let ext = output.pathExtension
-        let token = UUID().uuidString.prefix(8).lowercased()
-        return output.deletingPathExtension()
-            .appendingPathExtension(String(token))
-            .appendingPathExtension("vs-partial")
-            .appendingPathExtension(ext)
+        PartialFileNaming.uniquePartialURL(for: output)
+    }
+
+    /// Reserve this run's partial beside `output` — O_CREAT|O_EXCL AND
+    /// registered live in the shared registry, so no stale-partial sweep
+    /// (Combine's or Transcode's) touches it while the job runs, however
+    /// long it is paused. The caller releases it (`PartialFileNaming.
+    /// unregisterLive`) when the job ends; `publish` releases it on success.
+    static func reservePartial(for output: URL) throws -> URL {
+        do {
+            return try PartialFileNaming.reserve(for: output)
+        } catch let failure as PartialFileNaming.Failure {
+            throw Failure(message: failure.message)
+        }
     }
 
     /// Finder-style free-name candidate: "name 2.ext", "name 3.ext", …
@@ -124,6 +133,12 @@ enum DerivativeOutputPublish {
         let fm = FileManager.default
         guard fm.fileExists(atPath: partial) else {
             throw Failure(message: "the finished output is missing (\((partial as NSString).lastPathComponent))")
+        }
+        // Published (the partial name is gone) ⇒ release the reservation.
+        defer {
+            if !fm.fileExists(atPath: partial) {
+                PartialFileNaming.unregisterLive(URL(fileURLWithPath: partial))
+            }
         }
         if try renameNoClobber(partial, final.path) { return .published(final) }
 
@@ -186,41 +201,29 @@ enum DerivativeOutputPublish {
     // MARK: Crash leftovers
 
     /// Partials of THIS output name (`<stem>.<8 hex>.vs-partial.<ext>`)
-    /// left by a crash or force-quit, older than `olderThan`. A live job's
-    /// partial is written continuously, so its mtime is always fresh.
-    /// Pure name + date test — exposed for tests.
+    /// left by a crash or force-quit, older than `olderThan`. Pure name +
+    /// date test — exposed for tests. (A running job's partial is also
+    /// protected by the live registry, which the sweep checks first.)
     static func isStalePartial(name: String, of output: URL, modified: Date,
                                now: Date, olderThan: TimeInterval) -> Bool {
-        let stem = output.deletingPathExtension().lastPathComponent
-        let ext = output.pathExtension
-        guard name.hasPrefix(stem + "."), name.hasSuffix(partialMarker + ext) else { return false }
-        let token = name.dropFirst(stem.count + 1).dropLast(partialMarker.count + ext.count)
-        guard token.count == 8, token.allSatisfy({ $0.isHexDigit }) else { return false }
-        return now.timeIntervalSince(modified) > olderThan
+        PartialFileNaming.isPartialName(name, of: output)
+            && now.timeIntervalSince(modified) > olderThan
     }
 
     /// Remove stale partials of `output` in its folder; returns their
-    /// names. Only this app's own incomplete encodes match (the scanner
-    /// never catalogues a `.vs-partial.` name). DISK I/O — off-main.
+    /// names. Goes through the ONE sweep Combine uses too
+    /// (PartialFileNaming.sweepStale): never a partial reserved by a running
+    /// job (either kind), regular files only, the shared 24 h threshold,
+    /// each removal logged with its size as swept by "transcode". Only this
+    /// app's own incomplete encodes match (the scanner never catalogues a
+    /// `.vs-partial.` name). DISK I/O — off-main.
     @discardableResult
-    static func sweepStalePartials(beside output: URL, olderThan: TimeInterval = 24 * 3600,
+    static func sweepStalePartials(beside output: URL, olderThan: TimeInterval = PartialFileNaming.staleThreshold,
                                    now: Date = Date()) -> [String] {
-        let fm = FileManager.default
         let dir = output.deletingLastPathComponent()
-        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return [] }
-        var swept: [String] = []
-        for name in names where name.contains(partialMarker) {
-            let path = dir.appendingPathComponent(name).path
-            guard let modified = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
-                  isStalePartial(name: name, of: output, modified: modified, now: now, olderThan: olderThan)
-            else { continue }
-            do {
-                try fm.removeItem(atPath: path)
-                swept.append(name)
-            } catch {
-                publishLog.error("stale partial \(name, privacy: .public) could not be removed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
+        let result = PartialFileNaming.sweepStale(in: dir, job: "transcode", olderThan: olderThan, now: now,
+                                                  matching: { PartialFileNaming.isPartialName($0, of: output) })
+        let swept = result.removed.map(\.name)
         if !swept.isEmpty {
             let line = "publish: removed \(swept.count) stale partial(s) left by an interrupted run beside \(output.lastPathComponent): \(swept.joined(separator: ", "))"
             publishLog.notice("\(line, privacy: .public)")

@@ -331,31 +331,36 @@ struct CombineOutputPublishTests {
         try Data("final".utf8).write(to: final)
         try Self.age(final, hours: 48)
 
-        // Old, not live → removed.
+        // Older than the shared 24 h threshold, not live → removed.
         let stale = CombineOutputPublish.uniquePartialURL(for: final)
         try Data(count: 1234).write(to: stale)
-        try Self.age(stale, hours: 7)
+        try Self.age(stale, hours: 25)
         // Fresh → kept.
         let fresh = CombineOutputPublish.uniquePartialURL(for: final)
         try Data("fresh".utf8).write(to: fresh)
+        // 7 h (a paused job's frozen mtime) → kept: the threshold is 24 h
+        // since fix/one-partial-registry (was 6 h).
+        let paused = CombineOutputPublish.uniquePartialURL(for: final)
+        try Data("paused".utf8).write(to: paused)
+        try Self.age(paused, hours: 7)
         // Old but reserved by a running job → kept.
         let live = try CombineOutputPublish.reservePartial(for: final)
         defer { PartialFileNaming.unregisterLive(live) }
-        try Self.age(live, hours: 7)
+        try Self.age(live, hours: 48)
         // Old lookalikes → kept.
         let kept = dir.appendingPathComponent("test_clip_combined.abcdef12.vs-kept.mov")
         let noToken = dir.appendingPathComponent("test_clip_combined.vs-partial.mov")
         let folderLike = dir.appendingPathComponent("test_dir.abcdef12.vs-partial.mov", isDirectory: true)
-        for u in [kept, noToken] { try Data("x".utf8).write(to: u); try Self.age(u, hours: 7) }
+        for u in [kept, noToken] { try Data("x".utf8).write(to: u); try Self.age(u, hours: 48) }
         try FileManager.default.createDirectory(at: folderLike, withIntermediateDirectories: true)
-        try Self.age(folderLike, hours: 7)
+        try Self.age(folderLike, hours: 48)
 
         let result = CombineOutputPublish.sweepStalePartials(in: dir)
         #expect(result.removed == [.init(name: stale.lastPathComponent, sizeBytes: 1234)])
         #expect(result.errors.isEmpty)
         let left = Set(Self.names(in: dir))
         #expect(!left.contains(stale.lastPathComponent))
-        for u in [final, fresh, live, kept, noToken, folderLike] {
+        for u in [final, fresh, paused, live, kept, noToken, folderLike] {
             #expect(left.contains(u.lastPathComponent), "\(u.lastPathComponent) must survive the sweep")
         }
     }
