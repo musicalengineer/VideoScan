@@ -85,5 +85,8 @@ extension VideoRecord {
         case archiveFixity
         case contentFixity
         case archivedAt
+        case proAppsMediaIdentifier
+        case footage
+        case footageDecisions
     }
 }

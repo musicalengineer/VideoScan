@@ -152,6 +152,9 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let archiveFixity: ArchiveFixity?
     public let contentFixity: ContentFixity?
     public let archivedAt: Date?
+    public let proAppsMediaIdentifier: String?
+    public let footage: FootageMembership?
+    public let footageDecisions: [FootageDecision]
 
     // MARK: Capture from a live VideoRecord (called ON the main actor)
 
@@ -275,6 +278,9 @@ public struct VideoRecordDTO: Sendable, Encodable {
         archiveFixity               = r.archiveFixity
         contentFixity               = r.contentFixity
         archivedAt                  = r.archivedAt
+        proAppsMediaIdentifier      = r.proAppsMediaIdentifier
+        footage                     = r.footage
+        footageDecisions            = r.footageDecisions
     }
 
     // MARK: Encode — VERBATIM from VideoRecord.encode(to:)
@@ -506,5 +512,13 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // when the app has hashed the file end to end.
         try c.encodeIfPresent(contentFixity, forKey: .contentFixity)
         try c.encodeIfPresent(archivedAt, forKey: .archivedAt)
+        // Find Similar Footage (2026-09-23): every key written only when
+        // present / non-empty — records the verb never touched (every
+        // legacy record) round-trip byte-identical.
+        try c.encodeIfPresent(proAppsMediaIdentifier, forKey: .proAppsMediaIdentifier)
+        try c.encodeIfPresent(footage, forKey: .footage)
+        if !footageDecisions.isEmpty {
+            try c.encode(footageDecisions, forKey: .footageDecisions)
+        }
     }
 }

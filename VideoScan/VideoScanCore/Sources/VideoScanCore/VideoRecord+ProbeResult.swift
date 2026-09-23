@@ -62,6 +62,9 @@ public struct ProbeResult: Sendable {
     public var originMake: String?
     public var originModel: String?
     public var originEncoder: String?
+    /// FCP's `com.apple.proapps.mediaIdentifier` (Find Similar Footage,
+    /// 2026-09-23) — same JSON, same pass. nil default matches VideoRecord.
+    public var proAppsMediaIdentifier: String?
 
     public init() {}
 }
@@ -107,6 +110,7 @@ extension ProbeResult {
         originMake             = rec.originMake
         originModel            = rec.originModel
         originEncoder          = rec.originEncoder
+        proAppsMediaIdentifier = rec.proAppsMediaIdentifier
     }
 }
 
@@ -140,5 +144,6 @@ extension VideoRecord {
         originMake             = r.originMake
         originModel            = r.originModel
         originEncoder          = r.originEncoder
+        proAppsMediaIdentifier = r.proAppsMediaIdentifier
     }
 }

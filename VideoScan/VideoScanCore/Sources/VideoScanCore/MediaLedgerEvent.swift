@@ -62,6 +62,12 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         /// A prepared batch was discarded without a decision on this
         /// row — half a skip. by: rick.
         case angelCleared
+        /// Find Similar Footage (2026-09-23): the person said this file and
+        /// another are / are not the same footage, or took the answer back.
+        /// detail: answer ("same" / "notSame" / "forgotten"), other (the
+        /// other record id), label (the other file's name). by: rick.
+        /// Appended at the END — the on-disk vocabulary is append-only.
+        case footageDecided
     }
 
     /// Who did it. "rick" for a human gesture; the app's own verbs are
@@ -110,6 +116,8 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         /// family remain after the file left.
         public static let tier = "tier"
         public static let remainingVerifiedCopies = "remainingVerifiedCopies"
+        /// Find Similar Footage: the OTHER record of a footage decision.
+        public static let other = "other"
     }
 
     public let at: Date

@@ -155,6 +155,9 @@ extension VideoRecord {
         c.repairConfirmedDate = repairConfirmedDate
         c.archiveFixity = archiveFixity
         c.contentFixity = contentFixity
+        c.proAppsMediaIdentifier = proAppsMediaIdentifier
+        c.footage = footage
+        c.footageDecisions = footageDecisions
         c.scanContext = scanContext
         return c
     }
