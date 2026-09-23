@@ -9,7 +9,10 @@
 //     Rick's amended rule: "it is OK for everyone to hear any of these kind
 //     words, say beth asks about ellen, she should hear the good."
 //   • When the current user greets Hallie, the greeting may carry one of
-//     THEIR OWN lines.
+//     THEIR OWN lines — unless they are the app's OWNER (Rick 2026-09-23:
+//     "refrain from using the flattering things to me … keep the
+//     flattering things for others"). Others asking about the owner still
+//     hear his lines.
 //   • At most once per subject (and once for the greeting) per Hallie
 //     conversation; a reset clears it. A person with several lines gets
 //     them in rotation across conversations.
@@ -305,11 +308,21 @@ enum HallieKindWords {
     }
 
     /// The current user's own kind word for a greeting, or nil.
+    ///
+    /// `speakers` is who is being greeted (the desktop owner, or a web
+    /// reader's session). `appOwner` is the person who owns THIS app — never
+    /// replaced per session. Rick 2026-09-23: "we can refrain from using the
+    /// flattering things to me, the author and owner of this app, but keep
+    /// the flattering things for others" — so a greeting to the app owner
+    /// carries no kind word, on the desktop or via the web. Biography
+    /// answers about the owner are unchanged (biographyOffer).
     static func greetingOffer(
         result: HallieTurnExecutor.Result,
         speakers: HallieTurnExecutor.Speakers,
+        appOwner: HallieTurnExecutor.Speakers,
         profiles: [HallieTurnExecutor.ProfileSnapshot]?,
-        loadBook: () -> HallieKindWordsBook
+        loadBook: () -> HallieKindWordsBook,
+        log: (String) -> Void = { appLog.write($0) }
     ) -> Offer? {
         guard isGreeting(result) else { return nil }
         let book = loadBook()
@@ -317,6 +330,11 @@ enum HallieKindWords {
               let profile = ownerProfile(speakers: speakers, profiles: profiles),
               let uuid = profileUUID(profile),
               let person = book.people[uuid] else { return nil }
+        if isAppOwner(greeted: profile, speakers: speakers,
+                      appOwner: appOwner, profiles: profiles) {
+            log("[hallie] greeting kind word skipped — greeting the app's owner")
+            return nil
+        }
         let anchor: String
         if result.prose.hasSuffix(greetingQuestion) {
             anchor = String(result.prose.dropLast(greetingQuestion.count))
@@ -418,6 +436,39 @@ enum HallieKindWords {
         guard let name = speakers.ownerName else { return nil }
         return subjectProfile(answeredName: nil, typed: name, selected: nil,
                               profiles: profiles, graph: nil)
+    }
+
+    /// Whether the greeted profile is the app's owner. Fails TOWARD "yes"
+    /// (no compliment) when the owner's own profile can't be resolved:
+    ///   1. same configured FamilySearch ID on both → the owner;
+    ///   2. owner's profile resolves → same profile UUID (or stable ID);
+    ///   3. owner's profile does NOT resolve → the greeted speaker's
+    ///      spelling is an owner spelling (HallieOwnerResolver), so a web
+    ///      "Rick" is still treated as Rick.
+    static func isAppOwner(
+        greeted: HallieTurnExecutor.ProfileSnapshot,
+        speakers: HallieTurnExecutor.Speakers,
+        appOwner: HallieTurnExecutor.Speakers,
+        profiles: [HallieTurnExecutor.ProfileSnapshot]?
+    ) -> Bool {
+        if let ownerID = appOwner.ownerFamilySearchID,
+           let greetedID = speakers.ownerFamilySearchID,
+           ownerID.uppercased() == greetedID.uppercased() {
+            return true
+        }
+        if let ownerProfile = ownerProfile(speakers: appOwner, profiles: profiles) {
+            if let a = profileUUID(ownerProfile), let b = profileUUID(greeted) { return a == b }
+            return ownerProfile.stableID == greeted.stableID
+        }
+        // Owner unresolvable: the greeted profile pinned to the owner's
+        // FamilySearch ID, or the speaker's own spelling of the owner's name.
+        if let ownerID = appOwner.ownerFamilySearchID,
+           case .familySearchID(let id)? = greeted.treeIdentity,
+           id.uppercased() == ownerID.uppercased() {
+            return true
+        }
+        guard let spoken = speakers.ownerName else { return false }
+        return HallieOwnerResolver.isOwnerSpelling(spoken, owner: appOwner.ownerName)
     }
 
     /// The key into the book: the profile's UUID, or a stableID that IS

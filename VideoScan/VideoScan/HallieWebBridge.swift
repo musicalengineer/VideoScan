@@ -651,6 +651,9 @@ final class HallieWebBridge {
 
 extension HallieAppTurnCoordinator.Dependencies {
     /// The same dependencies with a different "I" — the device's person.
+    /// The app OWNER is never replaced: a web reader is a speaker, not the
+    /// owner, so the owner's no-self-compliment rule still recognises Rick
+    /// when he greets from the web.
     func replacingSpeakers(_ speakers: HallieTurnExecutor.Speakers) -> HallieAppTurnCoordinator.Dependencies {
         HallieAppTurnCoordinator.Dependencies(
             startLocalBrain: startLocalBrain,
@@ -674,7 +677,8 @@ extension HallieAppTurnCoordinator.Dependencies {
             continueTurn: continueTurn,
             resolveBiographyPhoto: resolveBiographyPhoto,
             composeAnswer: composeAnswer,
-            loadKindWords: loadKindWords)
+            loadKindWords: loadKindWords,
+            loadAppOwner: loadAppOwner)
     }
 }
 
