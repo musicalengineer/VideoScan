@@ -1,3 +1,23 @@
+# Find Similar Footage — Rick's decisions (2026-09-23) → Phase 1 spec
+
+**Decided (Rick, 2026-09-23):**
+- **Phase 1 = "Find Similar Footage"** — SAME footage (copies, re-encodes, transcodes, exports, trims of one recording), not "similar content". A **Media File Operations verb** that **walks the catalog and records in the metadata** which files are probably the same footage. "It doesn't have to be 100% accurate… something to allow me to review media more quickly and stop seeing the same old videos over and over", and so the Angel doesn't archive too many copies.
+- **Part 2 = "Deep Analyze"** — improving metadata for search (the "search 100× better" north star) and curation (promote / delete), using state-of-the-art models, running in the background with **Analyze**. Semantic "similar content" belongs there, not in Find Similar Footage. Later.
+
+**Phase 1 spec (metadata only; no audio/visual fingerprints yet):**
+1. **Evidence (T0 + T1 of v1), each recorded with its reason:** same full content hash (identical); derivedFrom/derivationKind lineage; combinedFromPairID/pairGroupID; FCP `com.apple.proapps.mediaIdentifier` equality and Original Media ↔ Transcoded Media structure; duration within ±2 frames at the record's own frame rate AND a normalized-stem match (strip `.vs.*`, `_balanced/_trimmed/_cleaned/_converted`, `copy N`, `_02`-style collisions, date prefixes, case/punctuation). Duration alone never groups. Sampled/partial hashes only NOMINATE; only full hashes say Identical (codex).
+2. **Footage groups:** connected components over the evidence edges, with a confidence (Identical / Likely / Possible) and the edge reasons kept. Additive catalog fields (e.g. footageGroupID, footageConfidence, footageEvidence) — nothing removed or renamed.
+3. **Originality inside a group:** the v1 scorer (camera make/model, capture date, camera codec/name pattern, not in Transcoded Media, no transcoder encoder tag…) picks the likely original and labels the rest (re-encode / transcode / export / copy).
+4. **The MFO verb:** "Find Similar Footage" — whole catalog (or a selection/volume), off-main, honest progress, pause/stop, logged, reads catalog metadata only (no media bytes; one extra ffprobe tag captured by the existing embedded-date refresh for mediaIdentifier where missing). Re-runnable; incremental.
+5. **Using it:**
+   - right-click **Find Similar Footage** on one file → a read-only sheet: the group, the likely original, the evidence per member, playable side by side;
+   - Catalog: **"one per footage group"** view/filter + a group badge ("3 copies of the same footage") so Rick stops seeing repeats;
+   - Archive Angel: one recommendation per footage group (the likely original), companions noted.
+6. **Human decisions** ("same footage" / "not the same") persist on the records + Media Ledger, never in a cache, and override the machine forever. No date is written by Phase 1 (dates come later with Undo + provenance).
+7. **Later:** audio/visual fingerprints (after the labelled spike) add edges to the same groups; semantic similarity → Deep Analyze.
+
+---
+
 # Find Original / Find Related — design v2 (2026-09-23, after codex's independent review)
 
 **Status: DRAFT for Rick.** v1 (below, unchanged) proposed evidence tiers → an overnight fingerprint index → learned weights. Codex's review (docs/codex-review-1633-1638-2026-09-23.md) found real gaps; Claude agrees with every point. v2 changes the plan, not the ambition.
