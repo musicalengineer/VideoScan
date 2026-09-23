@@ -100,8 +100,10 @@ struct ArchiveAngelBoundarySensorTests {
         return re.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range) }
     }
 
+    /// Canonical on both sides (SourceTree.swift): the enumerator returns
+    /// /private/tmp/… for a /tmp checkout, #filePath does not.
     static func relative(_ url: URL, to base: URL) -> String {
-        String(url.standardizedFileURL.path.dropFirst(base.standardizedFileURL.path.count + 1))
+        SourceTree.relativePath(url, under: base) ?? url.path
     }
 
     /// The inbound leaks in one file's (comment-stripped) code, one string
@@ -135,8 +137,8 @@ struct ArchiveAngelBoundarySensorTests {
     /// "File.swift | Token" → count.
     static func inbound() -> [String: Int] {
         var out: [String: Int] = [:]
-        let angel = angelDir.standardizedFileURL.path + "/"
-        for url in swiftFiles(under: appDir()) where !url.standardizedFileURL.path.hasPrefix(angel) {
+        let angel = SourceTree.canonicalPath(angelDir) + "/"
+        for url in swiftFiles(under: appDir()) where !SourceTree.canonicalPath(url).hasPrefix(angel) {
             let name = relative(url, to: appDir())
             for token in inboundTokens(in: code(of: url)) { out["\(name) | \(token)", default: 0] += 1 }
         }

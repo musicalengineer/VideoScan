@@ -93,7 +93,9 @@ struct AtomicFilePublishSensorTests {
                                            includingPropertiesForKeys: nil,
                                            options: [.skipsHiddenFiles]) else { continue }
             for case let url as URL in walk where url.pathExtension == "swift" {
-                let rel = url.path.replacingOccurrences(of: repoRoot.path + "/", with: "")
+                // Canonical on both sides: the enumerator returns
+                // /private/tmp/… for a /tmp checkout (SourceTree.swift).
+                guard let rel = SourceTree.relativePath(url, under: repoRoot) else { continue }
                 out.append((rel, try String(contentsOf: url, encoding: .utf8)))
             }
         }
