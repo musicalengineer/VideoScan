@@ -495,22 +495,30 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/BundleImporter.swift": 2, "VideoScan/CaptionRunner.swift": 2,
         "VideoScan/CatalogStore.swift": 1, "VideoScan/CatalogSync.swift": 3,
         "VideoScan/CatalogWriteError.swift": 1, "VideoScan/CleanupJob.swift": 4,
-        // removePartial's removeItem (refuses any name that is not
-        // `<stem>.<8 hex>.vs-partial.<ext>`; used for this run's own O_EXCL
-        // partial and the >6 h, not-live, regular-file stale sweep) + the
-        // placeholder fallback's unlink (only our own 0-byte O_EXCL
-        // placeholder, same dev+ino re-checked just before) (2026-09-22).
-        "VideoScan/CombineOutputPublish.swift": 2,
+        // 2 → 1 (fix/one-partial-registry, 2026-09-22): removePartial now
+        // delegates the removeItem to PartialFileNaming.remove (after its own
+        // is-a-partial guard). What remains is the placeholder fallback's
+        // unlink (only our own 0-byte O_EXCL placeholder, same dev+ino
+        // re-checked just before).
+        "VideoScan/CombineOutputPublish.swift": 1,
         "VideoScan/CouplePortrait.swift": 2,
-        // trashItem (Replace, the user's choice, never on the archive volume)
-        // + removeItem of this app's OWN stale `.vs-partial.` leftovers (sweep).
-        "VideoScan/DerivativeOutputPublish.swift": 2,
+        // trashItem (Replace, the user's choice, never on the archive volume).
+        // 2 → 1 (fix/one-partial-registry, 2026-09-22): the stale-partial
+        // sweep's removeItem moved to the ONE shared sweep in
+        // PartialFileNaming.swift.
+        "VideoScan/DerivativeOutputPublish.swift": 1,
         "VideoScan/FamilyAssetStore.swift": 2,
         "VideoScan/FamilySearchPullCoordinator.swift": 6, "VideoScan/FindPersonJob.swift": 1,
         "VideoScan/HallieNeuralSpeech.swift": 7, "VideoScan/HalliePhotoImport.swift": 1,
         "VideoScan/HalliePronunciationLexicon.swift": 1, "VideoScan/HallieWebPoster.swift": 3,
         "VideoScan/HallieWebProxy.swift": 3, "VideoScan/IdentifyFamilyModel.swift": 1,
         "VideoScan/MediaPersonLinks.swift": 1,   // a method named unlink(personID:) — no file
+        // NEW 1 (fix/one-partial-registry, 2026-09-22): the ONE removal of
+        // `<stem>.<8 hex>.vs-partial.<ext>` files — unlink(2), so a directory
+        // is refused (QA 3) — behind remove()'s is-a-partial name guard; used by Combine + Transcode for this
+        // run's own partial and by the one stale sweep (not live, regular
+        // file, > 24 h, each removal logged with size + job). Never a final.
+        "VideoScan/PartialFileNaming.swift": 1,
         "VideoScan/POIProfileFileStore.swift": 2, "VideoScan/POIStorage.swift": 1,
         "VideoScan/PerceptualFingerprinter.swift": 1, "VideoScan/PersonEditSheet.swift": 1,
         "VideoScan/PersonFinderCompilation.swift": 7, "VideoScan/RebuildAudioJob.swift": 1,
@@ -523,9 +531,10 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/ReviewThumbnailRenderer.swift": 1, "VideoScan/ScanCheckpoint.swift": 1,
         "VideoScan/ScanJobsStorage.swift": 2, "VideoScan/SignatureVerification.swift": 2,
         // 7 → 4 (2026-09-22): no pre-delete of the output name or of a
-        // fixed-name partial; the four left remove this run's own
-        // uniquely named partial after a stall / cancel / failed encode.
-        "VideoScan/TranscodeJob.swift": 4,
+        // fixed-name partial. 4 → 0 (fix/one-partial-registry, same day):
+        // this run's own reserved partial is removed through
+        // PartialFileNaming.remove (name-guarded, logged, releases the
+        // reservation) — see PartialRegistryCrossJobTests.
         "VideoScan/TrimJob.swift": 1,
         // 3 → 1 (2026-09-22, fix/combine-never-overwrites): the final-name
         // removals on failure / verify failure are gone (partials go through
@@ -587,7 +596,7 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/RebuildAudioJob.swift": Reviewed(count: 1, reason: "writes its own .vs-partial; published with a non-clobbering moveItem + re-uniquify"),
         "VideoScan/ReformatJob.swift": Reviewed(count: 1, reason: "writes its own timestamped .vs-partial; published with RENAME_EXCL"),
         "VideoScan/ReviewThumbnailRenderer.swift": Reviewed(count: 1, reason: "a thumbnail PNG in its own temp"),
-        "VideoScan/TranscodeJob+Args.swift": Reviewed(count: 3, reason: "writes a uniquely named partial; DerivativeOutputPublish never clobbers"),
+        "VideoScan/TranscodeJob+Args.swift": Reviewed(count: 3, reason: "writes ONLY this run's O_EXCL-reserved `<stem>.<8 hex>.vs-partial.<ext>` (TranscodeJob passes the reserved partialPath, never the final name); -y just lets ffmpeg open the 0-byte reservation. Published by DerivativeOutputPublish with RENAME_EXCL (fix/one-partial-registry, 2026-09-22)"),
         "VideoScan/TrimEngine.swift": Reviewed(count: 1, reason: "writes its own partial; TrimJob publishes non-clobbering"),
         "VideoScanCore/FFmpegFrameRip.swift": Reviewed(count: 1, reason: "a frame PNG in its own temp"),
     ]
@@ -716,9 +725,10 @@ struct ArchiveVolumeProtectionSourceSensor {
         #expect(!transcode.contains("ReformatJob.atomicPublish"), "Transcode publishes through DerivativeOutputPublish")
         let publish = try Self.source("VideoScan/DerivativeOutputPublish.swift")
         let sweep = try #require(publish.range(of: "static func sweepStalePartials("))
-        #expect(publish.components(separatedBy: "removeItem(").count - 1 == 1
-                && (publish.range(of: "removeItem(")?.lowerBound ?? publish.startIndex) > sweep.lowerBound,
-                "the ONE removeItem is the stale-partial sweep; a replaced file only ever goes to the Trash")
+        #expect(!publish.contains("removeItem("),
+                "no removeItem here: a replaced file only ever goes to the Trash")
+        #expect(publish[sweep.upperBound...].contains("PartialFileNaming.sweepStale(in: dir, job: \"transcode\""),
+                "Transcode's stale sweep is the ONE shared sweep (fix/one-partial-registry)")
         #expect(publish.contains("UInt32(RENAME_EXCL)") && !publish.contains("RENAME_SWAP)"))
     }
 
@@ -728,19 +738,36 @@ struct ArchiveVolumeProtectionSourceSensor {
     /// removal out from behind its guard.
     @Test func combineOnlyEverRemovesOrReplacesItsOwnPartialsAndPlaceholder() throws {
         let publish = try Self.source("VideoScan/CombineOutputPublish.swift")
-        // removeItem: exactly one, inside removePartial, after the name guard.
+        // removePartial: its own name guard, then the ONE shared removal
+        // (fix/one-partial-registry, 2026-09-22) — no removeItem of its own.
         let removePartial = try #require(publish.range(of: "static func removePartial("))
         let nameGuard = try #require(publish.range(of: "guard isPartialName(url.lastPathComponent) else {",
                                                    range: removePartial.upperBound..<publish.endIndex))
-        let remove = try #require(publish.range(of: "removeItem("))
-        #expect(publish.components(separatedBy: "removeItem(").count - 1 == 1)
-        #expect(remove.lowerBound > nameGuard.upperBound,
-                "the one removeItem sits behind removePartial's is-a-partial guard")
-        // The sweep removes through removePartial only, and skips live partials.
+        let delegate = try #require(publish.range(of: "try PartialFileNaming.remove(url)",
+                                                  range: removePartial.upperBound..<publish.endIndex))
+        #expect(!publish.contains("removeItem("))
+        #expect(delegate.lowerBound > nameGuard.upperBound,
+                "the removal sits behind removePartial's is-a-partial guard")
+        // The sweep is the ONE shared sweep.
         let sweep = try #require(publish.range(of: "static func sweepStalePartials("))
-        let sweepBody = publish[sweep.upperBound...]
-        #expect(sweepBody.contains("if PartialFileNaming.isLive(url) { continue }"))
-        #expect(sweepBody.contains("try removePartial(url)"))
+        #expect(publish[sweep.upperBound...].contains("PartialFileNaming.sweepStale(in: folder, job: \"combine\""))
+        // …and in the shared file: no removeItem (recursive on a directory)
+        // — exactly one unlink(2), behind remove()'s name guard (QA 3,
+        // 2026-09-22); the sweep skips live partials and removes via remove().
+        let shared = try Self.source("VideoScan/PartialFileNaming.swift")
+        let sharedRemove = try #require(shared.range(of: "static func remove(_ url: URL) throws {"))
+        let sharedGuard = try #require(shared.range(of: "guard isPartialName(url.lastPathComponent) else {",
+                                                    range: sharedRemove.upperBound..<shared.endIndex))
+        let sharedUnlink = try #require(shared.range(of: "unlink(url.path)"))
+        #expect(!shared.contains("removeItem("))
+        #expect(shared.components(separatedBy: "unlink(url.path)").count - 1 == 1)
+        #expect(sharedUnlink.lowerBound > sharedGuard.upperBound,
+                "the one unlink sits behind remove()'s is-a-partial guard")
+        let sharedSweep = try #require(shared.range(of: "static func sweepStale("))
+        let sweepBody = shared[sharedSweep.upperBound...]
+        #expect(sweepBody.contains("if isLive(url) { continue }"))
+        #expect(sweepBody.contains("(attrs[.type] as? FileAttributeType) == .typeRegular"))
+        #expect(sweepBody.contains("try remove(url)"))
         // rename(2) and unlink(2): only in the placeholder fallback, each
         // after the dev+ino+size-0 identity check.
         let fallback = try #require(publish.range(of: "private static func renameViaPlaceholder("))

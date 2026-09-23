@@ -82,39 +82,26 @@ enum CombineOutputPublish {
     }
 
     /// Create an EMPTY partial with O_CREAT|O_EXCL so the name is ours alone
-    /// before ffmpeg (`-y`) writes into it, and register it as live (so a
-    /// stale-partial sweep never touches it). Retries on the (astronomically
-    /// unlikely) token collision; throws on any other failure.
+    /// before ffmpeg (`-y`) writes into it, and register it as live (so no
+    /// stale-partial sweep — Combine's or Transcode's — touches it). The one
+    /// shared reservation: PartialFileNaming.reserve.
     static func reservePartial(for output: URL) throws -> URL {
-        for _ in 0..<16 {
-            let candidate = uniquePartialURL(for: output)
-            let fd = open(candidate.path, O_CREAT | O_EXCL | O_WRONLY, 0o644)
-            if fd >= 0 {
-                close(fd)
-                PartialFileNaming.registerLive(candidate)
-                return candidate
-            }
-            let e = errno
-            if e == EEXIST { continue }
-            throw Failure(message: "could not create \(candidate.lastPathComponent): "
-                          + String(cString: strerror(e)) + " (errno \(e))")
+        do {
+            return try PartialFileNaming.reserve(for: output)
+        } catch let failure as PartialFileNaming.Failure {
+            throw Failure(message: failure.message)
         }
-        throw Failure(message: "no free partial name beside \(output.lastPathComponent)")
     }
 
     /// Remove a partial this run reserved. Refuses (throws) for any name
     /// that is not a partial, so a caller bug can never delete a final.
-    /// Already-gone is success.
+    /// Already-gone is success. The removal itself (and the unregister) is
+    /// PartialFileNaming.remove, which re-checks the name.
     static func removePartial(_ url: URL) throws {
         guard isPartialName(url.lastPathComponent) else {
             throw Failure(message: "refusing to remove \(url.lastPathComponent): not a Combine partial")
         }
-        defer { PartialFileNaming.unregisterLive(url) }
-        do {
-            try FileManager.default.removeItem(at: url)
-        } catch CocoaError.fileNoSuchFile {
-            return
-        }
+        try PartialFileNaming.remove(url)
     }
 
     // MARK: publish
@@ -212,48 +199,22 @@ enum CombineOutputPublish {
     /// that blocked the rename also blocks the sweep's unlink. Returns
     /// where the file now is.
     static func keepUnpublished(_ partial: URL) -> URL {
-        defer { PartialFileNaming.unregisterLive(partial) }
-        let name = partial.lastPathComponent
-        guard isPartialName(name) else { return partial }
-        let keptName = name.replacingOccurrences(of: ".\(PartialFileNaming.marker).", with: ".vs-kept.")
-        let kept = partial.deletingLastPathComponent().appendingPathComponent(keptName)
-        if (try? renameNoClobber(partial.path, kept.path)) == true { return kept }
-        return partial
+        PartialFileNaming.keepUnpublished(partial, renameNoClobber: renameNoClobber)
     }
 
     // MARK: stale-partial sweep
 
-    struct SweptPartial: Sendable, Equatable {
-        let name: String
-        let sizeBytes: Int64
-    }
+    typealias SweptPartial = PartialFileNaming.SweptPartial
 
-    /// Remove partials in `folder` left by a crashed/killed run: ONLY names
-    /// matching the exact partial pattern, ONLY older than `olderThan`
-    /// (modification time — ffmpeg keeps a live one fresh), and NEVER one a
-    /// running job in this process has reserved. DISK I/O — call off-main.
-    static func sweepStalePartials(in folder: URL, olderThan: TimeInterval = 6 * 3600,
+    /// Remove partials in `folder` left by a crashed/killed run — through
+    /// the ONE sweep Transcode uses too (PartialFileNaming.sweepStale):
+    /// exact partial pattern, regular files, older than `olderThan`
+    /// (default: the shared 24 h threshold), NEVER one a running job in this
+    /// process reserved — Combine's or Transcode's. Each removal is logged
+    /// with its size as swept by "combine". DISK I/O — call off-main.
+    static func sweepStalePartials(in folder: URL, olderThan: TimeInterval = PartialFileNaming.staleThreshold,
                                    now: Date = Date()) -> (removed: [SweptPartial], errors: [String]) {
-        let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: folder.path) else { return ([], []) }
-        var removed: [SweptPartial] = []
-        var errors: [String] = []
-        for name in names where isPartialName(name) {
-            let url = folder.appendingPathComponent(name)
-            if PartialFileNaming.isLive(url) { continue }
-            guard let attrs = try? fm.attributesOfItem(atPath: url.path),
-                  (attrs[.type] as? FileAttributeType) == .typeRegular,
-                  let modified = attrs[.modificationDate] as? Date,
-                  now.timeIntervalSince(modified) > olderThan else { continue }
-            let size = (attrs[.size] as? Int64) ?? 0
-            do {
-                try removePartial(url)
-                removed.append(SweptPartial(name: name, sizeBytes: size))
-            } catch {
-                errors.append("\(name): \(error.localizedDescription)")
-            }
-        }
-        return (removed, errors)
+        PartialFileNaming.sweepStale(in: folder, job: "combine", olderThan: olderThan, now: now)
     }
 }
 
@@ -264,4 +225,7 @@ enum CombineTestSeams {
     /// destination in the window between the pre-check and the publish
     /// (the audit's 2026-09-22 race) or cancel the job mid-mux.
     @TaskLocal static var beforeMux: (@Sendable (_ destination: URL, _ writeTarget: URL) -> Void)? = nil
+    /// Overrides "is this a network path?" for stageCombineInputs, so a
+    /// test can force the buffering (staging-dir) path on a local file.
+    @TaskLocal static var isNetworkPath: (@Sendable (String) -> Bool)? = nil
 }
