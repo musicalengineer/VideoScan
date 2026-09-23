@@ -927,6 +927,140 @@ struct PruneApplyTests {
         try await eventually("the dropped row leaves the list") { !center.jobs.contains { $0.id == second.id } }
     }
 
+    /// A Trash seam that throws on the Nth file operation (1-based) and
+    /// removes every other file for real — the fixture never reaches the
+    /// real Trash. Thread-safe: it runs inside the detached FileManager pass.
+    final class FailingRemover: @unchecked Sendable {
+        private let lock = NSLock()
+        private var calls = 0
+        private let failOn: Int
+        init(failOn: Int) { self.failOn = failOn }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return calls }
+        func remove(_ url: URL) throws {
+            lock.lock(); calls += 1; let n = calls; lock.unlock()
+            if n == failOn { throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: url.path]) }
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+
+    @Test("CODEX #1642 P2-a: a Trash failure on the 2nd copy ends the batch FAILED (results kept, approval says what went) and the waiting line is dropped, logged — the next batch never starts")
+    func aPerCopyTrashFailureFailsTheBatchAndDropsTheLine() async throws {
+        let f = try await fixture("prune_q_iofail_a", extraCopies: 1); defer { f.sb.cleanup() }
+        let g = try await fixture("prune_q_iofail_b"); defer { g.sb.cleanup() }
+        let dups = f.family.rows.filter { $0.checkable && $0.id != f.keeper.id }.map(\.copy)
+        try #require(dups.count == 2)
+        let sink = InMemoryLogSink()
+        let previous = appLog
+        appLog = sink
+        defer { appLog = previous }
+        let remover = FailingRemover(failOn: 2)
+        var h1 = VideoScanModel.PruneVerifyHooks.live
+        h1.removeFile = { try remover.remove($0) }
+        let center = MediaFileOperationsCenter()
+        let first = center.startPruneApply(shown: f.shown, selected: Set(dups.map(\.id)), recordIDs: f.ids, options: .init(),
+                                           batchID: "io1", model: f.model, mode: .permanent, hooks: h1)
+        let second = center.startPruneApply(shown: g.shown, selected: [g.dup.id], recordIDs: g.ids, options: .init(),
+                                            batchID: "io2", model: g.model, mode: .permanent)
+        #expect(second.isQueued)
+        await first.task?.value
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(remover.count == 2, "both copies reached the file operation")
+        guard case .failed(let why) = first.state else { Issue.record("an I/O failure is an error, not a normal finish: \(first.state)"); return }
+        #expect(why.contains("could not be moved"), "\(why)")
+        // Accumulated results are kept: one moved, one failed, named.
+        #expect(first.outcome.trashed == 1 && first.outcome.failed.count == 1, "\(first.outcome)")
+        #expect(first.rows.filter { $0.status == .trashed }.count == 1 && first.rows.filter { $0.status == .failed }.count == 1, "\(first.rows)")
+        await f.model.mediaLedger.waitForPendingWrites()
+        let approvals = f.model.mediaLedger.allEvents().filter { $0.event == .approval }
+        #expect(approvals.map { $0.detail[MediaLedgerEvent.Detail.count] } == ["1"], "the approval says what actually went: \(approvals.map(\.detail))")
+        // The line is dropped, not handed on.
+        #expect(second.task == nil && second.state == .cancelled && second.droppedWhileQueued, "\(second.state)")
+        #expect(FileManager.default.fileExists(atPath: g.dup.fullPath), "the waiting batch's copy is untouched")
+        let line = PruneApplyJob.droppedLine(title: second.title, count: 1, bytes: g.dup.sizeBytes, reason: .batchBeforeFailed(why))
+        #expect(sink.lines.filter { $0.contains(line) }.count == 1, "logged once, with why: \(sink.lines)")
+        try await eventually("the dropped row leaves the list") { !center.jobs.contains { $0.id == second.id } }
+        #expect(!center.hasActivePruneApply)
+    }
+
+    @Test("CODEX #1642 P2-a negative: a batch whose copies are only HELD by a safety rule is a normal finish — it hands on and the next batch runs")
+    func aBatchThatOnlyHoldsStillHandsOn() async throws {
+        let f = try await fixture("prune_q_holdonly_a"); defer { f.sb.cleanup() }
+        let g = try await fixture("prune_q_holdonly_b"); defer { g.sb.cleanup() }
+        f.model.record(forID: f.dup.id)?.userNotes = "added since"   // held before any byte is read
+        let center = MediaFileOperationsCenter()
+        let first = center.startPruneApply(shown: f.shown, selected: [f.dup.id], recordIDs: f.ids, options: .init(),
+                                           batchID: "ho1", model: f.model, mode: .permanent)
+        let second = center.startPruneApply(shown: g.shown, selected: [g.dup.id], recordIDs: g.ids, options: .init(),
+                                            batchID: "ho2", model: g.model, mode: .permanent)
+        await first.task?.value
+        #expect(first.state == .finished(summary: first.outcome.summary) && first.outcome.held.count == 1, "\(first.state)")
+        try await eventually("the second starts") { second.task != nil }
+        await second.task?.value
+        #expect(second.outcome.trashed == 1, "\(second.outcome)")
+    }
+
+    @Test("CODEX #1642 P2-a table: only a failure AT THE MOVE is an error; a hold is a decision")
+    func whichCopyResultsAreErrors() {
+        typealias R = VideoScanModel.PruneCopyResult
+        #expect(R.failed("permission denied").errorText == "permission denied")
+        #expect(R.alreadyMissing.errorText != nil)
+        #expect(R.skippedOffline.errorText != nil)
+        #expect(R.held("a copy you left unchecked…").errorText == nil)
+        #expect(R.trashed(bytes: 1).errorText == nil)
+    }
+
+    @Test("CODEX #1642 P2-b: an UNCHECKED survivor that leaves the disk between the verdict and the move holds the checked copy, named — the family is never taken down to the archive copy alone")
+    func anUncheckedSurvivorGoneBeforeTheMoveHoldsTheCopy() async throws {
+        let f = try await fixture("prune_survivor_gone", extraCopies: 1); defer { f.sb.cleanup() }
+        let others = f.family.rows.filter { $0.checkable && $0.id != f.keeper.id }.map(\.copy)
+        try #require(others.count == 2)
+        let target = others[0]
+        let keeperPath = f.keeper.fullPath
+        let aside = f.sb.root.appendingPathComponent("aside_survivor.mov").path
+        var hooks = VideoScanModel.PruneVerifyHooks.live
+        // Moved aside (nothing deleted) after the target's verdict, before its move.
+        hooks.beforeMutation = { _ in try? FileManager.default.moveItem(atPath: keeperPath, toPath: aside) }
+        let out = await apply(f, selected: [target.id], hooks: hooks)
+        #expect(out.trashed == 0 && out.held.count == 1, "\(out)")
+        #expect(out.held.first?.contains("a copy you left unchecked") == true && out.held.first?.contains("nothing moved") == true, "\(out.held)")
+        #expect(FileManager.default.fileExists(atPath: target.fullPath), "the checked copy stays")
+        #expect(f.model.record(forID: target.id)?.purgedAt == nil)
+        await f.model.mediaLedger.waitForPendingWrites()
+        #expect(!f.model.mediaLedger.allEvents().contains { $0.event == .copyDeleted || $0.event == .approval })
+    }
+
+    @Test("CODEX #1642 P2-b: an unchecked survivor CHANGED on disk, or retired in the catalog, between verdict and move holds the copy; untouched survivors let it go")
+    func anUncheckedSurvivorChangedOrRetiredHoldsTheCopy() async throws {
+        // Changed on disk (same size, new bytes).
+        let f = try await fixture("prune_survivor_changed", extraCopies: 1); defer { f.sb.cleanup() }
+        let others = f.family.rows.filter { $0.checkable && $0.id != f.keeper.id }.map(\.copy)
+        try #require(others.count == 2)
+        let otherPath = others[1].fullPath
+        var hooks = VideoScanModel.PruneVerifyHooks.live
+        hooks.beforeMutation = { _ in try? MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: otherPath), bytes: 40 * 1024, seed: 911) }
+        let out = await apply(f, selected: [others[0].id], hooks: hooks)
+        #expect(out.trashed == 0 && out.held.first?.contains("a copy you left unchecked") == true
+                && out.held.first?.contains("changed on disk") == true, "\(out)")
+        #expect(FileManager.default.fileExists(atPath: others[0].fullPath))
+
+        // Retired in the catalog (purged by another window) — no disk change at all.
+        let g = try await fixture("prune_survivor_retired", extraCopies: 1); defer { g.sb.cleanup() }
+        let gOthers = g.family.rows.filter { $0.checkable && $0.id != g.keeper.id }.map(\.copy)
+        let keeperID = g.keeper.id
+        var hooks2 = VideoScanModel.PruneVerifyHooks.live
+        hooks2.beforeMutation = { _ in g.model.record(forID: keeperID)?.purgedAt = Date() }
+        let out2 = await apply(g, selected: [gOthers[0].id], hooks: hooks2)
+        #expect(out2.trashed == 0 && out2.held.first?.contains("a copy you left unchecked") == true, "\(out2)")
+        #expect(FileManager.default.fileExists(atPath: gOthers[0].fullPath))
+
+        // Control: nothing touched → the same selection goes.
+        let h = try await fixture("prune_survivor_control", extraCopies: 1); defer { h.sb.cleanup() }
+        let hOthers = h.family.rows.filter { $0.checkable && $0.id != h.keeper.id }.map(\.copy)
+        let out3 = await apply(h, selected: [hOthers[0].id])
+        #expect(out3.trashed == 1 && out3.held.isEmpty, "\(out3)")
+        #expect(FileManager.default.fileExists(atPath: h.keeper.fullPath) && FileManager.default.fileExists(atPath: hOthers[1].fullPath))
+    }
+
     @Test("QUEUE LOG: the queued line names the batch AHEAD, not the new one (QA MINOR — the list is newest-first)")
     func theQueuedLineNamesTheBatchAhead() async throws {
         let f = try await fixture("prune_q_name_a"); defer { f.sb.cleanup() }
