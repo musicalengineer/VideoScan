@@ -53,6 +53,23 @@ protocol AngelCatalog: AnyObject {
     @discardableResult
     func reconcileArchiveAngelBufferAtLaunch(bufferRoot: URL,
                                              fileExists: @escaping @Sendable (String) -> Bool) async -> Int
+
+    // Show Copies… (S4) — the copy-family walk (Review/ArchiveAngelShowCopies).
+
+    /// Every active (not purged) record — O(n), once per Show Copies.
+    func activeRecordsForCopyFamily() -> [VideoRecord]
+    /// The Master Archive copy promoted from `record`, if any.
+    func masterArchiveCopy(of record: VideoRecord) -> VideoRecord?
+    /// The record an archive copy was promoted from, if any.
+    func promotionSource(of record: VideoRecord) -> VideoRecord?
+    /// Is `record` itself a copy inside the Master Archive?
+    func isArchiveCopy(_ record: VideoRecord) -> Bool
+
+    /// Balance Audio outputs already catalogued for `record` (active,
+    /// `derivedFrom` = record, derivationKind "balanceAudio"). O(n) — once
+    /// per prepared row. The prepare step reuses one instead of balancing
+    /// again (S4 fix — the Helper's 2026-08-19 rule).
+    func catalogedBalancedCopies(of record: VideoRecord) -> [VideoRecord]
 }
 
 /// "Show in Catalog" from anywhere in the Angel.
@@ -94,4 +111,10 @@ protocol AngelLedger: AnyObject {
     func ledgerAngelAttention(_ kind: MediaLedgerEvent.Kind, recordIDs: [UUID],
                               batchID: String?, reason: String?,
                               scores: [UUID: Int], at: Date) -> Task<Void, Never>?
+    /// dateSet / placeSet lines (S4: an inherited fact that landed with
+    /// its promote is ledgered by the angel).
+    @discardableResult
+    func noteUserDateEdited(_ rec: VideoRecord, by: MediaLedgerEvent.Actor) -> Task<Void, Never>?
+    @discardableResult
+    func noteUserPlaceEdited(_ rec: VideoRecord, by: MediaLedgerEvent.Actor) -> Task<Void, Never>?
 }
