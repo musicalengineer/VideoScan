@@ -302,7 +302,7 @@ extension HallieTurnExecutor {
                         return false
                     }
                     guard let war = ask.war else { return true }
-                    return HallieServiceStory.war(of: fact) == war
+                    return HallieServiceStory.war(of: fact, birthYear: person.birthYear) == war
                 }
                 if !facts.isEmpty { matches.append((person, facts)) }
             }

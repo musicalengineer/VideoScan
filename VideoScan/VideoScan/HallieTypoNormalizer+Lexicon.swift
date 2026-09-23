@@ -217,6 +217,11 @@ extension HallieTypoNormalizer {
     /// "hour" is not "your", "snow" is not "show") or a compound a
     /// splitter would otherwise break ("into", "somehow", "theme").
     static let commonWords: Set<String> = [
+        // Proper adjectives the system word list only has capitalised, so
+        // it cannot protect them: "the American Revolution" was split into
+        // "Ameri can" when a tree held a given name "Ameri" (2026-09-23).
+        "american", "americans", "british", "english", "irish", "scottish",
+        "french", "german", "confederate", "confederacy", "continental",
         // Near neighbours of the vocabulary
         "fine", "fins", "fond", "fund", "kind", "mind", "bind", "wind", "hind",
         "rind", "shoe", "shoes", "snow", "slow", "shop", "shot", "chow",

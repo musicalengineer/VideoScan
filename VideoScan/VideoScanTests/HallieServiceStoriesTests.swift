@@ -583,6 +583,33 @@ struct HallieServiceStoriesTests {
         #expect(one.knowledgeCitations.map(\.id) == ["gedcom:@N@"])
     }
 
+    @Test("a war named in a tree note must be possible by date — England's Civil War is not America's")
+    func treeWarSanity() {
+        typealias Fact = GedcomFamilyGraph.MilitaryFact
+        let english = Fact(tag: "_MILT", value: "He was prominent in the Eastern Association during the Civil War")
+        #expect(HallieServiceStory.war(of: english, birthYear: 1480) == nil, "born 1480: not the American Civil War")
+        #expect(HallieServiceStory.war(of: english, birthYear: 1840) == .civilWar)
+        #expect(HallieServiceStory.war(of: english) == .civilWar, "no dates at all: the words stand")
+        let dated = Fact(tag: "_MILT", value: "Civil War service", date: "1643")
+        #expect(HallieServiceStory.war(of: dated, birthYear: 1840) == nil, "the fact's own date rules")
+        #expect(HallieServiceStory.war(of: Fact(tag: "_MILT", date: "6 July 1780")) == .americanRevolution)
+        #expect(HallieServiceStory.war(of: Fact(tag: "_MILT", date: "1790")) == nil)
+        let long = String(repeating: "a long FamilySearch note ", count: 20)
+        let phrase = HallieServiceStory.phrase(Fact(tag: "_MILT", value: long))
+        #expect(phrase.count < 170)
+        #expect(phrase.hasSuffix("…”"))
+    }
+
+    @Test("the front door never splits a proper adjective against a tree given name")
+    func properAdjectivesSurviveTheFrontDoor() {
+        // Rick's 20-generation pull has a given name "Ameri": "American" was
+        // read as "Ameri can" and the Revolution question went to the model.
+        let door = HallieFrontDoor.prepare("anyone in the American Revolution") { $0 == "Ameri" || $0 == "Brit" }
+        #expect(door.routingText == "anyone in the American Revolution")
+        #expect(HallieFrontDoor.prepare("who served in the British Army") { $0 == "Brit" }.routingText
+                == "who served in the British Army")
+    }
+
     // MARK: - Isolation and scale
 
     /// POISONED STATE: this machine may hold Rick's real CyberBrain, which

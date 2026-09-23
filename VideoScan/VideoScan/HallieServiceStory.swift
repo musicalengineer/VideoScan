@@ -154,11 +154,38 @@ enum HallieServiceStory {
     /// name, else the war whose years contain its DATE. Nil when neither.
     /// The date rule never says the person fought — the phrase keeps the
     /// fact's own words and date ("dated 6 July 1780").
-    static func war(of fact: GedcomFamilyGraph.MilitaryFact) -> HallieServiceQuestion.War? {
+    ///
+    /// Words can name ANOTHER war of the same name — a FamilySearch note on
+    /// a man born in 1480 says "the Civil War" and means England's (live
+    /// pull, 2026-09-23). So a war named in the words must also be possible
+    /// by date: the fact's own year inside the war's span, or — with no
+    /// fact date — a birth year no later than the war's end and no more
+    /// than 90 years before its start. Dates only ever EXCLUDE here; they
+    /// never put anyone in a war.
+    static let maximumAgeAtWarStart = 90
+
+    static func war(of fact: GedcomFamilyGraph.MilitaryFact, birthYear: Int? = nil) -> HallieServiceQuestion.War? {
         let words = [fact.value, fact.type, fact.note].compactMap { $0 }.joined(separator: " ")
-        if let named = HallieServiceQuestion.war(namedIn: words) { return named }
+        if let named = HallieServiceQuestion.war(namedIn: words) {
+            guard let span = named.worldFact?.years else { return named }
+            if let year = fact.year { return span.contains(year) ? named : nil }
+            if let born = birthYear,
+               born > span.upperBound || born < span.lowerBound - maximumAgeAtWarStart { return nil }
+            return named
+        }
         guard let year = fact.year else { return nil }
         return HallieServiceQuestion.War.allCases.first { $0.worldFact?.years.contains(year) == true }
+    }
+
+    /// Tree notes can run to paragraphs; a list line quotes at most this
+    /// many characters, cut at a word boundary.
+    static let maximumQuotedFactCharacters = 160
+
+    static func capped(_ text: String) -> String {
+        guard text.count > maximumQuotedFactCharacters else { return text }
+        let head = text.prefix(maximumQuotedFactCharacters)
+        let cut = head.lastIndex(of: " ").map { head[..<$0] } ?? head
+        return cut.trimmingCharacters(in: CharacterSet(charactersIn: " ,;:.")) + "…"
     }
 
     /// "a military draft registration dated 1917-1918 in Ohio, West Virginia,
@@ -170,7 +197,7 @@ enum HallieServiceStory {
         if fact.isDraftRegistration {
             text = "a military draft registration"
         } else if let summary = fact.summary {
-            text = "“\(summary)”"
+            text = "“\(capped(summary))”"
         } else {
             text = "military service"
         }
