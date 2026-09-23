@@ -316,6 +316,18 @@ struct ArchiveAngelReviewSheet: View {
                                      && !(entry.proposedDate ?? "").isEmpty ? Color.orange : Color.secondary)
                     .lineLimit(1)
             }
+            // Facts inherited from another copy of the recording (S4 fix):
+            // stamped on Promote, never over the file's own values.
+            let inherited = ArchiveAngelFamilyFacts.reviewLine(entry)
+            if !inherited.isEmpty {
+                Label(inherited, systemImage: "arrow.triangle.branch")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .padding(.leading, 98)
+                    .help("This file has none of its own; another copy carries it. Promote writes it onto this file (a date you type above wins).")
+                    .accessibilityIdentifier("archiveAngel.row.inherited")
+            }
             HStack(spacing: 8) {
                 Text("notes")
                     .font(.system(size: 11))

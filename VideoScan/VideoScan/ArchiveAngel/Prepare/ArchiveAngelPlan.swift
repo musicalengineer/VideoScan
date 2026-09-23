@@ -58,6 +58,12 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         /// Wall-clock seconds the step took (2026-09-19, the Angel testbed
         /// and journey audit). Additive: plans written before it decode nil.
         var seconds: Double?
+        /// An EXISTING catalogued companion reused instead of made (S4 fix:
+        /// an original already balanced gets its `_balanced` copy reused,
+        /// never a second balance). Absolute path OUTSIDE the buffer — the
+        /// buffer's reclaim and hygiene key on `outputRelPath` and never
+        /// touch it. Additive: older plans decode nil.
+        var existingPath: String?
         var id: StepKind { kind }
     }
 
@@ -91,6 +97,14 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         case reclaimBuffer    // skipped — delete its companions, then go on
     }
 
+    /// A hand-entered value and the copy it came from.
+    struct InheritedFact: Codable, Sendable, Equatable {
+        var value: String
+        var confidence: String
+        var fromRecordID: UUID
+        var fromFilename: String
+    }
+
     struct Entry: Codable, Sendable, Identifiable, Equatable {
         /// Catalog record id of the ORIGINAL.
         var id: UUID
@@ -115,6 +129,17 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         /// batches written before 2026-09-10 still decode (nil = false).
         var userEditedName: Bool?
         var userNotes: String = ""
+        /// Hand-entered facts this row INHERITS from another copy of the
+        /// same recording because it has none of its own (S4, 2026-09-23 —
+        /// the retired Promote Helper's rule, ArchiveAngelFamilyStamp).
+        /// Found at plan build so Review can say where each came from;
+        /// stamped onto the record at Promote. Additive: older plans decode
+        /// nil (nothing inherited).
+        var inheritedDate: InheritedFact?
+        var inheritedPlace: InheritedFact?
+        /// Backup-attestation kinds ("cloud", "offsite", "drive") the
+        /// family adds or updates on this row.
+        var inheritedAttestationKinds: [String]?
         var steps: [StepOutcome] = StepKind.allCases.map { StepOutcome(kind: $0) }
         var status: EntryStatus = .pending
         /// Archive relpath of the original after Promote (nil until then).
@@ -137,7 +162,9 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         /// decode with nil = never noted.
         var uncheckedNotedAt: Date?
 
-        var companionsMade: [StepOutcome] { steps.filter { $0.state == .done && $0.outputRelPath != nil } }
+        var companionsMade: [StepOutcome] {
+            steps.filter { $0.state == .done && ($0.outputRelPath != nil || $0.existingPath != nil) }
+        }
         var isOriginalOnly: Bool { status == .ready && companionsMade.isEmpty }
         /// Left out of this batch for buffer space, not broken (2026-09-19).
         var isBufferShort: Bool {

@@ -12,9 +12,8 @@
 // decision itself is the pure CopyFamilyAssessor, untouched. The catalog
 // is reached through the AngelCatalog seam only.
 //
-// Cost: one pass over the active records to index them (O(n)), then the
-// family walk (O(family) hops; a duplicate group costs one pass over the
-// active records, as before). Runs on the main actor when a person asks —
+// Cost: one pass over the active records to index them (O(n), once per
+// pass — `Index`), then the family walk (O(family) hops, all lookups). Runs on the main actor when a person asks —
 // never in a view body. At 100k records it is well under a second
 // (ArchiveAngelShowCopiesTests pins the budget).
 
@@ -46,39 +45,64 @@ final class ArchiveAngelShowCopiesPresenter: ObservableObject {
 
 enum ArchiveAngelCopyFamily {
 
+    /// The catalog's active records indexed for the family walk — built
+    /// ONCE per pass (a Show Copies, a Prepare batch, a Promote) so a batch
+    /// of N rows costs one O(n) index plus N small walks, not N catalog
+    /// passes. (≈ a C++ struct of hash maps built up front.)
+    struct Index {
+        let byID: [UUID: VideoRecord]
+        let children: [UUID: [VideoRecord]]
+        let byHash: [String: [VideoRecord]]
+        let byGroup: [UUID: [VideoRecord]]
+
+        @MainActor
+        init(active: [VideoRecord]) {
+            var byID: [UUID: VideoRecord] = [:]
+            byID.reserveCapacity(active.count)
+            var children: [UUID: [VideoRecord]] = [:]
+            var byHash: [String: [VideoRecord]] = [:]
+            var byGroup: [UUID: [VideoRecord]] = [:]
+            for r in active {
+                byID[r.id] = r
+                if let d = r.derivedFrom { children[d, default: []].append(r) }
+                if !r.contentHash.isEmpty { byHash[r.contentHash, default: []].append(r) }
+                if let g = r.duplicateGroupID { byGroup[g, default: []].append(r) }
+            }
+            self.byID = byID; self.children = children; self.byHash = byHash; self.byGroup = byGroup
+        }
+
+        @MainActor
+        init(catalog: any AngelCatalog) {
+            self.init(active: catalog.activeRecordsForCopyFamily())
+        }
+    }
+
     /// Everything the catalog knows to be the same recording as `seed`:
     /// its duplicate group, its lineage (derivedFrom both ways,
     /// transitive), its archive copy / promotion source, and any record
     /// with the same non-empty content signature. Present records only.
     @MainActor
     static func collect(seed: VideoRecord, catalog: any AngelCatalog) -> [VideoRecord] {
-        let active = catalog.activeRecordsForCopyFamily()
-        var byID: [UUID: VideoRecord] = [:]
-        byID.reserveCapacity(active.count)
-        var children: [UUID: [VideoRecord]] = [:]
-        var byHash: [String: [VideoRecord]] = [:]
-        for r in active {
-            byID[r.id] = r
-            if let d = r.derivedFrom { children[d, default: []].append(r) }
-            if !r.contentHash.isEmpty { byHash[r.contentHash, default: []].append(r) }
-        }
+        collect(seed: seed, index: Index(catalog: catalog), catalog: catalog)
+    }
+
+    /// The same walk over a prebuilt index (one index per batch).
+    @MainActor
+    static func collect(seed: VideoRecord, index: Index, catalog: any AngelCatalog) -> [VideoRecord] {
         var family: [UUID: VideoRecord] = [seed.id: seed]
         var queue: [VideoRecord] = [seed]
         var hops = 0
         while let r = queue.popLast(), hops < 10_000 {
             hops += 1
             var related: [VideoRecord] = []
-            if let g = r.duplicateGroupID {
-                // Group members: one pass over active (groups are small
-                // relative to the catalog; a per-group index is unnecessary
-                // at catalog sizes the app targets).
-                related += active.filter { $0.duplicateGroupID == g }
-            }
-            if let d = r.derivedFrom, let parent = byID[d] { related.append(parent) }
-            related += children[r.id] ?? []
+            // Group members (the active records sharing the group id — the
+            // same set the Helper's `active.filter` pass found, now indexed).
+            if let g = r.duplicateGroupID { related += index.byGroup[g] ?? [] }
+            if let d = r.derivedFrom, let parent = index.byID[d] { related.append(parent) }
+            related += index.children[r.id] ?? []
             if let copy = catalog.masterArchiveCopy(of: r) { related.append(copy) }
             if let src = catalog.promotionSource(of: r) { related.append(src) }
-            if !r.contentHash.isEmpty { related += byHash[r.contentHash] ?? [] }
+            if !r.contentHash.isEmpty { related += index.byHash[r.contentHash] ?? [] }
             for x in related where family[x.id] == nil {
                 family[x.id] = x
                 queue.append(x)

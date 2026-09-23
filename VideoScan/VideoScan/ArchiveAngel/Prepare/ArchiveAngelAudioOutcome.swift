@@ -34,6 +34,12 @@ enum ArchiveAngelAudioOutcome: Equatable {
     /// The file carries no audio stream at all.
     case noAudio
 
+    // TODO(S4 finding 3, for Rick): this reads "fixable" as a
+    // channel-imbalance finding that also passes BalanceAudioFix's gate;
+    // ArchiveAngelJob's balance step asks only
+    // BalanceAudioFix.refusalReason(for: analysis). Two predicates for one
+    // question — they can disagree on an analysis without the finding.
+    // Unify on one (behaviour change, so not in the S4 refactor).
     static func from(_ d: AudioVerifyDiagnosis) -> ArchiveAngelAudioOutcome {
         // The imbalance finding is only ever produced when the fix gate
         // is open (VerifyAudioRules), but the gate is consulted AGAIN

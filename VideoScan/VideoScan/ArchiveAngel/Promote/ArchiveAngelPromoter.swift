@@ -100,13 +100,18 @@ final class ArchiveAngelPromoter: ObservableObject {
     }
 
     /// Companion outcomes that are intended for promotion: done, with a
-    /// catalog record and a file still present in the buffer.
+    /// catalog record and a file still present in the buffer — or, for an
+    /// existing companion the Angel reused (S4: an already-balanced copy),
+    /// still present where it lives.
     static func promotableCompanions(of entry: ArchiveAngelPlan.Entry, in plan: ArchiveAngelPlan,
                                      fileManager fm: FileManager = .default) -> [ArchiveAngelPlan.StepOutcome] {
         entry.steps.filter { step in
-            guard step.state == .done, step.recordID != nil, let rel = step.outputRelPath else { return false }
-            let path = URL(fileURLWithPath: plan.batchDir).appendingPathComponent(rel).path
-            return fm.fileExists(atPath: path)
+            guard step.state == .done, step.recordID != nil else { return false }
+            if let rel = step.outputRelPath {
+                return fm.fileExists(atPath: URL(fileURLWithPath: plan.batchDir).appendingPathComponent(rel).path)
+            }
+            if let existing = step.existingPath { return fm.fileExists(atPath: existing) }
+            return false
         }
     }
 
@@ -135,6 +140,10 @@ final class ArchiveAngelPromoter: ObservableObject {
         // (Rick 2026-09-10); only a changed file is refused below.
         for line in Self.followRenames(plan: &plan, model: model) { model.log(line); appLog.write(line) }
 
+        // Rick's hand-entered facts ride the promote (S4 fix — the retired
+        // Helper's rule): built lazily, one family index per Promote.
+        var familyIndex: ArchiveAngelCopyFamily.Index?
+
         for i in plan.entries.indices where plan.entries[i].selected && plan.entries[i].status == .ready {
             let entry = plan.entries[i]
             if let problem = Self.identityProblem(for: entry, model: model) {
@@ -157,6 +166,19 @@ final class ArchiveAngelPromoter: ObservableObject {
                 if let role = Self.roleLabel(for: step.kind) { roles[cid] = role }
             }
             intended[entry.id] = companionIDs
+            // Stamp the family's date / place / attestations onto the
+            // original and its companions before the job reads them (the
+            // manifest row carries them). Never over a record's own value.
+            if let original = model.record(forID: entry.id) {
+                let index = familyIndex ?? ArchiveAngelCopyFamily.Index(catalog: model)
+                familyIndex = index
+                let family = ArchiveAngelCopyFamily.collect(seed: original, index: index, catalog: model)
+                let companions = companionIDs.compactMap { model.record(forID: $0) }
+                for line in ArchiveAngelFamilyFacts.stamp(entry: entry, original: original,
+                                                          companions: companions, family: family) {
+                    Self.note(line, plan: &plan, model: model)
+                }
+            }
         }
 
         guard !ids.isEmpty, var promotePlan = model.buildPromotePlan(recordIDs: ids) else {

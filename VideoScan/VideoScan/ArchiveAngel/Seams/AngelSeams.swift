@@ -64,6 +64,12 @@ protocol AngelCatalog: AnyObject {
     func promotionSource(of record: VideoRecord) -> VideoRecord?
     /// Is `record` itself a copy inside the Master Archive?
     func isArchiveCopy(_ record: VideoRecord) -> Bool
+
+    /// Balance Audio outputs already catalogued for `record` (active,
+    /// `derivedFrom` = record, derivationKind "balanceAudio"). O(n) — once
+    /// per prepared row. The prepare step reuses one instead of balancing
+    /// again (S4 fix — the Helper's 2026-08-19 rule).
+    func catalogedBalancedCopies(of record: VideoRecord) -> [VideoRecord]
 }
 
 /// "Show in Catalog" from anywhere in the Angel.
