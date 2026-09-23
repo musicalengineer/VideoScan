@@ -831,6 +831,9 @@ struct CatalogContent: View {
         .sheet(item: $trimRequest) { request in
             TrimSheet(request: request)
         }
+        // Archive Angel ▸ Show Copies… (read-only, S4). The façade holds
+        // the request; the host presents it with the same .sheet(item:) shape.
+        .modifier(ArchiveAngelShowCopiesHost(angel: model.archiveAngel))
         // "Audio Info ..." (GH #128/#135) — presentation-only;
         // carries the Balance Audio offer since the GH #137
         // consolidation. Same .sheet(item:) shape.

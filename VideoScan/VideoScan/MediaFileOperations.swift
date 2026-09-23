@@ -105,13 +105,11 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// row → linked catalog record. Never a move; never a re-encode.
     /// docs/archive_promotion_workflow.md, Rick 2026-08-15.
     case promote
-    /// "Assess Copies for Archive…" — Promote-Helper (2026-08-19): one
-    /// copy family → distinct representations, the recommended original,
-    /// and the actions. Reads catalog metadata only (no media I/O) so it
-    /// finishes instantly; it is an MFO job for the expandable result
-    /// panel and the action buttons that launch Promote / Transcode /
-    /// Verify Audio from it. docs/promote_helper_plan.md.
-    case assessCopies
+    // (`assessCopies` — the Promote Helper's "Assess Copies for Archive…"
+    // row — was retired in Archive Angel consolidation S4, 2026-09-22; its
+    // read-only successor is Archive Angel ▸ Show Copies…, a sheet, not a
+    // job. The kind was never persisted: no Codable, no saved plan, no
+    // defaults key named it.)
     /// "Verify Archive Copies" — the manifest-driven fixity audit +
     /// recovery pass (GH #167, 2026-08-20): re-read every Master
     /// Archive copy end to end, compare its SHA-256 against the
@@ -162,7 +160,6 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .verifyAudio: return "Verify"
         case .findPerson: return "Find"
         case .promote: return "Promote"
-        case .assessCopies: return "Assess"
         case .verifyArchive: return "Fixity"
         case .archiveAngel: return "Angel"
         // Upper-case on purpose (the badge is small caps, so "Delete"
@@ -197,7 +194,6 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .verifyAudio: return "verify audio"
         case .findPerson: return "find person"
         case .promote: return "promote"
-        case .assessCopies: return "assess copies"
         case .verifyArchive: return "verify archive"
         case .archiveAngel: return "archive angel"
         case .deleteDuplicates: return "delete duplicates"
@@ -776,9 +772,9 @@ final class MediaFileOperationsCenter: ObservableObject {
 
     /// Remove specific jobs from the list regardless of state, releasing
     /// their subscriptions/bookkeeping (OUTCOME line written first if the
-    /// job is terminal and unlogged). Used by the Archive Helper's
-    /// replace policy (AssessCopiesJob.swift) and the vanish-on-cancel
-    /// path below — NOT a user-facing bulk verb.
+    /// job is terminal and unlogged). Used by the vanish-on-cancel path
+    /// below (and, until S4 retired it, the Archive Helper's replace
+    /// policy) — NOT a user-facing bulk verb.
     func removeJobs(withIDs ids: Set<UUID>) {
         let removed = jobs.filter { ids.contains($0.id) }
         guard !removed.isEmpty else { return }

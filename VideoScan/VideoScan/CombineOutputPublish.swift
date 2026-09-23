@@ -16,29 +16,32 @@
 //      directory ⇒ same volume ⇒ the publish is a rename, not a copy). The
 //      partial's name is RESERVED with O_CREAT|O_EXCL before ffmpeg runs, so
 //      two concurrent pairs can never share one (PartialFileNaming).
-//   2. Success + verify → publish with `renamex_np(RENAME_EXCL)`: an atomic
-//      rename that FAILS if the name is taken. Never RENAME_SWAP /
-//      `replaceItemAt` (the Sandbox.kext deadlock, AtomicFilePublish.swift).
-//      Volumes that don't support RENAME_EXCL (exFAT, msdos, some SMB —
-//      ENOTSUP/EINVAL) get the fallback in `renameNoClobber`.
+//   2. Success + verify → publish through ExclusivePublish (PartialFileNaming
+//      .swift): `renamex_np(RENAME_EXCL)`, or on volumes without it (exFAT,
+//      msdos, some SMB) `link(2)` — both fail atomically if the name is
+//      taken. No hard links either → publish REFUSES; nothing is ever
+//      renamed over (codex #1642, 2026-09-23: the old O_EXCL-placeholder +
+//      lstat + rename(2) fallback overwrote a second writer in its window).
+//      Never RENAME_SWAP / `replaceItemAt` (the Sandbox.kext deadlock,
+//      AtomicFilePublish.swift).
 //   3. Name taken → "name 2.mov", "name 3.mov", … (Finder style); the caller
 //      logs it and catalogs the name actually published.
 //   4. Failure / verify failure / cancel remove ONLY the partial this run
 //      reserved — `removePartial` refuses any name that is not a partial.
-//      A publish ERROR never removes a verified partial: it is kept and its
+//      A publish ERROR never removes a verified partial: it is kept
+//      (protected, then moved to `.vs-kept.` if the drive allows) and its
 //      path reported.
 //
 // (For Rick: RENAME_EXCL ≈ link()+unlink() in one syscall — the kernel checks
 // "destination absent" and renames atomically, so there is no check-then-act
 // window like `fileExists` followed by `moveItem`.)
 //
-// UNIFY NOTE: fix/archive-protection-followups adds DerivativeOutputPublish
-// (Transcode/Reformat) with the same partial naming, `besideURL`,
-// `renameNoClobber` and an `Outcome` of the same shape. Once both are on
-// main, `publish(partial:as:)` here is
+// UNIFY NOTE: DerivativeOutputPublish (Transcode/Reformat) shares the
+// partial naming, the keep, the sweep and — since codex #1642 — the
+// no-clobber rename (ExclusivePublish). `publish(partial:as:)` here is
 //   DerivativeOutputPublish.publish(partial:, as:, policy: .keep(reason: …),
 //                                   archiveCheck: nil, trash: { _ in nil })
-// PLUS this file's ENOTSUP/EINVAL fallback, which that helper lacks.
+// in all but its Failure type.
 
 import Darwin
 import Foundation
@@ -62,13 +65,6 @@ enum CombineOutputPublish {
         let message: String
         var description: String { message }
         var errorDescription: String? { message }
-    }
-
-    /// The RENAME_EXCL syscall. Returns 0 or an errno. Task-local test seam
-    /// so the unsupported-volume fallback can be exercised without an exFAT
-    /// disk; production = `renamex_np(…, RENAME_EXCL)`.
-    @TaskLocal static var renameExclSyscall: @Sendable (String, String) -> Int32 = { src, dst in
-        renamex_np(src, dst, UInt32(RENAME_EXCL)) == 0 ? 0 : errno
     }
 
     // MARK: partials
@@ -114,58 +110,16 @@ enum CombineOutputPublish {
         return url.deletingLastPathComponent().appendingPathComponent(name)
     }
 
-    /// No-clobber rename. true = renamed; false = the destination exists
-    /// (nothing changed); throws on any other failure (the source is then
-    /// still at its own name).
-    ///
-    /// RENAME_EXCL unsupported (ENOTSUP/EINVAL — exFAT, msdos, some SMB):
-    /// reserve the destination with O_CREAT|O_EXCL (an empty placeholder),
-    /// confirm the name still holds OUR 0-byte file (same dev+ino), then
-    /// rename(2) over it. The only thing rename can replace is that
-    /// placeholder, which we created a moment earlier.
+    /// No-clobber rename (ExclusivePublish). true = renamed; false = the
+    /// destination exists (nothing changed); throws on any other failure —
+    /// including "the drive can't publish without risk of overwriting" —
+    /// and the source is then still at its own name.
     static func renameNoClobber(_ source: String, _ destination: String) throws -> Bool {
-        let e = renameExclSyscall(source, destination)
-        if e == 0 { return true }
-        if e == EEXIST { return false }
-        guard e == ENOTSUP || e == EINVAL else {
-            throw Failure(message: "rename to \((destination as NSString).lastPathComponent) failed: "
-                          + String(cString: strerror(e)) + " (errno \(e))")
+        do {
+            return try ExclusivePublish.renameNoClobber(source, destination)
+        } catch let failure as PartialFileNaming.Failure {
+            throw Failure(message: failure.message)
         }
-        return try renameViaPlaceholder(source, destination, exclErrno: e)
-    }
-
-    private static func renameViaPlaceholder(_ source: String, _ destination: String,
-                                             exclErrno: Int32) throws -> Bool {
-        let name = (destination as NSString).lastPathComponent
-        let fd = open(destination, O_CREAT | O_EXCL | O_WRONLY, 0o644)
-        if fd < 0 {
-            let oe = errno
-            if oe == EEXIST { return false }
-            throw Failure(message: "rename to \(name) failed: RENAME_EXCL unsupported (errno \(exclErrno)) "
-                          + "and the name could not be reserved: " + String(cString: strerror(oe)) + " (errno \(oe))")
-        }
-        var mine = stat()
-        let statOK = fstat(fd, &mine) == 0
-        close(fd)
-        guard statOK else {
-            throw Failure(message: "rename to \(name) failed: could not stat the placeholder")
-        }
-        var now = stat()
-        guard lstat(destination, &now) == 0,
-              now.st_dev == mine.st_dev, now.st_ino == mine.st_ino, now.st_size == 0 else {
-            // Someone replaced our placeholder: that file is theirs — treat
-            // the name as taken and leave it alone.
-            return false
-        }
-        if rename(source, destination) == 0 { return true }
-        let re = errno
-        // Take our placeholder back out — only if it is still ours and empty.
-        var after = stat()
-        if lstat(destination, &after) == 0,
-           after.st_dev == mine.st_dev, after.st_ino == mine.st_ino, after.st_size == 0 {
-            unlink(destination)
-        }
-        throw Failure(message: "rename to \(name) failed: " + String(cString: strerror(re)) + " (errno \(re))")
     }
 
     /// Publish `partial` as `final`, or beside it when the name is taken.
@@ -192,12 +146,12 @@ enum CombineOutputPublish {
         throw Failure(message: "no free name beside \(final.lastPathComponent) after 199 tries")
     }
 
-    /// A verified output that could not be published must survive: move
-    /// it off the partial pattern (`<stem>.<token>.vs-kept.<ext>`) so the
-    /// stale-partial sweep can never match it. If even that rename fails
-    /// the partial stays where it is — the same directory-write failure
-    /// that blocked the rename also blocks the sweep's unlink. Returns
-    /// where the file now is.
+    /// A verified output that could not be published must survive: it is
+    /// protected on disk where it is (`<partial>.keep`, honoured by every
+    /// sweep, across restarts), then moved off the partial pattern to the
+    /// first free `<stem>.<token>[-n].vs-kept.<ext>` — never overwriting.
+    /// On a drive that can't rename exclusively it stays at its partial
+    /// name, protected. Returns where the file now is.
     static func keepUnpublished(_ partial: URL) -> URL {
         PartialFileNaming.keepUnpublished(partial, renameNoClobber: renameNoClobber)
     }
@@ -210,8 +164,9 @@ enum CombineOutputPublish {
     /// the ONE sweep Transcode uses too (PartialFileNaming.sweepStale):
     /// exact partial pattern, regular files, older than `olderThan`
     /// (default: the shared 24 h threshold), NEVER one a running job in this
-    /// process reserved — Combine's or Transcode's. Each removal is logged
-    /// with its size as swept by "combine". DISK I/O — call off-main.
+    /// process reserved — Combine's or Transcode's — and NEVER a protected
+    /// finished output. Each removal is logged with its size as swept by
+    /// "combine". DISK I/O — call off-main.
     static func sweepStalePartials(in folder: URL, olderThan: TimeInterval = PartialFileNaming.staleThreshold,
                                    now: Date = Date()) -> (removed: [SweptPartial], errors: [String]) {
         PartialFileNaming.sweepStale(in: folder, job: "combine", olderThan: olderThan, now: now)

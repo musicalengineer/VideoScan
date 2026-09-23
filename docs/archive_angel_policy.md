@@ -41,7 +41,7 @@ So the smallest useful file is:
 1. **Floors** (`floors`) are checked in order. The first one that fires excludes the file, and its reason is the one you see.
 2. **Signals** (`signals`) each add one printed evidence line. The score is the sum of the lines.
 3. **Grades** (`grades`) turn the score into a letter: A ≥ `a`, B ≥ `b`, C ≥ `c`, D ≥ `d`, otherwise X.
-4. **Classes** (`recommend`) put every file into exactly one class. These classes are the only numbers the app shows: the Archive tab's nudge sentence, the Angel strip's "N ready · M need a date · K prepared", the catalog's badge, and Show ▸ Archive Candidates.
+4. **Classes** (`recommend`) put every file into exactly one class. These classes are the only numbers the app shows: the Angel strip's "N ready · M need a date · K prepared", the catalog's badge, and Show ▸ Archive Candidates.
 
 | Class | Default rule |
 |---|---|

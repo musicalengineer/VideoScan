@@ -130,7 +130,7 @@ struct ArchiveTimelinePane: View {
             Text("The story starts with the first promote")
                 .font(.headline)
                 .foregroundColor(.secondary)
-            Text("Right-click a file in the Catalog and choose Archive Helper — every promoted file takes its place on this timeline.")
+            Text("Right-click a file in the Catalog and choose Archive Angel ▸ Prepare with Archive Angel — every promoted file takes its place on this timeline.")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

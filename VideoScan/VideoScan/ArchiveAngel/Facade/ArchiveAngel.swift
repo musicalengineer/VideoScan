@@ -2,7 +2,8 @@
 // The Archive Angel's ONE front door (docs/archive_angel_consolidation_plan.md,
 // "Target architecture"). The rest of the app talks to `model.archiveAngel`
 // and to the few public views (ArchiveAngelStrip, ArchiveAngelMenuItems,
-// ArchiveAngelCatalogBadgeView, ArchiveAngelJobDetailView); everything else
+// ArchiveAngelCatalogBadgeView, ArchiveAngelJobDetailView,
+// ArchiveAngelShowCopiesHost); everything else
 // under ArchiveAngel/ is the module's inside. ArchiveAngelBoundarySensorTests
 // fails when app code reaches past this surface.
 //
@@ -80,11 +81,14 @@ final class ArchiveAngel: ObservableObject {
     @Published private(set) var sweepEnabled: Bool
     @Published private(set) var batches = Batches()
     /// ONE set of numbers (S3b): the class counts every surface reads —
-    /// the nudge, the strip headline, the badge, the catalog filter.
+    /// the strip headline, the badge, the catalog filter.
     /// Rebuilt by `rebuildRecommendations()` (ArchiveAngel+Recommendations).
     @Published private(set) var recommendations = ArchiveAngelRecommendationSummary()
     /// The pending live recount after a catalog change.
     var recountTask: Task<Void, Never>?
+    /// The catalog's Show Copies… sheet (S4) — its own small observable so
+    /// the sheet host does not re-render on every recount.
+    let showCopiesPresenter = ArchiveAngelShowCopiesPresenter()
     /// Refreshes are stamped when requested; a scan publishes only if it
     /// is newer than what is on screen (codex review 2026-09-20 #9).
     private var refreshGeneration = 0
