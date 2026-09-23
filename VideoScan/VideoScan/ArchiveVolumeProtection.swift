@@ -340,7 +340,10 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
                             pendingAliasCandidates: [String] = []) -> ArchiveVolumeProtection? {
         guard var snap = provisionalIgnoringPending(designation: d, previous: previous,
                                                     provenBootFolder: provenBootFolder) else { return nil }
-        let pending = pendingAliasCandidates.map { canonical($0).lowercased() }.filter { $0.count > 1 }
+        // /Volumes roots are mounts, not hidden aliases — their paths have
+        // their own resolve / unprovable rule. Only other spellings pend.
+        let pending = pendingAliasCandidates.map { canonical($0).lowercased() }
+            .filter { $0.count > 1 && externalVolumeRoot(of: $0) == nil }
         guard !pending.isEmpty else { return snap }
         snap = ArchiveVolumeProtection(label: snap.label, placement: snap.placement, archiveRoots: snap.archiveRoots,
                                        aliasRoots: snap.aliasRoots, protectedFolders: snap.protectedFolders,
@@ -414,13 +417,17 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
         for alias in aliasRoots where lower.hasPrefix(alias) {
             if Self.isInsideLexically(path: lower, root: alias) { return .onArchiveVolume }
         }
-        for pending in pendingAliasRoots where lower.hasPrefix(pending) {
-            if Self.isInsideLexically(path: lower, root: pending) { return .unprovable }
+        guard let root = Self.externalVolumeRoot(of: path)?.lowercased() else {
+            // Not a /Volumes path: under a scan target no build has resolved
+            // yet it may be a symlink into FamilyArchive (codex #1650).
+            for pending in pendingAliasRoots where lower.hasPrefix(pending) {
+                if Self.isInsideLexically(path: lower, root: pending) { return .unprovable }
+            }
+            // The boot disk is never an external archive; a custom mount
+            // that is not one of the alias roots is decided at removal (UUID).
+            return .clear
         }
         if placement == .bootFolder { return .clear }
-        // The boot disk is never an external archive; a custom mount that
-        // is not one of the alias roots is decided at removal (UUID).
-        guard let root = Self.externalVolumeRoot(of: path)?.lowercased() else { return .clear }
         if archiveRoots.contains(root) { return .onArchiveVolume }
         if isResolved || provenOtherRoots.contains(root) { return .clear }
         return .unprovable
