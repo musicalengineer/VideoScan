@@ -684,7 +684,7 @@ struct SyncRoundTripTests {
         for case let url as URL in walker {
             let vals = try url.resourceValues(forKeys: [.isRegularFileKey])
             if vals.isRegularFile != true { continue }
-            let rel = url.path.replacingOccurrences(of: root.path + "/", with: "")
+            guard let rel = SourceTree.relativePath(url, under: root) else { continue }
             let data = try Data(contentsOf: url)
             let hash = SHA256.hash(data: data)
                 .map { String(format: "%02x", $0) }.joined()
