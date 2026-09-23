@@ -898,7 +898,7 @@ extension MediaFileOperationKind {
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
-             .promote:
+             .promote, .findSimilarFootage:
             return false
         }
     }
@@ -980,6 +980,10 @@ extension MediaFileOperationKind {
         // and apart from Reformat's crimson (Δ ≈ 0.14); contrast vs white
         // ≈ 8.9.
         case .pruneCopies: return Color(red: 0.58, green: 0.06, blue: 0.16)
+        // Find Similar Footage (2026-09-23) — graphite: a metadata walk,
+        // not a media verb. Δ ≥ 0.19 from every other fill (nearest:
+        // Rebuild's brown), contrast vs white ≈ 8.5.
+        case .findSimilarFootage: return Color(red: 0.30, green: 0.30, blue: 0.30)
         }
     }
 }

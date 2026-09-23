@@ -123,6 +123,8 @@ enum ScanEngine {
         r.originMake    = origin.make
         r.originModel   = origin.model
         r.originEncoder = origin.encoder
+        r.proAppsMediaIdentifier = EmbeddedOriginTags.proAppsMediaIdentifier(formatTags: fmtTags,
+                                                                              streamTags: allStreamTags)
 
         var hasVideo = false
         var hasAudio = false

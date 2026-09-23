@@ -596,6 +596,26 @@ public class VideoRecord: Identifiable, Decodable {
     /// (`resolvedArchivedAt` in the app).
     public var archivedAt: Date?
 
+    /// Final Cut Pro's `com.apple.proapps.mediaIdentifier` container tag
+    /// (Find Similar Footage, 2026-09-23). FCP stamps it on the media it
+    /// transcodes, and it survives copying a library, so two transcodes
+    /// carrying the same value are the same source footage. Captured by the
+    /// scan and by "Refresh Embedded Dates" (fcpbundle files lacking it).
+    /// Additive optional — legacy catalogs decode nil, the DTO writes the
+    /// key only when present.
+    public var proAppsMediaIdentifier: String?
+
+    /// Find Similar Footage — the MACHINE's current answer (group, role,
+    /// confidence, reasons); rewritten by each run. nil = in no group.
+    /// Additive optional (FootageMembership.swift).
+    public var footage: FootageMembership?
+
+    /// Find Similar Footage — the PERSON's answers ("same footage" / "not
+    /// the same" about another record). Never touched by the machine; every
+    /// run obeys them. Additive — legacy catalogs decode [], the DTO writes
+    /// the key only when non-empty.
+    public var footageDecisions: [FootageDecision] = []
+
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
     /// stable UUID if available, and the remote server name for network
@@ -788,6 +808,11 @@ public class VideoRecord: Identifiable, Decodable {
         // Whole-file fixity for any record (2026-09-20) — additive optional.
         contentFixity               = try c.decodeIfPresent(ContentFixity.self, forKey: .contentFixity)
         archivedAt                  = try c.decodeIfPresent(Date.self, forKey: .archivedAt)
+        // Find Similar Footage (2026-09-23) — additive optionals; legacy
+        // catalogs (no keys) decode nil / [].
+        proAppsMediaIdentifier      = try c.decodeIfPresent(String.self, forKey: .proAppsMediaIdentifier)
+        footage                     = try c.decodeIfPresent(FootageMembership.self, forKey: .footage)
+        footageDecisions            = try c.decodeIfPresent([FootageDecision].self, forKey: .footageDecisions) ?? []
         // Relocate provenance. Legacy catalogs (no keys) decode as nil and
         // remain treated as "never relocated." Once set on first migration
         // these keys are encoded on every subsequent write.

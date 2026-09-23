@@ -358,8 +358,8 @@ extension AngelRecommendRules {
             AngelClassRule(.needsDate, when: [AngelPolicyDefaults.recommendedByPersonOrAngel]),
             AngelClassRule(.worthALook, when: [.init(field: .grade, op: .eq, value: .string("B"))]),
         ],
-        copies: AngelCopyRules(collapseBy: ["duplicateGroup", "nameAndDuration"],
-                               prefer: ["userKeeper", "best"],
+        copies: AngelCopyRules(collapseBy: ["footageGroup", "duplicateGroup", "nameAndDuration"],
+                               prefer: ["userKeeper", "footageOriginal", "best"],
                                classes: ["ready", "needsDate", "worthALook"],
                                noteCopies: true),
         order: "angelRank")

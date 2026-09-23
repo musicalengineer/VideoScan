@@ -47,6 +47,8 @@ extension VideoScanModel {
         var noTag: Int = 0
         /// ffprobe could not read the file at all.
         var failed: Int = 0
+        /// Records that gained an FCP media identifier (Find Similar Footage).
+        var mediaIdentifiers: Int = 0
         var cancelled: Bool = false
         var elapsed: TimeInterval = 0
     }
@@ -67,10 +69,38 @@ extension VideoScanModel {
         return true
     }
 
+    /// Find Similar Footage (2026-09-23): an FCP-bundle file with no
+    /// `com.apple.proapps.mediaIdentifier` yet also wants the tag-only
+    /// probe — the one extra tag rides the same ffprobe call. Scoped to
+    /// `.fcpbundle/` paths (FCP writes the tag on the media it manages;
+    /// 141 such files in the 2026-09-22 catalog), so a refresh never
+    /// re-probes the whole catalog for it. A bundle file that carries no
+    /// identifier is probed again on each refresh — bounded by that count.
+    nonisolated static func needsMediaIdentifier(_ rec: VideoRecord) -> Bool {
+        guard rec.proAppsMediaIdentifier == nil else { return false }
+        guard rec.purgedAt == nil, !rec.isSetAside, !rec.isSuperseded else { return false }
+        guard !rec.fullPath.isEmpty, rec.fullPath.lowercased().contains(".fcpbundle/") else { return false }
+        guard rec.streamTypeRaw != StreamType.ffprobeFailed.rawValue else { return false }
+        return true
+    }
+
+    /// Everything one tag-only probe yields (Sendable; crosses actors).
+    struct EmbeddedTagProbe: Sendable, Equatable {
+        var capture: EmbeddedCreationDate.Capture?
+        var origin: EmbeddedOriginTags.Origin
+        var mediaIdentifier: String?
+    }
+
     /// One tag-only ffprobe: `-show_entries format_tags:stream_tags` as
     /// JSON. Returns (capture, origin) or nil when ffprobe failed. Pure
     /// apart from the subprocess; safe to call from any executor.
     nonisolated static func probeEmbeddedTags(path: String) async -> (EmbeddedCreationDate.Capture?, EmbeddedOriginTags.Origin)? {
+        guard let p = await probeEmbeddedTagSet(path: path) else { return nil }
+        return (p.capture, p.origin)
+    }
+
+    /// The same probe, with the FCP media identifier too.
+    nonisolated static func probeEmbeddedTagSet(path: String) async -> EmbeddedTagProbe? {
         let args = ["-v", "error",
                     "-print_format", "json",
                     "-show_entries", "format_tags:stream_tags",
@@ -84,7 +114,8 @@ extension VideoScanModel {
         let streamTags = (out.streams ?? []).map { $0.tags ?? [:] }
         let cap = EmbeddedCreationDate.extract(formatTags: fmtTags, streamTags: streamTags)
         let origin = EmbeddedOriginTags.extract(formatTags: fmtTags, streamTags: streamTags)
-        return (cap, origin)
+        let mid = EmbeddedOriginTags.proAppsMediaIdentifier(formatTags: fmtTags, streamTags: streamTags)
+        return EmbeddedTagProbe(capture: cap, origin: origin, mediaIdentifier: mid)
     }
 
     // MARK: - Run
@@ -95,6 +126,7 @@ extension VideoScanModel {
         let path: String
         let capture: EmbeddedCreationDate.Capture?
         let origin: EmbeddedOriginTags.Origin
+        let mediaIdentifier: String?
         let failed: Bool
     }
 
@@ -119,7 +151,7 @@ extension VideoScanModel {
         defer { isRefreshingEmbeddedDates = false }
 
         let work: [(id: UUID, path: String)] = records
-            .filter { Self.needsEmbeddedDate($0) }
+            .filter { Self.needsEmbeddedDate($0) || Self.needsMediaIdentifier($0) }
             .filter { rec in
                 guard let prefix = pathPrefix else { return true }
                 return Self.isUnder(rec, prefix: prefix)
@@ -156,10 +188,11 @@ extension VideoScanModel {
                         group.addTask {
                             for item in lane {
                                 if Task.isCancelled { return }
-                                let probed = await Self.probeEmbeddedTags(path: item.path)
+                                let probed = await Self.probeEmbeddedTagSet(path: item.path)
                                 let outcome = EmbeddedProbeOutcome(
                                     id: item.id, path: item.path,
-                                    capture: probed?.0, origin: probed?.1 ?? .init(),
+                                    capture: probed?.capture, origin: probed?.origin ?? .init(),
+                                    mediaIdentifier: probed?.mediaIdentifier,
                                     failed: probed == nil)
                                 do { try await permits.wait() } catch { return }
                                 continuation.yield(outcome)
@@ -201,6 +234,13 @@ extension VideoScanModel {
                     rec.originEncoder = o.origin.encoder
                     changed = true
                 }
+                // FCP media identifier (Find Similar Footage) — only onto a
+                // record without one; written through like the date.
+                if rec.proAppsMediaIdentifier == nil, let mid = o.mediaIdentifier {
+                    rec.proAppsMediaIdentifier = mid
+                    metadataCache.updateMediaIdentifier(path: rec.fullPath, identifier: mid)
+                    result.mediaIdentifiers += 1
+                }
                 if changed {
                     // Write through to the probe cache — see the file header.
                     metadataCache.updateEmbeddedDate(path: rec.fullPath,
@@ -225,11 +265,12 @@ extension VideoScanModel {
         await flush()
 
         result.elapsed = Date().timeIntervalSince(started)
-        if result.dated > 0 || processed > 0 {
+        if result.dated > 0 || result.mediaIdentifiers > 0 || processed > 0 {
             noteCatalogRecordsMutated()
             saveCatalogDebounced()
         }
         log("Refresh Embedded Dates: dated \(result.dated), no tag \(result.noTag), failed \(result.failed)"
+            + (result.mediaIdentifiers > 0 ? ", FCP media ids \(result.mediaIdentifiers)" : "")
             + (result.cancelled ? ", CANCELLED" : "")
             + String(format: ", %.1fs", result.elapsed))
         return result

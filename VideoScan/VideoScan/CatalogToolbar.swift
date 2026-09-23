@@ -53,6 +53,9 @@ struct CatalogToolbar<Dashboard: View>: View {
     let onClearAndRecorrelateAll: () -> Void
     let onAnalyzeDuplicatesAll: () -> Void
     let onAnalyzeDuplicatesSelected: () -> Void
+    /// Find Similar Footage (2026-09-23) — whole catalog / the selection.
+    let onFindSimilarFootage: () -> Void
+    let onFindSimilarFootageOfSelected: () -> Void
     let volumesWithDeletableDups: [(path: String, count: Int)]
     /// Opens the Delete Duplicates volume picker (a sheet, not a submenu —
     /// see CatalogDuplicatesMenu.swift).
@@ -373,7 +376,9 @@ struct CatalogToolbar<Dashboard: View>: View {
                     onSetAlsoCleanUpWorkingCopies: { [model] on in
                         model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = on
                         model.noteDuplicateKeeperSettingsChanged()
-                    })
+                    },
+                    onFindSimilarFootage: onFindSimilarFootage,
+                    onFindSimilarFootageOfSelected: onFindSimilarFootageOfSelected)
 
                 if !duplicateStatus.isEmpty {
                     Text(duplicateStatus)

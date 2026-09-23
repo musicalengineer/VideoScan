@@ -20,6 +20,19 @@ import Testing
 @Suite("Rescan preservation")
 struct RescanPreservationTests {
 
+    // Find Similar Footage (QA 2026-09-23, MAJOR 1): Rick's footage answers
+    // are user edits — they must survive every rescan.
+    @Test func footageDecisionsSurviveRescan() {
+        let old = VideoRecord(); old.filename = "a.mov"; old.fullPath = "/Volumes/Test/a.mov"
+        old.setFootageDecision(FootageDecision(otherID: UUID(), verdict: .notSame))
+        let snap = RescanPreservedFields(from: old)
+        #expect(snap.isWorthRestoring)
+        let fresh = freshlyScannedRecord(path: old.fullPath)
+        snap.apply(to: fresh)
+        #expect(fresh.footageDecisions.map(\.verdict) == [.notSame])
+    }
+
+
     // MARK: - Helpers
 
     private func dossierLoadedRecord(

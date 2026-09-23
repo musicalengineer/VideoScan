@@ -544,6 +544,7 @@ struct ArchiveAngelVocabularyTests {
         #expect(MediaLedgerEvent.Kind.allCases.map(\.rawValue) == [
             "cataloged", "setAside", "putBack", "archived", "copyTrashed", "copyDeleted", "restored",
             "placeSet", "dateSet", "attestation", "approval", "angelProposed", "angelSkipped", "angelCleared",
+            "footageDecided",  // Find Similar Footage 2026-09-23 — appended, append-only vocabulary
         ])
         #expect(MediaLedgerEvent.Actor.allCases.map(\.rawValue) == ["rick", "tidy", "promote", "angel", "app"])
         #expect(ArchiveAngelAttentionStore.attentionKinds == [.angelProposed, .angelSkipped, .angelCleared])
