@@ -6,66 +6,27 @@
 //   LOGIC     tables for every operator × field type, `any`, every rule kind
 //             the classifier reads, the copy chooser, the date rule;
 //   SCALE     the legacy rule set over the S0 100k-record catalog, timed;
-//   PARITY    (S3a, kept as the legacy-rule-set sensor) the classifier under
-//             `.legacyNudge` answers EXACTLY what ArchiveNudge.assess answers —
-//             same ready / near counts, same ids, reasons, years, shortlist —
-//             on the 100k fixed-seed catalog and on every ArchiveNudgeTests case.
+//   FROZEN    (S3a parity → S4) the classifier under `.legacyNudge` holds
+//             the retired ArchiveNudge.assess's answers — its 100k pins and
+//             every ArchiveNudgeTests expectation, unchanged.
 
 import Foundation
 import Testing
 @testable import VideoScan
 import VideoScanCore
 
-// MARK: - Parity with ArchiveNudge.assess (S3a)
+// MARK: - The legacy rule set, pinned to frozen answers (S3a parity → S4)
 
-@Suite("Archive Angel recommendations — the legacy rule set reproduces ArchiveNudge exactly", .serialized)
+/// S3a proved `.legacyNudge` answers EXACTLY what ArchiveNudge.assess
+/// answered (same ids, reasons, years, order) on the 100k S0 catalog and on
+/// every ArchiveNudgeTests case. S4 retired ArchiveNudge with the Promote
+/// Helper, so the rule set is now held to that function's FROZEN answers:
+/// the 100k pins live in ArchiveAngelScaleCharacterizationTests.nudgeCounts,
+/// and the ArchiveNudgeTests cases are below with the expectations they
+/// asserted on the old function, unchanged.
+@Suite("Archive Angel recommendations — the legacy rule set holds the retired ArchiveNudge's frozen answers", .serialized)
 @MainActor
 struct ArchiveAngelRecommendationsLegacyParityTests {
-
-    /// Everything a person can see in the nudge, compared as sets where
-    /// ArchiveNudge's own order is not deterministic (dictionary order among
-    /// exact ties), and exactly where it is.
-    private func expectSame(_ old: ArchiveNudge, _ new: ArchiveNudge, _ label: String) {
-        #expect(new.ready.count == old.ready.count, "\(label): ready \(new.ready.count) vs \(old.ready.count)")
-        #expect(new.nearReady.count == old.nearReady.count, "\(label): near \(new.nearReady.count) vs \(old.nearReady.count)")
-        func byID(_ list: [ArchiveNudge.Candidate]) -> [UUID: ArchiveNudge.Candidate] {
-            Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        }
-        let oldReady = byID(old.ready), newReady = byID(new.ready)
-        let oldNear = byID(old.nearReady), newNear = byID(new.nearReady)
-        #expect(Set(newReady.keys) == Set(oldReady.keys), "\(label): the same ready recordings")
-        #expect(Set(newNear.keys) == Set(oldNear.keys), "\(label): the same nearly-ready recordings")
-        var mismatched = 0
-        for (id, o) in oldReady.merging(oldNear, uniquingKeysWith: { a, _ in a }) {
-            guard let n = newReady[id] ?? newNear[id] else { continue }
-            if n != o { mismatched += 1 }
-        }
-        #expect(mismatched == 0, "\(label): \(mismatched) row(s) differ in filename / year / reasons / score / needsDate")
-        // The order: score, then year, then name — compare the sort keys
-        // position by position (equal keys may legitimately swap).
-        func keys(_ l: [ArchiveNudge.Candidate]) -> [String] { l.map { "\($0.score)|\($0.year ?? -1)|\($0.filename.lowercased())" } }
-        #expect(keys(new.ready) == keys(old.ready), "\(label): ready order")
-        #expect(keys(new.nearReady) == keys(old.nearReady), "\(label): near order")
-        #expect(new.headline == old.headline, "\(label): headline")
-    }
-
-    @Test("PARITY at 100k: the S0 fixed-seed catalog — counts, ids, reasons, order, shortlist; S0 pins hold")
-    func parityAtScale() {
-        let records = ArchiveAngelS0Catalog.records(100_000)
-        let now = Date()
-        let old = ArchiveNudge.assess(records)
-        let clock = ContinuousClock()
-        var new = ArchiveNudge.empty
-        let elapsed = clock.measure { new = ArchiveAngel.nudge(for: records, now: now) }
-        let s = ArchiveAngelS0Catalog.seconds(elapsed)
-        print("[angel-s3a] legacy classifier ready \(new.ready.count) near \(new.nearReady.count) · \(String(format: "%.3f", s)) s")
-        expectSame(old, new, "100k")
-        #expect(new.ready.count == ArchiveAngelScaleCharacterizationTests.pinnedNudgeReady)
-        #expect(new.nearReady.count == ArchiveAngelScaleCharacterizationTests.pinnedNudgeNear)
-        #expect(new.shortlist.map { ArchiveAngelScaleCharacterizationTests.index($0.id) }
-                == ArchiveAngelScaleCharacterizationTests.pinnedNudgeHead)
-        #expect(s < 1.5, "legacy classification (projection + classify) over 100k in \(s) s")
-    }
 
     @Test("SCALE: the pure classify over 100k projected candidates — under 1 s (Debug)")
     func classifyBudget() {
@@ -82,7 +43,7 @@ struct ArchiveAngelRecommendationsLegacyParityTests {
         #expect(s < 1, "classify 100k in \(s) s")
     }
 
-    // The ArchiveNudgeTests cases, run through both.
+    // The ArchiveNudgeTests cases (Rick 2026-08-21), frozen expectations.
 
     private func record(_ name: String, stars: Int = 0, disposition: MediaDisposition = .unreviewed,
                         stage: ArchiveStage = .none, dup: DuplicateDisposition = .none,
@@ -101,22 +62,54 @@ struct ArchiveAngelRecommendationsLegacyParityTests {
         return r
     }
 
-    private func both(_ records: [VideoRecord]) -> (ArchiveNudge, ArchiveNudge) {
-        (ArchiveNudge.assess(records), ArchiveAngel.nudge(for: records))
+    private func legacy(_ records: [VideoRecord]) -> ArchiveAngelRecommendations.Result {
+        ArchiveAngelRecommendations.classify(records.map { ArchiveAngelCandidate(recommendationFactsOf: $0) },
+                                             rules: .legacyNudge)
     }
 
-    @Test("PARITY: every ArchiveNudgeTests case gives an identical ArchiveNudge (order included)")
-    func parityOnFixtures() {
-        var cases: [(String, [VideoRecord])] = []
-        cases.append(("vouched/dated", [
-            record("christmas_1994.mov", stars: 3), record("cape.mov", disposition: .important),
-            record("ready.mov", stage: .readyForArchive), record("unrated.mov"), record("one_star.mov", stars: 1),
-            record("copy.mov", stars: 3, dup: .extraCopy), record("junk.mov", stars: 3, disposition: .suspectedJunk),
-            record("scored_junk.mov", stars: 3, junk: 80), record("undated.mov", stars: 2, dated: false),
-        ]))
-        cases.append(("keeper", [record("b.mov", stars: 2), record("a.mov", stars: 3, disposition: .important, dup: .keep),
-                                 record("keeper_only.mov", dup: .keep)]))
-        cases.append(("headlines", (1...15).map { record("f\($0).mov", stars: 2) } + [record("u.mov", stars: 2, dated: false)]))
+    @Test("FROZEN: only vouched, dated keepers are ready — never junk, never an extra copy, 1 star is not a vouch")
+    func onlyVouchedDatedKeepersAreReady() {
+        let r = legacy([
+            record("christmas_1994.mov", stars: 3),
+            record("cape.mov", disposition: .important),
+            record("ready.mov", stage: .readyForArchive),
+            record("unrated.mov"),                              // nobody vouched
+            record("one_star.mov", stars: 1),                   // 1 star is not a vouch
+            record("copy.mov", stars: 3, dup: .extraCopy),      // never an extra copy
+            record("junk.mov", stars: 3, disposition: .suspectedJunk),
+            record("scored_junk.mov", stars: 3, junk: 80),
+            record("undated.mov", stars: 2, dated: false),
+        ])
+        #expect(r.ready.map(\.filename) == ["cape.mov", "christmas_1994.mov", "ready.mov"])
+        #expect(r.needsDate.map(\.filename) == ["undated.mov"])
+        #expect(r.ready.first { $0.filename == "christmas_1994.mov" }?.reasons == ["★★★"])
+        #expect(r.ready.first { $0.filename == "christmas_1994.mov" }?.year == 1994)
+        #expect(r.ready.first { $0.filename == "cape.mov" }?.reasons == ["marked Important"])
+    }
+
+    @Test("FROZEN: stronger vouching sorts first; the Keep mark alone is not a vouch")
+    func strongerVouchingSortsFirstAndKeepIsNotAVouchByItself() {
+        let r = legacy([
+            record("b.mov", stars: 2),
+            record("a.mov", stars: 3, disposition: .important, dup: .keep),
+            record("keeper_only.mov", dup: .keep),
+        ])
+        #expect(r.ready.map(\.filename) == ["a.mov", "b.mov"])
+        #expect(r.ready.first?.reasons == ["marked Important", "★★★", "the copy to keep"])
+    }
+
+    @Test("FROZEN: counts — 15 ready + 1 needing a date; one needing a date alone; nothing at all")
+    func counts() {
+        let many = legacy((1...15).map { record("f\($0).mov", stars: 2) } + [record("u.mov", stars: 2, dated: false)])
+        #expect(many.ready.count == 15 && many.needsDate.count == 1)
+        let one = legacy([record("u.mov", stars: 2, dated: false)])
+        #expect(one.ready.isEmpty && one.needsDate.map(\.filename) == ["u.mov"])
+        let none = legacy([])
+        #expect(none.ready.isEmpty && none.needsDate.isEmpty)
+    }
+
+    @Test("FROZEN: copies of one recording collapse to the keeper, or to the best-vouched copy")
+    func copiesOfOneRecordingCollapseToTheKeeperOrTheBestVouched() {
         let group = UUID()
         func copy(_ name: String, stars: Int, dup: DuplicateDisposition) -> VideoRecord {
             let r = record(name, stars: stars, dup: dup)
@@ -124,15 +117,35 @@ struct ArchiveAngelRecommendationsLegacyParityTests {
             r.duplicateGroupCount = 3
             return r
         }
-        cases.append(("group with keeper", [copy("lacie/xmas.mov", stars: 3, dup: .review),
-                                            copy("mybook/xmas.mov", stars: 2, dup: .keep),
-                                            copy("x9/xmas.mov", stars: 3, dup: .review)]))
-        cases.append(("group no keeper", [copy("lacie/xmas.mov", stars: 2, dup: .review),
-                                          copy("mybook/xmas.mov", stars: 3, dup: .none)]))
-        var twenty = (1...20).map { record("r\($0).mov", stars: 2) }
-        twenty.append(record("important.mov", disposition: .important))
-        twenty += (1...5).map { record("u\($0).mov", stars: 2, dated: false) }
-        cases.append(("shortlist", twenty))
+        let withKeeper = legacy([
+            copy("lacie/xmas.mov", stars: 3, dup: .review),
+            copy("mybook/xmas.mov", stars: 2, dup: .keep),
+            copy("x9/xmas.mov", stars: 3, dup: .review),
+        ])
+        #expect(withKeeper.ready.map(\.filename) == ["mybook/xmas.mov"], "the chosen keeper wins even with fewer stars")
+        #expect(withKeeper.ready.first?.reasons.last == "3 copies — this one")
+        let noKeeper = legacy([
+            copy("lacie/xmas.mov", stars: 2, dup: .review),
+            copy("mybook/xmas.mov", stars: 3, dup: .none),
+        ])
+        #expect(noKeeper.ready.map(\.filename) == ["mybook/xmas.mov"], "no keeper chosen → the best-vouched copy, once")
+        #expect(noKeeper.ready.first?.reasons.last == "2 copies — this one")
+    }
+
+    @Test("FROZEN: ready rows lead, strongest first; the nearly-ready follow")
+    func readyFirstStrongestFirst() {
+        var records = (1...20).map { record("r\($0).mov", stars: 2) }
+        records.append(record("important.mov", disposition: .important))
+        records.append(contentsOf: (1...5).map { record("u\($0).mov", stars: 2, dated: false) })
+        let r = legacy(records)
+        #expect(r.ready.count == 21 && r.needsDate.count == 5)
+        #expect(r.ready.first?.filename == "important.mov", "strongest vouching first")
+        let few = legacy([record("a.mov", stars: 2), record("u.mov", stars: 2, dated: false)])
+        #expect((few.ready + few.needsDate).map(\.filename) == ["a.mov", "u.mov"])
+    }
+
+    @Test("FROZEN: the same camera name and length collapses; older tapes rank first among equals")
+    func sameCameraNameAndLengthCollapsesAndOlderTapesRankFirst() {
         func mts(_ path: String) -> VideoRecord {
             let r = record("00000.MTS", disposition: .important)
             r.fullPath = path
@@ -141,14 +154,17 @@ struct ArchiveAngelRecommendationsLegacyParityTests {
         }
         let fixture2026 = record("2026-07-05_12-55-56.mkv", disposition: .important)
         fixture2026.embeddedCreationDate = Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 5))
-        cases.append(("camera names", [fixture2026, mts("/Volumes/X9/card1/00000.MTS"), mts("/Volumes/X10/card2/00000.MTS"),
-                                        mts("/Volumes/LaCie/00000.MTS"), mts("/Volumes/MyBook/00000.MTS"),
-                                        record("Cape-1993-archive.mkv", disposition: .important)]))
-        cases.append(("empty", []))
-        for (label, records) in cases {
-            let (old, new) = both(records)
-            #expect(new == old, "\(label): \(new.ready.map(\.filename)) / \(new.nearReady.map(\.filename)) vs \(old.ready.map(\.filename)) / \(old.nearReady.map(\.filename))")
-        }
+        let r = legacy([
+            fixture2026,
+            mts("/Volumes/X9/card1/00000.MTS"), mts("/Volumes/X10/card2/00000.MTS"),
+            mts("/Volumes/LaCie/00000.MTS"), mts("/Volumes/MyBook/00000.MTS"),
+            record("Cape-1993-archive.mkv", disposition: .important),
+        ])
+        let names = r.ready.map(\.filename)
+        #expect(names.filter { $0 == "00000.MTS" }.count == 1, "four cards, one recording")
+        #expect(names.first == "00000.MTS" || names.first == "Cape-1993-archive.mkv")
+        #expect(names.last == "2026-07-05_12-55-56.mkv", "older recordings first among equal vouching")
+        #expect(r.ready.first { $0.filename == "00000.MTS" }?.reasons.last == "4 copies — this one")
     }
 
     @Test("the legacy rule set is sound data (validation finds nothing) and survives a JSON round trip unchanged")
@@ -448,7 +464,7 @@ struct ArchiveAngelUnifiedRulesTests {
 
 // MARK: - ONE set of numbers (the façade)
 
-@Suite("Archive Angel — one set of numbers: nudge, strip headline, badge and filter agree", .serialized)
+@Suite("Archive Angel — one set of numbers: strip headline, badge and filter agree", .serialized)
 @MainActor
 struct ArchiveAngelOneSetOfNumbersTests {
 
@@ -470,7 +486,7 @@ struct ArchiveAngelOneSetOfNumbersTests {
         return r
     }
 
-    @Test("the counts, the nudge, the headline, the candidate set and the badges come from the same classes")
+    @Test("the counts, the headline, the candidate set and the badges come from the same classes")
     func agree() throws {
         let (model, root) = try model()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -496,11 +512,8 @@ struct ArchiveAngelOneSetOfNumbersTests {
         #expect(s.count(.ready) == 2 && s.count(.needsDate) == 1 && s.count(.worthALook) == 1)
         #expect(s.count(.excluded) == 1 && s.count(.anotherCopy) == 1 && s.count(.prepared) == 0)
         #expect(s.headline == "2 ready · 1 needs a date · 0 prepared")
-        #expect(s.nudge.ready.count == s.count(.ready), "the nudge sentence reads the same count")
-        #expect(s.nudge.nearReady.count == s.count(.needsDate))
-        #expect(s.nudge.ready.map(\.filename) == ["r1.mov", "r2.mov"], "by score")
-        #expect(s.nudge.ready.first?.year == 1994 && s.nudge.ready.first?.reasons == ["★★★"])
-        #expect(s.nudge.headline == "It looks like 2 files are ready to be archived, and 1 more just need a date.")
+        // (S4: the Archive tab's nudge list that also read these rows was
+        // retired with the Promote Helper; the strip and ranked list remain.)
         #expect(angel.candidateIDs == Set(ids[0...3]), "the catalog filter = Ready + Needs a date + Worth a look")
         #expect(s.ranked == [ids[0], ids[1], ids[2], ids[3]])
         #expect(angel.badge(for: ids[0])?.text == "Promote me")
@@ -659,7 +672,7 @@ struct ArchiveAngelS3QATests {
                                                                                   recs[1].id: rec(150, .ready, year: 1994)]))
         let s = model.archiveAngel.recommendations
         #expect(s.count(.ready) == 1 && !s.candidateIDs.contains(recs[1].id))
-        #expect(s.nudge.ready.map(\.filename) == ["a.mov"])
+        #expect(s.ranked == [recs[0].id], "only the live record is listed")
     }
 
     @Test("RED: a regex with a repeated group (ReDoS shape) is refused")

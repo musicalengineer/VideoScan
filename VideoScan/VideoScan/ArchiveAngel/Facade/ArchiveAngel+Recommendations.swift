@@ -1,9 +1,10 @@
 // ArchiveAngel+Recommendations.swift
 // ONE set of numbers (Consolidation S3b, Rick 2026-09-22). The façade turns
 // the sweep's classified evidence plus the prepared batches into the counts
-// every surface reads — the Archive tab's nudge sentence, the Angel strip's
-// headline ("N ready · M need a date · K prepared"), the catalog row badge
-// and the catalog's Archive Candidates filter — so they can never disagree.
+// every surface reads — the Angel strip's headline ("N ready · M need a
+// date · K prepared"), the catalog row badge and the catalog's Archive
+// Candidates filter — so they can never disagree. (The Archive tab's
+// nudge list read them too until S4 retired it with the Promote Helper.)
 //
 // Rebuilt when the evidence store changes (its `didChange`, after the new
 // file is in place) and when the prepared batches are re-read. One O(n)
@@ -30,8 +31,6 @@ struct ArchiveAngelRecommendationSummary: Equatable {
     /// Recommended ids: Ready, then Needs a date, then Worth a look, each
     /// by score (the strip's list).
     var ranked: [UUID] = []
-    /// The Archive tab's nudge (Ready → ready, Needs a date → nearly ready).
-    var nudge: ArchiveNudge = .empty
     /// Has any assessment been loaded or run?
     var isAssessed = false
     /// Bumps on every rebuild (catalog rows re-render their badge on it).
@@ -65,21 +64,15 @@ struct ArchiveAngelRecommendationSummary: Equatable {
         }
         s.isAssessed = true
         var rows: [ArchiveAngelRecommendationClass: [(UUID, ArchiveAngelEvidenceRecord)]] = [:]
-        var names: [UUID: String] = [:]
         for (id, rec) in evidence {
             if prepared.contains(id) { continue }
             if promoted.contains(id) { s.counts[.promoted, default: 0] += 1; continue }
             var kind = rec.recommendationClass
-            var name: String?
-            if kind.isRecommended {
-                name = live(id)
-                if name == nil { kind = .excluded }
-            }
+            if kind.isRecommended, live(id) == nil { kind = .excluded }
             s.counts[kind, default: 0] += 1
-            if kind.isRecommended, let name {
+            if kind.isRecommended {
                 s.candidateIDs.insert(id)
                 rows[kind, default: []].append((id, rec))
-                names[id] = name
             }
         }
         func sorted(_ k: ArchiveAngelRecommendationClass) -> [(UUID, ArchiveAngelEvidenceRecord)] {
@@ -89,14 +82,6 @@ struct ArchiveAngelRecommendationSummary: Equatable {
         }
         let ready = sorted(.ready), need = sorted(.needsDate), worth = sorted(.worthALook)
         s.ranked = (ready + need + worth).map(\.0)
-        func nudgeRows(_ list: [(UUID, ArchiveAngelEvidenceRecord)], needsDate: Bool) -> [ArchiveNudge.Candidate] {
-            list.compactMap { id, rec in
-                guard let name = names[id] else { return nil }
-                return ArchiveNudge.Candidate(id: id, filename: name, year: needsDate ? nil : rec.year,
-                                              reasons: rec.reasons ?? [], needsDate: needsDate, score: rec.score)
-            }
-        }
-        s.nudge = ArchiveNudge(ready: nudgeRows(ready, needsDate: false), nearReady: nudgeRows(need, needsDate: true))
         return s
     }
 

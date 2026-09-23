@@ -108,7 +108,7 @@ struct PlaceInheritanceSensorTests {
         #expect(repair.userPlace == "Cape Cod" && repair.userPlaceConfidence == "estimated")
     }
 
-    // MARK: AssessCopiesFamilyStamp (Archive Helper promote — codex #1374)
+    // MARK: ArchiveAngelFamilyStamp (Archive Helper promote — codex #1374)
 
     @Test func archiveHelperPromoteStampsFamilyPlaceIfMissing() {
         func rec(_ name: String, place: String? = nil, confidence: String? = nil) -> VideoRecord {
@@ -117,25 +117,25 @@ struct PlaceInheritanceSensorTests {
             return r
         }
         // Selection: known beats estimated; precise beats coarse; ties lexicographic.
-        #expect(AssessCopiesFamilyStamp.bestUserPlace(among: [rec("a.mov"), rec("b.mov")]) == nil)
+        #expect(ArchiveAngelFamilyStamp.bestUserPlace(among: [rec("a.mov"), rec("b.mov")]) == nil)
         let guessedCoarse = rec("c.mov", place: "Franklin", confidence: "estimated")
         let guessedPrecise = rec("d.mov", place: "Franklin, MA", confidence: "estimated")
         let knownCoarse = rec("e.mov", place: "Cape Cod", confidence: "known")
-        var best = AssessCopiesFamilyStamp.bestUserPlace(among: [guessedCoarse, guessedPrecise])
+        var best = ArchiveAngelFamilyStamp.bestUserPlace(among: [guessedCoarse, guessedPrecise])
         #expect(best?.place == "Franklin, MA" && best?.confidence == "estimated")
-        best = AssessCopiesFamilyStamp.bestUserPlace(among: [guessedPrecise, knownCoarse])
+        best = ArchiveAngelFamilyStamp.bestUserPlace(among: [guessedPrecise, knownCoarse])
         #expect(best?.place == "Cape Cod" && best?.confidence == "known", "known beats a more precise guess")
-        best = AssessCopiesFamilyStamp.bestUserPlace(among: [rec("f.mov", place: "Norwood"), rec("g.mov", place: "Ashland")])
+        best = ArchiveAngelFamilyStamp.bestUserPlace(among: [rec("f.mov", place: "Norwood"), rec("g.mov", place: "Ashland")])
         #expect(best?.place == "Ashland", "equal length, equal confidence → lexicographic")
 
         // Stamp: only records without a place; the family's confidence rides along.
         let master = rec("master.mov")
         let copy = rec("copy.mov", place: "Montana", confidence: "estimated")
         let family = (place: "Cape Cod", confidence: "known")
-        #expect(AssessCopiesFamilyStamp.stampPlaceIfMissing(family, onto: [master, copy]).map(\.filename) == ["master.mov"])
+        #expect(ArchiveAngelFamilyStamp.stampPlaceIfMissing(family, onto: [master, copy]).map(\.filename) == ["master.mov"])
         #expect(master.userPlace == "Cape Cod" && master.userPlaceConfidence == "known")
         #expect(copy.userPlace == "Montana" && copy.userPlaceConfidence == "estimated", "a record's own place is never clobbered")
-        #expect(AssessCopiesFamilyStamp.stampPlaceIfMissing(family, onto: [master, copy]).isEmpty, "second pass changes nothing")
+        #expect(ArchiveAngelFamilyStamp.stampPlaceIfMissing(family, onto: [master, copy]).isEmpty, "second pass changes nothing")
     }
 
     // codex #1380 (3): indexed-vs-canonical agreement — the search index
@@ -148,8 +148,8 @@ struct PlaceInheritanceSensorTests {
         model.searchIndex.rebuild(records: model.records)   // stale-able entries exist
         #expect(model.searchIndex.filter(records: model.records, query: "cape").isEmpty)
 
-        let changed = AssessCopiesFamilyStamp.stampPlaceIfMissing((place: "Cape Cod", confidence: "known"), onto: [master])
-        AssessCopiesFamilyStamp.announce(changed)   // record-scoped posts → model re-indexes each
+        let changed = ArchiveAngelFamilyStamp.stampPlaceIfMissing((place: "Cape Cod", confidence: "known"), onto: [master])
+        ArchiveAngelFamilyStamp.announce(changed)   // record-scoped posts → model re-indexes each
 
         #expect(pfCatalogTokenMatches(.substring("cape"), master), "canonical matcher sees the place")
         #expect(model.searchIndex.filter(records: model.records, query: "cape").map(\.id) == [master.id],
@@ -394,19 +394,19 @@ struct PlaceInheritanceSensorTests {
             r.backupAttestations = atts
             return r
         }
-        #expect(AssessCopiesFamilyStamp.familyAttestations(among: [rec("a.mov"), rec("b.mov")]).isEmpty)
+        #expect(ArchiveAngelFamilyStamp.familyAttestations(among: [rec("a.mov"), rec("b.mov")]).isEmpty)
         let later = Date(timeIntervalSince1970: 1_757_800_000)
         let newerCloudNo = BackupAttestation(kind: .cloud, answer: .no, attestedAt: later)
-        let family = AssessCopiesFamilyStamp.familyAttestations(among: [rec("c.mov", [cloudYes]), rec("d.mov", [newerCloudNo, offsiteNo])])
+        let family = ArchiveAngelFamilyStamp.familyAttestations(among: [rec("c.mov", [cloudYes]), rec("d.mov", [newerCloudNo, offsiteNo])])
         #expect(family == [newerCloudNo, offsiteNo], "union by kind, latest per kind")
 
         let master = rec("master.mov")
         let own = rec("own.mov", [BackupAttestation(kind: .cloud, answer: .yes, label: "Dropbox", attestedAt: Date(timeIntervalSince1970: 1_757_900_000))])
-        #expect(AssessCopiesFamilyStamp.stampAttestationsIfMissing(family, onto: [master, own]).map(\.filename) == ["master.mov", "own.mov"])
+        #expect(ArchiveAngelFamilyStamp.stampAttestationsIfMissing(family, onto: [master, own]).map(\.filename) == ["master.mov", "own.mov"])
         #expect(master.backupAttestations == family)
         #expect(own.backupAttestation(for: .cloud)?.label == "Dropbox", "a record's own newer answer is never clobbered")
         #expect(own.backupAttestation(for: .offsite)?.answer == .no, "...but the family's 'no' is added")
-        #expect(AssessCopiesFamilyStamp.stampAttestationsIfMissing(family, onto: [master, own]).isEmpty, "second pass changes nothing")
+        #expect(ArchiveAngelFamilyStamp.stampAttestationsIfMissing(family, onto: [master, own]).isEmpty, "second pass changes nothing")
     }
 
     @Test func keeperPolicyScoresAttestedCopy() {

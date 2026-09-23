@@ -512,12 +512,11 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/BundleImporter.swift": 2, "VideoScan/CaptionRunner.swift": 2,
         "VideoScan/CatalogStore.swift": 1, "VideoScan/CatalogSync.swift": 3,
         "VideoScan/CatalogWriteError.swift": 1, "VideoScan/CleanupJob.swift": 4,
-        // 2 → 1 (fix/one-partial-registry, 2026-09-22): removePartial now
-        // delegates the removeItem to PartialFileNaming.remove (after its own
-        // is-a-partial guard). What remains is the placeholder fallback's
-        // unlink (only our own 0-byte O_EXCL placeholder, same dev+ino
-        // re-checked just before).
-        "VideoScan/CombineOutputPublish.swift": 1,
+        // CombineOutputPublish.swift: 2 → 1 (fix/one-partial-registry,
+        // 2026-09-22) → 0 (codex #1642, 2026-09-23): the placeholder
+        // fallback and its unlink are gone; the no-clobber rename lives in
+        // ExclusivePublish (PartialFileNaming.swift) and removePartial
+        // delegates to PartialFileNaming.remove.
         "VideoScan/CouplePortrait.swift": 2,
         // trashItem (Replace, the user's choice, never on the archive volume).
         // 2 → 1 (fix/one-partial-registry, 2026-09-22): the stale-partial
@@ -532,10 +531,19 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/MediaPersonLinks.swift": 1,   // a method named unlink(personID:) — no file
         // NEW 1 (fix/one-partial-registry, 2026-09-22): the ONE removal of
         // `<stem>.<8 hex>.vs-partial.<ext>` files — unlink(2), so a directory
-        // is refused (QA 3) — behind remove()'s is-a-partial name guard; used by Combine + Transcode for this
-        // run's own partial and by the one stale sweep (not live, regular
-        // file, > 24 h, each removal logged with size + job). Never a final.
-        "VideoScan/PartialFileNaming.swift": 1,
+        // is refused (QA 3) — behind remove()'s is-a-partial name guard AND
+        // its is-not-protected guard; used by Combine + Transcode for this
+        // run's own partial and by the one stale sweep (not live, not
+        // protected, regular file, > 24 h, each removal logged with size +
+        // job). Never a final.
+        // 1 → 3 (codex #1642, 2026-09-23):
+        //  - dropProtectionMarker: unlinks `<partial>.keep` — the app's own
+        //    marker, derived from a checked partial name — only AFTER the
+        //    output was moved off the pattern (it protects nothing then);
+        //  - ExclusivePublish.publishByLink: after link(2) gave OUR file its
+        //    published name, drops the old partial name — only while lstat
+        //    shows the same dev+ino (the data stays under the new name).
+        "VideoScan/PartialFileNaming.swift": 3,
         "VideoScan/POIProfileFileStore.swift": 2, "VideoScan/POIStorage.swift": 1,
         "VideoScan/PerceptualFingerprinter.swift": 1, "VideoScan/PersonEditSheet.swift": 1,
         "VideoScan/PersonFinderCompilation.swift": 7, "VideoScan/RebuildAudioJob.swift": 1,
@@ -584,8 +592,11 @@ struct ArchiveVolumeProtectionSourceSensor {
     /// RENAME_EXCL): these REPLACE whatever is at the destination.
     /// `RENAME_EXCL` renames are no-clobber and are not counted.
     static let reviewedClobberingRenames: [String: Reviewed] = [
-        "VideoScan/CombineOutputPublish.swift": Reviewed(count: 1, reason:
-            "the ENOTSUP/EINVAL fallback (exFAT/msdos/SMB lack RENAME_EXCL): rename(2) onto OUR 0-byte O_EXCL placeholder, only after lstat confirms the name is still that placeholder (same dev+ino, size 0); anything else ⇒ name taken, nothing touched. The normal path is renamex_np(RENAME_EXCL)"),
+        // CombineOutputPublish.swift: 1 → 0 (codex #1642, 2026-09-23). Its
+        // placeholder fallback rename(2)d after an lstat check — a second
+        // writer in that window was overwritten. No publish path renames
+        // over anything now: ExclusivePublish uses RENAME_EXCL, link(2), or
+        // refuses.
         "VideoScan/MediaLedger.swift": Reviewed(count: 1, reason:
             "publishes the ledger's own index mirror from its own partial (dirfd-relative); app data"),
         "VideoScan/POIStorage.swift": Reviewed(count: 1, reason:
@@ -624,6 +635,14 @@ struct ArchiveVolumeProtectionSourceSensor {
 
     private static func source(_ rel: String) throws -> String {
         try String(contentsOf: projectDir.appendingPathComponent(rel), encoding: .utf8)
+    }
+
+    /// `text` without its comment lines (so an explainer mentioning a call
+    /// is not the call).
+    private static func codeOnly(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
     }
 
     /// Per-file match counts over non-comment lines. `stripStrings` blanks
@@ -746,14 +765,19 @@ struct ArchiveVolumeProtectionSourceSensor {
                 "no removeItem here: a replaced file only ever goes to the Trash")
         #expect(publish[sweep.upperBound...].contains("PartialFileNaming.sweepStale(in: dir, job: \"transcode\""),
                 "Transcode's stale sweep is the ONE shared sweep (fix/one-partial-registry)")
-        #expect(publish.contains("UInt32(RENAME_EXCL)") && !publish.contains("RENAME_SWAP)"))
+        #expect(!publish.contains("RENAME_SWAP)"))
+        // codex #1642: Derivative's no-clobber rename IS the shared one.
+        #expect(publish.contains("try ExclusivePublish.renameNoClobberDetailed(source, destination)"))
+        #expect(!Self.codeOnly(publish).contains("renamex_np("), "no private rename — ExclusivePublish only")
     }
 
     /// Combine (fix/combine-never-overwrites, 2026-09-22) never removes or
     /// replaces a final output or a catalog file. Pin the SHAPE the counts
     /// above were reviewed against, so a count-neutral edit cannot move a
-    /// removal out from behind its guard.
-    @Test func combineOnlyEverRemovesOrReplacesItsOwnPartialsAndPlaceholder() throws {
+    /// removal out from behind its guard. Renamed from
+    /// …AndPlaceholder (codex #1642, 2026-09-23): there is no placeholder
+    /// and no rename over anything any more.
+    @Test func combineOnlyEverRemovesItsOwnPartialsAndNeverRenamesOverAName() throws {
         let publish = try Self.source("VideoScan/CombineOutputPublish.swift")
         // removePartial: its own name guard, then the ONE shared removal
         // (fix/one-partial-registry, 2026-09-22) — no removeItem of its own.
@@ -768,35 +792,54 @@ struct ArchiveVolumeProtectionSourceSensor {
         // The sweep is the ONE shared sweep.
         let sweep = try #require(publish.range(of: "static func sweepStalePartials("))
         #expect(publish[sweep.upperBound...].contains("PartialFileNaming.sweepStale(in: folder, job: \"combine\""))
+        // codex #1642: no placeholder, no bare rename, no unlink — Combine
+        // publishes only through the shared ExclusivePublish.
+        #expect(!publish.contains("renameViaPlaceholder"))
+        #expect(!Self.codeOnly(publish).contains("unlink("))
+        #expect(!Self.codeOnly(publish).contains("rename("))
+        #expect(publish.contains("try ExclusivePublish.renameNoClobber(source, destination)"))
         // …and in the shared file: no removeItem (recursive on a directory)
-        // — exactly one unlink(2), behind remove()'s name guard (QA 3,
-        // 2026-09-22); the sweep skips live partials and removes via remove().
+        // — exactly one unlink of a partial, behind remove()'s name guard
+        // (QA 3, 2026-09-22) and its protection guard (codex #1642); the
+        // sweep skips live AND protected partials and removes via remove().
         let shared = try Self.source("VideoScan/PartialFileNaming.swift")
         let sharedRemove = try #require(shared.range(of: "static func remove(_ url: URL) throws {"))
         let sharedGuard = try #require(shared.range(of: "guard isPartialName(url.lastPathComponent) else {",
                                                     range: sharedRemove.upperBound..<shared.endIndex))
+        let protectGuard = try #require(shared.range(of: "guard !isProtected(url) else {",
+                                                     range: sharedRemove.upperBound..<shared.endIndex))
         let sharedUnlink = try #require(shared.range(of: "unlink(url.path)"))
         #expect(!shared.contains("removeItem("))
         #expect(shared.components(separatedBy: "unlink(url.path)").count - 1 == 1)
-        #expect(sharedUnlink.lowerBound > sharedGuard.upperBound,
-                "the one unlink sits behind remove()'s is-a-partial guard")
+        #expect(sharedUnlink.lowerBound > sharedGuard.upperBound && sharedUnlink.lowerBound > protectGuard.upperBound,
+                "the one partial unlink sits behind remove()'s is-a-partial AND is-not-protected guards")
         let sharedSweep = try #require(shared.range(of: "static func sweepStale("))
         let sweepBody = shared[sharedSweep.upperBound...]
         #expect(sweepBody.contains("if isLive(url) { continue }"))
+        #expect(sweepBody.contains("if isProtected(url) { continue }"))
         #expect(sweepBody.contains("(attrs[.type] as? FileAttributeType) == .typeRegular"))
         #expect(sweepBody.contains("try remove(url)"))
-        // rename(2) and unlink(2): only in the placeholder fallback, each
-        // after the dev+ino+size-0 identity check.
-        let fallback = try #require(publish.range(of: "private static func renameViaPlaceholder("))
-        let identity = "now.st_dev == mine.st_dev, now.st_ino == mine.st_ino, now.st_size == 0"
-        let check = try #require(publish.range(of: identity, range: fallback.upperBound..<publish.endIndex))
-        let bareRename = try #require(publish.range(of: "if rename(source, destination) == 0"))
-        #expect(bareRename.lowerBound > check.upperBound)
-        let recheck = try #require(publish.range(
-            of: "after.st_dev == mine.st_dev, after.st_ino == mine.st_ino, after.st_size == 0"))
-        let unlinkSite = try #require(publish.range(of: "unlink(destination)"))
-        #expect(unlinkSite.lowerBound > recheck.upperBound && recheck.lowerBound > bareRename.upperBound)
-        #expect(publish.contains("renamex_np(src, dst, UInt32(RENAME_EXCL))"))
+        // keepUnpublished: the durable marker is written BEFORE any rename,
+        // and the reservation is released only once the output is off the
+        // pattern or marked; otherwise pinned.
+        let keep = try #require(shared.range(of: "static func keepUnpublished("))
+        let keepBody = shared[keep.upperBound...]
+        let mark = try #require(keepBody.range(of: "let marked = writeProtectionMarker(for: partial)"))
+        let firstRename = try #require(keepBody.range(of: "try renameNoClobber(partial.path, kept.path)"))
+        #expect(mark.upperBound < firstRename.lowerBound)
+        #expect(keepBody.contains("pin(partial)"))
+        // ExclusivePublish: RENAME_EXCL, else link(2) — EEXIST handled before
+        // any other link outcome — else refuse. The old partial name is
+        // dropped only after the dev+ino re-check.
+        let exclusive = try #require(shared.range(of: "enum ExclusivePublish {"))
+        let exBody = shared[exclusive.upperBound...]
+        #expect(exBody.contains("renamex_np(src, dst, UInt32(RENAME_EXCL))"))
+        let linkCall = try #require(exBody.range(of: "let le = linkSyscall(source, destination)"))
+        let eexist = try #require(exBody.range(of: "if le == EEXIST { return .taken(renameExclSupported: false) }"))
+        #expect(eexist.lowerBound > linkCall.upperBound)
+        let identity = try #require(exBody.range(of: "now.st_dev == mine.st_dev, now.st_ino == mine.st_ino"))
+        let dropSource = try #require(exBody.range(of: "if unlink(source) != 0"))
+        #expect(dropSource.lowerBound > identity.upperBound && identity.lowerBound > eexist.upperBound)
         // The model: ffmpeg writes the reserved partial; failures remove the
         // partial, never the output name.
         let model = try Self.source("VideoScan/VideoScanModel+Combine.swift")
