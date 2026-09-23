@@ -532,6 +532,23 @@ public class VideoRecord: Identifiable, Decodable {
     /// (`Date?` ≈ C++ `std::optional<Date>`.) Same additive migration.
     public var audioVerifyDate: Date?
 
+    /// Verify Video verdict (Rick 2026-09-23 — Verify Audio's picture-side
+    /// sibling): "" = never verified, "ok", "warning", or "broken" (the
+    /// raw values of VideoVerifyVerdict). Broken records share the red
+    /// damaged-row language with damaged audio. Same additive, delta-
+    /// minimal migration as `audioVerifyStatus`: legacy catalogs decode
+    /// as "" and never-verified records encode no key.
+    public var videoVerifyStatus: String = ""
+
+    /// Plain-words detail for `videoVerifyStatus`. Broken notes lead with
+    /// "Broken video — " and warnings with "Video warning — " so ONE
+    /// query (`notes:broken`) batch-finds every broken picture. "" when
+    /// never verified or verified clean.
+    public var videoVerifyNote: String = ""
+
+    /// When Verify Video last ran on this record. nil = never verified.
+    public var videoVerifyDate: Date?
+
     /// Repair lifecycle (GH #132): set on the ORIGINAL record when Rick
     /// confirms a repair — points at the repaired record that replaces
     /// it. nil = normal record (the vast majority); non-nil = superseded:
@@ -776,6 +793,11 @@ public class VideoRecord: Identifiable, Decodable {
         audioVerifyStatus           = try c.decodeIfPresent(String.self, forKey: .audioVerifyStatus) ?? ""
         audioVerifyNote             = try c.decodeIfPresent(String.self, forKey: .audioVerifyNote) ?? ""
         audioVerifyDate             = try c.decodeIfPresent(Date.self, forKey: .audioVerifyDate)
+        // Verify Video verdict (2026-09-23) — same additive-optional
+        // migration: legacy catalogs (no keys) come back never-verified.
+        videoVerifyStatus           = try c.decodeIfPresent(String.self, forKey: .videoVerifyStatus) ?? ""
+        videoVerifyNote             = try c.decodeIfPresent(String.self, forKey: .videoVerifyNote) ?? ""
+        videoVerifyDate             = try c.decodeIfPresent(Date.self, forKey: .videoVerifyDate)
         // Repair lifecycle (GH #132) — additive optional, same migration
         // pattern: legacy catalogs (no keys) come back nil = normal /
         // unconfirmed; superseded/confirmed records round-trip unchanged.

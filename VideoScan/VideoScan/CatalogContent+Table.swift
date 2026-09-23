@@ -134,6 +134,11 @@ extension CatalogContent {
         if rec.audioVerifyStatus == "damaged" {
             tip += "\n\n⚠️ \(rec.audioVerifyNote.isEmpty ? "Damaged audio" : rec.audioVerifyNote)"
         }
+        // Verify Video (2026-09-23): broken AND warning verdicts explain
+        // themselves here; the note self-describes ("Broken video — …").
+        if rec.videoVerifyStatus == "broken" || rec.videoVerifyStatus == "warning" {
+            tip += "\n\n⚠️ \(rec.videoVerifyNote.isEmpty ? "Video \(rec.videoVerifyStatus)" : rec.videoVerifyNote)"
+        }
         return tip
     }
 
@@ -750,28 +755,10 @@ extension CatalogContent {
                         }
                     }
 
-                    // Trim Master — cut static/junk off the head and
-                    // tail of an archival capture with a stream copy
-                    // (no re-encode, no quality loss). Single-file
-                    // operation in v1: disabled for multi-select.
-                    // Needs a video stream, an online volume, and no
-                    // trim already running against this record.
-                    let trimRunning = fileOpsCenter.jobs.contains { job in
-                        guard job.state.isActive, let t = job as? TrimJob else { return false }
-                        return t.record.id == rec.id
-                    }
-                    let trimBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
-                        || trimRunning
-                        || activeRecs.count > 1
-                        || !(rec.streamType == .videoAndAudio || rec.streamType == .videoOnly)
-                    Button("Trim Master…") {
-                        trimRequest = TrimRequest(record: rec)
-                    }
-                    .disabled(trimBlocked)
-                    .help(activeRecs.count > 1
-                          ? "Trim Master works on one file at a time."
-                          : "Cut static or junk off the start and end — a perfect copy with no quality loss. The original is never changed.")
-                    .accessibilityIdentifier("catalog.row.trimMaster")
+                    // (The "Trim Master…" item was retired 2026-09-23 — Rick:
+                    // "Let's remove Trim Master". TrimJob and startTrim stay
+                    // (tested, and the .trim job kind still names old rows);
+                    // only the menu entry and its now-unreachable sheet went.)
 
                     // Promote to Archive (Master Archive, 2026-08-15) —
                     // single + multi select; the model routes to the
@@ -1217,6 +1204,36 @@ extension CatalogContent {
     }
 
 
+    /// "Verify Video" (Rick 2026-09-23) — Verify Audio's picture-side
+    /// sibling, dispatched identically: one VerifyVideoJob per reachable
+    /// selected row with a picture, into the MFO window, any selection
+    /// size (the full decode reads the whole file, so never a sheet). No
+    /// ellipsis: nothing opens before the action (macOS convention; Verify
+    /// Audio has none either). Audio-only rows are skipped and the item
+    /// greys out when nothing selected has a picture — O(selection), never
+    /// O(records).
+    @ViewBuilder
+    private func verifyVideoMenuItem(activeRecs: [VideoRecord]) -> some View {
+        let verifiableRecs = activeRecs.filter {
+            $0.streamType != .audioOnly
+                && VolumeReachability.isReachable(path: $0.fullPath)
+        }
+        Button(activeRecs.count > 1
+               ? "Verify Video (\(activeRecs.count) Files)"
+               : "Verify Video") {
+            fileOpsCenter.startedByUser { center in
+                for r in verifiableRecs {
+                    model.noteMissingFileForUserAction(r)
+                    center.startVerifyVideo(record: r, model: model)
+                }
+            }
+            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+        }
+        .disabled(verifiableRecs.isEmpty)
+        .help("Check the picture — does every frame decode, are the timing and frame rate sane, is the file a sensible size for its picture? Says OK, Warning or Broken, and what to do. Runs in the operations window; the catalog stays usable.")
+        .accessibilityIdentifier("catalog.row.verifyVideo")
+    }
+
     /// Verify Audio + repair-lifecycle context-menu cluster (GH #128 /
     /// #132 / #135), extracted from the row context menu so the menu's
     /// ViewBuilder expression stays inside Xcode's type-check budget
@@ -1258,6 +1275,10 @@ extension CatalogContent {
         .disabled(verifiableRecs.isEmpty)
         .help("Check the sound track — levels, format, and whether the audio really belongs to the picture. Runs in the operations window; the catalog stays usable.")
         .accessibilityIdentifier("catalog.row.verifyAudio")
+
+        // Verify Video — right beside Verify Audio, built the same way
+        // (Rick 2026-09-23).
+        verifyVideoMenuItem(activeRecs: activeRecs)
 
         // Always available for a single row (Rick 2026-08-14): with a
         // cached Verify Audio diagnosis the sheet shows findings; without

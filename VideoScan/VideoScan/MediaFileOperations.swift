@@ -92,6 +92,12 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// these; the results sheet presents the already-computed
     /// diagnosis afterwards without re-running anything.
     case verifyAudio
+    /// "Verify Video" — Verify Audio's picture-side sibling (Rick
+    /// 2026-09-23): header facts + packet samples + a full decode, then
+    /// a plain-words OK / Warning / Broken verdict with a recommendation.
+    /// Read-only on media; verdict persisted on the record. Its row
+    /// expands to the reasons (VerifyVideoDetailView). VerifyVideoJob.
+    case verifyVideo
     /// "Find & Tag" — runs a per-person detector recipe (Donna Recipe,
     /// docs/find-and-tag-design.md) over selected records and writes
     /// MACHINE-tier person tags (detected "Donna*" / suspected
@@ -164,6 +170,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .balanceAudio: return "Balance"
         case .rebuildAudio: return "Rebuild"
         case .verifyAudio: return "Verify"
+        case .verifyVideo: return "Verify Video"
         case .findPerson: return "Find"
         case .promote: return "Promote"
         case .verifyArchive: return "Fixity"
@@ -199,6 +206,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .balanceAudio: return "balance audio"
         case .rebuildAudio: return "rebuild audio"
         case .verifyAudio: return "verify audio"
+        case .verifyVideo: return "verify video"
         case .findPerson: return "find person"
         case .promote: return "promote"
         case .verifyArchive: return "verify archive"
@@ -1101,7 +1109,8 @@ final class MediaFileOperationsCenter: ObservableObject {
                           probedIntra: probedIntra)
         guard add(job) else { return job }
         // Same-record dedupe guard (QA MAJOR 2, 2026-07-17). The context
-        // menu greys out "Trim Master…" while a trim runs, but the Center
+        // menu used to grey out "Trim Master…" while a trim ran (the menu
+        // item was retired 2026-09-23), but the Center
         // is the last line of defense for every caller: two trims of one
         // record share the `.vs-partial` path, so the second job's
         // stale-partial cleanup would unlink the first job's in-flight
@@ -1269,6 +1278,37 @@ final class MediaFileOperationsCenter: ObservableObject {
         job.start()
         fileOpsLog.info("verifyAudio started: \(record.filename, privacy: .public) (autoRepair=\(autoRepair))")
         logStart(job, plan: autoRepair ? "diagnose + repair if damaged" : "diagnose the audio track")
+        return job
+    }
+
+    /// Kick off "Verify Video" as an MFO job (Rick 2026-09-23) — built
+    /// like `startVerifyAudio`: the full decode reads the whole file, so
+    /// it runs here, gated per volume, never in a sheet. Persists the
+    /// verdict on completion. Returns nil — REFUSING the dispatch — when a
+    /// Verify Video job is already active for this same record.
+    ///
+    /// `diagnoseOverride` is a TEST SEAM only — production passes nil.
+    @discardableResult
+    func startVerifyVideo(record: VideoRecord,
+                          model: VideoScanModel,
+                          diagnoseOverride: (@Sendable (String) async throws -> VideoVerifyDiagnosis)? = nil) -> VerifyVideoJob? {
+        let duplicate = jobs.contains { job in
+            guard job.state.isActive, let v = job as? VerifyVideoJob else { return false }
+            return v.record.id == record.id
+        }
+        guard !duplicate else {
+            fileOpsLog.notice("verifyVideo REFUSED duplicate dispatch: \(record.filename, privacy: .public) already has an active verify video job")
+            appLog.write("verify video refused: \(record.filename) — a verify video job for this file is already running; nothing was started")
+            return nil
+        }
+        let job = VerifyVideoJob(record: record,
+                                 model: model,
+                                 gates: gatePlan(forPaths: [record.fullPath]),
+                                 diagnoseOverride: diagnoseOverride)
+        guard add(job) else { return job }
+        job.start()
+        fileOpsLog.info("verifyVideo started: \(record.filename, privacy: .public)")
+        logStart(job, plan: "check the picture (header, timestamps, full decode)")
         return job
     }
 

@@ -147,6 +147,9 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let audioVerifyStatus: String
     public let audioVerifyNote: String
     public let audioVerifyDate: Date?
+    public let videoVerifyStatus: String
+    public let videoVerifyNote: String
+    public let videoVerifyDate: Date?
     public let supersededByID: UUID?
     public let repairConfirmedDate: Date?
     public let archiveFixity: ArchiveFixity?
@@ -273,6 +276,9 @@ public struct VideoRecordDTO: Sendable, Encodable {
         audioVerifyStatus           = r.audioVerifyStatus
         audioVerifyNote             = r.audioVerifyNote
         audioVerifyDate             = r.audioVerifyDate
+        videoVerifyStatus           = r.videoVerifyStatus
+        videoVerifyNote             = r.videoVerifyNote
+        videoVerifyDate             = r.videoVerifyDate
         supersededByID              = r.supersededByID
         repairConfirmedDate         = r.repairConfirmedDate
         archiveFixity               = r.archiveFixity
@@ -500,6 +506,15 @@ public struct VideoRecordDTO: Sendable, Encodable {
             try c.encode(audioVerifyNote, forKey: .audioVerifyNote)
         }
         try c.encodeIfPresent(audioVerifyDate, forKey: .audioVerifyDate)
+        // Verify Video verdict (2026-09-23): the same delta-minimal rule —
+        // never-verified records gain zero bytes.
+        if !videoVerifyStatus.isEmpty {
+            try c.encode(videoVerifyStatus, forKey: .videoVerifyStatus)
+        }
+        if !videoVerifyNote.isEmpty {
+            try c.encode(videoVerifyNote, forKey: .videoVerifyNote)
+        }
+        try c.encodeIfPresent(videoVerifyDate, forKey: .videoVerifyDate)
         // Repair lifecycle (GH #132): delta-minimal — both keys written
         // only when present, so never-superseded / never-confirmed
         // records (all legacy records) round-trip byte-identical.

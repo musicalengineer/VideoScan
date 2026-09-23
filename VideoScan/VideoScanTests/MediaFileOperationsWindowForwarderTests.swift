@@ -378,7 +378,7 @@ struct MediaFileOperationsWindowForwardSensorTests {
         // Archive Angel Start (start sheet) + Prepare with Archive Angel
         // (catalog menu) — both through ArchiveAngel.prepare since S2.
         "ArchiveAngel/Seams/AppConformances.swift": 2,
-        "CatalogContent+Table.swift": 8,          // compare, find, verify×2, analyze×2, reformat×2
+        "CatalogContent+Table.swift": 9,          // compare, find, verify audio×2, verify video, analyze×2, reformat×2
         "CatalogHelpers.swift": 1,                // Extract Facial Frames
         "CleanupSheet.swift": 1,
         "ContentView.swift": 2,                   // Delete Duplicates + accepted Resume
@@ -386,7 +386,7 @@ struct MediaFileOperationsWindowForwardSensorTests {
         "PromoteToArchiveSheet.swift": 1,
         "RipAllFramesSheet.swift": 1,
         "TranscodeSheet.swift": 1,
-        "TrimSheet.swift": 1,
+        // (TrimSheet.swift retired with the "Trim Master…" menu item, 2026-09-23.)
         "VerifyAudioSheet.swift": 2,              // Balance + Rebuild
     ]
 

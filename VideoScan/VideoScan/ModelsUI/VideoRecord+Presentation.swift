@@ -28,6 +28,11 @@ extension VideoRecord {
         if audioVerifyStatus == "damaged" {
             return .red
         }
+        // Verify Video "broken" verdict (2026-09-23) — the same damaged
+        // tier: a broken picture must never read as an ordinary row.
+        if videoVerifyStatus == "broken" {
+            return .red
+        }
         if mediaDisposition == .confirmedJunk {
             return .secondary
         }
@@ -72,7 +77,7 @@ extension VideoRecord {
         }
         // Verify Audio damaged verdict (GH #128) — same red wash the
         // ffprobeFailed state uses (one damaged-row language).
-        if audioVerifyStatus == "damaged" {
+        if audioVerifyStatus == "damaged" || videoVerifyStatus == "broken" {
             return Color.red.opacity(0.15)
         }
         switch streamType {

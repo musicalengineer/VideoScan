@@ -80,6 +80,9 @@ extension VideoRecord {
         case audioVerifyStatus
         case audioVerifyNote
         case audioVerifyDate
+        case videoVerifyStatus
+        case videoVerifyNote
+        case videoVerifyDate
         case supersededByID
         case repairConfirmedDate
         case archiveFixity

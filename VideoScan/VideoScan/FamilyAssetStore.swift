@@ -677,6 +677,21 @@ struct FamilyAssetStore {
     /// name-only rule (`groupFolderMatches(_:person:)`).
     var identity: FamilyAssetIdentityDirectory? = nil
 
+    /// One listing of `People/`, taken by `snapshotPeopleFolders()` and
+    /// reused by every read through THIS store value. Nil (the default)
+    /// lists the directory on every call, as before. Lifetime = the value:
+    /// a lineage card makes one store, looks up its 7 people and drops it,
+    /// so nothing outlives the answer. Without it, one `photoURLs(for:)`
+    /// listed, stat'ed, sorted and parsed `People/` about six times
+    /// (HallieQueryBench paternal-line, 2026-09-23). Only folder NAMES are
+    /// held; every image is still opened and verified fresh.
+    private var peopleFolderSnapshot: [URL]? = nil
+
+    /// Take the `People/` listing once for a batch of read-only lookups.
+    mutating func snapshotPeopleFolders() {
+        peopleFolderSnapshot = listSafePersonFolders()
+    }
+
     /// Names imported photos; injectable so tests can predict a destination
     /// (the symlink-swap test plants a link exactly where the import lands).
     var importClock: @Sendable () -> Date = { Date() }
@@ -926,7 +941,7 @@ struct FamilyAssetStore {
         guard isSafeDirectory(directory) else { return [] }
         return safeChildren(of: directory)
             .filter(isDocumentFile)
-            .sorted(by: Self.stableURLOrder)
+            .stableURLOrdered()
     }
 
     private func isDocumentFile(_ url: URL) -> Bool {
@@ -1641,7 +1656,7 @@ struct FamilyAssetStore {
         guard isSafeDirectory(directory) else { return [] }
         return safeChildren(of: directory)
             .filter(isVerifiedImage)
-            .sorted(by: Self.stableURLOrder)
+            .stableURLOrdered()
     }
 
     private struct FolderIdentity {
@@ -1651,9 +1666,13 @@ struct FamilyAssetStore {
     }
 
     private func safePersonFolders() -> [URL] {
+        peopleFolderSnapshot ?? listSafePersonFolders()
+    }
+
+    private func listSafePersonFolders() -> [URL] {
         safeChildren(of: peopleDirectory)
             .filter(isSafeDirectory)
-            .sorted(by: Self.stableURLOrder)
+            .stableURLOrdered()
     }
 
     private func resolvedPersonFolder(
@@ -1825,10 +1844,12 @@ struct FamilyAssetStore {
         return String(collapsed.prefix(120))
     }
 
+    private static let lookupLocale = Locale(identifier: "en_US_POSIX")
+
     private static func lookupKey(_ raw: String) -> String {
         raw.folding(
             options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
-            locale: Locale(identifier: "en_US_POSIX"))
+            locale: lookupLocale)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
@@ -1888,6 +1909,30 @@ struct FamilyAssetStore {
         return left == right ? lhs.path < rhs.path : left < right
     }
 
+    /// `sorted(by: stableURLOrder)` with each URL's key computed ONCE
+    /// instead of twice per comparison. Same comparator, same stable sort,
+    /// so the same order. `safePersonFolders()` runs about six times per
+    /// person a lineage card shows, and folding a folder name (Unicode
+    /// case/diacritic/width folding) ~1,000 times per sort of 82 folders
+    /// was two thirds of the paternal-line question once the identity
+    /// lookup was fixed (HallieQueryBench, 2026-09-23).
+    fileprivate static func stableURLOrdered(_ urls: [URL]) -> [URL] {
+        struct Keyed {
+            let key: String
+            let path: String
+            let url: URL
+        }
+        var keyed: [Keyed] = []
+        keyed.reserveCapacity(urls.count)
+        for url in urls {
+            keyed.append(Keyed(key: lookupKey(url.lastPathComponent), path: url.path, url: url))
+        }
+        keyed.sort { (lhs: Keyed, rhs: Keyed) -> Bool in
+            lhs.key == rhs.key ? lhs.path < rhs.path : lhs.key < rhs.key
+        }
+        return keyed.map(\.url)
+    }
+
     private static func canonicalized(_ raw: URL, fileManager: FileManager) -> URL {
         var existing = raw.standardizedFileURL
         var tail: [String] = []
@@ -1913,4 +1958,8 @@ struct FamilyAssetStore {
     static let allowedDocumentExtensions: Set<String> = [
         "pdf", "txt", "rtf", "md", "doc", "docx",
     ]
+}
+
+private extension Array where Element == URL {
+    func stableURLOrdered() -> [URL] { FamilyAssetStore.stableURLOrdered(self) }
 }
