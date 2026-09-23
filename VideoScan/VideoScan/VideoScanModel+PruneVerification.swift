@@ -77,6 +77,10 @@ extension VideoScanModel {
         var shouldCancel: () -> Bool
         var didOpen: ((String) -> Void)?
         var beforeMutation: (@MainActor (String) -> Void)?
+        /// The file operation itself (tests only — nil = the Trash routine's
+        /// own trashItem / removeItem). A test makes the move FAIL with it
+        /// (codex #1642: a per-copy I/O failure must end the batch in error).
+        var removeFile: (@Sendable (URL) throws -> Void)?
 
         static let live = PruneVerifyHooks(shouldCancel: { Task.isCancelled })
 
