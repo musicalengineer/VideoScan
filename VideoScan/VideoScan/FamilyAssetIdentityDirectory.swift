@@ -53,19 +53,52 @@ struct FamilyAssetIdentityDirectory: Sendable, Equatable {
     /// tree's formal given names): "Rick Breen" → {"rick"}.
     let ownerTokens: Set<String>
 
-    private var byID: [String: Member] {
-        Dictionary(members.map { ($0.gedcomID, $0) }, uniquingKeysWith: { first, _ in first })
+    /// gedcomID → position in `members`, built ONCE with the directory.
+    /// This was a computed property that rebuilt a dictionary of every
+    /// member on each `member(_:)` call — and `FamilyAssetStore.
+    /// groupFolderMatches` calls that once per People/ folder per person
+    /// shown, so a 7-person lineage card over a 16k-person tree and 82
+    /// folders rebuilt it ~570 times per answer (HallieQueryBench
+    /// paternal-line, Release, M5: 1.27 s, 2026-09-23). An index rather
+    /// than a second copy of the members: 16k Ints, not 16k Sets.
+    /// First occurrence wins, as the old `uniquingKeysWith` did.
+    private let indexByID: [String: Int]
+    /// Surname token (own or by marriage) → positions in `members` of its
+    /// carriers, ascending, built once. `attributedMembers` used to union
+    /// every member's surnames and then filter every member, per group
+    /// folder, per person shown — O(tree) twice for each. Its keys ARE the
+    /// old union; its lists, merged, ARE the old filter's result in the
+    /// same member order. ~one Int per (member, surname token).
+    private let positionsBySurname: [String: [Int]]
+
+    private static func index(_ members: [Member]) -> [String: Int] {
+        var index: [String: Int] = [:]
+        index.reserveCapacity(members.count)
+        for (position, member) in members.enumerated() where index[member.gedcomID] == nil {
+            index[member.gedcomID] = position
+        }
+        return index
+    }
+
+    private static func surnameIndex(_ members: [Member]) -> [String: [Int]] {
+        var index: [String: [Int]] = [:]
+        for (position, member) in members.enumerated() {
+            for token in member.surnameTokens { index[token, default: []].append(position) }
+        }
+        return index
     }
 
     init(members: [Member], ownerGedcomID: String?, ownerTokens: Set<String> = []) {
         self.members = members
+        self.indexByID = Self.index(members)
+        self.positionsBySurname = Self.surnameIndex(members)
         self.ownerGedcomID = ownerGedcomID
         self.ownerTokens = ownerTokens
     }
 
     func member(_ gedcomID: String?) -> Member? {
-        guard let gedcomID else { return nil }
-        return byID[gedcomID]
+        guard let gedcomID, let position = indexByID[gedcomID] else { return nil }
+        return members[position]
     }
 
     // MARK: Building from live sources
@@ -171,6 +204,8 @@ struct FamilyAssetIdentityDirectory: Sendable, Equatable {
             initialized = count
         }
         self.members = members
+        self.indexByID = Self.index(members)
+        self.positionsBySurname = Self.surnameIndex(members)
         self.ownerGedcomID = ownerGedcomID
         self.ownerTokens = ownerGedcomID == nil ? [] : ownerNick
     }
@@ -186,10 +221,13 @@ struct FamilyAssetIdentityDirectory: Sendable, Equatable {
         let suffixes = GedcomFamilyGraph.nameSuffixes
         let suffixTokens = Set(folderTokens.filter { suffixes.contains($0) })
         let nameTokens = folderTokens.filter { !suffixes.contains($0) }
-        let folderSurnames = Set(nameTokens).intersection(
-            members.reduce(into: Set<String>()) { $0.formUnion($1.surnameTokens) })
+        let folderSurnames = Set(nameTokens).filter { positionsBySurname[$0] != nil }
         guard !folderSurnames.isEmpty else { return [] }
-        let family = members.filter { !$0.surnameTokens.isDisjoint(with: folderSurnames) }
+        // Every carrier of a folder surname, once each, in member order —
+        // what `members.filter { !$0.surnameTokens.isDisjoint(with:) }` gave.
+        var positions = folderSurnames.flatMap { positionsBySurname[$0] ?? [] }
+        if folderSurnames.count > 1 { positions = Set(positions).sorted() }
+        let family = positions.map { members[$0] }
         let givenTokens = nameTokens.filter { !folderSurnames.contains($0) }
         if givenTokens.isEmpty {
             return Set(family.map(\.gedcomID))
