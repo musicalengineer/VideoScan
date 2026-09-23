@@ -54,6 +54,11 @@ enum ArchiveAngelCopyFamily {
         let children: [UUID: [VideoRecord]]
         let byHash: [String: [VideoRecord]]
         let byGroup: [UUID: [VideoRecord]]
+        /// WHOLE-FILE digests (ContentFixity / ArchiveFixity — every byte
+        /// read), keyed by `ArchiveAngelCopyFamily.fullDigestKeys`. The ONLY
+        /// content evidence that may authorise fact inheritance (codex
+        /// #1654 P1-1: `contentHash` is a SAMPLED signature).
+        let byDigest: [String: [VideoRecord]]
 
         @MainActor
         init(active: [VideoRecord]) {
@@ -62,13 +67,16 @@ enum ArchiveAngelCopyFamily {
             var children: [UUID: [VideoRecord]] = [:]
             var byHash: [String: [VideoRecord]] = [:]
             var byGroup: [UUID: [VideoRecord]] = [:]
+            var byDigest: [String: [VideoRecord]] = [:]
             for r in active {
                 byID[r.id] = r
                 if let d = r.derivedFrom { children[d, default: []].append(r) }
                 if !r.contentHash.isEmpty { byHash[r.contentHash, default: []].append(r) }
                 if let g = r.duplicateGroupID { byGroup[g, default: []].append(r) }
+                for k in ArchiveAngelCopyFamily.fullDigestKeys(r) { byDigest[k, default: []].append(r) }
             }
             self.byID = byID; self.children = children; self.byHash = byHash; self.byGroup = byGroup
+            self.byDigest = byDigest
         }
 
         @MainActor
@@ -89,25 +97,29 @@ enum ArchiveAngelCopyFamily {
     /// The same walk over a prebuilt index (one index per batch).
     @MainActor
     static func collect(seed: VideoRecord, index: Index, catalog: any AngelCatalog) -> [VideoRecord] {
-        walk(seed: seed, index: index, catalog: catalog, followDuplicateGroup: true)
+        walk(seed: seed, index: index, catalog: catalog)
     }
 
-    /// The IDENTITY family: copies proven to be the same recording — the
-    /// same non-empty content signature, `derivedFrom` lineage (both ways),
-    /// and an archive copy ↔ its promotion source. NOT the duplicate group:
-    /// duplicate detection is a heuristic (same stem + length + resolution
-    /// can match two different clips — two 00000.MTS of equal length). Hand-
-    /// entered facts are INHERITED only across these links (the 2026-09-12
-    /// rule: facts travel only between verified copies; QA on S4). Show
-    /// Copies still lists the whole family.
+    /// The whole-file digest keys a record carries ("sha256:<hex>:<bytes>"),
+    /// each only while it still describes the catalogued size — a stale
+    /// digest is not identity. Empty = no full-content evidence.
     @MainActor
-    static func collectIdentity(seed: VideoRecord, index: Index, catalog: any AngelCatalog) -> [VideoRecord] {
-        walk(seed: seed, index: index, catalog: catalog, followDuplicateGroup: false)
+    static func fullDigestKeys(_ r: VideoRecord) -> [String] {
+        var keys: [String] = []
+        if let f = r.contentFixity, f.algorithm == ContentFixity.sha256, !f.digest.isEmpty,
+           f.byteCount > 0, f.byteCount == r.sizeBytes {
+            keys.append("sha256:\(f.digest.lowercased()):\(f.byteCount)")
+        }
+        if let f = r.archiveFixity, f.algorithm == "sha256", !f.digest.isEmpty,
+           f.sizeBytes > 0, f.sizeBytes == r.sizeBytes {
+            let k = "sha256:\(f.digest.lowercased()):\(f.sizeBytes)"
+            if !keys.contains(k) { keys.append(k) }
+        }
+        return keys
     }
 
     @MainActor
-    private static func walk(seed: VideoRecord, index: Index, catalog: any AngelCatalog,
-                             followDuplicateGroup: Bool) -> [VideoRecord] {
+    private static func walk(seed: VideoRecord, index: Index, catalog: any AngelCatalog) -> [VideoRecord] {
         var family: [UUID: VideoRecord] = [seed.id: seed]
         var queue: [VideoRecord] = [seed]
         var hops = 0
@@ -116,7 +128,7 @@ enum ArchiveAngelCopyFamily {
             var related: [VideoRecord] = []
             // Group members (the active records sharing the group id — the
             // same set the Helper's `active.filter` pass found, now indexed).
-            if followDuplicateGroup, let g = r.duplicateGroupID { related += index.byGroup[g] ?? [] }
+            if let g = r.duplicateGroupID { related += index.byGroup[g] ?? [] }
             if let d = r.derivedFrom, let parent = index.byID[d] { related.append(parent) }
             related += index.children[r.id] ?? []
             if let copy = catalog.masterArchiveCopy(of: r) { related.append(copy) }

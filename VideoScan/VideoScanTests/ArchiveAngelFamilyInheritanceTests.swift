@@ -55,6 +55,17 @@ struct ArchiveAngelFamilyInheritanceTests {
         return url
     }
 
+    /// Both records carry the same WHOLE-FILE digest — the only content
+    /// evidence that lets facts travel (codex #1654 P1-1).
+    private func verifiedSameBytes(_ a: VideoRecord, _ b: VideoRecord) {
+        let size = max(a.sizeBytes, 1)
+        a.sizeBytes = size; b.sizeBytes = size
+        let stamp = FileIdentityStamp(device: 1, inode: 1, size: size, mtimeNs: 0)
+        let digest = String(repeating: "ab", count: 32)
+        a.contentFixity = ContentFixity(digest: digest, byteCount: size, stamp: stamp)
+        b.contentFixity = ContentFixity(digest: digest, byteCount: size, stamp: stamp)
+    }
+
     private func run(_ b: Bench, pick: [VideoRecord], catalog: [VideoRecord]) async -> ArchiveAngelJob {
         b.model.records = catalog
         let job = ArchiveAngelJob(model: b.model, center: b.center, count: pick.count, makeLossless: false,
@@ -74,7 +85,8 @@ struct ArchiveAngelFamilyInheritanceTests {
         rec.durationSeconds = 600; rec.videoCodec = "h264"; rec.audioCodec = "aac"; rec.isPlayable = "Yes"
         rec.contentHash = "v1:tape"
         let sibling = MasterArchiveTestSupport.makeRecord(path: "/Volumes/OldMyBook/test_inh_tape.mp4")
-        sibling.contentHash = "v1:tape"                      // the same recording
+        sibling.contentHash = "v1:tape"
+        verifiedSameBytes(rec, sibling)                      // the same recording, PROVEN (codex #1654)
         sibling.userDate = "1987-06"; sibling.userDateConfidence = "known"
         let job = await run(b, pick: [rec], catalog: [rec, sibling])
         guard case .finished = job.state else { Issue.record("\(job.state) — \(job.plan.log.suffix(5))"); return }
@@ -95,6 +107,7 @@ struct ArchiveAngelFamilyInheritanceTests {
         rec.contentHash = "v1:tape"
         let sibling = MasterArchiveTestSupport.makeRecord(path: "/Volumes/OldMyBook/Christmas copy.mov")
         sibling.contentHash = "v1:tape"
+        verifiedSameBytes(rec, sibling)
         sibling.userDate = "1987-06"; sibling.userDateConfidence = "known"
         sibling.userPlace = "Cape Cod"; sibling.userPlaceConfidence = "known"
         sibling.backupAttestations = [BackupAttestation(kind: .offsite, answer: .yes,
@@ -151,6 +164,7 @@ struct ArchiveAngelFamilyInheritanceTests {
         let (sb, model, rec, sibling, fixturePlan) = try promoteFixture("inherit_heuristic")
         var plan = fixturePlan; defer { sb.cleanup() }
         sibling.contentHash = "v1:a-different-recording"
+        sibling.contentFixity = nil                          // not proven the same bytes
         let g = UUID(); rec.duplicateGroupID = g; sibling.duplicateGroupID = g
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter()) { _ in }

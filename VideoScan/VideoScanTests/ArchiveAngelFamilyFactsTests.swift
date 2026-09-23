@@ -143,8 +143,17 @@ struct ArchiveAngelFamilyFactsTests {
         let g = UUID()
         let original = rec("tape.mov", hash: "v1:t")
         original.duplicateGroupID = g
+        original.durationSeconds = 600
         let twin = rec("twin.mov", hash: "v1:t")
-        let child = rec("tape_access.mov", hash: ""); child.derivedFrom = original.id
+        // Proven the same bytes (codex #1654: a sampled contentHash alone is not).
+        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 10, mtimeNs: 0)
+        for r in [original, twin] {
+            r.sizeBytes = 10
+            r.contentFixity = ContentFixity(digest: String(repeating: "cd", count: 32), byteCount: 10, stamp: stamp)
+        }
+        // A whole-file repair of the original (same length) is an equivalent.
+        let child = rec("tape_balanced.mov", hash: ""); child.derivedFrom = original.id
+        child.derivationKind = "balanceAudio"; child.durationSeconds = 600
         let lookalike = rec("00000.MTS", hash: "v1:other"); lookalike.duplicateGroupID = g
         lookalike.userDate = "1987-06"; lookalike.userDateConfidence = "known"; lookalike.userPlace = "Somewhere"
         model.records = [original, twin, child, lookalike]

@@ -162,6 +162,10 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         /// S4). Cleared once settled. Persisted so an interrupted promote
         /// can still be undone at the next settle.
         var stampedFacts: [StampedFact]?
+        /// A `<stem>_balanced` file that LOOKS like this original's balanced
+        /// copy (same name stem and length) but carries no Balance Audio
+        /// link to it — shown in Review, never used (codex #1654 P1-3).
+        var balancedNomination: String?
         var steps: [StepOutcome] = StepKind.allCases.map { StepOutcome(kind: $0) }
         var status: EntryStatus = .pending
         /// Archive relpath of the original after Promote (nil until then).
