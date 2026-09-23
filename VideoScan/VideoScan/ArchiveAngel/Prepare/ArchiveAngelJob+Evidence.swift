@@ -179,7 +179,8 @@ extension ArchiveAngelJob {
             return ta != tb ? ta < tb : ArchiveAngelScorer.rank(a, b, tables: tables)
         }
         collected.sort(by: order)
-        var kept = ArchiveAngelScorer.onePerDuplicateGroup(collected, rejected: &rejected)
+        var kept = ArchiveAngelScorer.onePerDuplicateGroup(collected, rejected: &rejected,
+                                                           collapseBy: policy.recommend.copies.batchCollapseBy)
         kept = ArchiveAngelScorer.onePerFamily(kept, rejected: &rejected)
         let picks = ArchiveAngelScorer.withFreshSlots(kept, count: count, weights: weights, by: order)
         // Evidence that no longer yields a full batch is not trusted — walk.

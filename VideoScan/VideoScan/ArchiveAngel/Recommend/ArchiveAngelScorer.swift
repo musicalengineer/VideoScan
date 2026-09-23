@@ -100,6 +100,12 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     var userDateConfidence: String?
     var originMake: String?
     var originEncoder: String?
+    /// Find Similar Footage (2026-09-23): the record's footage group and its
+    /// rank in it (0 = the likely original). Read by the `footageGroup`
+    /// collapse and the `footageOriginal` preference — one recommendation
+    /// per footage group. Additive, defaulted nil (no group).
+    var footageGroupID: UUID?
+    var footageRank: Int?
 
     /// Rick 2026-09-21: a Live Photo's motion half
     /// (`jpegvideocomplement_*.mov`, ~3 s) is part of a photo, not a video.
@@ -165,7 +171,8 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
          contentKey: String = "", attention: ArchiveAngelAttention = .none, familySkips: Double = 0,
          familyKey: String = "", deviceModel: String = "", captureDate: Date? = nil,
          duplicateGroupCount: Int = 0, duplicateDisposition: DuplicateDisposition = .none,
-         userDateConfidence: String? = nil, originMake: String? = nil, originEncoder: String? = nil) {
+         userDateConfidence: String? = nil, originMake: String? = nil, originEncoder: String? = nil,
+         footageGroupID: UUID? = nil, footageRank: Int? = nil) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds; self.streamTypeRaw = streamTypeRaw; self.isPlayable = isPlayable
         self.starRating = starRating; self.mediaDisposition = mediaDisposition; self.archiveStage = archiveStage
@@ -186,6 +193,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         self.duplicateGroupCount = duplicateGroupCount; self.duplicateDisposition = duplicateDisposition
         self.userDateConfidence = userDateConfidence; self.originMake = originMake
         self.originEncoder = originEncoder
+        self.footageGroupID = footageGroupID; self.footageRank = footageRank
     }
 }
 
@@ -586,7 +594,7 @@ enum ArchiveAngelScorer {
             }
         }
         picks.sort(by: order)
-        picks = onePerDuplicateGroup(picks, rejected: &rejected)
+        picks = onePerDuplicateGroup(picks, rejected: &rejected, collapseBy: p.recommend.copies.batchCollapseBy)
         picks = onePerFamily(picks, rejected: &rejected)
         let kept = withFreshSlots(picks, count: max(0, count), weights: w, by: order)
         return .init(picks: kept, overflow: max(0, picks.count - kept.count), rejected: rejected)
@@ -731,17 +739,30 @@ enum ArchiveAngelScorer {
     /// are counted under `.duplicateOfPick`, never silently dropped. Rows
     /// with no group never collapse.
     static func onePerDuplicateGroup(_ picks: [ArchiveAngelPick],
-                                     rejected: inout [ArchiveAngelRejection: Int]) -> [ArchiveAngelPick] {
+                                     rejected: inout [ArchiveAngelRejection: Int],
+                                     collapseBy: [String] = ["duplicateGroup"]) -> [ArchiveAngelPick] {
         // The one copy seam (ArchiveAngelCopyChooser), keyed by duplicate
         // group only — the batch never collapses by name. QA on S3: the
         // copy the person marked KEEP wins its group wherever it ranks
         // (the rest of the group still yields to it); otherwise the
         // best-ranked member, as before.
-        let key = { (p: ArchiveAngelPick) in ArchiveAngelCopyChooser.key(p.candidate, collapseBy: ["duplicateGroup"]) }
+        // Find Similar Footage (2026-09-23): with `footageGroup` in the
+        // policy's collapseBy, a footage group is one recording too, and its
+        // likely original (lowest footageRank present) is the preferred
+        // member unless the person marked a Keep.
+        let key = { (p: ArchiveAngelPick) in ArchiveAngelCopyChooser.key(p.candidate, collapseBy: collapseBy) }
         var keepers: [String: UUID] = [:]
         for p in picks where p.candidate.duplicateDisposition == .keep {
             if let k = key(p), keepers[k] == nil { keepers[k] = p.id }
         }
+        var bestRank: [String: (rank: Int, id: UUID)] = [:]
+        for p in picks {
+            guard let k = key(p), k.hasPrefix(ArchiveAngelCopyChooser.footagePrefix),
+                  let r = p.candidate.footageRank else { continue }
+            if let cur = bestRank[k], cur.rank <= r { continue }
+            bestRank[k] = (r, p.id)
+        }
+        for (k, v) in bestRank where keepers[k] == nil { keepers[k] = v.id }
         let preferred = keepers.isEmpty ? picks : picks.filter { p in
             guard let k = key(p), let keeper = keepers[k] else { return true }
             return p.id == keeper

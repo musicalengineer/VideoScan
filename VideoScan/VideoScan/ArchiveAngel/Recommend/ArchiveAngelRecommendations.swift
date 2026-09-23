@@ -120,19 +120,30 @@ struct AngelCopyRules: Codable, Sendable, Equatable {
     /// "duplicateGroup" (any catalog duplicate group), "sharedDuplicateGroup"
     /// (a group of two or more — the nudge's rule), "nameAndDuration" (same
     /// filename and length rounded to the second — "00000.MTS" ×4).
-    var collapseBy: [String] = ["duplicateGroup", "nameAndDuration"]
+    var collapseBy: [String] = ["footageGroup", "duplicateGroup", "nameAndDuration"]
     /// Which copy stays, criteria in order: "userKeeper" (the copy the
-    /// person marked Keep — first one wins), "best" (first by `order`).
-    var prefer: [String] = ["userKeeper", "best"]
+    /// person marked Keep — first one wins), "footageOriginal" (the footage
+    /// group's likely original), "best" (first by `order`).
+    var prefer: [String] = ["userKeeper", "footageOriginal", "best"]
     /// The classes that collapse (a Not now copy never hides a Ready one).
     var classes: [String] = ["ready", "needsDate", "worthALook"]
     /// Add "N copies — this one" to the kept copy's reasons.
     var noteCopies: Bool = true
 
-    static let collapseKinds = ["duplicateGroup", "sharedDuplicateGroup", "nameAndDuration"]
-    static let preferKinds = ["userKeeper", "best"]
+    /// "footageGroup" (Find Similar Footage, 2026-09-23): the record's
+    /// footage group — copies, re-encodes, transcodes, exports of one
+    /// recording. "footageOriginal" (prefer): the group's likely original.
+    static let collapseKinds = ["footageGroup", "duplicateGroup", "sharedDuplicateGroup", "nameAndDuration"]
+    static let preferKinds = ["userKeeper", "footageOriginal", "best"]
 
-    init(collapseBy: [String] = ["duplicateGroup", "nameAndDuration"], prefer: [String] = ["userKeeper", "best"],
+    /// The batch filter's keys (one member per recording per batch): the
+    /// duplicate group, plus the footage group when the policy collapses by it.
+    var batchCollapseBy: [String] {
+        collapseBy.contains("footageGroup") ? ["footageGroup", "duplicateGroup"] : ["duplicateGroup"]
+    }
+
+    init(collapseBy: [String] = ["footageGroup", "duplicateGroup", "nameAndDuration"],
+         prefer: [String] = ["userKeeper", "footageOriginal", "best"],
          classes: [String] = ["ready", "needsDate", "worthALook"], noteCopies: Bool = true) {
         self.collapseBy = collapseBy
         self.prefer = prefer
@@ -325,9 +336,14 @@ extension AngelRecommendRules {
 enum ArchiveAngelCopyChooser {
 
     /// The recording key for `c` under `collapseBy`, or nil (never collapses).
+    /// Recording keys from a footage group start with this.
+    static let footagePrefix = "footage:"
+
     static func key(_ c: ArchiveAngelCandidate, collapseBy: [String]) -> String? {
         for kind in collapseBy {
             switch kind {
+            case "footageGroup":
+                if let g = c.footageGroupID { return footagePrefix + g.uuidString }
             case "duplicateGroup":
                 if let g = c.duplicateGroupID { return "group:" + g.uuidString }
             case "sharedDuplicateGroup":
@@ -347,12 +363,22 @@ enum ArchiveAngelCopyChooser {
     /// order); `isBetter(a, b)` = a ranks before b. The person's Keep is
     /// the FIRST such member; "best" keeps the first of equals.
     static func choose(_ members: [Int], prefer: [String], isKeeper: (Int) -> Bool,
+                       footageRank: (Int) -> Int? = { _ in nil },
                        isBetter: (Int, Int) -> Bool) -> Int? {
         guard let first = members.first else { return nil }
         for criterion in prefer {
             switch criterion {
             case "userKeeper":
                 if let k = members.first(where: isKeeper) { return k }
+            case "footageOriginal":
+                // The lowest footage rank present (0 = the likely original);
+                // members without a rank never win this criterion.
+                var best: (m: Int, rank: Int)?
+                for m in members {
+                    guard let r = footageRank(m) else { continue }
+                    if best == nil || r < best!.rank { best = (m, r) }
+                }
+                if let b = best { return b.m }
             case "best":
                 var best = first
                 for m in members.dropFirst() where isBetter(m, best) { best = m }
@@ -464,15 +490,23 @@ enum ArchiveAngelRecommendations {
                   let kept = ArchiveAngelCopyChooser.choose(
                     members, prefer: rules.copies.prefer,
                     isKeeper: { candidates[$0].duplicateDisposition == .keep },
+                    footageRank: { k.hasPrefix(ArchiveAngelCopyChooser.footagePrefix) ? candidates[$0].footageRank : nil },
                     isBetter: byOrder) else { continue }
+            let footage = k.hasPrefix(ArchiveAngelCopyChooser.footagePrefix)
             for m in members {
                 verdicts[m].copyKey = k
                 guard m != kept else { continue }
                 verdicts[m].kind = .anotherCopy
-                verdicts[m].reasons = ["Another copy of \(candidates[kept].filename) is the one recommended"]
+                verdicts[m].reasons = [footage
+                    ? "Same footage as \(candidates[kept].filename) — that one is recommended"
+                    : "Another copy of \(candidates[kept].filename) is the one recommended"]
             }
             verdicts[kept].copies = members.count
-            if rules.copies.noteCopies { verdicts[kept].reasons.append("\(members.count) copies — this one") }
+            if rules.copies.noteCopies {
+                verdicts[kept].reasons.append(footage
+                    ? "\(members.count) files of the same footage — this one"
+                    : "\(members.count) copies — this one")
+            }
         }
 
         // Lists + counts.

@@ -180,12 +180,14 @@
         "worthALook"
       ],
       "collapseBy" : [
+        "footageGroup",
         "duplicateGroup",
         "nameAndDuration"
       ],
       "noteCopies" : true,
       "prefer" : [
         "userKeeper",
+        "footageOriginal",
         "best"
       ]
     },
