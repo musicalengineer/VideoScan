@@ -75,8 +75,9 @@ extension VideoScanModel {
         tempBase: URL,
         hasRAMDisk: Bool
     ) async throws -> (video: URL, audio: URL, tempDir: URL?) {
-        let videoIsNetwork = CombineVerifier.isNetworkPath(videoPath)
-        let audioIsNetwork = CombineVerifier.isNetworkPath(audioPath)
+        let isNetwork = CombineTestSeams.isNetworkPath ?? { CombineVerifier.isNetworkPath($0) }
+        let videoIsNetwork = isNetwork(videoPath)
+        let audioIsNetwork = isNetwork(audioPath)
         guard videoIsNetwork || audioIsNetwork else {
             return (URL(fileURLWithPath: videoPath), URL(fileURLWithPath: audioPath), nil)
         }
@@ -85,19 +86,27 @@ extension VideoScanModel {
 
         var localVideo = URL(fileURLWithPath: videoPath)
         var localAudio = URL(fileURLWithPath: audioPath)
-        if videoIsNetwork {
-            localVideo = try await bufferCombineSource(
-                kind: "video", from: videoPath,
-                to: tempDir.appendingPathComponent(videoFilename),
-                hasRAMDisk: hasRAMDisk
-            )
-        }
-        if audioIsNetwork {
-            localAudio = try await bufferCombineSource(
-                kind: "audio", from: audioPath,
-                to: tempDir.appendingPathComponent(audioFilename),
-                hasRAMDisk: hasRAMDisk
-            )
+        do {
+            if videoIsNetwork {
+                localVideo = try await bufferCombineSource(
+                    kind: "video", from: videoPath,
+                    to: tempDir.appendingPathComponent(videoFilename),
+                    hasRAMDisk: hasRAMDisk
+                )
+            }
+            if audioIsNetwork {
+                localAudio = try await bufferCombineSource(
+                    kind: "audio", from: audioPath,
+                    to: tempDir.appendingPathComponent(audioFilename),
+                    hasRAMDisk: hasRAMDisk
+                )
+            }
+        } catch {
+            // A failed buffer step used to leak this dir (and any copy
+            // already in it) on the RAM disk / temp. Remove ONLY the dir
+            // this call just created, then report the original error.
+            removeCombineTempDir(tempDir)
+            throw error
         }
         return (localVideo, localAudio, tempDir)
     }
@@ -403,17 +412,17 @@ extension VideoScanModel {
     }
 
     /// Remove partials a crashed/killed earlier run left in the output
-    /// folder (older than 6 h, exact partial pattern, not reserved by a
-    /// running job — CombineOutputPublish.sweepStalePartials). Directory
-    /// I/O runs off the main actor; each removal is logged with its size.
+    /// folder (older than 24 h, exact partial pattern, regular files, not
+    /// reserved by a running job of ANY kind — the one shared sweep,
+    /// PartialFileNaming.sweepStale, which also writes each removal with its
+    /// size to the app log). Directory I/O runs off the main actor; each
+    /// removal is echoed to the Combine console here.
     func sweepStaleCombinePartials(in folder: URL) async {
         let result = await Task.detached(priority: .utility) {
             CombineOutputPublish.sweepStalePartials(in: folder)
         }.value
         for swept in result.removed {
-            let line = "combine: removed stale partial \(folder.path)/\(swept.name) (\(Formatting.humanSize(swept.sizeBytes)))"
-            log("  \(line)")
-            appLog.write(line)
+            log("  combine: removed stale partial \(folder.path)/\(swept.name) (\(Formatting.humanSize(swept.sizeBytes)))")
         }
         for failure in result.errors {
             log("  ⚠ could not remove stale partial \(failure)")
