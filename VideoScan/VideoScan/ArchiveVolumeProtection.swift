@@ -199,6 +199,18 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
             external = false   // no UUID: the path is the whole identity
         }
 
+        // No UUID and nothing at that path right now: a boot folder that is
+        // gone OR an unmounted custom mount — the disk cannot say which, so
+        // never assume boot folder (QA on #1642: a held / provisional copy
+        // would then read every /Volumes path as clear). Protect the
+        // spelling; /Volumes stays unprovable.
+        if !external, mounted == nil, spelledRoot == nil {
+            return ArchiveVolumeProtection(label: (spelled as NSString).lastPathComponent,
+                                           placement: .unknown, archiveRoots: [], aliasRoots: [],
+                                           protectedFolders: [spelled.lowercased()], expectedUUID: nil,
+                                           isResolved: false, provenOtherRoots: [], isProvisional: false)
+        }
+
         guard external else {
             return makeBootFolder(spelled: spelled, mounted: mounted, uuid: d.volumeUUID,
                                   aliasCandidates: aliasCandidates, identity: identity, networkRoots: networkRoots)
@@ -289,7 +301,8 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
                 guard lower != "/", !network.contains(where: { isInsideLexically(path: lower, root: $0) }),
                       !folders.contains(where: { isInsideLexically(path: lower, root: $0) }),
                       let cid = identity(spelledC) else { continue }
-                let creal = canonical(cid.resolvedPath)
+                let creal = canonical(cid.resolvedPath).lowercased()
+                let real = real.lowercased()
                 if isInsideLexically(path: creal, root: real) {
                     folders.append(lower)                       // the scan target is inside the folder
                 } else if isInsideLexically(path: real, root: creal) {
@@ -432,8 +445,11 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
 
     /// "/Volumes/<name>" for a path on an external mount, else nil.
     /// Two string scans, no URL parsing — asked once per record.
+    /// Case-folded: APFS/HFS+ are case-insensitive, so "/volumes/x" IS
+    /// "/Volumes/x" (QA on #1642) — and Remove / Tidy / purge ask only the
+    /// string verdict.
     static func externalVolumeRoot(of path: String) -> String? {
-        guard path.hasPrefix("/Volumes/") else { return nil }
+        guard hasPrefixFolded(path, "/volumes/") else { return nil }
         let rest = path.dropFirst("/Volumes/".count)
         let name = rest.prefix { $0 != "/" }
         guard !name.isEmpty, name != ".", name != ".." else { return nil }
@@ -451,6 +467,17 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
         return path == root || (path.hasPrefix(root) && path.dropFirst(root.count).first == "/")
     }
 
+    /// `s` starts with `lowerASCIIPrefix`, ignoring ASCII case. Walks the
+    /// UTF-8 bytes — no allocation (asked once per record).
+    static func hasPrefixFolded(_ s: String, _ lowerASCIIPrefix: String) -> Bool {
+        var it = s.utf8.makeIterator()
+        for p in lowerASCIIPrefix.utf8 {
+            guard let c = it.next() else { return false }
+            if (c >= 65 && c <= 90 ? c + 32 : c) != p { return false }
+        }
+        return true
+    }
+
     /// Mount points that belong to the boot disk: "/" and the APFS
     /// system/data group under "/System/Volumes/" (Data, Preboot, VM, …).
     static func isBootMountPoint(_ mountPoint: String) -> Bool {
@@ -460,11 +487,12 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
     /// The boot disk's data-volume FIRMLINKS for the two trees a media
     /// path can be spelled through: "/System/Volumes/Data/Volumes/X" IS
     /// "/Volumes/X", "/System/Volumes/Data/Users/…" IS "/Users/…".
+    /// Case-folded like `externalVolumeRoot` (QA on #1642).
     static func strippingDataFirmlink(_ path: String) -> String {
-        let data = "/System/Volumes/Data"
-        guard path.hasPrefix(data + "/") else { return path }
+        let data = "/system/volumes/data"
+        guard hasPrefixFolded(path, data + "/") else { return path }
         let rest = String(path.dropFirst(data.count))
-        return rest.hasPrefix("/Volumes/") || rest.hasPrefix("/Users/") ? rest : path
+        return hasPrefixFolded(rest, "/volumes/") || hasPrefixFolded(rest, "/users/") ? rest : path
     }
 
     static func canonical(_ path: String) -> String {
@@ -476,7 +504,7 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
     /// paths never are.
     private static func canonicalIfNeeded(_ path: String) -> String {
         if path.contains("/./") || path.contains("/../") || path.contains("//")
-            || path.hasSuffix("/.") || path.hasSuffix("/..") || path.hasPrefix("/System/Volumes/Data/") {
+            || path.hasSuffix("/.") || path.hasSuffix("/..") || hasPrefixFolded(path, "/system/volumes/data/") {
             return canonical(path)
         }
         return path

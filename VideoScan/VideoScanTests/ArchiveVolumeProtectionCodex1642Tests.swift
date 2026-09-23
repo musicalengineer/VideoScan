@@ -87,7 +87,9 @@ struct ArchiveVolumeProtectionCodex1642IdentityTests {
                                "/Volumes/CrucialX10": "UUID-X10"])
         let snap = ArchiveVolumeProtection.make(designation: d,
                                                 mountedRoots: { ["/Volumes/FamilyArchive", "/Volumes/CrucialX10"] },
-                                                probe: probe)
+                                                probe: probe,
+                                                identity: identityProbe(["/Volumes/FamilyArchive": ("/Volumes/FamilyArchive", "/Volumes/FamilyArchive")]),
+                                                networkRoots: { [] })
         #expect(snap?.verdict(forPath: canonicalLoose) == .onArchiveVolume, "canonical spelling of the same volume")
         #expect(snap?.verdictAtRemoval(path: canonicalLoose, probe: probe) == .onArchiveVolume)
         #expect(snap?.verdict(forPath: "/Volumes/CrucialX10/a.mov") == .clear)
@@ -108,7 +110,9 @@ struct ArchiveVolumeProtectionCodex1642IdentityTests {
         let probe = uuidProbe(["/Volumes/FamilyArchive": "UUID-ARCH", "/Volumes/CrucialX10": "UUID-X10"])
         let snap = ArchiveVolumeProtection.make(designation: d,
                                                 mountedRoots: { ["/Volumes/FamilyArchive", "/Volumes/CrucialX10"] },
-                                                probe: probe)
+                                                probe: probe,
+                                                // Dangling alias: its directory reads as the boot disk.
+                                                identity: identityProbe([:]), networkRoots: { [] })
         #expect(snap?.verdict(forPath: canonicalLoose) == .onArchiveVolume, "found by UUID at its canonical mount")
         #expect(snap?.verdictAtRemoval(path: "/Volumes/FamilyArchive/loose.mov", probe: probe) == .onArchiveVolume,
                 "the removal-time UUID check is consulted")
@@ -119,6 +123,32 @@ struct ArchiveVolumeProtectionCodex1642IdentityTests {
                 "the designated spelling itself stays protected")
     }
 
+    /// QA on #1642 (MAJOR): APFS is case-insensitive, so these spellings
+    /// ARE the archive volume — and Remove / Tidy / purge ask only this
+    /// string verdict (no removal-time re-check).
+    @Test func caseFoldedSpellingsAreTheArchiveVolume() {
+        let d = MasterArchiveDesignation(targetPath: "/Volumes/FamilyArchive", rootPath: "/Volumes/FamilyArchive/Breen_Family_Archive", volumeUUID: "UUID-ARCH")
+        let snap = ArchiveVolumeProtection.make(designation: d, mountedRoots: { ["/Volumes/FamilyArchive"] },
+            probe: uuidProbe(["/Volumes/FamilyArchive": "UUID-ARCH"]),
+            identity: { $0.hasPrefix("/Volumes/FamilyArchive") ? MountIdentity(resolvedPath: $0, mountPoint: "/Volumes/FamilyArchive") : nil },
+            networkRoots: { [] })
+        #expect(snap?.verdict(forPath: "/volumes/familyarchive/MoviesExpansion/a.mov") == .onArchiveVolume)
+        #expect(snap?.verdict(forPath: "/VOLUMES/FamilyArchive/a.mov") == .onArchiveVolume)
+        #expect(snap?.verdict(forPath: "/system/volumes/data/Volumes/FamilyArchive/a.mov") == .onArchiveVolume)
+        #expect(snap?.verdict(forPath: "/volumes/CrucialX10/a.mov") == .clear, "another drive, however spelled, is still clear")
+    }
+
+    /// QA on #1642 (MINOR): a designation outside /Volumes that does not
+    /// resolve and has no UUID could be an unmounted custom mount — never
+    /// assume boot folder (a held/provisional copy would clear /Volumes).
+    @Test func unresolvableNoUUIDDesignationIsNotABootFolder() {
+        let d = MasterArchiveDesignation(targetPath: "/Users/rickb/FA-1642", rootPath: "/Users/rickb/FA-1642/Breen_Family_Archive", volumeUUID: nil)
+        let built = ArchiveVolumeProtection.make(designation: d, mountedRoots: { [] }, probe: { _ in nil }, identity: { _ in nil }, networkRoots: { [] })
+        let p = ArchiveVolumeProtection.provisional(designation: d, previous: built)
+        #expect(p?.verdict(forPath: "/Volumes/FamilyArchive/a.mov") != .clear)
+        #expect(built?.verdict(forPath: "/Users/rickb/FA-1642/x.mov") == .onArchiveVolume, "its own spelling stays protected")
+    }
+
     /// The legitimate boot-disk case is unchanged: a folder on the boot
     /// disk protects that FOLDER, never the whole boot disk.
     @Test func bootDiskFolderDesignationStillProtectsOnlyItsFolder() {
@@ -126,7 +156,8 @@ struct ArchiveVolumeProtectionCodex1642IdentityTests {
                                          rootPath: "/Users/rickb/ArchiveHere-test-1642/Breen_Family_Archive",
                                          volumeUUID: "BOOT")
         let probe = uuidProbe([:])
-        let snap = ArchiveVolumeProtection.make(designation: d, mountedRoots: { ["/Volumes/CrucialX10"] }, probe: probe)
+        let snap = ArchiveVolumeProtection.make(designation: d, mountedRoots: { ["/Volumes/CrucialX10"] }, probe: probe,
+                                                identity: identityProbe([:]), networkRoots: { [] })
         #expect(snap?.verdict(forPath: "/Users/rickb/ArchiveHere-test-1642/MoviesExpansion/a.mov") == .onArchiveVolume)
         #expect(snap?.verdict(forPath: "/Users/rickb/Movies/a.mov") == .clear)
         #expect(snap?.verdictAtRemoval(path: "/Users/rickb/Movies/a.mov", probe: probe) == .clear,
