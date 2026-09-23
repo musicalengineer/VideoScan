@@ -247,7 +247,7 @@ struct ArchiveAngelSelection: Sendable, Equatable {
 
 // MARK: - Weights (one table; tune here, never in the logic)
 
-struct ArchiveAngelWeights: Sendable, Equatable {
+struct ArchiveAngelWeights: Sendable, Equatable, Codable {
     var threeStars = 100
     var twoStars = 40
     var oneStar = 10

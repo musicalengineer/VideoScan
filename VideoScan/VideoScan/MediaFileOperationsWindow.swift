@@ -566,8 +566,8 @@ struct MediaFileOperationRow: View {
                     .padding(.bottom, 10)
             }
 
-            if isExpanded, let angel = job as? ArchiveAngelJob {
-                ArchiveAngelDetailView(job: angel)
+            if isExpanded, let angel = ArchiveAngelJobDetailView(job: job) {
+                angel
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }

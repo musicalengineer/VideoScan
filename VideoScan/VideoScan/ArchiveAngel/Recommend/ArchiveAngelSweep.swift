@@ -29,25 +29,9 @@ import os
 private let sweepLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "archiveAngelSweep")
 
 // MARK: - Settings
-
-/// ON by default — scoring reads catalog fields and Spotlight metadata,
-/// never media bytes, so it is cheap enough to be always-on.
-struct ArchiveAngelSweepSettings: Equatable {
-    var enabled: Bool = true
-
-    static let enabledKey = "archiveAngel.sweepEnabled"
-
-    static func restored(from defaults: UserDefaults) -> ArchiveAngelSweepSettings {
-        var s = ArchiveAngelSweepSettings()
-        // Missing key → the ON default; only an explicit false turns it off.
-        if let stored = defaults.object(forKey: enabledKey) as? Bool { s.enabled = stored }
-        return s
-    }
-
-    func save(to defaults: UserDefaults) {
-        defaults.set(enabled, forKey: Self.enabledKey)
-    }
-}
+//
+// "Assess Continuously" (archiveAngel.sweepEnabled, ON by default) moved to
+// ArchiveAngelSettings with the Angel's other preferences (S2) — same key.
 
 // MARK: - Status
 

@@ -1,60 +1,12 @@
 // VideoScanModel+ArchiveAngelSweep.swift
-// Archive Angel phase 2 wiring: the model owns the evidence store and the
-// background scoring sweep (`archiveAngelStore` / `archiveAngelSweep`,
-// declared in VideoScanModel.swift beside the preview sweep); this file
-// configures the sweep's closures, the launch trigger and the setting.
+// The catalog's half of the Archive Angel's background sweep: the scorer
+// inputs for every active record (AngelCatalog.archiveAngelSweepCandidates).
+// Since S2 the façade (Facade/ArchiveAngel.swift) owns the evidence store,
+// the sweep, its configuration, the launch trigger and the setting.
 
 import Foundation
 
 extension VideoScanModel {
-
-    /// Called once at launch, right after configurePreviewSweep(). Loads
-    /// the sidecar (off-main) so the catalog filter works immediately,
-    /// then schedules the first scoring run. Test hosts never start a
-    /// sweep: the setting is restored from the injected defaults and the
-    /// launch trigger is skipped under a test bundle.
-    func configureArchiveAngelSweep() {
-        archiveAngelSweep.configure(ArchiveAngelSweep.Configuration(
-            candidates: { [weak self] in self?.archiveAngelSweepCandidates() ?? [] },
-            isExternallyBusy: { [weak self] in
-                guard let self else { return true }
-                if self.isScanning || self.isCombining { return true }
-                return self.isMediaFileOperationBusyForAngel()
-            },
-            attentionState: { [weak self] in
-                guard let self else { return (0, nil) }
-                return (self.archiveAngelAttention.revision, self.archiveAngelAttention.lastEventAt)
-            },
-            log: { [weak self] line in
-                self?.log(line)
-                appLog.write(line)
-            }
-        ), enabled: archiveAngelSweepSettings.enabled)
-
-        guard !TestEnvironment.isTestHost else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            // Buffer companions whose batch folder is already gone (batches
-            // cleared before the companion-retirement fix) are retired
-            // once per launch — stats off-main, the catalog on main
-            // (2026-09-21; VideoScanModel+ArchiveAngelCompanions).
-            await self.reconcileArchiveAngelBufferAtLaunch()
-            // Attention memory first (the scorer reads it), then the grades.
-            await self.archiveAngelAttention.load(from: self.mediaLedger)
-            let loaded = await self.archiveAngelStore.load()
-            // No sidecar, or one assessed under older rules: the grades
-            // are needed now, not in 90 s — a pass is under 2 s.
-            self.archiveAngelSweep.scheduleLaunchRun(delay: loaded ? nil : 15)
-        }
-    }
-
-    /// Settings checkbox handler: persist + start/stop.
-    func setArchiveAngelSweepEnabled(_ on: Bool) {
-        archiveAngelSweepSettings.enabled = on
-        archiveAngelSweepSettings.save(to: .standard)
-        archiveAngelSweep.setEnabled(on)
-        if on { archiveAngelSweep.rescoreNow() }
-    }
 
     /// Scorer inputs for every active record. ONE keeper policy for the
     /// whole pass (it is the expensive part of the projection). Main actor,
@@ -67,8 +19,9 @@ extension VideoScanModel {
         for r in active {
             out.append(ArchiveAngelCandidate.project(r, model: self, policy: policy))
         }
-        ArchiveAngelScorer.markDerivatives(&out)   // T10 H3: needs the whole set (one O(n) pass)
-        ArchiveAngelScorer.applyFamilyAttention(&out)   // Phase 1: a variant of a skipped file is not new
+        let weights = archiveAngel.policy.weights   // the recommendation policy (S2; default = today's table)
+        ArchiveAngelScorer.markDerivatives(&out, weights: weights)   // T10 H3: needs the whole set (one O(n) pass)
+        ArchiveAngelScorer.applyFamilyAttention(&out, weights: weights)   // Phase 1: a variant of a skipped file is not new
         return out
     }
 }

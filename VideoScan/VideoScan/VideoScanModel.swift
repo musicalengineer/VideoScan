@@ -37,7 +37,7 @@ final class VideoScanModel: ObservableObject {
             // service; no-op while the checkbox is off.
             previewSweep.noteCatalogChanged()
             // Archive Angel phase 2: rescore once the catalog settles (5-min debounce).
-            archiveAngelSweep.noteCatalogChanged()
+            archiveAngel.catalogChanged()
         }
     }
     /// True when the app is running on a non-master Mac (viewer mode).
@@ -245,7 +245,7 @@ final class VideoScanModel: ObservableObject {
         // In-place record edits (stars, people, dates, notes, dossier
         // writeback) reach the Archive Angel Assessment through here too —
         // the sweep debounces, so a burst is one re-score (2026-09-10).
-        archiveAngelSweep.noteCatalogChanged()
+        archiveAngel.catalogChanged()
         guard !dossierCountsRefreshScheduled else { return }
         dossierCountsRefreshScheduled = true
         Task { @MainActor [weak self] in
@@ -727,15 +727,12 @@ final class VideoScanModel: ObservableObject {
     /// filmstrip request sites.
     let previewSweep = PreviewSweepService()
 
-    /// Archive Angel phase 2 (2026-09-09): the evidence sidecar and the
-    /// background scoring sweep. Wiring in VideoScanModel+ArchiveAngelSweep.swift.
-    let archiveAngelStore = ArchiveAngelEvidenceStore()
-    lazy var archiveAngelSweep = ArchiveAngelSweep(store: archiveAngelStore)
-    /// Phase 1 attention memory — derived from the Media Ledger's
-    /// angelProposed / angelSkipped / angelCleared lines.
-    let archiveAngelAttention = ArchiveAngelAttentionStore()
-    /// The Archive Angel's front door (ArchiveAngel/Facade/ArchiveAngel.swift).
-    /// S1: forwards to the three properties above; S2 makes it their owner.
+    /// The Archive Angel — its ONE property on the model (consolidation S2,
+    /// 2026-09-22). The façade owns the evidence sidecar, the background
+    /// scoring sweep, the attention memory, the settings and the prepared
+    /// batches; see ArchiveAngel/Facade/ArchiveAngel.swift. Lazy because it
+    /// holds a (weak) back-reference to this model; `launch()` at the end
+    /// of init creates it.
     lazy var archiveAngel = ArchiveAngel(model: self)
 
     /// Content-keyed ignore list (2026-09-11): set-aside / removed content
@@ -746,15 +743,6 @@ final class VideoScanModel: ObservableObject {
     /// Bumped on every ignore-list change so menu labels re-render on
     /// the count without observing the store directly.
     @Published var ignoredContentRevision: Int = 0
-    /// ON by default (scoring reads catalog fields + Spotlight, never media).
-    @Published var archiveAngelSweepSettings: ArchiveAngelSweepSettings =
-        TestEnvironment.isTestHost
-            ? ArchiveAngelSweepSettings()
-            : ArchiveAngelSweepSettings.restored(from: .standard)
-    /// "An Archive Angel or Promote job is active" — the model does not
-    /// hold the MediaFileOperationsCenter, so VideoScanApp installs this
-    /// once the center exists. Default: never busy.
-    var isMediaFileOperationBusyForAngel: @MainActor () -> Bool = { false }
 
     /// Stage 2 (2026-07-29): manages the DETACHED out-of-process helper
     /// (videoscan-preview-sweep) so preview prewarming survives app quit.
@@ -1160,8 +1148,9 @@ final class VideoScanModel: ObservableObject {
         // fire inside init). Test hosts get the pristine OFF default,
         // so the ~200 model-constructing tests never start a sweep.
         configurePreviewSweep()
-        // Archive Angel phase 2: evidence sidecar + background scoring sweep.
-        configureArchiveAngelSweep()
+        // Archive Angel phase 2: evidence sidecar + background scoring sweep
+        // (the façade owns both since consolidation S2).
+        archiveAngel.launch()
         // Content-keyed ignore list (2026-09-11): load so the first scan
         // already knows what not to re-ingest.
         configureIgnoredContent()

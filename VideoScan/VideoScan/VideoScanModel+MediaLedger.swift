@@ -169,7 +169,7 @@ extension VideoScanModel {
     func ledgerAngelAttention(_ kind: MediaLedgerEvent.Kind, recordIDs: [UUID],
                               batchID: String?, reason: String? = nil,
                               scores: [UUID: Int] = [:], at: Date = Date()) -> Task<Void, Never>? {
-        guard ArchiveAngelAttentionStore.attentionKinds.contains(kind) else { return nil }
+        guard ArchiveAngel.attentionKinds.contains(kind) else { return nil }
         let by: MediaLedgerEvent.Actor = kind == .angelProposed ? .angel : .rick
         var events: [MediaLedgerEvent] = []
         for id in recordIDs {
@@ -180,8 +180,7 @@ extension VideoScanModel {
             events.append(ledgerEvent(kind, for: rec, by: by, at: at, batchID: batchID, detail: detail))
         }
         guard !events.isEmpty else { return nil }
-        archiveAngelAttention.note(events)
-        archiveAngelSweep.noteCatalogChanged()
+        archiveAngel.noteAttention(events)
         return ledgerAppend(events)
     }
 
@@ -272,7 +271,7 @@ extension VideoScanModel {
                 isOnline: online,
                 isPairMember: CatalogScopePolicy.isPairProtected(r),
                 isVersion: isVersion,
-                hasHumanNote: ArchiveAngelCandidate.hasHumanNote(r.userNotes),
+                hasHumanNote: ArchiveAngel.hasHumanNote(r.userNotes),
                 starRating: r.starRating,
                 disposition: r.mediaDisposition,
                 attestations: r.backupAttestations,
@@ -341,7 +340,7 @@ extension VideoScanModel {
         // tokens (_trimmed, _balanced, .vs.edit…) and share-out tokens
         // (clip 1, part 2, v3) stripped, case-folded.
         let related = ArchiveCopyFamilies.nameRelated(families: families, snapshots: snapshots,
-                                                      baseStem: ArchiveAngelFamily.baseStem)
+                                                      baseStem: ArchiveAngel.familyBaseStem)
         return PrunePlan.compute(families: families, related: related, options: options)
     }
 

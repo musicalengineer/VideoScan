@@ -347,20 +347,12 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
 
 enum ArchiveAngelPlanStore {
 
-    /// Default buffer root: the internal SSD (design §5). Rick 9/09: "we'll
-    /// try with a fast ssd" — a setting can point this elsewhere.
-    static var defaultBufferRoot: URL {
-        // Isolation (audit, 2026-09-19): under the test host, never Rick's
-        // live buffer — a test that starts a job through the normal entry
-        // point would otherwise write batches (and settle his!) there. One
-        // folder per test process, like CatalogStore.shared's guard.
-        if TestEnvironment.isTestHost { return testHostBufferRoot }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Movies/VideoScan Buffer/ArchiveAngel", isDirectory: true)
-    }
+    /// The running process's buffer root. The formula and the test-host
+    /// isolation live in AngelEnvironment (S2); the app injects the root
+    /// through the façade — this forwarder is for tests and tools.
+    static var defaultBufferRoot: URL { AngelEnvironment.currentBufferRoot }
 
-    nonisolated static let testHostBufferRoot = FileManager.default.temporaryDirectory
-        .appendingPathComponent("test_angel_buffer_pid\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+    nonisolated static var testHostBufferRoot: URL { AngelEnvironment.testHostBufferRoot }
 
     nonisolated static func save(_ plan: ArchiveAngelPlan) throws {
         let enc = JSONEncoder()
@@ -611,8 +603,9 @@ enum ArchiveAngelPlanStore {
     /// Delete a batch folder (companions + plan) — THE delete entry point
     /// for whole batches (the clear verb, the settle, the job's cancel).
     /// Refuses, with a typed and logged error, anything that is not
-    /// `<bufferRoot>/batch-…`.
-    nonisolated static func removeBatchFolder(_ plan: ArchiveAngelPlan, bufferRoot: URL = defaultBufferRoot,
+    /// `<bufferRoot>/batch-…`. Every caller names the root (S2: no default
+    /// pointing at the live buffer on the one delete entry point).
+    nonisolated static func removeBatchFolder(_ plan: ArchiveAngelPlan, bufferRoot: URL,
                                               log: (String) -> Void = { appLog.write($0) }) throws {
         do {
             try checkBatchFolder(plan.batchDir, bufferRoot: bufferRoot)

@@ -17,8 +17,9 @@
 //             UserDefaults / @AppStorage outside the settings file, the
 //             hard-coded buffer root. The seam files themselves are exempt.
 //   COUPLING  (informational, may only shrink) concrete VideoScanModel /
-//             MediaFileOperationsCenter references inside the Angel — the
-//             work S6 (pure core → package) has left.
+//             MediaFileOperationsCenter references in the Angel's CORE
+//             (Recommend/Prepare/Review/Promote) — the work S6 (pure core →
+//             package) has left. Views and the composition root are exempt.
 //
 // Comments are stripped before scanning: a doc comment that mentions a type
 // is not a dependency.
@@ -31,73 +32,17 @@ struct ArchiveAngelBoundarySensorTests {
 
     // MARK: Baselines (lower these as leaks are removed; never raise them)
 
-    // S1 (2026-09-22, main 05f4be42 + the moves): today's leaks.
-    static let inboundBaseline: [String: Int] = [
-        "ArchiveItemVersions.swift | ArchiveAngelNaming": 1,
-        "ArchiveView+Table.swift | ArchiveAngelAssessmentPanel": 1,
-        "ArchiveView+Table.swift | ArchiveAngelBufferHygieneCard": 1,
-        "ArchiveView+Table.swift | ArchiveAngelReadyDisclosure": 1,
-        "ArchiveView+Table.swift | ArchiveAngelReviewRequest": 1,
-        "ArchiveView+Table.swift | ArchiveAngelStartRequest": 1,
-        "ArchiveView+Table.swift | ArchiveAngelUnreadableRow": 1,
-        "ArchiveView+Table.swift | archiveAngelStore": 1,
-        "ArchiveView+Table.swift | archiveAngelSweep": 1,
-        "ArchiveView.swift | ArchiveAngelBufferHygiene": 4,
-        "ArchiveView.swift | ArchiveAngelHygieneSession": 1,
-        "ArchiveView.swift | ArchiveAngelPlan": 1,
-        "ArchiveView.swift | ArchiveAngelPlanStore": 6,
-        "ArchiveView.swift | ArchiveAngelPromoter": 2,
-        "ArchiveView.swift | ArchiveAngelReviewRequest": 2,
-        "ArchiveView.swift | ArchiveAngelReviewSheet": 1,
-        "ArchiveView.swift | ArchiveAngelStartRequest": 1,
-        "ArchiveView.swift | ArchiveAngelStartSheet": 1,
-        "ArchiveView.swift | forgetArchiveAngelCompanions": 1,
-        "CatalogContent+Promote.swift | defaults key archiveAngel.makeLossless": 1,
-        "CatalogContent+Promote.swift | prepareWithArchiveAngel": 1,
-        "CatalogContent+Promote.swift | prepareWithArchiveAngelMenuItem": 1,
-        "CatalogContent+Promote.swift | startArchiveAngel": 1,
-        "CatalogContent+Table.swift | ArchiveAngelCatalogBadge": 2,
-        "CatalogContent+Table.swift | archiveAngelStore": 4,
-        "CatalogContent+Table.swift | prepareWithArchiveAngelMenuItem": 1,
-        "CatalogHelpers.swift | ArchiveAngelEvidenceRecord": 1,
-        "CatalogHelpers.swift | archiveAngelStore": 2,
-        "InspectorPanel.swift | ArchiveAngelEvidenceRecord": 1,
-        "MediaFileOperationsWindow.swift | ArchiveAngelDetailView": 1,
-        "MediaFileOperationsWindow.swift | ArchiveAngelJob": 1,
-        "VideoScanApp.swift | ArchiveAngelJob": 1,
-        "VideoScanApp.swift | isMediaFileOperationBusyForAngel": 1,
-        "VideoScanModel+MediaLedger.swift | ArchiveAngelAttentionStore": 1,
-        "VideoScanModel+MediaLedger.swift | ArchiveAngelCandidate": 1,
-        "VideoScanModel+MediaLedger.swift | ArchiveAngelFamily": 1,
-        "VideoScanModel+MediaLedger.swift | archiveAngelAttention": 1,
-        "VideoScanModel+MediaLedger.swift | archiveAngelSweep": 1,
-        "VideoScanModel.swift | ArchiveAngelAttentionStore": 1,
-        "VideoScanModel.swift | ArchiveAngelEvidenceStore": 1,
-        "VideoScanModel.swift | ArchiveAngelSweep": 1,
-        "VideoScanModel.swift | ArchiveAngelSweepSettings": 3,
-        "VideoScanModel.swift | archiveAngelAttention": 1,
-        "VideoScanModel.swift | archiveAngelStore": 2,
-        "VideoScanModel.swift | archiveAngelSweep": 3,
-        "VideoScanModel.swift | archiveAngelSweepSettings": 1,
-        "VideoScanModel.swift | configureArchiveAngelSweep": 1,
-        "VideoScanModel.swift | isMediaFileOperationBusyForAngel": 1,
-    ]
-    static let outboundBaseline: [String: Int] = [
-        "Facade/VideoScanModel+ArchiveAngelSweep.swift | TestEnvironment.isTestHost": 1,
-        "Prepare/ArchiveAngelJob.swift | O(n) records scan": 2,
-        "Prepare/ArchiveAngelPlan.swift | TestEnvironment.isTestHost": 1,
-        "Prepare/ArchiveAngelPlan.swift | hard-coded buffer root": 1,
-        "Prepare/MediaFileOperations+ArchiveAngel.swift | hard-coded buffer root": 2,
-        "Prepare/VideoScanModel+ArchiveAngelCompanions.swift | hard-coded buffer root": 1,
-        "Recommend/ArchiveAngelEvidenceStore.swift | TestEnvironment.isTestHost": 1,
-        "UI/ArchiveAngelAssessmentPanel.swift | UserDefaults / @AppStorage": 1,
-        "UI/ArchiveAngelAssessmentPanel.swift | navigation": 2,
-        "UI/ArchiveAngelRowActions.swift | UserDefaults / @AppStorage": 1,
-        "UI/ArchiveAngelRowActions.swift | navigation": 2,
-        "UI/ArchiveAngelStartSheet.swift | UserDefaults / @AppStorage": 2,
-        "UI/ArchiveAngelStartSheet.swift | hard-coded buffer root": 1,
-    ]
-    static let couplingBaseline = 45
+    // S1 (2026-09-22): inbound 68 in 48 places, outbound 18 in 13 places.
+    // S2 (2026-09-22): ZERO — the seams, the façade and the strip took
+    // every one. Keep them empty: a new leak fails here.
+    static let inboundBaseline: [String: Int] = [:]
+    static let outboundBaseline: [String: Int] = [:]
+    /// The CORE (Recommend/, Prepare/, Review/, Promote/) naming the concrete
+    /// VideoScanModel / MediaFileOperationsCenter instead of a seam — S6's
+    /// work before the pure core can become a package. 29 at S1 and S2.
+    /// (UI/ views take the app's environment objects by design, and the
+    /// façade + seam files are the composition root — not counted.)
+    static let couplingBaseline = 29
 
     // MARK: The public surface
 
@@ -193,9 +138,13 @@ struct ArchiveAngelBoundarySensorTests {
         return out
     }
 
+    static let coreFolders: Set<String> = ["Recommend", "Prepare", "Review", "Promote"]
+
     static func coupling() -> Int {
         var n = 0
-        for url in swiftFiles(under: angelDir) where !seamFiles.contains(relative(url, to: angelDir)) {
+        for url in swiftFiles(under: angelDir) {
+            let rel = relative(url, to: angelDir)
+            guard let folder = rel.split(separator: "/").first, coreFolders.contains(String(folder)) else { continue }
             n += matches(#"\b(VideoScanModel|MediaFileOperationsCenter)\b"#, in: code(of: url)).count
         }
         return n
@@ -219,7 +168,7 @@ struct ArchiveAngelBoundarySensorTests {
     @Test("the scanner sees the app and the Angel folder (a moved folder must not make this vacuous)")
     func scannerSeesFiles() {
         #expect(Self.swiftFiles(under: Self.appDir()).count > 300)
-        #expect(Self.swiftFiles(under: Self.angelDir).count >= 27)
+        #expect(Self.swiftFiles(under: Self.angelDir).count >= 35)
         #expect(FileManager.default.fileExists(atPath: Self.angelDir.appendingPathComponent("Facade/ArchiveAngel.swift").path))
     }
 

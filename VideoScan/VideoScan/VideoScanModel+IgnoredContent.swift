@@ -18,7 +18,7 @@ extension VideoScanModel {
 
     // MARK: Launch
 
-    /// Called once from init (beside configureArchiveAngelSweep). Loads
+    /// Called once from init (beside archiveAngel.launch()). Loads
     /// the sidecar off-main so the first scan already knows what to skip.
     /// Test hosts never load (their store points at a scratch folder).
     func configureIgnoredContent() {

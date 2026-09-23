@@ -131,7 +131,7 @@ struct ArchiveAngelBenchmarkTests {
                 let model = MasterArchiveTestSupport.makeModel(sandbox)
                 model.scanTargets = []
                 model.previewSweep.stop()
-                model.archiveAngelSweep.stop()
+                model.archiveAngel.sweep.stop()
                 // Assign only the isolated designation; initializeMasterArchive
                 // also persists scan-target preferences, unwanted in a benchmark.
                 model.masterArchive = MasterArchiveDesignation(targetPath: sandbox.archiveVolume.path,

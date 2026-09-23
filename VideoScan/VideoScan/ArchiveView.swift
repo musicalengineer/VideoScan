@@ -60,24 +60,10 @@ struct ArchiveView: View {
 
     @Environment(\.openWindow) var openWindow
 
-    /// Archive Angel (2026-09-09): Stage 1 entry sheet + Stage 2 review
-    /// sheet, both `.sheet(item:)` with struct payloads. Ready batches are
-    /// read from the buffer OUTSIDE body (disk I/O) — refreshed on entry,
-    /// when a sheet closes, and when the MFO job list changes.
-    @State var angelStartRequest: ArchiveAngelStartRequest?
-    @State var angelReviewRequest: ArchiveAngelReviewRequest?
-    @State var angelReadyBatches: [ArchiveAngelPlan] = []
-    /// Batch folders whose plan can't be read (audit #7) — listed, never
-    /// touched.
-    @State var angelUnreadableBatches: [ArchiveAngelPlanStore.UnreadableBatch] = []
-    /// Buffer hygiene (curation Phase 2, 2026-09-19): what is waiting in
-    /// the buffer and what finished batches still hold. Computed with the
-    /// scan, off the main actor; drives the card above the disclosure and
-    /// the start sheet's banner.
-    @State var angelHygiene: ArchiveAngelBufferHygiene.Report = .empty
-    /// Refreshes are stamped when requested; a scan publishes only if it
-    /// is newer than what is on screen (codex review 2026-09-20 #9).
-    @State var angelRefreshGeneration = 0
+    // Archive Angel: its sheets, batches and buffer-hygiene state live in
+    // ArchiveAngelStrip + the façade (`model.archiveAngel`) since
+    // consolidation S2 (2026-09-22); this view only places the strip and
+    // tells the façade when to re-read the buffer.
 
     var body: some View {
         HSplitView {
@@ -106,19 +92,16 @@ struct ArchiveView: View {
         .sheet(item: $archiveDetailRecord) { rec in
             ArchiveDetailSheet(record: rec, allRecords: model.records)
         }
-        .sheet(item: $angelStartRequest) { _ in
-            ArchiveAngelStartSheet(hygiene: angelHygiene, revealHygiene: { revealAngelHygiene() })
-                .environmentObject(model)
-                .environmentObject(fileOpsCenter)
+        // Archive Angel batches are read from the buffer OUTSIDE body (disk
+        // I/O) — refreshed on entry and when the MFO job list changes (the
+        // strip refreshes after its own sheets and cards).
+        .task { model.archiveAngel.refreshBatches(reason: "Archive tab entry") }
+        .onChange(of: fileOpsCenter.jobs.map(\.id)) { _, _ in
+            model.archiveAngel.refreshBatches(reason: "job list changed")
         }
-        .sheet(item: $angelReviewRequest, onDismiss: { refreshAngelBatches() }) { req in
-            ArchiveAngelReviewSheet(plan: req.plan)
-                .environmentObject(model)
-                .environmentObject(fileOpsCenter)
+        .onChange(of: ArchiveAngel.finishedJobCount(fileOpsCenter.jobs)) { _, _ in
+            model.archiveAngel.refreshBatches(reason: "an Angel job finished")
         }
-        .task { refreshAngelBatches() }
-        .onChange(of: fileOpsCenter.jobs.map(\.id)) { _, _ in refreshAngelBatches() }
-        .onChange(of: angelFinishedJobCount) { _, _ in refreshAngelBatches() }
         // GH #175: landing on the Archived column sorts newest first.
         .onChange(of: sortOrder) { old, new in
             let adjusted = ArchiveSortPolicy.adjusted(new: new, previous: old)
@@ -126,77 +109,14 @@ struct ArchiveView: View {
         }
     }
 
-    // MARK: - Archive Angel batches
+    // MARK: - Archive Angel
 
-    /// Finished Angel jobs — a change means a batch just became ready.
-    private var angelFinishedJobCount: Int {
-        fileOpsCenter.jobs.filter { $0.kind == .archiveAngel && !$0.state.isActive }.count
-    }
-
-    func refreshAngelBatches() {
-        let root = ArchiveAngelPlanStore.defaultBufferRoot
-        // A promote a quit left `.promoting` is settled against the catalog
-        // first (audit #3), so its batch is listed again or finished.
-        ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: root, model: model)
-        angelRefreshGeneration += 1
-        let generation = angelRefreshGeneration
-        Task {
-            let (readyPlans, unreadable, settled, hygiene) = await Task.detached(priority: .utility) {
-                // GH #177: a batch left `preparing` by a quit or a stop is
-                // settled here (ready rows kept → listed; none → removed).
-                let settled = ArchiveAngelPlanStore.settleInterruptedBatches(bufferRoot: root)
-                let scan = ArchiveAngelPlanStore.scanBatches(bufferRoot: root)
-                // Folder sizes are disk walks — here, never in body.
-                var hygiene = ArchiveAngelBufferHygiene.report(
-                    plans: scan.plans,
-                    bytesOf: { ArchiveAngelPlanStore.folderBytes($0.batchDir, fm: .default) },
-                    modifiedAt: ArchiveAngelBufferHygiene.planModifiedAt,
-                    diskFree: ArchiveAngelBufferHygiene.diskFree(bufferRoot: root))
-                hygiene.generation = generation
-                // A "ready" batch with no ready rows has nothing to review
-                // (Rick 2026-09-22: "Archive Angel has 0 videos ready" in
-                // orange) — it is not offered.
-                return (scan.plans.filter { $0.status == .ready && $0.readyCount > 0 },
-                        scan.unreadable, settled, hygiene)
-            }.value
-            var ready = readyPlans
-            await MainActor.run {
-                // The settle reclaimed the unfinished rows' files; their
-                // catalogued companions are retired here (codex #1572) —
-                // after the settle's removals, reconciled against the disk.
-                model.forgetArchiveAngelCompanions(settled: settled)
-                // An older scan that finished late must not overwrite a
-                // newer one (#9): its side effects above are idempotent,
-                // its picture of the buffer is stale.
-                guard hygiene.isNewer(than: angelHygiene) else { return }
-                // Rows follow catalog renames (Rick 2026-09-10) — the row
-                // and the sheet show the record's current name.
-                for i in ready.indices {
-                    let lines = ArchiveAngelPromoter.followRenames(plan: &ready[i], model: model)
-                    if !lines.isEmpty {
-                        lines.forEach { model.log($0) }
-                        ArchiveAngelPlanStore.saveLogged(ready[i], context: "following a catalog rename")
-                    }
-                }
-                angelReadyBatches = ready
-                angelUnreadableBatches = unreadable
-                angelHygiene = hygiene
-            }
-        }
-    }
-
-    /// The start sheet's banner button: close the sheet, land on the
-    /// Archived column (where the card lives) and un-hide anything put
-    /// off with Later so the whole picture is on screen.
-    func revealAngelHygiene() {
-        ArchiveAngelHygieneSession.shared.laterBatchIDs.removeAll()
+    /// The start sheet's hygiene banner lands here: the Archived column,
+    /// focus cleared, so the card (in the strip) is on screen. The façade
+    /// has already un-hidden anything put off with Later.
+    func revealArchivedForAngel() {
         model.focusedMediaIDs = []
         apply(ArchiveHomeState.sidebarPick(.archived, viewMode: ArchiveViewMode(rawValue: archiveViewMode) ?? .timeline))
-    }
-
-    func openNewestAngelBatch() {
-        guard let newest = angelReadyBatches.first else { return }
-        angelReviewRequest = ArchiveAngelReviewRequest(plan: newest)
     }
 
     // MARK: - Snapshot access

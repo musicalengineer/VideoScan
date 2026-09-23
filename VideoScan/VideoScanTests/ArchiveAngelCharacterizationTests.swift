@@ -446,10 +446,13 @@ struct ArchiveAngelVocabularyTests {
 
     @Test("the Angel's UserDefaults keys are unchanged (a rename would silently reset Rick's settings)")
     func defaultsKeys() {
-        #expect(ArchiveAngelSweepSettings.enabledKey == "archiveAngel.sweepEnabled")
-        // "archiveAngel.count" / "archiveAngel.makeLossless" are @AppStorage
-        // literals in the start sheet today; S2 moves them into
-        // ArchiveAngelSettings and pins them there. Their defaults: 25 / false.
+        // S2 gathered the three into ArchiveAngelSettings — the strings are
+        // what S0 pinned (the sweep's key, and the start sheet's two
+        // @AppStorage literals); the defaults are ON / 25 / off.
+        #expect(ArchiveAngelSettings.sweepEnabledKey == "archiveAngel.sweepEnabled")
+        #expect(ArchiveAngelSettings.batchCountKey == "archiveAngel.count")
+        #expect(ArchiveAngelSettings.makeLosslessKey == "archiveAngel.makeLossless")
+        #expect(ArchiveAngelSettings() == ArchiveAngelSettings(sweepEnabled: true, batchCount: 25, makeLossless: false))
         #expect(ArchiveAngelStartSheet.choices == [10, 25, 35, 50])
     }
 
