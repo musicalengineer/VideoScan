@@ -161,7 +161,7 @@ struct FixityStampVolumeIdentityTests {
         }
         let offline = MasterArchiveTestSupport.makeRecord(path: r.sb.sources.appendingPathComponent("gone.mov").path)
         offline.scanContext.volumeUUID = realUUID
-        offline.contentFixity = withStamp(proven.contentFixity!, proven.contentFixity!.stamp)
+        offline.contentFixity = try #require(proven.contentFixity)
         let (bURL, bound) = try r.file("bound.mov", seed: 5)
         let alreadyBound = MasterArchiveTestSupport.makeRecord(path: bURL.path)
         alreadyBound.contentFixity = bound
