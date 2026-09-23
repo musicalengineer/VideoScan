@@ -1304,6 +1304,14 @@ final class VideoScanModel: ObservableObject {
         return catalogStore.saveNow(records: records)
     }
 
+    /// Durable save the caller AWAITS without blocking the main actor
+    /// (codex #1659 — the Archive Angel's rollback journal is cleared only
+    /// after this returns true). See CatalogStore.saveAcknowledged.
+    func saveCatalogAcknowledged() async -> Bool {
+        noteCatalogMutated()
+        return await catalogStore.saveAcknowledged(records: records)
+    }
+
     // MARK: - Catalog mutation revision (codex #1393)
 
     /// THE authoritative "something about the catalog changed" counter

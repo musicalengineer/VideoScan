@@ -70,10 +70,10 @@ protocol AngelCatalog: AnyObject {
     /// per prepared row. The prepare step reuses one instead of balancing
     /// again (S4 fix — the Helper's 2026-08-19 rule).
     func catalogedBalancedCopies(of record: VideoRecord) -> [VideoRecord]
-    /// Save the catalog NOW (synchronous, fsync'd); true = durably on disk.
-    /// The rollback journal is cleared only after this succeeds (codex #1654).
-    @discardableResult
-    func saveCatalogNow() -> Bool
+    /// Save the catalog durably, AWAITED off the main actor (codex #1659 —
+    /// never the synchronous quit-time save); true = on disk. The rollback
+    /// journal is cleared only after this succeeds (codex #1654).
+    func saveCatalogAcknowledged() async -> Bool
 }
 
 /// "Show in Catalog" from anywhere in the Angel.

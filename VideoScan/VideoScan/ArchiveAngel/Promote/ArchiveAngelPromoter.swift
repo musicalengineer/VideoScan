@@ -122,8 +122,11 @@ final class ArchiveAngelPromoter: ObservableObject {
     /// and saves it. Returns the job, or nil when nothing could start
     /// (no master archive, nothing selected) — the plan then says why.
     @discardableResult
+    /// `freshFixity`: records whose whole-file fixity a stat confirmed just
+    /// before this call (`verifiedFixity`, off the main actor — codex
+    /// #1659). Only they may lend through a digest match; empty = none.
     func promote(plan: inout ArchiveAngelPlan, model: VideoScanModel,
-                 center: MediaFileOperationsCenter,
+                 center: MediaFileOperationsCenter, freshFixity: Set<UUID> = [],
                  onFinished: @escaping @MainActor (ArchiveAngelPlan) -> Void) -> PromoteToArchiveJob? {
         guard model.masterArchiveRootPath != nil else {
             Self.note("Archive Angel: Promote refused — no Master Archive designated", plan: &plan, model: model)
@@ -140,12 +143,27 @@ final class ArchiveAngelPromoter: ObservableObject {
         // (Rick 2026-09-10); only a changed file is refused below.
         for line in Self.followRenames(plan: &plan, model: model) { model.log(line); appLog.write(line) }
         // A previous attempt's rollback still pending (codex #1654 P1-4):
-        // settle it before stamping again, so the journal never mixes runs.
+        // never stamp over an undo that is not yet durable (codex #1659) —
+        // re-stamping the same value would let a later re-apply undo it.
+        if Self.hasAwaitingRestores(plan), let disk = try? ArchiveAngelPlanStore.load(batchDir: plan.batchDir) {
+            // Entries the acknowledged save already cleared on disk are done.
+            for i in plan.entries.indices {
+                let onDisk = disk.entries.first { $0.id == plan.entries[i].id }?.stampedFacts ?? []
+                let left = (plan.entries[i].stampedFacts ?? []).filter { $0.awaitingSave != true || onDisk.contains($0) }
+                plan.entries[i].stampedFacts = left.isEmpty ? nil : left
+            }
+        }
         if Self.hasPendingRestores(plan) {
             for line in Self.settleStampedFacts(plan: &plan, landed: { id in
                 model.record(forID: id).map { model.isArchived($0) } ?? false
             }, catalog: model, ledger: model) {
                 Self.note(line, plan: &plan, model: model)
+            }
+            if Self.hasAwaitingRestores(plan) {
+                Self.note("Archive Angel: Promote not started — the previous attempt's undo is still being saved to the catalog; "
+                          + "press Promote again in a moment", plan: &plan, model: model)
+                ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
+                return nil
             }
         }
 
@@ -183,7 +201,8 @@ final class ArchiveAngelPromoter: ObservableObject {
             if let original = model.record(forID: entry.id) {
                 let index = familyIndex ?? ArchiveAngelCopyFamily.Index(catalog: model)
                 familyIndex = index
-                let relatives = ArchiveAngelFamilyFacts.relatives(of: original, index: index, catalog: model)
+                let relatives = ArchiveAngelFamilyFacts.relatives(of: original, index: index, catalog: model,
+                                                                  fresh: freshFixity)
                 let companions = companionIDs.compactMap { model.record(forID: $0) }
                 let stamped = ArchiveAngelFamilyFacts.stamp(entry: entry, original: original,
                                                             companions: companions, relatives: relatives)
@@ -385,22 +404,40 @@ final class ArchiveAngelPromoter: ObservableObject {
         return lines
     }
 
+    /// The stat just before Promote stamps (codex #1659): the selected
+    /// ready rows and every copy a digest could join them to, checked
+    /// against the files NOW, off the main actor. Pass the result to
+    /// `promote(…, freshFixity:)` in the same main-actor turn it returns.
+    static func verifiedFixity(for plan: ArchiveAngelPlan, catalog: any AngelCatalog) async -> Set<UUID> {
+        let targets = plan.entries.filter { $0.selected && $0.status == .ready }
+            .compactMap { catalog.record(forID: $0.id) }
+        guard !targets.isEmpty else { return [] }
+        return await ArchiveAngelFixityCheck.verify(targets: targets, index: ArchiveAngelCopyFamily.Index(catalog: catalog),
+                                                    catalog: catalog)
+    }
+
     /// Settle what Promote stamped from the family (QA on S4; durability
-    /// codex #1654 P1-4). For a record that `landed`: keep it, write the
-    /// Media Ledger's dateSet / placeSet line by the angel, drop the entry.
-    /// For one that did not: restore the old value (only if still ours),
-    /// then SAVE THE CATALOG NOW — the rollback entries are dropped only
-    /// once that save is confirmed; otherwise they stay in the plan (the
-    /// caller saves it) and the next settle re-applies them idempotently
-    /// (a relaunch after a crash included). Returns the log lines.
+    /// codex #1654 P1-4, non-blocking codex #1659 P2). For a record that
+    /// `landed`: keep it, write the Media Ledger's dateSet / placeSet line
+    /// by the angel, drop the entry. For one that did not: restore the old
+    /// value (only if still ours) and KEEP the entry, marked `awaitingSave`,
+    /// in the plan (the caller saves the plan — the journal is on disk
+    /// before anything else happens). An acknowledged catalog save is then
+    /// started OFF the main actor; only when it confirms the restored values
+    /// are on disk are those entries removed from the plan on disk
+    /// (`acknowledgeRestores`). A crash or a failed save leaves them; every
+    /// later settle (Archive-tab refresh, a relaunch) re-applies them
+    /// idempotently and tries again. Returns the log lines.
     static func settleStampedFacts(plan: inout ArchiveAngelPlan, landed: (UUID) -> Bool,
                                    catalog: any AngelCatalog, ledger: any AngelLedger) -> [String] {
         var lines: [String] = []
-        var pending: [Int: [ArchiveAngelPlan.StampedFact]] = [:]
+        var awaiting: [ArchiveAngelPlan.StampedFact] = []
         for i in plan.entries.indices {
             guard let facts = plan.entries[i].stampedFacts, !facts.isEmpty else { continue }
-            let kept = facts.filter { landed($0.recordID) }
-            let undo = facts.filter { !landed($0.recordID) }
+            let pending = facts.filter { $0.awaitingSave == true }
+            let fresh = facts.filter { $0.awaitingSave != true }
+            let kept = fresh.filter { landed($0.recordID) }
+            var undo = fresh.filter { !landed($0.recordID) }
             for f in kept {
                 guard let r = catalog.record(forID: f.recordID) else { continue }
                 switch f.field {
@@ -409,29 +446,69 @@ final class ArchiveAngelPromoter: ObservableObject {
                 case .attestations: break
                 }
             }
-            plan.entries[i].stampedFacts = nil
             if !undo.isEmpty {
                 let restored = ArchiveAngelFamilyFacts.restore(undo, record: { catalog.record(forID: $0) })
                 lines.append("Archive Angel: \(plan.entries[i].filename) — not promoted: undid \(undo.count) inherited fact(s) "
                              + "on \(restored.count) record(s)")
-                pending[i] = undo
+                for k in undo.indices { undo[k].awaitingSave = true }
             }
+            if !pending.isEmpty {
+                // A restore not yet acknowledged on disk (a crash, a failed
+                // save): apply again — a no-op where it already holds.
+                let redone = ArchiveAngelFamilyFacts.restore(pending, record: { catalog.record(forID: $0) })
+                if !redone.isEmpty {
+                    lines.append("Archive Angel: \(plan.entries[i].filename) — re-applied \(redone.count) pending undo(s) after an interrupted save")
+                }
+            }
+            let stillPending = pending + undo
+            plan.entries[i].stampedFacts = stillPending.isEmpty ? nil : stillPending
+            awaiting += stillPending
         }
-        guard !pending.isEmpty else { return lines }
-        if catalog.saveCatalogNow() {
-            lines.append("Archive Angel: restored values saved to the catalog — rollback journal cleared")
-        } else {
-            for (i, undo) in pending { plan.entries[i].stampedFacts = undo }
-            lines.append("Archive Angel: the catalog could not be saved — the rollback journal is KEPT in the batch "
-                         + "and re-applied at the next settle")
+        guard !awaiting.isEmpty else { return lines }
+        lines.append("Archive Angel: saving the restored values to the catalog — the undo journal stays in the batch until that save is confirmed")
+        let batchDir = plan.batchDir
+        Task { @MainActor in
+            _ = await acknowledgeRestores(batchDir: batchDir, facts: awaiting, catalog: catalog)
         }
         return lines
+    }
+
+    /// Await a durable catalog save (off the main actor), then remove the
+    /// acknowledged undo entries from the plan ON DISK. False = not saved;
+    /// the entries stay for the next settle. Logged either way.
+    @discardableResult
+    static func acknowledgeRestores(batchDir: String, facts: [ArchiveAngelPlan.StampedFact],
+                                    catalog: any AngelCatalog) async -> Bool {
+        let batch = (batchDir as NSString).lastPathComponent
+        guard await catalog.saveCatalogAcknowledged() else {
+            catalog.angelLog("Archive Angel: \(batch) — the catalog could not be saved; the undo journal is KEPT and re-applied at the next settle")
+            return false
+        }
+        guard var plan = try? ArchiveAngelPlanStore.load(batchDir: batchDir) else {
+            catalog.angelLog("Archive Angel: \(batch) — restored values are saved, but the batch's plan could not be re-read to clear its undo journal (re-applying it later is harmless)")
+            return true
+        }
+        let acked = facts
+        for i in plan.entries.indices {
+            guard var list = plan.entries[i].stampedFacts else { continue }
+            list.removeAll { f in f.awaitingSave == true && acked.contains(f) }
+            plan.entries[i].stampedFacts = list.isEmpty ? nil : list
+        }
+        let saved = ArchiveAngelPlanStore.saveLogged(plan, context: "undo journal acknowledged")
+        catalog.angelLog("Archive Angel: \(batch) — restored values are on disk; undo journal "
+                         + (saved ? "cleared" : "could not be cleared yet (harmless: re-applying is a no-op)"))
+        return true
     }
 
     /// A plan (not in flight) with rollback entries still pending — the
     /// catalog save after a restore failed, or the app stopped first.
     static func hasPendingRestores(_ plan: ArchiveAngelPlan) -> Bool {
         plan.entries.contains { !($0.stampedFacts ?? []).isEmpty }
+    }
+
+    /// Undo entries restored in memory but not yet acknowledged on disk.
+    static func hasAwaitingRestores(_ plan: ArchiveAngelPlan) -> Bool {
+        plan.entries.contains { ($0.stampedFacts ?? []).contains { $0.awaitingSave == true } }
     }
 
     /// The promoter's ONE log verb (audit P2, Rick 2026-09-19 "tests and

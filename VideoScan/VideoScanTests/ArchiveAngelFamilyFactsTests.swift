@@ -146,7 +146,7 @@ struct ArchiveAngelFamilyFactsTests {
         original.durationSeconds = 600
         let twin = rec("twin.mov", hash: "v1:t")
         // Proven the same bytes (codex #1654: a sampled contentHash alone is not).
-        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 10, mtimeNs: 0)
+        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 10, mtimeNs: 0, ctimeNs: 1)   // ctime-bearing = usable
         for r in [original, twin] {
             r.sizeBytes = 10
             r.contentFixity = ContentFixity(digest: String(repeating: "cd", count: 32), byteCount: 10, stamp: stamp)
@@ -157,7 +157,10 @@ struct ArchiveAngelFamilyFactsTests {
         let lookalike = rec("00000.MTS", hash: "v1:other"); lookalike.duplicateGroupID = g
         lookalike.userDate = "1987-06"; lookalike.userDateConfidence = "known"; lookalike.userPlace = "Somewhere"
         model.records = [original, twin, child, lookalike]
-        let r = ArchiveAngelFamilyFacts.relatives(of: original, index: .init(active: model.records), catalog: model)
+        // `fresh`: the stat-verified set (declared here — this unit test pins
+        // the lender logic; ArchiveAngelCodex1659Tests pins the stat).
+        let r = ArchiveAngelFamilyFacts.relatives(of: original, index: .init(active: model.records), catalog: model,
+                                                  fresh: [original.id, twin.id])
         #expect(Set(r.identity.map(\.id)) == [twin.id, child.id])
         #expect(r.similar.map(\.id) == [lookalike.id])
         let got = ArchiveAngelFamilyFacts.inherited(for: original, relatives: r)

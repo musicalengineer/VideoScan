@@ -903,6 +903,49 @@ final class CatalogStore {
         }
     }
 
+    /// ACKNOWLEDGED durable save (codex #1659): the same write as `saveNow`
+    /// — ownership/staleness gate, snapshot on the main actor, encode +
+    /// atomic write + F_FULLFSYNC + verify on `writeQueue` — but the main
+    /// actor AWAITS the write instead of blocking on `writeQueue.sync`, so a
+    /// caller that must know the data is on disk (the Archive Angel's
+    /// rollback journal) never freezes the UI. FIFO on the serial write
+    /// queue orders it after any async save already running, exactly as
+    /// `saveNow` is ordered. Any pending debounced / coalesced save is
+    /// superseded by this snapshot (as in `saveNow`).
+    /// - Returns: true only when the snapshot durably reached disk.
+    func saveAcknowledged(records: [VideoRecord]) async -> Bool {
+        if Self.isRunningTests && self === CatalogStore.shared { return false }
+        if isReadOnly {
+            NSLog("VideoScan: CatalogStore.saveAcknowledged refused — read-only viewer mode")
+            ViewerWriteGuard.refuse("CatalogStore.saveAcknowledged")
+            lastWriteError = .readOnlyViewer
+            CatalogWriteJournal.record(.readOnlyViewer, catalogURL: fileURL)
+            return false
+        }
+        if writePrecondition() != nil { return false }
+        debounceTask?.cancel()
+        debounceTask = nil
+        pendingRecords = nil  // superseded by this save
+        let nextGeneration = allocateGeneration()
+        let payload = Self.makePayload(records: records, generation: nextGeneration,
+                                       masterArchive: masterArchive)
+        let dest = fileURL
+        let seam = testAfterWriteBeforeVerify
+        catalogStoreLog.notice("catalog save (acknowledged): BEGIN \(records.count) records → \(dest.lastPathComponent, privacy: .public)")
+        let writeError: CatalogWriteError? = await withCheckedContinuation { cont in
+            writeQueue.async {
+                cont.resume(returning: Self.encodeAndWrite(payload: payload, to: dest,
+                                                           purpose: .liveCatalog,
+                                                           afterWriteBeforeVerify: seam))
+            }
+        }
+        let ok = writeError == nil
+        finishWrite(success: ok, wroteGeneration: nextGeneration, error: writeError)
+        if ok { observer?.catalogStoreDidWrite(self) }
+        catalogStoreLog.notice("catalog save (acknowledged): \(ok ? "durable" : "FAILED", privacy: .public)")
+        return ok
+    }
+
     /// Off-main save: snapshot on the main actor, encode+write on
     /// `writeQueue`. Internal (not private) so tests can drive the async
     /// path without waiting out the 2 s debounce.
