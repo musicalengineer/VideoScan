@@ -356,6 +356,9 @@ nonisolated func pfNotesFieldMatches(value: String, rec: VideoRecord) -> Bool {
     rec.userNotes.lowercased().contains(value)
         || rec.notes.lowercased().contains(value)
         || rec.audioVerifyNote.lowercased().contains(value)
+        // Verify Video verdict note (2026-09-23): "Broken video — …" /
+        // "Video warning — …" so `notes:broken` finds every broken picture.
+        || rec.videoVerifyNote.lowercased().contains(value)
 }
 
 /// `codec:` field match — EITHER codec field, so `codec:mp3` finds
