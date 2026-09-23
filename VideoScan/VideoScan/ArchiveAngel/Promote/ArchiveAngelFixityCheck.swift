@@ -9,7 +9,12 @@
 // the same size keeps its size but not its stamp. The same holds for the
 // archive-copy ↔ promotion-source link (codex #1665): the discovery walk
 // reaches linked records, so they are stat'ed here too, and the link
-// lends only between two fresh ends.
+// lends only between two fresh ends WITH equal current digests (#1673).
+// Codex #1673: EVERY lending edge — whole-file repairs and ancestry too —
+// needs both ends fresh; the discovery walk (`lenders(fresh: nil)`)
+// already follows those edges, so their endpoints are stat'ed here as
+// well. A record with no usable fixity is never probed, so never fresh:
+// it cannot lend or borrow.
 //
 // Stat only — never a read of the file's contents (the fixity design:
 // stat-level identity, the digest stands in for the read). Runs OFF the
