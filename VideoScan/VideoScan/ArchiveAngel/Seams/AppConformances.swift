@@ -35,6 +35,22 @@ extension VideoScanModel: AngelCatalog, AngelNavigator, AngelArchive, AngelLedge
         appLog.write(line)
     }
 
+    /// Show Copies… (S4): the same active set the retired AssessCopiesJob
+    /// walked (`pfActiveRecords(model.records)`).
+    func activeRecordsForCopyFamily() -> [VideoRecord] {
+        pfActiveRecords(records)
+    }
+
+    /// The prepare step's "already balanced?" question (S4 fix): active
+    /// records the Balance Audio job catalogued from `record`.
+    func catalogedBalancedCopies(of record: VideoRecord) -> [VideoRecord] {
+        let id = record.id
+        return records.filter {
+            $0.derivedFrom == id && $0.derivationKind == BalanceAudioFix.derivationKind
+                && !$0.isPurged && !$0.isSetAside && !$0.isSuperseded
+        }
+    }
+
     // MARK: AngelNavigator
 
     /// Same steps as ArchiveView+Table.showInCatalog, without the view:

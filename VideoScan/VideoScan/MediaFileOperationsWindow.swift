@@ -85,8 +85,8 @@ enum MediaFileOperationsWindowOpener {
         return age >= 0 && age < MediaFileOperationsWindowForwarder.debounceSeconds
     }
 
-    /// The job window is the RESULT the user asked for (Archive Helper's
-    /// expanded row, Compare) — open it in front like any other window.
+    /// The job window is the RESULT the user asked for (an Angel batch,
+    /// Compare) — open it in front like any other window.
     static func openInFront(_ openWindow: OpenWindowAction) {
         openWindow(id: sceneID)
     }
@@ -150,10 +150,6 @@ struct MediaFileOperationsWindow: View {
 
     /// Compare rows the user expanded for the verdict + metadata diff.
     @State private var expandedJobIDs: Set<UUID> = []
-    /// Assess Copies rows open expanded on arrival — the panel IS the
-    /// result (Promote-Helper, 2026-08-19). Remembered so a user collapse
-    /// sticks.
-    @State private var autoExpandedAssessIDs: Set<UUID> = []
 
     private var combineSectionVisible: Bool {
         !dashboard.combineJobs.isEmpty || model.isCombining
@@ -305,19 +301,6 @@ struct MediaFileOperationsWindow: View {
                 }
             }
             .padding(.vertical, 4)
-        }
-        // Keyed on the ID LIST, not the count: the Archive Helper's
-        // replace policy (Bug B, 2026-08-20) swaps an old session for a
-        // new one in the same turn — count unchanged, ids changed — and
-        // the fresh session must still arrive expanded.
-        .onChange(of: center.jobs.map(\.id)) { _, _ in autoExpandNewAssessRows() }
-        .onAppear { autoExpandNewAssessRows() }
-    }
-
-    private func autoExpandNewAssessRows() {
-        for job in center.jobs where job is AssessCopiesJob && !autoExpandedAssessIDs.contains(job.id) {
-            autoExpandedAssessIDs.insert(job.id)
-            expandedJobIDs.insert(job.id)
         }
     }
 
@@ -550,12 +533,6 @@ struct MediaFileOperationRow: View {
 
             if isExpanded, let find = job as? FindPersonJob {
                 FindPersonDetailView(job: find)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
-
-            if isExpanded, let assess = job as? AssessCopiesJob {
-                AssessCopiesDetailView(job: assess)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
@@ -910,7 +887,7 @@ extension MediaFileOperationKind {
     /// listed by name so that backlog is readable from the code.
     var hasDetailView: Bool {
         switch self {
-        case .compare, .findPerson, .assessCopies, .verifyArchive, .archiveAngel, .deleteDuplicates,
+        case .compare, .findPerson, .verifyArchive, .archiveAngel, .deleteDuplicates,
              .pruneCopies:
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
@@ -973,18 +950,14 @@ extension MediaFileOperationKind {
         // like the retire/archivebox family, darker than rebuild's brown,
         // and clearly apart from extract's burnt orange.
         case .promote: return Color(red: 0.55, green: 0.36, blue: 0.10)
-        // Assess Copies (Promote-Helper, 2026-08-19) — dark plum: sits
-        // beside Promote's bronze as "the thinking before the copying",
-        // apart from trim's indigo and findPerson's slate.
-        case .assessCopies: return Color(red: 0.45, green: 0.16, blue: 0.45)
         // Verify Archive Copies (GH #167, 2026-08-20) — steel slate:
         // cooler and grayer than trim's indigo and findPerson's slate
         // blue; reads as "the auditor", apart from verifyAudio's
         // goldenrod despite sharing the verb.
         case .verifyArchive: return Color(red: 0.36, green: 0.42, blue: 0.60)
         // Archive Angel (2026-09-09) — deep violet: the proposer that
-        // precedes Promote's bronze; apart from assessCopies' plum by
-        // leaning blue.
+        // precedes Promote's bronze (the retired assessCopies' plum it once
+        // stood apart from went with the Promote Helper, S4).
         case .archiveAngel: return Color(red: 0.70, green: 0.30, blue: 0.05)   // dark amber — the Angel's orange; Δ≥0.14 from every other fill (nightly sensor 9/10)
         // Delete Duplicates (2026-09-20) — Rick asked for "DELETE in clear
         // high contrast color": white on a strong, saturated red. System

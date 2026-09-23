@@ -34,7 +34,11 @@ extension ArchiveView {
             kind = .video
         }
         let people = ArchivePeopleCell.text(for: rec)
-        return ArchiveTimelineItem(id: rec.id,
+        // Lineage for version grouping (codex #1644): a promotion link is
+        // the archive copy of the SAME item (an orphan copy standing in for
+        // its vanished source), not a version — never passed on.
+        let lineage = rec.derivationKind == ArchivePromotion.derivationKind ? nil : rec.derivedFrom
+        var item = ArchiveTimelineItem(id: rec.id,
                                    title: ArchiveTimelinePath.title(fromArchiveFilename: copy.filename),
                                    archiveFilename: copy.filename,
                                    relPath: rel,
@@ -43,6 +47,9 @@ extension ArchiveView {
                                    durationSeconds: rec.durationSeconds,
                                    peopleText: people == "—" ? "" : people,
                                    isVerified: copy.archiveFixity != nil)
+        item.derivedFromID = lineage
+        item.derivationKind = lineage == nil ? nil : rec.derivationKind
+        return item
     }
 
     /// All archived assets as timeline items — memoized per records
@@ -130,7 +137,7 @@ struct ArchiveTimelinePane: View {
             Text("The story starts with the first promote")
                 .font(.headline)
                 .foregroundColor(.secondary)
-            Text("Right-click a file in the Catalog and choose Archive Helper — every promoted file takes its place on this timeline.")
+            Text("Right-click a file in the Catalog and choose Archive Angel ▸ Prepare with Archive Angel — every promoted file takes its place on this timeline.")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

@@ -9,7 +9,7 @@
 //
 //   INBOUND   app code OUTSIDE VideoScan/ArchiveAngel/ naming anything of the
 //             Angel's but the public surface (the façade `ArchiveAngel` /
-//             `model.archiveAngel`, and the five public views/types listed
+//             `model.archiveAngel`, and the public views/types listed
 //             in `publicSurface`), or reading an "archiveAngel.*" defaults key.
 //   OUTBOUND  Angel code reaching for app globals it should get from a seam:
 //             tab navigation ("selectedTab" / MainWindowHelper), O(n)
@@ -58,6 +58,9 @@ struct ArchiveAngelBoundarySensorTests {
         "ArchiveAngel", "archiveAngel",   // the façade type, `model.archiveAngel`, the MFO kind `.archiveAngel`
         "ArchiveAngelStrip", "ArchiveAngelCatalogBadgeView", "ArchiveAngelMenuItems",
         "ArchiveAngelJobDetailView", "ArchiveAngelRecommendationClass",
+        // S4: the catalog's Show Copies… sheet host (the façade's
+        // `showCopies(of:)` / `copies(of:)` are reached through `archiveAngel`).
+        "ArchiveAngelShowCopiesHost",
     ]
 
     /// Angel files that ARE the seams: they may touch app globals.

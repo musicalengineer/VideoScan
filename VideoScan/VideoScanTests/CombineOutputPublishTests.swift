@@ -218,13 +218,13 @@ struct CombineOutputPublishTests {
     static let enotsup: @Sendable (String, String) -> Int32 = { _, _ in ENOTSUP }
 
     @Test(arguments: [ENOTSUP, EINVAL])
-    func fallback_freeName_publishesViaPlaceholder(_ err: Int32) throws {
+    func fallback_freeName_publishesViaLink(_ err: Int32) throws {
         let dir = try Self.makeDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let final = dir.appendingPathComponent("test_clip_combined.mov")
         let partial = try CombineOutputPublish.reservePartial(for: final)
         try Data("new".utf8).write(to: partial)
-        let outcome = try CombineOutputPublish.$renameExclSyscall.withValue({ _, _ in err }) {
+        let outcome = try ExclusivePublish.$renameExclSyscall.withValue({ _, _ in err }) {
             try CombineOutputPublish.publish(partial: partial.path, as: final)
         }
         #expect(outcome == .published(final))
@@ -240,7 +240,7 @@ struct CombineOutputPublishTests {
         try Data("original".utf8).write(to: final)
         let partial = try CombineOutputPublish.reservePartial(for: final)
         try Data("new".utf8).write(to: partial)
-        let outcome = try CombineOutputPublish.$renameExclSyscall.withValue(Self.enotsup) {
+        let outcome = try ExclusivePublish.$renameExclSyscall.withValue(Self.enotsup) {
             try CombineOutputPublish.publish(partial: partial.path, as: final)
         }
         #expect(outcome.url.lastPathComponent == "test_clip_combined 2.mov")
@@ -255,7 +255,7 @@ struct CombineOutputPublishTests {
         let partial = try CombineOutputPublish.reservePartial(for: final)
         try Data("verified".utf8).write(to: partial)
         #expect(throws: CombineOutputPublish.Failure.self) {
-            try CombineOutputPublish.$renameExclSyscall.withValue({ _, _ in EIO }) {
+            try ExclusivePublish.$renameExclSyscall.withValue({ _, _ in EIO }) {
                 _ = try CombineOutputPublish.publish(partial: partial.path, as: final)
             }
         }
@@ -305,7 +305,19 @@ struct CombineOutputPublishTests {
         try Data("original".utf8).write(to: final)
         let p1 = try CombineOutputPublish.reservePartial(for: final)
         try Data("first".utf8).write(to: p1)
-        let o1 = try CombineOutputPublish.publish(partial: p1.path, as: final)
+        // codex #1642: without RENAME_EXCL AND hard links the publish must
+        // REFUSE (never rename over) and leave everything as it was.
+        let o1: CombineOutputPublish.Outcome
+        do {
+            o1 = try CombineOutputPublish.publish(partial: p1.path, as: final)
+        } catch {
+            print("[exFAT] publish refused: \(error.localizedDescription)")
+            #expect(error.localizedDescription.contains(ExclusivePublish.cannotPublishSafelyNote))
+            #expect(try Data(contentsOf: final) == Data("original".utf8))
+            #expect(try Data(contentsOf: p1) == Data("first".utf8))
+            #expect(Self.names(in: mountPoint).filter { $0.hasPrefix("test_clip_combined 2") }.isEmpty)
+            return
+        }
         #expect(o1.url.lastPathComponent == "test_clip_combined 2.mov")
         #expect(try Data(contentsOf: final) == Data("original".utf8))
         #expect(try Data(contentsOf: o1.url) == Data("first".utf8))
