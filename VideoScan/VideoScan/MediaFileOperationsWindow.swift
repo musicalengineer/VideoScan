@@ -555,6 +555,12 @@ struct MediaFileOperationRow: View {
                     .padding(.bottom, 10)
             }
 
+            if isExpanded, let verifyVideo = job as? VerifyVideoJob {
+                VerifyVideoDetailView(job: verifyVideo)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
+
             if isExpanded, let prune = job as? PruneApplyJob {
                 PruneApplyDetailView(job: prune)
                     .padding(.horizontal, 12)
@@ -888,7 +894,7 @@ extension MediaFileOperationKind {
     var hasDetailView: Bool {
         switch self {
         case .compare, .findPerson, .verifyArchive, .archiveAngel, .deleteDuplicates,
-             .pruneCopies:
+             .pruneCopies, .verifyVideo:
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
@@ -941,6 +947,10 @@ extension MediaFileOperationKind {
         // keeps the yellow "checking" semantics; reads apart from its
         // brown repair sibling and from extract's burnt orange.
         case .verifyAudio: return Color(red: 0.72, green: 0.53, blue: 0.04)
+        // Verify Video (2026-09-23) — dark olive: the picture-side sibling
+        // of Verify Audio's goldenrod (same "checking" family, Δ ≈ 0.31
+        // from it), apart from combine's forest green and promote's bronze.
+        case .verifyVideo: return Color(red: 0.42, green: 0.45, blue: 0.05)
         // Find & Tag (per-person recipe, 2026-08-02) — dark slate blue,
         // distinct from trim's indigo and compare's cobalt; passes the
         // white-text contrast sensor like the rest of the 2026-07-31
