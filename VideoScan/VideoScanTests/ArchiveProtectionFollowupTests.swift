@@ -566,7 +566,6 @@ struct ArchiveSnapshotStaleWindowQATests {
         model.records = [keeper] + copies
         addVerifiedArchiveFamily(to: model, keeper: keeper)
         designateFamilyArchive(model, uuid: "UUID-ARCH")
-        await model.refreshArchiveVolumeSnapshot(force: true)
 
         final class Once: @unchecked Sendable { var fired = false }
         let once = Once()
@@ -580,8 +579,17 @@ struct ArchiveSnapshotStaleWindowQATests {
         }
         let job = DeleteDuplicatesJob(model: model, volumePath: dir.path, hooks: hooks,
                                       planRoot: dir.appendingPathComponent("plans"))
-        job.start()
-        await job.task?.value
+        // Isolation: the snapshot build and the removal-time probe read an
+        // injected mount table / UUIDs, never this host's real volumes
+        // (a UUID designation otherwise reads every mounted root's UUID).
+        // The archive (UUID-ARCH) is not mounted; the temp dir is boot disk.
+        await ArchiveVolumeProtection.$mountedVolumeRootsProbe.withValue({ [] }) {
+            await MasterArchiveDesignation.$volumeUUIDProbe.withValue({ _ in "BOOT-UUID" }) {
+                await model.refreshArchiveVolumeSnapshot(force: true)
+                job.start()
+                await job.task?.value
+            }
+        }
         #expect(once.fired, "fixture: the mount landed mid-run")
         #expect(copies.allSatisfy { $0.duplicateDisposition != .review }, "no extra copy was re-marked Review")
         #expect(job.result.deleted == 3, "\(job.state)")

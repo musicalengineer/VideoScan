@@ -87,12 +87,22 @@ extension VideoScanModel {
     /// rule — archive tree AND the whole archive volume, 2026-09-22 —
     /// and volume reachability, the 5 s cache, one stat per volume at
     /// most). The archive-volume snapshot is taken once for the plan.
-    func catalogTrashPlan(for records: [VideoRecord]) -> CatalogTrashPlan {
+    /// `isOffline` is injectable so tests never depend on which drives
+    /// the host has mounted (CLAUDE.md isolation dimension); production
+    /// callers take the default.
+    func catalogTrashPlan(for records: [VideoRecord],
+                          isOffline: (VideoRecord) -> Bool = VideoScanModel.isRecordOnOfflineVolume) -> CatalogTrashPlan {
         let archiveVolume = archiveVolumeProtection()
         return Self.catalogTrashPlan(
             for: records,
             isMasterArchive: { self.bulkDeleteRefusal($0, volume: archiveVolume) != nil },
-            isOffline: { Self.isExternalVolumePath($0.fullPath) && !VolumeReachability.isReachable(path: $0.fullPath) })
+            isOffline: isOffline)
+    }
+
+    /// The production offline predicate: an external /Volumes path whose
+    /// drive is not mounted (VolumeReachability's 5 s cache).
+    static func isRecordOnOfflineVolume(_ rec: VideoRecord) -> Bool {
+        isExternalVolumePath(rec.fullPath) && !VolumeReachability.isReachable(path: rec.fullPath)
     }
 
     /// ⌘⌫: plan, say what was refused, then hand the rest to the existing

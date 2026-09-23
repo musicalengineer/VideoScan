@@ -197,10 +197,27 @@ struct ArchiveVolumeProtectionTests {
         let model = isolatedModel()
         designateFamilyArchive(model)
         let a = record(onVolume), b = record(elsewhere)
-        let plan = model.catalogTrashPlan(for: [a, b])
+        // Isolation (CLAUDE.md dimension 4): every drive is "connected".
+        // With the real reachability probe, b (/Volumes/CrucialX10) was
+        // refused .offlineVolume on any host without that drive — the
+        // test passed on the M4 only because X10 happens to be mounted.
+        // The archive predicate stays the model's real one.
+        let plan = model.catalogTrashPlan(for: [a, b], isOffline: { _ in false })
         #expect(plan.refused.map(\.id) == [a.id])
         #expect(plan.refused.first?.reason == .masterArchive)
         #expect(plan.toTrash == [b.id])
+    }
+
+    @Test func trashShortcutPlanArchiveRefusalOutranksOffline() {
+        // Poisoned state: every drive reads offline. The archive-volume
+        // row must still be refused as .masterArchive (the stronger,
+        // permanent reason), and the other row as .offlineVolume.
+        let model = isolatedModel()
+        designateFamilyArchive(model)
+        let a = record(onVolume), b = record(elsewhere)
+        let plan = model.catalogTrashPlan(for: [a, b], isOffline: { _ in true })
+        #expect(plan.toTrash.isEmpty)
+        #expect(plan.refused.map(\.reason) == [.masterArchive, .offlineVolume])
     }
 
     @Test func discardUnderConstructionLeavesArchiveVolumeFilesAlone() {
