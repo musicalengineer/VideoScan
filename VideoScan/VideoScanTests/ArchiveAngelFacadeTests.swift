@@ -23,7 +23,12 @@ struct ArchiveAngelFacadeTests {
     func readsForward() throws {
         let (model, root) = try model()
         defer { try? FileManager.default.removeItem(at: root) }
-        let a = UUID(), b = UUID(), c = UUID()
+        // QA on S3: the façade only recommends records the LIVE catalog holds.
+        let recs = (0..<3).map { i -> VideoRecord in
+            let r = VideoRecord(); r.filename = "f\(i).mov"; r.fullPath = "/Volumes/T/f\(i).mov"; return r
+        }
+        model.records = recs
+        let a = recs[0].id, b = recs[1].id, c = recs[2].id
         let now = Date()
         model.archiveAngel.store.replace(with: ArchiveAngelEvidenceFile(computedAt: now, records: [
             a: .init(score: 120, lines: [.init(points: 120, line: "★★★")], rejection: nil, useCount: 0, lastUsed: nil, computedAt: now),

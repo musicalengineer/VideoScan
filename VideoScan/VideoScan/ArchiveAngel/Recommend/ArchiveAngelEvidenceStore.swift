@@ -276,6 +276,33 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
             .map(\.key)
     }
 
+    /// The Prepare order (QA on S3): records whose class Prepare takes,
+    /// by (tier = index in `prepare`, score desc, id); an UNCLASSIFIED
+    /// eligible record (a pre-S3b or test-built file) takes the last tier,
+    /// so old evidence still prepares by score. `skipped` = eligible
+    /// records in classes Prepare does not take. One O(records) pass + sort.
+    func rankedPrepareIDs(_ prepare: [ArchiveAngelRecommendationClass]) -> (ids: [(UUID, Int)], skipped: Int) {
+        guard let f = file else { return ([], 0) }
+        var rows: [(UUID, Int, Int)] = []
+        var skipped = 0
+        for (id, r) in f.records where r.isEligible {
+            if prepare.isEmpty {
+                rows.append((id, 0, r.score))   // no class filter: score order
+            } else if let k = r.recommendation {
+                guard let tier = prepare.firstIndex(of: k) else { skipped += 1; continue }
+                rows.append((id, tier, r.score))
+            } else {
+                rows.append((id, prepare.count, r.score))
+            }
+        }
+        rows.sort { a, b in
+            if a.1 != b.1 { return a.1 < b.1 }
+            if a.2 != b.2 { return a.2 > b.2 }
+            return a.0.uuidString < b.0.uuidString
+        }
+        return (rows.map { ($0.0, $0.1) }, skipped)
+    }
+
     /// Floor rejections by reason — one O(records) pass, for the Angel
     /// plan's "rejected" summary when picks come from evidence.
     func rejectionCounts() -> [ArchiveAngelRejection: Int] {

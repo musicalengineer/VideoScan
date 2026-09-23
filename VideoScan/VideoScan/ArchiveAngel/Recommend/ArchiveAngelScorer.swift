@@ -248,6 +248,21 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     /// accident (they sort after Master, and "stage ≥ Master" meant
     /// archived); the default policy now names them (floor `fileGone`).
     case fileGone = "The file was deleted or could not be salvaged (its stage says so)"
+    /// QA on S3 (2026-09-22): the person marked this copy an Extra copy —
+    /// the Keep copy of the same recording is the one to archive.
+    case extraCopy = "Marked an extra copy — the Keep copy is the one to archive"
+    /// QA on S3: Prepare takes only the classes the policy prepares
+    /// (`recommend.prepare`: Ready, then Worth a look by default).
+    case notRecommendedNow = "Not in a class the Angel prepares now (Not now, Needs a date, Another copy)"
+}
+
+extension ArchiveAngelRejection {
+    /// The reasons a SAFETY floor gives (AngelPolicyDefaults.safetyFloorIDs):
+    /// a file excluded for one of these is never recommended, whatever the
+    /// class rules say — `useAngelFloors: false` included.
+    static let safetyReasons: Set<ArchiveAngelRejection> = [
+        .notVideo, .alreadyArchived, .duplicateArchived, .fileGone, .volumeOffline,
+    ]
 }
 
 enum ArchiveAngelVerdict: Sendable, Equatable {
@@ -427,8 +442,9 @@ enum ArchiveAngelScorer {
                         now: Date = Date()) -> ArchiveAngelVerdict {
         if let hit = floorHit(c, policy: p, now: now) { return .rejected(hit.rejection) }
         var lines: [ArchiveAngelEvidence] = []
-        p.signals.withUnsafeBufferPointer { signals in
-            for i in signals.indices {
+        p.signals.withUnsafeBufferPointer { buffer in
+            guard let signals = buffer.baseAddress else { return }
+            for i in 0..<buffer.count {
                 guard signals[i].enabled, let kind = signals[i].resolvedKind else { continue }
                 if !signals[i].when.isEmpty {
                     var ctx = AngelEvalContext(now: now)
@@ -524,26 +540,55 @@ enum ArchiveAngelScorer {
         select(candidates, count: count, policy: AngelRecommendationPolicy.builtIn.with(weights: w), now: now)
     }
 
+    /// `byClass` (Prepare Batch, QA on S3): classify the set with the
+    /// policy's `recommend` rules and take only the classes it prepares,
+    /// class first (Ready, then Worth a look…), then rank — so the batch
+    /// agrees with the numbers the Archive tab shows. Off = score order
+    /// over every eligible record (the pure scorer, and its pins).
     static func select(_ candidates: [ArchiveAngelCandidate], count: Int,
                        policy p: AngelRecommendationPolicy,
-                       now: Date = Date()) -> ArchiveAngelSelection {
+                       now: Date = Date(), byClass: Bool = false) -> ArchiveAngelSelection {
         let w = p.weights
         var picks: [ArchiveAngelPick] = []
         picks.reserveCapacity(candidates.count)
         var rejected: [ArchiveAngelRejection: Int] = [:]
+        var evidence: [UUID: ArchiveAngelEvidenceRecord] = [:]
         for c in candidates {
             switch verdict(c, policy: p, now: now) {
-            case .eligible(let score, let evidence):
-                picks.append(.init(candidate: c, score: score, evidence: evidence))
+            case .eligible(let score, let lines):
+                picks.append(.init(candidate: c, score: score, evidence: lines))
+                if byClass, !p.recommend.prepare.isEmpty {
+                    evidence[c.id] = .init(score: score, lines: [], rejection: nil, useCount: 0, lastUsed: nil,
+                                           computedAt: now, bands: p.grades)
+                }
             case .rejected(let reason):
                 rejected[reason, default: 0] += 1
+                if byClass, !p.recommend.prepare.isEmpty {
+                    evidence[c.id] = .init(score: 0, lines: [], rejection: reason, useCount: 0, lastUsed: nil, computedAt: now)
+                }
             }
         }
         let tables = p.tables
-        picks.sort { rank($0, $1, tables: tables) }
+        var order: (ArchiveAngelPick, ArchiveAngelPick) -> Bool = { rank($0, $1, tables: tables) }
+        if byClass, !p.recommend.prepareClasses.isEmpty {
+            let result = ArchiveAngelRecommendations.classify(candidates, evidence: evidence, rules: p.recommend, now: now)
+            var tier: [UUID: Int] = [:]
+            let prepare = p.recommend.prepareClasses
+            for (i, v) in result.verdicts.enumerated() {
+                if let t = prepare.firstIndex(of: v.kind) { tier[candidates[i].id] = t }
+            }
+            let before = picks.count
+            picks = picks.filter { tier[$0.id] != nil }
+            if before > picks.count { rejected[.notRecommendedNow, default: 0] += before - picks.count }
+            order = { a, b in
+                let ta = tier[a.id] ?? .max, tb = tier[b.id] ?? .max
+                return ta != tb ? ta < tb : rank(a, b, tables: tables)
+            }
+        }
+        picks.sort(by: order)
         picks = onePerDuplicateGroup(picks, rejected: &rejected)
         picks = onePerFamily(picks, rejected: &rejected)
-        let kept = withFreshSlots(picks, count: max(0, count), weights: w)
+        let kept = withFreshSlots(picks, count: max(0, count), weights: w, by: order)
         return .init(picks: kept, overflow: max(0, picks.count - kept.count), rejected: rejected)
     }
 
@@ -569,7 +614,8 @@ enum ArchiveAngelScorer {
     /// When there are no such new files the head stands. The result is in
     /// `rank` order. Pure.
     static func withFreshSlots(_ ranked: [ArchiveAngelPick], count: Int,
-                               weights w: ArchiveAngelWeights = .standard) -> [ArchiveAngelPick] {
+                               weights w: ArchiveAngelWeights = .standard,
+                               by order: (ArchiveAngelPick, ArchiveAngelPick) -> Bool = rank) -> [ArchiveAngelPick] {
         guard count > 0 else { return [] }
         var head = Array(ranked.prefix(count))
         let wanted = min(count, Int((Double(count) * w.freshShare).rounded(.up)))
@@ -586,7 +632,7 @@ enum ArchiveAngelScorer {
                     i -= 1
                 }
                 head.append(contentsOf: incoming)
-                head.sort(by: rank)
+                head.sort(by: order)
             }
         }
         // The person reads why a file is here: a 0-point line, never a grade.
@@ -687,12 +733,22 @@ enum ArchiveAngelScorer {
     static func onePerDuplicateGroup(_ picks: [ArchiveAngelPick],
                                      rejected: inout [ArchiveAngelRejection: Int]) -> [ArchiveAngelPick] {
         // The one copy seam (ArchiveAngelCopyChooser), keyed by duplicate
-        // group only — the batch never collapses by name (a parity test
-        // pins this against the pre-S3 filter).
-        let out = ArchiveAngelCopyChooser.firstPerKey(picks) {
-            ArchiveAngelCopyChooser.key($0.candidate, collapseBy: ["duplicateGroup"])
+        // group only — the batch never collapses by name. QA on S3: the
+        // copy the person marked KEEP wins its group wherever it ranks
+        // (the rest of the group still yields to it); otherwise the
+        // best-ranked member, as before.
+        let key = { (p: ArchiveAngelPick) in ArchiveAngelCopyChooser.key(p.candidate, collapseBy: ["duplicateGroup"]) }
+        var keepers: [String: UUID] = [:]
+        for p in picks where p.candidate.duplicateDisposition == .keep {
+            if let k = key(p), keepers[k] == nil { keepers[k] = p.id }
         }
-        if out.dropped > 0 { rejected[.duplicateOfPick, default: 0] += out.dropped }
+        let preferred = keepers.isEmpty ? picks : picks.filter { p in
+            guard let k = key(p), let keeper = keepers[k] else { return true }
+            return p.id == keeper
+        }
+        let out = ArchiveAngelCopyChooser.firstPerKey(preferred, key: key)
+        let dropped = out.dropped + (picks.count - preferred.count)
+        if dropped > 0 { rejected[.duplicateOfPick, default: 0] += dropped }
         return out.kept
     }
 
@@ -842,9 +898,11 @@ enum ArchiveAngelScorer {
         let stem = (filename as NSString).deletingPathExtension
         if let re = tables.appCacheRegex,
            re.firstMatch(in: stem, range: NSRange(stem.startIndex..., in: stem)) != nil { return true }
-        let folders = (fullPath as NSString).deletingLastPathComponent.split(separator: "/")
+        // Lower-case the folder part ONCE, then look each component up
+        // (was a lowercased() allocation per component).
+        let folders = (fullPath as NSString).deletingLastPathComponent.lowercased()
         let names = tables.appCacheFolderSet
-        return folders.contains { names.contains($0.lowercased()) }
+        return folders.split(separator: "/").contains { names.contains(String($0)) }
     }
 
     /// Points and the printed tier for a duration; nil under 5 min (a

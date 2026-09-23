@@ -164,10 +164,33 @@ struct AngelPolicyTables: Codable, Sendable, Equatable {
         if !(1...64).contains(maxOriginalsPerKey) { out.append("tables.maxOriginalsPerKey = \(maxOriginalsPerKey) — must be 1…64") }
         if appCacheNamePattern.count > Self.maxPatternLength {
             out.append("tables.appCacheNamePattern is longer than \(Self.maxPatternLength) characters")
-        } else if (try? NSRegularExpression(pattern: appCacheNamePattern, options: [.caseInsensitive])) == nil {
-            out.append("tables.appCacheNamePattern is not a valid regular expression")
+        } else if let why = Self.patternRisk(appCacheNamePattern) {
+            out.append("tables.appCacheNamePattern " + why)
         }
         return out
+    }
+
+    /// Why a user pattern must not run, or nil (QA on S3: ReDoS). It runs
+    /// on the main actor once per record, so: (1) no REPEATED group — a
+    /// group followed by `+`, `*` or `{` (nested quantifiers, `(a|aa)*`)
+    /// is where catastrophic backtracking lives; `(…)?` is fine; (2) it
+    /// must compile; (3) a probe against a worst-case stem stays under
+    /// 20 ms. Pure over the pattern.
+    static func patternRisk(_ pattern: String) -> String? {
+        // An unescaped `)` followed by a repetition.
+        if pattern.range(of: #"(?<!\\)\)[+*{]"#, options: .regularExpression) != nil {
+            return "repeats a group (`(…)+`, `(…)*`, `(…){n,}`) — refused: that shape can hang the sweep (ReDoS)"
+        }
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return "is not a valid regular expression"
+        }
+        let probe = String(repeating: "a1_-", count: 64) + "!"
+        let start = Date()
+        _ = re.firstMatch(in: probe, range: NSRange(probe.startIndex..., in: probe))
+        if Date().timeIntervalSince(start) > 0.02 {
+            return "is too slow on a 257-character name — refused (ReDoS guard)"
+        }
+        return nil
     }
 
     static let standard = AngelPolicyTables(
@@ -203,6 +226,33 @@ struct AngelPolicyTables: Codable, Sendable, Equatable {
 
 enum AngelPolicyDefaults {
 
+    /// SAFETY floors (QA on S3, 2026-09-22 — the delete-safety principle:
+    /// refuse over guess). A file that is not a video, is already in the
+    /// Master Archive, has an archived copy, is gone, or sits on an offline
+    /// volume must never be recommended. A policy.json that disables one of
+    /// these, narrows it (`when`), exempts stars, spares explicit picks,
+    /// changes its kind or reason — or drops it — is REFUSED whole.
+    static let safetyFloorIDs: [String] = ["notVideo", "onMasterArchive", "archivedCopy", "fileGone", "volumeOffline"]
+
+    static var safetyFloors: [AngelRule] { floors.filter { safetyFloorIDs.contains($0.id) } }
+
+    /// Problems with the safety floors in `floors`; empty = all intact.
+    static func safetyProblems(in floors: [AngelRule]) -> [String] {
+        var out: [String] = []
+        for canonical in safetyFloors {
+            guard let r = floors.first(where: { $0.id == canonical.id }) else {
+                out.append("floors: safety floor \"\(canonical.id)\" is missing — it cannot be removed, by design")
+                continue
+            }
+            if !r.enabled || r.kind != canonical.kind || r.when != canonical.when || r.starExempt
+                || !r.explicitPicks || r.rejection != canonical.rejection {
+                out.append("floors: safety floor \"\(canonical.id)\" cannot be disabled or loosened (enabled, kind, when, "
+                           + "starExempt, explicitPicks and rejection are fixed) — delete-safety principle")
+            }
+        }
+        return out
+    }
+
     /// The hard floors, in the order a person should hear the reason.
     static let floors: [AngelRule] = [
         AngelRule(id: "notVideo", kind: .notVideo, note: "Audio-only files, stills and un-probed files are not videos"),
@@ -218,6 +268,13 @@ enum AngelPolicyDefaults {
                   rejection: "fileGone"),
         AngelRule(id: "archivedCopy", kind: .archivedCopy,
                   note: "A copy of it, or the original this is a version of, is already archived"),
+        // QA on S3 (2026-09-22): Rick's "Extra copy" is a floor, so neither
+        // the classes nor Prepare ever offer it over the Keep copy. A
+        // default (switchable), not a safety floor: it is a curation choice.
+        AngelRule(id: "extraCopy", kind: .match,
+                  note: "You marked it an Extra copy — the Keep copy is the one to archive",
+                  when: [.init(field: .duplicateDisposition, op: .eq, value: .string("extraCopy"))],
+                  rejection: "extraCopy"),
         AngelRule(id: "notPlayable", kind: .notPlayable),
         AngelRule(id: "pairedHalf", kind: .pairedHalf, note: "Combine the A/V pair first; the combined file is the candidate"),
         AngelRule(id: "livePhotoMotion", kind: .livePhotoMotion,
@@ -295,11 +352,7 @@ extension AngelRecommendRules {
     /// copy, else the best-ranked.
     static let standard = AngelRecommendRules(
         useAngelFloors: true,
-        exclude: [
-            AngelRule(id: "extraCopy", kind: .match,
-                      when: [.init(field: .duplicateDisposition, op: .eq, value: .string("extraCopy"))],
-                      line: "Marked an extra copy — its keeper is the one to archive"),
-        ],
+        exclude: [],   // the Extra copy rule is a floor now (QA on S3)
         vouch: AngelPolicyDefaults.vouch,
         date: AngelDateRule(minimum: "year"),
         classes: [

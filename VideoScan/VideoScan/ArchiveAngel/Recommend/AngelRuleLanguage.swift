@@ -224,7 +224,7 @@ struct AngelCondition: Codable, Sendable, Equatable {
         case number(AngelField, AngelOp, Double)
         case text(AngelField, AngelOp, String)            // lowercased operand
         case textSet(AngelField, AngelOp, Set<String>)    // in / notIn (lowercased)
-        case choice(AngelField, AngelOp, Set<String>)     // canonical case names
+        case choice(AngelField, AngelOp, [String])        // canonical case names (a few; array beats hashing)
         case any([AngelCondition])
         case invalid(String)
     }
@@ -349,14 +349,14 @@ struct AngelCondition: Codable, Sendable, Equatable {
         case (.in, _), (.notIn, _): return wrongValue(f, o, v, "a list drawn from: " + names.joined(separator: ", "))
         default: return .invalid("\"\(f.rawValue)\" is a choice: use == != in notIn")
         }
-        var canonical = Set<String>()
+        var canonical: [String] = []
         for w in written {
             guard let c = f.canonicalChoice(w) else {
                 return .invalid("\"\(w)\" is not a \(f.rawValue) — one of: \(names.joined(separator: ", "))")
             }
-            canonical.insert(c)
+            if !canonical.contains(c) { canonical.append(c) }
         }
-        return .choice(f, o, canonical)
+        return .choice(f, o, canonical.sorted())
     }
 
     static let maxTextLength = 200
@@ -454,8 +454,12 @@ struct AngelCondition: Codable, Sendable, Equatable {
 
     /// AND over a `when` list (an empty list always matches).
     static func all(_ conditions: [AngelCondition], _ c: ArchiveAngelCandidate, _ ctx: inout AngelEvalContext) -> Bool {
-        for cond in conditions where !cond.matches(c, &ctx) { return false }
-        return true
+        // In place — no copy of each condition per record.
+        conditions.withUnsafeBufferPointer { buffer in
+            guard let conds = buffer.baseAddress else { return true }
+            for i in 0..<buffer.count where !conds[i].matches(c, &ctx) { return false }
+            return true
+        }
     }
 }
 
@@ -827,6 +831,8 @@ extension ArchiveAngelRejection {
         case .sameFamilyAsPick: return "sameFamilyAsPick"
         case .policyRule: return "policyRule"
         case .fileGone: return "fileGone"
+        case .extraCopy: return "extraCopy"
+        case .notRecommendedNow: return "notRecommendedNow"
         }
     }
 

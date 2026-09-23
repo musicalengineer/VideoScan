@@ -109,6 +109,7 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
         }
         problems += weightProblems()
         problems += AngelRule.problems(in: floors, section: .floors, where: "floors", pointRange: 0...0)
+        problems += AngelPolicyDefaults.safetyProblems(in: floors)
         problems += AngelRule.problems(in: signals, section: .signals, where: "signals",
                                        pointRange: -Self.pointRange.upperBound...Self.pointRange.upperBound)
         problems += grades.problems
@@ -265,9 +266,12 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
         } catch {
             return .failure(.undecodable(String(describing: error).prefix(300).description))
         }
-        guard let version = given["schemaVersion"] as? Int else {
-            return .failure(.undecodable("no \"schemaVersion\" (this app reads \(readableSchemaVersions.lowerBound)…\(readableSchemaVersions.upperBound))"))
+        // An integer, not `true` (NSNumber bridges a JSON bool to 1) and not 2.0.
+        guard let number = given["schemaVersion"] as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(), !CFNumberIsFloatType(number) else {
+            return .failure(.undecodable("no integer \"schemaVersion\" (this app reads \(readableSchemaVersions.lowerBound)…\(readableSchemaVersions.upperBound))"))
         }
+        let version = number.intValue
         guard readableSchemaVersions.contains(version) else {
             return .failure(.invalid(["schemaVersion \(version) — this app reads schema \(currentSchemaVersion) (and migrates 1)"]))
         }

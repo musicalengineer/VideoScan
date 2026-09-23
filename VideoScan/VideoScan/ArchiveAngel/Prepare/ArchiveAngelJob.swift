@@ -361,17 +361,23 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             ArchiveAngelPlanStore.inFlightRecordIDs(bufferRoot: root)
         }.value
         if !inFlight.isEmpty { note("Archive Angel: \(inFlight.count) record(s) already in a prepared batch — skipping them") }
+        // QA on S3: a record purged, set aside, superseded or already
+        // promoted since the evidence was written is never projected.
+        let live = { (id: UUID) -> VideoRecord? in
+            guard let r = model.record(forID: id), model.isRecommendableNow(r) else { return nil }
+            return r
+        }
         if let ids = explicitRecordIDs {
             selection = Self.explicitSelection(
                 ids: ids, inFlight: inFlight, policy: self.policy,
-                project: { id in model.record(forID: id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } })
+                project: { id in live(id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } })
             consideredCount = ids.count
             note("Archive Angel: preparing \(selection.picks.count) of \(ids.count) selected record(s)")
         } else if let fromEvidence = Self.selectFromEvidence(
             store: model.archiveAngel.store, count: requestedCount, now: Date(), policy: self.policy, excluding: inFlight,
             attentionChangedAt: model.archiveAngel.attention.lastEventAt,
             attentionRevision: model.archiveAngel.attention.revision,
-            project: { id in model.record(forID: id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
+            project: { id in live(id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
             selection = fromEvidence.selection
             consideredCount = model.archiveAngel.store.consideredCount
             let age = max(0, Int(Date().timeIntervalSince(fromEvidence.computedAt) / 60))
@@ -410,7 +416,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             if stopRequested { finishCancelled(); return }
             let skipped = candidates.filter { inFlight.contains($0.id) }.count
             var walked = ArchiveAngelScorer.select(candidates.filter { !inFlight.contains($0.id) }, count: requestedCount,
-                                                   policy: rules)
+                                                   policy: rules, byClass: true)
             if skipped > 0 { walked.rejected[.inAnotherBatch, default: 0] += skipped }
             selection = walked
             consideredCount = candidates.count

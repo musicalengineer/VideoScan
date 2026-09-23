@@ -26,6 +26,10 @@ extension VideoScanModel: AngelCatalog, AngelNavigator, AngelArchive, AngelLedge
 
     var isCatalogBusyForAngel: Bool { isScanning || isCombining }
 
+    func isRecommendableNow(_ rec: VideoRecord) -> Bool {
+        !rec.isPurged && !rec.isSetAside && !rec.isSuperseded && !promoteWouldRefusePermanently(rec)
+    }
+
     func angelLog(_ line: String) {
         log(line)
         appLog.write(line)

@@ -47,11 +47,14 @@ struct ArchiveAngelRecommendationSummary: Equatable {
     }
 
     /// Pure: the summary of classified evidence under the batches' overlay.
-    /// `filename` resolves a record for the nudge's rows (nil = gone from
-    /// the catalog → not listed).
+    /// `live` answers, NOW, for a record the evidence recommends: its
+    /// filename, or nil when it is gone from the catalog, purged, set
+    /// aside, superseded or something Promote would refuse (QA on S3 — the
+    /// evidence can be up to a sweep old). Such a record counts as
+    /// Excluded and is never listed, badged or filtered in.
     static func make(evidence: [UUID: ArchiveAngelEvidenceRecord]?,
                      prepared: Set<UUID>, promoted: Set<UUID>,
-                     revision: Int, filename: (UUID) -> String?) -> ArchiveAngelRecommendationSummary {
+                     revision: Int, live: (UUID) -> String?) -> ArchiveAngelRecommendationSummary {
         var s = ArchiveAngelRecommendationSummary()
         s.revision = revision
         s.preparedIDs = prepared
@@ -62,14 +65,21 @@ struct ArchiveAngelRecommendationSummary: Equatable {
         }
         s.isAssessed = true
         var rows: [ArchiveAngelRecommendationClass: [(UUID, ArchiveAngelEvidenceRecord)]] = [:]
+        var names: [UUID: String] = [:]
         for (id, rec) in evidence {
             if prepared.contains(id) { continue }
             if promoted.contains(id) { s.counts[.promoted, default: 0] += 1; continue }
-            let kind = rec.recommendationClass
-            s.counts[kind, default: 0] += 1
+            var kind = rec.recommendationClass
+            var name: String?
             if kind.isRecommended {
+                name = live(id)
+                if name == nil { kind = .excluded }
+            }
+            s.counts[kind, default: 0] += 1
+            if kind.isRecommended, let name {
                 s.candidateIDs.insert(id)
                 rows[kind, default: []].append((id, rec))
+                names[id] = name
             }
         }
         func sorted(_ k: ArchiveAngelRecommendationClass) -> [(UUID, ArchiveAngelEvidenceRecord)] {
@@ -81,7 +91,7 @@ struct ArchiveAngelRecommendationSummary: Equatable {
         s.ranked = (ready + need + worth).map(\.0)
         func nudgeRows(_ list: [(UUID, ArchiveAngelEvidenceRecord)], needsDate: Bool) -> [ArchiveNudge.Candidate] {
             list.compactMap { id, rec in
-                guard let name = filename(id) else { return nil }
+                guard let name = names[id] else { return nil }
                 return ArchiveNudge.Candidate(id: id, filename: name, year: needsDate ? nil : rec.year,
                                               reasons: rec.reasons ?? [], needsDate: needsDate, score: rec.score)
             }
@@ -115,8 +125,24 @@ extension ArchiveAngel {
         let next = ArchiveAngelRecommendationSummary.make(
             evidence: store.file?.records, prepared: overlay.prepared, promoted: overlay.promoted,
             revision: recommendations.revision &+ 1,
-            filename: { catalog?.record(forID: $0)?.filename })
+            live: { id in
+                guard let catalog, let r = catalog.record(forID: id), catalog.isRecommendableNow(r) else { return nil }
+                return r.filename
+            })
         publishRecommendations(next)
         summaryLog.debug("recommendations rebuilt — \(next.headline, privacy: .public)")
+    }
+
+    /// The catalog changed (a purge, a set-aside, a promote, an edit):
+    /// recount against the LIVE catalog shortly after it settles — the
+    /// evidence may be a sweep old. Debounced 0.5 s; O(evidence) with O(1)
+    /// lookups, never in a view body.
+    func scheduleRecommendationsRecount() {
+        recountTask?.cancel()
+        recountTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.rebuildRecommendations()
+        }
     }
 }

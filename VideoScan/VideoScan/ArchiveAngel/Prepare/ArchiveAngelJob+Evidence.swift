@@ -58,6 +58,7 @@ extension ArchiveAngelJob {
         guard attentionIsCurrent(store: store, changedAt: attentionChangedAt, revision: attentionRevision) else { return nil }
         let weights = policy.weights
         var collected: [ArchiveAngelPick] = []
+        var tiers: [UUID: Int] = [:]
         collected.reserveCapacity(count)
         var rejected = store.rejectionCounts()
         var projections = 0
@@ -71,7 +72,9 @@ extension ArchiveAngelJob {
         // band is the same one the final `rank` order would cut at.
         var bandGroups: Set<UUID> = []
         var distinctSeen = 0
-        var bandScore: Int? = nil
+        // QA on S3: the band is (class tier, score) — Ready before Worth a
+        // look whatever the scores (Prepare agrees with the numbers).
+        var bandKey: (tier: Int, score: Int)? = nil
         let freshWanted = min(count, Int((Double(count) * weights.freshShare).rounded(.up)))
         // Fresh files counted the way the batch will see them: AFTER the
         // one-per-duplicate-group and one-per-family filters. A fresh
@@ -83,13 +86,17 @@ extension ArchiveAngelJob {
         var seenFamilies: Set<String> = []
         var pastBand = false
         var extraLooks = 0
-        for id in store.rankedEligibleIDs() {
+        let prepare = policy.recommend.prepareClasses
+        let ranked = store.rankedPrepareIDs(prepare)
+        rejected[.notRecommendedNow, default: 0] += ranked.skipped
+        if rejected[.notRecommendedNow] == 0 { rejected[.notRecommendedNow] = nil }
+        for (id, tier) in ranked.ids {
             guard let evidence = store.record(for: id) else { continue }
-            if let band = bandScore, evidence.score < band { pastBand = true }
+            if let band = bandKey, tier > band.tier || (tier == band.tier && evidence.score < band.score) { pastBand = true }
             if pastBand {
-                if freshCollected >= freshWanted || evidence.score < weights.freshMinimumScore
-                    || extraLooks >= freshScanBudget { break }
+                if freshCollected >= freshWanted || extraLooks >= freshScanBudget { break }
                 extraLooks += 1
+                if evidence.score < weights.freshMinimumScore { continue }
                 if evidence.timesProposed > 0 || evidence.familySkips > 0 { continue }
             }
             if excluding.contains(id) { rejected[.inAnotherBatch, default: 0] += 1; continue }
@@ -104,22 +111,27 @@ extension ArchiveAngelJob {
                 continue
             }
             collected.append(.init(candidate: candidate, score: evidence.score, evidence: evidence.lines))
+            tiers[id] = tier
             let groupIsNew = candidate.duplicateGroupID.map { seenGroups.insert($0).inserted } ?? true
             let familyIsNew = seenFamilies.insert(candidate.resolvedFamilyKey).inserted
             if candidate.isFreshToPerson, groupIsNew, familyIsNew { freshCollected += 1 }
             if !pastBand, candidate.duplicateGroupID.map({ bandGroups.insert($0).inserted }) ?? true {
                 distinctSeen += 1
-                if distinctSeen == count { bandScore = evidence.score }
+                if distinctSeen == count { bandKey = (tier, evidence.score) }
             }
         }
         let tables = policy.tables
-        collected.sort { ArchiveAngelScorer.rank($0, $1, tables: tables) }
-        var ranked = ArchiveAngelScorer.onePerDuplicateGroup(collected, rejected: &rejected)
-        ranked = ArchiveAngelScorer.onePerFamily(ranked, rejected: &rejected)
-        let picks = ArchiveAngelScorer.withFreshSlots(ranked, count: count, weights: weights)
+        let order: (ArchiveAngelPick, ArchiveAngelPick) -> Bool = { a, b in
+            let ta = tiers[a.id] ?? .max, tb = tiers[b.id] ?? .max
+            return ta != tb ? ta < tb : ArchiveAngelScorer.rank(a, b, tables: tables)
+        }
+        collected.sort(by: order)
+        var kept = ArchiveAngelScorer.onePerDuplicateGroup(collected, rejected: &rejected)
+        kept = ArchiveAngelScorer.onePerFamily(kept, rejected: &rejected)
+        let picks = ArchiveAngelScorer.withFreshSlots(kept, count: count, weights: weights, by: order)
         // Evidence that no longer yields a full batch is not trusted — walk.
         guard picks.count == count else { return nil }
-        let overflow = max(0, store.eligibleCount - projections) + (ranked.count - picks.count)
+        let overflow = max(0, ranked.ids.count - projections) + (kept.count - picks.count)
         return EvidencePick(selection: .init(picks: picks, overflow: overflow, rejected: rejected),
                             computedAt: store.computedAt ?? now, projections: projections)
     }

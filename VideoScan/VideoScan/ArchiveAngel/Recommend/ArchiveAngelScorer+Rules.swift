@@ -28,21 +28,25 @@ extension ArchiveAngelScorer {
         // cost at 100k). ≈ iterating a const std::vector by reference.
         // The weights and tables are hoisted once per record; each floor
         // gets only what it reads (no rule or policy copy per floor).
-        let w = p.weights
-        let tables = p.tables
-        return p.floors.withUnsafeBufferPointer { floors -> (rejection: ArchiveAngelRejection, rule: AngelRule)? in
-            for i in floors.indices {
+        // One context per record, shared by every floor's `when` (it only
+        // caches the date resolution, which is per candidate anyway).
+        var ctx = AngelEvalContext(now: now)
+        // Through the element POINTER: `buffer[i].field` returns a copy of
+        // the whole rule (strings, arrays) in an unoptimized build; a
+        // pointer subscript is an in-place address (≈ `const Rule&`).
+        return p.floors.withUnsafeBufferPointer { buffer -> (rejection: ArchiveAngelRejection, rule: AngelRule)? in
+            guard let floors = buffer.baseAddress else { return nil }
+            for i in 0..<buffer.count {
                 guard floors[i].enabled, let kind = floors[i].resolvedKind else { continue }
                 if floors[i].starExempt && c.starRating > 0 { continue }
                 if !floors[i].when.isEmpty {
-                    var ctx = AngelEvalContext(now: now)
                     guard AngelCondition.all(floors[i].when, c, &ctx) else { continue }
                     if kind == .match {
                         let reason = floors[i].rejection.flatMap(ArchiveAngelRejection.named) ?? .policyRule
                         return (reason, floors[i])
                     }
                 }
-                if let rejection = floorFires(kind, c, weights: w, tables: tables, now: now) { return (rejection, floors[i]) }
+                if let rejection = floorFires(kind, c, policy: p, now: now) { return (rejection, floors[i]) }
             }
             return nil
         }
@@ -52,7 +56,7 @@ extension ArchiveAngelScorer {
     /// from `weights` and `tables`. A `match` floor is decided by its `when`
     /// in `floorHit` (never here — an empty `when` matches nothing).
     static func floorFires(_ kind: AngelRuleKind, _ c: ArchiveAngelCandidate,
-                           weights w: ArchiveAngelWeights, tables: AngelPolicyTables, now: Date) -> ArchiveAngelRejection? {
+                           policy p: AngelRecommendationPolicy, now: Date) -> ArchiveAngelRejection? {
         switch kind {
         case .match:
             return nil
@@ -73,31 +77,31 @@ extension ArchiveAngelScorer {
         case .livePhotoMotion:
             // Rick 2026-09-21. Ahead of `.tooShort` so a 3 s Live Photo
             // half is counted as what it is, not as a short clip.
-            return w.excludeLivePhotoMotion && c.isLivePhotoMotion ? .livePhotoMotion : nil
+            return p.weights.excludeLivePhotoMotion && c.isLivePhotoMotion ? .livePhotoMotion : nil
         case .recentPhoneClip:
-            guard w.excludeRecentPhoneClips, c.isPhoneClip,
-                  Self.isRecent(captureDate: c.captureDate, years: w.recentPhoneClipYears, now: now) else { return nil }
+            guard p.weights.excludeRecentPhoneClips, c.isPhoneClip,
+                  Self.isRecent(captureDate: c.captureDate, years: p.weights.recentPhoneClipYears, now: now) else { return nil }
             return .recentPhoneClip
         case .appCache:
-            return Self.looksLikeAppCache(filename: c.filename, fullPath: c.fullPath, tables: tables) ? .appCache : nil
+            return Self.looksLikeAppCache(filename: c.filename, fullPath: c.fullPath, tables: p.tables) ? .appCache : nil
         case .derivativeOfOriginal:
             return c.derivativeOfOriginal != nil ? .derivativeOfOriginal : nil
         case .tooShort:
-            return c.durationSeconds < w.minimumDurationSeconds ? .tooShort : nil
+            return c.durationSeconds < p.weights.minimumDurationSeconds ? .tooShort : nil
         case .proxyStream:
             guard c.durationSeconds > 0, c.sizeBytes > 0,
-                  Double(c.sizeBytes) * 8 / c.durationSeconds / 1000 < w.minimumAverageKilobitsPerSecond else { return nil }
+                  Double(c.sizeBytes) * 8 / c.durationSeconds / 1000 < p.weights.minimumAverageKilobitsPerSecond else { return nil }
             return .proxyStream
         case .markedJunk:
             return c.mediaDisposition == .confirmedJunk ? .junk : nil
         case .suspectedJunk:
             return c.mediaDisposition == .suspectedJunk ? .suspectedJunk : nil
         case .junkScore:
-            return c.junkScore >= w.junkFloor ? .suspectedJunk : nil
+            return c.junkScore >= p.weights.junkFloor ? .suspectedJunk : nil
         case .volumeOffline:
             return c.volumeOnline ? nil : .volumeOffline
         case .resting:
-            return c.attention.restingUntil(now: now, weights: w) != nil ? .resting : nil
+            return c.attention.restingUntil(now: now, weights: p.weights) != nil ? .resting : nil
         default:
             return nil   // a signal kind in the floors list — validation refuses it
         }

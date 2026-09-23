@@ -76,6 +76,8 @@ final class ArchiveAngel: ObservableObject {
     /// the nudge, the strip headline, the badge, the catalog filter.
     /// Rebuilt by `rebuildRecommendations()` (ArchiveAngel+Recommendations).
     @Published private(set) var recommendations = ArchiveAngelRecommendationSummary()
+    /// The pending live recount after a catalog change.
+    var recountTask: Task<Void, Never>?
     /// Refreshes are stamped when requested; a scan publishes only if it
     /// is newer than what is on screen (codex review 2026-09-20 #9).
     private var refreshGeneration = 0
@@ -189,6 +191,8 @@ final class ArchiveAngel: ObservableObject {
     /// every records change — O(1), never logged.
     func catalogChanged() {
         sweep.noteCatalogChanged()
+        // The classes follow the LIVE catalog now, the scores at the next sweep.
+        scheduleRecommendationsRecount()
     }
 
     /// Attention events were just ledgered: fold them into the memory and

@@ -401,7 +401,7 @@ struct ArchiveAngelRecommendationPolicyTests {
         (#"{"schemaVersion": 2, "grades": {"a": 50, "b": 60}}"#, "grades must rise"),
         (#"{"schemaVersion": 2, "recommend": {"classes": [{"class": "maybe"}]}}"#, "unknown class"),
         (#"{"schemaVersion": 2, "recommend": {"classes": [{"class": "ready", "when": [{"field": "grade", "op": "==", "value": "E"}]}]}}"#, "is not a grade"),
-        (#"{"name": "no version"}"#, "no \"schemaVersion\""),
+        (#"{"name": "no version"}"#, "no integer \"schemaVersion\""),
     ])
     func poisonedRulesRefused(json: String, reason: String) throws {
         let loaded = try loadJSON(json, label: "poison")

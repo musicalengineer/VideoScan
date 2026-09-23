@@ -237,7 +237,12 @@ struct ArchiveAngelSweepTests {
         await sweep.runAndWait(reason: "rescore")
         #expect(store.attentionRevision == attention.revision)
         #expect(store.attentionLastEventAt == skipAt)
-        #expect(ArchiveAngelJob.selectFromEvidence(store: store, count: 3, now: Date(),
+        // QA on S3: Prepare follows the classes; this fixture is about the
+        // attention stamp, so it asks for the pre-S3 score order
+        // (`recommend.prepare: []`).
+        var scoreOrder = AngelRecommendationPolicy.builtIn
+        scoreOrder.recommend.prepare = []
+        #expect(ArchiveAngelJob.selectFromEvidence(store: store, count: 3, now: Date(), policy: scoreOrder,
                                                    attentionChangedAt: attention.lastEventAt,
                                                    attentionRevision: attention.revision, project: project)?.selection.picks.count == 3)
     }
@@ -276,7 +281,13 @@ struct ArchiveAngelSweepTests {
         ArchiveAngelScorer.applyFamilyAttention(&cs, now: now)
         #expect(cs.first { $0.id == sibling.id }?.familySkips == 2)
 
-        let walk = ArchiveAngelScorer.select(cs, count: 10, now: now)
+        // QA on S3: the cache and the walk must agree under the SAME policy.
+        // This fixture exercises attention (fresh C/D files, undated
+        // favourites), so it uses the pre-S3 score order (`prepare: []`);
+        // ArchiveAngelS3QATests pins the class order.
+        var scoreOrder = AngelRecommendationPolicy.builtIn
+        scoreOrder.recommend.prepare = []
+        let walk = ArchiveAngelScorer.select(cs, count: 10, policy: scoreOrder, now: now, byClass: true)
         let walkIDs = walk.picks.map(\.candidate.id)
         #expect(walkIDs.count == 10)
         #expect(Set(walkIDs).intersection(fresh.prefix(3).map(\.id)).count == 3, "the three best fresh files")
@@ -288,7 +299,7 @@ struct ArchiveAngelSweepTests {
         await sweep.runAndWait(reason: "test")
         #expect(sweep.store.record(for: sibling.id)?.familySkips == 2, "the family pass's result is in the record")
         let byID = Dictionary(uniqueKeysWithValues: cs.map { ($0.id, $0) })
-        let cached = ArchiveAngelJob.selectFromEvidence(store: sweep.store, count: 10, now: now) { id in
+        let cached = ArchiveAngelJob.selectFromEvidence(store: sweep.store, count: 10, now: now, policy: scoreOrder) { id in
             // The job's projection is per record: attention yes, the family pass no.
             guard var c = byID[id] else { return nil }
             c.familySkips = 0; c.familyKey = ""

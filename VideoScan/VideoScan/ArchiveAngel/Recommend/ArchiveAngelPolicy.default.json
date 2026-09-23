@@ -32,6 +32,19 @@
       "note" : "A copy of it, or the original this is a version of, is already archived"
     },
     {
+      "id" : "extraCopy",
+      "kind" : "match",
+      "note" : "You marked it an Extra copy — the Keep copy is the one to archive",
+      "rejection" : "extraCopy",
+      "when" : [
+        {
+          "field" : "duplicateDisposition",
+          "op" : "==",
+          "value" : "extraCopy"
+        }
+      ]
+    },
+    {
       "id" : "notPlayable",
       "kind" : "notPlayable"
     },
@@ -180,20 +193,13 @@
       "minimum" : "year"
     },
     "exclude" : [
-      {
-        "id" : "extraCopy",
-        "kind" : "match",
-        "line" : "Marked an extra copy — its keeper is the one to archive",
-        "when" : [
-          {
-            "field" : "duplicateDisposition",
-            "op" : "==",
-            "value" : "extraCopy"
-          }
-        ]
-      }
+
     ],
     "order" : "angelRank",
+    "prepare" : [
+      "ready",
+      "worthALook"
+    ],
     "useAngelFloors" : true,
     "vouch" : [
       {

@@ -164,7 +164,13 @@ enum ArchiveAngelS0Catalog {
         return id
     }
 
-    static func candidates(_ n: Int) -> [ArchiveAngelCandidate] {
+    /// `terminalStages` (QA on S3, 2026-09-22): the v10-era generator never
+    /// emitted Relocate's terminal stages (Manually Deleted, Salvage
+    /// Failed), so the `fileGone` floor went unexercised at scale. With it
+    /// on, every 53rd record is Manually Deleted and every 97th Salvage
+    /// Failed — an override AFTER the draws, so the RNG stream (and every
+    /// other field) is unchanged. Off keeps the v10 pins reproducible.
+    static func candidates(_ n: Int, terminalStages: Bool = false) -> [ArchiveAngelCandidate] {
         var rng = RNG(state: 0x9E37_79B9_7F4A_7C15)
         var out: [ArchiveAngelCandidate] = []
         out.reserveCapacity(n)
@@ -208,6 +214,9 @@ enum ArchiveAngelS0Catalog {
                 duplicateGroupID: rng.below(6) == 0 ? uuid(1_000_000 + i % 3000) : nil,
                 deviceModel: rng.below(10) == 0 ? "iPhone 12" : "",
                 captureDate: rng.below(2) == 0 ? now.addingTimeInterval(-Double(rng.below(8000)) * 86_400) : nil)
+            if terminalStages {
+                if i % 53 == 0 { c.archiveStage = .manuallyDeleted } else if i % 97 == 0 { c.archiveStage = .salvageFailed }
+            }
             if rng.below(10) == 0 {
                 var a = ArchiveAngelAttention.none
                 a.note(.angelProposed, at: now.addingTimeInterval(-5 * 86_400))
@@ -341,33 +350,35 @@ struct ArchiveAngelScaleCharacterizationTests {
 
     // Re-pinned 2026-09-22 for rules v11 (Consolidation S3b) — DELIBERATE:
     // archiveStage Ready/Master is a vote, not "already archived", so the
-    // files v10 rejected for their stage alone are now graded. Every other
-    // reason's count is unchanged (the diff is exactly the stage rule).
+    // files v10 rejected for their stage alone are now graded.
     // v10 → v11 on this catalog: 31,338 files v10 rejected for their stage
-    // alone are released; A 9,016 → 15,718, B 3,228 → 5,608, alreadyArchived
-    // 32,815 → 1,477; the other reasons grow only because a released file
-    // can hit a later floor.
-    static let pinnedGrades: [ArchiveAngelGrade: Int] = [.a: 15718, .b: 5608, .c: 2382, .d: 132, .x: 76160]
+    // alone are released (v11DiffIsTheStageRule). QA on S3 (2026-09-22)
+    // re-pinned these over the fixture WITH Relocate's terminal stages
+    // (`terminalStages: true` — every 53rd record Manually Deleted, every
+    // 97th Salvage Failed), so `fileGone` is exercised at scale: 2,127
+    // files. The v10 pins above stay on the original fixture.
+    static let pinnedGrades: [ArchiveAngelGrade: Int] = [.a: 15281, .b: 5447, .c: 2315, .d: 128, .x: 76829]
     static let pinnedRejections: [ArchiveAngelRejection: Int] = [
-        .notVideo: 24976, .alreadyArchived: 1477, .duplicateArchived: 2863, .volumeOffline: 1774,
-        .tooShort: 807, .recentPhoneClip: 12345, .junk: 6890, .suspectedJunk: 7908, .notPlayable: 1763,
-        .pairedHalf: 2308, .derivativeOfOriginal: 239, .appCache: 5900, .proxyStream: 6073, .resting: 835,
+        .notVideo: 24976, .alreadyArchived: 1477, .duplicateArchived: 2783, .volumeOffline: 1726,
+        .tooShort: 771, .recentPhoneClip: 11999, .junk: 6698, .suspectedJunk: 7640, .notPlayable: 1705,
+        .pairedHalf: 2241, .derivativeOfOriginal: 234, .appCache: 5731, .proxyStream: 5908, .resting: 811,
+        .fileGone: 2127,
     ]
-    static let pinnedScoreSum = 2_957_966
+    static let pinnedScoreSum = 2_876_281
     static let pinnedNudgeReady = 11_787
     static let pinnedNudgeNear = 11_482
     static let pinnedNudgeHead = [2649, 31596, 76168, 40491, 15136, 42680, 66721, 35713, 40586, 75163, 93926, 13672, 92296, 13579, 82583]
     static let pinnedSelectionHead = [61588, 33829, 24591, 23613, 6218, 8665, 1885, 12279, 73414, 26643]
-    static let pinnedSelectionOverflow = 21_764
+    static let pinnedSelectionOverflow = 21_192
     static let pinnedSelectionRejected: [ArchiveAngelRejection: Int] =
-        pinnedRejections.merging([.duplicateOfPick: 1751, .sameFamilyAsPick: 317]) { a, _ in a }
+        pinnedRejections.merging([.duplicateOfPick: 1666, .sameFamilyAsPick: 305]) { a, _ in a }
     /// The unified classifier over the same 100k (rules v11 default). For
-    /// comparison, the legacy nudge rules over these candidates say 25,318
-    /// ready + 7,646 need a date (no floors, no grades, no copy chooser
+    /// comparison, the legacy nudge rules over these candidates say 25,123
+    /// ready + 7,586 need a date (no floors, no grades, no copy chooser
     /// beyond a shared group / name + length). Excluded is X minus the two
     /// eligible records that scored 0 (Not now — no floor named them).
     static let pinnedClasses: [ArchiveAngelRecommendationClass: Int] = [
-        .ready: 14887, .needsDate: 3833, .worthALook: 2216, .notNow: 1267, .excluded: 76158, .anotherCopy: 1639,
+        .ready: 14497, .needsDate: 3724, .worthALook: 2155, .notNow: 1235, .excluded: 76827, .anotherCopy: 1562,
     ]
 
     /// The index `i` of a synthetic record from its UUID.
@@ -377,7 +388,7 @@ struct ArchiveAngelScaleCharacterizationTests {
 
     @Test("SCALE: grade + floor histogram over 100k candidates — exact counts, floor + verdict under 1 s")
     func gradeHistogram() {
-        var cs = ArchiveAngelS0Catalog.candidates(100_000)
+        var cs = ArchiveAngelS0Catalog.candidates(100_000, terminalStages: true)
         let clock = ContinuousClock()
         var h: (grades: [ArchiveAngelGrade: Int], rejections: [ArchiveAngelRejection: Int], scoreSum: Int) = ([:], [:], 0)
         // The two whole-set passes the sweep's snapshot runs (not timed —
@@ -402,7 +413,7 @@ struct ArchiveAngelScaleCharacterizationTests {
 
     @Test("the batch pick over the same 100k — first 10 picks and rejection counts pinned")
     func selectionPinned() {
-        var cs = ArchiveAngelS0Catalog.candidates(100_000)
+        var cs = ArchiveAngelS0Catalog.candidates(100_000, terminalStages: true)
         ArchiveAngelScorer.markDerivatives(&cs)
         ArchiveAngelScorer.applyFamilyAttention(&cs, now: ArchiveAngelS0Catalog.now)
         let sel = ArchiveAngelScorer.select(cs, count: 10, now: ArchiveAngelS0Catalog.now)
@@ -471,7 +482,7 @@ struct ArchiveAngelScaleCharacterizationTests {
 
     @Test("SCALE + SENSOR: the unified classifier over the S0 100k candidates — class counts pinned, under 1 s")
     func unifiedClassesPinned() {
-        var cs = ArchiveAngelS0Catalog.candidates(100_000)
+        var cs = ArchiveAngelS0Catalog.candidates(100_000, terminalStages: true)
         ArchiveAngelScorer.markDerivatives(&cs)
         ArchiveAngelScorer.applyFamilyAttention(&cs, now: ArchiveAngelS0Catalog.now)
         let evidence = ArchiveAngelS0Catalog.evidence(cs)
@@ -554,6 +565,9 @@ struct ArchiveAngelVocabularyTests {
             // S3b (2026-09-22): ADDED — a match floor from policy.json.
             "Excluded by a rule in your recommendation policy",
             "The file was deleted or could not be salvaged (its stage says so)",
+            // QA on S3 (2026-09-22): ADDED.
+            "Marked an extra copy — the Keep copy is the one to archive",
+            "Not in a class the Angel prepares now (Not now, Needs a date, Another copy)",
         ])
     }
 

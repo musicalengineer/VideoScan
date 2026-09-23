@@ -381,7 +381,8 @@ struct ArchiveAngelUnifiedRulesTests {
             ("grade D, 1 star → Not now (1 star is not a vouch)", .init(starRating: 1, captureDate: dated), ev(10), .notNow),
             ("stage Ready is a VOTE → Ready", .init(archiveStage: .readyForArchive, captureDate: dated), ev(30), .ready),
             ("stage Master is a VOTE → Needs a date", .init(archiveStage: .masterAssigned), ev(30), .needsDate),
-            ("an Extra copy → Excluded", .init(starRating: 3, captureDate: dated, duplicateDisposition: .extraCopy), ev(150), .excluded),
+            // QA on S3: Extra copy is a scorer FLOOR now — its evidence is X.
+            ("an Extra copy → Excluded", .init(starRating: 3, captureDate: dated, duplicateDisposition: .extraCopy), ev(0, .extraCopy), .excluded),
             ("no evidence → Not now", .init(starRating: 3, captureDate: dated), nil, .notNow),
             ("a year in the name dates it", .init(filename: "Cape Cod 1993.mov", starRating: 2), ev(50), .ready),
         ]
@@ -390,6 +391,7 @@ struct ArchiveAngelUnifiedRulesTests {
             #expect(v.kind == want, "\(label): got \(v.kind)")
         }
         #expect(AngelRecommendRules.standard.problems.isEmpty, "\(AngelRecommendRules.standard.problems)")
+        #expect(ArchiveAngelScorer.hardFloor(.init(starRating: 3, duplicateDisposition: .extraCopy), policy: .builtIn, now: now) == .extraCopy)
     }
 
     @Test("reasons: vouches first, grade A named when nobody vouched, the floor's own reason when excluded")
@@ -513,12 +515,12 @@ struct ArchiveAngelOneSetOfNumbersTests {
         var ready = ArchiveAngelEvidenceRecord(score: 150, lines: [], rejection: nil, useCount: 0, lastUsed: nil, computedAt: Date())
         ready.recommendation = .ready
         let s = ArchiveAngelRecommendationSummary.make(evidence: [a: ready, b: ready], prepared: [a, c], promoted: [],
-                                                       revision: 1, filename: { _ in "x.mov" })
+                                                       revision: 1, live: { _ in "x.mov" })
         #expect(s.count(.ready) == 1 && s.count(.prepared) == 2)
         #expect(s.candidateIDs == [b])
         #expect(s.headline == "1 ready · 0 need a date · 2 prepared")
         #expect(ArchiveAngelCatalogBadge.make(for: ready, prepared: true)?.text == "Prepared")
-        let none = ArchiveAngelRecommendationSummary.make(evidence: nil, prepared: [], promoted: [], revision: 1, filename: { _ in nil })
+        let none = ArchiveAngelRecommendationSummary.make(evidence: nil, prepared: [], promoted: [], revision: 1, live: { _ in nil })
         #expect(!none.isAssessed && none.candidateIDs.isEmpty)
     }
 
@@ -534,5 +536,147 @@ struct ArchiveAngelOneSetOfNumbersTests {
         let promotedIDs = Set(promoted.entries.filter { $0.status == .promoted }.map(\.id))
         #expect(o.promoted == promotedIDs.subtracting(o.prepared))
         #expect(!o.prepared.contains(ready.entries[0].id))
+    }
+}
+
+// MARK: - QA on S3 (2026-09-22) — red first
+
+@Suite("Archive Angel S3 QA — safety floors, Extra copy, live guard, regex, schema", .serialized)
+@MainActor
+struct ArchiveAngelS3QATests {
+
+    private func model() throws -> (VideoScanModel, URL) {
+        let sb = try MasterArchiveTestSupport.makeSandbox("angel-s3qa")
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        model.previewSweep.stop()
+        model.archiveAngel.sweep.stop()
+        return (model, sb.root)
+    }
+
+    private func rec(_ score: Int, _ kind: ArchiveAngelRecommendationClass?, year: Int? = nil) -> ArchiveAngelEvidenceRecord {
+        var r = ArchiveAngelEvidenceRecord(score: score, lines: [], rejection: nil, useCount: 0, lastUsed: nil, computedAt: Date())
+        r.recommendation = kind
+        r.year = year
+        return r
+    }
+
+    private func load(_ json: String) throws -> AngelRecommendationPolicy.Loaded {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("policy.json")
+        try Data(json.utf8).write(to: url)
+        return AngelRecommendationPolicy.load(overrideURL: url, bundledURL: nil)
+    }
+
+    @Test("RED: an override cannot disable or loosen a safety floor")
+    func safetyFloorsStay() throws {
+        let loaded = try load(#"{"schemaVersion":2,"floors":[{"id":"fileGone","enabled":false},{"id":"onMasterArchive","starExempt":true}]}"#)
+        #expect(loaded.source == .builtIn, "the whole file is refused")
+        #expect(loaded.notices.first?.contains("safety floor") == true, "\(loaded.notices)")
+        let p = loaded.policy
+        #expect(ArchiveAngelScorer.hardFloor(.init(archiveStage: .manuallyDeleted), policy: p) == .fileGone)
+        #expect(ArchiveAngelScorer.hardFloor(.init(starRating: 3, isOnMasterArchive: true), policy: p) == .alreadyArchived)
+        for json in [#"{"schemaVersion":2,"floors":[{"id":"archivedCopy","when":[{"field":"starRating","op":"==","value":0}]}]}"#,
+                     #"{"schemaVersion":2,"floors":[{"id":"volumeOffline","explicitPicks":false}]}"#,
+                     #"{"schemaVersion":2,"floors":[{"id":"notVideo","kind":"match","when":[{"field":"starRating","op":"<","value":0}]}]}"#] {
+            #expect(try load(json).source == .builtIn, "\(json)")
+        }
+        var rules = AngelRecommendRules.standard
+        rules.useAngelFloors = false
+        let ev = ArchiveAngelEvidenceRecord(score: 0, lines: [], rejection: .alreadyArchived, useCount: 0, lastUsed: nil, computedAt: Date())
+        let v = ArchiveAngelRecommendations.verdict(.init(starRating: 3, captureDate: Date(timeIntervalSince1970: 773_000_000)),
+                                                    evidence: ev, rules: rules, now: Date())
+        #expect(v.kind == .excluded)
+    }
+
+    @Test("RED: the batch never prepares an Extra copy over the Keep copy")
+    func prepareHonoursExtraCopy() {
+        let g = UUID(), d = Date(timeIntervalSince1970: 773_000_000)
+        let keep = ArchiveAngelCandidate(filename: "xmas.mov", fullPath: "/Volumes/RAID/xmas.mov", durationSeconds: 1800, starRating: 3,
+                                         volumeRole: .backup, duplicateGroupID: g, captureDate: d, duplicateGroupCount: 2,
+                                         duplicateDisposition: .keep)
+        let extra = ArchiveAngelCandidate(filename: "xmas.mov", fullPath: "/Volumes/Stray/xmas.mov", durationSeconds: 1800, starRating: 3,
+                                          volumeRole: .unassigned, duplicateGroupID: g, captureDate: d, duplicateGroupCount: 2,
+                                          duplicateDisposition: .extraCopy)
+        let sel = ArchiveAngelScorer.select([keep, extra], count: 1, policy: .builtIn, now: Date(timeIntervalSince1970: 1_790_000_000))
+        #expect(sel.picks.map(\.candidate.id) == [keep.id])
+        // A Keep that merely scores lower than a Review copy still wins its group.
+        var review = extra
+        review.id = UUID()
+        review.duplicateDisposition = .review
+        let sel2 = ArchiveAngelScorer.select([keep, review], count: 1, policy: .builtIn, now: Date(timeIntervalSince1970: 1_790_000_000))
+        #expect(sel2.picks.map(\.candidate.id) == [keep.id])
+    }
+
+    @Test("Prepare follows the classes: a vouched ★★ dated grade-C Ready file goes before an unvouched grade-B Worth a look; Not now / Needs a date are not prepared")
+    func prepareByClass() {
+        let d = Date(timeIntervalSince1970: 773_000_000), now = Date(timeIntervalSince1970: 1_790_000_000)
+        let readyC = ArchiveAngelCandidate(filename: "ready.mov", durationSeconds: 600, starRating: 2, captureDate: d)
+        let worthB = ArchiveAngelCandidate(filename: "worth.mov", durationSeconds: 3700, confirmedPeople: ["Donna"],
+                                           hasUserNotes: false, userDate: nil, captureDate: nil)
+        let notNow = ArchiveAngelCandidate(filename: "weak.mov", durationSeconds: 400, captureDate: d)
+        let undatedA = ArchiveAngelCandidate(filename: "undated.mov", durationSeconds: 4000, starRating: 3)
+        let all = [worthB, notNow, readyC, undatedA]
+        func score(_ c: ArchiveAngelCandidate) -> Int {
+            if case .eligible(let s, _) = ArchiveAngelScorer.verdict(c, policy: .builtIn, now: now) { return s }
+            return -1
+        }
+        #expect(score(worthB) >= 60 && score(worthB) < 100, "fixture: B (\(score(worthB)))")
+        #expect(score(readyC) < 60, "fixture: C (\(score(readyC)))")
+        let sel = ArchiveAngelScorer.select(all, count: 4, policy: .builtIn, now: now, byClass: true)
+        #expect(sel.picks.map(\.candidate.filename) == ["ready.mov", "worth.mov"])
+        #expect(sel.rejected[.notRecommendedNow] == 2, "Not now + Needs a date")
+        var optIn = AngelRecommendationPolicy.builtIn
+        optIn.recommend.prepare = ["ready", "needsDate", "worthALook"]
+        let sel2 = ArchiveAngelScorer.select(all, count: 4, policy: optIn, now: now, byClass: true)
+        #expect(sel2.picks.map(\.candidate.filename) == ["ready.mov", "undated.mov", "worth.mov"])
+    }
+
+    @Test("the evidence pick follows the classes too (tier, then score); unclassified evidence comes last")
+    func evidencePickByClass() {
+        let now = Date()
+        let store = ArchiveAngelEvidenceStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID()
+        store.replace(with: ArchiveAngelEvidenceFile(computedAt: now, complete: true, considered: 4, eligible: 4, records: [
+            a: rec(40, .ready), b: rec(90, .worthALook), c: rec(160, .needsDate), d: rec(30, nil),
+        ]))
+        let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 3, now: now) { id in
+            ArchiveAngelCandidate(id: id, filename: "\(id).mov", durationSeconds: 600)
+        }
+        #expect(pick?.selection.picks.map(\.candidate.id) == [a, b, d])
+        #expect(pick?.selection.rejected[.notRecommendedNow] == 1)
+    }
+
+    @Test("RED: a purged record's stale Ready evidence is not counted or listed")
+    func stalePurgedNotRecommended() throws {
+        let (model, root) = try model()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let recs = ["a.mov", "b.mov"].map { n -> VideoRecord in let r = VideoRecord(); r.filename = n; r.fullPath = "/Volumes/T/" + n; return r }
+        recs[1].purgedAt = Date()
+        model.records = recs
+        model.archiveAngel.store.replace(with: ArchiveAngelEvidenceFile(records: [recs[0].id: rec(150, .ready, year: 1994),
+                                                                                  recs[1].id: rec(150, .ready, year: 1994)]))
+        let s = model.archiveAngel.recommendations
+        #expect(s.count(.ready) == 1 && !s.candidateIDs.contains(recs[1].id))
+        #expect(s.nudge.ready.map(\.filename) == ["a.mov"])
+    }
+
+    @Test("RED: a regex with a repeated group (ReDoS shape) is refused")
+    func redosRefused() throws {
+        for pattern in [#"^(a+)+$"#, #"^(a|aa)*$"#, #"(x*){2,}"#] {
+            let json = #"{"schemaVersion":2,"tables":{"appCacheNamePattern":"# + "\"\(pattern.replacingOccurrences(of: "\\", with: "\\\\"))\"}}"
+            let loaded = try load(json)
+            #expect(loaded.source == .builtIn, "\(pattern)")
+            #expect(loaded.notices.first?.contains("appCacheNamePattern") == true, "\(loaded.notices)")
+        }
+    }
+
+    @Test("RED: schemaVersion must be an integer (true / 2.0 / \"2\" are refused)")
+    func schemaVersionInteger() throws {
+        for v in ["true", "2.0", "\"2\""] {
+            #expect(try load(#"{"schemaVersion":"# + v + "}").source == .builtIn, "schemaVersion \(v)")
+        }
+        #expect(try load(#"{"schemaVersion":2}"#).source == .userOverride)
     }
 }

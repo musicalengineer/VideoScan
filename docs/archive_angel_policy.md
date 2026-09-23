@@ -28,7 +28,7 @@ Your file is **merged over the built-in rules**:
   - an entry with a new `id` adds a rule. A new **signal** goes just before the `downloadCap` / `fatigue` adjusters. Anything else goes at the end.
 - Everything else (`recommend.classes`, `tables.originality`, single values) replaces the default.
 
-`"schemaVersion": 2` is required. A schema-1 file (just `weights`) is still accepted: its weights are used with today's default rules, and a notice says so.
+`"schemaVersion": 2` is required, as an integer (`true`, `2.0` and `"2"` are refused). A schema-1 file (just `weights`) is still accepted: its weights are used with today's default rules, and a notice says so.
 
 So the smallest useful file is:
 
@@ -49,11 +49,27 @@ So the smallest useful file is:
 | **Needs a date** | Same as Ready, but not dated |
 | **Worth a look** | Grade B, nobody vouched |
 | **Not now** | Grade C/D, or nothing recommends it |
-| **Excluded** | A floor fired, or an `exclude` rule matched (by default: marked an Extra copy) |
+| **Excluded** | A floor fired (including the default `extraCopy` floor: a copy you marked Extra copy — switchable, not a safety floor), or an `exclude` rule matched |
 | **Another copy** | The same recording as a recommended copy (same duplicate group, or same name + length). The copy you marked Keep wins; otherwise the best-ranked copy does. |
 | **Prepared** | Sitting in a prepared batch, waiting for your review |
 
 archiveStage Ready/Master is a **vote** to archive. Only a real Master Archive copy (`onMasterArchive`, `archivedCopy`) means "already archived".
+
+## Safety floors — these cannot be turned off, by design
+
+Five floors guard against recommending a file the archive must never receive twice or cannot receive at all (the delete-safety principle: refuse over guess):
+
+| Floor | Excludes |
+|---|---|
+| `notVideo` | audio-only files, stills, un-probed files |
+| `onMasterArchive` | a file in the Master Archive, or one that already has its copy there |
+| `archivedCopy` | a file whose content (or original) is already archived |
+| `fileGone` | a record Relocate marked Manually Deleted or Salvage Failed |
+| `volumeOffline` | a file on a volume that isn't mounted |
+
+A `policy.json` that disables one of these, narrows it with `when`, sets `starExempt`, sets `explicitPicks: false`, or changes its kind or reason is **refused whole**. The log names the safety floor, and the bundled default runs. `recommend.useAngelFloors: false` still honours them. You may change their `note` and `line`.
+
+Separately from the floors, the recommendation counts are re-checked against the live catalog about half a second after any catalog change. A record that has been purged, set aside or superseded, or that Promote would refuse (already promoted, an archive copy), stops being counted, listed or badged immediately. It doesn't wait for the next sweep. Prepare applies the same check before it projects a record.
 
 ## Rules
 
@@ -113,6 +129,7 @@ A condition is `{ "field": …, "op": …, "value": … }`. To say "any of these
 | `copies.collapseBy` | `duplicateGroup`, `nameAndDuration` | How copies of one recording are recognised (`sharedDuplicateGroup` = only groups of two or more) |
 | `copies.prefer` | `userKeeper`, `best` | Which copy stays |
 | `order` | `angelRank` | The order of the lists: `angelRank` (score, then most original) or `vouchPoints` (the old nudge's order) |
+| `prepare` | `["ready", "worthALook"]` | The classes Prepare Batch takes, in this order: class first, then score. Add `"needsDate"` to opt in to undated keepers. Within a duplicate group, the copy you marked Keep is prepared. |
 
 ## `grades` and `tables`
 
@@ -123,7 +140,7 @@ A condition is `{ "field": …, "op": …, "value": … }`. To say "any of these
   - `deliveryCodecs` (used by the download cap)
   - `familyOriginFolders` (a leading `.` matches a suffix, like `.imovielibrary`)
   - `appCacheFolders`
-  - `appCacheNamePattern` (a regular expression over the file stem)
+  - `appCacheNamePattern` (a regular expression over the file stem). A repeated group — `(…)+`, `(…)*`, `(…){n,}` — is refused, because it can make the sweep hang (ReDoS). The pattern must also match a worst-case 257-character name within 20 ms.
   - `maxOriginalsPerKey`
 
 ## Deliberately NOT in the policy

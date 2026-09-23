@@ -180,11 +180,23 @@ struct AngelRecommendRules: Codable, Sendable, Equatable {
     /// "angelRank" (the Angel's score, then its most-original tie-breaks)
     /// or "vouchPoints" (vouch points, then the older year, then the name).
     var order: String
+    /// The classes Prepare Batch takes, in this order (QA on S3: Prepare
+    /// agrees with the numbers). Needs a date is left out by default — add
+    /// it to opt in. Unclassified evidence (a pre-S3b file) comes last.
+    /// EMPTY = no class filter: every eligible file by score (the pre-S3
+    /// batch order).
+    var prepare: [String]
 
     static let orders = ["angelRank", "vouchPoints"]
+    static let defaultPrepare = ["ready", "worthALook"]
+
+    var prepareClasses: [ArchiveAngelRecommendationClass] {
+        prepare.compactMap(ArchiveAngelRecommendationClass.init(rawValue:))
+    }
 
     init(useAngelFloors: Bool, exclude: [AngelRule], vouch: [AngelRule], date: AngelDateRule,
-         classes: [AngelClassRule], copies: AngelCopyRules, order: String) {
+         classes: [AngelClassRule], copies: AngelCopyRules, order: String,
+         prepare: [String] = AngelRecommendRules.defaultPrepare) {
         self.useAngelFloors = useAngelFloors
         self.exclude = exclude
         self.vouch = vouch
@@ -192,6 +204,23 @@ struct AngelRecommendRules: Codable, Sendable, Equatable {
         self.classes = classes
         self.copies = copies
         self.order = order
+        self.prepare = prepare
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case useAngelFloors, exclude, vouch, date, classes, copies, order, prepare
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        useAngelFloors = try c.decode(Bool.self, forKey: .useAngelFloors)
+        exclude = try c.decode([AngelRule].self, forKey: .exclude)
+        vouch = try c.decode([AngelRule].self, forKey: .vouch)
+        date = try c.decode(AngelDateRule.self, forKey: .date)
+        classes = try c.decode([AngelClassRule].self, forKey: .classes)
+        copies = try c.decode(AngelCopyRules.self, forKey: .copies)
+        order = try c.decode(String.self, forKey: .order)
+        prepare = try c.decodeIfPresent([String].self, forKey: .prepare) ?? Self.defaultPrepare
     }
 
     /// Every problem in the rule set; empty = usable.
@@ -216,6 +245,9 @@ struct AngelRecommendRules: Codable, Sendable, Equatable {
             for cond in rule.when { out += cond.problems(allowClassifierFields: true).map { "\(here): \($0)" } }
         }
         out += copies.problems
+        for k in prepare where ArchiveAngelRecommendationClass(rawValue: k).map({ !$0.isRecommended }) ?? true {
+            out.append("recommend.prepare \"\(k)\" — one of: ready, needsDate, worthALook")
+        }
         if !Self.orders.contains(order) {
             out.append("recommend.order \"\(order)\" — one of: \(Self.orders.joined(separator: ", "))")
         }
@@ -465,6 +497,14 @@ enum ArchiveAngelRecommendations {
         if let ev {
             ctx.grade = ev.grade
             v.score = ev.score
+        }
+        // 0. Safety floors are never overridden (QA on S3): a gone,
+        // archived, offline or non-video file is Excluded even when the
+        // rules ignore the Angel's floors.
+        if let rejection = ev?.rejection, ArchiveAngelRejection.safetyReasons.contains(rejection) {
+            v.kind = .excluded
+            v.reasons = [rejection.rawValue]
+            return v
         }
         // 1. The Angel's floors.
         if rules.useAngelFloors {
