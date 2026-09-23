@@ -1,7 +1,7 @@
 // ArchiveAngelFixityCheck.swift
 // Is a record's stored whole-file digest still true of the file ON DISK
 // NOW? (codex #1659, 2026-09-23.) A ContentFixity is bound to the stat
-// stamp of the file it was read from; `describesFileNow` — device, inode,
+// stamp of the file it was read from; `describesFileNow` — volume (UUID), inode,
 // size, mtime AND kernel ctime — is the verification-grade check the rest
 // of the app uses to let a stored digest stand in for a read. The Archive
 // Angel lends Rick's hand-entered facts across a digest match only when

@@ -406,6 +406,18 @@ final class VideoScanModel: ObservableObject {
     /// production.
     var volumeRenameStatProviderForTesting: (@Sendable (String) -> Int64?)?
 
+    // MARK: - Fixity stamp volume-identity upgrade (2026-09-23)
+    // Storage for VideoScanModel+FixityStampUpgrade.swift (extensions
+    // can't add stored properties).
+
+    /// Debounce flag for `noteFixityStampUpgradeDue(trigger:)`.
+    var fixityStampUpgradeScheduled = false
+    /// One pass at a time — a mount burst must not start two.
+    var fixityStampUpgradeInFlight = false
+    /// Per-volume summary lines already logged this session, so repeated
+    /// mounts do not repeat an unchanged "N not upgraded" line.
+    var fixityStampUpgradeLoggedLines: Set<String> = []
+
     /// Cache lookup for a scan-target row. Missing entry (no rename
     /// detected, or cache still warming) returns nil — fail-safe: no
     /// badge, no migration offered.

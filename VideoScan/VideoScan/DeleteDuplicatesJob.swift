@@ -1886,10 +1886,13 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// inode, size, mtime and kernel ctime all reproduce. The device
     /// number is NOT compared — an external drive remounted after a
     /// reboot can come back under another one; APFS inode numbers do not
-    /// change.
+    /// change. A recorded stamp that carries a volume UUID (2026-09-23)
+    /// must also be on THAT volume — a different disk mounted at the same
+    /// path is not the plan's file. The one shared comparison
+    /// (`FileIdentityStamp.describesSameFile`); pre-UUID plans keep the
+    /// device-blind rule they were written under.
     nonisolated static func quarantineIdentityMatches(recorded: FileIdentityStamp, current: FileIdentityStamp) -> Bool {
-        recorded.inode == current.inode && recorded.size == current.size
-            && recorded.mtimeNs == current.mtimeNs && recorded.ctimeNs == current.ctimeNs
+        recorded.describesSameFile(now: current, changeTime: .mustMatch, legacyVolume: .notCompared)
     }
 
     /// Move an orphaned quarantined file back to its original path. Only

@@ -6,7 +6,7 @@
 //
 //   EQUIVALENT (undirected — either may lend to the other)
 //     • the same WHOLE-FILE digest (ContentFixity) on BOTH records, each
-//       confirmed fresh NOW by a stat (`describesFileNow` — device, inode,
+//       confirmed fresh NOW by a stat (`describesFileNow` — volume (UUID), inode,
 //       size, mtime, ctime; ArchiveAngelFixityCheck, off the main actor).
 //       A copy rewritten since its digest was taken keeps its size but not
 //       its stamp — codex #1659. `contentHash` is a SAMPLED head/middle/

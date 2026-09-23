@@ -8,7 +8,7 @@
 // ── EVIDENCE (each edge keeps its reason) ─────────────────────────────────
 //   Identical  same whole-file SHA-256 on BOTH sides, each still CURRENT:
 //                the stored ContentFixity describes the file on disk now
-//                (`describesFileNow` — device, inode, size, mtime, ctime;
+//                (`describesFileNow` — volume (UUID), inode, size, mtime, ctime;
 //                stat only, the job's "Checking stored digests" step, the
 //                ArchiveAngelFixityCheck semantics). codex #1674 F1.
 //   Confirmed  the person said "same footage" (FootageDecision.same)
