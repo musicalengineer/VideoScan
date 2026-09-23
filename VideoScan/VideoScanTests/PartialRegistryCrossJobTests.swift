@@ -201,18 +201,41 @@ struct PartialRegistryCrossJobTests {
     }
 
     /// QA 2: the registry matches the FILE (dev + ino), not the spelling
-    /// of its path (/var vs /private/var, firmlinks, case).
-    @Test func livePartialSurvivesASweepThroughAnAliasedPath() throws {
-        let real = URL(fileURLWithPath: (NSTemporaryDirectory() as NSString).resolvingSymlinksInPath)
-            .appendingPathComponent("alias-\(UUID().uuidString)")
+    /// of its path. Three spellings of one folder: /var vs /private/var
+    /// (standardizedFileURL already folds that one), a symlinked folder,
+    /// and different case (temp volume is case-insensitive APFS) — the last
+    /// two defeated the old path-keyed registry.
+    @Test(arguments: ["private", "symlink", "case"])
+    func livePartialSurvivesASweepThroughAnAliasedPath(_ kind: String) throws {
+        // realpath(3) keeps "/private" (NSString.resolvingSymlinksInPath
+        // strips it, which made QA's draft sweep a non-existent folder).
+        let resolved = try #require(realpath(NSTemporaryDirectory(), nil))
+        defer { free(resolved) }
+        let base = URL(fileURLWithPath: String(cString: resolved))
+        let real = base.appendingPathComponent("test_alias-\(UUID().uuidString.prefix(8).lowercased())")
         try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: real) }
-        let partial = try PartialFileNaming.reserve(for: real.appendingPathComponent("clip.mov"))
+        let partial = try PartialFileNaming.reserve(for: real.appendingPathComponent("test_clip.mov"))
         defer { PartialFileNaming.unregisterLive(partial) }
-        #expect(real.path.hasPrefix("/private/"), "the alias needs a /private path — \(real.path)")
-        let alias = URL(fileURLWithPath: String(real.path.dropFirst("/private".count)))
+
+        let alias: URL
+        switch kind {
+        case "private":
+            try #require(real.path.hasPrefix("/private/"), "needs a /private path — \(real.path)")
+            alias = URL(fileURLWithPath: String(real.path.dropFirst("/private".count)))
+        case "symlink":
+            alias = base.appendingPathComponent("test_link-\(UUID().uuidString.prefix(8))")
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
+        default:
+            alias = base.appendingPathComponent(real.lastPathComponent.uppercased())
+        }
+        defer { if kind == "symlink" { try? FileManager.default.removeItem(at: alias) } }
+        let aliased = alias.appendingPathComponent(partial.lastPathComponent)
+        try #require(FileManager.default.fileExists(atPath: aliased.path),
+                     "the alias must reach the same file (\(kind))")
+
         _ = PartialFileNaming.sweepStale(in: alias, job: "test", olderThan: -1)
-        #expect(FileManager.default.fileExists(atPath: partial.path))
+        #expect(FileManager.default.fileExists(atPath: partial.path), "\(kind): a live partial was swept")
     }
 
     /// QA 3: remove() is unlink(2), never a recursive removal — a directory
@@ -237,7 +260,8 @@ struct PartialRegistryCrossJobTests {
         let exitBranch = try #require(text.range(of: "if let failure = FFmpegEncodeCheck.exitFailure("))
         let nextReturn = try #require(text.range(of: "return", range: exitBranch.upperBound..<text.endIndex))
         #expect(text[exitBranch.upperBound..<nextReturn.lowerBound].contains("discardPartial(partialURL)"))
-        #expect(text.contains("DerivativeOutputPublish.keepUnpublished(partialURL)"),
+        #expect(text.contains("await Self.keepUnpublishedOffMain(partialURL)")
+                && text.contains("DerivativeOutputPublish.keepUnpublished(partial)"),
                 "a failed publish moves the encode off the partial pattern")
         #expect(!text.contains("the encode is at \\(partialPath)"))
     }
