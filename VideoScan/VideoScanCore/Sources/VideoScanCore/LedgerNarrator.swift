@@ -187,6 +187,17 @@ public enum LedgerNarrator {
             default:
                 return "\(who) took back the footage answer about \(otherText) on \(d)."
             }
+
+        case .familyMusic:
+            if detail[MediaLedgerEvent.Detail.action] == "unmarked" {
+                return "\(who) took it off the Family Music shelf on \(d)."
+            }
+            let performer = detail[MediaLedgerEvent.Detail.performer] ?? ""
+            let title = detail[MediaLedgerEvent.Detail.title] ?? ""
+            var s = "\(who) marked it as family music on \(d)"
+            if !title.isEmpty { s += " — \u{201C}\(title)\u{201D}" }
+            if !performer.isEmpty { s += (title.isEmpty ? " — " : ", ") + "played by \(performer)" }
+            return s + "."
         }
     }
 

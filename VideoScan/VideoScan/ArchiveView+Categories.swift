@@ -23,16 +23,24 @@ import SwiftUI
 /// (a source with a promoted copy, or an orphan copy standing in for a
 /// vanished source) or not. "Needs a date" is the slice of Not Yet
 /// Archived the promote flow will file under Undated/.
+///
+/// `music` (Family Music, 2026-09-23) is NOT an archive stage: it is Rick's
+/// hand-marked shelf of family recordings, archived or not, shown as the
+/// LAST sidebar row and only when at least one file is marked. Hand-offs
+/// never land on it (ArchiveView.category(containing:) answers only
+/// archived / not-yet-archived); only a sidebar click selects it.
 enum ArchiveCategory: String, CaseIterable {
     case archived       = "archived"
     case notYetArchived = "notYetArchived"
     case needsDate      = "needsDate"
+    case music          = "music"
 
     var label: String {
         switch self {
         case .archived:       return "Archived"
         case .notYetArchived: return "Not Yet Archived"
         case .needsDate:      return "Needs a Date"
+        case .music:          return "Music"
         }
     }
 
@@ -41,6 +49,7 @@ enum ArchiveCategory: String, CaseIterable {
         case .archived:       return "archivebox.fill"
         case .notYetArchived: return "tray.fill"
         case .needsDate:      return "calendar.badge.exclamationmark"
+        case .music:          return "music.note.list"
         }
     }
 
@@ -49,6 +58,7 @@ enum ArchiveCategory: String, CaseIterable {
         case .archived:       return .green
         case .notYetArchived: return .primary
         case .needsDate:      return .orange
+        case .music:          return .purple
         }
     }
 }
@@ -118,14 +128,24 @@ struct ArchiveCategorySnapshot {
     /// allocates ISO formatters and parses notes, which must never run per
     /// row per render (codex #1311). The table's sort and cell read this.
     var archivedDates: [UUID: Date] = [:]
+    /// Family Music (2026-09-23): Rick's hand-marked recordings as shelf
+    /// rows, in shelf order (performer, title, year), and the records
+    /// behind them in the same order. Built in the same pass — a nil check
+    /// per record; the per-row work runs only for the ~25 marked files.
+    var familyMusic: [FamilyMusicItem] = []
+    var familyMusicRecords: [VideoRecord] = []
 
     func records(for category: ArchiveCategory) -> [VideoRecord] {
         switch category {
         case .archived:       return archived
         case .notYetArchived: return notYetArchived
         case .needsDate:      return needsDate
+        case .music:          return familyMusicRecords
         }
     }
+
+    /// The sidebar shows the Music row only when this is true.
+    var showsMusicRow: Bool { !familyMusic.isEmpty }
 
     func count(for category: ArchiveCategory) -> Int { records(for: category).count }
 
@@ -146,7 +166,9 @@ struct ArchiveCategorySnapshot {
         var snap = ArchiveCategorySnapshot()
         snap.archived.reserveCapacity(active.count / 8)
         snap.notYetArchived.reserveCapacity(active.count)
+        var marked: [VideoRecord] = []
         for rec in active {
+            if rec.familyMusic != nil { marked.append(rec) }
             if model.isArchiveCopy(rec) {
                 // Orphan copy stands in for its vanished source; a copy
                 // with a live source is represented BY that source.
@@ -182,7 +204,33 @@ struct ArchiveCategorySnapshot {
             }
         }
         snap.volumeFileCounts = counts
+        snap.familyMusic = familyMusicShelf(marked: marked, model: model)
+        let byID = Dictionary(marked.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        snap.familyMusicRecords = snap.familyMusic.compactMap { byID[$0.id] }
         return snap
+    }
+
+    /// Shelf rows for the marked records. One row per piece of music: an
+    /// archive copy whose source is ALSO marked is represented by that
+    /// source (the same rule as the Archived list). O(marked).
+    @MainActor
+    static func familyMusicShelf(marked: [VideoRecord], model: VideoScanModel) -> [FamilyMusicItem] {
+        let markedIDs = Set(marked.map(\.id))
+        return FamilyMusicShelf.build(
+            from: marked,
+            isArchived: { rec in
+                switch status(of: rec, model: model) {
+                case .verified: return true
+                case .orphanCopy: return rec.archiveFixity != nil
+                case .unverified, .notArchived: return false
+                }
+            },
+            skip: { rec in
+                // Only when the source is itself ON the shelf — a copy
+                // whose source is purged or unmarked still shows.
+                guard model.isArchiveCopy(rec), let src = model.promotionSource(of: rec) else { return false }
+                return markedIDs.contains(src.id)
+            })
     }
 
     /// The SAME resolver the promote flow uses for placement, so this list

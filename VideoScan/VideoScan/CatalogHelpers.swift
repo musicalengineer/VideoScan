@@ -154,6 +154,8 @@ struct CatalogContent: View {
     @State var fileJourneyPayload: FileJourney?
     /// "Find Similar Footage…" sheet (2026-09-23) — .sheet(item:).
     @State var footageSheetRequest: FootageSheetRequest?
+    /// "Mark as Family Music…" sheet (2026-09-23) — .sheet(item:).
+    @State var familyMusicSheetRequest: FamilyMusicSheetRequest?
 
     /// Stable snapshot the Table reads from. Decoupled from `records` so the
     /// Table never sees the data array mutate mid-gesture (which races with
@@ -819,6 +821,12 @@ struct CatalogContent: View {
             FileJourneySheet(journey: payload)
         }
         // Find Similar Footage — the read-only group sheet.
+        // Family Music — performer + title, applied to the selection.
+        .sheet(item: $familyMusicSheetRequest) { request in
+            FamilyMusicSheet(request: request) { performer, title in
+                model.markFamilyMusic(request.recordIDs, performer: performer, title: title)
+            }
+        }
         .sheet(item: $footageSheetRequest) { request in
             FootageGroupSheet(request: request, model: model, startRun: { [fileOpsCenter, model] scope in
                 fileOpsCenter.startFindSimilarFootage(scope: scope, model: model)

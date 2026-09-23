@@ -616,6 +616,12 @@ public class VideoRecord: Identifiable, Decodable {
     /// the key only when non-empty.
     public var footageDecisions: [FootageDecision] = []
 
+    /// Family Music (2026-09-23) — Rick's explicit "this is family music"
+    /// mark (performer / title / when). ONLY a human gesture sets it, so
+    /// purchased music never lands on the shelf. Additive optional — legacy
+    /// catalogs decode nil, the DTO writes the key only when present.
+    public var familyMusic: FamilyMusicInfo?
+
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
     /// stable UUID if available, and the remote server name for network
@@ -813,6 +819,8 @@ public class VideoRecord: Identifiable, Decodable {
         proAppsMediaIdentifier      = try c.decodeIfPresent(String.self, forKey: .proAppsMediaIdentifier)
         footage                     = try c.decodeIfPresent(FootageMembership.self, forKey: .footage)
         footageDecisions            = try c.decodeIfPresent([FootageDecision].self, forKey: .footageDecisions) ?? []
+        // Family Music (2026-09-23) — additive optional; legacy → nil.
+        familyMusic                 = try c.decodeIfPresent(FamilyMusicInfo.self, forKey: .familyMusic)
         // Relocate provenance. Legacy catalogs (no keys) decode as nil and
         // remain treated as "never relocated." Once set on first migration
         // these keys are encoded on every subsequent write.

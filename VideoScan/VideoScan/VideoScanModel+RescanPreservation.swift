@@ -249,6 +249,12 @@ struct RescanPreservedFields: Sendable {
     let footageDecisions: [FootageDecision]
     let footage: FootageMembership?
 
+    /// Family Music (2026-09-23): Rick's explicit mark — a user edit, so it
+    /// must survive every Update Catalog (sensor:
+    /// familyMusicMarkSurvivesRescan). Holds no record-id pointers, so the
+    /// relink pass has nothing to follow.
+    let familyMusic: FamilyMusicInfo?
+
     /// True if this snapshot carries anything worth restoring.
     /// Records that have only scan-derived data don't need to be in
     /// the snapshot map at all — caller can use this to filter and
@@ -292,6 +298,7 @@ struct RescanPreservedFields: Sendable {
             || !backupAttestations.isEmpty
             || !footageDecisions.isEmpty
             || footage != nil
+            || familyMusic != nil
     }
 
     @MainActor
@@ -339,6 +346,7 @@ struct RescanPreservedFields: Sendable {
         self.backupAttestations = rec.backupAttestations
         self.footageDecisions = rec.footageDecisions
         self.footage = rec.footage
+        self.familyMusic = rec.familyMusic
     }
 
     // MARK: Fixity identity guard
@@ -440,6 +448,7 @@ struct RescanPreservedFields: Sendable {
         rec.backupAttestations = self.backupAttestations
         rec.footageDecisions = self.footageDecisions
         rec.footage = self.footage
+        rec.familyMusic = self.familyMusic
         return carry
     }
 }
