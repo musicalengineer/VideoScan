@@ -349,7 +349,10 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             return
         }
         if let failure = FFmpegEncodeCheck.exitFailure(exitCode: encodeResult.exitCode, stderr: encodeResult.stderr) {
-            // No partial at all: the exit reason beats "no output file".
+            // The partial is gone (or unreadable) and ffmpeg failed: the
+            // exit reason beats "no output file". Remove whatever is left
+            // of this run's reserved partial.
+            discardPartial(partialURL)
             transcodeLog.error("transcode FAILED (encode, no output): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
             await finish(failed: failure.prefix(1).uppercased() + failure.dropFirst())
             return
@@ -384,8 +387,12 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         } catch {
             // The partial is our own complete encode: kept, named, so the
             // work is not lost. Nothing else was changed by a failed publish.
-            transcodeLog.error("transcode FAILED (publish): \(self.record.filename, privacy: .public) — \(error.localizedDescription, privacy: .public)")
-            await finish(failed: "Could not finalize output file: \(error.localizedDescription) — the encode is at \(partialPath)")
+            // Moved OFF the partial pattern (`.vs-kept.`, no-clobber) so no
+            // stale sweep can remove it once this run releases it.
+            let kept = await Self.keepUnpublishedOffMain(partialURL)
+            transcodeLog.error("transcode FAILED (publish): \(self.record.filename, privacy: .public) — \(error.localizedDescription, privacy: .public) — encode kept at \(kept.path, privacy: .public)")
+            appLog.write("transcode: \(self.record.filename) finished but not published (\(error.localizedDescription)) — encode kept at \(kept.path)")
+            await finish(failed: "Could not finalize output file: \(error.localizedDescription) — the encode is kept at \(kept.path)")
             return
         }
         let finalPath = publishedURL.path
@@ -462,6 +469,11 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         } catch {
             transcodeLog.error("transcode: could not remove partial \(partial.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    @concurrent
+    nonisolated private static func keepUnpublishedOffMain(_ partial: URL) async -> URL {
+        DerivativeOutputPublish.keepUnpublished(partial)
     }
 
     @concurrent

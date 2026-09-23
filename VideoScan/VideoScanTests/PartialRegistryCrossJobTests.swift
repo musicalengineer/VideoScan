@@ -159,6 +159,89 @@ struct PartialRegistryCrossJobTests {
                 "partials are removed through PartialFileNaming.remove (name-guarded, logged)")
     }
 
+    // MARK: QA minors (2026-09-22)
+
+    /// QA 1: a Transcode encode that could not be published is moved OFF
+    /// the partial pattern, so no sweep can ever remove it.
+    @Test func anUnpublishedTranscodeEncodeIsKeptOffThePartialPattern() throws {
+        let dir = try Self.makeDir("keep_unpublished")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let out = dir.appendingPathComponent("test_k.vs.edit.mov")
+        let partial = try DerivativeOutputPublish.reservePartial(for: out)
+        try Data("encode".utf8).write(to: partial)
+        let kept = DerivativeOutputPublish.keepUnpublished(partial)
+        #expect(kept.lastPathComponent.contains(".vs-kept."), "\(kept.lastPathComponent)")
+        #expect(!PartialFileNaming.isPartialName(kept.lastPathComponent))
+        #expect(kept.pathExtension == "mov")
+        #expect(try Data(contentsOf: kept) == Data("encode".utf8))
+        #expect(!Self.exists(partial))
+        #expect(!PartialFileNaming.isLive(partial))
+        try Self.age(kept, hours: 48)
+        #expect(CombineOutputPublish.sweepStalePartials(in: dir).removed.isEmpty)
+        #expect(DerivativeOutputPublish.sweepStalePartials(beside: out).isEmpty)
+        #expect(Self.exists(kept), "no sweep reaches a kept encode")
+    }
+
+    /// QA 1: keeping never overwrites — a taken kept-name leaves the
+    /// partial where it is (still named, still reported).
+    @Test func keepingNeverOverwritesAnExistingKeptFile() throws {
+        let dir = try Self.makeDir("keep_no_clobber")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let out = dir.appendingPathComponent("test_k.vs.edit.mov")
+        let partial = try DerivativeOutputPublish.reservePartial(for: out)
+        defer { PartialFileNaming.unregisterLive(partial) }
+        try Data("new".utf8).write(to: partial)
+        let taken = dir.appendingPathComponent(partial.lastPathComponent
+            .replacingOccurrences(of: ".vs-partial.", with: ".vs-kept."))
+        try Data("older".utf8).write(to: taken)
+        let kept = DerivativeOutputPublish.keepUnpublished(partial)
+        #expect(kept == partial)
+        #expect(try Data(contentsOf: taken) == Data("older".utf8))
+        #expect(try Data(contentsOf: partial) == Data("new".utf8))
+    }
+
+    /// QA 2: the registry matches the FILE (dev + ino), not the spelling
+    /// of its path (/var vs /private/var, firmlinks, case).
+    @Test func livePartialSurvivesASweepThroughAnAliasedPath() throws {
+        let real = URL(fileURLWithPath: (NSTemporaryDirectory() as NSString).resolvingSymlinksInPath)
+            .appendingPathComponent("alias-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: real) }
+        let partial = try PartialFileNaming.reserve(for: real.appendingPathComponent("clip.mov"))
+        defer { PartialFileNaming.unregisterLive(partial) }
+        #expect(real.path.hasPrefix("/private/"), "the alias needs a /private path — \(real.path)")
+        let alias = URL(fileURLWithPath: String(real.path.dropFirst("/private".count)))
+        _ = PartialFileNaming.sweepStale(in: alias, job: "test", olderThan: -1)
+        #expect(FileManager.default.fileExists(atPath: partial.path))
+    }
+
+    /// QA 3: remove() is unlink(2), never a recursive removal — a directory
+    /// swapped in under a partial's name is refused and left intact.
+    @Test func removeRefusesADirectoryWearingAPartialName() throws {
+        let dir = try Self.makeDir("remove_dir")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let swapped = dir.appendingPathComponent("test_s.abcdef12.vs-partial.mov", isDirectory: true)
+        try FileManager.default.createDirectory(at: swapped, withIntermediateDirectories: true)
+        let inner = swapped.appendingPathComponent("test_inner.txt")
+        try Data("keep".utf8).write(to: inner)
+        #expect(throws: PartialFileNaming.Failure.self) { try PartialFileNaming.remove(swapped) }
+        #expect(Self.exists(inner))
+    }
+
+    /// QA 4: the exit-failure branch removes the (reserved) partial too.
+    @Test func transcodeExitFailureDiscardsItsPartialAndPublishFailureKeepsTheEncode() throws {
+        let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan/TranscodeJob.swift")
+        let text = try String(contentsOf: src, encoding: .utf8)
+        #expect(!text.contains("No partial at all"), "stale wording: the partial is reserved up front")
+        let exitBranch = try #require(text.range(of: "if let failure = FFmpegEncodeCheck.exitFailure("))
+        let nextReturn = try #require(text.range(of: "return", range: exitBranch.upperBound..<text.endIndex))
+        #expect(text[exitBranch.upperBound..<nextReturn.lowerBound].contains("discardPartial(partialURL)"))
+        #expect(text.contains("DerivativeOutputPublish.keepUnpublished(partialURL)"),
+                "a failed publish moves the encode off the partial pattern")
+        #expect(!text.contains("the encode is at \\(partialPath)"))
+    }
+
     // MARK: Staging dir (VS_<uuid>) on a throwing buffer step
 
     static func stagingDirs(in base: URL) -> [String] {

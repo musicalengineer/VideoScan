@@ -199,13 +199,7 @@ enum CombineOutputPublish {
     /// that blocked the rename also blocks the sweep's unlink. Returns
     /// where the file now is.
     static func keepUnpublished(_ partial: URL) -> URL {
-        defer { PartialFileNaming.unregisterLive(partial) }
-        let name = partial.lastPathComponent
-        guard isPartialName(name) else { return partial }
-        let keptName = name.replacingOccurrences(of: ".\(PartialFileNaming.marker).", with: ".vs-kept.")
-        let kept = partial.deletingLastPathComponent().appendingPathComponent(keptName)
-        if (try? renameNoClobber(partial.path, kept.path)) == true { return kept }
-        return partial
+        PartialFileNaming.keepUnpublished(partial, renameNoClobber: renameNoClobber)
     }
 
     // MARK: stale-partial sweep

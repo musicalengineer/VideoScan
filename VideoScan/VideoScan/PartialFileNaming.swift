@@ -6,8 +6,10 @@
 // Transcode (DerivativeOutputPublish) both go through here:
 //
 //   reserve(for:)   O_CREAT|O_EXCL the unique name AND register it live
-//   remove(_:)      remove a reserved partial (refuses any other name),
-//                   unregister it
+//   remove(_:)      unlink(2) a reserved partial (refuses any other name,
+//                   and a directory), unregister it
+//   keepUnpublished move a verified-but-unpublished output OFF the pattern
+//                   (`.vs-kept.`, no-clobber) so no sweep can reach it
 //   unregisterLive  on publish / keep / job end
 //   sweepStale(…)   the one crash-leftover sweep both jobs use: skips
 //                   anything live in this process, exact pattern only,
@@ -21,8 +23,8 @@
 // Combine's 6 h sweep, and Transcode's sweep ignored the registry. Damage
 // was a failed job, never a catalog file — but it must not happen.
 //
-// (For Rick: `live` is a process-wide std::set<std::string> guarded by an
-// os_unfair_lock — OSAllocatedUnfairLock is Swift's Sendable wrapper.)
+// (For Rick: `live` is a process-wide std::map<path, (dev, ino)> guarded by
+// an os_unfair_lock — OSAllocatedUnfairLock is Swift's Sendable wrapper.)
 
 import Darwin
 import Foundation
@@ -82,23 +84,65 @@ enum PartialFileNaming {
 
     // MARK: live registry
 
-    /// Partials reserved by running jobs in THIS process (standardized
-    /// paths). A sweep skips anything listed here regardless of age.
-    static let live = OSAllocatedUnfairLock(initialState: Set<String>())
+    /// A file's identity: (st_dev, st_ino). The registry matches live
+    /// partials by identity, NOT by path spelling — /var vs /private/var,
+    /// firmlinks, a case-insensitive volume reached with different case all
+    /// name the same file (QA 2026-09-22). The path is kept for logging and
+    /// for unregistering after the file is gone.
+    struct FileID: Hashable, Sendable {
+        let dev: UInt64
+        let ino: UInt64
+    }
+
+    static func fileID(_ url: URL) -> FileID? {
+        var st = stat()
+        guard lstat(url.path, &st) == 0 else { return nil }
+        return FileID(dev: UInt64(bitPattern: Int64(st.st_dev)), ino: UInt64(st.st_ino))
+    }
+
+    struct LiveSet: Sendable {
+        /// standardized path at registration → identity (nil when the file
+        /// did not exist yet; then the path is the only key).
+        var byPath: [String: FileID?] = [:]
+        var ids: Set<FileID> = []
+    }
+
+    /// Partials reserved by running jobs in THIS process. A sweep skips
+    /// anything listed here regardless of age. In-process only: a second
+    /// VideoScan process would not see these (it would still need the 24 h
+    /// threshold to pass); a cross-process guard (flock on the partial) is
+    /// a possible follow-up.
+    static let live = OSAllocatedUnfairLock(initialState: LiveSet())
 
     static func registerLive(_ url: URL) {
         let key = url.standardizedFileURL.path
-        live.withLock { _ = $0.insert(key) }
+        let id = fileID(url)
+        live.withLock { set in
+            set.byPath[key] = .some(id)
+            if let id { set.ids.insert(id) }
+        }
     }
 
     static func unregisterLive(_ url: URL) {
         let key = url.standardizedFileURL.path
-        live.withLock { _ = $0.remove(key) }
+        live.withLock { set in
+            if let entry = set.byPath.removeValue(forKey: key), let id = entry {
+                set.ids.remove(id)
+            }
+        }
     }
 
+    /// Live if this FILE (dev + ino) was reserved — under any spelling of
+    /// its path — or, for a registration made before the file existed, if
+    /// the path matches.
     static func isLive(_ url: URL) -> Bool {
         let key = url.standardizedFileURL.path
-        return live.withLock { $0.contains(key) }
+        let id = fileID(url)
+        return live.withLock { set in
+            if set.byPath[key] != nil { return true }
+            if let id { return set.ids.contains(id) }
+            return false
+        }
     }
 
     // MARK: reserve / remove
@@ -126,17 +170,40 @@ enum PartialFileNaming {
 
     /// Remove a partial and release its reservation. Refuses (throws) for
     /// any name that is not a partial, so a caller bug can never delete a
-    /// final. Already-gone is success.
+    /// final. unlink(2), never a recursive removal: a directory swapped in
+    /// under a partial's name is refused (EPERM on macOS) and left intact.
+    /// Already-gone is success.
     static func remove(_ url: URL) throws {
         guard isPartialName(url.lastPathComponent) else {
             throw Failure(message: "refusing to remove \(url.lastPathComponent): not a partial")
         }
         defer { unregisterLive(url) }
+        guard unlink(url.path) != 0 else { return }
+        let e = errno
+        if e == ENOENT { return }
+        let line = "could not remove partial \(url.path): " + String(cString: strerror(e)) + " (errno \(e))"
+        partialLog.error("\(line, privacy: .public)")
+        throw Failure(message: line)
+    }
+
+    /// A verified output that could not be published must survive: rename
+    /// it off the partial pattern (`<stem>.<token>.vs-kept.<ext>`) with the
+    /// caller's NO-CLOBBER rename, so no sweep can ever match it. If the
+    /// rename fails (or the kept name is taken) the partial stays where it
+    /// is. Releases the reservation either way. Returns where the file is.
+    static func keepUnpublished(_ partial: URL,
+                                renameNoClobber: (String, String) throws -> Bool) -> URL {
+        defer { unregisterLive(partial) }
+        let name = partial.lastPathComponent
+        guard isPartialName(name) else { return partial }
+        let keptName = name.replacingOccurrences(of: ".\(marker).", with: ".vs-kept.")
+        let kept = partial.deletingLastPathComponent().appendingPathComponent(keptName)
         do {
-            try FileManager.default.removeItem(at: url)
-        } catch CocoaError.fileNoSuchFile {
-            return
+            if try renameNoClobber(partial.path, kept.path) { return kept }
+        } catch {
+            partialLog.error("could not keep \(name, privacy: .public) as \(keptName, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
+        return partial
     }
 
     // MARK: stale sweep (the one both jobs use)

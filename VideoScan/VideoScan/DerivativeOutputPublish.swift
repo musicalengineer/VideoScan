@@ -105,6 +105,15 @@ enum DerivativeOutputPublish {
         }
     }
 
+    /// A finished encode that could not be published must survive: moved
+    /// off the partial pattern to `<stem>.<token>.vs-kept.<ext>` (RENAME_EXCL,
+    /// never overwriting) so no stale sweep — 24 h later, any job's — can
+    /// remove it. The one shared helper Combine uses too. Returns where the
+    /// file now is (the partial itself if even that rename failed).
+    static func keepUnpublished(_ partial: URL) -> URL {
+        PartialFileNaming.keepUnpublished(partial, renameNoClobber: renameNoClobber)
+    }
+
     /// Finder-style free-name candidate: "name 2.ext", "name 3.ext", …
     static func besideURL(for url: URL, attempt n: Int) -> URL {
         let stem = url.deletingPathExtension().lastPathComponent
