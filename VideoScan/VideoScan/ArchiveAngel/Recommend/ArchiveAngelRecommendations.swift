@@ -343,12 +343,19 @@ enum ArchiveAngelCopyChooser {
         keys(c, collapseBy: collapseBy).first
     }
 
-    /// EVERY recording key `c` carries under `collapseBy`, in policy order.
-    /// A footage group counts only when it is Likely or stronger — a
-    /// Possible group is shown to the person, never decided for them.
+    /// The recording keys `c` carries: its footage key (when the policy
+    /// collapses by footage and the group is Likely or stronger — a
+    /// Possible group is shown to the person, never decided for them) PLUS
+    /// the first non-footage key in policy order (the key the classifier
+    /// has always used). Only the footage key is added on top, so a record
+    /// with no footage group keeps exactly its legacy single key and the
+    /// pinned S0 / nudge counts cannot move.
     static func keys(_ c: ArchiveAngelCandidate, collapseBy: [String]) -> [String] {
         var out: [String] = []
+        var haveOther = false
         for kind in collapseBy {
+            if kind != "footageGroup", haveOther { continue }
+            let before = out.count
             switch kind {
             case "footageGroup":
                 if let g = c.footageGroupID, let conf = c.footageConfidence, conf != .possible {
@@ -365,6 +372,7 @@ enum ArchiveAngelCopyChooser {
             default:
                 continue
             }
+            if kind != "footageGroup", out.count > before { haveOther = true }
         }
         return out
     }
