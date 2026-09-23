@@ -22,11 +22,29 @@ private enum KindFixture {
         "Nobody bakes a better blueberry pie than Ellen.",
     ]
     static let bethLine = "Beth has the steadiest hands and the kindest heart in the family."
+    /// The app owner (a fixture "Rick"). His line is for OTHERS asking
+    /// about him — never for greeting him (Rick 2026-09-23).
+    static let rickUUID = UUID(uuidString: "99999999-8888-7777-6666-555555555555")!
+    static let rickLine = "Rick Fixture can fix any radio with a paperclip and a hum."
+    static let rickFSID = "ZZZZ-RRR"
 
     static let book = HallieKindWordsBook(people: [
         ellenUUID: .init(display: "Ellen", lines: ellenLines),
         bethUUID: .init(display: "Beth", lines: [bethLine]),
+        rickUUID: .init(display: "Rick", lines: [rickLine]),
     ])
+
+    /// The owner's People profile: pinned by FamilySearch ID, formal name
+    /// plus the nickname alias.
+    static func rickProfile() -> HallieTurnExecutor.ProfileSnapshot {
+        .init(stableID: rickUUID.uuidString, canonicalName: "Richard Fixture", aliases: ["Rick"],
+              uuid: rickUUID, treeIdentity: .familySearchID(rickFSID))
+    }
+
+    /// The app owner as configured on the desktop — INJECTED, never read
+    /// from real UserDefaults.
+    static let owner = HallieTurnExecutor.Speakers(
+        ownerName: "Rick Fixture", archivistName: "Hallie", ownerFamilySearchID: rickFSID)
 
     static func json(people: [String: Any], schemaVersion: Int = 1) -> Data {
         try! JSONSerialization.data(withJSONObject: [
@@ -307,7 +325,8 @@ struct HallieKindWordsDecisionTests {
         let profiles = [KindFixture.ellenProfile(), KindFixture.bethProfile()]
         let greeting = KindFixture.greetingResult()
         let offer = try #require(HallieKindWords.greetingOffer(
-            result: greeting, speakers: speakers, profiles: profiles, loadBook: { KindFixture.book }))
+            result: greeting, speakers: speakers, appOwner: KindFixture.owner,
+            profiles: profiles, loadBook: { KindFixture.book }))
         #expect(offer.uuid == KindFixture.bethUUID)
         var memory = Memory()
         let said = HallieKindWords.apply(offer, to: greeting, memory: &memory,
@@ -326,10 +345,12 @@ struct HallieKindWordsDecisionTests {
         #expect(HallieKindWords.greetingOffer(
             result: KindFixture.greetingResult(),
             speakers: .init(ownerName: "Stranger", archivistName: "Hallie"),
+            appOwner: KindFixture.owner,
             profiles: profiles, loadBook: { KindFixture.book }) == nil)
         #expect(HallieKindWords.greetingOffer(
             result: HallieTurnExecutor.commandResult(.smalltalk(.thanks)),
             speakers: .init(ownerName: "Beth", archivistName: "Hallie"),
+            appOwner: KindFixture.owner,
             profiles: profiles, loadBook: { KindFixture.book }) == nil)
     }
 
@@ -483,7 +504,13 @@ struct HallieKindWordsSensorTests {
         #expect(!answers.joined().contains(KindFixture.bethLine))
     }
 
-    @Test func shellGreetingCarriesTheOwnersOwnLine() async throws {
+    /// Beth speaks through a shell whose app owner is Rick. Before
+    /// 2026-09-23 the shell's speaker was assumed to be the one greeted
+    /// AND allowed a compliment; Rick's ruling ("refrain from using the
+    /// flattering things to me … keep the flattering things for others")
+    /// means only a NON-owner speaker hears her line, so the owner is
+    /// injected explicitly here.
+    @Test func shellGreetingCarriesANonOwnerSpeakersLine() async throws {
         var inputs = ["hi hallie", "good morning", ":quit"]
         var transcript: [HallieTranscriptEvent] = []
         var dependencies = HallieShellCLI.Dependencies(
@@ -499,6 +526,7 @@ struct HallieKindWordsSensorTests {
             recordTranscript: { transcript.append(contentsOf: $0) },
             speakers: { .init(ownerName: "Beth", archivistName: "Hallie") })
         dependencies.loadKindWords = { KindFixture.book }
+        dependencies.loadAppOwner = { KindFixture.owner }
 
         _ = await HallieShellCLI.run(
             options: .init(), input: { inputs.isEmpty ? nil : inputs.removeFirst() },
@@ -583,7 +611,10 @@ struct HallieKindWordsSensorTests {
             executeRequest: { _, _ in throw CancellationError() },
             continueTurn: { _, _, _ in throw CancellationError() },
             resolveBiographyPhoto: { _ in nil },
-            loadKindWords: { KindFixture.book })
+            loadKindWords: { KindFixture.book },
+            // Rick 2026-09-23: the owner is never complimented on a
+            // greeting, so Beth must be a non-owner speaker here.
+            loadAppOwner: { KindFixture.owner })
         let response = try await HallieAppTurnCoordinator.execute(
             question: "hi hallie", records: [], referent: .init(recordID: nil, temporalDate: nil),
             hosts: [], modelName: "fixture", dependencies: dependencies)
@@ -593,5 +624,189 @@ struct HallieKindWordsSensorTests {
         let said = response.applyingKindWord(memory: &memory, rotation: HallieKindWordsRotation())
         #expect(said.result.prose == "Hello! It's good to see you. \(KindFixture.bethLine) How can I help?")
         #expect(said.kindWord == nil)
+    }
+}
+
+// MARK: - The app owner is not complimented on a greeting (2026-09-23)
+//
+// Rick: "when I say hi to hallie she greets me with a compliment. I think
+// we can refrain from using the flattering things to me, the author and
+// owner of this app, but keep the flattering things for others."
+
+@MainActor
+@Suite("Hallie kind words — owner greeting", .serialized)
+struct HallieKindWordsOwnerGreetingTests {
+    private static let profiles = [
+        KindFixture.ellenProfile(), KindFixture.bethProfile(), KindFixture.rickProfile(),
+    ]
+
+    /// Desktop-shaped dependencies: speaker defaults to the owner, both
+    /// injected (never real UserDefaults).
+    private func desktop(
+        continueTurn: @escaping @Sendable (
+            HallieTurnExecutor.Clarification, HallieTurnExecutor.CandidateID, HallieTurnExecutor.Context
+        ) async throws -> HallieTurnExecutor.Result = { _, _, _ in throw CancellationError() }
+    ) -> HallieAppTurnCoordinator.Dependencies {
+        HallieAppTurnCoordinator.Dependencies(
+            startLocalBrain: { $0 },
+            translateAST: { _, _, _ in throw CancellationError() },
+            loadProfiles: { Self.profiles },
+            loadGraph: { nil },
+            loadSpeakers: { KindFixture.owner },
+            executeRequest: { _, _ in throw CancellationError() },
+            continueTurn: continueTurn,
+            resolveBiographyPhoto: { _ in nil },
+            loadKindWords: { KindFixture.book },
+            loadAppOwner: { KindFixture.owner })
+    }
+
+    private func greet(_ dependencies: HallieAppTurnCoordinator.Dependencies) async throws
+        -> HallieAppTurnCoordinator.Response {
+        try await HallieAppTurnCoordinator.execute(
+            question: "hi hallie", records: [], referent: .init(recordID: nil, temporalDate: nil),
+            hosts: [], modelName: "fixture", dependencies: dependencies)
+    }
+
+    private func webSpeaker(_ who: String) -> HallieTurnExecutor.Speakers {
+        // Exactly what HallieWebBridge.ask builds: a name, no FamilySearch ID.
+        .init(ownerName: who, archivistName: "Hallie")
+    }
+
+    @Test func desktopGreetingByTheOwnerCarriesNoKindWord() async throws {
+        let response = try await greet(desktop())
+        #expect(response.kindWord == nil)
+        var memory = HallieTurnExecutor.ConversationMemory()
+        let said = response.applyingKindWord(memory: &memory, rotation: HallieKindWordsRotation())
+        #expect(!said.result.prose.contains(KindFixture.rickLine))
+        #expect(said.result.prose == KindFixture.greetingResult().prose)
+    }
+
+    @Test func desktopDefaultOwnerIsTheSpeakerWhenNotInjected() async throws {
+        // No loadAppOwner: the owner defaults to loadSpeakers (desktop
+        // semantics) — still no self-compliment, and no UserDefaults read.
+        let dependencies = HallieAppTurnCoordinator.Dependencies(
+            startLocalBrain: { $0 },
+            translateAST: { _, _, _ in throw CancellationError() },
+            loadProfiles: { Self.profiles }, loadGraph: { nil },
+            loadSpeakers: { KindFixture.owner },
+            executeRequest: { _, _ in throw CancellationError() },
+            continueTurn: { _, _, _ in throw CancellationError() },
+            resolveBiographyPhoto: { _ in nil },
+            loadKindWords: { KindFixture.book })
+        #expect(dependencies.loadAppOwner() == KindFixture.owner)
+        #expect(try await greet(dependencies).kindWord == nil)
+    }
+
+    @Test func webGreetingByBethCarriesHerLine() async throws {
+        let web = desktop().replacingSpeakers(webSpeaker("Beth"))
+        // The bridge replaces the speaker, never the owner.
+        #expect(web.loadSpeakers() == webSpeaker("Beth"))
+        #expect(web.loadAppOwner() == KindFixture.owner)
+        let response = try await greet(web)
+        #expect(response.kindWord?.uuid == KindFixture.bethUUID)
+        var memory = HallieTurnExecutor.ConversationMemory()
+        let said = response.applyingKindWord(memory: &memory, rotation: HallieKindWordsRotation())
+        #expect(occurrences(of: KindFixture.bethLine, in: said.result.prose) == 1)
+    }
+
+    @Test func webGreetingByTheOwnerCarriesNoKindWord() async throws {
+        // Rick on his phone types "Rick": resolves by alias to his profile,
+        // which is the owner's profile (pinned by FamilySearch ID).
+        let response = try await greet(desktop().replacingSpeakers(webSpeaker("Rick")))
+        #expect(response.kindWord == nil)
+    }
+
+    @Test func bethAskingAboutTheOwnerStillHearsHisLine() async throws {
+        // Web session for Beth; a biography of Rick chosen by chip.
+        let context = HallieTurnExecutor.Context(profiles: Self.profiles)
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "tell me about rick", ast: KindFixture.biographyAST("rick"))
+        let clarification = HallieTurnExecutor.makeClarification(
+            intent: intent, stage: .profileIdentity,
+            candidates: [.init(id: .profileStableID(KindFixture.rickUUID.uuidString),
+                               canonicalName: "Richard Fixture", label: "Richard Fixture")],
+            context: context)
+        let pending = HallieAppTurnCoordinator.PendingClarification(
+            clarification: clarification, context: context, responderHost: "fixture",
+            capturedReferentID: nil, composition: .off)
+        let web = desktop(continueTurn: { _, _, _ in
+            KindFixture.biographyResult(name: nil, prose: "Richard Fixture is in the People tab.")
+        }).replacingSpeakers(webSpeaker("Beth"))
+        let response = try await HallieAppTurnCoordinator.continue(
+            pending: pending, selecting: .profileStableID(KindFixture.rickUUID.uuidString),
+            dependencies: web)
+        let offer = try #require(response.kindWord)
+        #expect(offer.uuid == KindFixture.rickUUID)
+        #expect(offer.lines == [KindFixture.rickLine])
+        // The pure path too: a biography never consults the owner.
+        #expect(HallieKindWords.biographyOffer(
+            result: KindFixture.biographyResult(name: nil), ast: KindFixture.biographyAST("Rick"),
+            profiles: Self.profiles, graph: nil, loadBook: { KindFixture.book })?.uuid == KindFixture.rickUUID)
+    }
+
+    @Test func unresolvableOwnerProfileStillSparesASpeakerWithTheOwnersSpelling() throws {
+        // Owner configured without a FamilySearch ID and by a spelling no
+        // profile claims exactly — his profile can't be resolved.
+        let owner = HallieTurnExecutor.Speakers(ownerName: "Rick Fixture", archivistName: "Hallie")
+        #expect(HallieKindWords.ownerProfile(speakers: owner, profiles: Self.profiles) == nil)
+        // A web "Rick" still resolves (alias) to the owner's profile …
+        let log = KindWordsLogBox()
+        #expect(HallieKindWords.greetingOffer(
+            result: KindFixture.greetingResult(), speakers: webSpeaker("Rick"), appOwner: owner,
+            profiles: Self.profiles, loadBook: { KindFixture.book }, log: { log.append($0) }) == nil)
+        // … one log line, never the kind-word text.
+        #expect(log.lines == ["[hallie] greeting kind word skipped — greeting the app's owner"])
+        #expect(!log.lines.joined().contains(KindFixture.rickLine))
+        // Beth, same unresolvable owner, still gets hers.
+        #expect(HallieKindWords.greetingOffer(
+            result: KindFixture.greetingResult(), speakers: webSpeaker("Beth"), appOwner: owner,
+            profiles: Self.profiles, loadBook: { KindFixture.book }, log: { log.append($0) })?.uuid
+                == KindFixture.bethUUID)
+        #expect(log.lines.count == 1)
+    }
+
+    @Test func unresolvableOwnerButMatchingFamilySearchIDIsTheOwner() {
+        // Owner has only an FSID nobody pins in People; the greeted speaker
+        // carries the same FSID → treated as the owner.
+        let owner = HallieTurnExecutor.Speakers(ownerName: nil, archivistName: "Hallie",
+                                                ownerFamilySearchID: "QQQQ-000")
+        let speaker = HallieTurnExecutor.Speakers(ownerName: "Beth", archivistName: "Hallie",
+                                                  ownerFamilySearchID: "qqqq-000")
+        #expect(HallieKindWords.greetingOffer(
+            result: KindFixture.greetingResult(), speakers: speaker, appOwner: owner,
+            profiles: Self.profiles, loadBook: { KindFixture.book }, log: { _ in }) == nil)
+    }
+
+    @Test func shellGreetingByTheOwnerCarriesNoKindWord() async throws {
+        var inputs = ["hi hallie", ":quit"]
+        var transcript: [HallieTranscriptEvent] = []
+        var dependencies = HallieShellCLI.Dependencies(
+            loadCatalog: { _ in [] },
+            loadProfiles: {
+                var rick = POIProfile(name: "Richard Fixture", referencePath: "/isolated/rick",
+                                      aliases: ["Rick"])
+                rick.uuid = KindFixture.rickUUID
+                var beth = POIProfile(name: "Elizabeth", referencePath: "/isolated/beth",
+                                      aliases: ["Beth"])
+                beth.uuid = KindFixture.bethUUID
+                return .loaded([rick, beth])
+            },
+            loadGraph: { _ in nil },
+            translateAST: { _, _ in throw CancellationError() },
+            executeTurn: HallieTurnExecutor.execute,
+            performMediaAction: { _ in },
+            recordTranscript: { transcript.append(contentsOf: $0) },
+            speakers: { .init(ownerName: "Rick", archivistName: "Hallie") })
+        dependencies.loadKindWords = { KindFixture.book }
+        // loadAppOwner left nil: the shell's speaker is the owner.
+
+        _ = await HallieShellCLI.run(
+            options: .init(), input: { inputs.isEmpty ? nil : inputs.removeFirst() },
+            output: { _ in }, dependencies: dependencies)
+
+        let answers = transcript.filter { $0.kind == .assistant }.map(\.text)
+        #expect(answers.count == 1)
+        #expect(answers.first?.hasSuffix("How can I help?") == true)
+        #expect(!answers.joined().contains(KindFixture.rickLine))
     }
 }

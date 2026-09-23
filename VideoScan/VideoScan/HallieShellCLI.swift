@@ -193,6 +193,10 @@ enum HallieShellCLI {
         /// so replays see what the family sees. Default none, so tests
         /// never read a file; production reads the cached store.
         var loadKindWords: () -> HallieKindWordsBook = { .empty }
+        /// Who owns this app (2026-09-23), for the no-self-compliment
+        /// greeting rule. nil = the shell's speaker (the shell runs on the
+        /// owner's Mac as the owner), so tests never read real defaults.
+        var loadAppOwner: (() -> HallieTurnExecutor.Speakers)? = nil
 
         init(
             loadCatalog: @escaping (URL) -> [VideoRecord]?,
@@ -1413,6 +1417,7 @@ enum HallieShellCLI {
         let result = HallieKindWords.apply(
             HallieKindWords.greetingOffer(
                 result: localResult, speakers: identity.speakers,
+                appOwner: dependencies.loadAppOwner?() ?? identity.speakers,
                 profiles: identity.profiles, loadBook: dependencies.loadKindWords),
             to: localResult, memory: &state.memory)
         state.lastResponder = "local"
