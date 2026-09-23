@@ -102,8 +102,8 @@ struct FamilyMusicLogicTests {
         let legacy = #"{"id":"11111111-2222-3333-4444-555555555555","filename":"a.m4a","fullPath":"/V/a.m4a"}"#
         let r = try JSONDecoder().decode(VideoRecord.self, from: Data(legacy.utf8))
         #expect(r.familyMusic == nil)
-        let out = String(decoding: try JSONEncoder().encode(VideoRecordDTO(r)), as: UTF8.self)
-        #expect(!out.contains("familyMusic"), "\(out)")
+        let out = String(bytes: try JSONEncoder().encode(VideoRecordDTO(r)), encoding: .utf8) ?? ""
+        #expect(!out.isEmpty && !out.contains("familyMusic"), "\(out)")
 
         r.familyMusic = FamilyMusicInfo(performer: "Tim", title: "Blackbird",
                                         markedAt: Date(timeIntervalSince1970: 1_800_000_000))
@@ -197,7 +197,7 @@ struct FamilyMusicLogicTests {
         let both = FamilyMusicSheetRequest.make(for: [r, s])
         #expect(both?.isMulti == true && both?.performer == "Tim" && both?.subject == "2 files")
         let t = FM.rec("z.m4a"); t.detectedPeople = ["Matt"]
-        #expect(FamilyMusicSheetRequest.make(for: [r, t])?.performer == "", "no common performer → blank")
+        #expect(FamilyMusicSheetRequest.make(for: [r, t])?.performer.isEmpty == true, "no common performer → blank")
         #expect(FamilyMusicSheetRequest.make(for: []) == nil)
     }
 
@@ -361,8 +361,9 @@ struct FamilyMusicMediaMatrixTests {
     private func route(path: String, stream: StreamType) -> FamilyMusicPlayRoute {
         let r = FM.rec((path as NSString).lastPathComponent, dir: (path as NSString).deletingLastPathComponent,
                        stream: stream)
-        r.familyMusic = FamilyMusicInfo(performer: "Tim")
-        let item = FamilyMusicShelf.item(for: r, mark: r.familyMusic!, isArchived: false)
+        let mark = FamilyMusicInfo(performer: "Tim")
+        r.familyMusic = mark
+        let item = FamilyMusicShelf.item(for: r, mark: mark, isArchived: false)
         return FamilyMusicPlayback.route(for: item, isOnline: VolumeReachability.isVolumeReachable(path: path))
     }
 
