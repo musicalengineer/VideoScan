@@ -495,6 +495,12 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/BundleImporter.swift": 2, "VideoScan/CaptionRunner.swift": 2,
         "VideoScan/CatalogStore.swift": 1, "VideoScan/CatalogSync.swift": 3,
         "VideoScan/CatalogWriteError.swift": 1, "VideoScan/CleanupJob.swift": 4,
+        // removePartial's removeItem (refuses any name that is not
+        // `<stem>.<8 hex>.vs-partial.<ext>`; used for this run's own O_EXCL
+        // partial and the >6 h, not-live, regular-file stale sweep) + the
+        // placeholder fallback's unlink (only our own 0-byte O_EXCL
+        // placeholder, same dev+ino re-checked just before) (2026-09-22).
+        "VideoScan/CombineOutputPublish.swift": 2,
         "VideoScan/CouplePortrait.swift": 2,
         // trashItem (Replace, the user's choice, never on the archive volume)
         // + removeItem of this app's OWN stale `.vs-partial.` leftovers (sweep).
@@ -521,7 +527,11 @@ struct ArchiveVolumeProtectionSourceSensor {
         // uniquely named partial after a stall / cancel / failed encode.
         "VideoScan/TranscodeJob.swift": 4,
         "VideoScan/TrimJob.swift": 1,
-        "VideoScan/VideoScanModel+Combine.swift": 3, "VideoScan/VideoScanModel+JunkDelete.swift": 2,
+        // 3 → 1 (2026-09-22, fix/combine-never-overwrites): the final-name
+        // removals on failure / verify failure are gone (partials go through
+        // CombineOutputPublish.removePartial); the one left removes this
+        // pair's own freshly created `VS_<uuid>` staging dir.
+        "VideoScan/VideoScanModel+Combine.swift": 1, "VideoScan/VideoScanModel+JunkDelete.swift": 2,
         "VideoScan/VideoScanModel+ProbeEngine.swift": 1, "VideoScan/VideoScanModel+Workbench.swift": 1,
         "VideoScanCore/AtomicFilePublish.swift": 2, "VideoScanCore/CyberBrainWriter.swift": 3,
         "VideoScanCore/FFmpegFrameRip.swift": 1, "VideoScanCore/FamilyGraphCompiledStore.swift": 5,
@@ -548,6 +558,8 @@ struct ArchiveVolumeProtectionSourceSensor {
     /// RENAME_EXCL): these REPLACE whatever is at the destination.
     /// `RENAME_EXCL` renames are no-clobber and are not counted.
     static let reviewedClobberingRenames: [String: Reviewed] = [
+        "VideoScan/CombineOutputPublish.swift": Reviewed(count: 1, reason:
+            "the ENOTSUP/EINVAL fallback (exFAT/msdos/SMB lack RENAME_EXCL): rename(2) onto OUR 0-byte O_EXCL placeholder, only after lstat confirms the name is still that placeholder (same dev+ino, size 0); anything else ⇒ name taken, nothing touched. The normal path is renamex_np(RENAME_EXCL)"),
         "VideoScan/MediaLedger.swift": Reviewed(count: 1, reason:
             "publishes the ledger's own index mirror from its own partial (dirfd-relative); app data"),
         "VideoScan/POIStorage.swift": Reviewed(count: 1, reason:
@@ -567,7 +579,7 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/CaptionRunner.swift": Reviewed(count: 1, reason: "a frame PNG in its own temp folder"),
         "VideoScan/CleanupFFmpegEngine.swift": Reviewed(count: 1, reason: "renders into the job's scratch dir; CleanupJob publishes non-clobbering"),
         "VideoScan/CombineEngine.swift": Reviewed(count: 1, reason:
-            "writes <video>_combined.mov straight to the output folder after a skip-if-exists check (not atomic — see the 2026-09-22 audit note in the follow-up report; the failure path removes that name)"),
+            "writes ONLY this run's O_EXCL-reserved `<stem>.<8 hex>.vs-partial.mov` (runMuxAndVerify passes partialURL, never the final name); -y just lets ffmpeg open the 0-byte reservation. Published by CombineOutputPublish with RENAME_EXCL (fix/combine-never-overwrites, 2026-09-22)"),
         "VideoScan/HallieWebPoster.swift": Reviewed(count: 1, reason: "poster frame in Hallie's own cache"),
         "VideoScan/HallieWebProxy.swift": Reviewed(count: 1, reason: "proxy clip in Hallie's own cache"),
         "VideoScan/PerceptualFingerprinter.swift": Reviewed(count: 1, reason: "its own temp output"),
@@ -700,5 +712,50 @@ struct ArchiveVolumeProtectionSourceSensor {
                 && (publish.range(of: "removeItem(")?.lowerBound ?? publish.startIndex) > sweep.lowerBound,
                 "the ONE removeItem is the stale-partial sweep; a replaced file only ever goes to the Trash")
         #expect(publish.contains("UInt32(RENAME_EXCL)") && !publish.contains("RENAME_SWAP)"))
+    }
+
+    /// Combine (fix/combine-never-overwrites, 2026-09-22) never removes or
+    /// replaces a final output or a catalog file. Pin the SHAPE the counts
+    /// above were reviewed against, so a count-neutral edit cannot move a
+    /// removal out from behind its guard.
+    @Test func combineOnlyEverRemovesOrReplacesItsOwnPartialsAndPlaceholder() throws {
+        let publish = try Self.source("VideoScan/CombineOutputPublish.swift")
+        // removeItem: exactly one, inside removePartial, after the name guard.
+        let removePartial = try #require(publish.range(of: "static func removePartial("))
+        let nameGuard = try #require(publish.range(of: "guard isPartialName(url.lastPathComponent) else {",
+                                                   range: removePartial.upperBound..<publish.endIndex))
+        let remove = try #require(publish.range(of: "removeItem("))
+        #expect(publish.components(separatedBy: "removeItem(").count - 1 == 1)
+        #expect(remove.lowerBound > nameGuard.upperBound,
+                "the one removeItem sits behind removePartial's is-a-partial guard")
+        // The sweep removes through removePartial only, and skips live partials.
+        let sweep = try #require(publish.range(of: "static func sweepStalePartials("))
+        let sweepBody = publish[sweep.upperBound...]
+        #expect(sweepBody.contains("if PartialFileNaming.isLive(url) { continue }"))
+        #expect(sweepBody.contains("try removePartial(url)"))
+        // rename(2) and unlink(2): only in the placeholder fallback, each
+        // after the dev+ino+size-0 identity check.
+        let fallback = try #require(publish.range(of: "private static func renameViaPlaceholder("))
+        let identity = "now.st_dev == mine.st_dev, now.st_ino == mine.st_ino, now.st_size == 0"
+        let check = try #require(publish.range(of: identity, range: fallback.upperBound..<publish.endIndex))
+        let bareRename = try #require(publish.range(of: "if rename(source, destination) == 0"))
+        #expect(bareRename.lowerBound > check.upperBound)
+        let recheck = try #require(publish.range(
+            of: "after.st_dev == mine.st_dev, after.st_ino == mine.st_ino, after.st_size == 0"))
+        let unlinkSite = try #require(publish.range(of: "unlink(destination)"))
+        #expect(unlinkSite.lowerBound > recheck.upperBound && recheck.lowerBound > bareRename.upperBound)
+        #expect(publish.contains("renamex_np(src, dst, UInt32(RENAME_EXCL))"))
+        // The model: ffmpeg writes the reserved partial; failures remove the
+        // partial, never the output name.
+        let model = try Self.source("VideoScan/VideoScanModel+Combine.swift")
+        #expect(model.contains("outputPath: partialURL.path,"), "ffmpeg writes the partial, never outURL")
+        #expect(!model.contains("removeItem(at: outURL)") && !model.contains("removeItem(atPath: outURL"))
+        #expect(model.contains("let tempDir = tempBase.appendingPathComponent(\"VS_\\(UUID().uuidString)\")"),
+                "the one removeItem in the model removes a staging dir this pair just created")
+        for text in [publish, model, try Self.source("VideoScan/CombineEngine.swift"),
+                     try Self.source("VideoScan/PartialFileNaming.swift")] {
+            #expect(!text.contains("RENAME_SWAP)") && !text.contains("replaceItemAt(")
+                    && !text.contains("replaceItem(at:"))
+        }
     }
 }
