@@ -270,6 +270,10 @@ struct HallieQueryBench {
 
     static let performanceOptIn = "VIDEOSCAN_HALLIE_PERF"
 
+    /// Release p50 budgets (seconds) for individual rows, authoritative
+    /// only under PerformanceLane.
+    static let rowBudgets: [String: Double] = ["paternal-line": 0.050]
+
     /// Built once: parsing 16,383 people twice is the expensive part and it
     /// is setup, not the thing under test.
     static let fixture: HallieBenchTree.Fixture = HallieBenchTree.make()
@@ -462,6 +466,21 @@ struct HallieQueryBench {
         if PerformanceLane.isAuthoritative(optInKey: Self.performanceOptIn) {
             #expect(p95 < 0.100,
                     Comment(rawValue: "Release budget: deterministic p95 \(HallieBenchStats.ms(p95)) ms"))
+            // Per-row budgets for rows that have regressed before. The
+            // paternal-line row reached 1.27 s p50 (Release, M5, 2026-09-23):
+            // each lineage-card person's photo lookup rebuilt a dictionary of
+            // the whole tree once per People/ folder (FamilyAssetIdentity
+            // Directory.member), switched on when e7d71578 made the biography
+            // turn publish the directory. FamilyAssetIdentityScaleSensorTests
+            // pins that in isolation; this row pins it end to end. Caveat:
+            // this row reads the host's real People/ folder, so its cost
+            // depends on the machine.
+            for (label, budget) in Self.rowBudgets {
+                guard let values = perQuestion[label] else { continue }
+                let p50 = HallieBenchStats.percentile(values, 50)
+                #expect(p50 < budget,
+                        Comment(rawValue: "Release budget: \(label) p50 \(HallieBenchStats.ms(p50)) ms (budget \(HallieBenchStats.ms(budget)) ms)"))
+            }
         } else {
             print("[hallie-bench]   \(PerformanceLane.explanation(optInKey: Self.performanceOptIn))")
         }

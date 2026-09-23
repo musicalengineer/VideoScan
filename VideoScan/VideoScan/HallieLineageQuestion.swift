@@ -1648,7 +1648,10 @@ enum HallieLineageAnswer {
                              graph: GedcomFamilyGraph,
                              basisNote: String? = nil,
                              lens: HallieVitalDates.Lens = .treeOnly) -> Result {
-        let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        var store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        // One People/ listing for the whole card, not ~6 per person shown.
+        store.snapshotPeopleFolders()
+        let assets = store
         // THE route my 2026-09-05 log evidence implicated ("lineage maternal
         // x5", "lineage both x4", both speaking Eileen 1930 after Rick had
         // corrected her profile). The first pass of this migration converted
