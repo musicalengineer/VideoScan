@@ -596,11 +596,12 @@ struct ArchiveVolumeProtectionSourceSensor {
         let regex = try NSRegularExpression(pattern: pattern)
         let literal = try NSRegularExpression(pattern: #""(?:[^"\\]|\\.)*""#)
         var found: [String: Int] = [:]
-        // The Archive Angel lives in its own subtree (VideoScan/ArchiveAngel/,
-        // consolidation S1 2026-09-22) — walked recursively so moving its
-        // files into subfolders did not blind this sensor to them. The other
-        // two roots stay one level deep, as they always were.
-        let dirs = [("VideoScan", "VideoScan", false), ("VideoScan/ArchiveAngel", "VideoScan/ArchiveAngel", true),
+        // The app source root is walked RECURSIVELY (2026-09-22): the
+        // Archive Angel moved into VideoScan/ArchiveAngel/<stage>/ and
+        // VideoScan/ModelsUI/ was never scanned at all — a one-level scan
+        // is blind to any subfolder. Keys are paths under the root
+        // ("VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift").
+        let dirs = [("VideoScan", "VideoScan", true),
                     ("VideoScanCore", "VideoScanCore/Sources/VideoScanCore", false)]
         for (label, rel, recursive) in dirs {
             let dir = projectDir.appendingPathComponent(rel)

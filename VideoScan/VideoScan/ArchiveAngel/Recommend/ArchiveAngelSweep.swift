@@ -336,7 +336,8 @@ final class ArchiveAngelSweep: ObservableObject {
                 let checkpoint = ArchiveAngelEvidenceFile(computedAt: now, complete: false,
                                                           considered: index, eligible: eligible, records: records,
                                                           attentionRevision: attention.revision,
-                                                          attentionLastEventAt: attention.lastEventAt)
+                                                          attentionLastEventAt: attention.lastEventAt,
+                                                          policyFingerprint: store.policyFingerprint)
                 _ = await ArchiveAngelEvidenceStore.saveOffMain(checkpoint, to: store.fileURL)
             }
             await Task.yield()
@@ -346,7 +347,8 @@ final class ArchiveAngelSweep: ObservableObject {
         let file = ArchiveAngelEvidenceFile(computedAt: finishedAt, complete: true,
                                             considered: total, eligible: eligible, records: records,
                                             attentionRevision: attention.revision,
-                                            attentionLastEventAt: attention.lastEventAt)
+                                            attentionLastEventAt: attention.lastEventAt,
+                                            policyFingerprint: store.policyFingerprint)
         store.replace(with: file)
         let saved = await store.save()
         lastRunSeconds = Double((clock.now - started).components.seconds)

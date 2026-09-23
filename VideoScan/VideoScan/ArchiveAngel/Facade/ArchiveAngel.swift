@@ -96,19 +96,22 @@ final class ArchiveAngel: ObservableObject {
     init(model: VideoScanModel, environment: AngelEnvironment = .app) {
         self.model = model
         self.environment = environment
-        let store = ArchiveAngelEvidenceStore(directory: environment.evidenceDirectory)
+        let loaded = AngelRecommendationPolicy.load(overrideURL: environment.policyOverrideURL,
+                                                    bundledURL: environment.bundledPolicyURL)
+        // The evidence is stamped with the policy it was scored under; a
+        // file from other rules is re-scored (S2, QA 2026-09-22 #3).
+        let store = ArchiveAngelEvidenceStore(directory: environment.evidenceDirectory,
+                                              policyFingerprint: loaded.policy.fingerprint)
         self.store = store
         self.sweep = ArchiveAngelSweep(store: store)
         self.attention = ArchiveAngelAttentionStore()
         self.sweepEnabled = environment.isTestHost
             ? ArchiveAngelSettings().sweepEnabled
             : ArchiveAngelSettings.restored(from: environment.defaults).sweepEnabled
-        let loaded = AngelRecommendationPolicy.load(overrideURL: environment.policyOverrideURL,
-                                                    bundledURL: environment.bundledPolicyURL)
         self.policy = loaded.policy
         self.policySource = loaded.source
         self.policyNotices = loaded.notices
-        facadeLog.info("recommendation policy: \(loaded.source.rawValue, privacy: .public) “\(loaded.policy.name, privacy: .public)” schema \(loaded.policy.schemaVersion)")
+        facadeLog.info("recommendation policy: \(loaded.source.rawValue, privacy: .public) “\(loaded.policy.name, privacy: .public)” schema \(loaded.policy.schemaVersion) fingerprint \(loaded.policy.fingerprint, privacy: .public)")
     }
 
     // MARK: Lifecycle
@@ -119,6 +122,10 @@ final class ArchiveAngel: ObservableObject {
     /// launch task: the setting is the pristine default and the sweep only
     /// runs when a test drives it.
     func launch() {
+        store.log = { [weak self] line in
+            facadeLog.info("\(line, privacy: .public)")
+            self?.catalog?.angelLog(line)
+        }
         facadeLog.info("launch START — assessment \(self.sweepEnabled ? "on" : "off", privacy: .public), test host \(self.environment.isTestHost)")
         for line in policyNotices { catalog?.angelLog(line) }
         policyNotices = []

@@ -203,4 +203,130 @@ struct ArchiveAngelRecommendationPolicyTests {
         #expect(ev.rejection == nil, "the override's 30 s floor reached the scorer — \(ev.summary())")
         #expect(ev.score > 0)
     }
+
+    // MARK: QA 2026-09-22 follow-ups
+
+    @Test("QA RED: points near Int.max pass validation and would trap the scorer's sum/product (AngelRecommendationPolicy.swift:88)")
+    func hugePointsRefused() {
+        var p = AngelRecommendationPolicy.builtIn
+        p.weights.threeStars = Int.max
+        #expect(!p.validationProblems().isEmpty)
+        var q = AngelRecommendationPolicy.builtIn
+        q.weights.confirmedPersonEach = Int.max / 2 + 1
+        #expect(!q.validationProblems().isEmpty)
+    }
+
+    @Test("every numeric field is bounded: out-of-range seconds, bitrates, days and skips are all named")
+    func everyFieldBounded() {
+        var p = AngelRecommendationPolicy.builtIn
+        p.weights.explicitPickMinimumDurationSeconds = 1e12
+        p.weights.downloadMinimumDurationSeconds = .nan
+        p.weights.downloadMaxKilobitsPerSecond = 1e15
+        p.weights.restDays = 1e9
+        p.weights.restAfterSkips = 1e9
+        p.weights.junkFloor = Int.max
+        p.weights.recentPhoneClipYears = Int.min
+        let problems = p.validationProblems().joined(separator: "\n")
+        for name in ["explicitPickMinimumDurationSeconds", "downloadMinimumDurationSeconds", "downloadMaxKilobitsPerSecond",
+                     "restDays", "restAfterSkips", "junkFloor", "recentPhoneClipYears"] {
+            #expect(problems.contains(name), "\(name) is range-checked")
+        }
+    }
+
+    @Test("DEFENCE IN DEPTH: the scorer saturates instead of trapping even with a policy validation would refuse")
+    func scorerSaturates() {
+        var w = ArchiveAngelWeights.standard
+        w.threeStars = Int.max
+        w.confirmedPersonEach = Int.max / 2 + 1
+        w.confirmedPersonCap = Int.max
+        w.dateKnown = Int.max
+        let c = ArchiveAngelCandidate(durationSeconds: 7_200, starRating: 3, confirmedPeople: ["A", "B", "C"],
+                                      userDate: "1994")
+        guard case .eligible(let score, _) = ArchiveAngelScorer.verdict(c, weights: w) else {
+            Issue.record("expected eligible"); return
+        }
+        #expect(score == Int.max)
+        #expect(ArchiveAngelScorer.sum(Int.max, 1) == Int.max)
+        #expect(ArchiveAngelScorer.sum(Int.min, -1) == Int.min)
+        #expect(ArchiveAngelScorer.product(Int.max / 2 + 1, 3) == Int.max)
+        #expect(ArchiveAngelScorer.product(-(Int.max / 2), 3) == Int.min)
+        #expect(ArchiveAngelScorer.clampedInt(.infinity) == Int.max && ArchiveAngelScorer.clampedInt(.nan) == 0)
+        #expect(ArchiveAngelScorer.clampedInt(41.0) == 41, "in range: identical to Int(_:)")
+    }
+
+    @Test("NIT: unknown keys in policy.json are named once, and the file is still used")
+    func unknownKeysNamed() throws {
+        let dir = try tempDir("unknown")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var obj = try #require(try JSONSerialization.jsonObject(with: AngelRecommendationPolicy.builtIn.encodedJSON()) as? [String: Any])
+        obj["comment"] = "mine"
+        var w = try #require(obj["weights"] as? [String: Any])
+        w["threeStar"] = 150          // typo of threeStars
+        obj["weights"] = w
+        let url = dir.appendingPathComponent("policy.json")
+        try JSONSerialization.data(withJSONObject: obj).write(to: url)
+        let loaded = AngelRecommendationPolicy.load(overrideURL: url, bundledURL: bundledURL)
+        #expect(loaded.source == .userOverride)
+        let warn = loaded.notices.filter { $0.contains("does not read") }
+        #expect(warn.count == 1)
+        #expect(warn.first?.contains("comment") == true && warn.first?.contains("weights.threeStar") == true)
+    }
+
+    @Test("fingerprint: stable, and different for any change")
+    func fingerprint() {
+        #expect(AngelRecommendationPolicy.builtIn.fingerprint == AngelRecommendationPolicy.defaultFingerprint)
+        #expect(AngelRecommendationPolicy().fingerprint == AngelRecommendationPolicy.builtIn.fingerprint)
+        var p = AngelRecommendationPolicy.builtIn
+        p.weights.minimumDurationSeconds = 119
+        #expect(p.fingerprint != AngelRecommendationPolicy.defaultFingerprint)
+        #expect(AngelRecommendationPolicy.defaultFingerprint.count == 16)
+    }
+
+    @Test("evidence.json is tied to the policy: same → loads; unstamped + default → loads (no forced re-score on upgrade); unstamped or other stamp + custom policy → ignored and logged")
+    func evidenceTiedToPolicy() async throws {
+        let dir = try tempDir("evidence")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let id = UUID()
+        let record = ArchiveAngelEvidenceRecord(score: 120, lines: [], rejection: nil, useCount: 0, lastUsed: nil, computedAt: Date())
+        var custom = AngelRecommendationPolicy.builtIn
+        custom.weights.minimumDurationSeconds = 30
+
+        func write(_ stamp: String?) async {
+            let file = ArchiveAngelEvidenceFile(records: [id: record], policyFingerprint: stamp)
+            _ = await ArchiveAngelEvidenceStore.saveOffMain(file, to: dir.appendingPathComponent(ArchiveAngelEvidenceStore.filename))
+        }
+        func loads(under fingerprint: String) async -> (Bool, [String]) {
+            let store = ArchiveAngelEvidenceStore(directory: dir, policyFingerprint: fingerprint)
+            var lines: [String] = []
+            store.log = { lines.append($0) }
+            return (await store.load(), lines)
+        }
+
+        await write(nil)
+        #expect(await loads(under: AngelRecommendationPolicy.defaultFingerprint).0, "an old file + the default policy: kept")
+        let (unstampedCustom, why) = await loads(under: custom.fingerprint)
+        #expect(!unstampedCustom)
+        #expect(why.first?.contains("policy changed: unstamped (default) → \(custom.fingerprint)") == true, "\(why)")
+
+        await write(custom.fingerprint)
+        #expect(await loads(under: custom.fingerprint).0)
+        let (other, why2) = await loads(under: AngelRecommendationPolicy.defaultFingerprint)
+        #expect(!other)
+        #expect(why2.first?.contains("policy changed: \(custom.fingerprint) → \(AngelRecommendationPolicy.defaultFingerprint)") == true)
+    }
+
+    @Test("the sweep stamps the evidence it writes with its store's policy fingerprint")
+    func sweepStamps() async throws {
+        let dir = try tempDir("stamp")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = ArchiveAngelEvidenceStore(directory: dir, policyFingerprint: "feedfacefeedface")
+        let sweep = ArchiveAngelSweep(store: store)
+        var cfg = ArchiveAngelSweep.Configuration(candidates: { [ArchiveAngelCandidate()] }, isExternallyBusy: { false })
+        cfg.playHistory = { _ in [:] }
+        cfg.quietSeconds = 0
+        sweep.configure(cfg, enabled: true)
+        await sweep.runAndWait(reason: "test")
+        sweep.stop()
+        #expect(store.file?.policyFingerprint == "feedfacefeedface")
+    }
 }

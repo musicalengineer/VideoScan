@@ -36,7 +36,15 @@ struct ArchiveAngelBoundarySensorTests {
     // S2 (2026-09-22): ZERO — the seams, the façade and the strip took
     // every one. Keep them empty: a new leak fails here.
     static let inboundBaseline: [String: Int] = [:]
-    static let outboundBaseline: [String: Int] = [:]
+    /// QA 2026-09-22 widened the O(n) rule to `for … in records` and
+    /// `records.filter{…}.first`. The two it found are legitimate today:
+    /// the companion-retirement entry point and the launch reconciliation
+    /// each make ONE catalog pass per call (never per record). Listed so the
+    /// ratchet can only shrink; a catalog seam for "records under a folder"
+    /// would take them to zero.
+    static let outboundBaseline: [String: Int] = [
+        "Prepare/VideoScanModel+ArchiveAngelCompanions.swift | O(n) records scan": 2,
+    ]
     /// The CORE (Recommend/, Prepare/, Review/, Promote/) naming the concrete
     /// VideoScanModel / MediaFileOperationsCenter instead of a seam — S6's
     /// work before the pure core can become a package. 29 at S1 and S2.
@@ -96,32 +104,62 @@ struct ArchiveAngelBoundarySensorTests {
         String(url.standardizedFileURL.path.dropFirst(base.standardizedFileURL.path.count + 1))
     }
 
+    /// The inbound leaks in one file's (comment-stripped) code, one string
+    /// per occurrence (QA 2026-09-22 widened the scan):
+    ///   • an identifier naming the Angel beyond the public surface
+    ///     (`ArchiveAngelEvidenceStore`, `archiveAngelStore`, …);
+    ///   • a chain PAST the façade into its parts
+    ///     (`.archiveAngel.store`, `.sweep`, `.attention`, `.environment`, `.policy`);
+    ///   • a seam / environment type (`AngelEnvironment`, `AngelCatalog`…) —
+    ///     app code reaches those through the façade, never by name;
+    ///   • an "archiveAngel.*" defaults key.
+    static func inboundTokens(in text: String) -> [String] {
+        var out: [String] = []
+        for token in matches(#"\b[A-Za-z_][A-Za-z0-9_]*\b"#, in: text)
+        where (token.contains("ArchiveAngel") || token.contains("archiveAngel")
+               || token == "isMediaFileOperationBusyForAngel") && !publicSurface.contains(token) {
+            out.append(token)
+        }
+        for chain in matches(#"\.archiveAngel\s*\.\s*(store|sweep|attention|environment|policy)\b"#, in: text) {
+            out.append("chain " + chain.replacingOccurrences(of: " ", with: ""))
+        }
+        for type in matches(#"\bAngel[A-Z][A-Za-z0-9_]*"#, in: text) {
+            out.append("seam type " + type)
+        }
+        for key in matches(#""archiveAngel\.[A-Za-z]+""#, in: text) {
+            out.append("defaults key " + key.replacingOccurrences(of: "\"", with: ""))
+        }
+        return out
+    }
+
     /// "File.swift | Token" → count.
     static func inbound() -> [String: Int] {
         var out: [String: Int] = [:]
         let angel = angelDir.standardizedFileURL.path + "/"
         for url in swiftFiles(under: appDir()) where !url.standardizedFileURL.path.hasPrefix(angel) {
-            let text = code(of: url)
             let name = relative(url, to: appDir())
-            for token in matches(#"\b[A-Za-z_][A-Za-z0-9_]*\b"#, in: text)
-            where (token.contains("ArchiveAngel") || token.contains("archiveAngel")
-                   || token == "isMediaFileOperationBusyForAngel") && !publicSurface.contains(token) {
-                out["\(name) | \(token)", default: 0] += 1
-            }
-            for key in matches(#""archiveAngel\.[A-Za-z]+""#, in: text) {
-                out["\(name) | defaults key \(key.replacingOccurrences(of: "\"", with: ""))", default: 0] += 1
-            }
+            for token in inboundTokens(in: code(of: url)) { out["\(name) | \(token)", default: 0] += 1 }
         }
         return out
     }
 
     static let outboundRules: [(name: String, pattern: String)] = [
         ("navigation", #""selectedTab"|MainWindowHelper\.shared"#),
-        ("O(n) records scan", #"records\.first\s*[\{\(]"#),
+        ("O(n) records scan", #"records\.first\s*[\{\(]|records\.filter\s*\{[^}]*\}\s*\.first|\bfor\s+[A-Za-z_][A-Za-z0-9_]*\s+in\s+(self\.|model\.)?records\b"#),
         ("TestEnvironment.isTestHost", #"TestEnvironment\.isTestHost"#),
         ("UserDefaults / @AppStorage", #"UserDefaults\.standard|@AppStorage\("#),
         ("hard-coded buffer root", #"(?<!var )\bdefaultBufferRoot\b"#),
     ]
+
+    /// Outbound rule name → occurrences in one file's (comment-stripped) code.
+    static func outboundHits(in text: String) -> [String: Int] {
+        var out: [String: Int] = [:]
+        for rule in outboundRules {
+            let n = matches(rule.pattern, in: text).count
+            if n > 0 { out[rule.name] = n }
+        }
+        return out
+    }
 
     /// "Folder/File.swift | rule" → count.
     static func outbound() -> [String: Int] {
@@ -129,11 +167,7 @@ struct ArchiveAngelBoundarySensorTests {
         for url in swiftFiles(under: angelDir) {
             let name = relative(url, to: angelDir)
             guard !seamFiles.contains(name) else { continue }
-            let text = code(of: url)
-            for rule in outboundRules {
-                let n = matches(rule.pattern, in: text).count
-                if n > 0 { out["\(name) | \(rule.name)", default: 0] += n }
-            }
+            for (rule, n) in outboundHits(in: code(of: url)) { out["\(name) | \(rule)", default: 0] += n }
         }
         return out
     }
@@ -195,7 +229,7 @@ struct ArchiveAngelBoundarySensorTests {
         #expect(n <= Self.couplingBaseline, "Angel → VideoScanModel/MediaFileOperationsCenter references grew: \(n) > \(Self.couplingBaseline)")
     }
 
-    @Test("the sensor catches a planted leak (so a green run means something)")
+    @Test("the sensor catches a planted leak — through the SAME functions the ratchets use")
     func catchesPlantedLeak() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("angel-sensor-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -205,13 +239,21 @@ struct ArchiveAngelBoundarySensorTests {
         // ArchiveAngelEvidenceStore in a comment is fine
         let x = model.archiveAngelStore.candidateIDs   // a leak
         let y: ArchiveAngelStrip? = nil                // public surface
+        let z = model.archiveAngel.candidateIDs        // public surface
         let k = UserDefaults.standard.bool(forKey: "archiveAngel.makeLossless")
+        let c = model.records.filter { $0.id == id }.first
+        for r in records where r.isPurged { }
         """.write(to: f, atomically: true, encoding: .utf8)
         let text = Self.code(of: f)
-        let tokens = Self.matches(#"\b[A-Za-z_][A-Za-z0-9_]*\b"#, in: text)
-            .filter { ($0.contains("ArchiveAngel") || $0.contains("archiveAngel")) && !Self.publicSurface.contains($0) }
-        #expect(tokens == ["archiveAngelStore"])
-        #expect(Self.matches(#""archiveAngel\.[A-Za-z]+""#, in: text) == ["\"archiveAngel.makeLossless\""])
-        #expect(Self.matches(Self.outboundRules[3].pattern, in: text).count == 1)
+        #expect(Self.inboundTokens(in: text) == ["archiveAngelStore", "defaults key archiveAngel.makeLossless"])
+        let out = Self.outboundHits(in: text)
+        #expect(out["UserDefaults / @AppStorage"] == 1)
+        #expect(out["O(n) records scan"] == 2)
+    }
+
+    @Test("QA RED: INBOUND misses façade-member chains and Angel* seam types")
+    func inboundCatchesChainedLeaks() {
+        let text = "let a = model.archiveAngel.store.candidateIDs\nmodel.archiveAngel.sweep.rescoreNow()\nlet r = AngelEnvironment.currentBufferRoot"
+        #expect(Self.inboundTokens(in: text).count >= 3)
     }
 }

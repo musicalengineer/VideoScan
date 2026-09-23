@@ -224,4 +224,27 @@ struct ArchiveAngelFacadeTests {
         }
         #expect(ArchiveAngel.finishedJobCount([]) == 0)
     }
+
+    @Test("busy gate on the REAL center: an active Promote → busy; an active Verify Audio → not busy; finished → not busy")
+    func busyGateRealCenter() throws {
+        let (model, root) = try model()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let promoteCenter = MediaFileOperationsCenter()
+        let promote = PromoteToArchiveJob(plan: ArchivePromotePlan(rootPath: root.path, entries: [], skipped: [],
+                                                                   totalBytes: 0, freeBytesAtRoot: nil),
+                                          model: model)
+        #expect(promoteCenter.add(promote))
+        #expect(promote.state.isActive, "a job not yet started is .running")
+        #expect(promoteCenter.isBusy, "an active Promote parks the sweep")
+        promote.cancel()
+        #expect(!promote.state.isActive || promote.state.cancelWasRequested)
+
+        let verifyCenter = MediaFileOperationsCenter()
+        let rec = VideoRecord()
+        rec.fullPath = root.appendingPathComponent("clip.mov").path
+        let verify = VerifyAudioJob(record: rec, model: model)
+        #expect(verifyCenter.add(verify))
+        #expect(verify.state.isActive)
+        #expect(!verifyCenter.isBusy, "a Verify Audio job does not park the Angel's sweep")
+    }
 }

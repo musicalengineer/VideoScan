@@ -389,7 +389,7 @@ enum ArchiveAngelScorer {
         }
 
         if !c.confirmedPeople.isEmpty {
-            let pts = min(w.confirmedPersonCap, w.confirmedPersonEach * c.confirmedPeople.count)
+            let pts = min(w.confirmedPersonCap, Self.product(w.confirmedPersonEach, c.confirmedPeople.count))
             add(pts, c.confirmedPeople.joined(separator: ", ") + " (confirmed)")
         }
         var seen = Set<String>()
@@ -397,23 +397,23 @@ enum ArchiveAngelScorer {
             !c.confirmedPeople.contains($0) && seen.insert($0).inserted
         }
         if !machineOnly.isEmpty {
-            let pts = min(w.machinePersonCap, w.machinePersonEach * machineOnly.count)
+            let pts = min(w.machinePersonCap, Self.product(w.machinePersonEach, machineOnly.count))
             add(pts, "Looks like " + machineOnly.joined(separator: ", ") + " (machine)")
         }
 
         if c.useCount > 0 {
-            var pts = min(w.playHistoryCap, Int((4.0 * log2(1.0 + Double(c.useCount))).rounded()))
+            var pts = min(w.playHistoryCap, Self.clampedInt((4.0 * log2(1.0 + Double(c.useCount))).rounded()))
             var line = c.useCount == 1 ? "Played once" : "Played \(c.useCount) times"
             if let last = c.lastUsed {
                 line += ", last on " + Self.dayFormatter.string(from: last)
-                if now.timeIntervalSince(last) < 365 * 86_400 { pts += w.playedRecentlyBonus }
+                if now.timeIntervalSince(last) < 365 * 86_400 { pts = Self.sum(pts, w.playedRecentlyBonus) }
             }
             add(pts, line)
         }
 
         let richness = Self.richnessItems(c)
         if !richness.isEmpty {
-            add(min(w.richnessCap, w.richnessEach * richness.count),
+            add(min(w.richnessCap, Self.product(w.richnessEach, richness.count)),
                 "Has " + richness.joined(separator: ", "))
         }
 
@@ -454,7 +454,7 @@ enum ArchiveAngelScorer {
         // new earns a reserved slot (`withFreshSlots`), not a better grade.
         if let fatigue = Self.fatigueLine(c, lines: lines, weights: w, now: now) { lines.append(fatigue) }
 
-        return .eligible(score: lines.reduce(0) { $0 + $1.points }, evidence: lines)
+        return .eligible(score: Self.total(lines), evidence: lines)
     }
 
     /// Phase 1: `score × fatigueFactor^effectiveSkips`, where the family's
@@ -467,10 +467,10 @@ enum ArchiveAngelScorer {
         let shared = w.familySkipShare * c.familySkips
         let effective = own + shared
         guard effective > 0 else { return nil }
-        let total = lines.reduce(0) { $0 + $1.points }
+        let total = Self.total(lines)
         guard total > 0 else { return nil }
         let factor = pow(w.fatigueFactor, effective)
-        let points = Int((Double(total) * factor).rounded()) - total
+        let points = Self.sum(Self.clampedInt((Double(total) * factor).rounded()), -total)
         guard points < 0 else { return nil }
         var line: String
         switch c.attention.timesSkipped {
@@ -496,10 +496,10 @@ enum ArchiveAngelScorer {
     static func downloadCapLine(_ c: ArchiveAngelCandidate, lines: [ArchiveAngelEvidence],
                                 weights w: ArchiveAngelWeights) -> ArchiveAngelEvidence? {
         guard !c.isHumanMarked, looksLikeDownloadOrRip(c, weights: w) else { return nil }
-        let total = lines.reduce(0) { $0 + $1.points }
+        let total = Self.total(lines)
         guard total > w.downloadCapScore else { return nil }
-        let kbps = Int((Double(c.sizeBytes) * 8 / c.durationSeconds / 1000).rounded())
-        return .init(points: w.downloadCapScore - total,
+        let kbps = Self.clampedInt((Double(c.sizeBytes) * 8 / c.durationSeconds / 1000).rounded())
+        return .init(points: Self.sum(w.downloadCapScore, -total),
                      line: "Looks like a download or rip — \(c.videoCodec) at \(kbps) kbit/s for "
                         + durationText(c.durationSeconds) + ", no star, person or note; capped at candidate grade")
     }
@@ -879,6 +879,37 @@ enum ArchiveAngelScorer {
         case w.sceneSeconds..<w.longSceneSeconds: return (w.durationScene, "a full scene")
         default: return nil
         }
+    }
+
+    // MARK: Saturating arithmetic (QA 2026-09-22: a policy.json number near
+    // Int.max must never trap the sweep). Identical results to `+` / `*` /
+    // `Int(_:)` for every in-range value — the policy validator keeps
+    // real rule sets far from the edges; this is defence in depth.
+
+    /// a + b, pinned to Int.min / Int.max instead of trapping.
+    static func sum(_ a: Int, _ b: Int) -> Int {
+        let (r, overflow) = a.addingReportingOverflow(b)
+        return overflow ? (b > 0 ? .max : .min) : r
+    }
+
+    /// a × b, pinned instead of trapping.
+    static func product(_ a: Int, _ b: Int) -> Int {
+        let (r, overflow) = a.multipliedReportingOverflow(by: b)
+        return overflow ? (((a < 0) != (b < 0)) ? .min : .max) : r
+    }
+
+    /// The score: the saturating sum of the printed points.
+    static func total(_ lines: [ArchiveAngelEvidence]) -> Int {
+        lines.reduce(0) { sum($0, $1.points) }
+    }
+
+    /// `Int(d)` for a finite in-range double; pinned to the Int range (NaN → 0)
+    /// instead of trapping.
+    static func clampedInt(_ d: Double) -> Int {
+        guard d.isFinite else { return d.isNaN ? 0 : (d > 0 ? .max : .min) }
+        if d >= 9.2e18 { return .max }
+        if d <= -9.2e18 { return .min }
+        return Int(d)
     }
 
     static let dayFormatter: DateFormatter = {

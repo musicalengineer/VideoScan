@@ -124,10 +124,16 @@ struct ArchiveAngelEvidenceFile: Codable, Sendable, Equatable {
     /// `computedAt`.
     var attentionRevision: Int?
     var attentionLastEventAt: Date?
+    /// The recommendation policy the records were scored under
+    /// (`AngelRecommendationPolicy.fingerprint`, S2 2026-09-22). nil = a
+    /// file written before the stamp existed: accepted only while the
+    /// DEFAULT policy is active (no forced re-score on upgrade).
+    var policyFingerprint: String?
 
     init(computedAt: Date = Date(), complete: Bool = true, considered: Int = 0,
          eligible: Int = 0, records: [UUID: ArchiveAngelEvidenceRecord] = [:],
-         attentionRevision: Int? = nil, attentionLastEventAt: Date? = nil) {
+         attentionRevision: Int? = nil, attentionLastEventAt: Date? = nil,
+         policyFingerprint: String? = nil) {
         self.computedAt = computedAt
         self.complete = complete
         self.considered = considered
@@ -135,6 +141,7 @@ struct ArchiveAngelEvidenceFile: Codable, Sendable, Equatable {
         self.records = records
         self.attentionRevision = attentionRevision
         self.attentionLastEventAt = attentionLastEventAt
+        self.policyFingerprint = policyFingerprint
     }
 }
 
@@ -166,8 +173,17 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     /// Rows re-render on this; the filter recomputes on `candidateIDs`.
     @Published private(set) var revision: Int = 0
 
-    init(directory: URL = ArchiveAngelEvidenceStore.defaultDirectory) {
+    /// The fingerprint of the policy this store's sweep scores with; a
+    /// loaded file stamped with another is treated like old rules.
+    let policyFingerprint: String
+    /// Where "policy changed" / load refusals are said (console + file log
+    /// via the façade). Default: the unified log only.
+    var log: (String) -> Void = { _ in }
+
+    init(directory: URL = ArchiveAngelEvidenceStore.defaultDirectory,
+         policyFingerprint: String = AngelRecommendationPolicy.defaultFingerprint) {
         self.directory = directory
+        self.policyFingerprint = policyFingerprint
     }
 
     // MARK: Reads (O(1))
@@ -244,8 +260,19 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     func load() async -> Bool {
         let url = fileURL
         guard let loaded = await Self.loadOffMain(url) else { return false }
+        if let why = Self.policyMismatch(stamped: loaded.policyFingerprint, current: policyFingerprint) {
+            log("Archive Angel Assessment: evidence.json ignored — " + why + "; re-scoring")
+            return false
+        }
         replace(with: loaded)
         return true
+    }
+
+    /// nil = the file's grades were computed under the current policy.
+    /// An unstamped (pre-S2) file counts as the DEFAULT policy's.
+    nonisolated static func policyMismatch(stamped: String?, current: String) -> String? {
+        let old = stamped ?? AngelRecommendationPolicy.defaultFingerprint
+        return old == current ? nil : "policy changed: \(stamped ?? "unstamped (default)") → \(current)"
     }
 
     /// Save the current file off-main (atomic replace). No-op when empty.

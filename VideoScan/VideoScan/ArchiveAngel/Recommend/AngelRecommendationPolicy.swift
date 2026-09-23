@@ -27,6 +27,7 @@
 // startup, with the compiled-in defaults as the fallback — the policy is
 // passed down by value, so a running job never sees it change mid-batch.)
 
+import CryptoKit
 import Foundation
 
 struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
@@ -51,28 +52,35 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
 
     /// The rules compiled into the app — today's behaviour.
     static let builtIn = AngelRecommendationPolicy()
+    /// The built-in rules' fingerprint — what an unstamped evidence.json
+    /// is assumed to have been scored under.
+    static let defaultFingerprint = builtIn.fingerprint
 
     // MARK: Validation
 
-    /// Every reason this rule set must not be used; empty = usable. Checks
-    /// the schema and that each number is finite and in a range the scorer
-    /// can work with — a typo in a hand-edited file must not, say, make
-    /// every clip "too short" or divide the fatigue by zero.
+    /// Every reason this rule set must not be used; empty = usable. EVERY
+    /// number has a bounded range (QA 2026-09-22: a "threeStars" near
+    /// Int.max passed a ≥ 0 check and would have trapped the scorer's sum
+    /// at every launch), and the duration tiers must rise. The ranges are
+    /// generous — far beyond any sane rule set — and exist to keep a typo
+    /// or a hostile file from reaching the arithmetic.
     func validationProblems() -> [String] {
         var problems: [String] = []
         if schemaVersion != Self.currentSchemaVersion {
             problems.append("schemaVersion \(schemaVersion) — this app reads schema \(Self.currentSchemaVersion)")
         }
         let w = weights
-        func nonNegative(_ name: String, _ v: Double) {
-            if !v.isFinite || v < 0 { problems.append("\(name) = \(v) — must be a finite number ≥ 0") }
+        func check(_ name: String, _ v: Int, _ range: ClosedRange<Int>) {
+            if !range.contains(v) { problems.append("\(name) = \(v) — must be \(range.lowerBound)…\(range.upperBound)") }
         }
-        func fraction(_ name: String, _ v: Double, allowZero: Bool = true) {
-            if !v.isFinite || v > 1 || v < 0 || (!allowZero && v == 0) {
-                problems.append("\(name) = \(v) — must be between \(allowZero ? "0" : "just above 0") and 1")
+        func check(_ name: String, _ v: Double, _ range: ClosedRange<Double>, excludingLower: Bool = false) {
+            if !v.isFinite || !range.contains(v) || (excludingLower && v == range.lowerBound) {
+                let lo = excludingLower ? "above \(range.lowerBound)" : "\(range.lowerBound)"
+                problems.append("\(name) = \(v) — must be a finite number \(lo)…\(range.upperBound)")
             }
         }
-        let points: [(String, Int)] = [
+        let points = Self.pointRange
+        let pointFields: [(String, Int)] = [
             ("threeStars", w.threeStars), ("twoStars", w.twoStars), ("oneStar", w.oneStar),
             ("confirmedPersonEach", w.confirmedPersonEach), ("confirmedPersonCap", w.confirmedPersonCap),
             ("machinePersonEach", w.machinePersonEach), ("machinePersonCap", w.machinePersonCap),
@@ -82,40 +90,43 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
             ("formatAtRisk", w.formatAtRisk), ("onlyCopy", w.onlyCopy), ("riskyVolume", w.riskyVolume),
             ("durationWholeTape", w.durationWholeTape), ("durationHalfTape", w.durationHalfTape),
             ("durationLongScene", w.durationLongScene), ("durationScene", w.durationScene),
-            ("junkFloor", w.junkFloor), ("downloadCapScore", w.downloadCapScore),
-            ("freshMinimumScore", w.freshMinimumScore),
+            ("downloadCapScore", w.downloadCapScore), ("freshMinimumScore", w.freshMinimumScore),
         ]
-        for (name, v) in points where v < 0 { problems.append("\(name) = \(v) — points must be ≥ 0") }
-        nonNegative("wholeTapeSeconds", w.wholeTapeSeconds)
-        nonNegative("halfTapeSeconds", w.halfTapeSeconds)
-        nonNegative("longSceneSeconds", w.longSceneSeconds)
-        nonNegative("sceneSeconds", w.sceneSeconds)
+        for (name, v) in pointFields { check(name, v, points) }
+        check("junkFloor", w.junkFloor, 0...1_000)
+        let day = Self.maxSeconds
+        check("wholeTapeSeconds", w.wholeTapeSeconds, 0...day)
+        check("halfTapeSeconds", w.halfTapeSeconds, 0...day)
+        check("longSceneSeconds", w.longSceneSeconds, 0...day)
+        check("sceneSeconds", w.sceneSeconds, 0...day)
         if !(w.sceneSeconds <= w.longSceneSeconds && w.longSceneSeconds <= w.halfTapeSeconds
              && w.halfTapeSeconds <= w.wholeTapeSeconds) {
             problems.append("duration tiers must rise: sceneSeconds ≤ longSceneSeconds ≤ halfTapeSeconds ≤ wholeTapeSeconds")
         }
-        nonNegative("minimumDurationSeconds", w.minimumDurationSeconds)
-        nonNegative("explicitPickMinimumDurationSeconds", w.explicitPickMinimumDurationSeconds)
-        if w.minimumDurationSeconds > 24 * 3600 { problems.append("minimumDurationSeconds over a day would exclude everything") }
-        if w.recentPhoneClipYears < 0 || w.recentPhoneClipYears > 100 {
-            problems.append("recentPhoneClipYears = \(w.recentPhoneClipYears) — must be 0…100")
-        }
-        fraction("dateConfidenceKnown", Double(w.dateConfidenceKnown))
-        nonNegative("minimumAverageKilobitsPerSecond", w.minimumAverageKilobitsPerSecond)
-        nonNegative("downloadMaxKilobitsPerSecond", w.downloadMaxKilobitsPerSecond)
-        nonNegative("downloadMinimumDurationSeconds", w.downloadMinimumDurationSeconds)
-        fraction("fatigueFactor", w.fatigueFactor, allowZero: false)
-        if !w.restAfterSkips.isFinite || w.restAfterSkips <= 0 {
-            problems.append("restAfterSkips = \(w.restAfterSkips) — must be a finite number > 0")
-        }
-        nonNegative("restDays", w.restDays)
-        nonNegative("oldSkipAfterDays", w.oldSkipAfterDays)
-        fraction("oldSkipWeight", w.oldSkipWeight)
-        fraction("clearWeight", w.clearWeight)
-        fraction("familySkipShare", w.familySkipShare)
-        fraction("freshShare", w.freshShare)
+        check("minimumDurationSeconds", w.minimumDurationSeconds, 0...day)
+        check("explicitPickMinimumDurationSeconds", w.explicitPickMinimumDurationSeconds, 0...day)
+        check("downloadMinimumDurationSeconds", w.downloadMinimumDurationSeconds, 0...day)
+        check("recentPhoneClipYears", w.recentPhoneClipYears, 0...100)
+        check("dateConfidenceKnown", Double(w.dateConfidenceKnown), 0...1)
+        check("minimumAverageKilobitsPerSecond", w.minimumAverageKilobitsPerSecond, 0...Self.maxKilobitsPerSecond)
+        check("downloadMaxKilobitsPerSecond", w.downloadMaxKilobitsPerSecond, 0...Self.maxKilobitsPerSecond)
+        check("fatigueFactor", w.fatigueFactor, 0...1, excludingLower: true)
+        check("restAfterSkips", w.restAfterSkips, 0...1_000, excludingLower: true)
+        check("restDays", w.restDays, 0...3_650)
+        check("oldSkipAfterDays", w.oldSkipAfterDays, 0...3_650)
+        check("oldSkipWeight", w.oldSkipWeight, 0...1)
+        check("clearWeight", w.clearWeight, 0...1)
+        check("familySkipShare", w.familySkipShare, 0...1)
+        check("freshShare", w.freshShare, 0...1)
         return problems
     }
+
+    /// Points any single rule may be worth. Today's largest is 100 (★★★).
+    static let pointRange = 0...10_000
+    /// Any duration / threshold in seconds: at most a day.
+    static let maxSeconds: Double = 86_400
+    /// Any bitrate threshold: at most 1 Gbit/s.
+    static let maxKilobitsPerSecond: Double = 1_000_000
 
     // MARK: Loading
 
@@ -139,9 +150,14 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
                      read: (URL) throws -> Data = { try Data(contentsOf: $0) }) -> Loaded {
         var notices: [String] = []
         if fileExists(overrideURL.path) {
-            switch decodeValidated(from: overrideURL, read: read) {
+            var unknown: [String] = []
+            switch decodeValidated(from: overrideURL, read: read, unknownKeys: { unknown = $0 }) {
             case .success(let p):
                 notices.append("Archive Angel: using your recommendation rules “\(p.name)” from \(overrideURL.path)")
+                if !unknown.isEmpty {
+                    notices.append("Archive Angel: \(overrideURL.lastPathComponent) has key(s) this app does not read — "
+                                   + unknown.joined(separator: ", ") + " (ignored; a typo? the default applies for the intended field)")
+                }
                 return Loaded(policy: p, source: .userOverride, notices: notices)
             case .failure(let why):
                 notices.append("Archive Angel: refused \(overrideURL.path) — \(why); using "
@@ -173,6 +189,14 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
     }
 
     static func decodeValidated(from url: URL, read: (URL) throws -> Data) -> Result<AngelRecommendationPolicy, LoadFailure> {
+        decodeValidated(from: url, read: read, unknownKeys: { _ in })
+    }
+
+    /// Same, reporting keys the file has that this app does not read
+    /// ("weights.threeStar" — a typo that would otherwise be silently
+    /// ignored while the default applies).
+    static func decodeValidated(from url: URL, read: (URL) throws -> Data,
+                                unknownKeys: ([String]) -> Void) -> Result<AngelRecommendationPolicy, LoadFailure> {
         let data: Data
         do { data = try read(url) } catch { return .failure(.unreadable(error.localizedDescription)) }
         let policy: AngelRecommendationPolicy
@@ -180,7 +204,33 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
             return .failure(.undecodable(String(describing: error).prefix(300).description))
         }
         let problems = policy.validationProblems()
-        return problems.isEmpty ? .success(policy) : .failure(.invalid(problems))
+        guard problems.isEmpty else { return .failure(.invalid(problems)) }
+        let unknown = Self.unknownKeys(in: data)
+        if !unknown.isEmpty { unknownKeys(unknown) }
+        return .success(policy)
+    }
+
+    /// Top-level and `weights.` keys in `data` that the built-in policy
+    /// does not encode. Sorted. Empty when the JSON can't be read as an object.
+    static func unknownKeys(in data: Data) -> [String] {
+        guard let given = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let known = (try? builtIn.encodedJSON()).flatMap({ try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any]
+        else { return [] }
+        var out = given.keys.filter { known[$0] == nil }
+        if let gw = given["weights"] as? [String: Any], let kw = known["weights"] as? [String: Any] {
+            out += gw.keys.filter { kw[$0] == nil }.map { "weights." + $0 }
+        }
+        return out.sorted()
+    }
+
+    /// A stable fingerprint of the rule set: SHA-256 (first 16 hex digits)
+    /// of the canonical encoding (sorted keys, no whitespace). Stamped into
+    /// evidence.json so grades computed under other rules are re-scored.
+    var fingerprint: String {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys]
+        guard let data = try? enc.encode(self) else { return "unencodable" }
+        return SHA256.hash(data: data).prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
     /// The JSON an override starts from (sorted keys, pretty) — what the
