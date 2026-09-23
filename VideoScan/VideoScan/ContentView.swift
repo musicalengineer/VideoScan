@@ -241,6 +241,12 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
     /// `userPlace` yet — the "where was this?" to-do list, the sibling of
     /// the undated queue. O(1) per record (a nil check).
     case noPlaceYet = "No Place Yet"
+    /// Find Similar Footage (2026-09-23): show each footage group once —
+    /// its best-ranked VISIBLE member (the likely original when it is on a
+    /// connected drive) — plus every ungrouped file. O(rows) in the
+    /// event-driven computeFiltered pass (FootageOnePerGroup), never in a
+    /// view body.
+    case onePerFootage = "One Per Footage"
 
     var icon: String {
         switch self {
@@ -255,6 +261,7 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
         case .hasMasterCopy:        return "archivebox.fill"
         case .archiveCandidates:    return "sparkles"
         case .noPlaceYet:           return "mappin.slash"
+        case .onePerFootage:        return "square.stack.3d.up"
         }
     }
 }
@@ -657,6 +664,18 @@ struct CatalogView: View {
             onAnalyzeDuplicatesSelected: {
                 model.log("\nAnalyzing duplicate candidates in \(selectedIDs.count) selected files...")
                 Task { await model.analyzeDuplicates(selectedIDs: selectedIDs) }
+            },
+            onFindSimilarFootage: {
+                startFileOperation("Find Similar Footage") { center in
+                    center.startFindSimilarFootage(scope: .catalog, model: model)
+                }
+            },
+            onFindSimilarFootageOfSelected: {
+                let ids = selectedIDs
+                guard !ids.isEmpty else { return }
+                startFileOperation("Find Similar Footage") { center in
+                    center.startFindSimilarFootage(scope: .records(ids), model: model)
+                }
             },
             volumesWithDeletableDups: model.deletableDupVolumes,
             onChooseVolumeToDeleteDuplicates: {

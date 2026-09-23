@@ -452,6 +452,23 @@ extension CatalogView {
                 }
             }
 
+            // Find Similar Footage on this volume's files (2026-09-23) — the
+            // grouping still sees the whole catalog (the other copies can
+            // be on any drive); only this volume's groups are written.
+            if single, !first.searchPath.isEmpty {
+                Button(action: {
+                    let scope = FootageScope.volume(prefix: first.searchPath,
+                                                    label: VolumeReachability.displayLabel(forPath: first.searchPath))
+                    startFileOperation("Find Similar Footage") { center in
+                        center.startFindSimilarFootage(scope: scope, model: model)
+                    }
+                }) {
+                    Label("Find Similar Footage", systemImage: "square.stack.3d.up")
+                }
+                .disabled(model.isReadOnly)
+                .help("Record which of this volume's files are probably the same footage as files anywhere in the catalog (copies, re-encodes, transcodes, exports). Catalog metadata only — no media is read.")
+            }
+
             if single {
                 Button(action: { model.verifyCatalog(for: first) }) {
                     Label("Verify Catalog", systemImage: "checkmark.shield")
