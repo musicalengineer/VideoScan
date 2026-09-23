@@ -667,7 +667,13 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         // copy (S4 fix — the retired Helper's 2026-08-19 rule).
         progress("balancing audio", 1)
         var balancedRecord: VideoRecord?
-        if let existing = await existingBalancedCopy(of: rec, catalog: model) {
+        let found = await existingBalancedCopy(of: rec, catalog: model)
+        if let nominated = found.nomination {
+            plan.entries[idx].balancedNomination = nominated.fullPath
+            note("Archive Angel: \(rec.filename) — an existing balanced copy may exist: \(nominated.filename) — "
+                 + "not used (no Balance Audio link to this original)")
+        }
+        if let existing = found.reuse {
             balancedRecord = existing
             note("Archive Angel: \(rec.filename) — using existing balanced copy \(existing.filename)")
             if (model as any AngelCatalog).isRecommendableNow(existing) {
@@ -761,27 +767,28 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     /// provenance), else the conventional `<stem>_balanced.<ext|mov>` beside
     /// it if the catalog holds it. Never a file inside the Angel's buffer
     /// (another batch's companion can be reclaimed under us). nil = none.
-    private func existingBalancedCopy(of rec: VideoRecord, catalog: any AngelCatalog) async -> VideoRecord? {
+    private func existingBalancedCopy(of rec: VideoRecord, catalog: any AngelCatalog) async
+        -> (reuse: VideoRecord?, nomination: VideoRecord?) {
         let bufferPrefix = bufferRoot.standardizedFileURL.path + "/"
-        var candidates = catalog.catalogedBalancedCopies(of: rec).sorted { $0.fullPath < $1.fullPath }
+        // REUSE only with established provenance: the Balance Audio job's
+        // own link (derivedFrom = this original, kind balanceAudio). codex
+        // #1654 P1-3: a name + length match is a NOMINATION — shown in
+        // Review, never used as the access-copy source or a companion.
+        let linked = catalog.catalogedBalancedCopies(of: rec).sorted { $0.fullPath < $1.fullPath }
+        for c in linked where !c.fullPath.hasPrefix(bufferPrefix) {
+            if await Self.fileExistsOffMain(c.fullPath) { return (c, nil) }
+        }
         let src = URL(fileURLWithPath: rec.fullPath)
         let stem = src.deletingPathExtension().lastPathComponent
         for ext in Array(Set([src.pathExtension.isEmpty ? "mov" : src.pathExtension, "mov"])).sorted() {
             let path = src.deletingLastPathComponent().appendingPathComponent("\(stem)_balanced.\(ext)").path
-            // Name-only match (QA on S4): not linked to ANOTHER original,
-            // and the same length as this one (±1 s) — a name is a hint,
-            // not an identity.
-            if let r = catalog.record(forPath: path), r.id != rec.id, !r.isPurged,
-               r.derivedFrom == nil || r.derivedFrom == rec.id,
+            if let r = catalog.record(forPath: path), r.id != rec.id, !r.isPurged, r.derivedFrom != rec.id,
                rec.durationSeconds > 0, r.durationSeconds > 0, abs(r.durationSeconds - rec.durationSeconds) <= 1,
-               !candidates.contains(where: { $0.id == r.id }) {
-                candidates.append(r)
+               !r.fullPath.hasPrefix(bufferPrefix), await Self.fileExistsOffMain(r.fullPath) {
+                return (nil, r)
             }
         }
-        for c in candidates where !c.fullPath.hasPrefix(bufferPrefix) {
-            if await Self.fileExistsOffMain(c.fullPath) { return c }
-        }
-        return nil
+        return (nil, nil)
     }
 
     private func runTranscode(index idx: Int, kind: ArchiveAngelPlan.StepKind, record: VideoRecord,

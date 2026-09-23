@@ -17,12 +17,15 @@
 //      if it lands, the date/place writes get Media Ledger lines by the
 //      angel.
 //
-// WHICH copies may lend a fact (QA on S4): only IDENTITY relatives — the
-// same non-empty content signature, `derivedFrom` lineage, an archive copy
-// ↔ its promotion source (ArchiveAngelCopyFamily.collectIdentity). A copy
-// reached only through the duplicate group is SIMILAR, not proven the same
-// (two 00000.MTS of equal length can share a group): its date is shown in
-// Review as "a similar copy says …", never applied.
+// WHICH copies may lend a fact (QA on S4, tightened by codex #1654): only
+// PROVEN equivalents, with direction — ArchiveAngelFactLenders: the same
+// WHOLE-FILE digest (never the sampled contentHash), an archive copy ↔ its
+// promotion source, a whole-file repair ↔ its source; ancestors lend DOWN
+// to a derivative (a trim may take its tape's date), never up or sideways.
+// Backup attestations travel only between byte-identical copies. Every
+// other copy in the family (duplicate group, sampled-hash twin, sibling
+// trim) is SIMILAR: its date is shown in Review as "a similar copy says …",
+// never applied.
 //
 // Never overwrites: a record's own hand-entered date or place always wins,
 // and an attestation the record answered itself wins a tie. Companions
@@ -44,7 +47,11 @@ enum ArchiveAngelFamilyFacts {
     /// The copies that may lend facts to `original` (identity) and the ones
     /// only shown (similar). Neither contains the original.
     struct Relatives {
+        /// May lend date / place (proven equivalents + ancestors).
         var identity: [VideoRecord]
+        /// May lend backup attestations (byte-identical copies only).
+        var sameBytes: [VideoRecord] = []
+        /// Shown only.
         var similar: [VideoRecord] = []
     }
 
@@ -53,9 +60,11 @@ enum ArchiveAngelFamilyFacts {
     @MainActor
     static func relatives(of original: VideoRecord, index: ArchiveAngelCopyFamily.Index,
                           catalog: any AngelCatalog) -> Relatives {
-        let identity = ArchiveAngelCopyFamily.collectIdentity(seed: original, index: index, catalog: catalog)
+        let lenders = ArchiveAngelFactLenders.lenders(for: original, index: index, catalog: catalog)
         let full = ArchiveAngelCopyFamily.collect(seed: original, index: index, catalog: catalog)
-        return relatives(of: original, identityFamily: identity, fullFamily: full)
+        var r = relatives(of: original, identityFamily: lenders.facts, fullFamily: full)
+        r.sameBytes = lenders.sameBytes
+        return r
     }
 
     /// Pure split (both lists in the walk's path order).
@@ -92,16 +101,17 @@ enum ArchiveAngelFamilyFacts {
         if rec.userPlace == nil, let best = ArchiveAngelFamilyStamp.bestUserPlaceSource(among: relatives.identity) {
             out.place = fact(best)
         }
-        let kinds = addedAttestationKinds(to: rec, from: ArchiveAngelFamilyStamp.familyAttestations(among: relatives.identity))
+        let kinds = addedAttestationKinds(to: rec, from: ArchiveAngelFamilyStamp.familyAttestations(among: relatives.sameBytes))
         out.attestationKinds = kinds.isEmpty ? nil : kinds
         return out
     }
 
-    /// `family` = identity relatives (may include `rec`). For callers and
-    /// tests that already have the identity family.
+    /// `family` = PROVEN byte-identical relatives (may include `rec`) — for
+    /// callers and tests that already established that.
     @MainActor
     static func inherited(for rec: VideoRecord, family: [VideoRecord]) -> Inherited {
-        inherited(for: rec, relatives: Relatives(identity: family.filter { $0.id != rec.id }))
+        let others = family.filter { $0.id != rec.id }
+        return inherited(for: rec, relatives: Relatives(identity: others, sameBytes: others))
     }
 
     private static func fact(_ v: ArchiveAngelFamilyValue) -> ArchiveAngelPlan.InheritedFact {
@@ -125,6 +135,9 @@ enum ArchiveAngelFamilyFacts {
         var line = parts.isEmpty ? "" : "Inherits " + parts.joined(separator: " · ")
         if let s = e.similarDate {
             line += (line.isEmpty ? "" : " · ") + "a similar copy (\(s.fromFilename)) says \(s.value) — not applied"
+        }
+        if let n = e.balancedNomination {
+            line += (line.isEmpty ? "" : " · ") + "an existing balanced copy may exist: \((n as NSString).lastPathComponent) — not used"
         }
         return line
     }
@@ -168,8 +181,8 @@ enum ArchiveAngelFamilyFacts {
             out.facts.append(f)
             out.lines.append("Archive Angel: \(original.filename) — place \(best.value) (\(best.confidence)) inherited from \(best.from.filename)")
         }
-        // Attestations → the original.
-        let fam = ArchiveAngelFamilyStamp.familyAttestations(among: sources)
+        // Attestations → the original, from byte-identical copies only.
+        let fam = ArchiveAngelFamilyStamp.familyAttestations(among: relatives.sameBytes.filter { $0.id != original.id })
         let kinds = addedAttestationKinds(to: original, from: fam)
         if let f = stampAttestations(fam, onto: original) {
             out.facts.append(f)
@@ -188,9 +201,7 @@ enum ArchiveAngelFamilyFacts {
                let f = stampPlace(p, original.userPlaceConfidence ?? UserPlaceConfidence.estimated.rawValue, onto: c) {
                 out.facts.append(f); what.append("place \(p)")
             }
-            if let f = stampAttestations(original.backupAttestations, onto: c) {
-                out.facts.append(f); what.append("backup answers")
-            }
+            // (No backup answers: a companion is different bytes — codex #1654.)
             if !what.isEmpty {
                 out.lines.append("Archive Angel: \(c.filename) — \(what.joined(separator: ", ")) from its original \(original.filename)")
             }
@@ -201,13 +212,15 @@ enum ArchiveAngelFamilyFacts {
         return out
     }
 
-    /// `family` = identity relatives (may include the original / companions).
+    /// `family` = PROVEN byte-identical relatives (may include the original /
+    /// companions) — for callers and tests that already established that.
     @MainActor
     static func stamp(entry: ArchiveAngelPlan.Entry, original: VideoRecord, companions: [VideoRecord],
                       family: [VideoRecord]) -> StampResult {
         let targets = Set([original.id] + companions.map(\.id))
+        let others = family.filter { !targets.contains($0.id) }
         return stamp(entry: entry, original: original, companions: companions,
-                     relatives: Relatives(identity: family.filter { !targets.contains($0.id) }))
+                     relatives: Relatives(identity: others, sameBytes: others))
     }
 
     @MainActor

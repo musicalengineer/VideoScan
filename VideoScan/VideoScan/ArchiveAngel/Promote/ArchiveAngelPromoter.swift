@@ -139,6 +139,15 @@ final class ArchiveAngelPromoter: ObservableObject {
         // A catalog rename since preparation is followed, not refused
         // (Rick 2026-09-10); only a changed file is refused below.
         for line in Self.followRenames(plan: &plan, model: model) { model.log(line); appLog.write(line) }
+        // A previous attempt's rollback still pending (codex #1654 P1-4):
+        // settle it before stamping again, so the journal never mixes runs.
+        if Self.hasPendingRestores(plan) {
+            for line in Self.settleStampedFacts(plan: &plan, landed: { id in
+                model.record(forID: id).map { model.isArchived($0) } ?? false
+            }, catalog: model, ledger: model) {
+                Self.note(line, plan: &plan, model: model)
+            }
+        }
 
         // Rick's hand-entered facts ride the promote (S4 fix — the retired
         // Helper's rule): built lazily, one family index per Promote.
@@ -207,10 +216,24 @@ final class ArchiveAngelPromoter: ObservableObject {
             }
         }
 
+        let statusBefore = plan.status
         plan.status = .promoting
         let originals = intended.count, companions = intended.values.reduce(0) { $0 + $1.count }
         let startLine = "Archive Angel: Promote started — \(originals) original(s) + \(companions) companion(s), "
             + "\(promotePlan.skipped.count) skipped by Promote, \(ByteCountFormatter.string(fromByteCount: plan.bytesToCopy, countStyle: .file)) to copy"
+        // The plan IS the rollback journal (stampedFacts): no durable
+        // journal, no promote (codex #1654 P1-4). The stamps are undone in
+        // this same main-actor turn, before any debounced catalog save.
+        guard ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote") else {
+            plan.status = statusBefore
+            let restored = plan.entries.reduce(0) { n, e in
+                n + ArchiveAngelFamilyFacts.restore(e.stampedFacts ?? [], record: { model.record(forID: $0) }).count
+            }
+            for i in plan.entries.indices { plan.entries[i].stampedFacts = nil }
+            Self.note("Archive Angel: Promote refused — the batch's plan.json (its rollback journal) could not be saved; "
+                      + "\(restored) inherited value(s) undone, nothing copied", plan: &plan, model: model)
+            return nil
+        }
         Self.note(startLine, plan: &plan, model: model)
         ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
 
@@ -321,6 +344,18 @@ final class ArchiveAngelPromoter: ObservableObject {
     static func settleStrandedPromotions(bufferRoot: URL, model: VideoScanModel) -> [String] {
         var lines: [String] = []
         for var plan in ArchiveAngelPlanStore.listBatches(bufferRoot: bufferRoot)
+            where plan.status != .promoting && !ArchiveAngelLiveBatches.isLive(plan.batchDir) && Self.hasPendingRestores(plan) {
+            // codex #1654 P1-4: rollback entries a crash or a failed
+            // catalog save left behind are re-applied (compare-before-restore
+            // makes this idempotent), then cleared once the catalog is saved.
+            let undone = Self.settleStampedFacts(plan: &plan, landed: { id in
+                model.record(forID: id).map { model.isArchived($0) } ?? false
+            }, catalog: model, ledger: model)
+            for line in undone { Self.note(line, plan: &plan, model: model) }
+            ArchiveAngelPlanStore.saveLogged(plan, context: "pending restore")
+            lines.append(contentsOf: undone)
+        }
+        for var plan in ArchiveAngelPlanStore.listBatches(bufferRoot: bufferRoot)
             where plan.status == .promoting && !ArchiveAngelLiveBatches.isLive(plan.batchDir) {
             var promoted = 0, back = 0
             for i in plan.entries.indices where plan.entries[i].status == .ready {
@@ -350,14 +385,18 @@ final class ArchiveAngelPromoter: ObservableObject {
         return lines
     }
 
-    /// Settle what Promote stamped from the family (QA on S4): for a record
-    /// that `landed`, keep it and write the Media Ledger's dateSet /
-    /// placeSet line by the angel; for one that did not, restore the old
-    /// value (only if still ours). Clears the rows' `stampedFacts`. Returns
-    /// the log lines (the caller notes them). Seams only.
+    /// Settle what Promote stamped from the family (QA on S4; durability
+    /// codex #1654 P1-4). For a record that `landed`: keep it, write the
+    /// Media Ledger's dateSet / placeSet line by the angel, drop the entry.
+    /// For one that did not: restore the old value (only if still ours),
+    /// then SAVE THE CATALOG NOW — the rollback entries are dropped only
+    /// once that save is confirmed; otherwise they stay in the plan (the
+    /// caller saves it) and the next settle re-applies them idempotently
+    /// (a relaunch after a crash included). Returns the log lines.
     static func settleStampedFacts(plan: inout ArchiveAngelPlan, landed: (UUID) -> Bool,
                                    catalog: any AngelCatalog, ledger: any AngelLedger) -> [String] {
         var lines: [String] = []
+        var pending: [Int: [ArchiveAngelPlan.StampedFact]] = [:]
         for i in plan.entries.indices {
             guard let facts = plan.entries[i].stampedFacts, !facts.isEmpty else { continue }
             let kept = facts.filter { landed($0.recordID) }
@@ -370,14 +409,29 @@ final class ArchiveAngelPromoter: ObservableObject {
                 case .attestations: break
                 }
             }
+            plan.entries[i].stampedFacts = nil
             if !undo.isEmpty {
                 let restored = ArchiveAngelFamilyFacts.restore(undo, record: { catalog.record(forID: $0) })
                 lines.append("Archive Angel: \(plan.entries[i].filename) — not promoted: undid \(undo.count) inherited fact(s) "
                              + "on \(restored.count) record(s)")
+                pending[i] = undo
             }
-            plan.entries[i].stampedFacts = nil
+        }
+        guard !pending.isEmpty else { return lines }
+        if catalog.saveCatalogNow() {
+            lines.append("Archive Angel: restored values saved to the catalog — rollback journal cleared")
+        } else {
+            for (i, undo) in pending { plan.entries[i].stampedFacts = undo }
+            lines.append("Archive Angel: the catalog could not be saved — the rollback journal is KEPT in the batch "
+                         + "and re-applied at the next settle")
         }
         return lines
+    }
+
+    /// A plan (not in flight) with rollback entries still pending — the
+    /// catalog save after a restore failed, or the app stopped first.
+    static func hasPendingRestores(_ plan: ArchiveAngelPlan) -> Bool {
+        plan.entries.contains { !($0.stampedFacts ?? []).isEmpty }
     }
 
     /// The promoter's ONE log verb (audit P2, Rick 2026-09-19 "tests and
