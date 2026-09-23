@@ -57,10 +57,13 @@ enum ArchiveAngelFamilyFacts {
 
     /// The ONE way plan build and Promote read the relatives (QA nit on S4:
     /// Review and Promote must name the same source).
+    /// `fresh` = records whose whole-file fixity a stat confirmed
+    /// (ArchiveAngelFixityCheck); a digest-only relative outside it is
+    /// SIMILAR (shown, not applied) — codex #1659.
     @MainActor
     static func relatives(of original: VideoRecord, index: ArchiveAngelCopyFamily.Index,
-                          catalog: any AngelCatalog) -> Relatives {
-        let lenders = ArchiveAngelFactLenders.lenders(for: original, index: index, catalog: catalog)
+                          catalog: any AngelCatalog, fresh: Set<UUID>) -> Relatives {
+        let lenders = ArchiveAngelFactLenders.lenders(for: original, index: index, catalog: catalog, fresh: fresh)
         let full = ArchiveAngelCopyFamily.collect(seed: original, index: index, catalog: catalog)
         var r = relatives(of: original, identityFamily: lenders.facts, fullFamily: full)
         r.sameBytes = lenders.sameBytes

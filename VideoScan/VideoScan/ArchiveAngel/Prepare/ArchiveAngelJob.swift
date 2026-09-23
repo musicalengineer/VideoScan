@@ -431,11 +431,17 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         // date / place of its own inherits the best one another copy of the
         // same recording carries — found here so Review shows it and where
         // it came from. ONE family index per batch (O(n) once).
-        let familyIndex = ArchiveAngelCopyFamily.Index(catalog: model)
+        // Whole-file digests lend only while a stat confirms they still
+        // describe the files (codex #1659) — donors AND targets, off-main.
+        let discovery = ArchiveAngelCopyFamily.Index(catalog: model)
+        let fresh = await ArchiveAngelFixityCheck.verify(
+            targets: selection.picks.compactMap { model.record(forID: $0.candidate.id) },
+            index: discovery, catalog: model)
+        let familyIndex = ArchiveAngelCopyFamily.Index(catalog: model)   // the catalog as it is after the hop
         for pick in selection.picks {
             guard let rec = model.record(forID: pick.candidate.id) else { continue }
             var facts = ArchivePathResolver.facts(for: rec)
-            let relatives = ArchiveAngelFamilyFacts.relatives(of: rec, index: familyIndex, catalog: model)
+            let relatives = ArchiveAngelFamilyFacts.relatives(of: rec, index: familyIndex, catalog: model, fresh: fresh)
             let inherited = ArchiveAngelFamilyFacts.inherited(for: rec, relatives: relatives)
             if let d = inherited.date, let hint = ArchiveAngelPromoter.dateHint(from: d.value) {
                 facts.dateHint = hint
