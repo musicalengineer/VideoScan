@@ -31,6 +31,8 @@ struct ArchiveAngelReviewSheet: View {
     /// "was very busy, hard to tell which were already archived, rejected".
     /// Only the rows still waiting on a decision show by default.
     @State private var showSettled = false
+    /// "Copies…" on a row (S4): Show Copies… presented over this sheet.
+    @State private var copiesRequest: ArchiveAngelShowCopiesRequest?
 
     init(plan: ArchiveAngelPlan) {
         _plan = State(initialValue: plan)
@@ -59,6 +61,9 @@ struct ArchiveAngelReviewSheet: View {
             if !ArchiveAngelPromoter.followRenames(plan: &plan, model: model).isEmpty {
                 ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
             }
+        }
+        .sheet(item: $copiesRequest) { request in
+            ArchiveAngelShowCopiesView(request: request)
         }
         .alert("Discard this batch?", isPresented: $showDiscardConfirm) {
             Button("Discard", role: .destructive) { discard() }
@@ -143,6 +148,11 @@ struct ArchiveAngelReviewSheet: View {
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                         Spacer()
+                        Button("Copies…") { copiesRequest = model.archiveAngel.copies(of: entry.id) }
+                            .buttonStyle(.link)
+                            .font(.system(size: 11))
+                            .help("Show Copies — which of this recording's copies is the original (read-only)")
+                            .accessibilityIdentifier("archiveAngel.row.showCopies")
                         ArchiveAngelRowActions(entry: entry, beforeNavigate: { keepAndClose() })
                         scoreBadge(entry.score)
                     }

@@ -35,6 +35,12 @@ extension VideoScanModel: AngelCatalog, AngelNavigator, AngelArchive, AngelLedge
         appLog.write(line)
     }
 
+    /// Show Copies… (S4): the same active set the retired AssessCopiesJob
+    /// walked (`pfActiveRecords(model.records)`).
+    func activeRecordsForCopyFamily() -> [VideoRecord] {
+        pfActiveRecords(records)
+    }
+
     // MARK: AngelNavigator
 
     /// Same steps as ArchiveView+Table.showInCatalog, without the view:

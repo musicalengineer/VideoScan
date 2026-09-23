@@ -53,6 +53,17 @@ protocol AngelCatalog: AnyObject {
     @discardableResult
     func reconcileArchiveAngelBufferAtLaunch(bufferRoot: URL,
                                              fileExists: @escaping @Sendable (String) -> Bool) async -> Int
+
+    // Show Copies… (S4) — the copy-family walk (Review/ArchiveAngelShowCopies).
+
+    /// Every active (not purged) record — O(n), once per Show Copies.
+    func activeRecordsForCopyFamily() -> [VideoRecord]
+    /// The Master Archive copy promoted from `record`, if any.
+    func masterArchiveCopy(of record: VideoRecord) -> VideoRecord?
+    /// The record an archive copy was promoted from, if any.
+    func promotionSource(of record: VideoRecord) -> VideoRecord?
+    /// Is `record` itself a copy inside the Master Archive?
+    func isArchiveCopy(_ record: VideoRecord) -> Bool
 }
 
 /// "Show in Catalog" from anywhere in the Angel.
