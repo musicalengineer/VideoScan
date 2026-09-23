@@ -41,6 +41,19 @@ struct ArchiveAngelRecommendationPolicyTests {
         #expect(AngelRecommendationPolicy.builtIn.validationProblems().isEmpty)
     }
 
+    @Test("the bundled file is byte-identical to the built-in rules' encoding (on a mismatch the expected JSON is written to the temp dir)")
+    func bundledBytesMatch() throws {
+        let url = try #require(bundledURL)
+        let expected = try AngelRecommendationPolicy.builtIn.encodedJSON() + Data("\n".utf8)
+        let actual = try Data(contentsOf: url)
+        if actual != expected {
+            let out = FileManager.default.temporaryDirectory.appendingPathComponent("ArchiveAngelPolicy.default.expected.json")
+            try expected.write(to: out)
+            print("[angel-policy] bundled default is stale — expected JSON written to \(out.path)")
+        }
+        #expect(actual == expected, "regenerate ArchiveAngelPolicy.default.json from AngelRecommendationPolicy.builtIn")
+    }
+
     @Test("with no override the loader uses the bundled default, silently")
     func noOverride() throws {
         let dir = try tempDir("none")
@@ -74,7 +87,7 @@ struct ArchiveAngelRecommendationPolicyTests {
     @Test("POISONED: bad JSON, another schema, bad numbers or an unreadable file are refused with a reason; the defaults run", arguments: [
         "not json at all",
         #"{"schemaVersion": 99, "name": "future", "weights": {}}"#,
-        "SCHEMA2",
+        "SCHEMA3",
         "NUMBERS",
         "UNREADABLE",
     ])
@@ -84,9 +97,9 @@ struct ArchiveAngelRecommendationPolicyTests {
         let url = dir.appendingPathComponent("policy.json")
         var read: (URL) throws -> Data = { try Data(contentsOf: $0) }
         switch kind {
-        case "SCHEMA2":
+        case "SCHEMA3":
             var p = AngelRecommendationPolicy.builtIn
-            p.schemaVersion = 2
+            p.schemaVersion = 3
             try p.encodedJSON().write(to: url)
         case "NUMBERS":
             var p = AngelRecommendationPolicy.builtIn
@@ -328,5 +341,173 @@ struct ArchiveAngelRecommendationPolicyTests {
         await sweep.runAndWait(reason: "test")
         sweep.stop()
         #expect(store.file?.policyFingerprint == "feedfacefeedface")
+    }
+
+    // MARK: S3b — schema 2: rules as data, addable and removable
+
+    private func loadJSON(_ json: String, label: String) throws -> AngelRecommendationPolicy.Loaded {
+        let dir = try tempDir(label)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("policy.json")
+        try Data(json.utf8).write(to: url)
+        return AngelRecommendationPolicy.load(overrideURL: url, bundledURL: bundledURL)
+    }
+
+    @Test("a schema-1 file (weights only) is read: its weights, today's rules for the rest, and a notice")
+    func schemaOneMigrated() throws {
+        var obj = try #require(try JSONSerialization.jsonObject(with: AngelRecommendationPolicy.builtIn.encodedJSON()) as? [String: Any])
+        var w = try #require(obj["weights"] as? [String: Any])
+        w["minimumDurationSeconds"] = 30.0
+        w.removeValue(forKey: "playHistoryPerDoubling")      // schema 1 never had it
+        obj = ["schemaVersion": 1, "name": "old tapes", "weights": w]
+        let loaded = try loadJSON(String(bytes: try JSONSerialization.data(withJSONObject: obj), encoding: .utf8) ?? "", label: "v1")
+        #expect(loaded.source == .userOverride)
+        #expect(loaded.policy.schemaVersion == AngelRecommendationPolicy.currentSchemaVersion)
+        #expect(loaded.policy.weights.minimumDurationSeconds == 30)
+        #expect(loaded.policy.weights.playHistoryPerDoubling == 4, "a missing field takes the default")
+        #expect(loaded.policy.floors == AngelRecommendationPolicy.builtIn.floors)
+        #expect(loaded.notices.contains { $0.contains("schema 1") }, "\(loaded.notices)")
+    }
+
+    @Test("a partial override: only what it names changes; rule lists merge by id (edit in place, disable, add)")
+    func partialAndMergeByID() throws {
+        let loaded = try loadJSON(#"""
+        {"schemaVersion": 2, "name": "partial",
+         "weights": {"minimumDurationSeconds": 300},
+         "floors": [{"id": "recentPhoneClip", "enabled": false}],
+         "signals": [{"id": "boost", "kind": "match", "when": [{"field": "starRating", "op": ">=", "value": 1}],
+                      "points": 7, "line": "starred"}],
+         "grades": {"a": 120}}
+        """#, label: "partial")
+        #expect(loaded.source == .userOverride, "\(loaded.notices)")
+        let p = loaded.policy
+        let base = AngelRecommendationPolicy.builtIn
+        #expect(p.weights.minimumDurationSeconds == 300 && p.weights.threeStars == base.weights.threeStars)
+        #expect(p.floors.map(\.id) == base.floors.map(\.id), "edited in place — order kept")
+        #expect(p.floors.first { $0.id == "recentPhoneClip" }?.enabled == false)
+        #expect(p.floors.first { $0.id == "recentPhoneClip" }?.kind == "recentPhoneClip", "the kind survives the merge")
+        let ids = p.signals.map(\.id)
+        #expect(ids.firstIndex(of: "boost") == ids.firstIndex(of: "downloadCap").map { $0 - 1 }, "a new signal goes before the cap")
+        #expect(p.grades == AngelGradeBands(a: 120, b: 60, c: 25, d: 1))
+        #expect(p.recommend == base.recommend)
+    }
+
+    @Test("POISONED rules refuse the WHOLE file with the reason named — unknown kind, unknown field, a kind in the wrong list, a bad pattern, grades that do not rise", arguments: [
+        (#"{"schemaVersion": 2, "floors": [{"id": "x", "kind": "frobnicate", "when": [{"field": "starRating", "op": ">", "value": 0}]}]}"#, "unknown kind \"frobnicate\""),
+        (#"{"schemaVersion": 2, "floors": [{"id": "x", "kind": "match", "when": [{"field": "lenght", "op": "<", "value": 5}]}]}"#, "unknown field \"lenght\""),
+        (#"{"schemaVersion": 2, "signals": [{"id": "x", "kind": "tooShort"}]}"#, "does not belong in signals"),
+        (#"{"schemaVersion": 2, "floors": [{"id": "x", "kind": "match", "whne": []}]}"#, "needs at least one condition"),
+        (#"{"schemaVersion": 2, "tables": {"appCacheNamePattern": "(unclosed"}}"#, "not a valid regular expression"),
+        (#"{"schemaVersion": 2, "grades": {"a": 50, "b": 60}}"#, "grades must rise"),
+        (#"{"schemaVersion": 2, "recommend": {"classes": [{"class": "maybe"}]}}"#, "unknown class"),
+        (#"{"schemaVersion": 2, "recommend": {"classes": [{"class": "ready", "when": [{"field": "grade", "op": "==", "value": "E"}]}]}}"#, "is not a grade"),
+        (#"{"name": "no version"}"#, "no \"schemaVersion\""),
+    ])
+    func poisonedRulesRefused(json: String, reason: String) throws {
+        let loaded = try loadJSON(json, label: "poison")
+        #expect(loaded.source == .bundled, "\(json)")
+        #expect(loaded.policy == .builtIn)
+        #expect(loaded.notices.count == 1)
+        #expect(loaded.notices.first?.contains(reason) == true, "\(loaded.notices)")
+    }
+
+    // The three worked examples of docs/archive_angel_policy.md, verbatim.
+
+    static let exampleUnderFive = #"""
+    {
+      "schemaVersion": 2,
+      "name": "Rick: nothing under 5 minutes",
+      "floors": [
+        { "id": "underFiveMinutes", "kind": "match",
+          "when": [ { "field": "durationMinutes", "op": "<", "value": 5 } ],
+          "line": "Under 5 minutes — usually a piece of a longer original",
+          "explicitPicks": false }
+      ]
+    }
+    """#
+
+    static let exampleDonna = #"""
+    {
+      "schemaVersion": 2,
+      "name": "Rick: Donna first",
+      "signals": [
+        { "id": "donna", "kind": "match",
+          "when": [ { "any": [ { "field": "people", "op": "contains", "value": "Donna" },
+                               { "field": "machinePeople", "op": "contains", "value": "Donna" } ] } ],
+          "points": 40, "line": "Donna is in it" }
+      ]
+    }
+    """#
+
+    static let examplePhone2020s = #"""
+    {
+      "schemaVersion": 2,
+      "name": "Rick: no 2020s phone clips",
+      "floors": [
+        { "id": "phone2020s", "kind": "match",
+          "when": [ { "field": "isPhoneClip", "op": "==", "value": true },
+                    { "field": "captureYear", "op": ">=", "value": 2020 } ],
+          "line": "A 2020s phone clip" }
+      ]
+    }
+    """#
+
+    @Test("WORKED EXAMPLE 1: never recommend clips under 5 minutes — a 4-minute clip is excluded with the rule's words; an explicit pick still goes")
+    func exampleOne() throws {
+        let loaded = try loadJSON(Self.exampleUnderFive, label: "ex1")
+        #expect(loaded.source == .userOverride, "\(loaded.notices)")
+        let p = loaded.policy
+        let clip = ArchiveAngelCandidate(sizeBytes: 240 * 3_000_000 / 8, durationSeconds: 240, starRating: 3)
+        let hit = ArchiveAngelScorer.floorHit(clip, policy: p)
+        #expect(hit?.rejection == .policyRule && hit?.rule.displayLine.hasPrefix("Under 5 minutes") == true)
+        #expect(ArchiveAngelScorer.hardFloor(clip, policy: .builtIn) == nil, "the default lets it through")
+        #expect(ArchiveAngelScorer.hardFloor(clip, policy: p.forExplicitPicks()) == nil, "explicitPicks: false")
+    }
+
+    @Test("WORKED EXAMPLE 2: boost anything with Donna — +40, printed, before the download cap")
+    func exampleTwo() throws {
+        let p = try loadJSON(Self.exampleDonna, label: "ex2").policy
+        let withDonna = ArchiveAngelCandidate(durationSeconds: 600, detectedPeople: ["Donna"])
+        guard case .eligible(let score, let lines) = ArchiveAngelScorer.verdict(withDonna, policy: p),
+              case .eligible(let plain, _) = ArchiveAngelScorer.verdict(withDonna, policy: .builtIn) else {
+            Issue.record("expected eligible"); return
+        }
+        #expect(score == plain + 40)
+        #expect(lines.contains { $0.line == "Donna is in it" && $0.points == 40 })
+    }
+
+    @Test("WORKED EXAMPLE 3: ignore 2020s phone clips — even a hand-picked one (the built-in 10-year rule spares explicit picks; this rule does not)")
+    func exampleThree() throws {
+        let p = try loadJSON(Self.examplePhone2020s, label: "ex3").policy
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let clip2021 = ArchiveAngelCandidate(durationSeconds: 600, deviceModel: "iPhone 12",
+                                             captureDate: Date(timeIntervalSince1970: 1_620_000_000))
+        #expect(ArchiveAngelScorer.hardFloor(clip2021, policy: p.forExplicitPicks(), now: now) == .policyRule)
+        #expect(ArchiveAngelScorer.hardFloor(clip2021, policy: AngelRecommendationPolicy.builtIn.forExplicitPicks(), now: now) == nil)
+        let clip2012 = ArchiveAngelCandidate(durationSeconds: 600, deviceModel: "iPhone 4S",
+                                             captureDate: Date(timeIntervalSince1970: 1_340_000_000))
+        #expect(ArchiveAngelScorer.hardFloor(clip2012, policy: p, now: now) == nil)
+    }
+
+    @Test("ISOLATION: a poisoned policy.json handed to a test-host façade is refused and logged, the bundled rules run, and nothing is written to the real App Support folder")
+    func poisonedFacadeIsolated() async throws {
+        let dir = try tempDir("iso")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let real = AngelEnvironment.productionAngelSupportDirectory().appendingPathComponent("policy.json")
+        let realBefore = try? FileManager.default.attributesOfItem(atPath: real.path)[.modificationDate] as? Date
+        let bad = dir.appendingPathComponent("policy.json")
+        try Data(#"{"schemaVersion": 2, "floors": [{"id": "x", "kind": "frobnicate"}]}"#.utf8).write(to: bad)
+        let (model, _, sandbox) = try ninetySecondClipModel(dir)
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+        let angel = ArchiveAngel(model: model, environment: environment(root: dir, policy: bad))
+        #expect(angel.policySource == .bundled)
+        #expect(angel.policy == .builtIn)
+        angel.launch()
+        await angel.sweep.runAndWait(reason: "test")
+        angel.sweep.stop()
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("evidence/evidence.json").path),
+                "evidence went to the injected folder")
+        let realAfter = try? FileManager.default.attributesOfItem(atPath: real.path)[.modificationDate] as? Date
+        #expect(realBefore == realAfter, "the real policy.json is never created or touched")
     }
 }

@@ -257,16 +257,16 @@ enum ArchiveAngelS0Catalog {
 
     /// The sweep's per-record path (floor, then verdict), as a grade histogram
     /// plus floor reasons — exactly what `ArchiveAngelSweep.perform` stores.
-    static func histogram(_ cs: [ArchiveAngelCandidate], weights: ArchiveAngelWeights = .standard)
+    static func histogram(_ cs: [ArchiveAngelCandidate], policy: AngelRecommendationPolicy = .builtIn)
     -> (grades: [ArchiveAngelGrade: Int], rejections: [ArchiveAngelRejection: Int], scoreSum: Int) {
         var grades: [ArchiveAngelGrade: Int] = [:]
         var rejections: [ArchiveAngelRejection: Int] = [:]
         var sum = 0
         for c in cs {
-            if let r = ArchiveAngelScorer.hardFloor(c, weights: weights, now: now) {
+            if let r = ArchiveAngelScorer.hardFloor(c, policy: policy, now: now) {
                 grades[.x, default: 0] += 1; rejections[r, default: 0] += 1; continue
             }
-            switch ArchiveAngelScorer.verdict(c, weights: weights, now: now) {
+            switch ArchiveAngelScorer.verdict(c, policy: policy, now: now) {
             case .eligible(let score, _):
                 grades[ArchiveAngelGrade.from(score: score), default: 0] += 1
                 sum += score
@@ -280,27 +280,95 @@ enum ArchiveAngelS0Catalog {
     static func seconds(_ d: Duration) -> Double {
         Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
     }
+
+    /// The evidence the sweep would store for `cs` (floor, then verdict).
+    static func evidence(_ cs: [ArchiveAngelCandidate], policy: AngelRecommendationPolicy = .builtIn)
+    -> [UUID: ArchiveAngelEvidenceRecord] {
+        var out: [UUID: ArchiveAngelEvidenceRecord] = [:]
+        out.reserveCapacity(cs.count)
+        for c in cs {
+            switch ArchiveAngelScorer.verdict(c, policy: policy, now: now) {
+            case .eligible(let score, let lines):
+                out[c.id] = .init(score: score, lines: lines, rejection: nil, useCount: c.useCount,
+                                  lastUsed: c.lastUsed, computedAt: now, bands: policy.grades)
+            case .rejected(let r):
+                out[c.id] = .init(score: 0, lines: [], rejection: r, useCount: 0, lastUsed: nil, computedAt: now)
+            }
+        }
+        return out
+    }
+}
+
+extension AngelRecommendationPolicy {
+    /// Rules v10 (main 0c61841b) written AS DATA: today's floors plus the
+    /// retired "archiveStage ≥ Master means already archived" test, right
+    /// after the Master Archive floor — exactly where v10's hardFloor had
+    /// it. S3b's pins below prove the data-driven scorer reproduces v10
+    /// bit-for-bit with this one rule, and that the new default differs
+    /// from v10 by exactly that rule (Rick 2026-09-22, decision 3).
+    static var rulesV10: AngelRecommendationPolicy {
+        var p = AngelRecommendationPolicy.builtIn
+        let stage = AngelRule(
+            id: "stageMeansArchived", kind: .match,
+            when: [.init(field: .archiveStage, op: .in,
+                         value: .strings(["masterAssigned", "backedUp", "readyForArchive", "archived",
+                                          "manuallyDeleted", "salvageFailed"]))],
+            rejection: "alreadyArchived")
+        let at = (p.floors.firstIndex { $0.id == "onMasterArchive" } ?? 0) + 1
+        p.floors.insert(stage, at: at)
+        return p
+    }
 }
 
 @Suite("Archive Angel S0 — nudge counts and grade histogram pinned at 100k records", .serialized)
 @MainActor
 struct ArchiveAngelScaleCharacterizationTests {
 
-    // Pinned 2026-09-22 from main 05f4be42 (rules v10). S3b changes them on purpose.
-    static let pinnedGrades: [ArchiveAngelGrade: Int] = [.a: 9016, .b: 3228, .c: 1404, .d: 76, .x: 86276]
-    static let pinnedRejections: [ArchiveAngelRejection: Int] = [
+    // Pinned 2026-09-22 from main 05f4be42 (rules v10). S3b KEEPS them as
+    // the v10 pins: `.rulesV10` (v10 as policy data) must still produce
+    // them exactly — the data-driven scorer is a faithful interpreter.
+    static let v10Grades: [ArchiveAngelGrade: Int] = [.a: 9016, .b: 3228, .c: 1404, .d: 76, .x: 86276]
+    static let v10Rejections: [ArchiveAngelRejection: Int] = [
         .notVideo: 24976, .alreadyArchived: 32815, .duplicateArchived: 1653, .volumeOffline: 1049,
         .tooShort: 448, .recentPhoneClip: 7057, .junk: 3958, .suspectedJunk: 4527, .notPlayable: 991,
         .pairedHalf: 1339, .derivativeOfOriginal: 79, .appCache: 3384, .proxyStream: 3513, .resting: 485,
     ]
-    static let pinnedScoreSum = 1_699_691
+    static let v10ScoreSum = 1_699_691
+    static let v10SelectionHead = [24591, 23613, 73414, 26643, 20311, 28174, 37705, 39336, 95208, 20465]
+    static let v10SelectionOverflow = 12_919
+    static let v10SelectionRejected: [ArchiveAngelRejection: Int] =
+        v10Rejections.merging([.duplicateOfPick: 695, .sameFamilyAsPick: 102]) { a, _ in a }
+
+    // Re-pinned 2026-09-22 for rules v11 (Consolidation S3b) — DELIBERATE:
+    // archiveStage Ready/Master is a vote, not "already archived", so the
+    // files v10 rejected for their stage alone are now graded. Every other
+    // reason's count is unchanged (the diff is exactly the stage rule).
+    // v10 → v11 on this catalog: 31,338 files v10 rejected for their stage
+    // alone are released; A 9,016 → 15,718, B 3,228 → 5,608, alreadyArchived
+    // 32,815 → 1,477; the other reasons grow only because a released file
+    // can hit a later floor.
+    static let pinnedGrades: [ArchiveAngelGrade: Int] = [.a: 15718, .b: 5608, .c: 2382, .d: 132, .x: 76160]
+    static let pinnedRejections: [ArchiveAngelRejection: Int] = [
+        .notVideo: 24976, .alreadyArchived: 1477, .duplicateArchived: 2863, .volumeOffline: 1774,
+        .tooShort: 807, .recentPhoneClip: 12345, .junk: 6890, .suspectedJunk: 7908, .notPlayable: 1763,
+        .pairedHalf: 2308, .derivativeOfOriginal: 239, .appCache: 5900, .proxyStream: 6073, .resting: 835,
+    ]
+    static let pinnedScoreSum = 2_957_966
     static let pinnedNudgeReady = 11_787
     static let pinnedNudgeNear = 11_482
     static let pinnedNudgeHead = [2649, 31596, 76168, 40491, 15136, 42680, 66721, 35713, 40586, 75163, 93926, 13672, 92296, 13579, 82583]
-    static let pinnedSelectionHead = [24591, 23613, 73414, 26643, 20311, 28174, 37705, 39336, 95208, 20465]
-    static let pinnedSelectionOverflow = 12_919
+    static let pinnedSelectionHead = [61588, 33829, 24591, 23613, 6218, 8665, 1885, 12279, 73414, 26643]
+    static let pinnedSelectionOverflow = 21_764
     static let pinnedSelectionRejected: [ArchiveAngelRejection: Int] =
-        pinnedRejections.merging([.duplicateOfPick: 695, .sameFamilyAsPick: 102]) { a, _ in a }
+        pinnedRejections.merging([.duplicateOfPick: 1751, .sameFamilyAsPick: 317]) { a, _ in a }
+    /// The unified classifier over the same 100k (rules v11 default). For
+    /// comparison, the legacy nudge rules over these candidates say 25,318
+    /// ready + 7,646 need a date (no floors, no grades, no copy chooser
+    /// beyond a shared group / name + length). Excluded is X minus the two
+    /// eligible records that scored 0 (Not now — no floor named them).
+    static let pinnedClasses: [ArchiveAngelRecommendationClass: Int] = [
+        .ready: 14887, .needsDate: 3833, .worthALook: 2216, .notNow: 1267, .excluded: 76158, .anotherCopy: 1639,
+    ]
 
     /// The index `i` of a synthetic record from its UUID.
     static func index(_ id: UUID) -> Int {
@@ -325,7 +393,11 @@ struct ArchiveAngelScaleCharacterizationTests {
         #expect(h.grades == Self.pinnedGrades)
         #expect(h.rejections == Self.pinnedRejections)
         #expect(h.scoreSum == Self.pinnedScoreSum)
-        #expect(s < 1, "100k floor + verdict in \(s) s")
+        // S3b: v11 scores 23.8k eligible records here (v10: 13.7k — the stage
+        // release), so this pass does ~74% more verdict work than when the
+        // budget was set. Scaled like the other Debug ceilings for CI.
+        let ceiling = PerformanceLane.debugCeiling(.seconds(1))
+        #expect(elapsed < ceiling, "100k floor + verdict in \(s) s")
     }
 
     @Test("the batch pick over the same 100k — first 10 picks and rejection counts pinned")
@@ -355,6 +427,68 @@ struct ArchiveAngelScaleCharacterizationTests {
         #expect(nudge.nearReady.count == Self.pinnedNudgeNear)
         #expect(head == Self.pinnedNudgeHead)
         #expect(s < 1, "nudge over 100k in \(s) s")
+    }
+
+    @Test("RULES v10 AS DATA: the data-driven scorer reproduces every v10 pin exactly (grades, reasons, score sum, batch)")
+    func v10AsDataReproducesV10() {
+        var cs = ArchiveAngelS0Catalog.candidates(100_000)
+        ArchiveAngelScorer.markDerivatives(&cs, policy: .rulesV10)
+        ArchiveAngelScorer.applyFamilyAttention(&cs, now: ArchiveAngelS0Catalog.now)
+        let clock = ContinuousClock()
+        var h: (grades: [ArchiveAngelGrade: Int], rejections: [ArchiveAngelRejection: Int], scoreSum: Int) = ([:], [:], 0)
+        let elapsed = clock.measure { h = ArchiveAngelS0Catalog.histogram(cs, policy: .rulesV10) }
+        print("[angel-s3b] v10-as-data floor + verdict over 100k: \(String(format: "%.3f", ArchiveAngelS0Catalog.seconds(elapsed))) s (hard-coded v10: 0.31 s)")
+        #expect(h.grades == Self.v10Grades)
+        #expect(h.rejections == Self.v10Rejections)
+        #expect(h.scoreSum == Self.v10ScoreSum)
+        let sel = ArchiveAngelScorer.select(cs, count: 10, policy: .rulesV10, now: ArchiveAngelS0Catalog.now)
+        #expect(sel.picks.map { Self.index($0.id) } == Self.v10SelectionHead)
+        #expect(sel.rejected == Self.v10SelectionRejected)
+        #expect(sel.overflow == Self.v10SelectionOverflow)
+    }
+
+    @Test("v10 → v11 differs by EXACTLY the stage rule: only .alreadyArchived falls, and by the stage-only count")
+    func v11DiffIsTheStageRule() {
+        var cs = ArchiveAngelS0Catalog.candidates(100_000)
+        ArchiveAngelScorer.markDerivatives(&cs)
+        ArchiveAngelScorer.applyFamilyAttention(&cs, now: ArchiveAngelS0Catalog.now)
+        let h = ArchiveAngelS0Catalog.histogram(cs)
+        // Files v10 rejected for their stage and nothing earlier in the list.
+        let stageOnly = cs.filter { c in
+            ArchiveAngelScorer.hardFloor(c, policy: .rulesV10, now: ArchiveAngelS0Catalog.now) == .alreadyArchived
+                && !c.isOnMasterArchive
+        }.count
+        print("[angel-s3b] stage-only rejections released: \(stageOnly)")
+        #expect(h.rejections[.alreadyArchived] == (Self.v10Rejections[.alreadyArchived] ?? 0) - stageOnly)
+        #expect(stageOnly > 0)
+        var others = h.rejections
+        others[.alreadyArchived] = nil
+        // A released file can still hit a LATER floor — those counts can only grow.
+        for (reason, n) in Self.v10Rejections where reason != .alreadyArchived {
+            #expect((others[reason] ?? 0) >= n, "\(reason): \(others[reason] ?? 0) < v10 \(n)")
+        }
+    }
+
+    @Test("SCALE + SENSOR: the unified classifier over the S0 100k candidates — class counts pinned, under 1 s")
+    func unifiedClassesPinned() {
+        var cs = ArchiveAngelS0Catalog.candidates(100_000)
+        ArchiveAngelScorer.markDerivatives(&cs)
+        ArchiveAngelScorer.applyFamilyAttention(&cs, now: ArchiveAngelS0Catalog.now)
+        let evidence = ArchiveAngelS0Catalog.evidence(cs)
+        let clock = ContinuousClock()
+        var result = ArchiveAngelRecommendations.Result.empty
+        let elapsed = clock.measure {
+            result = ArchiveAngelRecommendations.classify(cs, evidence: evidence, rules: .standard,
+                                                          now: ArchiveAngelS0Catalog.now)
+        }
+        let s = ArchiveAngelS0Catalog.seconds(elapsed)
+        let legacy = ArchiveAngelRecommendations.classify(cs, rules: .legacyNudge, now: ArchiveAngelS0Catalog.now)
+        print("[angel-s3b] classes " + ArchiveAngelRecommendationClass.allCases.map { "\($0):\(result.counts[$0] ?? 0)" }.joined(separator: " ")
+              + " · legacy ready \(legacy.counts[.ready] ?? 0) near \(legacy.counts[.needsDate] ?? 0) · \(String(format: "%.3f", s)) s")
+        #expect(result.counts.values.reduce(0, +) == 100_000)
+        #expect(result.counts == Self.pinnedClasses)
+        #expect(result.ready.count == result.counts[.ready] ?? 0)
+        #expect(s < 1, "unified classify over 100k in \(s) s")
     }
 
     @Test("the background sweep stores the same grade histogram as the pure path (10k, no Spotlight, no disk budget)")
@@ -417,6 +551,9 @@ struct ArchiveAngelVocabularyTests {
             "Too small for its length — a thumbnail or proxy stream, not the original",
             "Resting — you passed on it three times; it comes back 90 days after the last pass",
             "A variant of another pick (same event family) — one per batch",
+            // S3b (2026-09-22): ADDED — a match floor from policy.json.
+            "Excluded by a rule in your recommendation policy",
+            "The file was deleted or could not be salvaged (its stage says so)",
         ])
     }
 
@@ -434,7 +571,7 @@ struct ArchiveAngelVocabularyTests {
         #expect(ArchiveAngelPlan.planFilename == "plan.json")
         #expect(ArchiveAngelEvidenceStore.filename == "evidence.json")
         #expect(ArchiveAngelEvidenceFile.currentVersion == 1)
-        #expect(ArchiveAngelScorer.rulesVersion == 10)
+        #expect(ArchiveAngelScorer.rulesVersion == 11, "S3b 2026-09-22: floors/signals as policy data, stage is a vote, classes")
     }
 
     @Test("grade bands unchanged: A ≥ 100, B 60–99, C 25–59, D 1–24, else X")

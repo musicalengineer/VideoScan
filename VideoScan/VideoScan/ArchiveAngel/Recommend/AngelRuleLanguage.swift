@@ -390,31 +390,34 @@ struct AngelCondition: Codable, Sendable, Equatable {
 
     // MARK: Evaluate
 
-    func matches(_ ctx: inout AngelEvalContext) -> Bool {
+    /// Does `c` satisfy this condition? `c` is passed (borrowed), never
+    /// copied into the context — at 100k records a copy per rule was most
+    /// of the interpreter's cost.
+    func matches(_ c: ArchiveAngelCandidate, _ ctx: inout AngelEvalContext) -> Bool {
         switch compiled {
         case .invalid:
             return false
         case .any(let children):
-            for child in children where child.matches(&ctx) { return true }
+            for child in children where child.matches(c, &ctx) { return true }
             return false
         case .flag(let f, let o, let want):
-            let have = ctx.flag(f)
+            let have = ctx.flag(f, c)
             return o == .eq ? have == want : have != want
         case .number(let f, let o, let want):
-            guard let have = ctx.number(f) else { return false }   // unknown (no year…) never matches
+            guard let have = ctx.number(f, c) else { return false }   // unknown (no year…) never matches
             return Self.compare(have, o, want)
         case .text(let f, let o, let want):
-            return Self.matchText(ctx, f, o, want)
+            return Self.matchText(c, f, o, want)
         case .textSet(let f, let o, let set):
             let hit: Bool
             if case .textList = f.kind {
-                hit = ctx.textList(f).contains { set.contains($0.lowercased()) }
+                hit = AngelEvalContext.textList(f, c).contains { set.contains($0.lowercased()) }
             } else {
-                hit = set.contains(ctx.text(f).lowercased())
+                hit = set.contains(AngelEvalContext.text(f, c).lowercased())
             }
             return o == .in ? hit : !hit
         case .choice(let f, let o, let set):
-            guard let have = ctx.choice(f) else { return false }
+            guard let have = ctx.choice(f, c) else { return false }
             let hit = set.contains(have)
             return (o == .eq || o == .in) ? hit : !hit
         }
@@ -432,12 +435,12 @@ struct AngelCondition: Codable, Sendable, Equatable {
         }
     }
 
-    private static func matchText(_ ctx: AngelEvalContext, _ f: AngelField, _ o: AngelOp, _ want: String) -> Bool {
+    private static func matchText(_ c: ArchiveAngelCandidate, _ f: AngelField, _ o: AngelOp, _ want: String) -> Bool {
         if case .textList = f.kind {
-            let has = ctx.textList(f).contains { $0.lowercased() == want }
+            let has = AngelEvalContext.textList(f, c).contains { $0.lowercased() == want }
             return o == .contains ? has : !has
         }
-        let have = ctx.text(f).lowercased()
+        let have = AngelEvalContext.text(f, c).lowercased()
         switch o {
         case .eq: return have == want
         case .ne: return have != want
@@ -450,19 +453,20 @@ struct AngelCondition: Codable, Sendable, Equatable {
     }
 
     /// AND over a `when` list (an empty list always matches).
-    static func all(_ conditions: [AngelCondition], _ ctx: inout AngelEvalContext) -> Bool {
-        for c in conditions where !c.matches(&ctx) { return false }
+    static func all(_ conditions: [AngelCondition], _ c: ArchiveAngelCandidate, _ ctx: inout AngelEvalContext) -> Bool {
+        for cond in conditions where !cond.matches(c, &ctx) { return false }
         return true
     }
 }
 
 // MARK: - Evaluation context
 
-/// What a condition can read: one candidate, plus — for the class rules —
-/// the facts the classifier derives. `dated` is computed on first use
-/// (RecordDateResolver is the one costly read).
+/// What a condition can read beyond the candidate itself: the facts the
+/// classifier derives (grade, eligible, vouched, vouch points, the date
+/// rule). Holds no candidate (it is passed to every call, borrowed) —
+/// cheap to make per record. `dated` is computed on first use
+/// (RecordDateResolver is the one costly read) and cached.
 struct AngelEvalContext {
-    let candidate: ArchiveAngelCandidate
     var grade: ArchiveAngelGrade?
     var eligible = true
     var vouched = false
@@ -472,17 +476,15 @@ struct AngelEvalContext {
     private var resolution: RecordDateResolution?
     private var datedCache: Bool?
 
-    init(candidate: ArchiveAngelCandidate, dateRule: AngelDateRule = .init(), now: Date) {
-        self.candidate = candidate
+    init(dateRule: AngelDateRule = .init(), now: Date) {
         self.dateRule = dateRule
         self.now = now
     }
 
     /// RecordDateResolver over the candidate's date facts — the SAME call
     /// ArchiveNudge and ArchiveReadiness make.
-    mutating func dateResolution() -> RecordDateResolution {
+    mutating func dateResolution(_ c: ArchiveAngelCandidate) -> RecordDateResolution {
         if let r = resolution { return r }
-        let c = candidate
         let r = RecordDateResolver.resolve(
             userDate: c.userDate,
             userDateConfidence: c.userDateConfidence,
@@ -498,18 +500,17 @@ struct AngelEvalContext {
         return r
     }
 
-    mutating func isDated() -> Bool {
+    mutating func isDated(_ c: ArchiveAngelCandidate) -> Bool {
         if let d = datedCache { return d }
-        let d = dateRule.isDated(dateResolution())
+        let d = dateRule.isDated(dateResolution(c))
         datedCache = d
         return d
     }
 
     /// The year the date rule found, when it found one.
-    mutating func datedYear() -> Int? { isDated() ? dateResolution().year : nil }
+    mutating func datedYear(_ c: ArchiveAngelCandidate) -> Int? { isDated(c) ? dateResolution(c).year : nil }
 
-    func text(_ f: AngelField) -> String {
-        let c = candidate
+    static func text(_ f: AngelField, _ c: ArchiveAngelCandidate) -> String {
         switch f {
         case .filename: return c.filename
         case .path: return c.fullPath
@@ -520,16 +521,15 @@ struct AngelEvalContext {
         }
     }
 
-    func textList(_ f: AngelField) -> [String] {
+    static func textList(_ f: AngelField, _ c: ArchiveAngelCandidate) -> [String] {
         switch f {
-        case .people: return candidate.confirmedPeople
-        case .machinePeople: return candidate.detectedPeople + candidate.suspectedPeople
+        case .people: return c.confirmedPeople
+        case .machinePeople: return c.detectedPeople + c.suspectedPeople
         default: return []
         }
     }
 
-    mutating func number(_ f: AngelField) -> Double? {
-        let c = candidate
+    func number(_ f: AngelField, _ c: ArchiveAngelCandidate) -> Double? {
         switch f {
         case .durationSeconds: return c.durationSeconds
         case .durationMinutes: return c.durationSeconds / 60
@@ -551,8 +551,16 @@ struct AngelEvalContext {
         }
     }
 
-    mutating func flag(_ f: AngelField) -> Bool {
-        let c = candidate
+    mutating func flag(_ f: AngelField, _ c: ArchiveAngelCandidate) -> Bool {
+        switch f {
+        case .eligible: return eligible
+        case .vouched: return vouched
+        case .dated: return isDated(c)
+        default: return Self.candidateFlag(f, c)
+        }
+    }
+
+    static func candidateFlag(_ f: AngelField, _ c: ArchiveAngelCandidate) -> Bool {
         switch f {
         case .isPhoneClip: return c.isPhoneClip
         case .isLivePhotoMotion: return c.isLivePhotoMotion
@@ -568,15 +576,11 @@ struct AngelEvalContext {
         case .hasUserDate: return !(c.userDate ?? "").isEmpty
         case .hasCaptions: return c.hasCaptions
         case .hasOCRText: return c.hasOCRText
-        case .eligible: return eligible
-        case .vouched: return vouched
-        case .dated: return isDated()
         default: return false
         }
     }
 
-    func choice(_ f: AngelField) -> String? {
-        let c = candidate
+    func choice(_ f: AngelField, _ c: ArchiveAngelCandidate) -> String? {
         switch f {
         case .mediaDisposition: return AngelField.name(c.mediaDisposition)
         case .archiveStage: return AngelField.name(c.archiveStage)
@@ -775,7 +779,7 @@ struct AngelRule: Codable, Sendable, Equatable {
             for cond in r.when {
                 out += cond.problems(allowClassifierFields: false).map { "\(here): \($0)" }
             }
-            if k == .match && r.when.isEmpty && section != .signals {
+            if k == .match && r.when.isEmpty {
                 out.append("\(here): a match rule needs at least one condition in \"when\"")
             }
             if !pointRange.contains(r.points) {
@@ -821,6 +825,8 @@ extension ArchiveAngelRejection {
         case .proxyStream: return "proxyStream"
         case .resting: return "resting"
         case .sameFamilyAsPick: return "sameFamilyAsPick"
+        case .policyRule: return "policyRule"
+        case .fileGone: return "fileGone"
         }
     }
 

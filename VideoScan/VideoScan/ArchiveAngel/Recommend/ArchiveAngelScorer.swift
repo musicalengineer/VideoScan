@@ -239,6 +239,15 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     /// One member of an event family per batch: the variants of a pick
     /// ("_fixedup", "_clip1", "part 2" beside it) wait for a later batch.
     case sameFamilyAsPick = "A variant of another pick (same event family) — one per batch"
+    /// Consolidation S3b: a `match` floor Rick wrote in policy.json with no
+    /// built-in reason named; the evidence carries the rule's own words
+    /// (`ArchiveAngelEvidenceRecord.excludedBy`).
+    case policyRule = "Excluded by a rule in your recommendation policy"
+    /// Consolidation S3b: Relocate's terminal stages (Manually Deleted,
+    /// Salvage Failed) — the file is gone. v10 excluded these only by
+    /// accident (they sort after Master, and "stage ≥ Master" meant
+    /// archived); the default policy now names them (floor `fileGone`).
+    case fileGone = "The file was deleted or could not be salvaged (its stage says so)"
 }
 
 enum ArchiveAngelVerdict: Sendable, Equatable {
@@ -262,6 +271,11 @@ struct ArchiveAngelSelection: Sendable, Equatable {
 }
 
 // MARK: - Weights (one table; tune here, never in the logic)
+//
+// Since S3b the numbers live in the recommendation policy
+// (AngelRecommendationPolicy.weights, policy.json); `.standard` is the
+// built-in value. WHICH floors and signals run, in what order, and any rule
+// Rick adds, are the policy's `floors` / `signals` arrays.
 
 struct ArchiveAngelWeights: Sendable, Equatable, Codable {
     var threeStars = 100
@@ -273,6 +287,12 @@ struct ArchiveAngelWeights: Sendable, Equatable, Codable {
     var machinePersonCap = 24
     var playHistoryCap = 40
     var playedRecentlyBonus = 5
+    /// Play history points = this × log2(1 + plays), capped at
+    /// `playHistoryCap` (S3b: was a literal 4).
+    var playHistoryPerDoubling = 4.0
+    /// A play within this many days earns `playedRecentlyBonus` (S3b: was
+    /// a literal 365).
+    var playedRecentlyDays = 365.0
     var richnessEach = 5
     var richnessCap = 40
     var dateKnown = 20
@@ -385,92 +405,133 @@ enum ArchiveAngelScorer {
     /// stamped with the attention revision it was scored under (codex
     /// 2026-09-20 #5/#6) — a v8 sidecar lacks both, so it must rescore;
     /// 10 = 2-minute floor (Rick 2026-09-21), plus the Live Photo motion
-    /// and recent-phone-clip exclusions (same day, same bump).
-    static let rulesVersion = 10
+    /// and recent-phone-clip exclusions (same day, same bump); 11 = the
+    /// floors and signals are the policy's rule arrays, archiveStage
+    /// Ready/Master is a VOTE (no longer "already archived" — Rick
+    /// 2026-09-22), and every record carries its recommendation class
+    /// (Consolidation S3b).
+    static let rulesVersion = 11
 
-    /// The verdict for one record. Pure.
+    /// The verdict for one record under the built-in rules with these
+    /// weights. Pure.
     static func verdict(_ c: ArchiveAngelCandidate,
                         weights w: ArchiveAngelWeights = .standard,
                         now: Date = Date()) -> ArchiveAngelVerdict {
-        if let rejection = hardFloor(c, weights: w, now: now) { return .rejected(rejection) }
+        verdict(c, policy: AngelRecommendationPolicy.builtIn.with(weights: w), now: now)
+    }
 
+    /// The verdict for one record: the policy's floors in order (first hit
+    /// rejects), then its signals in order — each an evidence line; the
+    /// score is their sum. Pure.
+    static func verdict(_ c: ArchiveAngelCandidate, policy p: AngelRecommendationPolicy,
+                        now: Date = Date()) -> ArchiveAngelVerdict {
+        if let hit = floorHit(c, policy: p, now: now) { return .rejected(hit.rejection) }
         var lines: [ArchiveAngelEvidence] = []
-        func add(_ points: Int, _ line: String) { lines.append(.init(points: points, line: line)) }
-
-        switch c.starRating {
-        case 3...: add(w.threeStars, "You rated it best (★★★)")
-        case 2:    add(w.twoStars, "You rated it better (★★)")
-        case 1:    add(w.oneStar, "You rated it good (★)")
-        default:   break
-        }
-
-        if !c.confirmedPeople.isEmpty {
-            let pts = min(w.confirmedPersonCap, Self.product(w.confirmedPersonEach, c.confirmedPeople.count))
-            add(pts, c.confirmedPeople.joined(separator: ", ") + " (confirmed)")
-        }
-        var seen = Set<String>()
-        let machineOnly = (c.detectedPeople + c.suspectedPeople).filter {
-            !c.confirmedPeople.contains($0) && seen.insert($0).inserted
-        }
-        if !machineOnly.isEmpty {
-            let pts = min(w.machinePersonCap, Self.product(w.machinePersonEach, machineOnly.count))
-            add(pts, "Looks like " + machineOnly.joined(separator: ", ") + " (machine)")
-        }
-
-        if c.useCount > 0 {
-            var pts = min(w.playHistoryCap, Self.clampedInt((4.0 * log2(1.0 + Double(c.useCount))).rounded()))
-            var line = c.useCount == 1 ? "Played once" : "Played \(c.useCount) times"
-            if let last = c.lastUsed {
-                line += ", last on " + Self.dayFormatter.string(from: last)
-                if now.timeIntervalSince(last) < 365 * 86_400 { pts = Self.sum(pts, w.playedRecentlyBonus) }
+        p.signals.withUnsafeBufferPointer { signals in
+            for i in signals.indices {
+                guard signals[i].enabled, let kind = signals[i].resolvedKind else { continue }
+                if !signals[i].when.isEmpty {
+                    var ctx = AngelEvalContext(now: now)
+                    guard AngelCondition.all(signals[i].when, c, &ctx) else { continue }
+                }
+                if let line = signal(kind, rule: signals[i], c, lines: lines, policy: p, now: now) { lines.append(line) }
             }
-            add(pts, line)
         }
+        return .eligible(score: Self.total(lines), evidence: lines)
+    }
 
-        let richness = Self.richnessItems(c)
-        if !richness.isEmpty {
-            add(min(w.richnessCap, Self.product(w.richnessEach, richness.count)),
-                "Has " + richness.joined(separator: ", "))
+    /// One signal's evidence line, or nil when it has nothing to say.
+    /// The built-in kinds read their numbers from `weights`; `match` adds
+    /// the rule's own points and line. The cap and fatigue act on `lines`
+    /// (the total so far), so they belong at the end of the list.
+    static func signal(_ kind: AngelRuleKind, rule: AngelRule, _ c: ArchiveAngelCandidate,
+                       lines: [ArchiveAngelEvidence], policy p: AngelRecommendationPolicy,
+                       now: Date) -> ArchiveAngelEvidence? {
+        let w = p.weights
+        switch kind {
+        case .match:
+            return .init(points: rule.points, line: rule.displayLine)
+        case .stars:
+            switch c.starRating {
+            case 3...: return .init(points: w.threeStars, line: "You rated it best (★★★)")
+            case 2:    return .init(points: w.twoStars, line: "You rated it better (★★)")
+            case 1:    return .init(points: w.oneStar, line: "You rated it good (★)")
+            default:   return nil
+            }
+        case .confirmedPeople:
+            guard !c.confirmedPeople.isEmpty else { return nil }
+            let pts = min(w.confirmedPersonCap, Self.product(w.confirmedPersonEach, c.confirmedPeople.count))
+            return .init(points: pts, line: c.confirmedPeople.joined(separator: ", ") + " (confirmed)")
+        case .machinePeople:
+            var seen = Set<String>()
+            let machineOnly = (c.detectedPeople + c.suspectedPeople).filter {
+                !c.confirmedPeople.contains($0) && seen.insert($0).inserted
+            }
+            guard !machineOnly.isEmpty else { return nil }
+            let pts = min(w.machinePersonCap, Self.product(w.machinePersonEach, machineOnly.count))
+            return .init(points: pts, line: "Looks like " + machineOnly.joined(separator: ", ") + " (machine)")
+        case .playHistory:
+            return playHistoryLine(c, weights: w, now: now)
+        case .richness:
+            let richness = Self.richnessItems(c)
+            guard !richness.isEmpty else { return nil }
+            return .init(points: min(w.richnessCap, Self.product(w.richnessEach, richness.count)),
+                         line: "Has " + richness.joined(separator: ", "))
+        case .date:
+            return dateLine(c, weights: w)
+        case .duration:
+            guard let (pts, tier) = Self.durationTier(c.durationSeconds, weights: w) else { return nil }
+            return .init(points: pts, line: "Runs \(Self.durationText(c.durationSeconds)) — \(tier)")
+        case .formatAtRisk:
+            return c.formatAtRisk ? .init(points: w.formatAtRisk, line: "At-risk format — archive sooner") : nil
+        case .onlyCopy:
+            return c.isOnlyCopy ? .init(points: w.onlyCopy, line: "This is the only copy") : nil
+        case .unassignedVolume:
+            return c.volumeRole == .unassigned
+                ? .init(points: w.riskyVolume, line: "Lives on \(c.volumeName) (no role assigned)") : nil
+        case .audioProblem:
+            guard let problem = c.audioProblem, !problem.isEmpty else { return nil }
+            return .init(points: 0, line: "Audio: \(problem) — will balance")
+        case .downloadCap:
+            return downloadCapLine(c, lines: lines, policy: p)
+        case .fatigue:
+            // Attention memory (Phase 1): fatigue last, as a negative line
+            // over everything above it, so the score stays the sum of its
+            // printed reasons. Novelty is deliberately NOT points — being
+            // new earns a reserved slot (`withFreshSlots`), not a grade.
+            return fatigueLine(c, lines: lines, weights: w, now: now)
+        default:
+            return nil   // a floor kind in the signals list — validation refuses it
         }
+    }
 
+    static func playHistoryLine(_ c: ArchiveAngelCandidate, weights w: ArchiveAngelWeights,
+                                now: Date) -> ArchiveAngelEvidence? {
+        guard c.useCount > 0 else { return nil }
+        var pts = min(w.playHistoryCap,
+                      Self.clampedInt((w.playHistoryPerDoubling * log2(1.0 + Double(c.useCount))).rounded()))
+        var line = c.useCount == 1 ? "Played once" : "Played \(c.useCount) times"
+        if let last = c.lastUsed {
+            line += ", last on " + Self.dayFormatter.string(from: last)
+            if now.timeIntervalSince(last) < w.playedRecentlyDays * 86_400 { pts = Self.sum(pts, w.playedRecentlyBonus) }
+        }
+        return .init(points: pts, line: line)
+    }
+
+    static func dateLine(_ c: ArchiveAngelCandidate, weights w: ArchiveAngelWeights) -> ArchiveAngelEvidence? {
         if let userDate = c.userDate, !userDate.isEmpty {
-            add(w.dateKnown, "Dated \(userDate) (yours)")
-        } else if let d = c.inferredRecordDate {
+            return .init(points: w.dateKnown, line: "Dated \(userDate) (yours)")
+        }
+        if let d = c.inferredRecordDate {
             let conf = c.inferredDateConfidence ?? 0
             if conf >= w.dateConfidenceKnown {
-                add(w.dateKnown, "Dated " + Self.dayFormatter.string(from: d)
-                    + String(format: " (consensus %.2f)", conf))
-            } else {
-                add(w.dateLowConfidence, "Date uncertain — "
-                    + Self.dayFormatter.string(from: d) + String(format: " (%.2f)", conf))
+                return .init(points: w.dateKnown, line: "Dated " + Self.dayFormatter.string(from: d)
+                             + String(format: " (consensus %.2f)", conf))
             }
-        } else if c.hasEmbeddedDate {
-            add(w.dateKnown, "Dated by the camera")
+            return .init(points: w.dateLowConfidence, line: "Date uncertain — "
+                         + Self.dayFormatter.string(from: d) + String(format: " (%.2f)", conf))
         }
-
-        if let (pts, tier) = Self.durationTier(c.durationSeconds, weights: w) {
-            add(pts, "Runs \(Self.durationText(c.durationSeconds)) — \(tier)")
-        }
-        if c.formatAtRisk { add(w.formatAtRisk, "At-risk format — archive sooner") }
-        if c.isOnlyCopy { add(w.onlyCopy, "This is the only copy") }
-        switch c.volumeRole {
-        case .workspace, .backup, .archive, .cloud, .system: break
-        case .unassigned: add(w.riskyVolume, "Lives on \(c.volumeName) (no role assigned)")
-        }
-        if let problem = c.audioProblem, !problem.isEmpty {
-            add(0, "Audio: \(problem) — will balance")
-        }
-
-        if let cap = Self.downloadCapLine(c, lines: lines, weights: w) { lines.append(cap) }
-
-        // Attention memory (Phase 1): fatigue last, as a negative line over
-        // everything above it, so the score stays the sum of its printed
-        // reasons. Novelty is deliberately NOT points — a flat bonus shifted
-        // every new file's grade and out-scored the download cap; being
-        // new earns a reserved slot (`withFreshSlots`), not a better grade.
-        if let fatigue = Self.fatigueLine(c, lines: lines, weights: w, now: now) { lines.append(fatigue) }
-
-        return .eligible(score: Self.total(lines), evidence: lines)
+        return c.hasEmbeddedDate ? .init(points: w.dateKnown, line: "Dated by the camera") : nil
     }
 
     /// Phase 1: `score × fatigueFactor^effectiveSkips`, where the family's
@@ -511,7 +572,13 @@ enum ArchiveAngelScorer {
     /// the score is still the sum of its printed reasons. nil = no cap.
     static func downloadCapLine(_ c: ArchiveAngelCandidate, lines: [ArchiveAngelEvidence],
                                 weights w: ArchiveAngelWeights) -> ArchiveAngelEvidence? {
-        guard !c.isHumanMarked, looksLikeDownloadOrRip(c, weights: w) else { return nil }
+        downloadCapLine(c, lines: lines, policy: AngelRecommendationPolicy.builtIn.with(weights: w))
+    }
+
+    static func downloadCapLine(_ c: ArchiveAngelCandidate, lines: [ArchiveAngelEvidence],
+                                policy p: AngelRecommendationPolicy) -> ArchiveAngelEvidence? {
+        let w = p.weights
+        guard !c.isHumanMarked, looksLikeDownloadOrRip(c, policy: p) else { return nil }
         let total = Self.total(lines)
         guard total > w.downloadCapScore else { return nil }
         let kbps = Self.clampedInt((Double(c.sizeBytes) * 8 / c.durationSeconds / 1000).rounded())
@@ -520,45 +587,104 @@ enum ArchiveAngelScorer {
                         + durationText(c.durationSeconds) + ", no star, person or note; capped at candidate grade")
     }
 
-    /// Hard floor (design §3.2): the reasons a record is never a candidate.
-    /// Order = the reason the user should hear first.
+    /// Hard floor (design §3.2) under the built-in floors with these weights.
     static func hardFloor(_ c: ArchiveAngelCandidate,
                           weights w: ArchiveAngelWeights = .standard,
                           now: Date = Date()) -> ArchiveAngelRejection? {
-        switch c.streamTypeRaw {
-        case StreamType.videoAndAudio.rawValue, StreamType.videoOnly.rawValue: break
-        default: return .notVideo
+        floorHit(c, policy: AngelRecommendationPolicy.builtIn.with(weights: w), now: now)?.rejection
+    }
+
+    /// The reason a record is never a candidate under `p`, or nil.
+    static func hardFloor(_ c: ArchiveAngelCandidate, policy p: AngelRecommendationPolicy,
+                          now: Date = Date()) -> ArchiveAngelRejection? {
+        floorHit(c, policy: p, now: now)?.rejection
+    }
+
+    /// The first enabled floor that rejects `c`, in the policy's order
+    /// (the order = the reason the user should hear first), with the rule
+    /// itself so a policy rule's own words can be shown. A `starExempt`
+    /// floor passes any starred file (machine evidence yields to a
+    /// person's star); `when` narrows any floor to the files it names.
+    static func floorHit(_ c: ArchiveAngelCandidate, policy p: AngelRecommendationPolicy,
+                         now: Date = Date()) -> (rejection: ArchiveAngelRejection, rule: AngelRule)? {
+        // Read the rules in place (a `for rule in` loop copies each rule —
+        // its strings and arrays — per record: most of the interpreter's
+        // cost at 100k). ≈ iterating a const std::vector by reference.
+        // The weights and tables are hoisted once per record; each floor
+        // gets only what it reads (no rule or policy copy per floor).
+        let w = p.weights
+        let tables = p.tables
+        return p.floors.withUnsafeBufferPointer { floors -> (rejection: ArchiveAngelRejection, rule: AngelRule)? in
+            for i in floors.indices {
+                guard floors[i].enabled, let kind = floors[i].resolvedKind else { continue }
+                if floors[i].starExempt && c.starRating > 0 { continue }
+                if !floors[i].when.isEmpty {
+                    var ctx = AngelEvalContext(now: now)
+                    guard AngelCondition.all(floors[i].when, c, &ctx) else { continue }
+                    if kind == .match {
+                        let reason = floors[i].rejection.flatMap(ArchiveAngelRejection.named) ?? .policyRule
+                        return (reason, floors[i])
+                    }
+                }
+                if let rejection = floorFires(kind, c, weights: w, tables: tables, now: now) { return (rejection, floors[i]) }
+            }
+            return nil
         }
-        if c.isOnMasterArchive || c.archiveStage >= .masterAssigned { return .alreadyArchived }
-        if c.hasArchivedDuplicate { return .duplicateArchived }
-        if c.isPlayable.lowercased().hasPrefix("no") || c.isPlayable.lowercased().contains("unsupported") {
-            return .notPlayable
-        }
-        if c.isPairedHalf { return .pairedHalf }
-        // Rick 2026-09-21. Ahead of `.tooShort` so a 3 s Live Photo half
-        // is counted as what it is, not as a short clip.
-        if w.excludeLivePhotoMotion, c.isLivePhotoMotion { return .livePhotoMotion }
-        if w.excludeRecentPhoneClips, c.isPhoneClip,
-           Self.isRecent(captureDate: c.captureDate, years: w.recentPhoneClipYears, now: now) {
+    }
+
+    /// One built-in floor's verdict on `c` (nil = passes); thresholds come
+    /// from `weights` and `tables`. A `match` floor is decided by its `when`
+    /// in `floorHit` (never here — an empty `when` matches nothing).
+    static func floorFires(_ kind: AngelRuleKind, _ c: ArchiveAngelCandidate,
+                           weights w: ArchiveAngelWeights, tables: AngelPolicyTables, now: Date) -> ArchiveAngelRejection? {
+        switch kind {
+        case .match:
+            return nil
+        case .notVideo:
+            switch c.streamTypeRaw {
+            case StreamType.videoAndAudio.rawValue, StreamType.videoOnly.rawValue: return nil
+            default: return .notVideo
+            }
+        case .onMasterArchive:
+            return c.isOnMasterArchive ? .alreadyArchived : nil
+        case .archivedCopy:
+            return c.hasArchivedDuplicate ? .duplicateArchived : nil
+        case .notPlayable:
+            let playable = c.isPlayable.lowercased()
+            return playable.hasPrefix("no") || playable.contains("unsupported") ? .notPlayable : nil
+        case .pairedHalf:
+            return c.isPairedHalf ? .pairedHalf : nil
+        case .livePhotoMotion:
+            // Rick 2026-09-21. Ahead of `.tooShort` so a 3 s Live Photo
+            // half is counted as what it is, not as a short clip.
+            return w.excludeLivePhotoMotion && c.isLivePhotoMotion ? .livePhotoMotion : nil
+        case .recentPhoneClip:
+            guard w.excludeRecentPhoneClips, c.isPhoneClip,
+                  Self.isRecent(captureDate: c.captureDate, years: w.recentPhoneClipYears, now: now) else { return nil }
             return .recentPhoneClip
-        }
-        // Machine evidence below here yields to a human star, like junk.
-        if c.starRating == 0, Self.looksLikeAppCache(filename: c.filename, fullPath: c.fullPath) { return .appCache }
-        if c.starRating == 0, c.derivativeOfOriginal != nil { return .derivativeOfOriginal }
-        if c.durationSeconds < w.minimumDurationSeconds { return .tooShort }
-        if c.starRating == 0, c.durationSeconds > 0, c.sizeBytes > 0,
-           Double(c.sizeBytes) * 8 / c.durationSeconds / 1000 < w.minimumAverageKilobitsPerSecond {
+        case .appCache:
+            return Self.looksLikeAppCache(filename: c.filename, fullPath: c.fullPath, tables: tables) ? .appCache : nil
+        case .derivativeOfOriginal:
+            return c.derivativeOfOriginal != nil ? .derivativeOfOriginal : nil
+        case .tooShort:
+            return c.durationSeconds < w.minimumDurationSeconds ? .tooShort : nil
+        case .proxyStream:
+            guard c.durationSeconds > 0, c.sizeBytes > 0,
+                  Double(c.sizeBytes) * 8 / c.durationSeconds / 1000 < w.minimumAverageKilobitsPerSecond else { return nil }
             return .proxyStream
+        case .markedJunk:
+            return c.mediaDisposition == .confirmedJunk ? .junk : nil
+        case .suspectedJunk:
+            return c.mediaDisposition == .suspectedJunk ? .suspectedJunk : nil
+        case .junkScore:
+            return c.junkScore >= w.junkFloor ? .suspectedJunk : nil
+        case .volumeOffline:
+            return c.volumeOnline ? nil : .volumeOffline
+        case .resting:
+            return c.attention.restingUntil(now: now, weights: w) != nil ? .resting : nil
+        default:
+            return nil   // a signal kind in the floors list — validation refuses it
         }
-        switch c.mediaDisposition {
-        case .confirmedJunk: return .junk
-        case .suspectedJunk where c.starRating == 0: return .suspectedJunk
-        default: break
-        }
-        if c.junkScore >= w.junkFloor && c.starRating == 0 { return .suspectedJunk }
-        if !c.volumeOnline { return .volumeOffline }
-        if c.attention.restingUntil(now: now, weights: w) != nil { return .resting }
-        return nil
     }
 
     /// True when `captureDate` is within `years` of `now`, or unknown
@@ -576,18 +702,26 @@ enum ArchiveAngelScorer {
     static func select(_ candidates: [ArchiveAngelCandidate], count: Int,
                        weights w: ArchiveAngelWeights = .standard,
                        now: Date = Date()) -> ArchiveAngelSelection {
+        select(candidates, count: count, policy: AngelRecommendationPolicy.builtIn.with(weights: w), now: now)
+    }
+
+    static func select(_ candidates: [ArchiveAngelCandidate], count: Int,
+                       policy p: AngelRecommendationPolicy,
+                       now: Date = Date()) -> ArchiveAngelSelection {
+        let w = p.weights
         var picks: [ArchiveAngelPick] = []
         picks.reserveCapacity(candidates.count)
         var rejected: [ArchiveAngelRejection: Int] = [:]
         for c in candidates {
-            switch verdict(c, weights: w, now: now) {
+            switch verdict(c, policy: p, now: now) {
             case .eligible(let score, let evidence):
                 picks.append(.init(candidate: c, score: score, evidence: evidence))
             case .rejected(let reason):
                 rejected[reason, default: 0] += 1
             }
         }
-        picks.sort(by: rank)
+        let tables = p.tables
+        picks.sort { rank($0, $1, tables: tables) }
         picks = onePerDuplicateGroup(picks, rejected: &rejected)
         picks = onePerFamily(picks, rejected: &rejected)
         let kept = withFreshSlots(picks, count: max(0, count), weights: w)
@@ -686,13 +820,19 @@ enum ArchiveAngelScorer {
         rank(a.candidate, score: a.score, before: b.candidate, score: b.score)
     }
 
+    /// The same order with the policy's originality table.
+    static func rank(_ a: ArchiveAngelPick, _ b: ArchiveAngelPick, tables: AngelPolicyTables) -> Bool {
+        rank(a.candidate, score: a.score, before: b.candidate, score: b.score, tables: tables)
+    }
+
     /// The same comparator over (candidate, score) pairs — the
     /// recommendation classifier's "angelRank" order uses it, so the lists
     /// and the batch pick can never disagree about who goes first.
     static func rank(_ a: ArchiveAngelCandidate, score sa: Int,
-                     before b: ArchiveAngelCandidate, score sb: Int) -> Bool {
+                     before b: ArchiveAngelCandidate, score sb: Int,
+                     tables: AngelPolicyTables = .standard) -> Bool {
         if sa != sb { return sa > sb }
-        let ao = originalityRank(a.videoCodec), bo = originalityRank(b.videoCodec)
+        let ao = originalityRank(a.videoCodec, tables: tables), bo = originalityRank(b.videoCodec, tables: tables)
         if ao != bo { return ao < bo }
         let ad = a.inferredRecordDate ?? .distantFuture
         let bd = b.inferredRecordDate ?? .distantFuture
@@ -708,20 +848,17 @@ enum ArchiveAngelScorer {
     /// SVQ3 are old exports; h264/hevc/mpeg4/vp9 are delivery re-encodes.
     /// Unknown (empty, un-probed) ranks last. Only a TIE-BREAK — never
     /// worth points — so it decides between copies of the same score.
-    static let originalityTable: [String: Int] = [
-        "dvvideo": 0, "dv": 0,
-        "mjpeg": 1,
-        "mpeg2video": 2, "hdv": 3,
-        "prores": 4,
-        "ffv1": 5,
-        "mpeg1video": 6,
-        "svq3": 7,
-        "h264": 8, "avc1": 8, "hevc": 8, "mpeg4": 8, "vp9": 8,
-    ]
-    static let originalityUnknown = 9
+    /// Views onto the built-in table (AngelPolicyTables.standard — the
+    /// policy's `tables.originality` since S3b).
+    static var originalityTable: [String: Int] { AngelPolicyTables.standard.originality }
+    static var originalityUnknown: Int { AngelPolicyTables.standard.originalityUnknown }
 
     static func originalityRank(_ videoCodec: String) -> Int {
-        originalityTable[videoCodec.lowercased()] ?? originalityUnknown
+        originalityRank(videoCodec, tables: .standard)
+    }
+
+    static func originalityRank(_ videoCodec: String, tables: AngelPolicyTables) -> Int {
+        tables.originalityLower[videoCodec.lowercased()] ?? tables.originalityUnknown
     }
 
     /// T10 H2: one member per duplicate group. `picks` must already be in
@@ -730,13 +867,14 @@ enum ArchiveAngelScorer {
     /// with no group never collapse.
     static func onePerDuplicateGroup(_ picks: [ArchiveAngelPick],
                                      rejected: inout [ArchiveAngelRejection: Int]) -> [ArchiveAngelPick] {
-        var seenGroups: Set<UUID> = []
-        return picks.filter { pick in
-            guard let g = pick.candidate.duplicateGroupID else { return true }
-            if seenGroups.insert(g).inserted { return true }
-            rejected[.duplicateOfPick, default: 0] += 1
-            return false
+        // The one copy seam (ArchiveAngelCopyChooser), keyed by duplicate
+        // group only — the batch never collapses by name (a parity test
+        // pins this against the pre-S3 filter).
+        let out = ArchiveAngelCopyChooser.firstPerKey(picks) {
+            ArchiveAngelCopyChooser.key($0.candidate, collapseBy: ["duplicateGroup"])
         }
+        if out.dropped > 0 { rejected[.duplicateOfPick, default: 0] += out.dropped }
+        return out.kept
     }
 
     // MARK: helpers
@@ -757,10 +895,15 @@ enum ArchiveAngelScorer {
     /// group|stem, grandparent|year|stem), at most `maxOriginalsPerKey`
     /// per key, so 5,000 same-named "Clip 01" originals cost 8 compares per
     /// export, never n².
-    static let maxOriginalsPerKey = 8
+    static var maxOriginalsPerKey: Int { AngelPolicyTables.standard.maxOriginalsPerKey }
 
     static func markDerivatives(_ candidates: inout [ArchiveAngelCandidate],
                                 weights w: ArchiveAngelWeights = .standard) {
+        markDerivatives(&candidates, policy: AngelRecommendationPolicy.builtIn.with(weights: w))
+    }
+
+    static func markDerivatives(_ candidates: inout [ArchiveAngelCandidate], policy p: AngelRecommendationPolicy) {
+        let maxOriginalsPerKey = p.tables.maxOriginalsPerKey
         var byFolder: [String: [Int]] = [:]        // "folder|stem" → indices
         var byGroup: [String: [Int]] = [:]         // "group|stem"  → indices
         var byGrandparent: [String: [Int]] = [:]   // "grandparent|year|stem" → indices
@@ -779,7 +922,7 @@ enum ArchiveAngelScorer {
             probe.attention = .none                                          // a resting original is still the original
             guard bases[i] == nil,                                           // an export is never an original
                   c.derivativeOfOriginal == nil,
-                  hardFloor(probe, weights: w) == nil else { continue }      // usable NOW
+                  hardFloor(probe, policy: p) == nil else { continue }      // usable NOW
             let stem = (c.filename as NSString).deletingPathExtension.lowercased()
             let folder = (c.fullPath as NSString).deletingLastPathComponent
             add(&byFolder, folder + "|" + stem, i)
@@ -822,33 +965,29 @@ enum ArchiveAngelScorer {
         return richness
     }
 
-    /// Codecs a rip or a download arrives in. Preservation and camera
-    /// codecs (dvvideo, prores, ffv1, mpeg2video, svq3, mjpeg, hevc from a
-    /// phone at 20 Mbit/s…) are deliberately NOT listed: only the rate
-    /// separates a phone hevc clip from a rip, and the rate rule below
-    /// keeps a 20 Mbit/s camera file well clear.
-    static let deliveryCodecs: Set<String> = [
-        "h264", "avc1", "mpeg4", "xvid", "divx", "msmpeg4v3", "msmpeg4v2", "msmpeg4",
-        "hevc", "h265", "vp8", "vp9", "av1", "wmv3", "wmv2", "vc1", "flv1", "theora",
-    ]
+    /// Codecs a rip or a download arrives in — the built-in table
+    /// (policy `tables.deliveryCodecs` since S3b). Preservation and camera
+    /// codecs (dvvideo, prores, ffv1, mpeg2video, svq3, mjpeg…) are
+    /// deliberately NOT listed: only the rate separates a phone hevc clip
+    /// from a rip, and the rate rule keeps a 20 Mbit/s camera file clear.
+    static var deliveryCodecs: Set<String> { AngelPolicyTables.standard.deliveryCodecSet }
 
     /// Folder components only a family's own editing leaves behind — an
-    /// iMovie library or project, the "Family Movies" tree. A low-bitrate
-    /// h264 export found there (live: EP1.m4v, 3 Mbit/s, "Ellen & Paul
-    /// 1997/Original Media") is a family export, not a download.
-    static let familyOriginPathMarkers: [String] = [
-        ".imovielibrary", ".imovieproject", "imovie events", "imovie projects", "family movies",
-        "home movies", "home videos", "original media",
-    ]
+    /// iMovie library or project, the "Family Movies" tree (policy
+    /// `tables.familyOriginFolders`). A low-bitrate h264 export found there
+    /// (live: EP1.m4v, 3 Mbit/s, "Ellen & Paul 1997/Original Media") is a
+    /// family export, not a download.
+    static var familyOriginPathMarkers: [String] { AngelPolicyTables.standard.familyOriginFolders }
 
     /// Whole folder components only (codex #1306 advisory): a component
     /// IS a marker, or ends with a package suffix (".imovielibrary",
     /// ".imovieproject") — never a substring of an unrelated folder name.
-    static func hasFamilyOriginPath(_ fullPath: String) -> Bool {
+    static func hasFamilyOriginPath(_ fullPath: String, tables: AngelPolicyTables = .standard) -> Bool {
         let components = (fullPath as NSString).deletingLastPathComponent
             .split(separator: "/").map { $0.lowercased() }
+        let markers = tables.familyOriginLower
         return components.contains { component in
-            familyOriginPathMarkers.contains { marker in
+            markers.contains { marker in
                 marker.hasPrefix(".") ? component.hasSuffix(marker) : component == marker
                     || component == marker + ".localized"
             }
@@ -857,36 +996,36 @@ enum ArchiveAngelScorer {
 
     static func looksLikeDownloadOrRip(_ c: ArchiveAngelCandidate,
                                        weights w: ArchiveAngelWeights = .standard) -> Bool {
+        looksLikeDownloadOrRip(c, policy: AngelRecommendationPolicy.builtIn.with(weights: w))
+    }
+
+    static func looksLikeDownloadOrRip(_ c: ArchiveAngelCandidate, policy p: AngelRecommendationPolicy) -> Bool {
+        let w = p.weights
         guard c.durationSeconds >= w.downloadMinimumDurationSeconds, c.sizeBytes > 0 else { return false }
-        guard deliveryCodecs.contains(c.videoCodec.lowercased()) else { return false }
-        guard !hasFamilyOriginPath(c.fullPath) else { return false }
+        guard p.tables.deliveryCodecSet.contains(c.videoCodec.lowercased()) else { return false }
+        guard !hasFamilyOriginPath(c.fullPath, tables: p.tables) else { return false }
         let kbps = Double(c.sizeBytes) * 8 / c.durationSeconds / 1000
         return kbps < w.downloadMaxKilobitsPerSecond
     }
 
-    /// Folder components an editing app writes for itself. Matched as
-    /// whole components (case-insensitive) so a family folder named
-    /// "Cache Cod" or "Thumbnails of Grandma" is untouched.
-    static let appCacheFolderNames: Set<String> = [
-        "imovie cache", "imovie movie cache", "imovie thumbnails", "imovie thumbnails.localized",
-        "render files", "transcoded media", "proxy media", "analysis files", "thumbnail media",
-        "cache", "caches", "renders", "proxies", "thumbnails", "temp", "tmp", ".cache", ".thumbnails",
-    ]
+    /// Folder components an editing app writes for itself (policy
+    /// `tables.appCacheFolders`). Matched as whole components
+    /// (case-insensitive) so a family folder named "Cache Cod" or
+    /// "Thumbnails of Grandma" is untouched.
+    static var appCacheFolderNames: Set<String> { AngelPolicyTables.standard.appCacheFolderSet }
 
     /// `Cache.mov`, `Cache-30.mov`, `render-12.mov`, `proxy_007.mov`,
-    /// `thumb.mov`… — a bare tool noun, optionally numbered. A real clip
-    /// named by a person ("Cache Cod 1998.mov") has more than the noun.
-    /// Compiled once (a per-call `String.range(of:.regularExpression)` is a
-    /// regex compile each time — 100k of them is most of a second).
-    static let appCacheStemRegex = try! NSRegularExpression(
-        pattern: #"^(cache|render|proxy|proxies|preview|thumb|thumbnail|temp|tmp)([ _-]?\d+)?$"#,
-        options: [.caseInsensitive])
-
-    static func looksLikeAppCache(filename: String, fullPath: String) -> Bool {
+    /// `thumb.mov`… — a bare tool noun, optionally numbered (policy
+    /// `tables.appCacheNamePattern`). A real clip named by a person ("Cache
+    /// Cod 1998.mov") has more than the noun. Compiled once per pattern
+    /// (AngelPolicyTables keeps it) — a per-call compile is most of a second at 100k.
+    static func looksLikeAppCache(filename: String, fullPath: String, tables: AngelPolicyTables = .standard) -> Bool {
         let stem = (filename as NSString).deletingPathExtension
-        if appCacheStemRegex.firstMatch(in: stem, range: NSRange(stem.startIndex..., in: stem)) != nil { return true }
+        if let re = tables.appCacheRegex,
+           re.firstMatch(in: stem, range: NSRange(stem.startIndex..., in: stem)) != nil { return true }
         let folders = (fullPath as NSString).deletingLastPathComponent.split(separator: "/")
-        return folders.contains { appCacheFolderNames.contains($0.lowercased()) }
+        let names = tables.appCacheFolderSet
+        return folders.contains { names.contains($0.lowercased()) }
     }
 
     /// Points and the printed tier for a duration; nil under 5 min (a

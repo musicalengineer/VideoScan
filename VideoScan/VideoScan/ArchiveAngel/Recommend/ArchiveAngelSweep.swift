@@ -85,7 +85,13 @@ final class ArchiveAngelSweep: ObservableObject {
         /// touch the metadata server.
         var playHistory: @Sendable ([String]) async -> [String: ArchiveAngelPlayHistory.Reading]
             = { await ArchiveAngelJob.readPlayHistoryOffMain(paths: $0) }
-        var weights: ArchiveAngelWeights = .standard
+        /// The recommendation policy the run scores AND classifies with
+        /// (the façade's; S3b). `weights` is kept as a view onto it.
+        var policy: AngelRecommendationPolicy = .builtIn
+        var weights: ArchiveAngelWeights {
+            get { policy.weights }
+            set { policy.weights = newValue }
+        }
         var sliceSize = 500
         var checkpointEvery = 5_000
         var quietSeconds: Double = 3
@@ -260,7 +266,8 @@ final class ArchiveAngelSweep: ObservableObject {
         // is stamped with — never the state at the finish line.
         let snapshotStart = clock.now
         let attention = cfg.attentionState()
-        let all = cfg.candidates()
+        var all = cfg.candidates()
+        let policy = cfg.policy
         noteSlice(clock.now - snapshotStart)
         let total = all.count
         status = .scoring(done: 0, total: total)
@@ -282,52 +289,55 @@ final class ArchiveAngelSweep: ObservableObject {
                 if Task.isCancelled { status = enabled ? .idle : .disabled; return }
             }
             let end = min(total, index + sliceSize)
-            let slice = all[index..<end]
 
-            // Floor pass (main actor, cheap) → paths that need play history.
+            // Floor pass (main actor, cheap) → indices that need play history.
             let t0 = clock.now
-            var pending: [ArchiveAngelCandidate] = []
-            pending.reserveCapacity(slice.count)
+            var pending: [Int] = []
+            pending.reserveCapacity(end - index)
             let now = cfg.now()
-            for c in slice {
-                if let rejection = ArchiveAngelScorer.hardFloor(c, weights: cfg.weights, now: now) {
-                    records[c.id] = .init(score: 0, lines: [], rejection: rejection,
+            for i in index..<end {
+                let c = all[i]
+                if let hit = ArchiveAngelScorer.floorHit(c, policy: policy, now: now) {
+                    records[c.id] = .init(score: 0, lines: [], rejection: hit.rejection,
                                           useCount: 0, lastUsed: nil, computedAt: now,
                                           timesProposed: c.attention.timesProposed,
-                                          familySkips: c.familySkips)
+                                          familySkips: c.familySkips, bands: policy.grades,
+                                          excludedBy: Self.excludedBy(hit))
                 } else {
-                    pending.append(c)
+                    pending.append(i)
                 }
             }
             noteSlice(clock.now - t0)
 
             // Spotlight for the eligible ones, off-main.
-            let readings = pending.isEmpty ? [:] : await cfg.playHistory(pending.map(\.fullPath))
+            let readings = pending.isEmpty ? [:] : await cfg.playHistory(pending.map { all[$0].fullPath })
 
             let t1 = clock.now
-            for var c in pending {
-                if let r = readings[c.fullPath] { c.useCount = r.useCount; c.lastUsed = r.lastUsed }
-                switch ArchiveAngelScorer.verdict(c, weights: cfg.weights, now: now) {
+            for i in pending {
+                // Written back so the classifier sees the same plays.
+                if let r = readings[all[i].fullPath] { all[i].useCount = r.useCount; all[i].lastUsed = r.lastUsed }
+                let c = all[i]
+                switch ArchiveAngelScorer.verdict(c, policy: policy, now: now) {
                 case .eligible(let score, let lines):
                     eligible += 1
                     let rec = ArchiveAngelEvidenceRecord(score: score, lines: lines, rejection: nil,
                                                          useCount: c.useCount, lastUsed: c.lastUsed, computedAt: now,
                                                          timesProposed: c.attention.timesProposed,
-                                                         familySkips: c.familySkips)
+                                                         familySkips: c.familySkips, bands: policy.grades)
                     records[c.id] = rec
                     sweepLog.debug("\(c.filename, privacy: .public): \(rec.summary(), privacy: .public)")
                 case .rejected(let rejection):
                     records[c.id] = .init(score: 0, lines: [], rejection: rejection,
                                           useCount: c.useCount, lastUsed: c.lastUsed, computedAt: now,
                                           timesProposed: c.attention.timesProposed,
-                                          familySkips: c.familySkips)
+                                          familySkips: c.familySkips, bands: policy.grades)
                     sweepLog.debug("\(c.filename, privacy: .public): excluded — \(rejection.rawValue, privacy: .public)")
                 }
             }
             noteSlice(clock.now - t1)
 
+            sinceCheckpoint += end - index
             index = end
-            sinceCheckpoint += slice.count
             status = .scoring(done: index, total: total)
 
             if sinceCheckpoint >= cfg.checkpointEvery, index < total {
@@ -340,6 +350,33 @@ final class ArchiveAngelSweep: ObservableObject {
                                                           policyFingerprint: store.policyFingerprint)
                 _ = await ArchiveAngelEvidenceStore.saveOffMain(checkpoint, to: store.fileURL)
             }
+            await Task.yield()
+        }
+
+        // Consolidation S3b: ONE classification over the whole set (copies
+        // need every record at once), off the main actor — the inputs are
+        // values. Every record gets its class, reasons, year and copies.
+        let classifyStart = clock.now
+        let classified = await Self.classifyOffMain(all, evidence: records, rules: policy.recommend, now: cfg.now())
+        if Task.isCancelled { status = enabled ? .idle : .disabled; return }
+        let classifySeconds = Self.seconds(clock.now - classifyStart)
+        // Written back in main-actor slices (the same pacing as scoring).
+        var from = 0
+        while from < classified.verdicts.count {
+            let t = clock.now
+            let to = min(classified.verdicts.count, from + sliceSize)
+            for i in from..<to {
+                let v = classified.verdicts[i]
+                let id = all[i].id
+                guard var rec = records[id] else { continue }
+                rec.recommendation = v.kind
+                rec.reasons = v.reasons.isEmpty ? nil : v.reasons
+                rec.year = v.year
+                rec.copies = v.copies > 1 ? v.copies : nil
+                records[id] = rec
+            }
+            noteSlice(clock.now - t)
+            from = to
             await Task.yield()
         }
 
@@ -360,9 +397,60 @@ final class ArchiveAngelSweep: ObservableObject {
         let bands = ArchiveAngelGrade.allCases.map { g -> String in
             "\(g == .x ? "excluded" : g.rawValue) \((grades[g] ?? 0).formatted())"
         }.joined(separator: " · ")
-        cfg.log("Archive Angel Assessment: done: \(bands) in \(String(format: "%.1f", lastRunSeconds)) s"
+        cfg.log("Archive Angel Assessment: done: \(bands) · " + Self.classLine(classified.counts)
+                + " (classified in \(String(format: "%.2f", classifySeconds)) s)"
+                + " in \(String(format: "%.1f", lastRunSeconds)) s"
                 + (saved ? "" : " (evidence NOT saved)"))
+        // Once, on the first run after a rules change: what the old
+        // surfaces said → what the one classifier says now.
+        if let old = store.olderRules {
+            store.olderRules = nil
+            let legacy = await Self.classifyOffMain(all.filter { !$0.isOnMasterArchive && !$0.hasArchivedDuplicate },
+                                                    evidence: [:], rules: .legacyNudge, now: finishedAt)
+            cfg.log(Self.migrationLine(fromVersion: old.rulesVersion, oldGrades: old.grades,
+                                       legacyCounts: legacy.counts, newCounts: classified.counts))
+        }
         sweepLog.info("assessment \(reason, privacy: .public): \(summary, privacy: .public) in \(self.lastRunSeconds, privacy: .public)s")
+    }
+
+    // MARK: Classification helpers
+
+    /// The classifier, off the main actor (inputs and result are values).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func classifyOffMain(_ candidates: [ArchiveAngelCandidate],
+                                            evidence: [UUID: ArchiveAngelEvidenceRecord],
+                                            rules: AngelRecommendRules,
+                                            now: Date) async -> ArchiveAngelRecommendations.Result {
+        ArchiveAngelRecommendations.classify(candidates, evidence: evidence, rules: rules, now: now)
+    }
+
+    /// A policy floor's own words for the evidence (built-in floors: nil —
+    /// their reason text is the rejection itself).
+    nonisolated static func excludedBy(_ hit: (rejection: ArchiveAngelRejection, rule: AngelRule)) -> String? {
+        hit.rule.resolvedKind == .match ? hit.rule.displayLine : nil
+    }
+
+    nonisolated static func classLine(_ counts: [ArchiveAngelRecommendationClass: Int]) -> String {
+        let order: [ArchiveAngelRecommendationClass] = [.ready, .needsDate, .worthALook, .notNow, .excluded, .anotherCopy]
+        return order.map { "\($0.label.lowercased()) \((counts[$0] ?? 0).formatted())" }.joined(separator: " · ")
+    }
+
+    /// "Archive Angel: recommendation rules v10 → v11 — before: nudge 589
+    /// ready + 123 need a date, Angel A 1 · B 106; now: ready 42 · …"
+    nonisolated static func migrationLine(fromVersion: Int, oldGrades: [ArchiveAngelGrade: Int],
+                                          legacyCounts: [ArchiveAngelRecommendationClass: Int],
+                                          newCounts: [ArchiveAngelRecommendationClass: Int]) -> String {
+        let grades = ArchiveAngelGrade.allCases.map { "\($0.rawValue) \((oldGrades[$0] ?? 0).formatted())" }
+            .joined(separator: " · ")
+        return "Archive Angel: recommendation rules v\(fromVersion) → v\(ArchiveAngelScorer.rulesVersion) — before: "
+            + "the nudge's rules \((legacyCounts[.ready] ?? 0).formatted()) ready + \((legacyCounts[.needsDate] ?? 0).formatted()) need a date, "
+            + "the Angel's grades \(grades); now (one set of numbers): " + classLine(newCounts)
+    }
+
+    nonisolated static func seconds(_ d: Duration) -> Double {
+        Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
     }
 
     private func userIsInteracting(_ cfg: Configuration) -> Bool {

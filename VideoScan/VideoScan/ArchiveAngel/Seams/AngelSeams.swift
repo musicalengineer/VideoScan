@@ -72,7 +72,7 @@ protocol AngelJobRunner: AnyObject {
     @discardableResult
     func startArchiveAngelByUser(count: Int, recordIDs: [UUID]?, makeLossless: Bool,
                                  model: VideoScanModel, bufferRoot: URL,
-                                 weights: ArchiveAngelWeights) -> ArchiveAngelJob
+                                 policy: AngelRecommendationPolicy) -> ArchiveAngelJob
 }
 
 /// The Master Archive: where Promote puts things.

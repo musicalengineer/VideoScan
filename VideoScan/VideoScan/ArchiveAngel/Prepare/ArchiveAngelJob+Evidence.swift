@@ -48,7 +48,7 @@ extension ArchiveAngelJob {
     static func selectFromEvidence(store: ArchiveAngelEvidenceStore, count: Int,
                                    freshness: TimeInterval = evidenceFreshness,
                                    now: Date,
-                                   weights: ArchiveAngelWeights = .standard,
+                                   policy: AngelRecommendationPolicy = .builtIn,
                                    excluding: Set<UUID> = [],
                                    attentionChangedAt: Date? = nil,
                                    attentionRevision: Int? = nil,
@@ -56,6 +56,7 @@ extension ArchiveAngelJob {
         guard count > 0, store.isFresh(within: freshness, now: now),
               store.eligibleCount >= count else { return nil }
         guard attentionIsCurrent(store: store, changedAt: attentionChangedAt, revision: attentionRevision) else { return nil }
+        let weights = policy.weights
         var collected: [ArchiveAngelPick] = []
         collected.reserveCapacity(count)
         var rejected = store.rejectionCounts()
@@ -98,7 +99,7 @@ extension ArchiveAngelJob {
             // sweep. Its result is current: this evidence is only used
             // when no attention event happened since it was scored.
             candidate.familySkips = evidence.familySkips
-            if let reason = ArchiveAngelScorer.hardFloor(candidate, weights: weights, now: now) {
+            if let reason = ArchiveAngelScorer.hardFloor(candidate, policy: policy, now: now) {
                 rejected[reason, default: 0] += 1
                 continue
             }
@@ -111,7 +112,8 @@ extension ArchiveAngelJob {
                 if distinctSeen == count { bandScore = evidence.score }
             }
         }
-        collected.sort(by: ArchiveAngelScorer.rank)
+        let tables = policy.tables
+        collected.sort { ArchiveAngelScorer.rank($0, $1, tables: tables) }
         var ranked = ArchiveAngelScorer.onePerDuplicateGroup(collected, rejected: &rejected)
         ranked = ArchiveAngelScorer.onePerFamily(ranked, rejected: &rejected)
         let picks = ArchiveAngelScorer.withFreshSlots(ranked, count: count, weights: weights)

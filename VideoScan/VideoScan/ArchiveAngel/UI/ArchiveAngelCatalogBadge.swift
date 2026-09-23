@@ -15,14 +15,23 @@ struct ArchiveAngelCatalogBadge: Equatable {
     /// Full verdict for the tooltip ("AAA grade A (112) — ★★★ · Donna …").
     let help: String
 
-    /// Grade A = ready to promote, B = nearly ready and worth a look.
-    /// C, D and X (excluded) draw nothing: the to-do view must stay calm.
-    static func make(for record: ArchiveAngelEvidenceRecord?) -> ArchiveAngelCatalogBadge? {
+    /// The record's recommendation class (S3b — the same class the Archive
+    /// tab counts): Ready = "Promote me", Needs a date, Worth a look, and
+    /// Prepared while it waits in a batch. Not now, Excluded and Another
+    /// copy draw nothing: the to-do view must stay calm. A record the
+    /// classifier never saw falls back to its grade (A → Ready, B → Worth a
+    /// look).
+    static func make(for record: ArchiveAngelEvidenceRecord?, prepared: Bool = false) -> ArchiveAngelCatalogBadge? {
+        if prepared {
+            return .init(text: "Prepared", color: .blue,
+                         help: "Archive Angel prepared this in a batch — review it in the Archive tab, then Promote.")
+        }
         guard let record else { return nil }
-        switch record.grade {
-        case .a: return .init(text: "Promote me", color: .green, help: record.summary())
-        case .b: return .init(text: "Worth a look", color: .orange, help: record.summary())
-        case .c, .d, .x: return nil
+        switch record.recommendationClass {
+        case .ready: return .init(text: "Promote me", color: .green, help: record.summary())
+        case .needsDate: return .init(text: "Needs a date", color: .orange, help: record.summary())
+        case .worthALook: return .init(text: "Worth a look", color: .orange, help: record.summary())
+        case .notNow, .excluded, .anotherCopy, .prepared, .promoted: return nil
         }
     }
 }

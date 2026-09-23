@@ -41,9 +41,6 @@ struct ArchiveView: View {
     /// memoized per records version — CatalogStorageTotals.compute is
     /// O(records) and must never run in body.
     @State var storageTotalsMemo = RenderMemo<RecordsVersion, CatalogStorageTotals>()
-    /// "It looks like N files are ready" (ArchiveNudge.swift), memoized
-    /// per records version.
-    @State var nudgeMemo = RenderMemo<RecordsVersion, ArchiveNudge>()
     /// "timeline" | "files" — the Archived category's in-session view
     /// switch (ArchiveViewMode.rawValue). Timeline is the default and
     /// every tab ENTRY resets to it (ArchiveHomeState rule 1/2): the

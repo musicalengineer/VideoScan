@@ -110,6 +110,59 @@ struct PromoteRecommendationAgreementTests {
         }
     }
 
+    // MARK: - 5b. The recommendation classes (Consolidation S3b)
+
+    /// THE SENSOR for the one classifier: every record the Angel puts in a
+    /// recommending class (Ready / Needs a date / Worth a look) is one the
+    /// Promote engine accepts; the promoted ones are Excluded; and an
+    /// archiveStage of Ready is a VOTE (it lands in Ready), never
+    /// "already archived" (Rick 2026-09-22, decision 3).
+    @Test func noRecommendationClassOffersWhatPromoteRefuses() async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("agree-classes")
+        defer { sb.cleanup() }
+        let files = try seed(sb, count: 6)
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        _ = try MasterArchiveTestSupport.initialize(model, in: sb)
+        model.previewSweep.stop()
+        model.archiveAngel.sweep.stop()
+        model.records = files.map { f in
+            let r = MasterArchiveTestSupport.makeRecord(path: f.path, userDate: "1994", starRating: 3)
+            r.durationSeconds = 600
+            r.isPlayable = "Yes"
+            return r
+        }
+        let originals = model.records.map(\.id)
+        let staged = originals[4]
+        model.record(forID: staged)?.archiveStage = .readyForArchive
+        let promotedIDs = Array(originals.prefix(3))
+        _ = await MasterArchiveTestSupport.promote(model, ids: promotedIDs)
+
+        var env = AngelEnvironment.app
+        env.bufferRoot = sb.root.appendingPathComponent("AngelBuffer", isDirectory: true)
+        env.evidenceDirectory = sb.root.appendingPathComponent("AngelEvidence", isDirectory: true)
+        env.policyOverrideURL = sb.root.appendingPathComponent("no-policy.json")
+        let angel = ArchiveAngel(model: model, environment: env)
+        angel.launch()
+        await angel.sweep.runAndWait(reason: "agreement sensor")
+        angel.sweep.stop()
+
+        let offered = model.records.filter { angel.recommendationClass(for: $0.id)?.isRecommended == true }
+        #expect(!offered.isEmpty, "the fixture must still offer something")
+        for rec in offered {
+            #expect(!model.promoteWouldRefusePermanently(rec), "\(rec.filename) is offered but Promote refuses it")
+        }
+        let plan = try #require(model.buildPromotePlan(recordIDs: offered.map(\.id)))
+        let permanentlySkipped = plan.skipped.filter { $0.reason.isPermanent }
+        #expect(permanentlySkipped.isEmpty,
+                "offered then refused: \(permanentlySkipped.map { "\($0.filename) — \($0.reason)" })")
+        for id in promotedIDs {
+            #expect(angel.recommendationClass(for: id) == .excluded, "a promoted original is Excluded")
+        }
+        #expect(angel.recommendationClass(for: staged) == .ready, "stage Ready is a vote to archive")
+        #expect(Set(offered.map(\.id)) == Set(originals.dropFirst(3)), "exactly the three un-promoted originals")
+        #expect(angel.recommendations.count(.ready) == 3)
+    }
+
     // MARK: - 2. Scale
 
     /// The agreement is checked per record on a list that can run to

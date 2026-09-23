@@ -56,14 +56,14 @@ struct ArchiveAngelFacadeTests {
     @MainActor
     final class FakeRunner: AngelJobRunner {
         var isBusy = false
-        var calls: [(count: Int, recordIDs: [UUID]?, lossless: Bool, root: URL, weights: ArchiveAngelWeights)] = []
+        var calls: [(count: Int, recordIDs: [UUID]?, lossless: Bool, root: URL, policy: AngelRecommendationPolicy)] = []
         func startArchiveAngelByUser(count: Int, recordIDs: [UUID]?, makeLossless: Bool,
                                      model: VideoScanModel, bufferRoot: URL,
-                                     weights: ArchiveAngelWeights) -> ArchiveAngelJob {
-            calls.append((count, recordIDs, makeLossless, bufferRoot, weights))
+                                     policy: AngelRecommendationPolicy) -> ArchiveAngelJob {
+            calls.append((count, recordIDs, makeLossless, bufferRoot, policy))
             return ArchiveAngelJob(model: model, center: MediaFileOperationsCenter(), count: count,
                                    makeLossless: makeLossless, bufferRoot: bufferRoot,
-                                   explicitRecordIDs: recordIDs, weights: weights)
+                                   explicitRecordIDs: recordIDs, policy: policy)
         }
     }
 
@@ -152,7 +152,7 @@ struct ArchiveAngelFacadeTests {
         #expect(runner.calls.count == 2)
         #expect(runner.calls[0].count == 10 && runner.calls[0].recordIDs == nil && !runner.calls[0].lossless)
         #expect(runner.calls[1].recordIDs == ids && runner.calls[1].lossless, "lossless follows the start sheet's choice")
-        #expect(runner.calls.allSatisfy { $0.root == angel.environment.bufferRoot && $0.weights == angel.policy.weights })
+        #expect(runner.calls.allSatisfy { $0.root == angel.environment.bufferRoot && $0.policy == angel.policy })
         #expect(job?.bufferRoot == angel.environment.bufferRoot)
         defaults.removePersistentDomain(forName: defaults.description)
     }

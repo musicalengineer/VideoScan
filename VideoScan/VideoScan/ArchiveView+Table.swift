@@ -53,8 +53,10 @@ extension ArchiveView {
                 // Archive Angel — ONE strip (Rick 2026-09-22), its cards and
                 // sheets (ArchiveAngel/UI/ArchiveAngelStrip.swift, S2).
                 ArchiveAngelStrip(angel: model.archiveAngel, revealArchived: { revealArchivedForAngel() })
-                ArchiveNudgeView(
-                    nudge: archiveNudge,
+                // The nudge reads the Angel's ONE set of numbers (S3b) —
+                // the same counts as the strip above and the catalog filter.
+                ArchiveNudgeHost(
+                    angel: model.archiveAngel,
                     openHelper: { id in
                         guard let seed = model.record(forID: id) else { return }
                         fileOpsCenter.startedByUser { $0.startAssessCopies(seed: seed, model: model) }
@@ -388,25 +390,5 @@ extension ArchiveView {
             CatalogStorageTotalsCalculator.compute(records: model.records)
         }
         return ArchiveProgress.from(totals: model.masterArchiveTotals, storage: storage)
-    }
-
-    /// Files the catalog already vouches for, not yet archived.
-    @MainActor
-    var archiveNudge: ArchiveNudge {
-        let key = RecordsVersion(count: model.records.count,
-                                 revision: model.volumeAggregatesRevision)
-        return nudgeMemo.value(for: key) {
-            // Belt and braces. `notYetArchived` already excludes anything
-            // with a master copy, so this is normally a no-op — but this
-            // list is what Rick CLICKS, and on 2026-09-16 he clicked one
-            // and got "already promoted". Nothing offered here may be
-            // something Promote will throw back. O(1) per record (one
-            // index lookup), inside the memo, never per render.
-            // Consolidation S3a: the ONE recommendation classifier, under
-            // the legacy nudge rules (same numbers as ArchiveNudge.assess —
-            // ArchiveAngelRecommendationsLegacyParityTests pins it).
-            ArchiveAngel.nudge(
-                for: snapshot.notYetArchived.filter { !model.promoteWouldRefusePermanently($0) })
-        }
     }
 }

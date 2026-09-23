@@ -1,50 +1,439 @@
 {
-  "name": "default",
-  "schemaVersion": 1,
-  "weights": {
-    "clearWeight": 0.5,
-    "confirmedPersonCap": 75,
-    "confirmedPersonEach": 25,
-    "dateConfidenceKnown": 0.8,
-    "dateKnown": 20,
-    "dateLowConfidence": 5,
-    "downloadCapScore": 59,
-    "downloadMaxKilobitsPerSecond": 4000.0,
-    "downloadMinimumDurationSeconds": 1200.0,
-    "durationHalfTape": 45,
-    "durationLongScene": 25,
-    "durationScene": 10,
-    "durationWholeTape": 60,
-    "excludeLivePhotoMotion": true,
-    "excludeRecentPhoneClips": true,
-    "explicitPickMinimumDurationSeconds": 60.0,
-    "familySkipShare": 0.5,
-    "fatigueFactor": 0.5,
-    "formatAtRisk": 15,
-    "freshMinimumScore": 25,
-    "freshShare": 0.3,
-    "halfTapeSeconds": 1800.0,
-    "junkFloor": 5,
-    "longSceneSeconds": 900.0,
-    "machinePersonCap": 24,
-    "machinePersonEach": 8,
-    "minimumAverageKilobitsPerSecond": 100.0,
-    "minimumDurationSeconds": 120.0,
-    "oldSkipAfterDays": 90.0,
-    "oldSkipWeight": 0.5,
-    "oneStar": 10,
-    "onlyCopy": 15,
-    "playHistoryCap": 40,
-    "playedRecentlyBonus": 5,
-    "recentPhoneClipYears": 10,
-    "restAfterSkips": 3.0,
-    "restDays": 90.0,
-    "richnessCap": 40,
-    "richnessEach": 5,
-    "riskyVolume": 10,
-    "sceneSeconds": 300.0,
-    "threeStars": 100,
-    "twoStars": 40,
-    "wholeTapeSeconds": 3600.0
+  "floors" : [
+    {
+      "id" : "notVideo",
+      "kind" : "notVideo",
+      "note" : "Audio-only files, stills and un-probed files are not videos"
+    },
+    {
+      "id" : "onMasterArchive",
+      "kind" : "onMasterArchive",
+      "note" : "The file is in the Master Archive or already has its copy there"
+    },
+    {
+      "id" : "fileGone",
+      "kind" : "match",
+      "note" : "Relocate marked the file deleted or unsalvageable",
+      "rejection" : "fileGone",
+      "when" : [
+        {
+          "field" : "archiveStage",
+          "op" : "in",
+          "value" : [
+            "manuallyDeleted",
+            "salvageFailed"
+          ]
+        }
+      ]
+    },
+    {
+      "id" : "archivedCopy",
+      "kind" : "archivedCopy",
+      "note" : "A copy of it, or the original this is a version of, is already archived"
+    },
+    {
+      "id" : "notPlayable",
+      "kind" : "notPlayable"
+    },
+    {
+      "id" : "pairedHalf",
+      "kind" : "pairedHalf",
+      "note" : "Combine the A/V pair first; the combined file is the candidate"
+    },
+    {
+      "explicitPicks" : false,
+      "id" : "livePhotoMotion",
+      "kind" : "livePhotoMotion",
+      "note" : "Rick 2026-09-21: a Live Photo's motion half is part of a photo"
+    },
+    {
+      "explicitPicks" : false,
+      "id" : "recentPhoneClip",
+      "kind" : "recentPhoneClip",
+      "note" : "Rick 2026-09-21: only phone clips older than weights.recentPhoneClipYears"
+    },
+    {
+      "id" : "appCache",
+      "kind" : "appCache",
+      "starExempt" : true
+    },
+    {
+      "id" : "derivativeOfOriginal",
+      "kind" : "derivativeOfOriginal",
+      "starExempt" : true
+    },
+    {
+      "id" : "tooShort",
+      "kind" : "tooShort",
+      "note" : "weights.minimumDurationSeconds (explicit picks: explicitPickMinimumDurationSeconds)"
+    },
+    {
+      "id" : "proxyStream",
+      "kind" : "proxyStream",
+      "starExempt" : true
+    },
+    {
+      "id" : "markedJunk",
+      "kind" : "markedJunk"
+    },
+    {
+      "id" : "suspectedJunk",
+      "kind" : "suspectedJunk",
+      "starExempt" : true
+    },
+    {
+      "id" : "junkScore",
+      "kind" : "junkScore",
+      "note" : "weights.junkFloor",
+      "starExempt" : true
+    },
+    {
+      "id" : "volumeOffline",
+      "kind" : "volumeOffline"
+    },
+    {
+      "id" : "resting",
+      "kind" : "resting",
+      "note" : "Attention memory: passed on three times, back after weights.restDays"
+    }
+  ],
+  "grades" : {
+    "a" : 100,
+    "b" : 60,
+    "c" : 25,
+    "d" : 1
+  },
+  "name" : "default",
+  "recommend" : {
+    "classes" : [
+      {
+        "class" : "ready",
+        "when" : [
+          {
+            "any" : [
+              {
+                "field" : "vouched",
+                "op" : "==",
+                "value" : true
+              },
+              {
+                "field" : "grade",
+                "op" : "==",
+                "value" : "A"
+              }
+            ]
+          },
+          {
+            "field" : "dated",
+            "op" : "==",
+            "value" : true
+          }
+        ]
+      },
+      {
+        "class" : "needsDate",
+        "when" : [
+          {
+            "any" : [
+              {
+                "field" : "vouched",
+                "op" : "==",
+                "value" : true
+              },
+              {
+                "field" : "grade",
+                "op" : "==",
+                "value" : "A"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "class" : "worthALook",
+        "when" : [
+          {
+            "field" : "grade",
+            "op" : "==",
+            "value" : "B"
+          }
+        ]
+      }
+    ],
+    "copies" : {
+      "classes" : [
+        "ready",
+        "needsDate",
+        "worthALook"
+      ],
+      "collapseBy" : [
+        "duplicateGroup",
+        "nameAndDuration"
+      ],
+      "noteCopies" : true,
+      "prefer" : [
+        "userKeeper",
+        "best"
+      ]
+    },
+    "date" : {
+      "minimum" : "year"
+    },
+    "exclude" : [
+      {
+        "id" : "extraCopy",
+        "kind" : "match",
+        "line" : "Marked an extra copy — its keeper is the one to archive",
+        "when" : [
+          {
+            "field" : "duplicateDisposition",
+            "op" : "==",
+            "value" : "extraCopy"
+          }
+        ]
+      }
+    ],
+    "order" : "angelRank",
+    "useAngelFloors" : true,
+    "vouch" : [
+      {
+        "id" : "important",
+        "kind" : "match",
+        "line" : "marked Important",
+        "points" : 3,
+        "when" : [
+          {
+            "field" : "mediaDisposition",
+            "op" : "==",
+            "value" : "important"
+          }
+        ]
+      },
+      {
+        "id" : "stars",
+        "kind" : "stars",
+        "points" : 1,
+        "when" : [
+          {
+            "field" : "starRating",
+            "op" : ">=",
+            "value" : 2
+          }
+        ]
+      },
+      {
+        "id" : "stageReady",
+        "kind" : "match",
+        "line" : "stage: Ready",
+        "points" : 2,
+        "when" : [
+          {
+            "field" : "archiveStage",
+            "op" : "==",
+            "value" : "readyForArchive"
+          }
+        ]
+      },
+      {
+        "id" : "stageMaster",
+        "kind" : "match",
+        "line" : "stage: Master",
+        "points" : 1,
+        "when" : [
+          {
+            "field" : "archiveStage",
+            "op" : "==",
+            "value" : "masterAssigned"
+          }
+        ]
+      },
+      {
+        "id" : "keeper",
+        "kind" : "match",
+        "line" : "the copy to keep",
+        "vouches" : false,
+        "when" : [
+          {
+            "field" : "duplicateDisposition",
+            "op" : "==",
+            "value" : "keep"
+          }
+        ]
+      }
+    ]
+  },
+  "schemaVersion" : 2,
+  "signals" : [
+    {
+      "id" : "stars",
+      "kind" : "stars"
+    },
+    {
+      "id" : "confirmedPeople",
+      "kind" : "confirmedPeople"
+    },
+    {
+      "id" : "machinePeople",
+      "kind" : "machinePeople"
+    },
+    {
+      "id" : "playHistory",
+      "kind" : "playHistory"
+    },
+    {
+      "id" : "richness",
+      "kind" : "richness"
+    },
+    {
+      "id" : "date",
+      "kind" : "date"
+    },
+    {
+      "id" : "duration",
+      "kind" : "duration"
+    },
+    {
+      "id" : "formatAtRisk",
+      "kind" : "formatAtRisk"
+    },
+    {
+      "id" : "onlyCopy",
+      "kind" : "onlyCopy"
+    },
+    {
+      "id" : "unassignedVolume",
+      "kind" : "unassignedVolume"
+    },
+    {
+      "id" : "audioProblem",
+      "kind" : "audioProblem"
+    },
+    {
+      "id" : "downloadCap",
+      "kind" : "downloadCap"
+    },
+    {
+      "id" : "fatigue",
+      "kind" : "fatigue"
+    }
+  ],
+  "tables" : {
+    "appCacheFolders" : [
+      "imovie cache",
+      "imovie movie cache",
+      "imovie thumbnails",
+      "imovie thumbnails.localized",
+      "render files",
+      "transcoded media",
+      "proxy media",
+      "analysis files",
+      "thumbnail media",
+      "cache",
+      "caches",
+      "renders",
+      "proxies",
+      "thumbnails",
+      "temp",
+      "tmp",
+      ".cache",
+      ".thumbnails"
+    ],
+    "appCacheNamePattern" : "^(cache|render|proxy|proxies|preview|thumb|thumbnail|temp|tmp)([ _-]?\\d+)?$",
+    "deliveryCodecs" : [
+      "h264",
+      "avc1",
+      "mpeg4",
+      "xvid",
+      "divx",
+      "msmpeg4v3",
+      "msmpeg4v2",
+      "msmpeg4",
+      "hevc",
+      "h265",
+      "vp8",
+      "vp9",
+      "av1",
+      "wmv3",
+      "wmv2",
+      "vc1",
+      "flv1",
+      "theora"
+    ],
+    "familyOriginFolders" : [
+      ".imovielibrary",
+      ".imovieproject",
+      "imovie events",
+      "imovie projects",
+      "family movies",
+      "home movies",
+      "home videos",
+      "original media"
+    ],
+    "maxOriginalsPerKey" : 8,
+    "originality" : {
+      "avc1" : 8,
+      "dv" : 0,
+      "dvvideo" : 0,
+      "ffv1" : 5,
+      "h264" : 8,
+      "hdv" : 3,
+      "hevc" : 8,
+      "mjpeg" : 1,
+      "mpeg1video" : 6,
+      "mpeg2video" : 2,
+      "mpeg4" : 8,
+      "prores" : 4,
+      "svq3" : 7,
+      "vp9" : 8
+    },
+    "originalityUnknown" : 9
+  },
+  "weights" : {
+    "clearWeight" : 0.5,
+    "confirmedPersonCap" : 75,
+    "confirmedPersonEach" : 25,
+    "dateConfidenceKnown" : 0.8,
+    "dateKnown" : 20,
+    "dateLowConfidence" : 5,
+    "downloadCapScore" : 59,
+    "downloadMaxKilobitsPerSecond" : 4000,
+    "downloadMinimumDurationSeconds" : 1200,
+    "durationHalfTape" : 45,
+    "durationLongScene" : 25,
+    "durationScene" : 10,
+    "durationWholeTape" : 60,
+    "excludeLivePhotoMotion" : true,
+    "excludeRecentPhoneClips" : true,
+    "explicitPickMinimumDurationSeconds" : 60,
+    "familySkipShare" : 0.5,
+    "fatigueFactor" : 0.5,
+    "formatAtRisk" : 15,
+    "freshMinimumScore" : 25,
+    "freshShare" : 0.3,
+    "halfTapeSeconds" : 1800,
+    "junkFloor" : 5,
+    "longSceneSeconds" : 900,
+    "machinePersonCap" : 24,
+    "machinePersonEach" : 8,
+    "minimumAverageKilobitsPerSecond" : 100,
+    "minimumDurationSeconds" : 120,
+    "oldSkipAfterDays" : 90,
+    "oldSkipWeight" : 0.5,
+    "oneStar" : 10,
+    "onlyCopy" : 15,
+    "playHistoryCap" : 40,
+    "playHistoryPerDoubling" : 4,
+    "playedRecentlyBonus" : 5,
+    "playedRecentlyDays" : 365,
+    "recentPhoneClipYears" : 10,
+    "restAfterSkips" : 3,
+    "restDays" : 90,
+    "richnessCap" : 40,
+    "richnessEach" : 5,
+    "riskyVolume" : 10,
+    "sceneSeconds" : 300,
+    "threeStars" : 100,
+    "twoStars" : 40,
+    "wholeTapeSeconds" : 3600
   }
 }

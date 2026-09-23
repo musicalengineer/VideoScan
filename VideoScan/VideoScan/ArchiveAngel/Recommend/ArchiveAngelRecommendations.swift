@@ -460,7 +460,7 @@ enum ArchiveAngelRecommendations {
     /// Steps 1–4 for one record (no copies — that needs the whole set).
     static func verdict(_ c: ArchiveAngelCandidate, evidence ev: ArchiveAngelEvidenceRecord?,
                         rules: AngelRecommendRules, now: Date) -> Verdict {
-        var ctx = AngelEvalContext(candidate: c, dateRule: rules.date, now: now)
+        var ctx = AngelEvalContext(dateRule: rules.date, now: now)
         var v = Verdict(kind: .notNow)
         if let ev {
             ctx.grade = ev.grade
@@ -480,13 +480,13 @@ enum ArchiveAngelRecommendations {
             }
         }
         // 2. Exclusions.
-        for rule in rules.exclude where rule.enabled && AngelCondition.all(rule.when, &ctx) {
+        for rule in rules.exclude where rule.enabled && AngelCondition.all(rule.when, c, &ctx) {
             v.kind = .excluded
             v.reasons = [rule.displayLine]
             return v
         }
         // 3. Vouches.
-        for rule in rules.vouch where rule.enabled && AngelCondition.all(rule.when, &ctx) {
+        for rule in rules.vouch where rule.enabled && AngelCondition.all(rule.when, c, &ctx) {
             switch rule.resolvedKind {
             case .stars?:
                 let stars = max(0, c.starRating)
@@ -503,12 +503,12 @@ enum ArchiveAngelRecommendations {
         v.points = ctx.vouchPoints
         // 4. Classes.
         for rule in rules.classes {
-            guard let assigned = rule.resolvedClass, AngelCondition.all(rule.when, &ctx) else { continue }
+            guard let assigned = rule.resolvedClass, AngelCondition.all(rule.when, c, &ctx) else { continue }
             v.kind = assigned
             break
         }
         if v.kind == .ready || v.kind == .needsDate || v.kind == .worthALook {
-            v.year = ctx.datedYear()
+            v.year = ctx.datedYear(c)
             if !ctx.vouched, ctx.grade == .a, v.kind != .worthALook {
                 v.reasons.append("Archive Angel grade A (\(v.score))")
             } else if v.kind == .worthALook, let g = ctx.grade {

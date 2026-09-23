@@ -168,8 +168,8 @@ struct AngelRuleLanguageTests {
     private let now = Date(timeIntervalSince1970: 1_790_000_000)
 
     private func matches(_ cond: AngelCondition, _ c: ArchiveAngelCandidate) -> Bool {
-        var ctx = AngelEvalContext(candidate: c, now: now)
-        return cond.matches(&ctx)
+        var ctx = AngelEvalContext(now: now)
+        return cond.matches(c, &ctx)
     }
 
     private func decode(_ json: String) throws -> AngelCondition {
@@ -284,7 +284,9 @@ struct AngelRuleLanguageTests {
         #expect(problems.contains { $0.contains("duplicate id") })
         #expect(problems.contains { $0.contains("\"tooShort\" does not belong in vouch") })
         #expect(problems.contains { $0.contains("unknown kind \"frobnicate\"") })
-        let encoded = String(bytes: try JSONEncoder().encode(rules[1]), encoding: .utf8)
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys]
+        let encoded = String(bytes: try enc.encode(rules[1]), encoding: .utf8)
         #expect(encoded == #"{"id":"a","kind":"tooShort"}"#)
     }
 
@@ -350,5 +352,187 @@ struct ArchiveAngelClassifierLogicTests {
         let b = CopyFamilyInput(fullPath: "/Volumes/B/x.mov", isReachable: true)
         #expect(ArchiveAngelCopyChooser.physicalInstance(of: [a, b])?.id == CopyFamilyAssessor.recommendedInstance([a, b])?.id)
         #expect(ArchiveAngelCopyChooser.physicalInstance(of: [a, b])?.id == b.id)
+    }
+}
+
+// MARK: - The unified rules (S3b)
+
+@Suite("Archive Angel recommendations — the unified default rules (S3b)")
+struct ArchiveAngelUnifiedRulesTests {
+
+    private let now = Date(timeIntervalSince1970: 1_790_000_000)
+    private let dated = Date(timeIntervalSince1970: 773_000_000)   // 1994
+
+    private func ev(_ score: Int, _ rejection: ArchiveAngelRejection? = nil) -> ArchiveAngelEvidenceRecord {
+        .init(score: score, lines: [], rejection: rejection, useCount: 0, lastUsed: nil, computedAt: now)
+    }
+
+    @Test("LOGIC table: floors, vouch-or-A, the date rule, grade B, C/D, extra copy, not assessed")
+    func table() {
+        typealias K = ArchiveAngelRecommendationClass
+        let rows: [(String, ArchiveAngelCandidate, ArchiveAngelEvidenceRecord?, K)] = [
+            ("a floor → Excluded", .init(starRating: 3, captureDate: dated), ev(0, .tooShort), .excluded),
+            ("★★ grade C, dated → Ready (vouched)", .init(starRating: 2, captureDate: dated), ev(40), .ready),
+            ("grade A unvouched, undated → Needs a date", .init(), ev(120), .needsDate),
+            ("grade A unvouched, dated → Ready", .init(captureDate: dated), ev(120), .ready),
+            ("grade B unvouched → Worth a look", .init(captureDate: dated), ev(70), .worthALook),
+            ("grade B + Important → Ready", .init(mediaDisposition: .important, captureDate: dated), ev(70), .ready),
+            ("grade C unvouched → Not now", .init(captureDate: dated), ev(40), .notNow),
+            ("grade D, 1 star → Not now (1 star is not a vouch)", .init(starRating: 1, captureDate: dated), ev(10), .notNow),
+            ("stage Ready is a VOTE → Ready", .init(archiveStage: .readyForArchive, captureDate: dated), ev(30), .ready),
+            ("stage Master is a VOTE → Needs a date", .init(archiveStage: .masterAssigned), ev(30), .needsDate),
+            ("an Extra copy → Excluded", .init(starRating: 3, captureDate: dated, duplicateDisposition: .extraCopy), ev(150), .excluded),
+            ("no evidence → Not now", .init(starRating: 3, captureDate: dated), nil, .notNow),
+            ("a year in the name dates it", .init(filename: "Cape Cod 1993.mov", starRating: 2), ev(50), .ready),
+        ]
+        for (label, c, e, want) in rows {
+            let v = ArchiveAngelRecommendations.verdict(c, evidence: e, rules: .standard, now: now)
+            #expect(v.kind == want, "\(label): got \(v.kind)")
+        }
+        #expect(AngelRecommendRules.standard.problems.isEmpty, "\(AngelRecommendRules.standard.problems)")
+    }
+
+    @Test("reasons: vouches first, grade A named when nobody vouched, the floor's own reason when excluded")
+    func reasons() {
+        let vouched = ArchiveAngelRecommendations.verdict(.init(starRating: 3, mediaDisposition: .important, captureDate: dated),
+                                                          evidence: ev(160), rules: .standard, now: now)
+        #expect(vouched.reasons == ["marked Important", "★★★"])
+        #expect(vouched.year == 1994)
+        let byGrade = ArchiveAngelRecommendations.verdict(.init(captureDate: dated), evidence: ev(120), rules: .standard, now: now)
+        #expect(byGrade.reasons == ["Archive Angel grade A (120)"])
+        let floored = ArchiveAngelRecommendations.verdict(.init(), evidence: ev(0, .volumeOffline), rules: .standard, now: now)
+        #expect(floored.reasons == [ArchiveAngelRejection.volumeOffline.rawValue])
+    }
+
+    @Test("copies: one per duplicate group — the Keep copy wins over a higher score; the rest are Another copy")
+    func copiesCollapse() {
+        let g = UUID()
+        let a = ArchiveAngelCandidate(filename: "a.mov", starRating: 3, duplicateGroupID: g, captureDate: dated,
+                                      duplicateGroupCount: 2)
+        let b = ArchiveAngelCandidate(filename: "b.mov", starRating: 2, duplicateGroupID: g, captureDate: dated,
+                                      duplicateGroupCount: 2, duplicateDisposition: .keep)
+        let r = ArchiveAngelRecommendations.classify([a, b], evidence: [a.id: ev(200), b.id: ev(90)],
+                                                     rules: .standard, now: now)
+        #expect(r.verdicts.map(\.kind) == [.anotherCopy, .ready])
+        #expect(r.verdicts[1].copies == 2 && r.verdicts[1].reasons.last == "2 copies — this one")
+        #expect(r.ready.map(\.id) == [b.id])
+        let noKeeper = ArchiveAngelRecommendations.classify(
+            [a, ArchiveAngelCandidate(filename: "c.mov", duplicateGroupID: g, captureDate: dated, duplicateGroupCount: 2)],
+            evidence: [a.id: ev(200)], rules: .standard, now: now)
+        #expect(noKeeper.verdicts.first?.kind == .ready, "the other copy is not assessed — nothing collapses")
+    }
+
+    @Test("SENSOR (Rick 2026-09-22, decision 3): archiveStage Ready/Master is a vote, not a floor; Relocate's deleted/unsalvageable stages are `fileGone`; v10's rule is one data rule away")
+    func stageIsAVote() {
+        for stage in [ArchiveStage.masterAssigned, .readyForArchive, .backedUp, .archived] {
+            #expect(ArchiveAngelScorer.hardFloor(ArchiveAngelCandidate(archiveStage: stage), policy: .builtIn, now: now) == nil,
+                    "\(stage) is not \"already archived\"")
+            #expect(ArchiveAngelScorer.hardFloor(ArchiveAngelCandidate(archiveStage: stage), policy: .rulesV10, now: now)
+                    == .alreadyArchived, "v10 as data")
+        }
+        for stage in [ArchiveStage.manuallyDeleted, .salvageFailed] {
+            #expect(ArchiveAngelScorer.hardFloor(ArchiveAngelCandidate(archiveStage: stage), policy: .builtIn, now: now) == .fileGone)
+        }
+        #expect(ArchiveAngelScorer.hardFloor(ArchiveAngelCandidate(isOnMasterArchive: true), policy: .builtIn, now: now) == .alreadyArchived,
+                "only a real Master Archive copy means archived")
+    }
+
+    @Test("the unified rules survive a JSON round trip unchanged (they are data)")
+    func roundTrip() throws {
+        let data = try JSONEncoder().encode(AngelRecommendRules.standard)
+        #expect(try JSONDecoder().decode(AngelRecommendRules.self, from: data) == .standard)
+    }
+}
+
+// MARK: - ONE set of numbers (the façade)
+
+@Suite("Archive Angel — one set of numbers: nudge, strip headline, badge and filter agree", .serialized)
+@MainActor
+struct ArchiveAngelOneSetOfNumbersTests {
+
+    private func model() throws -> (VideoScanModel, URL) {
+        let sb = try MasterArchiveTestSupport.makeSandbox("angel-numbers")
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        model.previewSweep.stop()
+        model.archiveAngel.sweep.stop()
+        return (model, sb.root)
+    }
+
+    private func rec(_ score: Int, _ kind: ArchiveAngelRecommendationClass?, year: Int? = nil,
+                     reasons: [String]? = nil, rejection: ArchiveAngelRejection? = nil) -> ArchiveAngelEvidenceRecord {
+        var r = ArchiveAngelEvidenceRecord(score: score, lines: [], rejection: rejection, useCount: 0, lastUsed: nil,
+                                           computedAt: Date())
+        r.recommendation = kind
+        r.year = year
+        r.reasons = reasons
+        return r
+    }
+
+    @Test("the counts, the nudge, the headline, the candidate set and the badges come from the same classes")
+    func agree() throws {
+        let (model, root) = try model()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let names = ["r1.mov", "r2.mov", "n.mov", "w.mov", "x.mov", "o.mov"]
+        let records = names.map { name -> VideoRecord in
+            let r = VideoRecord()
+            r.filename = name
+            r.fullPath = "/Volumes/T/" + name
+            return r
+        }
+        model.records = records
+        let ids = records.map(\.id)
+        let angel = model.archiveAngel
+        angel.store.replace(with: ArchiveAngelEvidenceFile(records: [
+            ids[0]: rec(150, .ready, year: 1994, reasons: ["★★★"]),
+            ids[1]: rec(40, .ready, year: 1988, reasons: ["marked Important"]),
+            ids[2]: rec(120, .needsDate, reasons: ["Archive Angel grade A (120)"]),
+            ids[3]: rec(70, .worthALook),
+            ids[4]: rec(0, .excluded, rejection: .tooShort),
+            ids[5]: rec(80, .anotherCopy),
+        ]))
+        let s = angel.recommendations
+        #expect(s.count(.ready) == 2 && s.count(.needsDate) == 1 && s.count(.worthALook) == 1)
+        #expect(s.count(.excluded) == 1 && s.count(.anotherCopy) == 1 && s.count(.prepared) == 0)
+        #expect(s.headline == "2 ready · 1 needs a date · 0 prepared")
+        #expect(s.nudge.ready.count == s.count(.ready), "the nudge sentence reads the same count")
+        #expect(s.nudge.nearReady.count == s.count(.needsDate))
+        #expect(s.nudge.ready.map(\.filename) == ["r1.mov", "r2.mov"], "by score")
+        #expect(s.nudge.ready.first?.year == 1994 && s.nudge.ready.first?.reasons == ["★★★"])
+        #expect(s.nudge.headline == "It looks like 2 files are ready to be archived, and 1 more just need a date.")
+        #expect(angel.candidateIDs == Set(ids[0...3]), "the catalog filter = Ready + Needs a date + Worth a look")
+        #expect(s.ranked == [ids[0], ids[1], ids[2], ids[3]])
+        #expect(angel.badge(for: ids[0])?.text == "Promote me")
+        #expect(angel.badge(for: ids[2])?.text == "Needs a date")
+        #expect(angel.badge(for: ids[3])?.text == "Worth a look")
+        #expect(angel.badge(for: ids[4]) == nil && angel.badge(for: ids[5]) == nil)
+    }
+
+    @Test("a prepared record leaves its class for Prepared — in the counts, the filter and the badge")
+    func preparedOverlay() {
+        let a = UUID(), b = UUID(), c = UUID()
+        var ready = ArchiveAngelEvidenceRecord(score: 150, lines: [], rejection: nil, useCount: 0, lastUsed: nil, computedAt: Date())
+        ready.recommendation = .ready
+        let s = ArchiveAngelRecommendationSummary.make(evidence: [a: ready, b: ready], prepared: [a, c], promoted: [],
+                                                       revision: 1, filename: { _ in "x.mov" })
+        #expect(s.count(.ready) == 1 && s.count(.prepared) == 2)
+        #expect(s.candidateIDs == [b])
+        #expect(s.headline == "1 ready · 0 need a date · 2 prepared")
+        #expect(ArchiveAngelCatalogBadge.make(for: ready, prepared: true)?.text == "Prepared")
+        let none = ArchiveAngelRecommendationSummary.make(evidence: nil, prepared: [], promoted: [], revision: 1, filename: { _ in nil })
+        #expect(!none.isAssessed && none.candidateIDs.isEmpty)
+    }
+
+    @Test("batch overlay: ready/pending rows are prepared; promoted rows of a buffer batch are promoted; skipped/failed are neither")
+    func batchOverlay() throws {
+        let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/ArchiveAngel")
+        let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+        let promoted = try dec.decode(ArchiveAngelPlan.self, from: Data(contentsOf: fixtures.appendingPathComponent("plan_promoted_with_skips.json")))
+        var ready = promoted
+        for i in ready.entries.indices { ready.entries[i].status = i == 0 ? .skipped : .ready }
+        let o = ArchiveAngelRecommendationSummary.batchOverlay(ready: [ready], buffer: [promoted])
+        #expect(o.prepared == Set(ready.entries.dropFirst().map(\.id)))
+        let promotedIDs = Set(promoted.entries.filter { $0.status == .promoted }.map(\.id))
+        #expect(o.promoted == promotedIDs.subtracting(o.prepared))
+        #expect(!o.prepared.contains(ready.entries[0].id))
     }
 }

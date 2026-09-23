@@ -157,6 +157,21 @@ struct ArchiveProgressBar: View {
     }
 }
 
+/// The nudge, fed by the Archive Angel's ONE set of numbers (Consolidation
+/// S3b): observes the façade so the sentence changes when a sweep or a
+/// batch recounts — the same Ready / Needs a date counts as the Angel strip
+/// and the catalog's Archive Candidates filter. Helper UI; S4 folds it into
+/// the strip.
+struct ArchiveNudgeHost: View {
+    @ObservedObject var angel: ArchiveAngel
+    let openHelper: (UUID) -> Void
+    let showInCatalog: (UUID) -> Void
+
+    var body: some View {
+        ArchiveNudgeView(nudge: angel.recommendations.nudge, openHelper: openHelper, showInCatalog: showInCatalog)
+    }
+}
+
 /// The nudge under the bar: one loose sentence and a chevron that opens a
 /// short, tidy list — the few files most likely to be ready — each with a
 /// green Archive Helper… and a blue Show in Catalog. A nudge, not an
