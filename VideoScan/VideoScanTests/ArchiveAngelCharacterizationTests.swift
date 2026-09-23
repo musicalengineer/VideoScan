@@ -425,19 +425,27 @@ struct ArchiveAngelScaleCharacterizationTests {
         #expect(sel.overflow == Self.pinnedSelectionOverflow)
     }
 
-    @Test("SCALE: ArchiveNudge.assess over 100k records — ready / near-ready counts pinned, under 1 s")
+    /// S0 pinned these numbers on ArchiveNudge.assess; S3a proved the
+    /// `.legacyNudge` rule set answers identically; S4 retired the nudge, so
+    /// the rule set is now held to the SAME frozen numbers (ready / near
+    /// counts and the first 15 — the old shortlist: ready first, then near).
+    @Test("SCALE: the legacy nudge rule set over 100k records — ready / near-ready counts and head pinned (frozen from ArchiveNudge.assess), under 1.5 s")
     func nudgeCounts() {
         let records = ArchiveAngelS0Catalog.records(100_000)
         let clock = ContinuousClock()
-        var nudge = ArchiveNudge.empty
-        let elapsed = clock.measure { nudge = ArchiveNudge.assess(records) }
+        var result = ArchiveAngelRecommendations.Result.empty
+        let elapsed = clock.measure {
+            let candidates = records.map { ArchiveAngelCandidate(recommendationFactsOf: $0) }
+            result = ArchiveAngelRecommendations.classify(candidates, rules: .legacyNudge, now: Date())
+        }
         let s = ArchiveAngelS0Catalog.seconds(elapsed)
-        let head = nudge.shortlist.map { Self.index($0.id) }
-        print("[angel-s0] nudge ready \(nudge.ready.count) near \(nudge.nearReady.count) head \(head) · \(String(format: "%.3f", s)) s")
-        #expect(nudge.ready.count == Self.pinnedNudgeReady)
-        #expect(nudge.nearReady.count == Self.pinnedNudgeNear)
+        let head = (result.ready + result.needsDate).prefix(15).map { Self.index($0.id) }
+        print("[angel-s4] legacy rules ready \(result.ready.count) near \(result.needsDate.count) head \(head) · \(String(format: "%.3f", s)) s")
+        #expect(result.ready.count == Self.pinnedNudgeReady)
+        #expect(result.needsDate.count == Self.pinnedNudgeNear)
         #expect(head == Self.pinnedNudgeHead)
-        #expect(s < 1, "nudge over 100k in \(s) s")
+        // Projection + classify (the S3a parity test's budget; assess alone had 1 s).
+        #expect(s < 1.5, "legacy rules over 100k in \(s) s")
     }
 
     @Test("RULES v10 AS DATA: the data-driven scorer reproduces every v10 pin exactly (grades, reasons, score sum, batch)")

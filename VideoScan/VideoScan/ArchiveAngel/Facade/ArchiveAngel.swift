@@ -74,7 +74,7 @@ final class ArchiveAngel: ObservableObject {
     @Published private(set) var sweepEnabled: Bool
     @Published private(set) var batches = Batches()
     /// ONE set of numbers (S3b): the class counts every surface reads —
-    /// the nudge, the strip headline, the badge, the catalog filter.
+    /// the strip headline, the badge, the catalog filter.
     /// Rebuilt by `rebuildRecommendations()` (ArchiveAngel+Recommendations).
     @Published private(set) var recommendations = ArchiveAngelRecommendationSummary()
     /// The pending live recount after a catalog change.
