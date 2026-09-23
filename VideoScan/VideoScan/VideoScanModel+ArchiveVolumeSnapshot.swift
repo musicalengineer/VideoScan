@@ -21,6 +21,13 @@
 //     NO disk access — which refuses what it cannot prove, and a rebuild
 //     is kicked. Nothing ever reads "clear" because a snapshot is late.
 //   • network mounts are never read (they stay unprovable → refused).
+//   • the scan targets' search paths ride along as ALIAS CANDIDATES
+//     (codex #1642): a scan root that is a symlink / firmlink spelling
+//     into FamilyArchive is resolved off-main once per build, so every
+//     row spelled through it is refused by string at the final step —
+//     Remove / Remove from Catalog / Tidy included, with no per-row disk
+//     read on the main thread. A scan-target change makes the snapshot
+//     stale like a mount does.
 //
 // (For Rick: the generation counter is the usual "sequence number on the
 // request, drop stale replies" pattern — a rebuild that started before a
@@ -40,6 +47,11 @@ struct ArchiveVolumeSnapshotCache {
     var generation = 0
     /// The designation the snapshot below was built for.
     var builtFor: MasterArchiveDesignation?
+    /// The alias candidates (scan-target search paths) it was built with.
+    var builtForCandidates: [String] = []
+    /// The designation Initialize resolved to a boot-disk FOLDER — its
+    /// provisional snapshot is then exact (codex #1642), not `.unknown`.
+    var provenBootFolder: MasterArchiveDesignation?
     var snapshot: ArchiveVolumeProtection?
     /// False from an invalidation until a rebuild for the current
     /// generation lands.
@@ -57,16 +69,32 @@ extension VideoScanModel {
     func archiveVolumeProtection() -> ArchiveVolumeProtection? {
         guard let d = masterArchive else { return nil }
         let cache = archiveVolumeSnapshotCache
-        if cache.isFresh, cache.builtFor == d { return cache.snapshot }
+        if isArchiveVolumeSnapshotFresh { return cache.snapshot }
         scheduleArchiveVolumeSnapshotRebuild()
-        return ArchiveVolumeProtection.provisional(designation: d)
+        // The last build for THIS designation keeps its proven spellings
+        // protected while the new one is built.
+        // Scan targets no build has resolved yet are pending (codex #1650):
+        // all of them before the first build, only the new ones after.
+        let sameDesignation = cache.builtFor == d
+        let resolved = sameDesignation ? Set(cache.builtForCandidates) : []
+        return ArchiveVolumeProtection.provisional(designation: d,
+                                                   previous: sameDesignation ? cache.snapshot : nil,
+                                                   provenBootFolder: cache.provenBootFolder == d,
+                                                   pendingAliasCandidates: archiveAliasCandidates.filter { !resolved.contains($0) })
     }
 
     /// True when `archiveVolumeProtection()` is returning a real (built)
     /// snapshot rather than the provisional one.
     var isArchiveVolumeSnapshotFresh: Bool {
         guard let d = masterArchive else { return true }
-        return archiveVolumeSnapshotCache.isFresh && archiveVolumeSnapshotCache.builtFor == d
+        let cache = archiveVolumeSnapshotCache
+        return cache.isFresh && cache.builtFor == d && cache.builtForCandidates == archiveAliasCandidates
+    }
+
+    /// The scan targets' search paths — the spellings catalog rows can
+    /// carry. O(targets), a handful.
+    var archiveAliasCandidates: [String] {
+        scanTargets.map(\.searchPath)
     }
 
     /// The snapshot plus the volume-UUID probe, captured HERE (task-local
@@ -75,7 +103,8 @@ extension VideoScanModel {
     func archiveRemovalCheck() -> ArchiveRemovalCheck? {
         guard let protection = archiveVolumeProtection() else { return nil }
         return ArchiveRemovalCheck(protection: protection, probe: MasterArchiveDesignation.volumeUUIDProbe,
-                                   isProvisional: !isArchiveVolumeSnapshotFresh)
+                                   isProvisional: !isArchiveVolumeSnapshotFresh,
+                                   identity: ArchiveVolumeProtection.mountIdentityProbe)
     }
 
     /// Something the snapshot depends on changed (designation, a mount, an
@@ -94,9 +123,10 @@ extension VideoScanModel {
     func scheduleArchiveVolumeSnapshotRebuild() {
         guard archiveVolumeSnapshotTask == nil, let d = masterArchive else { return }
         let generation = archiveVolumeSnapshotCache.generation
+        let candidates = archiveAliasCandidates
         archiveVolumeSnapshotTask = Task { @MainActor [weak self] in
-            let built = await Self.buildArchiveVolumeSnapshot(designation: d)
-            self?.installArchiveVolumeSnapshot(built, for: d, generation: generation)
+            let built = await Self.buildArchiveVolumeSnapshot(designation: d, aliasCandidates: candidates)
+            self?.installArchiveVolumeSnapshot(built, for: d, candidates: candidates, generation: generation)
         }
     }
 
@@ -110,8 +140,9 @@ extension VideoScanModel {
         if force { archiveVolumeSnapshotCache.generation &+= 1; archiveVolumeSnapshotCache.isFresh = false }
         if isArchiveVolumeSnapshotFresh { return archiveVolumeSnapshotCache.snapshot }
         let generation = archiveVolumeSnapshotCache.generation
-        let built = await Self.buildArchiveVolumeSnapshot(designation: d)
-        installArchiveVolumeSnapshot(built, for: d, generation: generation)
+        let candidates = archiveAliasCandidates
+        let built = await Self.buildArchiveVolumeSnapshot(designation: d, aliasCandidates: candidates)
+        installArchiveVolumeSnapshot(built, for: d, candidates: candidates, generation: generation)
         return archiveVolumeProtection()
     }
 
@@ -120,12 +151,13 @@ extension VideoScanModel {
     /// caller's (main) actor under Approachable Concurrency.
     @concurrent
     nonisolated static func buildArchiveVolumeSnapshot(
-        designation: MasterArchiveDesignation) async -> ArchiveVolumeProtection? {
-        ArchiveVolumeProtection.make(designation: designation)
+        designation: MasterArchiveDesignation, aliasCandidates: [String] = []) async -> ArchiveVolumeProtection? {
+        ArchiveVolumeProtection.make(designation: designation, aliasCandidates: aliasCandidates)
     }
 
     private func installArchiveVolumeSnapshot(_ built: ArchiveVolumeProtection?,
-                                              for d: MasterArchiveDesignation, generation: Int) {
+                                              for d: MasterArchiveDesignation, candidates: [String],
+                                              generation: Int) {
         if archiveVolumeSnapshotCache.generation == generation { archiveVolumeSnapshotTask = nil }
         guard archiveVolumeSnapshotCache.generation == generation, masterArchive == d else {
             // A newer invalidation (or a new designation) arrived while
@@ -135,11 +167,13 @@ extension VideoScanModel {
         }
         let changed = archiveVolumeSnapshotCache.snapshot != built || archiveVolumeSnapshotCache.builtFor != d
         archiveVolumeSnapshotCache.builtFor = d
+        archiveVolumeSnapshotCache.builtForCandidates = candidates
         archiveVolumeSnapshotCache.snapshot = built
         archiveVolumeSnapshotCache.isFresh = true
         archiveVolumeSnapshotCache.installCount += 1
         if let built {
             archiveVolumeLog.info("archive volume snapshot: \(built.label, privacy: .public) resolved=\(built.isResolved) roots=\(built.archiveRoots.count) provenOther=\(built.provenOtherRoots.count)")
+            archiveVolumeLog.info("archive volume snapshot placement=\(String(describing: built.placement), privacy: .public) aliases=\(built.aliasRoots.count) folders=\(built.protectedFolders.count)")
         }
         // The Delete Duplicates menu payload was computed against the
         // provisional snapshot: recompute it against the real one.
