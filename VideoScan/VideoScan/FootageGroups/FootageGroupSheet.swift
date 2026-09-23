@@ -24,8 +24,9 @@ struct FootageSheetRequest: Identifiable, Equatable {
 struct FootageGroupSheet: View {
     let request: FootageSheetRequest
     @ObservedObject var model: VideoScanModel
-    /// Starts the scoped re-run (nil when this window has no MFO center).
-    let startRun: (FootageScope) -> Void
+    /// Starts the scoped re-run; returns the job (nil when this window has
+    /// no MFO center) so the sheet can stop its spinner when it ends.
+    let startRun: (FootageScope) -> FindSimilarFootageJob?
     @Environment(\.dismiss) private var dismiss
 
     @State private var members: [VideoRecord] = []
@@ -135,16 +136,24 @@ struct FootageGroupSheet: View {
         rerun()
     }
 
-    private func rerun() {
-        runRequested = true
-        startRun(.records([request.recordID]))
-    }
+    private func rerun() { run(.records([request.recordID])) }
 
     private func decide(_ verdict: FootageDecision.Verdict?, other: UUID) {
         model.setFootageDecision(verdict, between: request.recordID, and: other)
-        runRequested = true
-        startRun(.records([request.recordID, other]))
         reload()
+        run(.records([request.recordID, other]))
+    }
+
+    /// Start a scoped run and refresh when it ends — even when it changed
+    /// nothing (then no catalog revision fires).
+    private func run(_ scope: FootageScope) {
+        guard let job = startRun(scope) else { runRequested = false; return }
+        runRequested = true
+        Task { @MainActor in
+            await job.task?.value
+            runRequested = false
+            reload()
+        }
     }
 }
 
