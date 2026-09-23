@@ -100,13 +100,18 @@ final class ArchiveAngelPromoter: ObservableObject {
     }
 
     /// Companion outcomes that are intended for promotion: done, with a
-    /// catalog record and a file still present in the buffer.
+    /// catalog record and a file still present in the buffer — or, for an
+    /// existing companion the Angel reused (S4: an already-balanced copy),
+    /// still present where it lives.
     static func promotableCompanions(of entry: ArchiveAngelPlan.Entry, in plan: ArchiveAngelPlan,
                                      fileManager fm: FileManager = .default) -> [ArchiveAngelPlan.StepOutcome] {
         entry.steps.filter { step in
-            guard step.state == .done, step.recordID != nil, let rel = step.outputRelPath else { return false }
-            let path = URL(fileURLWithPath: plan.batchDir).appendingPathComponent(rel).path
-            return fm.fileExists(atPath: path)
+            guard step.state == .done, step.recordID != nil else { return false }
+            if let rel = step.outputRelPath {
+                return fm.fileExists(atPath: URL(fileURLWithPath: plan.batchDir).appendingPathComponent(rel).path)
+            }
+            if let existing = step.existingPath { return fm.fileExists(atPath: existing) }
+            return false
         }
     }
 
@@ -135,6 +140,10 @@ final class ArchiveAngelPromoter: ObservableObject {
         // (Rick 2026-09-10); only a changed file is refused below.
         for line in Self.followRenames(plan: &plan, model: model) { model.log(line); appLog.write(line) }
 
+        // Rick's hand-entered facts ride the promote (S4 fix — the retired
+        // Helper's rule): built lazily, one family index per Promote.
+        var familyIndex: ArchiveAngelCopyFamily.Index?
+
         for i in plan.entries.indices where plan.entries[i].selected && plan.entries[i].status == .ready {
             let entry = plan.entries[i]
             if let problem = Self.identityProblem(for: entry, model: model) {
@@ -157,10 +166,30 @@ final class ArchiveAngelPromoter: ObservableObject {
                 if let role = Self.roleLabel(for: step.kind) { roles[cid] = role }
             }
             intended[entry.id] = companionIDs
+            // Stamp the family's date / place / attestations onto the
+            // original and its companions before the job reads them (the
+            // manifest row carries them). Never over a record's own value.
+            // Identity relatives only; what is replaced is kept on the row
+            // so a promote that never lands is undone (QA on S4).
+            if let original = model.record(forID: entry.id) {
+                let index = familyIndex ?? ArchiveAngelCopyFamily.Index(catalog: model)
+                familyIndex = index
+                let relatives = ArchiveAngelFamilyFacts.relatives(of: original, index: index, catalog: model)
+                let companions = companionIDs.compactMap { model.record(forID: $0) }
+                let stamped = ArchiveAngelFamilyFacts.stamp(entry: entry, original: original,
+                                                            companions: companions, relatives: relatives)
+                if !stamped.facts.isEmpty {
+                    plan.entries[i].stampedFacts = (plan.entries[i].stampedFacts ?? []) + stamped.facts
+                }
+                for line in stamped.lines { Self.note(line, plan: &plan, model: model) }
+            }
         }
 
         guard !ids.isEmpty, var promotePlan = model.buildPromotePlan(recordIDs: ids) else {
             Self.note("Archive Angel: Promote — nothing to promote", plan: &plan, model: model)
+            for line in Self.settleStampedFacts(plan: &plan, landed: { _ in false }, catalog: model, ledger: model) {
+                Self.note(line, plan: &plan, model: model)
+            }
             ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
             return nil
         }
@@ -269,6 +298,11 @@ final class ArchiveAngelPromoter: ObservableObject {
         // from `failed` (Rick 2026-09-13): "3 skipped", never "3 failed".
         let skipped = plan.entries.filter { $0.status == .skipped }.map(\.filename)
         report.skippedByUser = skipped.isEmpty ? nil : skipped
+        // Inherited facts: kept (and ledgered) where the record landed,
+        // undone where it did not — refused, cancelled, failed (QA on S4).
+        for line in Self.settleStampedFacts(plan: &plan, landed: { landed[$0] != nil }, catalog: model, ledger: model) {
+            Self.note(line, plan: &plan, model: model)
+        }
         plan.report = report
         plan.status = plan.readyCount == 0 ? .promoted : .ready
         plan.finishedAt = Date()
@@ -301,6 +335,10 @@ final class ArchiveAngelPromoter: ObservableObject {
                     back += 1
                 }
             }
+            let undone = Self.settleStampedFacts(plan: &plan, landed: { id in
+                model.record(forID: id).map { model.isArchived($0) } ?? false
+            }, catalog: model, ledger: model)
+            for line in undone { Self.note(line, plan: &plan, model: model) }
             plan.status = plan.readyCount == 0 ? .promoted : .ready
             plan.finishedAt = plan.finishedAt ?? Date()
             let line = "Archive Angel: settled an interrupted promote in \((plan.batchDir as NSString).lastPathComponent) — "
@@ -308,6 +346,36 @@ final class ArchiveAngelPromoter: ObservableObject {
             Self.note(line, plan: &plan, model: model)
             ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
             lines.append(line)
+        }
+        return lines
+    }
+
+    /// Settle what Promote stamped from the family (QA on S4): for a record
+    /// that `landed`, keep it and write the Media Ledger's dateSet /
+    /// placeSet line by the angel; for one that did not, restore the old
+    /// value (only if still ours). Clears the rows' `stampedFacts`. Returns
+    /// the log lines (the caller notes them). Seams only.
+    static func settleStampedFacts(plan: inout ArchiveAngelPlan, landed: (UUID) -> Bool,
+                                   catalog: any AngelCatalog, ledger: any AngelLedger) -> [String] {
+        var lines: [String] = []
+        for i in plan.entries.indices {
+            guard let facts = plan.entries[i].stampedFacts, !facts.isEmpty else { continue }
+            let kept = facts.filter { landed($0.recordID) }
+            let undo = facts.filter { !landed($0.recordID) }
+            for f in kept {
+                guard let r = catalog.record(forID: f.recordID) else { continue }
+                switch f.field {
+                case .date: ledger.noteUserDateEdited(r, by: .angel)
+                case .place: ledger.noteUserPlaceEdited(r, by: .angel)
+                case .attestations: break
+                }
+            }
+            if !undo.isEmpty {
+                let restored = ArchiveAngelFamilyFacts.restore(undo, record: { catalog.record(forID: $0) })
+                lines.append("Archive Angel: \(plan.entries[i].filename) — not promoted: undid \(undo.count) inherited fact(s) "
+                             + "on \(restored.count) record(s)")
+            }
+            plan.entries[i].stampedFacts = nil
         }
         return lines
     }

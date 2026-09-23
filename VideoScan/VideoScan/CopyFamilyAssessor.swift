@@ -194,13 +194,14 @@ enum CopyFamilyAction: String, Sendable, Equatable, CaseIterable {
     case createAndPromoteCompanion      = "Create + Promote Lossless Companion"
     case promoteOriginalAndCompanion    = "Promote Original + Companion"
     case createAccessCopy               = "Create Access Copy"
-    /// Diagnose the recommended copy's audio track (the Helper offers
-    /// Balance Audio inline when the verdict is one-sided/mono —
-    /// HelperAudioRepair.swift).
+    /// Diagnose the recommended copy's audio track (the retired Helper
+    /// offered Balance Audio inline; since S4 the Archive Angel's prepare
+    /// step verifies and balances).
     case verifyAudioFirst               = "Verify Audio"
-    /// Overlay action, never produced by the assessor itself: added by
-    /// HelperAudioActions.compose once a diagnosis says the track is
-    /// fixable (2026-08-26).
+    /// Overlay action, never produced by the assessor itself: the retired
+    /// Helper panel's HelperAudioActions.compose added it once a diagnosis
+    /// said the track was fixable (2026-08-26). Nothing adds it since S4;
+    /// kept so the action vocabulary (and its raw values) does not change.
     case balanceAudio                   = "Balance Audio"
 }
 

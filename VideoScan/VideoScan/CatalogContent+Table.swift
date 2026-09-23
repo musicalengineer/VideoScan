@@ -776,8 +776,8 @@ extension CatalogContent {
                     // Promote to Archive (Master Archive, 2026-08-15) —
                     // single + multi select; the model routes to the
                     // no-master alert or the confirmation sheet.
-                    // Promote-Helper (2026-08-19): which copy is the original?
-                    assessCopiesMenuItem(activeRecs: activeRecs, pureActive: pureActive)
+                    // "Which copy is the original?" is Archive Angel ▸
+                    // Show Copies… since S4 (the Promote Helper is retired).
                     promoteToArchiveMenuItem(activeRecs: activeRecs, pureActive: pureActive)
                     ArchiveAngelMenuItems(model: model, center: fileOpsCenter, activeRecs: activeRecs, pureActive: pureActive)
                     removeFromCatalogMenuItem(activeRecs: activeRecs, pureActive: pureActive)

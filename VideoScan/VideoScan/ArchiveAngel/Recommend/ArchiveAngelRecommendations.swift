@@ -20,8 +20,9 @@
 //      the best by `order`; the rest become Another copy.
 //   6. Lists — Ready / Needs a date / Worth a look, ordered by `order`.
 //
-// Two rule sets ship: `.legacyNudge` reproduces ArchiveNudge.assess exactly
-// (S3a — the parity test pins it), and the unified default (S3b) is Rick's
+// Two rule sets ship: `.legacyNudge` reproduces the retired ArchiveNudge.assess
+// exactly (S3a proved it by parity; since S4 removed the nudge, frozen
+// expected numbers pin it), and the unified default (S3b) is Rick's
 // 2026-09-22 ruling: Ready = passes the Angel's floors AND (vouched OR
 // grade A) AND dated to at least a year.
 //
@@ -258,7 +259,9 @@ struct AngelRecommendRules: Codable, Sendable, Equatable {
 extension AngelRecommendRules {
 
     /// ArchiveNudge.assess (the Archive tab's "It looks like N files are
-    /// ready…", Rick 2026-08-21) as DATA — S3a. Reproduces it exactly:
+    /// ready…", Rick 2026-08-21; retired with the Promote Helper in S4) as
+    /// DATA — S3a. Still read by the sweep's once-per-rules-change
+    /// "old → new counts" log line. Reproduces it exactly:
     ///   • excluded: an Extra copy, a junk disposition, junkScore ≥ 50;
     ///   • vouched: Important (3), ★★ / ★★★ (1 per star), stage Ready (2)
     ///     or Master (1); "the copy to keep" is a reason, not a vouch;
