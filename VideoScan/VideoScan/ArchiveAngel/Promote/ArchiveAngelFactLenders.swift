@@ -12,7 +12,9 @@
 //       its stamp — codex #1659. `contentHash` is a SAMPLED head/middle/
 //       tail signature (FileHasher.segmentedHash): two different 6 MiB
 //       files can share it — codex #1654 P1-1. Never enough.
-//     • an archive copy ↔ its promotion source (Promote verified the bytes).
+//     • an archive copy ↔ its promotion source (Promote verified the bytes
+//       once) — only while BOTH ends' ContentFixity is confirmed fresh by
+//       the same stat (codex #1665); otherwise "similar, not applied".
 //     • a WHOLE-FILE equivalent derivation ↔ its source: balanceAudio,
 //       rebuildAudio or externalRepair, with no trim range and the same
 //       length (±1 s / 1 %). Same footage, repaired.
@@ -68,8 +70,14 @@ enum ArchiveAngelFactLenders {
                     next += (index.byDigest[k] ?? []).filter { fresh?.contains($0.id) ?? true }
                 }
             }
-            if let copy = catalog.masterArchiveCopy(of: r) { next.append(copy) }
-            if let src = catalog.promotionSource(of: r) { next.append(src) }
+            // The archive link: Promote verified these bytes ONCE. It lends
+            // only while BOTH ends' ContentFixity still describes the file
+            // now (codex #1665) — a source rewritten after promotion, or an
+            // archive copy rewritten in place, is no longer those bytes.
+            if fresh?.contains(r.id) ?? true {
+                let linked = [catalog.masterArchiveCopy(of: r), catalog.promotionSource(of: r)].compactMap { $0 }
+                next += linked.filter { fresh?.contains($0.id) ?? true }
+            }
             if derivations {
                 if let d = r.derivedFrom, let parent = index.byID[d], isWholeFileEquivalent(r, of: parent) {
                     next.append(parent)
@@ -94,6 +102,11 @@ enum ArchiveAngelFactLenders {
         var cursor = target
         var seen: Set<UUID> = [target.id]
         while let d = cursor.derivedFrom, let parent = index.byID[d], seen.insert(parent.id).inserted {
+            // An archive copy's derivedFrom is its PROMOTION SOURCE — an
+            // identity link, not ancestry: it may be crossed only between two
+            // fresh ends, like the equivalence edge (codex #1665).
+            if cursor.derivationKind == ArchivePromotion.derivationKind,
+               let fresh, !(fresh.contains(cursor.id) && fresh.contains(parent.id)) { break }
             for (id, r) in equivalents(of: parent, index: index, catalog: catalog, derivations: true, fresh: fresh) where facts[id] == nil {
                 facts[id] = r
             }
