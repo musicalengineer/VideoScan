@@ -205,28 +205,9 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
 
         var doneBytes: Int64 = 0
         var sinceSave = 0
-        itemLoop: for (i, item) in items.enumerated() {
-            var outcome: FixityRebind.Outcome = .interrupted
-            while true {
-                guard await waitOutPause() else { break itemLoop }
-                subtitleText = "Reading \(i + 1) of \(items.count) — \((item.path as NSString).lastPathComponent) · "
-                    + "\(ByteCountFormatter.string(fromByteCount: doneBytes, countStyle: .file)) of "
-                    + "\(ByteCountFormatter.string(fromByteCount: tally.plannedBytes, countStyle: .file))"
-                let base = doneBytes
-                let ticker = Task { @MainActor [weak self] in
-                    while !Task.isCancelled, let self {
-                        self.fractionValue = Double(base + self.control.bytesRead) / Double(total)
-                        try? await Task.sleep(for: .milliseconds(500))
-                    }
-                }
-                outcome = await Self.rehashOffMain(path: item.path, control: control)
-                ticker.cancel()
-                if outcome == .interrupted {
-                    if stopped { break itemLoop }
-                    continue                        // paused: give the disk back, restart this file
-                }
-                break
-            }
+        for (i, item) in items.enumerated() {
+            guard let outcome = await readOne(item, index: i, count: items.count, doneBytes: doneBytes, total: total)
+            else { break }
             doneBytes += item.bytes
             fractionValue = Double(doneBytes) / Double(total)
             record(outcome, for: item, model: model)
@@ -250,6 +231,28 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         }
         finishSummary(model: model, ending: "done")
         finish(success: summaryLine)
+    }
+
+    /// Read one file, restarting it after a pause (the disk slot is given
+    /// back meanwhile). nil when stopped.
+    private func readOne(_ item: FixityRebindItem, index i: Int, count: Int,
+                         doneBytes: Int64, total: Int64) async -> FixityRebind.Outcome? {
+        while true {
+            guard await waitOutPause() else { return nil }
+            subtitleText = "Reading \(i + 1) of \(count) — \((item.path as NSString).lastPathComponent) · "
+                + "\(ByteCountFormatter.string(fromByteCount: doneBytes, countStyle: .file)) of "
+                + "\(ByteCountFormatter.string(fromByteCount: tally.plannedBytes, countStyle: .file))"
+            let ticker = Task { @MainActor [weak self] in
+                while !Task.isCancelled, let self {
+                    self.fractionValue = Double(doneBytes + self.control.bytesRead) / Double(total)
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+            }
+            let outcome = await Self.rehashOffMain(path: item.path, control: control)
+            ticker.cancel()
+            guard outcome == .interrupted else { return outcome }
+            if stopped { return nil }               // else paused: restart this file
+        }
     }
 
     private func record(_ outcome: FixityRebind.Outcome, for item: FixityRebindItem, model: VideoScanModel) {
