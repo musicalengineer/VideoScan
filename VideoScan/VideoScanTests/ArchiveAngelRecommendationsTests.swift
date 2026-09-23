@@ -1,0 +1,354 @@
+// ArchiveAngelRecommendationsTests.swift
+// Consolidation S3 — the ONE recommendation classifier and the rule
+// language it is driven by (ArchiveAngel/Recommend/ArchiveAngelRecommendations.swift,
+// AngelRuleLanguage.swift).
+//
+//   LOGIC     tables for every operator × field type, `any`, every rule kind
+//             the classifier reads, the copy chooser, the date rule;
+//   SCALE     the legacy rule set over the S0 100k-record catalog, timed;
+//   PARITY    (S3a, kept as the legacy-rule-set sensor) the classifier under
+//             `.legacyNudge` answers EXACTLY what ArchiveNudge.assess answers —
+//             same ready / near counts, same ids, reasons, years, shortlist —
+//             on the 100k fixed-seed catalog and on every ArchiveNudgeTests case.
+
+import Foundation
+import Testing
+@testable import VideoScan
+import VideoScanCore
+
+// MARK: - Parity with ArchiveNudge.assess (S3a)
+
+@Suite("Archive Angel recommendations — the legacy rule set reproduces ArchiveNudge exactly", .serialized)
+@MainActor
+struct ArchiveAngelRecommendationsLegacyParityTests {
+
+    /// Everything a person can see in the nudge, compared as sets where
+    /// ArchiveNudge's own order is not deterministic (dictionary order among
+    /// exact ties), and exactly where it is.
+    private func expectSame(_ old: ArchiveNudge, _ new: ArchiveNudge, _ label: String) {
+        #expect(new.ready.count == old.ready.count, "\(label): ready \(new.ready.count) vs \(old.ready.count)")
+        #expect(new.nearReady.count == old.nearReady.count, "\(label): near \(new.nearReady.count) vs \(old.nearReady.count)")
+        func byID(_ list: [ArchiveNudge.Candidate]) -> [UUID: ArchiveNudge.Candidate] {
+            Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        }
+        let oldReady = byID(old.ready), newReady = byID(new.ready)
+        let oldNear = byID(old.nearReady), newNear = byID(new.nearReady)
+        #expect(Set(newReady.keys) == Set(oldReady.keys), "\(label): the same ready recordings")
+        #expect(Set(newNear.keys) == Set(oldNear.keys), "\(label): the same nearly-ready recordings")
+        var mismatched = 0
+        for (id, o) in oldReady.merging(oldNear, uniquingKeysWith: { a, _ in a }) {
+            guard let n = newReady[id] ?? newNear[id] else { continue }
+            if n != o { mismatched += 1 }
+        }
+        #expect(mismatched == 0, "\(label): \(mismatched) row(s) differ in filename / year / reasons / score / needsDate")
+        // The order: score, then year, then name — compare the sort keys
+        // position by position (equal keys may legitimately swap).
+        func keys(_ l: [ArchiveNudge.Candidate]) -> [String] { l.map { "\($0.score)|\($0.year ?? -1)|\($0.filename.lowercased())" } }
+        #expect(keys(new.ready) == keys(old.ready), "\(label): ready order")
+        #expect(keys(new.nearReady) == keys(old.nearReady), "\(label): near order")
+        #expect(new.headline == old.headline, "\(label): headline")
+    }
+
+    @Test("PARITY at 100k: the S0 fixed-seed catalog — counts, ids, reasons, order, shortlist; S0 pins hold")
+    func parityAtScale() {
+        let records = ArchiveAngelS0Catalog.records(100_000)
+        let now = Date()
+        let old = ArchiveNudge.assess(records)
+        let clock = ContinuousClock()
+        var new = ArchiveNudge.empty
+        let elapsed = clock.measure { new = ArchiveAngel.nudge(for: records, now: now) }
+        let s = ArchiveAngelS0Catalog.seconds(elapsed)
+        print("[angel-s3a] legacy classifier ready \(new.ready.count) near \(new.nearReady.count) · \(String(format: "%.3f", s)) s")
+        expectSame(old, new, "100k")
+        #expect(new.ready.count == ArchiveAngelScaleCharacterizationTests.pinnedNudgeReady)
+        #expect(new.nearReady.count == ArchiveAngelScaleCharacterizationTests.pinnedNudgeNear)
+        #expect(new.shortlist.map { ArchiveAngelScaleCharacterizationTests.index($0.id) }
+                == ArchiveAngelScaleCharacterizationTests.pinnedNudgeHead)
+        #expect(s < 1.5, "legacy classification (projection + classify) over 100k in \(s) s")
+    }
+
+    @Test("SCALE: the pure classify over 100k projected candidates — under 1 s (Debug)")
+    func classifyBudget() {
+        let candidates = ArchiveAngelS0Catalog.records(100_000).map { ArchiveAngelCandidate(recommendationFactsOf: $0) }
+        let clock = ContinuousClock()
+        var result = ArchiveAngelRecommendations.Result.empty
+        let elapsed = clock.measure {
+            result = ArchiveAngelRecommendations.classify(candidates, rules: .legacyNudge)
+        }
+        let s = ArchiveAngelS0Catalog.seconds(elapsed)
+        print("[angel-s3a] classify 100k \(String(format: "%.3f", s)) s")
+        #expect(result.verdicts.count == 100_000)
+        #expect(result.counts.values.reduce(0, +) == 100_000)
+        #expect(s < 1, "classify 100k in \(s) s")
+    }
+
+    // The ArchiveNudgeTests cases, run through both.
+
+    private func record(_ name: String, stars: Int = 0, disposition: MediaDisposition = .unreviewed,
+                        stage: ArchiveStage = .none, dup: DuplicateDisposition = .none,
+                        junk: Int = 0, dated: Bool = true) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = name
+        r.fullPath = "/Volumes/LaCie/\(name)"
+        r.starRating = stars
+        r.mediaDisposition = disposition
+        r.archiveStage = stage
+        r.duplicateDisposition = dup
+        r.junkScore = junk
+        if dated {
+            r.embeddedCreationDate = Calendar.current.date(from: DateComponents(year: 1994, month: 7, day: 4))
+        }
+        return r
+    }
+
+    private func both(_ records: [VideoRecord]) -> (ArchiveNudge, ArchiveNudge) {
+        (ArchiveNudge.assess(records), ArchiveAngel.nudge(for: records))
+    }
+
+    @Test("PARITY: every ArchiveNudgeTests case gives an identical ArchiveNudge (order included)")
+    func parityOnFixtures() {
+        var cases: [(String, [VideoRecord])] = []
+        cases.append(("vouched/dated", [
+            record("christmas_1994.mov", stars: 3), record("cape.mov", disposition: .important),
+            record("ready.mov", stage: .readyForArchive), record("unrated.mov"), record("one_star.mov", stars: 1),
+            record("copy.mov", stars: 3, dup: .extraCopy), record("junk.mov", stars: 3, disposition: .suspectedJunk),
+            record("scored_junk.mov", stars: 3, junk: 80), record("undated.mov", stars: 2, dated: false),
+        ]))
+        cases.append(("keeper", [record("b.mov", stars: 2), record("a.mov", stars: 3, disposition: .important, dup: .keep),
+                                 record("keeper_only.mov", dup: .keep)]))
+        cases.append(("headlines", (1...15).map { record("f\($0).mov", stars: 2) } + [record("u.mov", stars: 2, dated: false)]))
+        let group = UUID()
+        func copy(_ name: String, stars: Int, dup: DuplicateDisposition) -> VideoRecord {
+            let r = record(name, stars: stars, dup: dup)
+            r.duplicateGroupID = group
+            r.duplicateGroupCount = 3
+            return r
+        }
+        cases.append(("group with keeper", [copy("lacie/xmas.mov", stars: 3, dup: .review),
+                                            copy("mybook/xmas.mov", stars: 2, dup: .keep),
+                                            copy("x9/xmas.mov", stars: 3, dup: .review)]))
+        cases.append(("group no keeper", [copy("lacie/xmas.mov", stars: 2, dup: .review),
+                                          copy("mybook/xmas.mov", stars: 3, dup: .none)]))
+        var twenty = (1...20).map { record("r\($0).mov", stars: 2) }
+        twenty.append(record("important.mov", disposition: .important))
+        twenty += (1...5).map { record("u\($0).mov", stars: 2, dated: false) }
+        cases.append(("shortlist", twenty))
+        func mts(_ path: String) -> VideoRecord {
+            let r = record("00000.MTS", disposition: .important)
+            r.fullPath = path
+            r.durationSeconds = 612.4
+            return r
+        }
+        let fixture2026 = record("2026-07-05_12-55-56.mkv", disposition: .important)
+        fixture2026.embeddedCreationDate = Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 5))
+        cases.append(("camera names", [fixture2026, mts("/Volumes/X9/card1/00000.MTS"), mts("/Volumes/X10/card2/00000.MTS"),
+                                        mts("/Volumes/LaCie/00000.MTS"), mts("/Volumes/MyBook/00000.MTS"),
+                                        record("Cape-1993-archive.mkv", disposition: .important)]))
+        cases.append(("empty", []))
+        for (label, records) in cases {
+            let (old, new) = both(records)
+            #expect(new == old, "\(label): \(new.ready.map(\.filename)) / \(new.nearReady.map(\.filename)) vs \(old.ready.map(\.filename)) / \(old.nearReady.map(\.filename))")
+        }
+    }
+
+    @Test("the legacy rule set is sound data (validation finds nothing) and survives a JSON round trip unchanged")
+    func legacyIsData() throws {
+        #expect(AngelRecommendRules.legacyNudge.problems.isEmpty, "\(AngelRecommendRules.legacyNudge.problems)")
+        let data = try JSONEncoder().encode(AngelRecommendRules.legacyNudge)
+        let back = try JSONDecoder().decode(AngelRecommendRules.self, from: data)
+        #expect(back == .legacyNudge)
+    }
+}
+
+// MARK: - The rule language
+
+@Suite("Archive Angel rule language — fields, operators, any, validation")
+struct AngelRuleLanguageTests {
+
+    private let now = Date(timeIntervalSince1970: 1_790_000_000)
+
+    private func matches(_ cond: AngelCondition, _ c: ArchiveAngelCandidate) -> Bool {
+        var ctx = AngelEvalContext(candidate: c, now: now)
+        return cond.matches(&ctx)
+    }
+
+    private func decode(_ json: String) throws -> AngelCondition {
+        try JSONDecoder().decode(AngelCondition.self, from: Data(json.utf8))
+    }
+
+    @Test("numbers: == != < <= > >=; an unknown value (no year) never matches")
+    func numbers() throws {
+        let c = ArchiveAngelCandidate(durationSeconds: 240)
+        let table: [(String, Bool)] = [
+            (#"{"field":"durationMinutes","op":"<","value":5}"#, true),
+            (#"{"field":"durationMinutes","op":"<=","value":4}"#, true),
+            (#"{"field":"durationMinutes","op":">","value":4}"#, false),
+            (#"{"field":"durationMinutes","op":">=","value":4}"#, true),
+            (#"{"field":"durationSeconds","op":"==","value":240}"#, true),
+            (#"{"field":"durationSeconds","op":"!=","value":240}"#, false),
+            (#"{"field":"year","op":"<","value":3000}"#, false),
+            (#"{"field":"year","op":"!=","value":1990}"#, false),
+        ]
+        for (json, want) in table {
+            let cond = try decode(json)
+            #expect(cond.problems(allowClassifierFields: false).isEmpty, "\(json)")
+            #expect(matches(cond, c) == want, "\(json)")
+        }
+    }
+
+    @Test("text: case-insensitive == contains hasPrefix hasSuffix in; lists: contains / in")
+    func text() throws {
+        let c = ArchiveAngelCandidate(filename: "Cape Cod 1993.MOV", fullPath: "/Volumes/LaCie/Family/Cape Cod 1993.MOV",
+                                      confirmedPeople: ["Donna", "Rick"], detectedPeople: ["Tim"], videoCodec: "dvvideo")
+        let table: [(String, Bool)] = [
+            (#"{"field":"filename","op":"==","value":"cape cod 1993.mov"}"#, true),
+            (#"{"field":"filename","op":"contains","value":"COD"}"#, true),
+            (#"{"field":"filename","op":"notContains","value":"cod"}"#, false),
+            (#"{"field":"path","op":"hasPrefix","value":"/volumes/lacie"}"#, true),
+            (#"{"field":"filename","op":"hasSuffix","value":".mp4"}"#, false),
+            (#"{"field":"videoCodec","op":"in","value":["h264","DVVIDEO"]}"#, true),
+            (#"{"field":"videoCodec","op":"notIn","value":["h264"]}"#, true),
+            (#"{"field":"people","op":"contains","value":"donna"}"#, true),
+            (#"{"field":"people","op":"contains","value":"Tim"}"#, false),
+            (#"{"field":"machinePeople","op":"contains","value":"Tim"}"#, true),
+            (#"{"field":"people","op":"in","value":["Ellen","Rick"]}"#, true),
+            (#"{"field":"people","op":"notIn","value":["Ellen"]}"#, true),
+        ]
+        for (json, want) in table {
+            let cond = try decode(json)
+            #expect(cond.problems(allowClassifierFields: false).isEmpty, "\(json)")
+            #expect(matches(cond, c) == want, "\(json)")
+        }
+    }
+
+    @Test("choices take the case name or the app's label; flags take true/false; any = OR")
+    func choicesFlagsAny() throws {
+        let c = ArchiveAngelCandidate(mediaDisposition: .suspectedJunk, archiveStage: .readyForArchive,
+                                      deviceModel: "iPhone 12", duplicateDisposition: .keep)
+        let table: [(String, Bool)] = [
+            (#"{"field":"mediaDisposition","op":"==","value":"suspectedJunk"}"#, true),
+            (#"{"field":"mediaDisposition","op":"==","value":"Suspected Junk"}"#, true),
+            (#"{"field":"mediaDisposition","op":"!=","value":"important"}"#, true),
+            (#"{"field":"archiveStage","op":"in","value":["masterAssigned","Ready"]}"#, true),
+            (#"{"field":"duplicateDisposition","op":"notIn","value":["extraCopy"]}"#, true),
+            (#"{"field":"isPhoneClip","op":"==","value":true}"#, true),
+            (#"{"field":"isOnlyCopy","op":"!=","value":false}"#, false),
+            (#"{"any":[{"field":"starRating","op":">=","value":2},{"field":"isPhoneClip","op":"==","value":true}]}"#, true),
+            (#"{"any":[{"field":"starRating","op":">=","value":2},{"field":"volumeOnline","op":"==","value":false}]}"#, false),
+        ]
+        for (json, want) in table {
+            let cond = try decode(json)
+            #expect(cond.problems(allowClassifierFields: false).isEmpty, "\(json)")
+            #expect(matches(cond, c) == want, "\(json)")
+        }
+    }
+
+    @Test("REFUSED: unknown field / op, wrong value type, a choice that is not one, classifier-only fields in a floor — each named")
+    func problemsNamed() throws {
+        let table: [(String, String)] = [
+            (#"{"field":"lenght","op":"<","value":5}"#, "unknown field \"lenght\""),
+            (#"{"field":"durationMinutes","op":"~","value":5}"#, "unknown op \"~\""),
+            (#"{"field":"durationMinutes","op":"<","value":"5"}"#, "needs a finite number"),
+            (#"{"field":"filename","op":"<","value":"a"}"#, "is text"),
+            (#"{"field":"isPhoneClip","op":"==","value":1}"#, "needs true or false"),
+            (#"{"field":"mediaDisposition","op":"==","value":"Importnt"}"#, "is not a mediaDisposition"),
+            (#"{"field":"grade","op":"==","value":"A"}"#, "only known to the class rules"),
+            (#"{"any":[]}"#, "at least one condition"),
+            (#"{"field":"filename","op":"==","value":"x","any":[{"field":"filename","op":"==","value":"y"}]}"#, "not both"),
+        ]
+        for (json, fragment) in table {
+            let cond = try decode(json)
+            let problems = cond.problems(allowClassifierFields: false)
+            #expect(problems.contains { $0.contains(fragment) }, "\(json) → \(problems)")
+            #expect(!matches(cond, ArchiveAngelCandidate()), "an unresolved condition never matches")
+        }
+    }
+
+    @Test("values decode as bool / number / string / list — never a number as a bool")
+    func valueDecoding() throws {
+        let d = JSONDecoder()
+        #expect(try d.decode([AngelValue].self, from: Data(#"[true, 3, 2.5, "x", ["a","b"]]"#.utf8))
+                == [.bool(true), .number(3), .number(2.5), .string("x"), .strings(["a", "b"])])
+        #expect(throws: (any Error).self) { try d.decode(AngelValue.self, from: Data(#"{"a":1}"#.utf8)) }
+    }
+
+    @Test("rules: unknown kind and a kind in the wrong section are refused; duplicate ids named; only non-defaults are written")
+    func ruleValidation() throws {
+        let json = #"""
+        [{"id":"a","kind":"match","when":[{"field":"starRating","op":">=","value":2}],"points":5,"line":"starred"},
+         {"id":"a","kind":"tooShort"},
+         {"id":"c","kind":"frobnicate"}]
+        """#
+        let rules = try JSONDecoder().decode([AngelRule].self, from: Data(json.utf8))
+        let problems = AngelRule.problems(in: rules, section: .vouch, where: "recommend.vouch", pointRange: 0...1_000)
+        #expect(problems.contains { $0.contains("duplicate id") })
+        #expect(problems.contains { $0.contains("\"tooShort\" does not belong in vouch") })
+        #expect(problems.contains { $0.contains("unknown kind \"frobnicate\"") })
+        let encoded = String(bytes: try JSONEncoder().encode(rules[1]), encoding: .utf8)
+        #expect(encoded == #"{"id":"a","kind":"tooShort"}"#)
+    }
+
+    @Test("the date rule wraps RecordDateResolver; readinessKnown asks ArchiveReadiness.dateState")
+    func dateRule() {
+        let year = RecordDateResolution(year: 1994, month: nil, day: nil, precision: .year, confidence: 0.5, source: .filename)
+        let decade = RecordDateResolution(year: 1990, month: nil, day: nil, precision: .decade, confidence: 0.5, source: .filename)
+        let userYear = RecordDateResolution(year: 1994, month: nil, day: nil, precision: .year, confidence: 1, source: .userDate)
+        #expect(AngelDateRule(minimum: "year").isDated(year))
+        #expect(!AngelDateRule(minimum: "year").isDated(decade))
+        #expect(!AngelDateRule(minimum: "month").isDated(year))
+        #expect(AngelDateRule(minimum: "decade").isDated(decade))
+        #expect(!AngelDateRule(minimum: "readinessKnown").isDated(year), "a filename year is low confidence")
+        #expect(AngelDateRule(minimum: "readinessKnown").isDated(userYear), "Rick's own year is known")
+        #expect(AngelDateRule(minimum: "yearly").problem != nil)
+    }
+}
+
+// MARK: - The classifier's own logic
+
+@Suite("Archive Angel recommendations — classes, vouches, copies")
+struct ArchiveAngelClassifierLogicTests {
+
+    private let now = Date(timeIntervalSince1970: 1_790_000_000)
+
+    @Test("legacy: exclusions first, vouches add up, class by vouched + dated, unvouched → Not now")
+    func legacyClasses() {
+        let dated = Date(timeIntervalSince1970: 773_000_000)
+        let cs = [
+            ArchiveAngelCandidate(filename: "a.mov", starRating: 3, captureDate: dated),
+            ArchiveAngelCandidate(filename: "b.mov", starRating: 2),
+            ArchiveAngelCandidate(filename: "c.mov", mediaDisposition: .important, archiveStage: .masterAssigned, captureDate: dated),
+            ArchiveAngelCandidate(filename: "d.mov", starRating: 3, junkScore: 50, captureDate: dated),
+            ArchiveAngelCandidate(filename: "e.mov", captureDate: dated),
+        ]
+        let r = ArchiveAngelRecommendations.classify(cs, rules: .legacyNudge, now: now)
+        #expect(r.verdicts.map(\.kind) == [.ready, .needsDate, .ready, .excluded, .notNow])
+        #expect(r.verdicts[2].points == 4 && r.verdicts[2].reasons == ["marked Important", "stage: Master"])
+        #expect(r.verdicts[3].reasons == ["Junk score 50 or more"])
+        #expect(r.ready.map(\.filename) == ["c.mov", "a.mov"], "4 points before 3")
+        #expect(r.counts == [.ready: 2, .needsDate: 1, .excluded: 1, .notNow: 1])
+    }
+
+    @Test("copy chooser: keys in order, the person's Keep first, else the best; the rest become Another copy")
+    func copies() {
+        let g = UUID()
+        let key = { (c: ArchiveAngelCandidate, by: [String]) in ArchiveAngelCopyChooser.key(c, collapseBy: by) }
+        let grouped1 = ArchiveAngelCandidate(filename: "x.mov", durationSeconds: 60.4, duplicateGroupID: g, duplicateGroupCount: 1)
+        #expect(key(grouped1, ["duplicateGroup"]) == "group:" + g.uuidString)
+        #expect(key(grouped1, ["sharedDuplicateGroup", "nameAndDuration"]) == "name:x.mov|60", "a group of one is not shared")
+        #expect(key(ArchiveAngelCandidate(filename: "", durationSeconds: 5), ["nameAndDuration"]) == nil)
+        #expect(ArchiveAngelCopyChooser.choose([4, 7, 9], prefer: ["userKeeper", "best"], isKeeper: { $0 == 9 },
+                                               isBetter: { $0 < $1 }) == 9)
+        #expect(ArchiveAngelCopyChooser.choose([4, 7, 2], prefer: ["userKeeper", "best"], isKeeper: { _ in false },
+                                               isBetter: { $0 < $1 }) == 2)
+        let kept = ArchiveAngelCopyChooser.firstPerKey(["a1", "b1", "a2", "c", "b2"], key: { $0 == "c" ? nil : String($0.prefix(1)) })
+        #expect(kept.kept == ["a1", "b1", "c"] && kept.dropped == 2)
+    }
+
+    @Test("SENSOR: CopyFamilyAssessor's physical-instance answer is reachable through the one copy seam, unchanged")
+    func physicalInstanceSeam() {
+        let a = CopyFamilyInput(fullPath: "/Volumes/A/x.mov", isReachable: false)
+        let b = CopyFamilyInput(fullPath: "/Volumes/B/x.mov", isReachable: true)
+        #expect(ArchiveAngelCopyChooser.physicalInstance(of: [a, b])?.id == CopyFamilyAssessor.recommendedInstance([a, b])?.id)
+        #expect(ArchiveAngelCopyChooser.physicalInstance(of: [a, b])?.id == b.id)
+    }
+}

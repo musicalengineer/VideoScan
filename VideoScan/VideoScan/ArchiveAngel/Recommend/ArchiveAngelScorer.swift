@@ -89,6 +89,17 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     /// creation_time, survives copies). NOT `dateCreated`, which on a
     /// Photos-library export is the COPY date. nil = no usable tag.
     var captureDate: Date?
+    /// Consolidation S3 (2026-09-22) — the facts the recommendation
+    /// classifier's rules read that the scorer never needed: the catalog's
+    /// duplicate bookkeeping (how many members the group has, and the
+    /// person's Keep / Extra copy choice) and the date provenance
+    /// RecordDateResolver takes (ArchiveAngelRecommendations' date rule).
+    /// Additive, defaulted — nothing here changes a score.
+    var duplicateGroupCount: Int
+    var duplicateDisposition: DuplicateDisposition
+    var userDateConfidence: String?
+    var originMake: String?
+    var originEncoder: String?
 
     /// Rick 2026-09-21: a Live Photo's motion half
     /// (`jpegvideocomplement_*.mov`, ~3 s) is part of a photo, not a video.
@@ -152,7 +163,9 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
          isOnMasterArchive: Bool = false, useCount: Int = 0, lastUsed: Date? = nil,
          videoCodec: String = "", duplicateGroupID: UUID? = nil, derivativeOfOriginal: String? = nil,
          contentKey: String = "", attention: ArchiveAngelAttention = .none, familySkips: Double = 0,
-         familyKey: String = "", deviceModel: String = "", captureDate: Date? = nil) {
+         familyKey: String = "", deviceModel: String = "", captureDate: Date? = nil,
+         duplicateGroupCount: Int = 0, duplicateDisposition: DuplicateDisposition = .none,
+         userDateConfidence: String? = nil, originMake: String? = nil, originEncoder: String? = nil) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds; self.streamTypeRaw = streamTypeRaw; self.isPlayable = isPlayable
         self.starRating = starRating; self.mediaDisposition = mediaDisposition; self.archiveStage = archiveStage
@@ -170,6 +183,9 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         self.contentKey = contentKey; self.attention = attention; self.familySkips = familySkips
         self.familyKey = familyKey
         self.deviceModel = deviceModel; self.captureDate = captureDate
+        self.duplicateGroupCount = duplicateGroupCount; self.duplicateDisposition = duplicateDisposition
+        self.userDateConfidence = userDateConfidence; self.originMake = originMake
+        self.originEncoder = originEncoder
     }
 }
 
@@ -667,17 +683,23 @@ enum ArchiveAngelScorer {
     /// `sort`. Both selection paths MUST rank with this so an equal-score
     /// duplicate group keeps the same member whichever path ran.
     static func rank(_ a: ArchiveAngelPick, _ b: ArchiveAngelPick) -> Bool {
-        if a.score != b.score { return a.score > b.score }
-        let ao = originalityRank(a.candidate.videoCodec), bo = originalityRank(b.candidate.videoCodec)
+        rank(a.candidate, score: a.score, before: b.candidate, score: b.score)
+    }
+
+    /// The same comparator over (candidate, score) pairs — the
+    /// recommendation classifier's "angelRank" order uses it, so the lists
+    /// and the batch pick can never disagree about who goes first.
+    static func rank(_ a: ArchiveAngelCandidate, score sa: Int,
+                     before b: ArchiveAngelCandidate, score sb: Int) -> Bool {
+        if sa != sb { return sa > sb }
+        let ao = originalityRank(a.videoCodec), bo = originalityRank(b.videoCodec)
         if ao != bo { return ao < bo }
-        let ad = a.candidate.inferredRecordDate ?? .distantFuture
-        let bd = b.candidate.inferredRecordDate ?? .distantFuture
+        let ad = a.inferredRecordDate ?? .distantFuture
+        let bd = b.inferredRecordDate ?? .distantFuture
         if ad != bd { return ad < bd }
-        if a.candidate.durationSeconds != b.candidate.durationSeconds {
-            return a.candidate.durationSeconds > b.candidate.durationSeconds
-        }
-        if a.candidate.sizeBytes != b.candidate.sizeBytes { return a.candidate.sizeBytes > b.candidate.sizeBytes }
-        return a.candidate.filename < b.candidate.filename
+        if a.durationSeconds != b.durationSeconds { return a.durationSeconds > b.durationSeconds }
+        if a.sizeBytes != b.sizeBytes { return a.sizeBytes > b.sizeBytes }
+        return a.filename < b.filename
     }
 
     /// "Most original" order of ffprobe codec names, 0 = most original. A

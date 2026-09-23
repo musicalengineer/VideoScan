@@ -402,8 +402,11 @@ extension ArchiveView {
             // and got "already promoted". Nothing offered here may be
             // something Promote will throw back. O(1) per record (one
             // index lookup), inside the memo, never per render.
-            ArchiveNudge.assess(
-                snapshot.notYetArchived.filter { !model.promoteWouldRefusePermanently($0) })
+            // Consolidation S3a: the ONE recommendation classifier, under
+            // the legacy nudge rules (same numbers as ArchiveNudge.assess —
+            // ArchiveAngelRecommendationsLegacyParityTests pins it).
+            ArchiveAngel.nudge(
+                for: snapshot.notYetArchived.filter { !model.promoteWouldRefusePermanently($0) })
         }
     }
 }
