@@ -444,6 +444,25 @@ public struct GedcomFamilyGraph: Sendable {
             }
         }
 
+        /// True when the line belonged to a military block (opened, or a
+        /// sub-line of the open one); false leaves it to the usual reader.
+        func consumeMilitary(level: Int, tag: String, value: String,
+                             into person: inout Person) -> Bool {
+            if level == 1 {
+                finishMilitary(into: &person)
+                guard let block = Self.openMilitaryFact(tag: tag, value: value) else { return false }
+                pendingMilitary = block
+                pendingEvent = nil
+                return true
+            }
+            guard var block = pendingMilitary else { return false }
+            if !Self.applyMilitaryLine(level: level, tag: tag, value: value, to: &block) {
+                droppedLineCount += 1
+            }
+            pendingMilitary = block
+            return true
+        }
+
         func flush() {
             if var person = currentIndi {
                 finishMilitary(into: &person)
@@ -546,19 +565,7 @@ public struct GedcomFamilyGraph: Sendable {
                 // Military facts (+Military): a level-1 line closes any
                 // open block and may open a new one; sub-lines of an open
                 // block are the block's. Nothing else changes.
-                if level == 1 {
-                    finishMilitary(into: &person)
-                    if let block = Self.openMilitaryFact(tag: tag, value: value) {
-                        pendingMilitary = block
-                        pendingEvent = nil
-                        currentIndi = person
-                        continue
-                    }
-                } else if var block = pendingMilitary {
-                    if !Self.applyMilitaryLine(level: level, tag: tag, value: value, to: &block) {
-                        droppedLineCount += 1
-                    }
-                    pendingMilitary = block
+                if consumeMilitary(level: level, tag: tag, value: value, into: &person) {
                     currentIndi = person
                     continue
                 }

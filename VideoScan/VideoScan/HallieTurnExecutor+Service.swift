@@ -175,115 +175,38 @@ extension HallieTurnExecutor {
             let itemIDs: [String]
         }
 
-        /// Everyone the family has a service record or passage about — for
-        /// one war when the question names one — plus the tree's facts.
-        private static func familyWide(_ ask: HallieServiceQuestion.FamilyAsk, context: Context) -> Result {
-            let index = context.cyberBrain
+        /// What the family itself said, for one family-wide ask.
+        private struct FamilyStories {
             var listed: [Listed] = []
+            /// Wars the family HAS stories from (for the "no record" line).
             var storiedWars: Set<HallieServiceQuestion.War> = []
-            var cyberBrainTreeIDs: Set<String> = []
-            var cyberBrainNames: Set<String> = []
+            /// Tree records / names already listed from the family's words.
+            var treeIDs: Set<String> = []
+            var names: Set<String> = []
+        }
 
-            for person in (index?.archive.people ?? []).sorted(by: { $0.canonicalName < $1.canonicalName }) {
-                guard let index else { break }
-                let stories = storyItems(for: person, index: index)
-                for item in stories {
-                    if let war = item.service?.conflict.flatMap(HallieServiceQuestion.War.init) {
-                        storiedWars.insert(war)
-                    }
-                }
-                let matching = stories.filter { item in
-                    guard let record = item.service else { return false }
-                    if let branch = ask.branch, !branch.matches(record.force) { return false }
-                    if let war = ask.war { return record.conflict == war.conflict }
-                    return ask.otherWar == nil
-                }
-                var entry: Listed?
-                if let first = matching.first, let record = first.service {
-                    var citations: [KnowledgeCitation] = []
-                    matching.forEach { cite($0, index: index, into: &citations) }
-                    entry = Listed(
-                        name: person.canonicalName,
-                        line: HallieServiceStory.summaryLine(name: person.canonicalName, record: record),
-                        storyPerson: person, citations: citations,
-                        itemIDs: matching.map(\.id))
-                } else if stories.isEmpty, ask.otherWar == nil {
-                    // An older free-text passage: listed under a war only
-                    // when its own words name that war.
-                    let passages = servicePassages(for: person, index: index).filter { passage in
-                        if let branch = ask.branch, !branch.matches(passage.item.text) { return false }
-                        guard let war = ask.war else { return true }
-                        return HallieServiceQuestion.war(namedIn: passage.item.text) == war
-                    }
-                    if let passage = passages.first {
-                        var citations: [KnowledgeCitation] = []
-                        cite(passage.item, index: index, into: &citations)
-                        entry = Listed(
-                            name: person.canonicalName,
-                            line: person.canonicalName + " — " + quoted(passage.item, source: passage.source, person: person),
-                            storyPerson: nil, citations: citations, itemIDs: [passage.item.id])
-                    }
-                }
-                guard let entry else { continue }
-                listed.append(entry)
-                // Listed from the family's own words: the tree's facts for
-                // the same person are not listed a second time.
-                if let tree = bridgedTreePerson(for: person, graph: context.graph) {
-                    cyberBrainTreeIDs.insert(tree.id)
-                }
-                cyberBrainNames.insert(PersonResolver.normalize(person.canonicalName))
-            }
+        typealias TreeMatch = (person: GedcomFamilyGraph.Person, facts: [GedcomFamilyGraph.MilitaryFact])
 
-            // The tree's own military facts, minus people already listed
-            // from the family's stories.
-            var treeMatches: [(person: GedcomFamilyGraph.Person, facts: [GedcomFamilyGraph.MilitaryFact])] = []
-            if ask.otherWar == nil, let graph = context.graph {
-                for person in graph.people.values where !person.militaryFacts.isEmpty {
-                    if cyberBrainTreeIDs.contains(person.id)
-                        || cyberBrainNames.contains(PersonResolver.normalize(person.name)) { continue }
-                    let facts = person.militaryFacts.filter { fact in
-                        if let branch = ask.branch,
-                           !branch.matches([fact.value, fact.type, fact.note].compactMap { $0 }.joined(separator: " ")) {
-                            return false
-                        }
-                        guard let war = ask.war else { return true }
-                        return HallieServiceStory.war(of: fact) == war
-                    }
-                    if !facts.isEmpty { treeMatches.append((person, facts)) }
-                }
-                // Most recent generations first (nearest to the family
-                // today), then by name — stable run to run.
-                treeMatches.sort {
-                    let a = $0.person.birthYear ?? Int.min, b = $1.person.birthYear ?? Int.min
-                    return a != b ? a > b : $0.person.name < $1.person.name
-                }
-            }
-
+        /// Everyone the family has a service record or passage about — for
+        /// one war / branch when the question names one — plus the tree's
+        /// facts, then the offer.
+        private static func familyWide(_ ask: HallieServiceQuestion.FamilyAsk, context: Context) -> Result {
+            let stories = familyStories(ask, context: context)
+            let tree = treeMatches(ask, graph: context.graph, excluding: stories)
             let scope = ask.war?.name ?? ask.otherWar ?? ask.branch?.name
             let queryDescription = "shape=graph operation=biography scope=family \(topicDescription)"
                 + ((ask.war?.name ?? ask.otherWar).map { " war=\($0)" } ?? "")
                 + (ask.branch.map { " branch=\($0.rawValue)" } ?? "")
-            guard !listed.isEmpty || !treeMatches.isEmpty else {
+            guard !stories.listed.isEmpty || !tree.isEmpty else {
                 return nothingForWar(scope: scope, isWar: ask.branch == nil,
-                                     storiedWars: storiedWars, queryDescription: queryDescription)
+                                     storiedWars: stories.storiedWars, queryDescription: queryDescription)
             }
-
             var paragraphs: [String] = []
             var citations: [KnowledgeCitation] = []
             var itemIDs: [String] = []
-            if !listed.isEmpty {
-                let shown = listed.prefix(maximumListed)
-                let lead: String
-                if let scope {
-                    lead = shown.count == 1
-                        ? "The family has told me about one person who served in \(scope):"
-                        : "The family has told me about \(shown.count) people who served in \(scope):"
-                } else {
-                    lead = shown.count == 1
-                        ? "The family has told me about one person who served:"
-                        : "The family has told me about \(shown.count) people who served:"
-                }
-                paragraphs.append(lead + " " + shown.map(\.line).joined(separator: " "))
+            let shown = Array(stories.listed.prefix(maximumListed))
+            if !shown.isEmpty {
+                paragraphs.append(familyLead(count: shown.count, scope: scope) + " " + shown.map(\.line).joined(separator: " "))
                 for entry in shown {
                     for citation in entry.citations where !citations.contains(where: { $0.id == citation.id }) {
                         citations.append(citation)
@@ -291,43 +214,12 @@ extension HallieTurnExecutor {
                     itemIDs += entry.itemIDs
                 }
             }
-            if !treeMatches.isEmpty {
-                let shown = treeMatches.prefix(maximumListed)
-                let lead = listed.isEmpty ? "The family tree records" : "The family tree also records"
-                // A fact is tied to a war by its own words or its own date
-                // (HallieServiceStory.war(of:)) — said, not implied.
-                let tied = scope.map { " tied to \($0) by its own words or date" } ?? ""
-                var sentence: String
-                if treeMatches.count == 1 {
-                    sentence = "\(lead) a military fact\(tied) for one person: "
-                } else {
-                    sentence = "\(lead) military facts\(tied) for \(treeMatches.count) people"
-                        + (treeMatches.count > shown.count ? ", including: " : ": ")
-                }
-                sentence += shown.map { HallieServiceStory.treeListLine(person: $0.person, facts: $0.facts) }
-                    .joined(separator: "; ") + "."
-                paragraphs.append(sentence)
+            if !tree.isEmpty {
+                paragraphs.append(treeParagraph(tree, scope: scope, afterStories: !shown.isEmpty))
                 citations.append(KnowledgeCitation(
                     id: treeCitationID, title: "Imported family tree (GEDCOM) — military facts",
                     attribution: nil, locator: nil))
                 itemIDs.append(treeCitationID)
-            }
-
-            // The offer: one story → "Would you like to hear it?"; several
-            // → pick a name. A tree-only answer offers nothing (no story).
-            let storyPeople = listed.prefix(maximumListed).compactMap(\.storyPerson)
-            var clarification: Clarification?
-            var offer: String?
-            if storyPeople.count == 1, let person = storyPeople.first {
-                offer = "Would you like to hear \(storyPronounPhrase(person, context: context)) story?"
-                clarification = makeClarification(
-                    intent: storyIntent(for: person), stage: .serviceOffer,
-                    candidates: [storyCandidate(person)], context: context)
-            } else if storyPeople.count > 1 {
-                offer = "Whose story would you like to hear?"
-                clarification = makeClarification(
-                    intent: storyIntent(for: storyPeople[0]), stage: .serviceOffer,
-                    candidates: storyPeople.map(storyCandidate), context: context)
             }
             let prose = paragraphs.joined(separator: " ")
             let result = Result(
@@ -335,9 +227,124 @@ extension HallieTurnExecutor {
                 basisLine: basisLine(itemIDs: itemIDs),
                 queryDescription: queryDescription, citations: [],
                 knowledgeCitations: citations,
-                catalogPersonName: listed.count == 1 && treeMatches.isEmpty ? listed.first?.name : nil,
+                catalogPersonName: shown.count == 1 && tree.isEmpty ? shown.first?.name : nil,
                 answerPlan: HallieAnswerPlan(route: .graph, shape: .fixed, fallbackText: prose))
-            guard let offer, let clarification else { return result }
+            return offeringStories(on: result, people: shown.compactMap(\.storyPerson), context: context)
+        }
+
+        private static func familyStories(_ ask: HallieServiceQuestion.FamilyAsk, context: Context) -> FamilyStories {
+            var found = FamilyStories()
+            guard let index = context.cyberBrain else { return found }
+            for person in index.archive.people.sorted(by: { $0.canonicalName < $1.canonicalName }) {
+                let stories = storyItems(for: person, index: index)
+                found.storiedWars.formUnion(stories.compactMap { $0.service?.conflict.flatMap(HallieServiceQuestion.War.init) })
+                let entry = stories.isEmpty
+                    ? passageEntry(for: person, ask: ask, index: index)
+                    : storyEntry(for: person, stories: stories, ask: ask, index: index)
+                guard let entry else { continue }
+                found.listed.append(entry)
+                // Listed from the family's own words: the tree's facts for
+                // the same person are not listed a second time.
+                if let tree = bridgedTreePerson(for: person, graph: context.graph) { found.treeIDs.insert(tree.id) }
+                found.names.insert(PersonResolver.normalize(person.canonicalName))
+            }
+            return found
+        }
+
+        /// A structured record for the war / branch asked about.
+        private static func storyEntry(for person: CyberBrainPerson, stories: [CyberBrainItem],
+                                       ask: HallieServiceQuestion.FamilyAsk, index: CyberBrainIndex) -> Listed? {
+            let matching = stories.filter { item in
+                guard let record = item.service else { return false }
+                if let branch = ask.branch, !branch.matches(record.force) { return false }
+                if let war = ask.war { return record.conflict == war.conflict }
+                return ask.otherWar == nil
+            }
+            guard let record = matching.first?.service else { return nil }
+            var citations: [KnowledgeCitation] = []
+            matching.forEach { cite($0, index: index, into: &citations) }
+            return Listed(name: person.canonicalName,
+                          line: HallieServiceStory.summaryLine(name: person.canonicalName, record: record),
+                          storyPerson: person, citations: citations, itemIDs: matching.map(\.id))
+        }
+
+        /// An older free-text passage: listed under a war / branch only when
+        /// its own words name it.
+        private static func passageEntry(for person: CyberBrainPerson, ask: HallieServiceQuestion.FamilyAsk,
+                                         index: CyberBrainIndex) -> Listed? {
+            guard ask.otherWar == nil else { return nil }
+            let passage = servicePassages(for: person, index: index).first { passage in
+                if let branch = ask.branch, !branch.matches(passage.item.text) { return false }
+                guard let war = ask.war else { return true }
+                return HallieServiceQuestion.war(namedIn: passage.item.text) == war
+            }
+            guard let passage else { return nil }
+            var citations: [KnowledgeCitation] = []
+            cite(passage.item, index: index, into: &citations)
+            return Listed(name: person.canonicalName,
+                          line: person.canonicalName + " — " + quoted(passage.item, source: passage.source, person: person),
+                          storyPerson: nil, citations: citations, itemIDs: [passage.item.id])
+        }
+
+        /// The tree's own military facts for the ask, minus people already
+        /// listed from the family's words. Most recent generations first
+        /// (nearest to the family today), then by name — stable run to run.
+        private static func treeMatches(_ ask: HallieServiceQuestion.FamilyAsk, graph: GedcomFamilyGraph?,
+                                        excluding stories: FamilyStories) -> [TreeMatch] {
+            guard ask.otherWar == nil, let graph else { return [] }
+            var matches: [TreeMatch] = []
+            for person in graph.people.values where !person.militaryFacts.isEmpty {
+                if stories.treeIDs.contains(person.id)
+                    || stories.names.contains(PersonResolver.normalize(person.name)) { continue }
+                let facts = person.militaryFacts.filter { fact in
+                    if let branch = ask.branch,
+                       !branch.matches([fact.value, fact.type, fact.note].compactMap { $0 }.joined(separator: " ")) {
+                        return false
+                    }
+                    guard let war = ask.war else { return true }
+                    return HallieServiceStory.war(of: fact) == war
+                }
+                if !facts.isEmpty { matches.append((person, facts)) }
+            }
+            return matches.sorted {
+                let a = $0.person.birthYear ?? Int.min, b = $1.person.birthYear ?? Int.min
+                return a != b ? a > b : $0.person.name < $1.person.name
+            }
+        }
+
+        private static func familyLead(count: Int, scope: String?) -> String {
+            let people = count == 1 ? "one person" : "\(count) people"
+            return "The family has told me about \(people) who served" + (scope.map { " in \($0)" } ?? "") + ":"
+        }
+
+        /// A fact is tied to a war by its own words or its own date
+        /// (HallieServiceStory.war(of:)) — said, not implied.
+        private static func treeParagraph(_ tree: [TreeMatch], scope: String?, afterStories: Bool) -> String {
+            let shown = tree.prefix(maximumListed)
+            let lead = afterStories ? "The family tree also records" : "The family tree records"
+            let tied = scope.map { " tied to \($0) by its own words or date" } ?? ""
+            var sentence: String
+            if tree.count == 1 {
+                sentence = "\(lead) a military fact\(tied) for one person: "
+            } else {
+                sentence = "\(lead) military facts\(tied) for \(tree.count) people"
+                    + (tree.count > shown.count ? ", including: " : ": ")
+            }
+            return sentence + shown.map { HallieServiceStory.treeListLine(person: $0.person, facts: $0.facts) }
+                .joined(separator: "; ") + "."
+        }
+
+        /// One story → "Would you like to hear his story?"; several → pick a
+        /// name. A tree-only answer offers nothing (there is no story).
+        private static func offeringStories(on result: Result, people: [CyberBrainPerson],
+                                            context: Context) -> Result {
+            guard let first = people.first else { return result }
+            let offer = people.count == 1
+                ? "Would you like to hear \(storyPronounPhrase(first, context: context)) story?"
+                : "Whose story would you like to hear?"
+            let clarification = makeClarification(
+                intent: storyIntent(for: first), stage: .serviceOffer,
+                candidates: people.map(storyCandidate), context: context)
             return result.offering(offer, clarification: clarification)
         }
 
@@ -576,7 +583,7 @@ extension HallieTurnExecutor {
             case 0: return ""
             case 1: return items[0]
             case 2: return items[0] + " and " + items[1]
-            default: return items.dropLast().joined(separator: ", ") + ", and " + items.last!
+            default: return items.dropLast().joined(separator: ", ") + ", and " + items[items.count - 1]
             }
         }
     }
