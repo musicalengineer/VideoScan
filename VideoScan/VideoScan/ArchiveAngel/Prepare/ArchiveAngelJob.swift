@@ -427,11 +427,22 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
         // ── Plan entries.
         var entries: [ArchiveAngelPlan.Entry] = []
+        // Rick's hand-entered facts ride the promote (S4 fix): a row with no
+        // date / place of its own inherits the best one another copy of the
+        // same recording carries — found here so Review shows it and where
+        // it came from. ONE family index per batch (O(n) once).
+        let familyIndex = ArchiveAngelCopyFamily.Index(catalog: model)
         for pick in selection.picks {
             guard let rec = model.record(forID: pick.candidate.id) else { continue }
-            let facts = ArchivePathResolver.facts(for: rec)
+            var facts = ArchivePathResolver.facts(for: rec)
+            let relatives = ArchiveAngelFamilyFacts.relatives(of: rec, index: familyIndex, catalog: model)
+            let inherited = ArchiveAngelFamilyFacts.inherited(for: rec, relatives: relatives)
+            if let d = inherited.date, let hint = ArchiveAngelPromoter.dateHint(from: d.value) {
+                facts.dateHint = hint
+                facts.dateIsLowConfidence = false
+            }
             let people = rec.confirmedByUserPeople.map(\.name) + rec.detectedPeople
-            entries.append(.init(
+            var entry = ArchiveAngelPlan.Entry(
                 id: rec.id,
                 sourcePath: rec.fullPath,
                 filename: rec.filename,
@@ -442,7 +453,15 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                 score: pick.score,
                 evidence: pick.evidence,
                 proposedName: ArchiveAngelNaming.proposedName(facts: facts, people: people, tags: rec.tags),
-                proposedDate: ArchiveAngelNaming.proposedDate(fromFilenamePrefix: facts.dateHint.filenamePrefix)))
+                proposedDate: inherited.date?.value
+                    ?? ArchiveAngelNaming.proposedDate(fromFilenamePrefix: facts.dateHint.filenamePrefix))
+            entry.inheritedDate = inherited.date
+            entry.inheritedPlace = inherited.place
+            entry.inheritedAttestationKinds = inherited.attestationKinds
+            entry.similarDate = inherited.similarDate
+            let line = ArchiveAngelFamilyFacts.reviewLine(entry)
+            if !line.isEmpty { note("Archive Angel: \(rec.filename) — \(line)") }
+            entries.append(entry)
         }
         plan.entries = entries
         plan.startedAt = Date()
@@ -631,7 +650,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                 step(idx, .verifyAudio, .skipped, note: skipStepNote)
             } else if let d = vj.diagnosis {
                 diagnosis = d
-                step(idx, .verifyAudio, .done, note: HelperAudioOutcome.from(d).headline)
+                step(idx, .verifyAudio, .done, note: ArchiveAngelAudioOutcome.from(d).headline)
             } else if case .failed(let m) = vj.state {
                 step(idx, .verifyAudio, .failed, note: m)
             } else {
@@ -643,10 +662,31 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         _ = await savePlan()
         if stopRequested || wasSkipped(idx) { return }
 
-        // b. Balanced audio — only on a fixable problem.
+        // b. Balanced audio — only on a fixable problem, and never twice:
+        // an original already balanced reuses its catalogued `_balanced`
+        // copy (S4 fix — the retired Helper's 2026-08-19 rule).
         progress("balancing audio", 1)
         var balancedRecord: VideoRecord?
-        if let d = diagnosis, let analysis = d.balanceAnalysis {
+        if let existing = await existingBalancedCopy(of: rec, catalog: model) {
+            balancedRecord = existing
+            note("Archive Angel: \(rec.filename) — using existing balanced copy \(existing.filename)")
+            if (model as any AngelCatalog).isRecommendableNow(existing) {
+                step(idx, .balanceAudio, .done, note: "Using existing balanced copy \(existing.filename)")
+                if let i = plan.entries[idx].steps.firstIndex(where: { $0.kind == .balanceAudio }) {
+                    plan.entries[idx].steps[i].recordID = existing.id
+                    plan.entries[idx].steps[i].existingPath = existing.fullPath
+                }
+            } else {
+                step(idx, .balanceAudio, .skipped,
+                     note: "Using existing balanced copy \(existing.filename) (already in the Master Archive — not promoted again)")
+            }
+        } else if let d = diagnosis, let analysis = d.balanceAnalysis {
+            // TODO(S4 finding 3, for Rick): "fixable" is decided here by
+            // BalanceAudioFix.refusalReason(for: analysis) alone, while
+            // ArchiveAngelAudioOutcome.from(_:) (the verify note above)
+            // requires a channel-imbalance finding first. The two can
+            // disagree on an analysis without that finding. Left as-is in
+            // S4 (behaviour-preserving); pick one predicate later.
             if let reason = BalanceAudioFix.refusalReason(for: analysis) {
                 step(idx, .balanceAudio, .skipped, note: reason)
             } else {
@@ -714,6 +754,34 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             step(idx, .losslessCopy, .skipped, note: "Lossless copy not needed — \(codec) original is the preservation master")
         }
         _ = await savePlan()
+    }
+
+    /// A Balance Audio output already catalogued for `rec` whose file is
+    /// on disk: first one linked by `derivedFrom` (the Balance job's own
+    /// provenance), else the conventional `<stem>_balanced.<ext|mov>` beside
+    /// it if the catalog holds it. Never a file inside the Angel's buffer
+    /// (another batch's companion can be reclaimed under us). nil = none.
+    private func existingBalancedCopy(of rec: VideoRecord, catalog: any AngelCatalog) async -> VideoRecord? {
+        let bufferPrefix = bufferRoot.standardizedFileURL.path + "/"
+        var candidates = catalog.catalogedBalancedCopies(of: rec).sorted { $0.fullPath < $1.fullPath }
+        let src = URL(fileURLWithPath: rec.fullPath)
+        let stem = src.deletingPathExtension().lastPathComponent
+        for ext in Array(Set([src.pathExtension.isEmpty ? "mov" : src.pathExtension, "mov"])).sorted() {
+            let path = src.deletingLastPathComponent().appendingPathComponent("\(stem)_balanced.\(ext)").path
+            // Name-only match (QA on S4): not linked to ANOTHER original,
+            // and the same length as this one (±1 s) — a name is a hint,
+            // not an identity.
+            if let r = catalog.record(forPath: path), r.id != rec.id, !r.isPurged,
+               r.derivedFrom == nil || r.derivedFrom == rec.id,
+               rec.durationSeconds > 0, r.durationSeconds > 0, abs(r.durationSeconds - rec.durationSeconds) <= 1,
+               !candidates.contains(where: { $0.id == r.id }) {
+                candidates.append(r)
+            }
+        }
+        for c in candidates where !c.fullPath.hasPrefix(bufferPrefix) {
+            if await Self.fileExistsOffMain(c.fullPath) { return c }
+        }
+        return nil
     }
 
     private func runTranscode(index idx: Int, kind: ArchiveAngelPlan.StepKind, record: VideoRecord,

@@ -2,7 +2,8 @@
 // The Archive Angel's ONE front door (docs/archive_angel_consolidation_plan.md,
 // "Target architecture"). The rest of the app talks to `model.archiveAngel`
 // and to the few public views (ArchiveAngelStrip, ArchiveAngelMenuItems,
-// ArchiveAngelCatalogBadgeView, ArchiveAngelJobDetailView); everything else
+// ArchiveAngelCatalogBadgeView, ArchiveAngelJobDetailView,
+// ArchiveAngelShowCopiesHost); everything else
 // under ArchiveAngel/ is the module's inside. ArchiveAngelBoundarySensorTests
 // fails when app code reaches past this surface.
 //
@@ -60,12 +61,19 @@ final class ArchiveAngel: ObservableObject {
     /// angelProposed / angelSkipped / angelCleared lines.
     let attention: ArchiveAngelAttentionStore
     /// The recommendation rules (built-in, bundled default, or Rick's
-    /// policy.json). Read once when the façade is made.
-    let policy: AngelRecommendationPolicy
-    let policySource: AngelRecommendationPolicy.Source
+    /// policy.json). Loaded ONCE, off the main actor, starting when the
+    /// façade is made (codex #1643: reading and validating policy.json
+    /// used to run in this main-actor initializer). Until it lands this is
+    /// the built-in rule set and `policyIsLoaded` is false; the sweep waits
+    /// for the load (`policyLoaded()`) and Prepare refuses until then.
+    private(set) var policy: AngelRecommendationPolicy = .builtIn
+    private(set) var policySource: AngelRecommendationPolicy.Source = .builtIn
+    private(set) var policyIsLoaded = false
+    private var policyLoad: Task<Void, Never>?
     /// Lines the policy load wants a person to see (a refused override…),
-    /// written at `launch()` once the console exists.
-    private var policyNotices: [String]
+    /// written once the console exists (`launch()`) and the load is in.
+    private var policyNotices: [String] = []
+    private var launched = false
 
     /// "Assess Continuously" — ON by default (scoring reads catalog fields
     /// + Spotlight, never media). A test host starts from the pristine ON
@@ -73,11 +81,14 @@ final class ArchiveAngel: ObservableObject {
     @Published private(set) var sweepEnabled: Bool
     @Published private(set) var batches = Batches()
     /// ONE set of numbers (S3b): the class counts every surface reads —
-    /// the nudge, the strip headline, the badge, the catalog filter.
+    /// the strip headline, the badge, the catalog filter.
     /// Rebuilt by `rebuildRecommendations()` (ArchiveAngel+Recommendations).
     @Published private(set) var recommendations = ArchiveAngelRecommendationSummary()
     /// The pending live recount after a catalog change.
     var recountTask: Task<Void, Never>?
+    /// The catalog's Show Copies… sheet (S4) — its own small observable so
+    /// the sheet host does not re-render on every recount.
+    let showCopiesPresenter = ArchiveAngelShowCopiesPresenter()
     /// Refreshes are stamped when requested; a scan publishes only if it
     /// is newer than what is on screen (codex review 2026-09-20 #9).
     private var refreshGeneration = 0
@@ -102,24 +113,51 @@ final class ArchiveAngel: ObservableObject {
     init(model: VideoScanModel, environment: AngelEnvironment = .app) {
         self.model = model
         self.environment = environment
-        let loaded = AngelRecommendationPolicy.load(overrideURL: environment.policyOverrideURL,
-                                                    bundledURL: environment.bundledPolicyURL)
         // The evidence is stamped with the policy it was scored under; a
-        // file from other rules is re-scored (S2, QA 2026-09-22 #3).
+        // file from other rules is re-scored (S2, QA 2026-09-22 #3). The
+        // stamp is set to the LOADED policy's in `adoptPolicy`, which runs
+        // before the evidence is read or any sweep scores.
         let store = ArchiveAngelEvidenceStore(directory: environment.evidenceDirectory,
-                                              policyFingerprint: loaded.policy.fingerprint)
+                                              policyFingerprint: AngelRecommendationPolicy.defaultFingerprint)
         self.store = store
         self.sweep = ArchiveAngelSweep(store: store)
         self.attention = ArchiveAngelAttentionStore()
         self.sweepEnabled = environment.isTestHost
             ? ArchiveAngelSettings().sweepEnabled
             : ArchiveAngelSettings.restored(from: environment.defaults).sweepEnabled
-        self.policy = loaded.policy
-        self.policySource = loaded.source
-        self.policyNotices = loaded.notices
-        facadeLog.info("recommendation policy: \(loaded.source.rawValue, privacy: .public) “\(loaded.policy.name, privacy: .public)” schema \(loaded.policy.schemaVersion) fingerprint \(loaded.policy.fingerprint, privacy: .public)")
         // After every evidence replace (the new file is in place): recount.
         store.didChange = { [weak self] in self?.rebuildRecommendations() }
+        // Read + validate policy.json OFF the main actor (bounded: ≤ 1 MB,
+        // linear, no regex), then adopt it here.
+        let overrideURL = environment.policyOverrideURL
+        let bundledURL = environment.bundledPolicyURL
+        policyLoad = Task { [weak self] in
+            let loaded = await AngelRecommendationPolicy.loadOffMain(overrideURL: overrideURL, bundledURL: bundledURL)
+            self?.adoptPolicy(loaded)
+        }
+    }
+
+    /// Waits for the off-main policy load (instant once it has landed).
+    func policyLoaded() async {
+        await policyLoad?.value
+    }
+
+    /// The loaded rules take effect: the evidence stamp, the sweep's rules,
+    /// the log. Main actor; runs once.
+    private func adoptPolicy(_ loaded: AngelRecommendationPolicy.Loaded) {
+        policy = loaded.policy
+        policySource = loaded.source
+        store.policyFingerprint = loaded.policy.fingerprint
+        sweep.setPolicy(loaded.policy)
+        policyIsLoaded = true
+        policyNotices += loaded.notices
+        facadeLog.info("recommendation policy: \(loaded.source.rawValue, privacy: .public) “\(loaded.policy.name, privacy: .public)” schema \(loaded.policy.schemaVersion) fingerprint \(loaded.policy.fingerprint, privacy: .public)")
+        if launched { flushPolicyNotices() }
+    }
+
+    private func flushPolicyNotices() {
+        for line in policyNotices { catalog?.angelLog(line) }
+        policyNotices = []
     }
 
     /// The one writer of `recommendations` (the rebuild lives in an
@@ -141,9 +179,9 @@ final class ArchiveAngel: ObservableObject {
             self?.catalog?.angelLog(line)
         }
         facadeLog.info("launch START — assessment \(self.sweepEnabled ? "on" : "off", privacy: .public), test host \(self.environment.isTestHost)")
-        for line in policyNotices { catalog?.angelLog(line) }
-        policyNotices = []
-        sweep.configure(ArchiveAngelSweep.Configuration(
+        launched = true
+        flushPolicyNotices()
+        var configuration = ArchiveAngelSweep.Configuration(
             candidates: { [weak self] in self?.catalog?.archiveAngelSweepCandidates() ?? [] },
             isExternallyBusy: { [weak self] in
                 guard let self, let catalog = self.catalog else { return true }
@@ -156,7 +194,10 @@ final class ArchiveAngel: ObservableObject {
             },
             policy: policy,
             log: { [weak self] line in self?.catalog?.angelLog(line) }
-        ), enabled: sweepEnabled)
+        )
+        // Every run first waits for the off-main policy load (codex #1643).
+        configuration.policyReady = { [weak self] in await self?.policyLoaded() }
+        sweep.configure(configuration, enabled: sweepEnabled)
 
         guard !environment.isTestHost else {
             facadeLog.info("launch done — test host: no launch pass")
@@ -170,6 +211,8 @@ final class ArchiveAngel: ObservableObject {
             // once per launch — stats off-main, the catalog on main
             // (2026-09-21; VideoScanModel+ArchiveAngelCompanions).
             await catalog.reconcileArchiveAngelBufferAtLaunch(bufferRoot: root, fileExists: VideoScanModel.fileIsOnDisk)
+            // The evidence is read under the LOADED policy's stamp.
+            await self.policyLoaded()
             // Attention memory first (the scorer reads it), then the grades.
             await self.attention.load(from: ledger.mediaLedger)
             let loaded = await self.store.load()
@@ -212,16 +255,18 @@ final class ArchiveAngel: ObservableObject {
 
     func evidence(for id: UUID) -> Evidence? { store.record(for: id) }
 
-    /// The record's class after the batches' overlay (nil = not assessed
-    /// and not in a batch).
+    /// The record's EFFECTIVE class — stored evidence, the batches'
+    /// overlay and the live refusal (codex #1643 A3: the same answer the
+    /// counts and the filter give). nil = not assessed and not in a batch.
     func recommendationClass(for id: UUID) -> ArchiveAngelRecommendationClass? {
-        if recommendations.preparedIDs.contains(id) { return .prepared }
-        if recommendations.promotedIDs.contains(id) { return .promoted }
-        return store.record(for: id)?.recommendationClass
+        effectiveRecommendation(for: id)?.kind
     }
 
+    /// The row chip, drawn from the effective class — never "Promote me"
+    /// on a record the counts excluded or a batch promoted.
     func badge(for id: UUID) -> Badge? {
-        ArchiveAngelCatalogBadge.make(for: store.record(for: id), prepared: recommendations.preparedIDs.contains(id))
+        guard let kind = recommendationClass(for: id) else { return nil }
+        return ArchiveAngelCatalogBadge.make(kind: kind, record: store.record(for: id))
     }
 
     /// Bumps on EVERY recount — every sweep result and every batch change
@@ -289,6 +334,11 @@ final class ArchiveAngel: ObservableObject {
         note("Archive Angel: Prepare \(what), lossless \(lossless ? "on" : "off") — START")
         guard let model else {
             note("Archive Angel: Prepare \(what) — not started: the catalog went away")
+            return nil
+        }
+        // Never prepare under rules that are not the ones Rick wrote.
+        guard policyIsLoaded else {
+            note("Archive Angel: Prepare \(what) — not started: the recommendation rules are still loading; try again in a moment")
             return nil
         }
         let job = runner.startArchiveAngelByUser(count: count, recordIDs: recordIDs, makeLossless: lossless,

@@ -92,6 +92,12 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// these; the results sheet presents the already-computed
     /// diagnosis afterwards without re-running anything.
     case verifyAudio
+    /// "Verify Video" — Verify Audio's picture-side sibling (Rick
+    /// 2026-09-23): header facts + packet samples + a full decode, then
+    /// a plain-words OK / Warning / Broken verdict with a recommendation.
+    /// Read-only on media; verdict persisted on the record. Its row
+    /// expands to the reasons (VerifyVideoDetailView). VerifyVideoJob.
+    case verifyVideo
     /// "Find & Tag" — runs a per-person detector recipe (Donna Recipe,
     /// docs/find-and-tag-design.md) over selected records and writes
     /// MACHINE-tier person tags (detected "Donna*" / suspected
@@ -105,13 +111,11 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// row → linked catalog record. Never a move; never a re-encode.
     /// docs/archive_promotion_workflow.md, Rick 2026-08-15.
     case promote
-    /// "Assess Copies for Archive…" — Promote-Helper (2026-08-19): one
-    /// copy family → distinct representations, the recommended original,
-    /// and the actions. Reads catalog metadata only (no media I/O) so it
-    /// finishes instantly; it is an MFO job for the expandable result
-    /// panel and the action buttons that launch Promote / Transcode /
-    /// Verify Audio from it. docs/promote_helper_plan.md.
-    case assessCopies
+    // (`assessCopies` — the Promote Helper's "Assess Copies for Archive…"
+    // row — was retired in Archive Angel consolidation S4, 2026-09-22; its
+    // read-only successor is Archive Angel ▸ Show Copies…, a sheet, not a
+    // job. The kind was never persisted: no Codable, no saved plan, no
+    // defaults key named it.)
     /// "Verify Archive Copies" — the manifest-driven fixity audit +
     /// recovery pass (GH #167, 2026-08-20): re-read every Master
     /// Archive copy end to end, compare its SHA-256 against the
@@ -160,9 +164,9 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .balanceAudio: return "Balance"
         case .rebuildAudio: return "Rebuild"
         case .verifyAudio: return "Verify"
+        case .verifyVideo: return "Verify Video"
         case .findPerson: return "Find"
         case .promote: return "Promote"
-        case .assessCopies: return "Assess"
         case .verifyArchive: return "Fixity"
         case .archiveAngel: return "Angel"
         // Upper-case on purpose (the badge is small caps, so "Delete"
@@ -195,9 +199,9 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .balanceAudio: return "balance audio"
         case .rebuildAudio: return "rebuild audio"
         case .verifyAudio: return "verify audio"
+        case .verifyVideo: return "verify video"
         case .findPerson: return "find person"
         case .promote: return "promote"
-        case .assessCopies: return "assess copies"
         case .verifyArchive: return "verify archive"
         case .archiveAngel: return "archive angel"
         case .deleteDuplicates: return "delete duplicates"
@@ -776,9 +780,9 @@ final class MediaFileOperationsCenter: ObservableObject {
 
     /// Remove specific jobs from the list regardless of state, releasing
     /// their subscriptions/bookkeeping (OUTCOME line written first if the
-    /// job is terminal and unlogged). Used by the Archive Helper's
-    /// replace policy (AssessCopiesJob.swift) and the vanish-on-cancel
-    /// path below — NOT a user-facing bulk verb.
+    /// job is terminal and unlogged). Used by the vanish-on-cancel path
+    /// below (and, until S4 retired it, the Archive Helper's replace
+    /// policy) — NOT a user-facing bulk verb.
     func removeJobs(withIDs ids: Set<UUID>) {
         let removed = jobs.filter { ids.contains($0.id) }
         guard !removed.isEmpty else { return }
@@ -1097,7 +1101,8 @@ final class MediaFileOperationsCenter: ObservableObject {
                           probedIntra: probedIntra)
         guard add(job) else { return job }
         // Same-record dedupe guard (QA MAJOR 2, 2026-07-17). The context
-        // menu greys out "Trim Master…" while a trim runs, but the Center
+        // menu used to grey out "Trim Master…" while a trim ran (the menu
+        // item was retired 2026-09-23), but the Center
         // is the last line of defense for every caller: two trims of one
         // record share the `.vs-partial` path, so the second job's
         // stale-partial cleanup would unlink the first job's in-flight
@@ -1265,6 +1270,37 @@ final class MediaFileOperationsCenter: ObservableObject {
         job.start()
         fileOpsLog.info("verifyAudio started: \(record.filename, privacy: .public) (autoRepair=\(autoRepair))")
         logStart(job, plan: autoRepair ? "diagnose + repair if damaged" : "diagnose the audio track")
+        return job
+    }
+
+    /// Kick off "Verify Video" as an MFO job (Rick 2026-09-23) — built
+    /// like `startVerifyAudio`: the full decode reads the whole file, so
+    /// it runs here, gated per volume, never in a sheet. Persists the
+    /// verdict on completion. Returns nil — REFUSING the dispatch — when a
+    /// Verify Video job is already active for this same record.
+    ///
+    /// `diagnoseOverride` is a TEST SEAM only — production passes nil.
+    @discardableResult
+    func startVerifyVideo(record: VideoRecord,
+                          model: VideoScanModel,
+                          diagnoseOverride: (@Sendable (String) async throws -> VideoVerifyDiagnosis)? = nil) -> VerifyVideoJob? {
+        let duplicate = jobs.contains { job in
+            guard job.state.isActive, let v = job as? VerifyVideoJob else { return false }
+            return v.record.id == record.id
+        }
+        guard !duplicate else {
+            fileOpsLog.notice("verifyVideo REFUSED duplicate dispatch: \(record.filename, privacy: .public) already has an active verify video job")
+            appLog.write("verify video refused: \(record.filename) — a verify video job for this file is already running; nothing was started")
+            return nil
+        }
+        let job = VerifyVideoJob(record: record,
+                                 model: model,
+                                 gates: gatePlan(forPaths: [record.fullPath]),
+                                 diagnoseOverride: diagnoseOverride)
+        guard add(job) else { return job }
+        job.start()
+        fileOpsLog.info("verifyVideo started: \(record.filename, privacy: .public)")
+        logStart(job, plan: "check the picture (header, timestamps, full decode)")
         return job
     }
 

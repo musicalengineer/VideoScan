@@ -322,6 +322,9 @@ struct CatalogStoreAsyncSaveTests {
           "audioVerifyStatus": "damaged",
           "audioVerifyNote": "reference movie — media missing",
           "audioVerifyDate": "2026-07-24T12:00:00Z",
+          "videoVerifyStatus": "broken",
+          "videoVerifyNote": "Broken video — each frame stored ~2,000× — broken encode; 46 GB for 71 s",
+          "videoVerifyDate": "2026-09-23T12:00:00Z",
           "supersededByID": "44444444-4444-4444-4444-444444444444",
           "repairConfirmedDate": "2026-07-24T18:00:00Z"
         }

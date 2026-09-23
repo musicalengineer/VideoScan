@@ -82,6 +82,19 @@ struct ArchiveAngelEvidenceRecord: Codable, Sendable, Equatable {
     var copies: Int?
     /// A policy floor's own words when `rejection == .policyRule`.
     var excludedBy: String?
+    /// codex #1643 A2: the first SAFETY floor that fires (the scorer's
+    /// independent safety pass), stored apart from `rejection` — which is
+    /// the first floor in policy order and may be an optional one. The
+    /// classifier excludes on this whatever `useAngelFloors` says. nil =
+    /// no safety floor fired, or evidence from before the pass existed
+    /// (then `rejection` is consulted, as before).
+    var safetyRejection: ArchiveAngelRejection?
+    /// codex #1643 A4: the recording key (ArchiveAngelCopyChooser.key)
+    /// under which the classifier collapsed this record with other copies
+    /// — set on EVERY member of a collapsed group (the kept one and each
+    /// Another copy). Prepare reclassifies the group live from it, so a
+    /// Keep chosen after the sweep wins before the next rescore.
+    var copyKey: String?
 
     init(score: Int, lines: [ArchiveAngelEvidence], rejection: ArchiveAngelRejection?,
          useCount: Int, lastUsed: Date?, computedAt: Date, timesProposed: Int = 0,
@@ -206,8 +219,10 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     @Published private(set) var revision: Int = 0
 
     /// The fingerprint of the policy this store's sweep scores with; a
-    /// loaded file stamped with another is treated like old rules.
-    let policyFingerprint: String
+    /// loaded file stamped with another is treated like old rules. Set by
+    /// the façade once the policy has loaded off the main actor (codex
+    /// #1643), always before the first `load()` / sweep.
+    var policyFingerprint: String
     /// Where "policy changed" / load refusals are said (console + file log
     /// via the façade). Default: the unified log only.
     var log: (String) -> Void = { _ in }

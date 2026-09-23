@@ -42,6 +42,15 @@ struct ArchiveTimelineItem: Identifiable, Equatable {
     /// The other versions folded into this card (ArchiveItemVersions),
     /// this card's own file included. Empty = a single-file item.
     var versions: [ArchiveItemVersion] = []
+    /// The catalog's lineage link (VideoRecord.derivedFrom) — the asset
+    /// this one was made from — when the catalog knows it. Promotion
+    /// links (archive copy → source) are NOT passed here: those are the
+    /// same item, not a version. An established relationship; version
+    /// grouping prefers it over name heuristics (codex #1644).
+    var derivedFromID: UUID? = nil
+    /// VideoRecord.derivationKind for `derivedFromID` ("balanceAudio",
+    /// "trim", …) — names the chip when the filename does not.
+    var derivationKind: String? = nil
 
     enum Kind: Equatable {
         case video

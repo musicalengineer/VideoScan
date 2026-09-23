@@ -1,3 +1,54 @@
+# Find Similar Footage — Rick's decisions (2026-09-23) → Phase 1 spec
+
+**Decided (Rick, 2026-09-23):**
+- **Phase 1 = "Find Similar Footage"** — SAME footage (copies, re-encodes, transcodes, exports, trims of one recording), not "similar content". A **Media File Operations verb** that **walks the catalog and records in the metadata** which files are probably the same footage. "It doesn't have to be 100% accurate… something to allow me to review media more quickly and stop seeing the same old videos over and over", and so the Angel doesn't archive too many copies.
+- **Part 2 = "Deep Analyze"** — improving metadata for search (the "search 100× better" north star) and curation (promote / delete), using state-of-the-art models, running in the background with **Analyze**. Semantic "similar content" belongs there, not in Find Similar Footage. Later.
+
+**Phase 1 spec (metadata only; no audio/visual fingerprints yet):**
+1. **Evidence (T0 + T1 of v1), each recorded with its reason:** same full content hash (identical); derivedFrom/derivationKind lineage; combinedFromPairID/pairGroupID; FCP `com.apple.proapps.mediaIdentifier` equality and Original Media ↔ Transcoded Media structure; duration within ±2 frames at the record's own frame rate AND a normalized-stem match (strip `.vs.*`, `_balanced/_trimmed/_cleaned/_converted`, `copy N`, `_02`-style collisions, date prefixes, case/punctuation). Duration alone never groups. Sampled/partial hashes only NOMINATE; only full hashes say Identical (codex).
+2. **Footage groups:** connected components over the evidence edges, with a confidence (Identical / Likely / Possible) and the edge reasons kept. Additive catalog fields (e.g. footageGroupID, footageConfidence, footageEvidence) — nothing removed or renamed.
+3. **Originality inside a group:** the v1 scorer (camera make/model, capture date, camera codec/name pattern, not in Transcoded Media, no transcoder encoder tag…) picks the likely original and labels the rest (re-encode / transcode / export / copy).
+4. **The MFO verb:** "Find Similar Footage" — whole catalog (or a selection/volume), off-main, honest progress, pause/stop, logged, reads catalog metadata only (no media bytes; one extra ffprobe tag captured by the existing embedded-date refresh for mediaIdentifier where missing). Re-runnable; incremental.
+5. **Using it:**
+   - right-click **Find Similar Footage** on one file → a read-only sheet: the group, the likely original, the evidence per member, playable side by side;
+   - Catalog: **"one per footage group"** view/filter + a group badge ("3 copies of the same footage") so Rick stops seeing repeats;
+   - Archive Angel: one recommendation per footage group (the likely original), companions noted.
+6. **Human decisions** ("same footage" / "not the same") persist on the records + Media Ledger, never in a cache, and override the machine forever. No date is written by Phase 1 (dates come later with Undo + provenance).
+7. **Later:** audio/visual fingerprints (after the labelled spike) add edges to the same groups; semantic similarity → Deep Analyze.
+
+---
+
+# Find Original / Find Related — design v2 (2026-09-23, after codex's independent review)
+
+**Status: DRAFT for Rick.** v1 (below, unchanged) proposed evidence tiers → an overnight fingerprint index → learned weights. Codex's review (docs/codex-review-1633-1638-2026-09-23.md) found real gaps; Claude agrees with every point. v2 changes the plan, not the ambition.
+
+## What changes in v2
+
+1. **Two questions, two data models, one sheet.** *Find Original* is **provenance** ("where did this file come from, and when was it really shot?"). *Find Similar* is **semantic retrieval** ("what else looks/sounds like this?"). They can share a sheet, but they never share conclusions: **similarity never creates lineage and never moves a date.**
+2. **Identity is proven, not sampled.** A sampled/partial hash (`p:` keys, partialMD5) only *nominates* a candidate; only a full-content hash (`h:`) or a byte comparison may say **Identical**. v2 defines how a `p:` match is promoted to `h:` and what happens on conflict (the verified answer wins; the nomination is logged as wrong).
+3. **Typed relationships with ranges.** Keep the app's existing operation parents (Trim, Balance, Transcode — including trim offsets) exactly. Discovered ancestry gets its own types (`reEncodeOf`, `containsSegmentOf(range)`, `sharesAudioWith`, `sameEventAs`) and a compilation can have **many sources with many ranges**.
+4. **Containment doesn't give direction, and a compilation has no single date.** "A's audio is inside B" doesn't say which came first; a compilation of 1994 + 1997 clips can't take one source's capture date.
+5. **Matching audio = shared audio.** A reused soundtrack or a music bed proves nothing about the event.
+6. **Provenance and retraction ship in Phase 1** — every date/relationship the feature writes carries who/what/when/why and can be undone — not in a later learning phase.
+7. **"Mounted" ≠ "awake".** The indexing policy must state whether it may wake a mounted-but-sleeping drive (v1 only said "mounted volumes only").
+8. **Measure before indexing 9.6 TB.** A small **labelled** spike comes first (below). Learned weights wait until labels distinguish identity / derivation / shared event / semantic similarity and a held-out evaluation supports a change.
+
+## Revised phases
+
+- **Phase 1 — metadata provenance, human-decided (≈1 week).** T0 lineage + T1 duration/name candidates, explicit reasons, side-by-side inspection, and **durable human decisions** (This is the original / Not related / Use its date) stored OUTSIDE any disposable cache, with provenance + retraction from day one. The guitar case reaches the 2025-02-02 export here.
+- **Phase 2 — labelled retrieval spike (≈1–2 days, no big index).** A small hand-labelled corpus drawn from the real archive: re-encodes, trims, long uninterrupted takes, compilations, speech/room audio, reused music, same scene/different camera. Measure recall, false matches, alignment error, read/decode time, index memory for: (a) the existing perceptual baseline (PerceptualHash / feature prints), (b) Chromaprint (near-identical audio — its stated target), (c) ShazamKit (Apple, local custom catalog), (d) accelerated embeddings on the ANE/MLX for *semantic* candidates only. Pick the dependency from numbers, not from v1's guesses.
+- **Phase 3 — index what the spike justified**, overnight, one reader per spindle, explicit wake policy.
+- **Phase 4 — learned weights**, only with labelled identity/derivation/event/similarity data and a held-out test.
+
+## Decisions for Rick (v2)
+1. Accept the split: provenance (Find Original) vs similarity (Find Similar) — similarity never writes a date? *(recommend yes)*
+2. Phase 2 spike before any 9.6 TB index? *(recommend yes)*
+3. May the overnight index wake a mounted-but-sleeping drive? *(recommend: no by default; a per-drive opt-in)*
+4. The "Use its date" write is **your** decision with provenance and an Undo? *(recommend yes — unchanged from v1)*
+5. Where do human decisions live — the catalog (per record) plus the Media Ledger (history)? *(recommend yes; never in fingerprints.sqlite)*
+
+---
+
 # Find Original / Find Related — design (DRAFT for Rick, 2026-09-22)
 
 *Read-only study of the codebase. Numbers marked "verified" were read from the live catalog/files on 2026-09-22; "estimate" means to be measured.*

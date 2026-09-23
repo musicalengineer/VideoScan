@@ -401,7 +401,7 @@ extension VideoScanModel {
     /// the catalog mutated and schedules a save.
     @discardableResult
     func initializeMasterArchive(at volumeOrFolderURL: URL) throws -> MasterArchiveInitResult {
-        let targetPath = PathScope.normalize(volumeOrFolderURL.standardizedFileURL.path)
+        let targetPath = Self.canonicalDesignationPath(volumeOrFolderURL)
         // Read-only viewer (codex R3 blocker 2): no scaffold, no designation
         // — same refusal every other write path makes.
         if isReadOnly {
@@ -439,10 +439,17 @@ extension VideoScanModel {
         notifyTargetsChanged()
         refreshTargetReachability()
 
-        masterArchive = MasterArchiveDesignation(
+        let designation = MasterArchiveDesignation(
             targetPath: targetPath,
             rootPath: rootURL.path,
             volumeUUID: MasterArchiveDesignation.volumeUUID(forPath: targetPath))
+        // Boot-disk folder or external volume, decided from the mount now
+        // (codex #1642) so the snapshot is exact from the first moment.
+        if ArchiveVolumeProtection.isProvenBootFolder(targetPath: designation.targetPath,
+                                                      volumeUUID: designation.volumeUUID) {
+            archiveVolumeSnapshotCache.provenBootFolder = designation
+        }
+        masterArchive = designation
         masterArchiveIdentityMismatch = nil
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
@@ -461,6 +468,22 @@ extension VideoScanModel {
         log("Master Archive: \(rootURL.path) (\(created)\(result.addedScanTarget ? "; added as scan target" : "")).")
         masterArchiveLog.info("initialize: root=\(rootURL.path, privacy: .public) created=\(result.createdPaths.count) addedTarget=\(result.addedScanTarget)")
         return result
+    }
+
+    /// The path a designation is stored under: symlinks resolved
+    /// (realpath) and the data-volume firmlink spelling folded back, so
+    /// "/System/Volumes/Data/Volumes/FamilyArchive" or a symlink to it is
+    /// stored as "/Volumes/FamilyArchive" (codex #1642). A path that does
+    /// not resolve keeps its standardized spelling. One realpath on a path
+    /// Rick just picked in an Open panel — the same cost as the UUID read
+    /// Initialize already makes. Identity is still decided from the mount
+    /// when the snapshot is built; this only keeps the stored text honest.
+    nonisolated static func canonicalDesignationPath(_ url: URL) -> String {
+        let standardized = PathScope.normalize(url.standardizedFileURL.path)
+        if let id = ArchiveVolumeProtection.mountIdentityProbe(standardized) {
+            return ArchiveVolumeProtection.canonical(id.resolvedPath)
+        }
+        return ArchiveVolumeProtection.canonical(standardized)
     }
 
     /// Import / bundle round-trip (codex QA blocker 1): a catalog.json or
@@ -619,9 +642,14 @@ extension VideoScanModel {
     /// FamilyArchive"). Since Rick's second ruling the same day ("For now
     /// we won't Remove anything from FamilyArchive") Remove from Catalog,
     /// Tidy Catalog and Remove (purge) pass `.catalogRemoval`: the tree
-    /// AND the proven archive volume are refused, but never a file that
-    /// is merely unprovable (a network share, a drive with no UUID, a
-    /// snapshot still being rebuilt) — the ruling is about FamilyArchive.
+    /// AND the proven archive volume are refused. A file that is merely
+    /// unprovable is refused only while the snapshot is PROVISIONAL (a
+    /// rename / reconnect just happened — the renamed FamilyArchive could
+    /// be exactly that drive, codex #1642): a transient "try again", no
+    /// catalog write. Once the snapshot is built, an unprovable file (a
+    /// network share, a drive with no UUID, the archive offline) is
+    /// removable — the ruling is about FamilyArchive, and such a drive
+    /// must not be blocked forever (QA 2026-09-22).
     /// No verb passes `.catalogOnly` today; it is kept for a verb that
     /// deliberately wants the tree-only rule again.
     /// The default is the stricter one, so a new caller that forgets to
@@ -668,7 +696,12 @@ extension VideoScanModel {
         switch snapshot.verdict(forPath: path) {
         case .clear: return nil
         case .onArchiveVolume: return .archiveVolume
-        case .unprovable: return effect == .catalogRemoval ? nil : .archiveVolumeUnprovable
+        case .unprovable:
+            // Catalog removal: transient while the snapshot is provisional
+            // (codex #1642), allowed once the build could not tie the drive
+            // to FamilyArchive (QA 2026-09-22 — not blocked forever).
+            if effect == .catalogRemoval, !snapshot.isProvisional { return nil }
+            return .archiveVolumeUnprovable
         }
     }
 
@@ -708,9 +741,18 @@ extension VideoScanModel {
         let label = snapshot?.label ?? "the archive volume"
         if tree > 0 { log(Self.masterArchiveRefusalLine(verb: verb, count: tree)) }
         if onVolume > 0 { log(Self.masterArchiveVolumeRefusalLine(verb: verb, count: onVolume, volume: label)) }
-        if unprovable > 0 { log(Self.masterArchiveUnprovableRefusalLine(verb: verb, count: unprovable, volume: label)) }
+        // A catalog removal only ever sees "unprovable" while the snapshot
+        // is provisional: say it is transient, not "not connected".
+        let pending = effect == .catalogRemoval && snapshot?.isProvisional == true
+        if unprovable > 0 {
+            log(pending ? Self.masterArchiveIdentityPendingLine(verb: verb, count: unprovable, volume: label)
+                        : Self.masterArchiveUnprovableRefusalLine(verb: verb, count: unprovable, volume: label))
+        }
         if onVolume + unprovable > 0 {
             masterArchiveLog.notice("bulk verb \(verb, privacy: .public): archive volume \(label, privacy: .public) protected \(onVolume) file(s), unprovable \(unprovable)")
+        }
+        if pending, unprovable > 0 {
+            masterArchiveLog.notice("bulk verb \(verb, privacy: .public): \(unprovable) catalog removal(s) deferred — archive volume snapshot provisional (transient, no catalog write)")
         }
         return kept
     }
@@ -730,6 +772,12 @@ extension VideoScanModel {
     /// …and for files whose drive cannot be told apart from it.
     nonisolated static func masterArchiveUnprovableRefusalLine(verb: String, count: Int, volume: String) -> String {
         "\(verb): left \(count) file(s) alone — \(volume), the Master Archive volume, is not connected, so VideoScan cannot prove their drive is not it."
+    }
+
+    /// …and for a catalog removal asked while the drive list is being
+    /// re-read (a mount, unmount or rename a moment ago). Transient.
+    nonisolated static func masterArchiveIdentityPendingLine(verb: String, count: Int, volume: String) -> String {
+        "\(verb): left \(count) file(s) alone for now — the drive list is refreshing, so VideoScan cannot yet tell whether their drive is \(volume), the Master Archive volume. Nothing was changed; try again in a moment."
     }
 
     /// Row/detail wording for one refused record (Delete Duplicates rows,

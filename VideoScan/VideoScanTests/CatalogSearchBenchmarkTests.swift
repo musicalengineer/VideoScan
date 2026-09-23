@@ -31,6 +31,7 @@
 //     -project VideoScan/VideoScan.xcodeproj -scheme VideoScan \
 //     -configuration Release -derivedDataPath .dd \
 //     -only-testing:VideoScanTests/CatalogSearchBenchmarkTests \
+//     -enableCodeCoverage NO ENABLE_TESTABILITY=YES \
 //     TEST_RUNNER_VS_RUN_SEARCH_BENCH=1 \
 //     TEST_RUNNER_VS_BENCH_OUT=/tmp/searchbench.jsonl
 //

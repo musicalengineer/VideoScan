@@ -180,8 +180,9 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
     static let maxSeconds: Double = 86_400
     /// Any bitrate threshold: at most 1 Gbit/s.
     static let maxKilobitsPerSecond: Double = 1_000_000
-    /// A policy file larger than this is refused unread (a runaway file
-    /// must not be parsed into memory).
+    /// A policy file larger than this is refused. The reader never holds
+    /// more than `maxFileBytes + 1` bytes (codex #1643 A5: the cap used to
+    /// be checked AFTER a whole-file read).
     static let maxFileBytes = 1_000_000
 
     // MARK: Loading
@@ -201,10 +202,47 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
         var notices: [String]
     }
 
+    /// `load` off the main actor — what the façade calls (codex #1643:
+    /// reading, parsing and validating policy.json used to run in the
+    /// façade's main-actor initializer). Bounded work: at most
+    /// `maxFileBytes + 1` bytes read, linear parse and validation, no regex.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func loadOffMain(overrideURL: URL, bundledURL: URL?,
+                                        read: @escaping @Sendable (URL) throws -> Data = { try AngelRecommendationPolicy.readPolicyFile($0) }) async -> Loaded {
+        load(overrideURL: overrideURL, bundledURL: bundledURL, read: read)
+    }
+
+    enum ReadRefusal: Error, LocalizedError {
+        case notARegularFile
+        var errorDescription: String? { "not a regular file" }
+    }
+
+    /// The policy file's bytes — never more than `limit` of them (default
+    /// `maxFileBytes + 1`, so "too large" is still detectable). A FIFO, a
+    /// device (`/dev/zero` behind a symlink) or a directory is refused
+    /// unread. ≈ `read(fd, buf, limit)` in a loop, never `readall`.
+    static func readPolicyFile(_ url: URL, limit: Int = maxFileBytes + 1) throws -> Data {
+        // A symlink to a real policy is fine (a dotfiles repo); what it
+        // points at must be a regular file.
+        let target = url.resolvingSymlinksInPath()
+        let values = try target.resourceValues(forKeys: [.isRegularFileKey])
+        guard values.isRegularFile == true else { throw ReadRefusal.notARegularFile }
+        let handle = try FileHandle(forReadingFrom: target)
+        defer { try? handle.close() }
+        var data = Data()
+        while data.count < limit {
+            guard let chunk = try handle.read(upToCount: limit - data.count), !chunk.isEmpty else { break }
+            data.append(chunk)
+        }
+        return data
+    }
+
     /// Pure over the two URLs (tests pass temp files). Never creates a file.
     static func load(overrideURL: URL, bundledURL: URL?,
                      fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
-                     read: (URL) throws -> Data = { try Data(contentsOf: $0) }) -> Loaded {
+                     read: (URL) throws -> Data = { try AngelRecommendationPolicy.readPolicyFile($0) }) -> Loaded {
         var notices: [String] = []
         if fileExists(overrideURL.path) {
             var extra: [String] = []
@@ -255,9 +293,9 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
         let data: Data
         do { data = try read(url) } catch { return .failure(.unreadable(error.localizedDescription)) }
         guard data.count <= maxFileBytes else {
-            return .failure(.unreadable("\(data.count) bytes — larger than \(maxFileBytes)"))
+            return .failure(.unreadable("more than \(maxFileBytes) bytes"))
         }
-        let given: [String: Any]
+        var given: [String: Any]
         do {
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return .failure(.undecodable("the top level must be a JSON object"))
@@ -275,20 +313,47 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
         guard readableSchemaVersions.contains(version) else {
             return .failure(.invalid(["schemaVersion \(version) — this app reads schema \(currentSchemaVersion) (and migrates 1)"]))
         }
+        // codex #1643: the policy language has no regular expression. A
+        // file that still carries the retired `tables.appCacheNamePattern`
+        // is migrated only when that is provably the same rule (the old
+        // bundled default, or a plain anchored literal alternation) — else
+        // the WHOLE file is refused, with the reason. No regex engine runs.
+        var fileNotes: [String] = []
+        var retiredKey = false
+        if var tables = given["tables"] as? [String: Any], let pattern = tables["appCacheNamePattern"] {
+            retiredKey = true
+            switch AngelStemMatcher.migrateRetired(pattern) {
+            case .refuse(let why):
+                return .failure(.invalid(["tables.appCacheNamePattern " + why]))
+            case .names(let names, let numbered):
+                let newKeys = ["appCacheStemNames", "appCacheStemNumbered", "appCacheStemGlobs"]
+                if newKeys.contains(where: { tables[$0] != nil }) {
+                    return .failure(.invalid(["tables.appCacheNamePattern (retired) and tables.appCacheStemNames/"
+                                              + "Numbered/Globs are both present — keep only the stem fields"]))
+                }
+                tables.removeValue(forKey: "appCacheNamePattern")
+                tables["appCacheStemNames"] = names
+                tables["appCacheStemNumbered"] = numbered
+                tables["appCacheStemGlobs"] = [String]()
+                given["tables"] = tables
+                fileNotes.append("tables.appCacheNamePattern (a regular expression) is no longer read — read as "
+                                 + "appCacheStemNames \(names)\(numbered ? ", numbered" : ""), the same rule; "
+                                 + "rename the key to silence this note")
+            }
+        }
         var policy: AngelRecommendationPolicy
         do {
             policy = try decodeMerged(given)
         } catch {
             return .failure(.undecodable(String(describing: error).prefix(300).description))
         }
-        var fileNotes: [String] = []
         if version == 1 {
             policy.schemaVersion = currentSchemaVersion
             fileNotes.append("schema 1 (weights only) read: your weights, the current default floors, signals and classes for everything else")
         }
         let problems = policy.validationProblems()
         guard problems.isEmpty else { return .failure(.invalid(problems)) }
-        let unknown = unknownKeys(in: data)
+        let unknown = unknownKeys(in: data).filter { !(retiredKey && $0 == "tables.appCacheNamePattern") }
         if !unknown.isEmpty {
             fileNotes.append("has key(s) this app does not read — " + unknown.joined(separator: ", ")
                              + " (ignored; a typo? the default applies for the intended field)")

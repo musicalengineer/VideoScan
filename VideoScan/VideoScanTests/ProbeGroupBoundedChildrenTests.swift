@@ -20,6 +20,11 @@
 //            returns < 2 s; main-actor pinger worst block < 250 ms; gated
 //            lines all present + ordered before the trailing line, with
 //            fsync count ≪ line count.
+//   Isolation (2026-09-23) — the run logs to a PRIVATE sink via
+//            `probeGroupGatedLogSink` (the global appLog is never swapped;
+//            parallel suites inflated the fsync count to 213 > 200 in the
+//            battery) and uses a pinned permit count via
+//            `probesPerVolumeOverride` instead of the machine's preference.
 //
 // Debug build. RED evidence: on the pre-fix engine the gauge is not
 // reachable (no seam), but the same 100k run enqueued 100,000 children
@@ -110,18 +115,30 @@ struct ProbeGroupBoundedChildrenTests {
         return o
     }
 
-    /// perfSettings is NOT written (its didSet persists to UserDefaults —
-    /// settings-pollution class); the bound is computed from whatever the
-    /// model restored, exactly as the engine does.
-    private func makeModel() -> (VideoScanModel, ProbeGroupLiveChildrenGauge, bound: Int) {
+    /// Probe permits for these tests — pinned, NOT read from the machine's
+    /// saved preference (128 on the M4, 32 on the M5 as of 2026-09-23), so
+    /// the bound, the timing and the teardown size are the same on every
+    /// host. 32 → bound 128; 100k × 1 ms / 32 ≈ 3 s of stubbed probe time.
+    static let pinnedProbes = 32
+
+    /// Isolation (2026-09-23, battery flake: fsync 213 > 200): the run's
+    /// gated lines go to `log` through the model's own sink seam — the
+    /// process-wide `appLog` is never swapped, so parallel suites writing
+    /// to it cannot land in this run's counts. perfSettings is NOT written
+    /// (its didSet persists to UserDefaults — settings-pollution class);
+    /// the permit count comes from `probesPerVolumeOverride`.
+    private func makeModel(log: PersistentLog,
+                           probes: Int = pinnedProbes) -> (VideoScanModel, ProbeGroupLiveChildrenGauge, bound: Int) {
         let model = VideoScanModel()
         model.scanOptions.probeExtensionless = true
         model.scanOptions.skipChecksums = true
         model.scanOptions.skipSmallFiles = false
         model.probeOutcomeStub = Self.gatedStub
+        model.probeGroupGatedLogSink = log
+        model.probesPerVolumeOverride = probes
         let gauge = ProbeGroupLiveChildrenGauge()
         model.probeGroupLiveChildrenGauge = gauge
-        let bound = VideoScanModel.probeGroupLiveChildBound(probesLimit: model.perfSettings.probesPerVolume)
+        let bound = VideoScanModel.probeGroupLiveChildBound(probesLimit: probes)
         return (model, gauge, bound)
     }
 
@@ -149,13 +166,9 @@ struct ProbeGroupBoundedChildrenTests {
     @Test("100k files: live children ≤ bound, main actor stays responsive, gated log complete + batched")
     func hundredKRunStaysBoundedAndResponsive() async throws {
         let root = BoundedChildrenFixture.root
-        let (model, gauge, bound) = makeModel()
-        #expect(bound >= 16)
-
         let log = try makeLog("full")
-        let previousSink = appLog
-        appLog = log
-        defer { appLog = previousSink }
+        let (model, gauge, bound) = makeModel(log: log)
+        #expect(bound == 128)
 
         let target = CatalogScanTarget(searchPath: root.path)
         let pinger = MainActorPinger()
@@ -169,7 +182,7 @@ struct ProbeGroupBoundedChildrenTests {
         pinger.stop()
         // The trailing line finalize would write (discovery audit /
         // "Cancelled …") — must land AFTER every gated line.
-        appLog.write("TRAILER")
+        log.write("TRAILER")
         log.close()
 
         print("[GH163 full] discovered=\(result.discovered) completed=\(result.completed) maxLive=\(gauge.maxLive) bound=\(bound) worstMainBlockMs=\(Int(pinger.worstBlockMs)) elapsed=\(elapsed) fsyncs=\(log.synchronizeCount)")
@@ -192,8 +205,8 @@ struct ProbeGroupBoundedChildrenTests {
 
         // Scale budget (Debug, M-series): the pre-fix engine spends this
         // long just tearing children down.
-        // 100k × 1 ms stub / 8 permits ≈ 12.5 s of pure probe time on
-        // default prefs, plus walk + drain overhead.
+        // 100k × 1 ms stub / 32 pinned permits ≈ 3 s of pure probe time,
+        // plus walk + drain overhead.
         #expect(elapsed < .seconds(90), "100k stubbed scan took \(elapsed)")
 
         // Sensor 4: every gated line present, TRAILER last, fsyncs ≪ lines.
@@ -209,11 +222,19 @@ struct ProbeGroupBoundedChildrenTests {
             #expect(after.isEmpty, "\(after.count) gated line(s) landed AFTER the trailing line")
             #expect(lines[..<trailerIndex].filter { $0.hasPrefix("NOT CATALOGED") }.count == gated.count)
         }
+        // Isolation sensor: the injected sink holds this run's lines and
+        // nothing else. A foreign line here means the probe group (or a
+        // future refactor) is writing through the global appLog again.
+        // (Lines after TRAILER are PersistentLog.close()'s own footer.)
+        let runLines = lines[..<(lines.lastIndex(of: "TRAILER") ?? lines.endIndex)]
+        let foreign = runLines.filter { !$0.contains(root.path) }
+        #expect(foreign.isEmpty, "\(foreign.count) foreign line(s) in the run's private log, e.g. \(foreign.first ?? "")")
         let expectedBatches = (result.completed + GatedOutcomeLogBatcher.defaultFlushEvery - 1)
             / GatedOutcomeLogBatcher.defaultFlushEvery
-        // + TRAILER's own fsync + a small margin.
-        #expect(log.synchronizeCount <= expectedBatches + 4,
-                "fsync count \(log.synchronizeCount) for \(gated.count) gated lines — batching regressed")
+        // Exact: one fsync per batch + TRAILER's own. The sink is private,
+        // so there is no margin to leave for other writers.
+        #expect(log.synchronizeCount == expectedBatches + 1,
+                "fsync count \(log.synchronizeCount) for \(gated.count) gated lines (expected \(expectedBatches) batches + TRAILER) — batching regressed")
         #expect(log.synchronizeCount * 50 < gated.count, "fsyncs must be ≪ lines")
     }
 
@@ -222,12 +243,8 @@ struct ProbeGroupBoundedChildrenTests {
     @Test("Cancel at ~50%: returns < 2 s (≤ bound children to tear down), gated log complete + ordered")
     func cancelMidScanReturnsPromptly() async throws {
         let root = BoundedChildrenFixture.root
-        let (model, gauge, bound) = makeModel()
-
         let log = try makeLog("cancel")
-        let previousSink = appLog
-        appLog = log
-        defer { appLog = previousSink }
+        let (model, gauge, bound) = makeModel(log: log)
 
         let target = CatalogScanTarget(searchPath: root.path)
         let scanTask = Task { @MainActor in
@@ -250,7 +267,7 @@ struct ProbeGroupBoundedChildrenTests {
         let result = await scanTask.value
         let teardown = clock.now - cancelledAt
 
-        appLog.write("TRAILER")
+        log.write("TRAILER")
         log.close()
 
         print("[GH163 cancel] discovered=\(result.discovered) completed=\(result.completed) maxLive=\(gauge.maxLive) bound=\(bound) teardown=\(teardown) fsyncs=\(log.synchronizeCount)")
@@ -271,6 +288,35 @@ struct ProbeGroupBoundedChildrenTests {
             Issue.record("TRAILER missing")
         }
         #expect(log.synchronizeCount * 50 < max(gated.count, 1))
+    }
+
+    // MARK: Isolation — the permit count comes from the seam, not the prefs
+
+    @Test("Pinned permits: 1 probe → bound 16 holds regardless of the machine's saved probesPerVolume")
+    func pinnedProbeCountBoundsTheGroup() async throws {
+        // 1,000 files in a private tree (the 100k fixture is overkill here).
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vs-gh163-pinned-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for i in 0..<1_000 {
+            let fd = open(root.appendingPathComponent(String(format: "blob%04d", i)).path, O_CREAT | O_WRONLY, 0o644)
+            try #require(fd >= 0)
+            close(fd)
+        }
+        let log = try makeLog("pinned")
+        let (model, gauge, bound) = makeModel(log: log, probes: 1)
+        #expect(bound == 16)
+        let result = await model.runTargetProbeGroup(
+            target: CatalogScanTarget(searchPath: root.path), root: root.path, volName: "GH163",
+            rootIsNetwork: false, ramMountPoint: nil)
+        log.close()
+        #expect(result.completed == 1_000)
+        // If the override were ignored, the bound would be 4 × the saved
+        // preference (≥ 16, 512 on a 128-permit M4) and the 1 ms stub would
+        // let discovery push the group well past 16.
+        #expect(gauge.maxLive <= 16, "max live \(gauge.maxLive) > 16 — probesPerVolumeOverride not honoured")
+        #expect(gauge.maxLive == 16, "the walk outruns a 1-permit probe; the group should sit AT its bound")
     }
 
     // MARK: Logic — the batcher itself

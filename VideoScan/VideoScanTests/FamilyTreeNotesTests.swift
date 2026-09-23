@@ -11,7 +11,8 @@ import VideoScanCore
 //               Hallie's index resolves it; a told-me item shows up
 //   Isolation — the model reads ONLY the injected brain directory
 //   Scale     — 16k-person graph + 500-item brain: resolver build < 50 ms,
-//               per-selection lookup microseconds
+//               per-selection lookup microseconds (Release budget, gated
+//               by PerformanceLane; Debug keeps a 4× ceiling)
 
 // MARK: - Fixtures
 
@@ -292,6 +293,21 @@ struct FamilyTreeNotesRoundTripTests {
 @MainActor
 struct FamilyTreeNotesScaleTests {
 
+    /// The 50 ms budgets are Release numbers. They are asserted only on an
+    /// authoritative PerformanceLane (Release + TEST_RUNNER_VIDEOSCAN_GEDCOM_PERF=1
+    /// + coverage off — the family-tree perf lane). Every other run keeps a
+    /// coarse Debug ceiling (4× the budget, widened on hosted CI) so a
+    /// scan-shaped regression is still caught without a loaded battery
+    /// machine failing a Release budget on Debug timings (2026-09-23).
+    static let performanceOptIn = "VIDEOSCAN_GEDCOM_PERF"
+    static let releaseBudget: Duration = .milliseconds(50)
+
+    static var budget: Duration {
+        PerformanceLane.isAuthoritative(optInKey: performanceOptIn)
+            ? releaseBudget
+            : PerformanceLane.debugCeiling(releaseBudget * 4)
+    }
+
     @Test func sixteenThousandPeopleAndFiveHundredItemsResolveFast() throws {
         var text = "0 HEAD\n"
         let givens = ["John", "Mary", "William", "Margaret", "Robert", "Elizabeth", "James", "Ann"]
@@ -326,7 +342,8 @@ struct FamilyTreeNotesScaleTests {
         let start = ContinuousClock.now
         let resolver = FamilyTreeNotesResolver(index: index, graph: graph, nameIndex: nameIndex)
         let buildElapsed = ContinuousClock.now - start
-        #expect(buildElapsed < .milliseconds(50), "resolver build took \(buildElapsed)")
+        let budget = Self.budget
+        #expect(buildElapsed < budget, "resolver build took \(buildElapsed) (budget \(budget), \(PerformanceLane.configurationName))")
 
         let lookupStart = ContinuousClock.now
         var total = 0
@@ -334,7 +351,10 @@ struct FamilyTreeNotesScaleTests {
         for i in stride(from: 2, to: 16_000, by: 97) { total += resolver.notes(forGedcomID: "@I\(i)@").count }
         let lookupElapsed = ContinuousClock.now - lookupStart
         #expect(total >= 500)
-        #expect(lookupElapsed < .milliseconds(50), "260 selections took \(lookupElapsed)")
+        #expect(lookupElapsed < budget, "260 selections took \(lookupElapsed) (budget \(budget))")
+        print("[tree-notes scale] build=\(buildElapsed) lookups=\(lookupElapsed) budget=\(budget) "
+              + (PerformanceLane.isAuthoritative(optInKey: Self.performanceOptIn)
+                 ? "(authoritative)" : PerformanceLane.explanation(optInKey: Self.performanceOptIn)))
         #expect(resolver.ambiguousPersonIDs.isEmpty)
     }
 }

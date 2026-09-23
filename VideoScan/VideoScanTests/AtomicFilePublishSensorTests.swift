@@ -239,13 +239,11 @@ struct AtomicFilePublishSensorTests {
             "VideoScan/VideoScan/POIStorage.swift",
             // publishes a validated CyberBrain archive
             "VideoScan/VideoScanCore/Sources/VideoScanCore/CyberBrainWriter.swift",
-            // Combine's no-clobber publish: renamex_np(RENAME_EXCL) first; a
-            // bare rename(2) ONLY on volumes without RENAME_EXCL (ENOTSUP /
-            // EINVAL — exFAT, msdos, SMB), onto its own 0-byte O_EXCL
-            // placeholder after a dev+ino identity check. Never RENAME_SWAP.
-            // A verified media file on disk, not Data — not a write(_:to:)
-            // shape (fix/combine-never-overwrites, 2026-09-22).
-            "VideoScan/VideoScan/CombineOutputPublish.swift",
+            // CombineOutputPublish.swift REMOVED (codex #1642, 2026-09-23):
+            // its bare rename(2) onto an lstat-checked placeholder overwrote
+            // a second writer in the check→rename window. Media publishes
+            // now go through ExclusivePublish (RENAME_EXCL / link(2) /
+            // refuse) and never call a bare rename.
         ]
 
         let sources = try productionSources()

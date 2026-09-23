@@ -344,7 +344,21 @@
       ".cache",
       ".thumbnails"
     ],
-    "appCacheNamePattern" : "^(cache|render|proxy|proxies|preview|thumb|thumbnail|temp|tmp)([ _-]?\\d+)?$",
+    "appCacheStemGlobs" : [
+
+    ],
+    "appCacheStemNames" : [
+      "cache",
+      "render",
+      "proxy",
+      "proxies",
+      "preview",
+      "thumb",
+      "thumbnail",
+      "temp",
+      "tmp"
+    ],
+    "appCacheStemNumbered" : true,
     "deliveryCodecs" : [
       "h264",
       "avc1",

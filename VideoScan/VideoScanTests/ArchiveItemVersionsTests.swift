@@ -7,7 +7,9 @@
 //
 // Five dimensions: LOGIC (roles, keys, grouping rules), SCALE (10k items
 // under a budget), SENSOR (nothing ever vanishes: every input id appears
-// exactly once as a card or a chip). MEDIA MATRIX / ISOLATION: n/a — pure
+// exactly once as a card or a chip — AND, since that passes while grouping
+// is wrong (codex #1644), explicit NEGATIVE fixtures pinning that distinct
+// recordings stay separate cards). MEDIA MATRIX / ISOLATION: n/a — pure
 // strings, no files, no global state.
 
 import Foundation
@@ -27,6 +29,16 @@ struct ArchiveItemVersionsTests {
 
     private func cards(_ rels: [String]) -> [ArchiveTimelineItem] {
         ArchiveItemVersions.group(rels.map(item))
+    }
+
+    /// NEGATIVE sensor: each named file is its own card with no chips —
+    /// grouping did not fold it into (or under) anything.
+    private func expectSeparate(_ names: [String], in out: [ArchiveTimelineItem],
+                                sourceLocation: SourceLocation = #_sourceLocation) {
+        for n in names {
+            #expect(out.contains { $0.archiveFilename == n && $0.versions.isEmpty },
+                    "\(n) must stay its own card", sourceLocation: sourceLocation)
+        }
     }
 
     /// Every input id appears exactly once — as a card or a chip.
@@ -159,5 +171,129 @@ struct ArchiveItemVersionsTests {
         #expect(out.count == 2_500)
         #expect(elapsed < 1.0, "took \(elapsed) s")
         expectNothingVanishes(rels, out)
+    }
+
+    // MARK: - Negative fixtures (codex #1644) — distinct recordings stay distinct
+
+    @Test("U1: two DIFFERENT dates with the same stem in one year stay two cards (codex #1644)")
+    func differentDatesNeverFold() {
+        let rels = [
+            "30_Video/1990-1999/1990/1990-01-01_Birthday.mov",
+            "30_Video/1990-1999/1990/1990-09-01_Birthday.mov",
+        ]
+        let out = cards(rels)
+        #expect(out.count == 2)
+        expectSeparate(["1990-01-01_Birthday.mov", "1990-09-01_Birthday.mov"], in: out)
+        expectNothingVanishes(rels, out)
+    }
+
+    @Test("two different dated Christmas tapes in one year stay two cards; an ambiguous undated version stays visible")
+    func twoChristmasTapesOneYear() {
+        let rels = [
+            "30_Video/1990-1999/1990/1990-12-24_Christmas.mov",
+            "30_Video/1990-1999/1990/1990-12-25_Christmas.mov",
+            "30_Video/1990-1999/1990/Christmas.vs.archive.mov",
+            "30_Video/1990-1999/1990/1990-12-25_Christmas_balanced.mov",
+        ]
+        let out = cards(rels)
+        #expect(out.count == 3)
+        expectSeparate(["1990-12-24_Christmas.mov", "Christmas.vs.archive.mov"], in: out)
+        let eve25 = out.first { $0.archiveFilename == "1990-12-25_Christmas.mov" }
+        #expect(eve25?.versions.map(\.label) == ["original", "restored"], "a same-DATE derivative still joins")
+        expectNothingVanishes(rels, out)
+    }
+
+    @Test("U1: camera counters Clip_01 / Clip_02 are distinct recordings, not a _02 collision (codex #1644)")
+    func cameraCountersNeverFold() {
+        let rels = [
+            "30_Video/1990-1999/1990/Clip_01.dv",
+            "30_Video/1990-1999/1990/Clip_02.dv",
+            "30_Video/1990-1999/1990/Clip.dv",
+        ]
+        let out = cards(rels)
+        #expect(out.count == 3)
+        expectSeparate(["Clip_01.dv", "Clip_02.dv", "Clip.dv"], in: out)
+        expectNothingVanishes(rels, out)
+    }
+
+    @Test("_NN is a collision only with an exact same-name sibling in the SAME folder")
+    func collisionNeedsExactSibling() {
+        let rels = [
+            "30_Video/1990-1999/1990/1990-xx-xx_Hawaii_01.mov",
+            "30_Video/1990-1999/1990/1990-xx-xx_Hawaii_02.mov",
+            "30_Video/1990-1999/1991/1991-xx-xx_Lake.mov",
+            "30_Video/1990-1999/1992/1991-xx-xx_Lake_02.mov",
+            "30_Video/1990-1999/1993/1993-xx-xx_Party.mov",
+            "30_Video/1990-1999/1993/1993-xx-xx_Party_02.mkv",
+        ]
+        let out = cards(rels)
+        #expect(out.count == 6)
+        expectSeparate(rels.map { ($0 as NSString).lastPathComponent }, in: out)
+        expectNothingVanishes(rels, out)
+    }
+
+    @Test("U2: an undated version with TWO candidate originals across years stays its own card, in either input order (codex #1644)")
+    func ambiguousCrossYearStaysVisible() {
+        let rels = [
+            "30_Video/1990-1999/1990/1990-xx-xx_Birthday.mov",
+            "30_Video/1990-1999/1991/1991-xx-xx_Birthday.mov",
+            "30_Video/1990-1999/1994/Birthday.vs.archive.mov",
+        ]
+        for input in [rels, rels.reversed()] {
+            let out = cards(input)
+            #expect(out.count == 3)
+            expectSeparate(["1990-xx-xx_Birthday.mov", "1991-xx-xx_Birthday.mov", "Birthday.vs.archive.mov"], in: out)
+            // It keeps its OWN year (not borrowed from either candidate).
+            #expect(out.first { $0.archiveFilename == "Birthday.vs.archive.mov" }?.year
+                    == ArchiveTimelinePath.year(fromRelPath: rels[2]))
+            expectNothingVanishes(input, out)
+        }
+    }
+
+    // MARK: - Established relationships (catalog derivedFrom) win over names
+
+    @Test("a catalog derivedFrom link folds a version whose NAME shares nothing with its original")
+    func derivedFromLinkFolds() {
+        let orig = item("30_Video/1990-1999/1990/1990-xx-xx_Birthday.mov")
+        var fixed = item("30_Video/1990-1999/1990/1990-xx-xx_Party-Audio-Fix.mov")
+        fixed.derivedFromID = orig.id
+        fixed.derivationKind = "balanceAudio"
+        let out = ArchiveItemVersions.group([fixed, orig])
+        #expect(out.count == 1)
+        #expect(out.first?.id == orig.id)
+        #expect(out.first?.versions.map(\.label) == ["original", "restored"])
+    }
+
+    @Test("a derivedFrom link resolves what the name alone cannot (two candidate years)")
+    func derivedFromLinkBeatsAmbiguity() {
+        let y90 = item("30_Video/1990-1999/1990/1990-xx-xx_Birthday.mov")
+        let y91 = item("30_Video/1990-1999/1991/1991-xx-xx_Birthday.mov")
+        var access = item("30_Video/1990-1999/1994/Birthday.vs.archive.mov")
+        access.derivedFromID = y91.id
+        let out = ArchiveItemVersions.group([y90, access, y91])
+        #expect(out.count == 2)
+        #expect(out.first { $0.id == y91.id }?.versions.map(\.label) == ["original", "access"])
+        #expect(out.contains { $0.id == y90.id && $0.versions.isEmpty })
+    }
+
+    @Test("a derivedFrom link to a record NOT in the archive falls back to the name rules")
+    func danglingLinkFallsBack() {
+        let orig = item("30_Video/1960-1969/1965/1965-xx-xx_Reel.mov")
+        var cleaned = item("30_Video/1960-1969/1965/1965-xx-xx_Reel_cleaned.mov")
+        cleaned.derivedFromID = UUID()
+        let out = ArchiveItemVersions.group([orig, cleaned])
+        #expect(out.count == 1)
+        #expect(out.first?.versions.map(\.label) == ["original", "restored"])
+    }
+
+    @Test("two same-name ORIGINALS without a link or collision suffix are not folded (different formats)")
+    func twoOriginalsNeedARelationship() {
+        let rels = [
+            "30_Video/1990-1999/1990/1990-xx-xx_Birthday.mov",
+            "30_Video/1990-1999/1990/1990-xx-xx_Birthday.dv",
+        ]
+        let out = cards(rels)
+        #expect(out.count == 2)
+        expectSeparate(["1990-xx-xx_Birthday.mov", "1990-xx-xx_Birthday.dv"], in: out)
     }
 }

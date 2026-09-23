@@ -151,6 +151,9 @@ extension VideoRecord {
         c.audioVerifyStatus = audioVerifyStatus
         c.audioVerifyNote = audioVerifyNote
         c.audioVerifyDate = audioVerifyDate
+        c.videoVerifyStatus = videoVerifyStatus
+        c.videoVerifyNote = videoVerifyNote
+        c.videoVerifyDate = videoVerifyDate
         c.supersededByID = supersededByID
         c.repairConfirmedDate = repairConfirmedDate
         c.archiveFixity = archiveFixity

@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 # Run the fixed 100k synthetic catalog-search benchmark and validate its JSONL.
+#
+# Release test builds and ENABLE_TESTABILITY=YES (2026-09-23): the app
+# project sets testability for Release, but the local VideoScanCore Swift
+# package is built with plain Release settings, and five suites in the test
+# target `@testable import VideoScanCore`. Without the command-line override
+# a Release `xcodebuild test` fails to compile the test target ("Unable to
+# resolve Swift module dependency to a compatible module: 'VideoScanCore'").
+# A command-line build setting applies to every target, packages included,
+# so it is passed explicitly below — the same thing TestDriver does for its
+# Release runs. It does not change optimisation (-O, whole-module) — only
+# symbol visibility — so benchmark numbers remain Release numbers.
+#
+# Coverage is off explicitly (-enableCodeCoverage NO); xcodebuild then sets
+# LLVM_PROFILE_FILE=/dev/null in the runner, which PerformanceLane treats as
+# coverage OFF.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -99,9 +114,11 @@ cmd=(
   -configuration Release
   -destination 'platform=macOS,arch=arm64'
   -derivedDataPath "$DERIVED_DATA"
+  -enableCodeCoverage NO
   -parallel-testing-enabled NO
   -maximum-concurrent-test-device-destinations 1
   -only-testing:VideoScanTests/CatalogSearchBenchmarkTests
+  ENABLE_TESTABILITY=YES
 )
 
 status=0

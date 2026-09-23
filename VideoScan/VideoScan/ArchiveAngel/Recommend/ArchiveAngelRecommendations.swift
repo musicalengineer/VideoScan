@@ -20,8 +20,9 @@
 //      the best by `order`; the rest become Another copy.
 //   6. Lists — Ready / Needs a date / Worth a look, ordered by `order`.
 //
-// Two rule sets ship: `.legacyNudge` reproduces ArchiveNudge.assess exactly
-// (S3a — the parity test pins it), and the unified default (S3b) is Rick's
+// Two rule sets ship: `.legacyNudge` reproduces the retired ArchiveNudge.assess
+// exactly (S3a proved it by parity; since S4 removed the nudge, frozen
+// expected numbers pin it), and the unified default (S3b) is Rick's
 // 2026-09-22 ruling: Ready = passes the Angel's floors AND (vouched OR
 // grade A) AND dated to at least a year.
 //
@@ -258,7 +259,9 @@ struct AngelRecommendRules: Codable, Sendable, Equatable {
 extension AngelRecommendRules {
 
     /// ArchiveNudge.assess (the Archive tab's "It looks like N files are
-    /// ready…", Rick 2026-08-21) as DATA — S3a. Reproduces it exactly:
+    /// ready…", Rick 2026-08-21; retired with the Promote Helper in S4) as
+    /// DATA — S3a. Still read by the sweep's once-per-rules-change
+    /// "old → new counts" log line. Reproduces it exactly:
     ///   • excluded: an Extra copy, a junk disposition, junkScore ≥ 50;
     ///   • vouched: Important (3), ★★ / ★★★ (1 per star), stage Ready (2)
     ///     or Master (1); "the copy to keep" is a reason, not a vouch;
@@ -402,6 +405,10 @@ enum ArchiveAngelRecommendations {
         var copies: Int = 1
         /// The Angel's score when floors are used (orders the lists).
         var score: Int = 0
+        /// The recording key this record was collapsed under with other
+        /// copies (every member of a group of 2+; nil otherwise) — Prepare
+        /// reclassifies the group live from it (codex #1643 A4).
+        var copyKey: String?
     }
 
     /// A row of a recommended list.
@@ -458,7 +465,9 @@ enum ArchiveAngelRecommendations {
                     members, prefer: rules.copies.prefer,
                     isKeeper: { candidates[$0].duplicateDisposition == .keep },
                     isBetter: byOrder) else { continue }
-            for m in members where m != kept {
+            for m in members {
+                verdicts[m].copyKey = k
+                guard m != kept else { continue }
                 verdicts[m].kind = .anotherCopy
                 verdicts[m].reasons = ["Another copy of \(candidates[kept].filename) is the one recommended"]
             }
@@ -500,10 +509,15 @@ enum ArchiveAngelRecommendations {
         }
         // 0. Safety floors are never overridden (QA on S3): a gone,
         // archived, offline or non-video file is Excluded even when the
-        // rules ignore the Angel's floors.
-        if let rejection = ev?.rejection, ArchiveAngelRejection.safetyReasons.contains(rejection) {
+        // rules ignore the Angel's floors. codex #1643 A2: read from the
+        // scorer's independent SAFETY pass (`safetyRejection`) — the first
+        // recorded rejection may be an optional floor that fired earlier in
+        // policy order ("Too short" on an offline tape). Evidence from
+        // before that pass falls back to the recorded rejection.
+        if let ev, let safety = ev.safetyRejection
+            ?? ev.rejection.flatMap({ ArchiveAngelRejection.safetyReasons.contains($0) ? $0 : nil }) {
             v.kind = .excluded
-            v.reasons = [rejection.rawValue]
+            v.reasons = [safety.rawValue]
             return v
         }
         // 1. The Angel's floors.
