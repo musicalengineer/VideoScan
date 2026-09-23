@@ -99,6 +99,11 @@ struct ArchiveView: View {
         .onChange(of: ArchiveAngel.finishedJobCount(fileOpsCenter.jobs)) { _, _ in
             model.archiveAngel.refreshBatches(reason: "an Angel job finished")
         }
+        // Family Music: the last mark taken back while the Music list is up
+        // hides its row — don't leave the pane showing a row that is gone.
+        .onChange(of: snapshot.showsMusicRow) { _, shows in
+            if !shows && selectedCategory == .music { backToArchive() }
+        }
         // GH #175: landing on the Archived column sorts newest first.
         .onChange(of: sortOrder) { old, new in
             let adjusted = ArchiveSortPolicy.adjusted(new: new, previous: old)
@@ -236,6 +241,14 @@ struct ArchiveView: View {
                         sidebarRow(.notYetArchived)
                         sidebarRow(.needsDate)
                             .padding(.leading, 14)
+                        // Family Music (2026-09-23): the LAST line, and only
+                        // once something is marked — O(1), read off the
+                        // memoized snapshot.
+                        if snapshot.showsMusicRow {
+                            sidebarRow(.music)
+                                .padding(.top, 6)
+                                .accessibilityIdentifier("archive.sidebar.music")
+                        }
                     }
                     .padding(.horizontal, 4)
 
@@ -437,6 +450,8 @@ struct ArchiveView: View {
             return "Active catalog assets with no Master Archive copy yet. Right-click → Promote to Archive."
         case .needsDate:
             return "Not-yet-archived assets with no resolvable date — Promote would file them under Undated/. Set a date in the Inspector first."
+        case .music:
+            return "Family Music — recordings of family members playing or singing that you marked in the Catalog (right-click → Mark as Family Music…). Archived or not."
         }
     }
 

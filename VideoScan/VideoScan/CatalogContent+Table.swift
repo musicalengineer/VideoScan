@@ -959,6 +959,31 @@ extension CatalogContent {
                             }
                         }
 
+                        // Family Music (Rick 2026-09-23): the ONLY way a file
+                        // gets on the Archive tab's Music shelf — a human
+                        // mark, never a rule, so bought music never shows.
+                        // Mark opens a sheet (ellipsis); Unmark acts at once.
+                        // Active rows only; multi-select: one sheet for all.
+                        let markable = activeRecs.filter { $0.streamType != .noStreams && $0.streamType != .ffprobeFailed }
+                        let markedRecs = activeRecs.filter { $0.familyMusic != nil }
+                        Button {
+                            familyMusicSheetRequest = FamilyMusicSheetRequest.make(for: markable)
+                        } label: {
+                            Label(FamilyMusicMenu.markTitle, systemImage: "music.note")
+                        }
+                        .disabled(markable.isEmpty || model.isReadOnly)
+                        .help("Put this recording (or video of someone playing) on the Family Music shelf in the Archive tab. Only files you mark ever appear there.")
+                        .accessibilityIdentifier("catalog.row.markFamilyMusic")
+                        if !markedRecs.isEmpty {
+                            Button {
+                                model.unmarkFamilyMusic(markedRecs.map(\.id))
+                            } label: {
+                                Label(FamilyMusicMenu.unmarkTitle, systemImage: "music.note")
+                            }
+                            .disabled(model.isReadOnly)
+                            .accessibilityIdentifier("catalog.row.unmarkFamilyMusic")
+                        }
+
                         // Find & Tag (docs/find-and-tag-design.md): run a
                         // per-person recipe over the selection; results
                         // land in the machine tiers (Donna* / Donna?).

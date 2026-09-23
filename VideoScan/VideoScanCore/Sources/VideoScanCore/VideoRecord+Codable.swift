@@ -91,5 +91,6 @@ extension VideoRecord {
         case proAppsMediaIdentifier
         case footage
         case footageDecisions
+        case familyMusic
     }
 }

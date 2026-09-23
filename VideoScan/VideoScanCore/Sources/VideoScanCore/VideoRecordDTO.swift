@@ -158,6 +158,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let proAppsMediaIdentifier: String?
     public let footage: FootageMembership?
     public let footageDecisions: [FootageDecision]
+    public let familyMusic: FamilyMusicInfo?
 
     // MARK: Capture from a live VideoRecord (called ON the main actor)
 
@@ -287,6 +288,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         proAppsMediaIdentifier      = r.proAppsMediaIdentifier
         footage                     = r.footage
         footageDecisions            = r.footageDecisions
+        familyMusic                 = r.familyMusic
     }
 
     // MARK: Encode — VERBATIM from VideoRecord.encode(to:)
@@ -535,5 +537,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         if !footageDecisions.isEmpty {
             try c.encode(footageDecisions, forKey: .footageDecisions)
         }
+        // Family Music (2026-09-23): only when Rick marked the file.
+        try c.encodeIfPresent(familyMusic, forKey: .familyMusic)
     }
 }

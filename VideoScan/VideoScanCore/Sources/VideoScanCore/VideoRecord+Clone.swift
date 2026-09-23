@@ -161,6 +161,7 @@ extension VideoRecord {
         c.proAppsMediaIdentifier = proAppsMediaIdentifier
         c.footage = footage
         c.footageDecisions = footageDecisions
+        c.familyMusic = familyMusic
         c.scanContext = scanContext
         return c
     }

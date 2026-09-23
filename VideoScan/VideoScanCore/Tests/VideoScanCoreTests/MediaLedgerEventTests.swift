@@ -23,7 +23,8 @@ final class MediaLedgerEventTests: XCTestCase {
         XCTAssertEqual(MediaLedgerEvent.Kind.allCases.map(\.rawValue),
                        ["cataloged", "setAside", "putBack", "archived", "copyTrashed", "copyDeleted",
                         "restored", "placeSet", "dateSet", "attestation", "approval",
-                        "angelProposed", "angelSkipped", "angelCleared", "footageDecided"])
+                        "angelProposed", "angelSkipped", "angelCleared", "footageDecided",
+                        "familyMusic"])
         XCTAssertEqual(MediaLedgerEvent.Actor.allCases.map(\.rawValue), ["rick", "tidy", "promote", "angel", "app"])
     }
 

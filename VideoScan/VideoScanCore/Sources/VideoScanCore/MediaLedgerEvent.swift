@@ -68,6 +68,11 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         /// other record id), label (the other file's name). by: rick.
         /// Appended at the END — the on-disk vocabulary is append-only.
         case footageDecided
+        /// Family Music (2026-09-23): the person marked this file as family
+        /// music, or took the mark back. detail: action ("marked" /
+        /// "unmarked"), performer, title (each only when set). by: rick.
+        /// Appended at the END — the on-disk vocabulary is append-only.
+        case familyMusic
     }
 
     /// Who did it. "rick" for a human gesture; the app's own verbs are
@@ -118,6 +123,9 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         public static let remainingVerifiedCopies = "remainingVerifiedCopies"
         /// Find Similar Footage: the OTHER record of a footage decision.
         public static let other = "other"
+        /// Family Music: who is playing, and what (free text, optional).
+        public static let performer = "performer"
+        public static let title = "title"
     }
 
     public let at: Date
