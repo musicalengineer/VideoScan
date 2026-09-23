@@ -660,6 +660,7 @@ struct ArchiveAngelCurationSimulationTests {
         }
         let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
         print("[angel-sim] 100k family pass + select: \(String(format: "%.2f", seconds)) s")
+        print("[angel-perf] familyPassSelect100k \(PerformanceLane.configurationName) \(elapsed)")
         #expect(seconds < 4, "100k in \(seconds) s")
     }
 

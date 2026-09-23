@@ -524,6 +524,7 @@ struct ArchiveAngelDerivativeTests {
         let started = ContinuousClock.now
         ArchiveAngelScorer.markDerivatives(&cands)
         let elapsed = ContinuousClock.now - started
+        print("[angel-perf] markDerivatives100k \(PerformanceLane.configurationName) \(elapsed)")
         let markedCount = cands.filter { $0.derivativeOfOriginal != nil }.count
         #expect(markedCount == 5_000, "every export beside its tape is marked: \(markedCount)")
         #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "100k markDerivatives took \(elapsed)")
@@ -654,6 +655,7 @@ struct ArchiveAngelSelectionTests {
         let started = ContinuousClock.now
         let sel = ArchiveAngelScorer.select(cands, count: 50)
         let elapsed = ContinuousClock.now - started
+        print("[angel-perf] select100k \(PerformanceLane.configurationName) \(elapsed)")
         #expect(sel.picks.count == 50)
         #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "100k select took \(elapsed)")
     }
