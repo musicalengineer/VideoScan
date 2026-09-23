@@ -980,11 +980,10 @@ extension MediaFileOperationKind {
         // and apart from Reformat's crimson (Δ ≈ 0.14); contrast vs white
         // ≈ 8.9.
         case .pruneCopies: return Color(red: 0.58, green: 0.06, blue: 0.16)
-        // Find Similar Footage (2026-09-23) — dark olive: a metadata walk,
-        // not a media verb; apart from Combine's green (Δ≈0.28), Promote's
-        // bronze (Δ≈0.21) and Rebuild's brown (Δ≈0.21); contrast vs
-        // white ≈ 6.3.
-        case .findSimilarFootage: return Color(red: 0.35, green: 0.40, blue: 0.05)
+        // Find Similar Footage (2026-09-23) — graphite: a metadata walk,
+        // not a media verb. Δ ≥ 0.19 from every other fill (nearest:
+        // Rebuild's brown), contrast vs white ≈ 8.5.
+        case .findSimilarFootage: return Color(red: 0.30, green: 0.30, blue: 0.30)
         }
     }
 }
