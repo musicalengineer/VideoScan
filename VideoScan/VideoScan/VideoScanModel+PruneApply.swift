@@ -102,6 +102,17 @@
 //      A checked copy the batch before already moved is skipped and named
 //      ("already moved to the Trash by the batch before") — never read,
 //      never counted twice, not a hold.
+//      AND AT THE MOVE (codex #1642 P2-b, 2026-09-23): the check above runs
+//      when the batch starts, but a tape capture takes minutes to verify,
+//      and a survivor can leave in that time. So each checked copy carries
+//      its family's survivor requirements — the unchecked copies' record
+//      ids, paths and identity stamps taken at prepare — to the mutation:
+//      the guard re-asks the live catalog (active, same path) on main, and
+//      re-STATS each survivor (stat only, never a read) immediately before
+//      the copy's own Trash. Gone, changed or on a drive no longer
+//      connected → the checked copy is held, named. Also asked cheaply
+//      before the copy's verdict read, so a family already broken is not
+//      read for nothing.
 // The PrunePlan rules themselves (fixity-verified archive copy, online,
 // not a pair member, never inside the archive) are PrunePlan.compute's,
 // unchanged. Unchecked copies are NEVER moved, even when the plan's
@@ -347,6 +358,58 @@ extension VideoScanModel {
         let archiveID: UUID
         let archivePath: String
         let archiveFilename: String
+        /// The copies in this copy's family the person LEFT UNCHECKED —
+        /// the "so is every copy you left unchecked" promise — re-checked
+        /// at the move (rule 7, codex #1642 P2-b).
+        var survivors: [PruneSurvivor] = []
+    }
+
+    /// One unchecked copy a checked copy's move depends on: its catalog
+    /// identity and the stat stamp it had when the batch began.
+    struct PruneSurvivor: Sendable, Equatable {
+        let recordID: UUID
+        let filename: String
+        let path: String
+        let stamp: FileIdentityStamp
+
+        /// "X, a copy you left unchecked to keep, <why> — …" — rule 7's words.
+        func reason(_ why: String) -> String {
+            "\(filename), a copy you left unchecked to keep, \(why) — the list you confirmed has changed, so nothing moved"
+        }
+    }
+
+    /// Off-main, stat only (never a read): every survivor is still on disk
+    /// as the same file. nil = go. Offline = the stat fails = held.
+    nonisolated static func pruneSurvivorProblemOnDisk(_ survivors: [PruneSurvivor]) -> String? {
+        for s in survivors {
+            guard let now = FileIdentityStamp.capture(path: s.path) else {
+                return s.reason("is no longer on disk, or its drive is no longer connected")
+            }
+            guard now == s.stamp else { return s.reason("changed on disk since the batch began") }
+        }
+        return nil
+    }
+
+    /// Both survivor checks, now: the catalog on main, then one stat per
+    /// survivor off-main. nil = go (and nil at once for no survivors).
+    func pruneSurvivorProblemNow(_ survivors: [PruneSurvivor]) async -> String? {
+        guard !survivors.isEmpty else { return nil }
+        if let why = pruneSurvivorProblemInCatalog(survivors) { return why }
+        return await Task.detached(priority: .userInitiated) {
+            Self.pruneSurvivorProblemOnDisk(survivors)
+        }.value
+    }
+
+    /// On main: every survivor is still an active catalog record at the
+    /// path it had when the batch began. nil = go.
+    func pruneSurvivorProblemInCatalog(_ survivors: [PruneSurvivor]) -> String? {
+        for s in survivors {
+            guard let live = record(forID: s.recordID), live.purgedAt == nil else {
+                return s.reason("is no longer an active catalog record")
+            }
+            guard live.fullPath == s.path else { return s.reason("moved in the catalog since the batch began") }
+        }
+        return nil
     }
 
     /// A copy `preparePrune` would not even try, with why.
@@ -366,6 +429,36 @@ extension VideoScanModel {
         /// Checked copies the batch before in the queue already moved.
         var movedEarlier: [PruneHeldCopy] = []
         static let nothing = PrunePrepared(fresh: .empty, items: [], held: [])
+    }
+
+    /// Rule 7's survivors, per checked copy: the rows of its SHOWN family
+    /// that were checkable and left unchecked (the same set pruneOverlap
+    /// judged), with their live names and paths. A survivor that is no
+    /// longer an active record holds its family (`notActive`, per copy).
+    /// Stamps are taken off-main by the caller. O(rows in shown families).
+    func pruneSurvivorRequirements(shown: PrunePlan, selected: Set<UUID>, goIDs: Set<UUID>)
+        -> (idsOf: [UUID: [UUID]], pathOf: [UUID: (filename: String, path: String)], notActive: [UUID: String]) {
+        var survivorIDsOf: [UUID: [UUID]] = [:]
+        for family in shown.families {
+            let members = family.rows.filter { goIDs.contains($0.id) }.map(\.id)
+            guard !members.isEmpty else { continue }
+            let unchecked = family.rows.filter { $0.checkable && !selected.contains($0.id) }.map(\.id)
+            for id in members { survivorIDsOf[id] = unchecked }
+        }
+        var survivorPath: [UUID: (filename: String, path: String)] = [:]
+        var survivorNotActive: [UUID: String] = [:]
+        for (copyID, ids) in survivorIDsOf {
+            for sid in ids {
+                guard let r = record(forID: sid), r.purgedAt == nil else {
+                    let name = shown.families.lazy.flatMap(\.rows).first { $0.id == sid }?.copy.filename ?? "a copy"
+                    survivorNotActive[copyID] = "\(name), a copy you left unchecked to keep, is no longer an active catalog record — "
+                        + "the list you confirmed has changed, so nothing in this family is moved"
+                    break
+                }
+                survivorPath[sid] = (r.filename, r.fullPath)
+            }
+        }
+        return (survivorIDsOf, survivorPath, survivorNotActive)
     }
 
     /// Per-batch evidence: the archive copies already proven current
@@ -413,6 +506,7 @@ extension VideoScanModel {
         // checked it too (then there is no keeper, and the confirmation
         // said so). Every row's kind decides its verdict path.
         let goIDs = Set(go.map(\.id))
+        let (survivorIDsOf, survivorPath, survivorNotActive) = pruneSurvivorRequirements(shown: shown, selected: selected, goIDs: goIDs)
         var keeperOf: [UUID: PrunePlan.CopyRef] = [:]
         var archiveOf: [UUID: PrunePlan.CopyRef] = [:]
         var kindOf: [UUID: PrunePlan.CopyRow.Kind] = [:]
@@ -432,6 +526,10 @@ extension VideoScanModel {
                                           reason: "no longer an active catalog record"))
                 continue
             }
+            if let why = survivorNotActive[copy.id] {
+                held.append(PruneHeldCopy(copyID: copy.id, filename: copy.filename, sizeBytes: copy.sizeBytes, reason: why))
+                continue
+            }
             let archive = archiveOf[copy.id].flatMap { record(forID: $0.id) }
             let keeper = keeperOf[copy.id].flatMap { record(forID: $0.id) }
             checks.append(PruneDiskCheck(copyID: copy.id, filename: copy.filename, path: rec.fullPath,
@@ -448,11 +546,28 @@ extension VideoScanModel {
         let problems = await Task.detached(priority: .userInitiated) {
             checks.compactMap { c in Self.pruneDiskProblem(c).map { (c.copyID, c.filename, c.size, $0) } }
         }.value
-        let refused = Set(problems.map(\.0))
+        var refused = Set(problems.map(\.0))
         held += problems.map { PruneHeldCopy(copyID: $0.0, filename: $0.1, sizeBytes: $0.2, reason: $0.3) }
+        // The survivors' identity stamps, stat only, off-main — the baseline
+        // the move re-checks against (codex #1642 P2-b).
+        let stamps = await Self.captureStamps(paths: Array(Set(survivorPath.values.map(\.path))))
         let items = checks.compactMap { c -> PruneItem? in
-            guard !refused.contains(c.copyID) else { return nil }
-            return itemOf[c.copyID]
+            guard !refused.contains(c.copyID), var item = itemOf[c.copyID] else { return nil }
+            var survivors: [PruneSurvivor] = []
+            for sid in survivorIDsOf[c.copyID] ?? [] {
+                guard let known = survivorPath[sid] else { continue }
+                let name = known.filename, path = known.path
+                guard let stamp = stamps[path] else {
+                    refused.insert(c.copyID)
+                    held.append(PruneHeldCopy(copyID: c.copyID, filename: c.filename, sizeBytes: c.size,
+                                              reason: "\(name), a copy you left unchecked to keep, is no longer on disk, or its drive is no longer connected — "
+                                                + "the list you confirmed has changed, so nothing in this family is moved"))
+                    return nil
+                }
+                survivors.append(PruneSurvivor(recordID: sid, filename: name, path: path, stamp: stamp))
+            }
+            item.survivors = survivors
+            return item
         }
         for h in held { log("Archived — what next?: held back \(h.line)") }
         return PrunePrepared(fresh: fresh, items: items, held: held, movedEarlier: movedBefore)
@@ -466,6 +581,23 @@ extension VideoScanModel {
         case failed(String)
         case alreadyMissing
         case skippedOffline
+
+        /// Non-nil when the MOVE itself went wrong — an error, not a
+        /// decision (codex #1642, Rick 2026-09-22: "an error drops the line
+        /// too, only a normal finish hands on"). The Trash routine threw
+        /// (permission, I/O, no Trash on the volume); the file vanished
+        /// between the guard's last stat and the move (a guarded file is
+        /// only ever "already gone" in that window); or its drive went away
+        /// between its verdict and its move. A HOLD — rule 7, a safety
+        /// refusal, a changed stamp, a Stop — is a decision and is nil.
+        var errorText: String? {
+            switch self {
+            case .failed(let why): return why
+            case .alreadyMissing: return "vanished during the move — the catalog cannot say where it went"
+            case .skippedOffline: return "its drive was disconnected during the move"
+            case .trashed, .held: return nil
+            }
+        }
     }
 
     struct PruneCopyOutcome: Sendable, Equatable {
@@ -545,6 +677,13 @@ extension VideoScanModel {
             return .held("its archive copy presented no evidence", archiveReadInFull: archiveReadInFull)
         }
 
+        // The unchecked survivors, before this copy is read (codex #1642
+        // P2-b): a family already broken is not read for nothing. Catalog
+        // on main, stat off-main. The guard asks again at the move.
+        if let why = await pruneSurvivorProblemNow(item.survivors) {
+            return .held(why, archiveReadInFull: archiveReadInFull)
+        }
+
         // VERDICT (#1, #3), off-main.
         let check = PruneByteCheck(copyID: item.copyID, filename: item.filename, path: item.path, kind: item.kind,
                                    archiveID: archive.id, archivePath: archive.fullPath,
@@ -578,15 +717,21 @@ extension VideoScanModel {
         // the proof re-checked at the last moment (#3): the live catalog on
         // main just before the hop, both stat stamps immediately before
         // the file's own Trash.
+        // The unchecked survivors travel with the proof (codex #1642 P2-b):
+        // live catalog on main, a fresh stat of each immediately before the
+        // move — a keeper that left during a long verification holds this copy.
+        let survivors = item.survivors
         let fileGuard = JunkDeletionGuard(
             authorize: { [weak self] rec in
                 guard let self else { return "the catalog went away — nothing moved" }
                 return self.pruneProofProblemInCatalog(proof, record: rec)
+                    ?? self.pruneSurvivorProblemInCatalog(survivors)
             },
             beforeRemoval: { path in
                 guard path == proof.path else { return "was never verified in this batch — nothing moved" }
-                return Self.pruneProofProblemOnDisk(proof)
-            })
+                return Self.pruneProofProblemOnDisk(proof) ?? Self.pruneSurvivorProblemOnDisk(survivors)
+            },
+            remove: hooks.removeFile)
         let result = await deleteConfirmedJunk([rec], mode: mode, guard: fileGuard)
 
         // Carry the person's marks (note, tags, people, stars…) to the

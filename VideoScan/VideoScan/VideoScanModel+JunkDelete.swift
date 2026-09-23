@@ -120,6 +120,10 @@ extension VideoScanModel {
     struct JunkDeletionGuard {
         let authorize: @MainActor (VideoRecord) -> String?
         let beforeRemoval: @Sendable (String) -> String?
+        /// The file operation itself, for tests (a seam that throws on the
+        /// Nth file — codex #1642). nil = FileManager's trashItem /
+        /// removeItem by `mode`, which is what every production caller gets.
+        var remove: (@Sendable (URL) throws -> Void)? = nil
     }
 
     /// Per-record decision made by the off-main FileManager pass. The
@@ -273,7 +277,8 @@ extension VideoScanModel {
         // the detached work is done.
         // -------------------------------------------------------------
         let mode = mode  // capture-in
-        let beforeRemoval = fileGuard?.beforeRemoval   // the only part of the guard that crosses
+        let beforeRemoval = fileGuard?.beforeRemoval   // the parts of the guard that cross
+        let removeOverride = fileGuard?.remove
         // The Master Archive VOLUME, re-asked per file at the moment of
         // removal (Rick 2026-09-22): the snapshot's verdict plus a fresh
         // read of the file's own volume UUID, so a FamilyArchive mounted
@@ -337,6 +342,11 @@ extension VideoScanModel {
                     // `throw` and unwind through.
                     do {
                         let url = URL(fileURLWithPath: path)
+                        if let removeOverride {
+                            try removeOverride(url)
+                            results.append((item.index, .succeeded))
+                            continue
+                        }
                         switch mode {
                         case .toTrash:
                             // trashItem moves to the volume's .Trashes;

@@ -53,6 +53,19 @@
 // normal finish hands the turn to the next batch. Stop on a WAITING batch
 // still takes out only that one.
 //
+// What counts as an error (codex #1642, Rick 2026-09-22: "an error drops
+// the line too, only a normal finish hands on"): a copy whose MOVE went
+// wrong — the Trash routine threw (permission, I/O, no Trash on the
+// volume), the file vanished between the guard's last stat and the move,
+// or its drive went away between its verdict and its move
+// (`PruneCopyResult.errorText`). The batch still works through its other
+// copies (each is verified and guarded on its own), keeps what it did,
+// writes the approval line with the actual counts, and then ends FAILED —
+// so the line behind it is dropped, each drop logged with the message. A
+// HOLD is not an error: rule 7, a copy moved by the batch before, a
+// safety refusal, a changed stamp, a Stop are decisions, and a batch that
+// only held still hands on.
+//
 // (For Rick: the same shape as DeleteDuplicatesJob — an ObservableObject
 // the MFO window renders, a Task that runs the loop, a flag the off-main
 // reads poll for Stop. ≈ a worker thread with an atomic<bool> stop flag.)
@@ -204,6 +217,10 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     private(set) var movedEarlier: Set<UUID> = []
     /// Copies THIS batch moved (handed on to the batch after it).
     private(set) var trashedIDs: Set<UUID> = []
+    /// Why this batch ended in error — set when any copy's MOVE went wrong
+    /// (`PruneCopyResult.errorText`), even if a Stop also landed: an error
+    /// drops the whole line whatever else happened (the center reads it).
+    private(set) var errorMessage: String?
     /// Called once the batch has fully settled (its task returned, or it
     /// was dropped while waiting) — the center starts the next in line.
     var onSettled: (() -> Void)?
@@ -512,6 +529,7 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
 
         let batch = VideoScanModel.PruneBatchState()
         var trashedRecords: [VideoRecord] = []
+        var errorLines: [String] = []
         for (i, item) in prepared.items.enumerated() {
             await waitWhilePaused()
             if stopRequested {
@@ -534,6 +552,11 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
             case .alreadyMissing:   setRow(item.copyID, status: .alreadyMissing, note: "already gone")
             case .skippedOffline:   setRow(item.copyID, status: .skippedOffline, note: "drive not connected")
             }
+            if let error = one.result.errorText {
+                errorLines.append("\(item.filename) — \(error)")
+                model.log("Archived — what next?: could not move \(item.filename) — \(error)")
+                pruneApplyLog.error("prune COPY-ERROR \(item.filename, privacy: .public): \(error, privacy: .public)")
+            }
             progress.settle(bytes: item.sizeBytes, seconds: -started.timeIntervalSinceNow, result: one.result)
             publishProgress()
         }
@@ -541,7 +564,24 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
         outcome.overrideCount = model.finishPrune(fresh: prepared.fresh, trashed: trashedRecords, batchID: batchID, mode: mode)
         model.log("Archived — what next?: " + outcome.summary)
         pruneApplyLog.notice("prune DONE trashed=\(self.outcome.trashed, privacy: .public) bytes=\(self.outcome.trashedBytes, privacy: .public) movedEarlier=\(self.outcome.movedByEarlierBatch, privacy: .public) held=\(self.outcome.held.count, privacy: .public) failed=\(self.outcome.failed.count, privacy: .public) stopped=\(self.stopRequested, privacy: .public)")
-        if stopRequested { finishCancelled() } else { finish(success: outcome.summary) }
+        if !errorLines.isEmpty {
+            let message = Self.errorMessage(errorLines, summary: outcome.summary)
+            errorMessage = message
+            appLog.write("trash copies: \(title) — ended in error: \(message)")
+            pruneApplyLog.error("prune FAILED errors=\(errorLines.count, privacy: .public) — the line behind it is dropped")
+        }
+        if stopRequested { finishCancelled() }
+        else if let errorMessage { finish(failed: errorMessage) }
+        else { finish(success: outcome.summary) }
+    }
+
+    /// The failed batch's message — also the "(the batch before failed: …)"
+    /// clause of every drop line. Pure (PruneApplyTests, codex #1642 P2-a).
+    nonisolated static func errorMessage(_ errors: [String], summary: String) -> String {
+        let n = errors.count
+        var text = "\(n) cop\(n == 1 ? "y" : "ies") could not be moved — \(errors.first ?? "")"
+        if n > 1 { text += " (and \(n - 1) more)" }
+        return text + " · " + summary
     }
 
     private func setRow(_ id: UUID, status: Row.Status, note: String) {
@@ -685,6 +725,12 @@ extension MediaFileOperationsCenter {
         case .finished:
             startNextPruneApplyIfIdle(inheriting: moved)
         case .cancelled:
+            // Stopped AND something failed before the Stop: the error wins —
+            // refuse over guess, the whole line goes (codex #1642).
+            if let why = job.errorMessage {
+                dropPruneLine(.batchBeforeFailed(why), upToSequence: Int.max)
+                return
+            }
             dropPruneLine(.stoppedWithBatchBefore, upToSequence: job.stopLineCutoff ?? Int.max)
             // Batches queued AFTER the Stop are new requests: they run.
             startNextPruneApplyIfIdle(inheriting: moved)

@@ -46,7 +46,7 @@ extension VideoScanModel {
         keepalive: VolumeKeepalive? = nil,
         audit: DiscoveryAuditCollector? = nil
     ) async -> (records: [VideoRecord], discovered: Int, completed: Int) {
-        let probesLimit = perfSettings.probesPerVolume
+        let probesLimit = effectiveProbesPerVolume
         let sem = AsyncSemaphore(limit: probesLimit)
         let skipHashingCaptured = scanOptions.skipChecksums
         var discoveredCount = 0
@@ -79,7 +79,7 @@ extension VideoScanModel {
             audit: audit,
             knownMediaExtensions: videoExtensions.union(audioExtensions),
             abortAfter: rootIsNetwork ? 100 : 50,
-            gatedLog: GatedOutcomeLogBatcher(sink: appLog)
+            gatedLog: GatedOutcomeLogBatcher(sink: probeGroupGatedLogSink ?? appLog)
         )
         var state = ProbeDrainState()
 
@@ -478,7 +478,7 @@ extension VideoScanModel {
         skipChecksums: Bool,
         audit: DiscoveryAuditCollector? = nil
     ) async -> (records: [VideoRecord], discovered: Int, completed: Int) {
-        let probesLimit = perfSettings.probesPerVolume
+        let probesLimit = effectiveProbesPerVolume
         let sem = AsyncSemaphore(limit: probesLimit)
         let totalFiles = filePaths.count
         // Sniff-gate exemption — same per-target context as
@@ -496,7 +496,7 @@ extension VideoScanModel {
             audit: audit,
             knownMediaExtensions: videoExtensions.union(audioExtensions),
             abortAfter: rootIsNetwork ? 100 : 50,
-            gatedLog: GatedOutcomeLogBatcher(sink: appLog)
+            gatedLog: GatedOutcomeLogBatcher(sink: probeGroupGatedLogSink ?? appLog)
         )
         var state = ProbeDrainState()
 

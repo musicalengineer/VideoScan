@@ -8,11 +8,11 @@ import VideoScanCore
 /// real host artifacts run only in the explicit Release/no-coverage lane:
 ///
 ///     TEST_RUNNER_VIDEOSCAN_GEDCOM_PERF=1 xcodebuild test \
-///       -configuration Release -enableCodeCoverage NO \
+///       -configuration Release -enableCodeCoverage NO ENABLE_TESTABILITY=YES \
 ///       -only-testing:VideoScanTests/GedcomScaleSensorTests
 ///
-/// Coverage-off is verified by the absence of LLVM_PROFILE_FILE in the test
-/// runner environment; merely mounting the archive never opts a normal suite
+/// Coverage-off is decided by PerformanceLane.coverageEnabled (LLVM_PROFILE_FILE
+/// unset, empty or /dev/null — Xcode sets /dev/null when coverage is off); merely mounting the archive never opts a normal suite
 /// into real removable-volume reads.
 final class GedcomScaleSensorTests: XCTestCase {
     static let bigTree = URL(fileURLWithPath:
@@ -117,6 +117,10 @@ final class GedcomScaleSensorTests: XCTestCase {
             environment: [Self.performanceOptIn: "1", "LLVM_PROFILE_FILE": "/tmp/default.profraw"]))
         XCTAssertTrue(Self.isAuthoritativePerformanceLane(
             debugBuild: false, environment: optIn))
+        XCTAssertTrue(Self.isAuthoritativePerformanceLane(
+            debugBuild: false,
+            environment: [Self.performanceOptIn: "1", "LLVM_PROFILE_FILE": "/dev/null"]),
+            "xcodebuild sets /dev/null when coverage is off — that is the Release lane")
     }
 
     func testDebugCeilingWidensOnlyOnGitHubHostedRunners() {
