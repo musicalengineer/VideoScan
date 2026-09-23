@@ -617,6 +617,26 @@ final class VideoScanModel: ObservableObject {
     /// production — one optional check per enqueue/drain, no other cost.
     var probeGroupLiveChildrenGauge: ProbeGroupLiveChildrenGauge?
 
+    /// Test seam (GH #163 isolation, 2026-09-23): the sink the probe groups'
+    /// GatedOutcomeLogBatcher writes to. Nil in production → the
+    /// process-wide `appLog`. Tests inject a private log so parallel suites
+    /// writing to the global `appLog` cannot land in (and inflate) the
+    /// run's line / fsync counts — the battery saw 213 fsyncs vs a bound of
+    /// 200 that way.
+    var probeGroupGatedLogSink: (any LogSink)?
+
+    /// Test seam (GH #163 isolation): overrides the per-volume ffprobe
+    /// permit count the probe groups use, so a test's concurrency bound
+    /// does not depend on the machine's saved preference (128 on the M4,
+    /// 32 on the M5). Nil in production → `perfSettings.probesPerVolume`.
+    /// Never written to perfSettings (its didSet persists to UserDefaults).
+    var probesPerVolumeOverride: Int?
+
+    /// The permit count the probe groups actually use.
+    var effectiveProbesPerVolume: Int {
+        probesPerVolumeOverride ?? perfSettings.probesPerVolume
+    }
+
     let videoExtensions: Set<String> = [
         "mov", "mp4", "m4v", "avi", "mkv", "mxf", "mts", "m2ts", "ts", "mpg", "mpeg",
         "m2v", "vob", "wmv", "asf", "webm", "ogv", "ogg", "rm", "rmvb", "divx", "flv",
