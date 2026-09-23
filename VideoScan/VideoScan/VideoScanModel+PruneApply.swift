@@ -390,6 +390,16 @@ extension VideoScanModel {
         return nil
     }
 
+    /// Both survivor checks, now: the catalog on main, then one stat per
+    /// survivor off-main. nil = go (and nil at once for no survivors).
+    func pruneSurvivorProblemNow(_ survivors: [PruneSurvivor]) async -> String? {
+        guard !survivors.isEmpty else { return nil }
+        if let why = pruneSurvivorProblemInCatalog(survivors) { return why }
+        return await Task.detached(priority: .userInitiated) {
+            Self.pruneSurvivorProblemOnDisk(survivors)
+        }.value
+    }
+
     /// On main: every survivor is still an active catalog record at the
     /// path it had when the batch began. nil = go.
     func pruneSurvivorProblemInCatalog(_ survivors: [PruneSurvivor]) -> String? {
@@ -419,6 +429,36 @@ extension VideoScanModel {
         /// Checked copies the batch before in the queue already moved.
         var movedEarlier: [PruneHeldCopy] = []
         static let nothing = PrunePrepared(fresh: .empty, items: [], held: [])
+    }
+
+    /// Rule 7's survivors, per checked copy: the rows of its SHOWN family
+    /// that were checkable and left unchecked (the same set pruneOverlap
+    /// judged), with their live names and paths. A survivor that is no
+    /// longer an active record holds its family (`notActive`, per copy).
+    /// Stamps are taken off-main by the caller. O(rows in shown families).
+    func pruneSurvivorRequirements(shown: PrunePlan, selected: Set<UUID>, goIDs: Set<UUID>)
+        -> (idsOf: [UUID: [UUID]], pathOf: [UUID: (filename: String, path: String)], notActive: [UUID: String]) {
+        var survivorIDsOf: [UUID: [UUID]] = [:]
+        for family in shown.families {
+            let members = family.rows.filter { goIDs.contains($0.id) }.map(\.id)
+            guard !members.isEmpty else { continue }
+            let unchecked = family.rows.filter { $0.checkable && !selected.contains($0.id) }.map(\.id)
+            for id in members { survivorIDsOf[id] = unchecked }
+        }
+        var survivorPath: [UUID: (filename: String, path: String)] = [:]
+        var survivorNotActive: [UUID: String] = [:]
+        for (copyID, ids) in survivorIDsOf {
+            for sid in ids {
+                guard let r = record(forID: sid), r.purgedAt == nil else {
+                    let name = shown.families.lazy.flatMap(\.rows).first { $0.id == sid }?.copy.filename ?? "a copy"
+                    survivorNotActive[copyID] = "\(name), a copy you left unchecked to keep, is no longer an active catalog record — "
+                        + "the list you confirmed has changed, so nothing in this family is moved"
+                    break
+                }
+                survivorPath[sid] = (r.filename, r.fullPath)
+            }
+        }
+        return (survivorIDsOf, survivorPath, survivorNotActive)
     }
 
     /// Per-batch evidence: the archive copies already proven current
@@ -466,30 +506,7 @@ extension VideoScanModel {
         // checked it too (then there is no keeper, and the confirmation
         // said so). Every row's kind decides its verdict path.
         let goIDs = Set(go.map(\.id))
-        // Rule 7's survivors, per checked copy: the rows of its SHOWN family
-        // that were checkable and left unchecked (the same set pruneOverlap
-        // judged). Their live paths now; their stamps are taken off-main
-        // below, with the disk checks.
-        var survivorIDsOf: [UUID: [UUID]] = [:]
-        for family in shown.families {
-            let members = family.rows.filter { goIDs.contains($0.id) }.map(\.id)
-            guard !members.isEmpty else { continue }
-            let unchecked = family.rows.filter { $0.checkable && !selected.contains($0.id) }.map(\.id)
-            for id in members { survivorIDsOf[id] = unchecked }
-        }
-        var survivorPath: [UUID: (filename: String, path: String)] = [:]
-        var survivorNotActive: [UUID: String] = [:]   // copy id → reason
-        for (copyID, ids) in survivorIDsOf {
-            for sid in ids {
-                guard let r = record(forID: sid), r.purgedAt == nil else {
-                    let name = shown.families.lazy.flatMap(\.rows).first { $0.id == sid }?.copy.filename ?? "a copy"
-                    survivorNotActive[copyID] = "\(name), a copy you left unchecked to keep, is no longer an active catalog record — "
-                        + "the list you confirmed has changed, so nothing in this family is moved"
-                    break
-                }
-                survivorPath[sid] = (r.filename, r.fullPath)
-            }
-        }
+        let (survivorIDsOf, survivorPath, survivorNotActive) = pruneSurvivorRequirements(shown: shown, selected: selected, goIDs: goIDs)
         var keeperOf: [UUID: PrunePlan.CopyRef] = [:]
         var archiveOf: [UUID: PrunePlan.CopyRef] = [:]
         var kindOf: [UUID: PrunePlan.CopyRow.Kind] = [:]
@@ -663,16 +680,8 @@ extension VideoScanModel {
         // The unchecked survivors, before this copy is read (codex #1642
         // P2-b): a family already broken is not read for nothing. Catalog
         // on main, stat off-main. The guard asks again at the move.
-        if !item.survivors.isEmpty {
-            if let why = pruneSurvivorProblemInCatalog(item.survivors) {
-                return .held(why, archiveReadInFull: archiveReadInFull)
-            }
-            let survivors = item.survivors
-            if let why = await Task.detached(priority: .userInitiated, operation: {
-                Self.pruneSurvivorProblemOnDisk(survivors)
-            }).value {
-                return .held(why, archiveReadInFull: archiveReadInFull)
-            }
+        if let why = await pruneSurvivorProblemNow(item.survivors) {
+            return .held(why, archiveReadInFull: archiveReadInFull)
         }
 
         // VERDICT (#1, #3), off-main.
