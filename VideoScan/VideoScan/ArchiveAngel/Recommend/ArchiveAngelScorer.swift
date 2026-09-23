@@ -891,13 +891,13 @@ enum ArchiveAngelScorer {
 
     /// `Cache.mov`, `Cache-30.mov`, `render-12.mov`, `proxy_007.mov`,
     /// `thumb.mov`… — a bare tool noun, optionally numbered (policy
-    /// `tables.appCacheNamePattern`). A real clip named by a person ("Cache
-    /// Cod 1998.mov") has more than the noun. Compiled once per pattern
-    /// (AngelPolicyTables keeps it) — a per-call compile is most of a second at 100k.
+    /// `tables.appCacheStemNames` / `appCacheStemNumbered`, plus any
+    /// `appCacheStemGlobs`). A real clip named by a person ("Cache Cod
+    /// 1998.mov") has more than the noun. Linear in the stem — no regex
+    /// (codex #1643: a user pattern could hang this main-actor sweep).
     static func looksLikeAppCache(filename: String, fullPath: String, tables: AngelPolicyTables = .standard) -> Bool {
         let stem = (filename as NSString).deletingPathExtension
-        if let re = tables.appCacheRegex,
-           re.firstMatch(in: stem, range: NSRange(stem.startIndex..., in: stem)) != nil { return true }
+        if tables.appCacheStemMatcher.matches(stem) { return true }
         // Lower-case the folder part ONCE, then look each component up
         // (was a lowercased() allocation per component).
         let folders = (fullPath as NSString).deletingLastPathComponent.lowercased()

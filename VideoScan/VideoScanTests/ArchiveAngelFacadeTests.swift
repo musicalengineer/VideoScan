@@ -143,11 +143,12 @@ struct ArchiveAngelFacadeTests {
     }
 
     @Test("prepare: the façade hands the runner ITS buffer root and policy; the catalog path reads the remembered lossless choice")
-    func prepareInjects() throws {
+    func prepareInjects() async throws {
         let (model, root) = try model()
         defer { try? FileManager.default.removeItem(at: root) }
         let defaults = suite()
         let angel = ArchiveAngel(model: model, environment: env(root, defaults: defaults))
+        await angel.policyLoaded()   // codex #1643: Prepare waits for the off-main policy load
         let runner = FakeRunner()
         let job = angel.prepare(count: 10, lossless: false, using: runner)
         #expect(job != nil)

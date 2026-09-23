@@ -12,9 +12,9 @@ Every criterion the Archive Angel uses to recommend a file is **data** in one JS
 | Bundled default | `ArchiveAngelPolicy.default.json` (in the app) | Byte-identical to the compiled-in rules (a test pins it). Copy entries from it as a starting point. |
 | Compiled-in | `AngelRecommendationPolicy.builtIn` | Used if both files are unusable. |
 
-The file is read once, when the app starts. **Quit and relaunch after editing it.**
+The file is read once, when the app starts — off the main thread, so a bad file can never freeze the app. It must be a regular file (a symlink to one is fine) of at most 1,000,000 bytes; the app never reads more than that. Until it has loaded (a few milliseconds), assessment waits and Prepare asks you to try again. **Quit and relaunch after editing it.**
 
-**Refused, never half-read.** If your file cannot be read or parsed, or anything in it is unknown (a kind, a field, an operator, a value of the wrong type, a choice that isn't one of the field's values, a number out of range, a bad regular expression), the whole file is refused. The console and `videoscan.log` name every problem, and the bundled default runs instead. A key the app doesn't read (a typo like `"pionts"`) doesn't refuse the file; it is named in a notice.
+**Refused, never half-read.** If your file cannot be read or parsed, or anything in it is unknown (a kind, a field, an operator, a value of the wrong type, a choice that isn't one of the field's values, a number out of range, a bad stem pattern), the whole file is refused. The console and `videoscan.log` name every problem, and the bundled default runs instead. A key the app doesn't read (a typo like `"pionts"`) doesn't refuse the file; it is named in a notice.
 
 **When the rules change, everything is re-scored.** The evidence sidecar is stamped with the policy's fingerprint. A different policy means a full re-score at the next sweep, which takes a few seconds.
 
@@ -69,7 +69,11 @@ Five floors guard against recommending a file the archive must never receive twi
 
 A `policy.json` that disables one of these, narrows it with `when`, sets `starExempt`, sets `explicitPicks: false`, or changes its kind or reason is **refused whole**. The log names the safety floor, and the bundled default runs. `recommend.useAngelFloors: false` still honours them. You may change their `note` and `line`.
 
-Separately from the floors, the recommendation counts are re-checked against the live catalog about half a second after any catalog change. A record that has been purged, set aside or superseded, or that Promote would refuse (already promoted, an archive copy), stops being counted, listed or badged immediately. It doesn't wait for the next sweep. Prepare applies the same check before it projects a record.
+**The safety floors are their own pass** (codex #1643). The reason a file shows is the *first* floor that fires in policy order — so an offline 30-second tape reads "Too short", the lasting reason, not "Volume offline". But every file is also checked against the five safety floors separately, and that result is stored on its own. The classes exclude a file on any safety hit, whichever floor fired first and whatever `useAngelFloors` says.
+
+Separately from the floors, the recommendation counts are re-checked against the live catalog about half a second after any catalog change. A record that has been purged, set aside or superseded, or that Promote would refuse (already promoted, an archive copy), stops being counted, listed or badged immediately. It doesn't wait for the next sweep. The counts, the catalog filter, the row badge, the record's class and Prepare all read **one** effective class — the stored class, then the prepared/promoted batches, then this live check — so a badge can never say "Promote me" for a file the counts left out.
+
+Prepare also looks at copies live. If you mark a different copy **Keep** after the last assessment (A was Ready, B was Another copy, you mark B Keep), Prepare re-decides that recording's copies from the current catalog and prepares B — it doesn't wait for the next sweep.
 
 ## Rules
 
@@ -140,7 +144,14 @@ A condition is `{ "field": …, "op": …, "value": … }`. To say "any of these
   - `deliveryCodecs` (used by the download cap)
   - `familyOriginFolders` (a leading `.` matches a suffix, like `.imovielibrary`)
   - `appCacheFolders`
-  - `appCacheNamePattern` (a regular expression over the file stem). A repeated group — `(…)+`, `(…)*`, `(…){n,}` — is refused, because it can make the sweep hang (ReDoS). The pattern must also match a worst-case 257-character name within 20 ms.
+  - `appCacheStemNames`, `appCacheStemNumbered`, `appCacheStemGlobs` — what counts as an app's cache/render file by its **stem** (the filename without its extension). Compared case-insensitively, always against the whole stem:
+    - `appCacheStemNames`: bare tool nouns (default `cache render proxy proxies preview thumb thumbnail temp tmp`). `Cache.mov` matches; `Cache Cod 1998.mov` does not.
+    - `appCacheStemNumbered` (default `true`): a noun may carry a number — one optional separator (space, `_` or `-`) and then digits: `Cache-30`, `render_7`, `tmp12`.
+    - `appCacheStemGlobs` (default none): extra patterns. Literal text, where `*` means "any characters": `render*` (starts with), `*_proxy` (ends with), `clip*final` (both), `*cache*` (contains). At most one `*`, or exactly two when they are the first and last character. A pattern of only `*` is refused (it would match every file). Up to 100 patterns and 500 names, each at most 100 characters.
+
+    **There are no regular expressions in the policy** (codex #1643). A user-supplied pattern could freeze the app: one passed every check and then took more than 2 seconds on a 30-character name, and another hung the check itself. These stem rules are matched in time proportional to the name's length, whatever you write. The defaults match exactly what the old pattern `^(cache|render|proxy|proxies|preview|thumb|thumbnail|temp|tmp)([ _-]?\d+)?$` matched (a test pins this).
+
+    An older file that still has `appCacheNamePattern`: if it is exactly the old default (copied from the bundled file), or a plain list like `^(Scratch|Render Temp)$`, it is read as the same rule and a notice asks you to rename the key. Anything else refuses the whole file, with the reason.
   - `maxOriginalsPerKey`
 
 ## Deliberately NOT in the policy
