@@ -5,7 +5,8 @@
 // under the Archive tab and the review sheet so the two surfaces agree.
 //
 // Show in Catalog uses the same focus plumbing as the Archive tab's
-// context menu (focus set + pending selection + tab index). A sheet must
+// context menu (focus set + pending selection + tab index) — through the
+// AngelNavigator seam since consolidation S2 (AppConformances.swift). A sheet must
 // close itself first — the catalog is behind it — so the caller passes
 // `beforeNavigate`.
 
@@ -56,27 +57,17 @@ struct ArchiveAngelRowActions: View {
     }
 
     private func showInCatalog() {
-        guard model.canNavigateToRecord(id: recordID) else {
+        guard (model as any AngelNavigator).canNavigateToRecord(id: recordID) else {
             model.log("Archive Angel: \(filename) is no longer in the catalog — it may have been removed or replaced by a re-scan.")
             return
         }
         beforeNavigate()
-        Self.navigate(model: model, to: recordID)
+        (model as any AngelNavigator).showInCatalog(recordID: recordID)
     }
 
     private func showInFinder() {
         if !NSWorkspace.shared.selectFile(sourcePath, inFileViewerRootedAtPath: "") {
             model.log("Archive Angel: Finder could not show \(sourcePath) — is the volume mounted?")
         }
-    }
-
-    /// Same steps as ArchiveView+Table.showInCatalog, without the view.
-    @MainActor
-    static func navigate(model: VideoScanModel, to id: UUID) {
-        model.focusedMediaIDs = model.focusSet(for: id)
-        model.pendingCatalogSelection = id
-        model.pendingCatalogPairMode = false
-        UserDefaults.standard.set(1, forKey: "selectedTab")
-        MainWindowHelper.shared.openMainWindow()
     }
 }

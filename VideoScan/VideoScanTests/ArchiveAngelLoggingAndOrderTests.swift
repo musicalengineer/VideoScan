@@ -61,14 +61,15 @@ struct ArchiveAngelLoggingAndOrderTests {
     @Test func sensorOneLogVerbAndNoSwallowedSaves() throws {
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("VideoScan")
-        for file in ["ArchiveAngelJob.swift", "ArchiveAngelPromoter.swift", "ArchiveAngelReviewSheet.swift",
-                     "ArchiveAngelReadyDisclosure.swift", "ArchiveView.swift", "ArchiveAngelPlan.swift"] {
+        for file in ["ArchiveAngel/Prepare/ArchiveAngelJob.swift", "ArchiveAngel/Promote/ArchiveAngelPromoter.swift",
+                     "ArchiveAngel/UI/ArchiveAngelReviewSheet.swift", "ArchiveAngel/UI/ArchiveAngelReadyDisclosure.swift",
+                     "ArchiveView.swift", "ArchiveAngel/Prepare/ArchiveAngelPlan.swift"] {
             let src = try String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8)
             #expect(!src.contains("try? ArchiveAngelPlanStore.save("), "\(file): a swallowed plan save")
             #expect(!src.contains("try? save(plan)"), "\(file): a swallowed plan save")
             #expect(!src.contains("try? await Self.savePlanOffMain"), "\(file): a swallowed plan save")
         }
-        let job = try String(contentsOf: dir.appendingPathComponent("ArchiveAngelJob.swift"), encoding: .utf8)
+        let job = try String(contentsOf: dir.appendingPathComponent("ArchiveAngel/Prepare/ArchiveAngelJob.swift"), encoding: .utf8)
         #expect(!job.contains("model.log("), "every job line goes through note()")
     }
 

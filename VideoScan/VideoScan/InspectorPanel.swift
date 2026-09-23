@@ -39,7 +39,7 @@ struct InspectorPanel: View {
     var promotionSource: VideoRecord?
     /// Archive Angel phase 2: the background sweep's verdict for this
     /// record (O(1) sidecar lookup by the CALLER). nil = not scored yet.
-    var angelEvidence: ArchiveAngelEvidenceRecord?
+    var angelEvidence: ArchiveAngel.Evidence?
 
     var body: some View {
         if let rec = record {

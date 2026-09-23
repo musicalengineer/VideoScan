@@ -50,45 +50,9 @@ extension ArchiveView {
             // (Rick 2026-08-21). O(1) per render: both inputs are memoized.
             if selectedCategory == .archived {
                 ArchiveProgressBar(progress: archiveProgress)
-                // Archive Angel — ONE strip (Rick 2026-09-22): grades, the
-                // review chip, Prepare Batch…, Show in Catalog, ⋯ sweep
-                // controls. Moved here from the sidebar.
-                ArchiveAngelAssessmentPanel(
-                    store: model.archiveAngelStore,
-                    sweep: model.archiveAngelSweep,
-                    prepare: { angelStartRequest = ArchiveAngelStartRequest() },
-                    review: angelReadyBatches.first.map { (ready: $0.readyCount, batches: angelReadyBatches.count) },
-                    openReview: { openNewestAngelBatch() })
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-                if !angelUnreadableBatches.isEmpty {
-                    ArchiveAngelUnreadableRow(batches: angelUnreadableBatches)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 6)
-                }
-                // Buffer hygiene (curation Phase 2, Rick 2026-09-19): when
-                // prepared batches are waiting in the buffer, or finished
-                // ones still hold files, ask "What next?" before anything.
-                if !angelHygiene.isEmpty {
-                    ArchiveAngelBufferHygieneCard(
-                        report: angelHygiene,
-                        openReview: { angelReviewRequest = ArchiveAngelReviewRequest(plan: $0) },
-                        batchesChanged: { refreshAngelBatches() })
-                }
-                // Archive Angel's PREPARED batch sits above the loose nudge
-                // (Rick 2026-09-09: "10 are actually preprocessed and really
-                // ready" must catch the eye before "it looks like 598…").
-                if let batch = angelReadyBatches.first {
-                    ArchiveAngelReadyDisclosure(
-                        plan: batch,
-                        openReview: { openNewestAngelBatch() },
-                        batchesChanged: { refreshAngelBatches() })
-                    // Re-seed the row's @State when the sheet edited the same
-                    // batch (same id, different content) — cheap fingerprint.
-                    .id("\(batch.id)-\(batch.status.rawValue)-" + batch.entries.map {
-                        "\($0.id)\($0.selected)\($0.filename)\($0.proposedName)\($0.proposedDate ?? "")\($0.status.rawValue)"
-                    }.joined().hashValue.description)
-                }
+                // Archive Angel — ONE strip (Rick 2026-09-22), its cards and
+                // sheets (ArchiveAngel/UI/ArchiveAngelStrip.swift, S2).
+                ArchiveAngelStrip(angel: model.archiveAngel, revealArchived: { revealArchivedForAngel() })
                 ArchiveNudgeView(
                     nudge: archiveNudge,
                     openHelper: { id in

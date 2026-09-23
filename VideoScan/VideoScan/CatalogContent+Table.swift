@@ -159,7 +159,7 @@ extension CatalogContent {
     }
 
     private var angelRevisionPublisher: AnyPublisher<Int, Never> {
-        model.archiveAngelStore.$revision.removeDuplicates().dropFirst().eraseToAnyPublisher()
+        model.archiveAngel.evidenceRevisionPublisher
     }
 
     private var tableWithAngelGrades: some View {
@@ -175,7 +175,7 @@ extension CatalogContent {
 
     /// Grade-set changes only — identical sweeps do not churn the table.
     private var angelGradesPublisher: AnyPublisher<Set<UUID>, Never> {
-        model.archiveAngelStore.$candidateIDs.removeDuplicates().dropFirst().eraseToAnyPublisher()
+        model.archiveAngel.candidateIDsPublisher
     }
 
     private var tableWithCatalogTriggers: some View {
@@ -779,7 +779,7 @@ extension CatalogContent {
                     // Promote-Helper (2026-08-19): which copy is the original?
                     assessCopiesMenuItem(activeRecs: activeRecs, pureActive: pureActive)
                     promoteToArchiveMenuItem(activeRecs: activeRecs, pureActive: pureActive)
-                    prepareWithArchiveAngelMenuItem(activeRecs: activeRecs, pureActive: pureActive)
+                    ArchiveAngelMenuItems(model: model, center: fileOpsCenter, activeRecs: activeRecs, pureActive: pureActive)
                     removeFromCatalogMenuItem(activeRecs: activeRecs, pureActive: pureActive)
 
                     // Verify Audio / Verification Results / Repair
@@ -1727,7 +1727,7 @@ extension CatalogContent {
             // visible (Rick 2026-09-11). O(1) sidecar read per row. The
             // revision is a real input of the chip so a grade change with
             // the same A+B set re-renders it (codex #1345).
-            if let badge = ArchiveAngelCatalogBadge.make(for: model.archiveAngelStore.record(for: rec.id)) {
+            if let badge = model.archiveAngel.badge(for: rec.id) {
                 ArchiveAngelCatalogBadgeView(badge: badge, revision: angelBadgeRevision)
             }
         }
@@ -1738,7 +1738,7 @@ extension CatalogContent {
     /// then your note (machine probe notes stay in the inspector).
     private func tagColumnHelp(for rec: VideoRecord) -> String {
         var lines = [rec.mediaDisposition.rawValue]
-        if let badge = ArchiveAngelCatalogBadge.make(for: model.archiveAngelStore.record(for: rec.id)) {
+        if let badge = model.archiveAngel.badge(for: rec.id) {
             lines.append(badge.help + " — Assess in the Archive tab to prepare it.")
         }
         if !rec.tags.isEmpty {

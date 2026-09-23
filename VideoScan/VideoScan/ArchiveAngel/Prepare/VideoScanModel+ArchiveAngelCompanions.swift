@@ -198,8 +198,9 @@ extension VideoScanModel {
         return (batchDir, batchDir + "/" + comps[1])
     }
 
-    /// Once per launch (called from `configureArchiveAngelSweep`'s launch
-    /// task; tests call it directly with a sandbox root): every active
+    /// Once per launch (called from `ArchiveAngel.launch()`'s launch task
+    /// with the façade's buffer root; tests call it directly with a sandbox
+    /// root): every active
     /// record whose path lies under the Angel buffer root and whose batch
     /// folder — or row folder — no longer exists is retired through
     /// `forgetArchiveAngelCompanions` per batch, with a launch reason and
@@ -211,7 +212,7 @@ extension VideoScanModel {
     /// nothing. Returns the number of records retired; one log line names
     /// the count.
     @discardableResult
-    func reconcileArchiveAngelBufferAtLaunch(bufferRoot: URL = ArchiveAngelPlanStore.defaultBufferRoot,
+    func reconcileArchiveAngelBufferAtLaunch(bufferRoot: URL,
                                              fileExists: @escaping @Sendable (String) -> Bool = VideoScanModel.fileIsOnDisk) async -> Int {
         // Main actor: which records live under the buffer, and in which folders.
         var recordsInBatch: [String: Int] = [:]

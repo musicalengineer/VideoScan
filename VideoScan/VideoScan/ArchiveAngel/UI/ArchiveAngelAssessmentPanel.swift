@@ -16,6 +16,9 @@ import SwiftUI
 
 struct ArchiveAngelAssessmentPanel: View {
     @EnvironmentObject var model: VideoScanModel
+    /// The façade: Assess Now / Assess Continuously and Show in Catalog go
+    /// through it (S2); observed for the Assess Continuously state.
+    @ObservedObject var angel: ArchiveAngel
     @ObservedObject var store: ArchiveAngelEvidenceStore
     @ObservedObject var sweep: ArchiveAngelSweep
     /// Opens the Archive Angel start sheet (pick 10/25/35/50 → prepare).
@@ -105,12 +108,12 @@ struct ArchiveAngelAssessmentPanel: View {
                     .disabled(store.candidateCount == 0)
                     .help("Focus the Catalog on every grade A and B record. Show ▸ Archive Candidates keeps the same view as a filter.")
                 Menu {
-                    Button("Assess Now") { sweep.rescoreNow() }
-                        .disabled(sweep.status.isRunning || !model.archiveAngelSweepSettings.enabled)
+                    Button("Assess Now") { angel.assessNow() }
+                        .disabled(sweep.status.isRunning || !angel.sweepEnabled)
                         .accessibilityIdentifier("archive.angelAssessNow")
                     Toggle("Assess Continuously", isOn: Binding(
-                        get: { model.archiveAngelSweepSettings.enabled },
-                        set: { model.setArchiveAngelSweepEnabled($0) }))
+                        get: { angel.sweepEnabled },
+                        set: { angel.setContinuous($0) }))
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -230,11 +233,6 @@ struct ArchiveAngelAssessmentPanel: View {
     private func showCandidatesInCatalog() {
         let ids = store.candidateIDs
         guard !ids.isEmpty else { return }
-        model.focusedMediaIDs = ids
-        model.pendingFocusLabel = "Archive Angel candidates"
-        model.pendingCatalogSelection = nil
-        model.pendingCatalogPairMode = false
-        UserDefaults.standard.set(1, forKey: "selectedTab")
-        MainWindowHelper.shared.openMainWindow()
+        angel.navigator?.showInCatalog(focus: ids, label: "Archive Angel candidates")
     }
 }
