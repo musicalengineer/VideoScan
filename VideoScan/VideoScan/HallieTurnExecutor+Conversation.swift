@@ -896,7 +896,10 @@ extension HallieTurnExecutor {
                 claims: claimsA + shifted,
                 counts: planA.counts + planB.counts,
                 fallbackText: prose,
-                provenanceNote: provenance.isEmpty ? nil : provenance.joined())
+                provenanceNote: provenance.isEmpty ? nil : provenance.joined(),
+                // Only b's clarification survives the join, so only b's
+                // offer (it ends `prose`) is still a question being asked.
+                trailingOffer: planB.trailingOffer)
             if a.transcriptText != nil || b.transcriptText != nil {
                 transcript = (a.transcriptText ?? a.prose) + "\n\n"
                     + shiftClaimTags(in: b.transcriptText ?? b.prose, by: offset)

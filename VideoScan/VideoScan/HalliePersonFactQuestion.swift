@@ -43,7 +43,11 @@ enum HalliePersonFactQuestion {
             // "tell me all about the wedding video" keeps its catalog road.
             // "what do you know about X" is NOT here: HallieAppV2Integration
             // relies on it as a phrasing outside this lane.
-            (#"^(?:tell (?:me|us) (?:(?:all|more|everything) )?about|who is|who was) (.+?)$"#, .biography)
+            (#"^(?:tell (?:me|us) (?:(?:all|more|everything) )?about|who is|who was) (.+?)$"#, .biography),
+            // "what did Chris O'Connor do?" (2026-09-23): a life, asked
+            // plainly — the biography (which offers a service story when
+            // the family has one). The subject must still be a person.
+            (#"^what did (.+?) do(?: (?:for a living|in (?:his|her|their) life))?$"#, .biography)
         ]
         for (pattern, operation) in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),

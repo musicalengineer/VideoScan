@@ -30,7 +30,7 @@ enum HallieClarificationDecline {
     /// The line Hallie says when the pending question is let go.
     static func reply(for stage: HallieTurnExecutor.ClarificationStage) -> String {
         switch stage {
-        case .galleryOffer:
+        case .galleryOffer, .serviceOffer:
             return "Okay."
         case .profileIdentity, .gedcomPerson, .cyberBrainPerson, .suggestedIdentity:
             return "Okay — I won't guess which person you meant."

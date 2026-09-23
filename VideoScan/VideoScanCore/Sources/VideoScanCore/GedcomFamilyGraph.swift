@@ -59,6 +59,10 @@ public struct GedcomFamilyGraph: Sendable {
         /// FamilySearch's stable person identifier (for example GVQV-NW3).
         /// This survives new exports even when file-local @I…@ pointers move.
         public var familySearchID: String?
+        /// Military facts the tree records (`_MILT`, `MILI`, a typed
+        /// military `EVEN`), in file order, verbatim — see
+        /// GedcomFamilyGraph+Military (2026-09-23). Empty for almost everyone.
+        public var militaryFacts: [MilitaryFact] = []
 
         /// Four-digit year pulled out of the raw GEDCOM birth date ("4 JUL
         /// 1962", "ABT 1944", "BET 1930 AND 1931" → first run wins). Nil when
@@ -424,9 +428,28 @@ public struct GedcomFamilyGraph: Sendable {
         var pendingEvent: String?
         /// Same for a family record: MARR.
         var pendingFamilyEvent: String?
+        /// A military block open under the current person (+Military).
+        var pendingMilitary: PendingMilitaryFact?
         let bom = CharacterSet(charactersIn: "\u{feff}")
 
+        /// Closes the open military block into `person`: kept when it is
+        /// military, otherwise every held line is counted as dropped.
+        func finishMilitary(into person: inout Person) {
+            guard let block = pendingMilitary else { return }
+            pendingMilitary = nil
+            if block.isMilitary {
+                person.militaryFacts.append(block.fact)
+            } else {
+                droppedLineCount += block.heldLines
+            }
+        }
+
         func flush() {
+            if var person = currentIndi {
+                finishMilitary(into: &person)
+                currentIndi = person
+            }
+            pendingMilitary = nil
             if let person = currentIndi {
                 people[person.id] = person
                 if let fsid = person.familySearchID, personIDByFamilySearchID[fsid] == nil {
@@ -520,6 +543,25 @@ public struct GedcomFamilyGraph: Sendable {
                 continue
             }
             if var person = currentIndi {
+                // Military facts (+Military): a level-1 line closes any
+                // open block and may open a new one; sub-lines of an open
+                // block are the block's. Nothing else changes.
+                if level == 1 {
+                    finishMilitary(into: &person)
+                    if let block = Self.openMilitaryFact(tag: tag, value: value) {
+                        pendingMilitary = block
+                        pendingEvent = nil
+                        currentIndi = person
+                        continue
+                    }
+                } else if var block = pendingMilitary {
+                    if !Self.applyMilitaryLine(level: level, tag: tag, value: value, to: &block) {
+                        droppedLineCount += 1
+                    }
+                    pendingMilitary = block
+                    currentIndi = person
+                    continue
+                }
                 if level == 1 { openTagKept = Self.keptPersonTags.contains(tag) }
                 if !Self.applyPersonLine(level: level, tag: tag, value: value,
                                          person: &person, pendingEvent: &pendingEvent)

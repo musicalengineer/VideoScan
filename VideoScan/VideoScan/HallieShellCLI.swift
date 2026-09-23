@@ -1009,9 +1009,9 @@ enum HallieShellCLI {
             // biography, 2026-09-10) just closes it — same wording as the
             // chat window (HallieClarificationDecline); a which-one keeps
             // the policy below.
-            if pending.value.stage == .galleryOffer, HallieClarificationDecline.matches(question) {
+            if pending.value.stage.isOffer, HallieClarificationDecline.matches(question) {
                 state.pendingClarification = nil
-                let line = HallieClarificationDecline.reply(for: .galleryOffer)
+                let line = HallieClarificationDecline.reply(for: pending.value.stage)
                 output(line)
                 let event = transcriptEvent(
                     kind: .assistant, text: line,
@@ -1040,7 +1040,12 @@ enum HallieShellCLI {
                 // typed name / year / number afterwards still selects.
             } else if decision == .abandon {
                 state.pendingClarification = nil
-                output(HallieClarificationPolicy.abandonNote)
+                // An unanswered OFFER just lapses (the chat window never
+                // says anything either); only a which-one question is
+                // acknowledged as set aside.
+                if !pending.value.stage.isOffer {
+                    output(HallieClarificationPolicy.abandonNote)
+                }
                 // fall through: answer THIS question as a fresh turn
             } else {
                 return await continueClarification(

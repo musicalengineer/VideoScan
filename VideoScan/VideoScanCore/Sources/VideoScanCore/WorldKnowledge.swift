@@ -118,7 +118,47 @@ public enum WorldKnowledge {
             years: 1983...1983,
             source: "Sony Betamovie BMC-100 (1983); JVC GR-C1 VHS-C (1984).",
             spokenClause: "camcorders begin in 1983"),
+        // The wars Hallie's service stories are asked about (Rick
+        // 2026-09-23). `years` is the span a DATED family-tree military fact
+        // must fall in to be listed under that war; the tree fact is then
+        // described by its own date, never as "fought in" the war.
+        WorldFact(
+            id: "war.americanRevolution",
+            statement: "The American Revolutionary War (the War of Independence) began at Lexington and Concord on April 19, 1775, and ended with the Treaty of Paris, September 3, 1783.",
+            years: 1775...1783,
+            source: "Standard US history: Battles of Lexington and Concord (1775); Treaty of Paris (1783).",
+            spokenClause: "the American Revolution (1775–1783)"),
+        WorldFact(
+            id: "war.civilWar",
+            statement: "The American Civil War began with the attack on Fort Sumter, April 12, 1861, and ended with the Confederate surrenders of 1865.",
+            years: 1861...1865,
+            source: "Standard US history: Fort Sumter (April 1861); Appomattox and the surrenders of 1865.",
+            spokenClause: "the Civil War (1861–1865)"),
+        WorldFact(
+            id: "war.worldWarI",
+            statement: "World War I ran from July 1914 to the Armistice of November 11, 1918; the United States fought from April 1917.",
+            years: 1914...1918,
+            source: "Standard world history: outbreak July 1914; US declaration of war April 6, 1917; Armistice November 11, 1918.",
+            spokenClause: "World War I (1914–1918)"),
+        WorldFact(
+            id: "war.worldWarII",
+            statement: "World War II ran from September 1939 to September 2, 1945; for US veterans, the official wartime service period runs from December 7, 1941, through December 31, 1946.",
+            years: 1939...1946,
+            source: "Standard world history; US wartime service period per 38 U.S.C. § 101 (December 7, 1941 – December 31, 1946).",
+            spokenClause: "World War II (1939–1945)"),
     ]
+
+    /// The world fact that dates a war, by its CyberBrain conflict name.
+    /// Nil for `.other` (no single span).
+    public static func war(_ conflict: CyberBrainServiceRecord.Conflict) -> WorldFact? {
+        switch conflict {
+        case .americanRevolution: return fact("war.americanRevolution")
+        case .civilWar: return fact("war.civilWar")
+        case .worldWarI: return fact("war.worldWarI")
+        case .worldWarII: return fact("war.worldWarII")
+        case .other: return nil
+        }
+    }
 
     public static func fact(_ id: String) -> WorldFact? {
         facts.first { $0.id == id }

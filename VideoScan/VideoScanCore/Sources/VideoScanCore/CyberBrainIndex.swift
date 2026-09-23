@@ -112,7 +112,7 @@ public struct CyberBrainIndex: Sendable {
 
     /// An alias like "Rick's dad" or "Rick’s father": it describes a person
     /// relative to someone else, so none of its words are this person's name.
-    static func isPossessiveAlias(_ normalized: String) -> Bool {
+    public static func isPossessiveAlias(_ normalized: String) -> Bool {
         normalized.contains("'s ") || normalized.contains("\u{2019}s ")
     }
 
@@ -169,6 +169,17 @@ public struct CyberBrainIndex: Sendable {
                     confidence: item.confidence,
                     createdAt: item.createdAt)
             }
+    }
+
+    /// The person's structured military-service stories (2026-09-23),
+    /// active and visible at the ceiling, in evidence order. At most a
+    /// handful per person, so no limit parameter.
+    public func serviceItems(
+        for personID: String,
+        privacyCeiling: CyberBrainItem.Privacy
+    ) -> [CyberBrainItem] {
+        visibleEvidence(for: personID, privacyCeiling: privacyCeiling)
+            .filter { $0.service != nil && $0.confidence != .disputed }
     }
 
     fileprivate func visibleEvidence(
@@ -313,8 +324,15 @@ public enum CyberBrainBiographyPlanner {
             }
         }
 
-        let allVisible = index.visibleEvidence(
+        // A structured service story (2026-09-23) is told when asked for —
+        // Hallie OFFERS it after the biography ("Would you like to hear how
+        // … served?") — so it is not one of the biography's claims. Unless
+        // it is ALL the family has: then the story is the biography, and
+        // there is nothing left to offer.
+        let visible = index.visibleEvidence(
             for: person.id, privacyCeiling: privacyCeiling)
+        let withoutService = visible.filter { $0.service == nil }
+        let allVisible = claims.isEmpty && withoutService.isEmpty ? visible : withoutService
         let selection = selectEvidence(allVisible, limit: itemLimit)
         let evidence = selection.items
         for item in evidence {

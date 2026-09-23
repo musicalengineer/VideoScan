@@ -37,7 +37,13 @@ public enum GedcomCompiledTree {
     /// section carries the FAM `_FSFTID`, and the persisted parent table
     /// now lists ONE father and ONE mother per person (the primary
     /// family's) — a codec-5 blob would keep serving both mothers.
-    public static let codecVersion: UInt32 = 6
+    /// 7 (2026-09-23, Hallie's military-service stories): each person
+    /// carries its military facts (`Person.militaryFacts`) as a flat list,
+    /// six strings per fact (tag, value, type, date, place, note; "" = nil).
+    /// A codec-6 blob has none and would hide every one of them.
+    public static let codecVersion: UInt32 = 7
+    /// Strings per military fact in the codec-7 people section.
+    static let militaryFactWidth = 6
     static let magic: [UInt8] = Array("VSFT".utf8)
     /// Records per parallel decode chunk (written into the section header;
     /// the reader honours whatever the file says). 39k people → 39
@@ -74,6 +80,9 @@ public enum GedcomCompiledTree {
             w.ref(p.surname); w.ref(p.familySearchID)
             w.refs(p.alternateNames); w.refs(p.alternateSurnames)
             w.refs(p.childOfFamilies); w.refs(p.spouseOfFamilies)
+            w.refs(p.militaryFacts.flatMap {   // codec 7
+                [$0.tag, $0.value ?? "", $0.type ?? "", $0.date ?? "", $0.place ?? "", $0.note ?? ""]
+            })
         }
         // Families
         w.chunkedSection(count: families.count) { w, i in
@@ -261,6 +270,16 @@ public enum GedcomCompiledTree {
             p.surname = try r.optionalString(); p.familySearchID = try r.optionalString()
             p.alternateNames = try r.stringArray(); p.alternateSurnames = try r.stringArray()
             p.childOfFamilies = try r.stringArray(); p.spouseOfFamilies = try r.stringArray()
+            let military = try r.stringArray()   // codec 7
+            guard military.count % militaryFactWidth == 0 else { throw CodecError.corrupt("military facts") }
+            if !military.isEmpty {
+                func field(_ s: String) -> String? { s.isEmpty ? nil : s }
+                p.militaryFacts = stride(from: 0, to: military.count, by: militaryFactWidth).map { i in
+                    GedcomFamilyGraph.MilitaryFact(
+                        tag: military[i], value: field(military[i + 1]), type: field(military[i + 2]),
+                        date: field(military[i + 3]), place: field(military[i + 4]), note: field(military[i + 5]))
+                }
+            }
             return p
         }
         clock.lap("people parse")
@@ -525,6 +544,7 @@ public enum GedcomCompiledTree {
         if a.alternateSurnames != b.alternateSurnames { return "alternateSurnames" }
         if a.childOfFamilies != b.childOfFamilies { return "childOfFamilies" }
         if a.spouseOfFamilies != b.spouseOfFamilies { return "spouseOfFamilies" }
+        if a.militaryFacts != b.militaryFacts { return "militaryFacts" }
         return "(unknown field)"
     }
 

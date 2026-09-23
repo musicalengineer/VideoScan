@@ -102,6 +102,15 @@ struct HallieAnswerPlan: Sendable, Equatable {
     /// it and never rephrases it — so it can never go missing and can never
     /// be laundered into a fact. Nil = nothing was assumed.
     let provenanceNote: String?
+    /// A QUESTION Hallie asks after the answer — "Would you like to hear how
+    /// Richard Harding Breen Sr served his country?" (2026-09-23) — with its
+    /// leading space. Like provenance it is Swift's, not the model's: never
+    /// a claim, never shown to the composer, appended after verification
+    /// (after the provenance note) so a model-phrased answer can neither
+    /// lose it nor reword it. Without this the offer's "yes" stayed pending
+    /// while the sentence that asked it vanished under composition.
+    /// `fallbackText` already ends with it. Nil = no offer.
+    let trailingOffer: String?
 
     init(
         route: HallieTurnExecutor.Route,
@@ -111,7 +120,8 @@ struct HallieAnswerPlan: Sendable, Equatable {
         counts: [Count] = [],
         fallbackText: String,
         subjectLifeStatus: LifeStatus? = nil,
-        provenanceNote: String? = nil
+        provenanceNote: String? = nil,
+        trailingOffer: String? = nil
     ) {
         self.route = route
         self.shape = shape
@@ -121,6 +131,23 @@ struct HallieAnswerPlan: Sendable, Equatable {
         self.fallbackText = fallbackText
         self.subjectLifeStatus = subjectLifeStatus
         self.provenanceNote = provenanceNote
+        self.trailingOffer = trailingOffer
+    }
+
+    /// The same plan ending with an offer (see `trailingOffer`). A plan that
+    /// already carries one keeps it — one question at a time.
+    func offering(_ offer: String) -> HallieAnswerPlan {
+        guard trailingOffer == nil, !offer.isEmpty else { return self }
+        return HallieAnswerPlan(
+            route: route,
+            shape: shape,
+            subject: subject,
+            claims: claims,
+            counts: counts,
+            fallbackText: fallbackText + offer,
+            subjectLifeStatus: subjectLifeStatus,
+            provenanceNote: provenanceNote,
+            trailingOffer: offer)
     }
 
     /// The same plan carrying `note` as provenance: appended to the
@@ -130,15 +157,23 @@ struct HallieAnswerPlan: Sendable, Equatable {
     /// wrappers never says it twice.
     func carrying(provenance note: String) -> HallieAnswerPlan {
         guard !note.isEmpty, provenanceNote != note else { return self }
+        // An offer stays LAST: the note goes in before it.
+        var text = fallbackText
+        if let offer = trailingOffer, text.hasSuffix(offer) {
+            text = String(text.dropLast(offer.count)) + note + offer
+        } else {
+            text += note
+        }
         return HallieAnswerPlan(
             route: route,
             shape: shape,
             subject: subject,
             claims: claims,
             counts: counts,
-            fallbackText: fallbackText + note,
+            fallbackText: text,
             subjectLifeStatus: subjectLifeStatus,
-            provenanceNote: note)
+            provenanceNote: note,
+            trailingOffer: trailingOffer)
     }
 
     /// Whether a model may phrase this answer at all.

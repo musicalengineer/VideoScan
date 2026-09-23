@@ -781,6 +781,145 @@
     "65"
    ],
    "notes": "lv260921-001 (session 7B52B1A4, Rick, app, 2026-09-21 13:52, tree mode). LIVE MISS: \"Richard was 64–65 years old during 1994, depending on the date\" — the translator invented explicitYear(1994) and the temporal lane had no age-AT-DEATH ask, so \"when he passed\" was read as a plain age against the invented year. (The Matthew Rice biography the ledger first blamed was codex's replay session 1603DC26 interleaved in the shared transcript, not Rick's turn; it stays in mustNotContain as the wrong-person sensor.) Fixed 2026-09-21: ArchivistTemporalExecutor.Ask.ageAtDeath + GroupReference.death count from the People profile's own birth and death dates (Dad Breen b. 1929-02-21, d. 2008-06-25 → 79); HallieTurnExecutor drops an explicitYear the question never mentions (questionSuppliesYear) and says so in the basis. Pinned by HallieDadBreenAgeAtDeathTests (the live AST, the honest AST, Ma Breen 92, the second Richard Breen and a same-surname tree stranger never win over the alias, a living person gets no age at death, bare \"dad\" in Rick's session is Dad Breen). expectMode tree: the mode gate's explicitCue(dad) is unchanged; the lane switches to catalog for the age arithmetic but the session mode recorded for the turn is the tree it was in."
+  },
+  {
+   "id": "strict-046",
+   "category": "strict",
+   "text": "who in our family served in the civil war",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "John Robert Latta"
+   ],
+   "mustNotContain": [
+    "Richard Harding Breen",
+    "surname",
+    "Ellen Ronan"
+   ],
+   "mustMatchQueryDescription": [
+    "topic=military-service",
+    "war=the Civil War"
+   ],
+   "notes": "Rick 2026-09-23 service stories: a family-wide war ask lists the family's service record for that war (John Robert Latta, Confederate, Fort Wagner — family tradition from Barry Latta) and never another war's veteran. Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories)."
+  },
+  {
+   "id": "strict-047",
+   "category": "strict",
+   "text": "was anyone in the family in world war 2",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "Richard Harding Breen Sr",
+    "Marine Corps"
+   ],
+   "mustNotContain": [
+    "John Robert Latta",
+    "Christopher O'Connor"
+   ],
+   "mustMatchQueryDescription": [
+    "topic=military-service",
+    "war=World War II"
+   ],
+   "notes": "Rick 2026-09-23: his dad joined the US Marine Corps in time to be counted a WWII veteran (official period ran through 31 Dec 1946), never in combat. Only WWII service is listed. Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories)."
+  },
+  {
+   "id": "strict-048",
+   "category": "strict",
+   "text": "tell me about John Robert Latta",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "John Robert Latta",
+    "Fort Wagner"
+   ],
+   "notes": "Biography of a person with a service record. After the phase-2 data step it ends with the offer 'Would you like to hear the family story of John Robert Latta's service in the Civil War?'; Fort Wagner comes from Rick's own Family Tree note either way. Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories)."
+  },
+  {
+   "id": "strict-049",
+   "category": "strict",
+   "text": "did my dad serve",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "Marine Corps"
+   ],
+   "mustNotContain": [
+    "Dafydd",
+    "one person at a time"
+   ],
+   "mustMatchQueryDescription": [
+    "topic=military-service"
+   ],
+   "notes": "Bare 'did X serve' (no branch named) is a one-person service ask; 'dad' is the owner's father through the tree. Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories)."
+  },
+  {
+   "id": "strict-050",
+   "category": "strict",
+   "text": "what did Chris O'Connor do",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "Christopher O'Connor",
+    "British Army"
+   ],
+   "notes": "'Chris O'Connor' (Rick's name for his great-grandfather) was added as a CyberBrain alias 2026-09-23; 'what did X do' is a biography, which carries or offers the British Army service. Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories)."
+  },
+  {
+   "id": "strict-051",
+   "category": "strict",
+   "text": "tell me about the family's military history",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "Richard Harding Breen Sr",
+    "John Robert Latta",
+    "Christopher O'Connor"
+   ],
+   "mustNotContain": [
+    "Ellen Ronan"
+   ],
+   "mustMatchQueryDescription": [
+    "topic=military-service"
+   ],
+   "notes": "Everyone the family has a service record or passage about. Ellen Ronan must NOT appear: her research note says her husband Christopher 'was … a soldier' (live false positive 2026-09-23, fixed by the same-sentence rule in +Service). Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories)."
+  },
+  {
+   "id": "strict-052",
+   "category": "strict",
+   "text": "anyone in the American Revolution",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "mustNotContain": [
+    "Richard Harding Breen Sr",
+    "John Robert Latta",
+    "Christopher O'Connor",
+    "Marine"
+   ],
+   "mustMatchQueryDescription": [
+    "topic=military-service",
+    "war=the American Revolution"
+   ],
+   "notes": "No family story for the Revolution: an honest 'Nobody in the family has told me…' plus an invitation — OR, once the tree is re-merged with its _MILT facts, tree people quoted verbatim with the tree citation. Outcome deliberately unconstrained; never another war's people. Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories)."
   }
  ]
 }

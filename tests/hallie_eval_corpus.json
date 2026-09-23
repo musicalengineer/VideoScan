@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 725 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 739 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected. Service-story items (mil260923-NNN, 2026-09-23) cover family military service: war asks by everyday name (Civil War, WW2, the Revolution, WWI), one person's service, the biography's offer and its 'yes' follow-up, and typo forms.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -5496,7 +5496,10 @@
       "category": "real_family",
       "text": "did anyone in the family serve in ww2",
       "expect": "biography",
-      "notes": "Dad Breen served in the USMC but his service dates are not recorded (b. 1929 — do not assert WW2); uncles/in-laws served, per Rick, but are not in the data. Say what is recorded and what is not; never invent service."
+      "notes": "Rick 2026-09-23: Dad Breen joined the US Marine Corps in time to be counted a WWII veteran (official period ran through 31 Dec 1946), never in combat — so WW2 IS now recorded for him. Uncles/in-laws served per Rick but are not in the data; never invent service.",
+      "mustContain": [
+        "Richard Harding Breen Sr"
+      ]
     },
     {
       "id": "fam-076",
@@ -5796,6 +5799,196 @@
       "text": "videos of dan and tim",
       "expect": "catalog",
       "notes": "clean: “videos of Dan and Tim”. NAMES ARE NEVER CORRECTED: 'dan' is not 'and', 'tim' is not 'time'; Dan and Tim's videos. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "mil260923-001",
+      "category": "biography",
+      "text": "who in our family served in the civil war",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "John Robert Latta"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Also strict-046."
+    },
+    {
+      "id": "mil260923-002",
+      "category": "biography",
+      "text": "yes",
+      "expect": "biography",
+      "followsPrevious": true,
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "54th Massachusetts",
+        "family tradition"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Takes the 'Would you like to hear his story?' offer: the brief story + 'That's family tradition, from Barry Latta; no document confirms it yet.' Needs the phase-2 data step."
+    },
+    {
+      "id": "mil260923-003",
+      "category": "biography",
+      "text": "was anyone in the family in world war 2",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Richard Harding Breen Sr",
+        "Marine Corps"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Also strict-047."
+    },
+    {
+      "id": "mil260923-004",
+      "category": "biography",
+      "text": "tell me about John Robert Latta",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "John Robert Latta"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Ends with 'Would you like to hear the family story of John Robert Latta's service in the Civil War?' (phase-2 data)."
+    },
+    {
+      "id": "mil260923-005",
+      "category": "biography",
+      "text": "did my dad serve",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Marine Corps"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Also strict-049. Expected (phase 2): the brief story + 'Rick Breen told me this.'"
+    },
+    {
+      "id": "mil260923-006",
+      "category": "biography",
+      "text": "what did Chris O'Connor do",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "British Army"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Also strict-050."
+    },
+    {
+      "id": "mil260923-007",
+      "category": "biography",
+      "text": "tell me about the family's military history",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Richard Harding Breen Sr",
+        "John Robert Latta",
+        "Christopher O'Connor"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Also strict-051. Ends 'Whose story would you like to hear?' with name chips (phase 2)."
+    },
+    {
+      "id": "mil260923-008",
+      "category": "biography",
+      "text": "anyone in the American Revolution",
+      "expect": "graceful_decline",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustNotContain": [
+        "Marine"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). No family story; honest decline + invitation until the tree is re-merged with its _MILT facts (Rick's 20-generation pull has Revolutionary War soldiers)."
+    },
+    {
+      "id": "mil260923-009",
+      "category": "biography",
+      "text": "tell me about Richard Harding Breen Sr",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Richard Harding Breen Sr"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Phase 2: ends 'Would you like to hear how Richard Harding Breen Sr served his country?'"
+    },
+    {
+      "id": "mil260923-010",
+      "category": "biography",
+      "text": "yes",
+      "expect": "biography",
+      "followsPrevious": true,
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "never in combat",
+        "Rick Breen told me this"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Takes the offer. Needs the phase-2 data step."
+    },
+    {
+      "id": "mil260923-011",
+      "category": "biography",
+      "text": "was anyone in the family in world war 1",
+      "expect": "graceful_decline",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustNotContain": [
+        "Richard Harding Breen Sr served",
+        "John Robert Latta"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). No family story for WWI; say so plainly and invite one."
+    },
+    {
+      "id": "mil260923-012",
+      "category": "typos",
+      "text": "who in our famly servd in the civl war",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "John Robert Latta"
+      ],
+      "notes": "clean: “who in our family served in the civil war”. Typo front door (service vocabulary added 2026-09-23)."
+    },
+    {
+      "id": "mil260923-013",
+      "category": "typos",
+      "text": "was anyone in the famliy in wolrd war 2",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Marine Corps"
+      ],
+      "notes": "clean: “was anyone in the family in world war 2”."
+    },
+    {
+      "id": "mil260923-014",
+      "category": "biography",
+      "text": "which side did John Robert Latta fight on",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Confederate"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). One-person service shape."
     }
   ]
 }

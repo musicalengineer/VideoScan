@@ -160,7 +160,7 @@ extension HallieShellCLI {
             Session.PendingClarification(value: $0, context: context)
         }
         state.biographyPhoto = nil
-        if result.clarification == nil,
+        if result.needsNoChoice,
            case .graph(let payload)? = ast,
            payload.operation == .biography,
            let canonical = result.catalogPersonName {
@@ -169,7 +169,7 @@ extension HallieShellCLI {
         }
         output(result.prose)
         var attachments = result.attachments
-        if state.biographyPhoto == nil, result.clarification == nil,
+        if state.biographyPhoto == nil, result.needsNoChoice,
            result.outcome == .answered,
            case .graph(let payload)? = ast, payload.operation == .biography,
            let canonical = result.catalogPersonName {
@@ -230,6 +230,12 @@ extension HallieShellCLI {
         _ clarification: HallieTurnExecutor.Clarification,
         output: (String) -> Void
     ) {
+        // An offer with one choice is a yes/no question, already asked in
+        // the prose ("Would you like to hear how … served?").
+        if clarification.stage.isOffer, clarification.candidates.count == 1 {
+            output("Reply “yes” to hear it, or “no”.")
+            return
+        }
         output("choices:")
         for (index, candidate) in clarification.candidates.enumerated() {
             output("  \(index + 1). \(candidate.label)")
