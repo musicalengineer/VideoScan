@@ -182,22 +182,34 @@ struct PartialRegistryCrossJobTests {
         #expect(Self.exists(kept), "no sweep reaches a kept encode")
     }
 
-    /// QA 1: keeping never overwrites — a taken kept-name leaves the
-    /// partial where it is (still named, still reported).
+    /// QA 1: keeping never overwrites — a taken kept-name is left alone and
+    /// the output goes to the NEXT free kept name. Extended through a +25 h
+    /// sweep after the job released it (codex #1642: this test used to stop
+    /// before aging; the output then kept its partial name, unprotected,
+    /// and the sweep deleted it).
     @Test func keepingNeverOverwritesAnExistingKeptFile() throws {
         let dir = try Self.makeDir("keep_no_clobber")
         defer { try? FileManager.default.removeItem(at: dir) }
         let out = dir.appendingPathComponent("test_k.vs.edit.mov")
         let partial = try DerivativeOutputPublish.reservePartial(for: out)
-        defer { PartialFileNaming.unregisterLive(partial) }
         try Data("new".utf8).write(to: partial)
         let taken = dir.appendingPathComponent(partial.lastPathComponent
             .replacingOccurrences(of: ".vs-partial.", with: ".vs-kept."))
         try Data("older".utf8).write(to: taken)
         let kept = DerivativeOutputPublish.keepUnpublished(partial)
-        #expect(kept == partial)
+        #expect(kept == PartialFileNaming.keptURL(for: partial, attempt: 2), "\(kept.lastPathComponent)")
         #expect(try Data(contentsOf: taken) == Data("older".utf8))
-        #expect(try Data(contentsOf: partial) == Data("new".utf8))
+        #expect(try Data(contentsOf: kept) == Data("new".utf8))
+        #expect(!Self.exists(partial))
+        #expect(!PartialFileNaming.isProtected(partial), "the marker goes once the output is off the pattern")
+
+        PartialFileNaming.unregisterLive(partial)   // the job's defer
+        for u in [taken, kept] { try Self.age(u, hours: 48) }
+        let later = Date().addingTimeInterval(25 * 3600)
+        #expect(CombineOutputPublish.sweepStalePartials(in: dir, now: later).removed.isEmpty)
+        #expect(DerivativeOutputPublish.sweepStalePartials(beside: out, now: later).isEmpty)
+        #expect(try Data(contentsOf: taken) == Data("older".utf8))
+        #expect(try Data(contentsOf: kept) == Data("new".utf8))
     }
 
     /// QA 2: the registry matches the FILE (dev + ino), not the spelling
