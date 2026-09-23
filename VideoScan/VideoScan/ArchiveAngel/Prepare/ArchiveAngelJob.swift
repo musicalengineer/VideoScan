@@ -435,8 +435,8 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         for pick in selection.picks {
             guard let rec = model.record(forID: pick.candidate.id) else { continue }
             var facts = ArchivePathResolver.facts(for: rec)
-            let family = ArchiveAngelCopyFamily.collect(seed: rec, index: familyIndex, catalog: model)
-            let inherited = ArchiveAngelFamilyFacts.inherited(for: rec, family: family)
+            let relatives = ArchiveAngelFamilyFacts.relatives(of: rec, index: familyIndex, catalog: model)
+            let inherited = ArchiveAngelFamilyFacts.inherited(for: rec, relatives: relatives)
             if let d = inherited.date, let hint = ArchiveAngelPromoter.dateHint(from: d.value) {
                 facts.dateHint = hint
                 facts.dateIsLowConfidence = false
@@ -458,6 +458,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             entry.inheritedDate = inherited.date
             entry.inheritedPlace = inherited.place
             entry.inheritedAttestationKinds = inherited.attestationKinds
+            entry.similarDate = inherited.similarDate
             let line = ArchiveAngelFamilyFacts.reviewLine(entry)
             if !line.isEmpty { note("Archive Angel: \(rec.filename) — \(line)") }
             entries.append(entry)
@@ -767,7 +768,12 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         let stem = src.deletingPathExtension().lastPathComponent
         for ext in Array(Set([src.pathExtension.isEmpty ? "mov" : src.pathExtension, "mov"])).sorted() {
             let path = src.deletingLastPathComponent().appendingPathComponent("\(stem)_balanced.\(ext)").path
+            // Name-only match (QA on S4): not linked to ANOTHER original,
+            // and the same length as this one (±1 s) — a name is a hint,
+            // not an identity.
             if let r = catalog.record(forPath: path), r.id != rec.id, !r.isPurged,
+               r.derivedFrom == nil || r.derivedFrom == rec.id,
+               rec.durationSeconds > 0, r.durationSeconds > 0, abs(r.durationSeconds - rec.durationSeconds) <= 1,
                !candidates.contains(where: { $0.id == r.id }) {
                 candidates.append(r)
             }

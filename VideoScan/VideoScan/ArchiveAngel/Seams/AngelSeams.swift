@@ -111,4 +111,10 @@ protocol AngelLedger: AnyObject {
     func ledgerAngelAttention(_ kind: MediaLedgerEvent.Kind, recordIDs: [UUID],
                               batchID: String?, reason: String?,
                               scores: [UUID: Int], at: Date) -> Task<Void, Never>?
+    /// dateSet / placeSet lines (S4: an inherited fact that landed with
+    /// its promote is ledgered by the angel).
+    @discardableResult
+    func noteUserDateEdited(_ rec: VideoRecord, by: MediaLedgerEvent.Actor) -> Task<Void, Never>?
+    @discardableResult
+    func noteUserPlaceEdited(_ rec: VideoRecord, by: MediaLedgerEvent.Actor) -> Task<Void, Never>?
 }

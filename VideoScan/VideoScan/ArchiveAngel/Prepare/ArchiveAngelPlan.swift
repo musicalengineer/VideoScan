@@ -105,6 +105,19 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         var fromFilename: String
     }
 
+    /// One field Promote stamped on one record, and what was there before.
+    struct StampedFact: Codable, Sendable, Equatable {
+        enum Field: String, Codable, Sendable { case date, place, attestations }
+        var recordID: UUID
+        var field: Field
+        var previousValue: String?
+        var previousConfidence: String?
+        var writtenValue: String?
+        var writtenConfidence: String?
+        var previousAttestations: [BackupAttestation]?
+        var writtenAttestations: [BackupAttestation]?
+    }
+
     struct Entry: Codable, Sendable, Identifiable, Equatable {
         /// Catalog record id of the ORIGINAL.
         var id: UUID
@@ -140,6 +153,15 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         /// Backup-attestation kinds ("cloud", "offsite", "drive") the
         /// family adds or updates on this row.
         var inheritedAttestationKinds: [String]?
+        /// A date a SIMILAR copy carries (same duplicate group, no identity
+        /// link) — shown in Review, never applied (QA on S4: duplicate
+        /// detection is a heuristic). nil = none, or an identity date won.
+        var similarDate: InheritedFact?
+        /// What Promote wrote onto records from the family, with the values
+        /// they replaced, so a promote that never lands is UNDONE (QA on
+        /// S4). Cleared once settled. Persisted so an interrupted promote
+        /// can still be undone at the next settle.
+        var stampedFacts: [StampedFact]?
         var steps: [StepOutcome] = StepKind.allCases.map { StepOutcome(kind: $0) }
         var status: EntryStatus = .pending
         /// Archive relpath of the original after Promote (nil until then).

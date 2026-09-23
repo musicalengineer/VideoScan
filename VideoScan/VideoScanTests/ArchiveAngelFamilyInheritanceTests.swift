@@ -144,6 +144,94 @@ struct ArchiveAngelFamilyInheritanceTests {
         await job?.task?.value
     }
 
+    // MARK: QA on S4 (2026-09-23) — red first
+
+    @Test("RED: a duplicate-group-only sibling's known date is not stamped as known")
+    func heuristicSiblingDateIsNotKnown() async throws {
+        let (sb, model, rec, sibling, fixturePlan) = try promoteFixture("inherit_heuristic")
+        var plan = fixturePlan; defer { sb.cleanup() }
+        sibling.contentHash = "v1:a-different-recording"
+        let g = UUID(); rec.duplicateGroupID = g; sibling.duplicateGroupID = g
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter()) { _ in }
+        #expect(rec.userDate == nil || rec.userDateConfidence != "known")
+        #expect(rec.userPlace == nil, "nor its place")
+        await job?.task?.value
+    }
+
+    @Test("RED: a promote that never lands (cancelled) leaves no inherited fact behind and no ledger line")
+    func cancelledPromoteUndoesTheStamp() async throws {
+        let (sb, model, rec, _, fixturePlan) = try promoteFixture("inherit_cancel")
+        var plan = fixturePlan; defer { sb.cleanup() }
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        var settled: ArchiveAngelPlan?
+        let job = try #require(ArchiveAngelPromoter().promote(plan: &plan, model: model,
+                                                              center: MediaFileOperationsCenter()) { settled = $0 })
+        job.cancel()
+        await job.task?.value
+        for _ in 0..<500 where settled == nil {
+            await Task.yield(); try? await Task.sleep(for: .milliseconds(2))
+        }
+        #expect(settled != nil, "the promoter settled the cancelled job")
+        #expect(rec.userDate == nil, "the inherited date was undone: \(rec.userDate ?? "nil")")
+        #expect(rec.userPlace == nil)
+        await model.mediaLedger.waitForPendingWrites()
+        let lines = model.mediaLedger.allEvents().filter { $0.recordID == rec.id && ($0.event == .dateSet || $0.event == .placeSet) }
+        #expect(lines.isEmpty, "no ledger line for a fact that did not land")
+    }
+
+    @Test("a promote that LANDS keeps the inherited facts and ledgers them, by the angel")
+    func landedPromoteLedgersTheStamp() async throws {
+        let (sb, model, rec, _, fixturePlan) = try promoteFixture("inherit_ledger")
+        var plan = fixturePlan; defer { sb.cleanup() }
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        var settled: ArchiveAngelPlan?
+        let job = try #require(ArchiveAngelPromoter().promote(plan: &plan, model: model,
+                                                              center: MediaFileOperationsCenter()) { settled = $0 })
+        await job.task?.value
+        for _ in 0..<500 where settled == nil {
+            await Task.yield(); try? await Task.sleep(for: .milliseconds(2))
+        }
+        #expect(settled?.entries.first?.status == .promoted, "\(settled?.log.suffix(4) ?? [])")
+        #expect(rec.userDate == "1987-06")
+        await model.mediaLedger.waitForPendingWrites()
+        let events = model.mediaLedger.allEvents().filter { $0.recordID == rec.id }
+        #expect(events.contains { $0.event == .dateSet && $0.by == .angel })
+        #expect(events.contains { $0.event == .placeSet && $0.by == .angel })
+    }
+
+    @Test("RED: the original's own date reaches a dateless companion")
+    func originalsDateReachesCompanion() {
+        let orig = MasterArchiveTestSupport.makeRecord(path: "/tmp/aa/tape.mov", userDate: "1987-06")
+        orig.userDateConfidence = "known"
+        let comp = MasterArchiveTestSupport.makeRecord(path: "/tmp/aa/tape_balanced.mov")
+        comp.derivedFrom = orig.id; comp.derivationKind = BalanceAudioFix.derivationKind
+        let e = ArchiveAngelPlan.Entry(id: orig.id, sourcePath: orig.fullPath, filename: "tape.mov", sizeBytes: 1, sourceContentHash: "", sourceModifiedAt: nil, durationSeconds: 1, score: 1, evidence: [], proposedName: "tape.mov", proposedDate: "1987-06", status: .ready)
+        _ = ArchiveAngelFamilyFacts.stamp(entry: e, original: orig, companions: [comp], family: [orig, comp])
+        #expect(comp.userDate == "1987-06")
+    }
+
+    @Test("RED: a name-only _balanced file linked to ANOTHER original is not reused",
+          .enabled(if: BalanceAudioTestMedia.toolsAvailable, "ffmpeg/ffprobe not available"))
+    func nameOnlyBalancedOfAnotherOriginalIsNotReused() async throws {
+        let b = try bench("reuse_other"); defer { b.sb.cleanup() }
+        let path = try BalanceAudioTestMedia.generate(into: b.sb.sources, channelCase: .leftOnly, wrapper: .movH264Pcm)
+        let rec = MasterArchiveTestSupport.makeRecord(path: path, userDate: "1995", starRating: 2)
+        rec.durationSeconds = 600; rec.videoCodec = "h264"; rec.audioCodec = "pcm_s16le"; rec.isPlayable = "Yes"
+        let balancedURL = b.sb.sources.appendingPathComponent("test_balance_leftOnly_balanced.mov")
+        _ = try await clip("test_reuse_other_tmp.mp4", in: b.sb.sources)
+        try FileManager.default.moveItem(at: b.sb.sources.appendingPathComponent("test_reuse_other_tmp.mp4"), to: balancedURL)
+        let other = MasterArchiveTestSupport.makeRecord(path: balancedURL.path, userDate: "1995")
+        other.derivedFrom = UUID()                                  // made from a DIFFERENT original
+        other.derivationKind = BalanceAudioFix.derivationKind
+        other.videoCodec = "h264"; other.audioCodec = "aac"; other.durationSeconds = 600; other.isPlayable = "Yes"
+        let job = await run(b, pick: [rec], catalog: [rec, other])
+        guard case .finished = job.state else { Issue.record("\(job.state)"); return }
+        let step = try #require(job.plan.entries.first?.steps.first { $0.kind == .balanceAudio })
+        #expect(step.recordID != other.id, "another original's balanced copy must not be reused")
+        #expect(!job.plan.log.contains { $0.contains("using existing balanced copy") }, "\(job.plan.log.suffix(6))")
+    }
+
     // MARK: 2 — the existing balanced copy
 
     @Test("RED→GREEN: an original already balanced reuses its catalogued _balanced copy — no second balance",

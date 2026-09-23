@@ -89,6 +89,25 @@ enum ArchiveAngelCopyFamily {
     /// The same walk over a prebuilt index (one index per batch).
     @MainActor
     static func collect(seed: VideoRecord, index: Index, catalog: any AngelCatalog) -> [VideoRecord] {
+        walk(seed: seed, index: index, catalog: catalog, followDuplicateGroup: true)
+    }
+
+    /// The IDENTITY family: copies proven to be the same recording — the
+    /// same non-empty content signature, `derivedFrom` lineage (both ways),
+    /// and an archive copy ↔ its promotion source. NOT the duplicate group:
+    /// duplicate detection is a heuristic (same stem + length + resolution
+    /// can match two different clips — two 00000.MTS of equal length). Hand-
+    /// entered facts are INHERITED only across these links (the 2026-09-12
+    /// rule: facts travel only between verified copies; QA on S4). Show
+    /// Copies still lists the whole family.
+    @MainActor
+    static func collectIdentity(seed: VideoRecord, index: Index, catalog: any AngelCatalog) -> [VideoRecord] {
+        walk(seed: seed, index: index, catalog: catalog, followDuplicateGroup: false)
+    }
+
+    @MainActor
+    private static func walk(seed: VideoRecord, index: Index, catalog: any AngelCatalog,
+                             followDuplicateGroup: Bool) -> [VideoRecord] {
         var family: [UUID: VideoRecord] = [seed.id: seed]
         var queue: [VideoRecord] = [seed]
         var hops = 0
@@ -97,7 +116,7 @@ enum ArchiveAngelCopyFamily {
             var related: [VideoRecord] = []
             // Group members (the active records sharing the group id — the
             // same set the Helper's `active.filter` pass found, now indexed).
-            if let g = r.duplicateGroupID { related += index.byGroup[g] ?? [] }
+            if followDuplicateGroup, let g = r.duplicateGroupID { related += index.byGroup[g] ?? [] }
             if let d = r.derivedFrom, let parent = index.byID[d] { related.append(parent) }
             related += index.children[r.id] ?? []
             if let copy = catalog.masterArchiveCopy(of: r) { related.append(copy) }

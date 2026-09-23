@@ -58,15 +58,17 @@ struct ArchiveAngelFamilyFactsTests {
         var e = ArchiveAngelPlan.Entry(id: original.id, sourcePath: original.fullPath, filename: "tape.mov", sizeBytes: 1,
                                        durationSeconds: 60, score: 1, evidence: [], proposedName: "tape.mov",
                                        proposedDate: "1988")
-        let lines = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling])
+        let lines = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling]).lines
         #expect(original.userDate == nil)
         #expect(lines.contains { $0.contains("not stamped: Review set 1988") }, "\(lines)")
         e.proposedDate = "1987-06"
         let again = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling])
         #expect(original.userDate == "1987-06" && original.userDateConfidence == "known")
-        #expect(again == ["Archive Angel: tape.mov — date 1987-06 (known) inherited from copy.mov"])
-        #expect(ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling]).isEmpty,
-                "idempotent: a second promote click writes nothing and logs nothing")
+        #expect(again.lines == ["Archive Angel: tape.mov — date 1987-06 (known) inherited from copy.mov"])
+        #expect(again.facts == [.init(recordID: original.id, field: .date, previousValue: nil, previousConfidence: nil,
+                                      writtenValue: "1987-06", writtenConfidence: "known")])
+        let third = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling])
+        #expect(third.lines.isEmpty && third.facts.isEmpty, "idempotent: a second promote click writes nothing and logs nothing")
     }
 
     @Test("companions promoted with the original get the family facts too; each record's own value still wins")
@@ -120,5 +122,57 @@ struct ArchiveAngelFamilyFactsTests {
         #expect(e.companionsMade.map(\.kind) == [.balanceAudio])
         try FileManager.default.removeItem(at: file)
         #expect(ArchiveAngelPromoter.promotableCompanions(of: e, in: plan).isEmpty)
+    }
+
+    @Test("NIT: a sibling changed after Prepare — the log says the copies changed, not that Review set it")
+    func siblingChangedSincePrepare() {
+        let original = rec("tape.mov")
+        let sibling = rec("copy.mov"); sibling.userDate = "1988"; sibling.userDateConfidence = "known"
+        var e = ArchiveAngelPlan.Entry(id: original.id, sourcePath: original.fullPath, filename: "tape.mov", sizeBytes: 1,
+                                       durationSeconds: 60, score: 1, evidence: [], proposedName: "tape.mov",
+                                       proposedDate: "1987-06")
+        e.inheritedDate = .init(value: "1987-06", confidence: "known", fromRecordID: sibling.id, fromFilename: "copy.mov")
+        let lines = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling]).lines
+        #expect(original.userDate == nil)
+        #expect(lines.count == 1 && lines[0].contains("said 1987-06 at Prepare") && lines[0].contains("now say 1988"), "\(lines)")
+    }
+
+    @Test("relatives: identity = hash / lineage / archive links; a duplicate-group-only copy is SIMILAR — shown, never lent")
+    func relativesSplitIdentityFromSimilar() {
+        let model = VideoScanModel()
+        let g = UUID()
+        let original = rec("tape.mov", hash: "v1:t")
+        original.duplicateGroupID = g
+        let twin = rec("twin.mov", hash: "v1:t")
+        let child = rec("tape_access.mov", hash: ""); child.derivedFrom = original.id
+        let lookalike = rec("00000.MTS", hash: "v1:other"); lookalike.duplicateGroupID = g
+        lookalike.userDate = "1987-06"; lookalike.userDateConfidence = "known"; lookalike.userPlace = "Somewhere"
+        model.records = [original, twin, child, lookalike]
+        let r = ArchiveAngelFamilyFacts.relatives(of: original, index: .init(active: model.records), catalog: model)
+        #expect(Set(r.identity.map(\.id)) == [twin.id, child.id])
+        #expect(r.similar.map(\.id) == [lookalike.id])
+        let got = ArchiveAngelFamilyFacts.inherited(for: original, relatives: r)
+        #expect(got.date == nil && got.place == nil, "a similar copy never lends")
+        #expect(got.similarDate?.value == "1987-06" && got.similarDate?.fromFilename == "00000.MTS")
+        var e = ArchiveAngelPlan.Entry(id: original.id, sourcePath: original.fullPath, filename: "tape.mov", sizeBytes: 1,
+                                       durationSeconds: 60, score: 1, evidence: [], proposedName: "tape.mov", proposedDate: nil)
+        e.similarDate = got.similarDate
+        #expect(ArchiveAngelFamilyFacts.reviewLine(e) == "a similar copy (00000.MTS) says 1987-06 — not applied")
+    }
+
+    @Test("restore puts back only what is still ours — an edit made since wins")
+    func restoreRespectsLaterEdits() {
+        let a = rec("a.mov"), b = rec("b.mov")
+        let sibling = rec("s.mov"); sibling.userDate = "1987"; sibling.userPlace = "Cape Cod"
+        let e = ArchiveAngelPlan.Entry(id: a.id, sourcePath: a.fullPath, filename: "a.mov", sizeBytes: 1,
+                                       durationSeconds: 60, score: 1, evidence: [], proposedName: "a.mov", proposedDate: nil)
+        let r = ArchiveAngelFamilyFacts.stamp(entry: e, original: a, companions: [b], family: [a, b, sibling])
+        #expect(a.userDate == "1987" && b.userDate == "1987" && a.userPlace == "Cape Cod")
+        b.userDate = "1990"                                   // Rick edited the companion meanwhile
+        let changed = ArchiveAngelFamilyFacts.restore(r.facts, record: { id in [a, b].first { $0.id == id } })
+        #expect(a.userDate == nil && a.userPlace == nil && a.userDateConfidence == nil)
+        #expect(b.userDate == "1990", "a later edit is never undone")
+        #expect(Set(changed.map(\.id)) == [a.id, b.id], "b's place was still ours and was restored")
+        #expect(b.userPlace == nil)
     }
 }
