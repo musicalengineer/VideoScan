@@ -419,7 +419,7 @@ struct CombineNeverOverwritesTests {
             }
             return EIO
         }
-        let ok = await CombineOutputPublish.$renameExclSyscall.withValue(failFinals) {
+        let ok = await ExclusivePublish.$renameExclSyscall.withValue(failFinals) {
             await Self.run(model, pair, into: out)
         }
         #expect(!ok)
