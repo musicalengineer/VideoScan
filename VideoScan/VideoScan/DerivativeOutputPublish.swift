@@ -14,9 +14,11 @@
 // The rules, in order:
 //   1. ffmpeg writes a UNIQUELY named partial beside the destination.
 //      Nothing at the destination is touched while it runs.
-//   2. The partial is published with `renamex_np(RENAME_EXCL)` — an
-//      atomic rename that FAILS if the name is taken. Never RENAME_SWAP /
-//      `replaceItemAt` (the Sandbox.kext deadlock, AtomicFilePublish.swift).
+//   2. The partial is published with ExclusivePublish: `renamex_np(RENAME_EXCL)`
+//      — an atomic rename that FAILS if the name is taken — or, on volumes
+//      without it, link(2) (same guarantee); neither → refuse and keep the
+//      output (codex #1642). Never RENAME_SWAP / `replaceItemAt` (the
+//      Sandbox.kext deadlock, AtomicFilePublish.swift).
 //   3. Name taken, Replace NOT chosen → published beside it ("name 2.ext").
 //   4. Name taken, Replace chosen → the existing file may go ONLY to the
 //      Trash (never `removeItem`), ONLY after the new output is present,
@@ -105,11 +107,12 @@ enum DerivativeOutputPublish {
         }
     }
 
-    /// A finished encode that could not be published must survive: moved
-    /// off the partial pattern to `<stem>.<token>.vs-kept.<ext>` (RENAME_EXCL,
-    /// never overwriting) so no stale sweep — 24 h later, any job's — can
-    /// remove it. The one shared helper Combine uses too. Returns where the
-    /// file now is (the partial itself if even that rename failed).
+    /// A finished encode that could not be published must survive: protected
+    /// on disk where it is (`<partial>.keep`, honoured by every sweep, across
+    /// restarts), then moved off the partial pattern to the first free
+    /// `<stem>.<token>[-n].vs-kept.<ext>` (never overwriting). The one shared
+    /// helper Combine uses too. Returns where the file now is (the partial
+    /// itself — still protected — if no rename was possible).
     static func keepUnpublished(_ partial: URL) -> URL {
         PartialFileNaming.keepUnpublished(partial, renameNoClobber: renameNoClobber)
     }
@@ -122,14 +125,22 @@ enum DerivativeOutputPublish {
         return url.deletingLastPathComponent().appendingPathComponent(name)
     }
 
-    /// Atomic no-clobber rename. true = renamed; false = the destination
-    /// exists (nothing changed); throws on any other failure.
+    /// Atomic no-clobber rename — the ONE ExclusivePublish (RENAME_EXCL,
+    /// else link(2), else refuse; never a rename over anything — codex
+    /// #1642). true = renamed; false = the destination exists (nothing
+    /// changed); throws on any other failure, including "the drive can't
+    /// publish without risk of overwriting". ReformatJob publishes through
+    /// this too.
     static func renameNoClobber(_ source: String, _ destination: String) throws -> Bool {
-        if renamex_np(source, destination, UInt32(RENAME_EXCL)) == 0 { return true }
-        let e = errno
-        if e == EEXIST { return false }
-        throw Failure(message: "rename to \((destination as NSString).lastPathComponent) failed: "
-                      + String(cString: strerror(e)) + " (errno \(e))")
+        try renameNoClobberDetailed(source, destination) == .renamed
+    }
+
+    private static func renameNoClobberDetailed(_ source: String, _ destination: String) throws -> ExclusivePublish.Result {
+        do {
+            return try ExclusivePublish.renameNoClobberDetailed(source, destination)
+        } catch let failure as PartialFileNaming.Failure {
+            throw Failure(message: failure.message)
+        }
     }
 
     /// Publish `partial` as `final` under `policy`. DISK I/O — call it off
@@ -149,7 +160,8 @@ enum DerivativeOutputPublish {
                 PartialFileNaming.unregisterLive(URL(fileURLWithPath: partial))
             }
         }
-        if try renameNoClobber(partial, final.path) { return .published(final) }
+        let first = try renameNoClobberDetailed(partial, final.path)
+        guard case .taken(let renameExclSupported) = first else { return .published(final) }
 
         // The name is taken.
         var keepReason: String
@@ -157,7 +169,12 @@ enum DerivativeOutputPublish {
         case .keep(let reason):
             keepReason = reason
         case .replaceViaTrash:
-            if let note = archiveCheck?.refusalNote(forPath: final.path) {
+            if !renameExclSupported {
+                // Trash-then-take needs an exclusive rename; without one the
+                // previous file would go to the Trash and the new output
+                // might then be refused (codex #1642). Keep it; go beside.
+                keepReason = "Replace was chosen, but this drive can't replace a file without risk of overwriting — the existing file was kept"
+            } else if let note = archiveCheck?.refusalNote(forPath: final.path) {
                 // The file's OWN volume is the Master Archive's (a path
                 // that hid it, or a volume mounted since the policy).
                 keepReason = note
