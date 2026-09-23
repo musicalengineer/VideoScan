@@ -42,6 +42,11 @@ private final class JobAfter: ObservableObject {
     @Published var livePreview: LivePreview = .init()
 }
 
+/// Counts update-block executions (a class: the block is @Sendable, so it
+/// cannot mutate a captured local).
+@MainActor
+private final class FireCounter { var n = 0 }
+
 @MainActor
 struct LivePreviewPublishBenchmarkTests {
 
@@ -71,19 +76,25 @@ struct LivePreviewPublishBenchmarkTests {
         let img: CGImage? = nil
         let rects: [CGRect] = []
 
+        let fires = FireCounter()
         for _ in 0..<Self.N {
             await throttle.update {
+                fires.n += 1
                 job.liveFrame = img
                 job.liveMatchedRects = rects
                 job.liveUnmatchedRects = rects
             }
         }
 
-        // Allow any deferred Combine sends to settle before reading the counter.
-        await MainActor.run { }
-
+        // No settling needed: @Published sends objectWillChange synchronously
+        // in willSet, and this test, the sink and the update block all run on
+        // the main actor. (Nightly 2026-09-23 flake — 29,988 of 30,000 — was
+        // 4 whole updates dropped by the throttle when the WALL clock stepped
+        // back; the throttle is now monotonic. See ThrottledMainActorUpdateTests.)
         Self.logLine("BEFORE: \(notifications) notifications for \(Self.N) fires (= \(Double(notifications) / Double(Self.N)) per fire)")
-        // Mechanical: 3 @Published assignments → 3 objectWillChange.send() calls.
+        // Every update must run (interval 0 = no throttle) …
+        #expect(fires.n == Self.N, "throttle(interval: 0) dropped \(Self.N - fires.n) update(s)")
+        // … and, mechanically, 3 @Published assignments → 3 objectWillChange.send() calls.
         #expect(notifications == 3 * Self.N)
     }
 
@@ -97,15 +108,16 @@ struct LivePreviewPublishBenchmarkTests {
         let img: CGImage? = nil
         let rects: [CGRect] = []
 
+        let fires = FireCounter()
         for _ in 0..<Self.N {
             await throttle.update {
+                fires.n += 1
                 job.livePreview = JobAfter.LivePreview(frame: img, matched: rects, unmatched: rects)
             }
         }
 
-        await MainActor.run { }
-
         Self.logLine("AFTER:  \(notifications) notifications for \(Self.N) fires (= \(Double(notifications) / Double(Self.N)) per fire)")
+        #expect(fires.n == Self.N, "throttle(interval: 0) dropped \(Self.N - fires.n) update(s)")
         #expect(notifications == Self.N)
     }
 

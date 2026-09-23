@@ -66,3 +66,16 @@ uses the explicit `VIDEOSCAN_TEAM_AGENT=fred` environment identity for Fred;
 otherwise a cloud Codex manager resolves to `codex`. A Qwen session without the
 explicit Fred identity receives nothing, preserving the separate read-only
 Engineering Room seat. Claude identifies itself explicitly.
+
+## Acknowledge means answered (2026-09-23)
+
+`ack` only removes a message from your inbox. A request is handled when its work
+is done and you have replied with `post --reply-to <id>`. Never acknowledge a
+request you have not answered: on 2026-09-22 six review requests were
+acknowledged within seconds of delivery and sat unanswered overnight.
+
+To see what you asked for that has no answer yet — acknowledged or not:
+
+```sh
+python3 tools/team-channel.py awaiting --from claude --to codex --days 3
+```

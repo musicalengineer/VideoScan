@@ -17,6 +17,21 @@ import Foundation
 ///     run when someone asked for them, not by accident.
 ///   - Coverage OFF. Instrumentation inflates every measurement, so a
 ///     coverage run can only produce false alarms.
+///
+/// Coverage detection (fixed 2026-09-23): `xcodebuild test` sets
+/// LLVM_PROFILE_FILE=/dev/null in the runner even with
+/// `-enableCodeCoverage NO`. Treating "any value" as coverage-on meant no
+/// Release budget was ever asserted. `/dev/null` and empty now mean OFF;
+/// PerformanceLaneTests pins this against the binary's real
+/// instrumentation (presence of the LLVM profile runtime).
+///
+/// Release test builds need ENABLE_TESTABILITY=YES on the xcodebuild
+/// command line (the app project sets it, but the local VideoScanCore
+/// package does not, and five suites `@testable import VideoScanCore`):
+///
+///     TEST_RUNNER_<OPT_IN>=1 xcodebuild test -configuration Release \
+///       -enableCodeCoverage NO ENABLE_TESTABILITY=YES \
+///       -only-testing:VideoScanTests/<Suite>
 enum PerformanceLane {
 
     #if DEBUG
@@ -33,7 +48,15 @@ enum PerformanceLane {
                                 environment: [String: String]) -> Bool {
         !debugBuild
             && environment[optInKey] == "1"
-            && environment["LLVM_PROFILE_FILE"] == nil
+            && !coverageEnabled(environment: environment)
+    }
+
+    /// Coverage is on only when LLVM_PROFILE_FILE names a real profile
+    /// destination. Unset, empty, and `/dev/null` (what Xcode sets when
+    /// coverage is off) all mean off.
+    static func coverageEnabled(environment: [String: String]) -> Bool {
+        guard let path = environment["LLVM_PROFILE_FILE"] else { return false }
+        return !path.isEmpty && path != "/dev/null"
     }
 
     static func isAuthoritative(optInKey: String) -> Bool {
@@ -65,7 +88,7 @@ enum PerformanceLane {
     /// do rather than just "skipped".
     static func explanation(optInKey: String) -> String {
         "not an authoritative performance lane (\(configurationName)"
-            + (ProcessInfo.processInfo.environment["LLVM_PROFILE_FILE"] == nil ? "" : ", coverage on")
-            + "). Run Release with \(optInKey)=1 and coverage off."
+            + (coverageEnabled(environment: ProcessInfo.processInfo.environment) ? ", coverage on" : "")
+            + "). Run Release with TEST_RUNNER_\(optInKey)=1, -enableCodeCoverage NO and ENABLE_TESTABILITY=YES."
     }
 }

@@ -12,7 +12,9 @@
 // state is one KinshipDisplayCenter instance created here.
 //
 // RUN THIS SUITE ALONE for gate numbers:
-//   xcodebuild test … -configuration Release -only-testing:VideoScanTests/KinshipPerformanceGateTests
+//   xcodebuild test … -configuration Release -enableCodeCoverage NO ENABLE_TESTABILITY=YES \
+//     -only-testing:VideoScanTests/KinshipPerformanceGateTests
+//   (ENABLE_TESTABILITY=YES: Release test builds need it — see PerformanceLane.swift.)
 // Swift Testing runs other suites concurrently in the same process; their
 // allocations land in the process RSS deltas measured here and their CPU
 // contends with the cold/p95 timings (seen 2026-08-29: cold 13 ms → 80 ms,

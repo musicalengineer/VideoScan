@@ -34,7 +34,11 @@ extension ArchiveView {
             kind = .video
         }
         let people = ArchivePeopleCell.text(for: rec)
-        return ArchiveTimelineItem(id: rec.id,
+        // Lineage for version grouping (codex #1644): a promotion link is
+        // the archive copy of the SAME item (an orphan copy standing in for
+        // its vanished source), not a version — never passed on.
+        let lineage = rec.derivationKind == ArchivePromotion.derivationKind ? nil : rec.derivedFrom
+        var item = ArchiveTimelineItem(id: rec.id,
                                    title: ArchiveTimelinePath.title(fromArchiveFilename: copy.filename),
                                    archiveFilename: copy.filename,
                                    relPath: rel,
@@ -43,6 +47,9 @@ extension ArchiveView {
                                    durationSeconds: rec.durationSeconds,
                                    peopleText: people == "—" ? "" : people,
                                    isVerified: copy.archiveFixity != nil)
+        item.derivedFromID = lineage
+        item.derivationKind = lineage == nil ? nil : rec.derivationKind
+        return item
     }
 
     /// All archived assets as timeline items — memoized per records
@@ -94,6 +101,13 @@ struct ArchiveTimelinePane: View {
     let openItems: ([UUID]) -> Void
 
     private static let undatedAnchor = -1
+
+    /// Scroll targets in the stream live in their OWN id space. The rail's
+    /// `ForEach(timeline.decades)` gives each rail row the decade's Int id,
+    /// so `scrollTo(1990)` found the rail's own (already visible) row and
+    /// nothing moved — only Undated, which is not in that ForEach, jumped
+    /// (Rick 2026-09-23). A String "stream-1990" can't collide with it.
+    static func anchorID(_ decade: Int) -> String { "stream-\(decade)" }
 
     var body: some View {
         if timeline.isEmpty {
@@ -187,7 +201,7 @@ struct ArchiveTimelinePane: View {
                             proxy: ScrollViewProxy) -> some View {
         Button {
             focusedDecade = anchor
-            withAnimation { proxy.scrollTo(anchor, anchor: .top) }
+            withAnimation { proxy.scrollTo(Self.anchorID(anchor), anchor: .top) }
         } label: {
             HStack {
                 Text(label)
@@ -218,26 +232,35 @@ struct ArchiveTimelinePane: View {
                 ForEach(timeline.decades) { decade in
                     if decade.isGap {
                         gapBand(decade)
-                            .id(decade.id)
+                            .id(Self.anchorID(decade.id))
                     } else {
+                        // The rail's scroll target is a zero-height ROW before
+                        // the section, not the pinned header: a lazy stack
+                        // does not reliably resolve scrollTo on a pinned
+                        // section header that has not been built yet, and the
+                        // rail clicks did nothing (Rick 2026-09-23).
+                        Color.clear
+                            .frame(height: 0)
+                            .id(Self.anchorID(decade.id))
                         Section {
                             ForEach(decade.years) { year in
                                 yearBlock(year)
                             }
                         } header: {
                             decadeHeader(decade)
-                                .id(decade.id)
                         }
                     }
                 }
                 if !timeline.undated.isEmpty {
+                    Color.clear
+                        .frame(height: 0)
+                        .id(Self.anchorID(Self.undatedAnchor))
                     Section {
                         cardGrid(timeline.undated)
                             .padding(.horizontal, 18)
                             .padding(.top, 6)
                     } header: {
                         undatedHeader
-                            .id(Self.undatedAnchor)
                     }
                 }
             }

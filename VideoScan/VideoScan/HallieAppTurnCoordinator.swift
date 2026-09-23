@@ -196,6 +196,14 @@ enum HallieAppTurnCoordinator {
         /// Rick's kind words (HallieKindWords). The default has none, so
         /// tests never read a real file; live reads the cached store.
         let loadKindWords: @Sendable () -> HallieKindWordsBook
+        /// Who OWNS this app (2026-09-23) — distinct from `loadSpeakers`,
+        /// which the web bridge swaps per session for a family member.
+        /// `replacingSpeakers` passes this through unchanged. A greeting to
+        /// the owner carries no kind word (Rick: "refrain from using the
+        /// flattering things to me"). Default = `loadSpeakers` (on the
+        /// desktop the speaker IS the owner), so tests that inject speakers
+        /// never read real UserDefaults for the owner either.
+        let loadAppOwner: @Sendable () -> HallieTurnExecutor.Speakers
 
         init(
             startLocalBrain: @escaping @Sendable ([String]) async throws -> [String],
@@ -239,7 +247,8 @@ enum HallieAppTurnCoordinator {
             ) async -> HallieGroundedComposer.Outcome = { plan, _, _, _ in
                 .template(plan, note: "template: no composer configured")
             },
-            loadKindWords: @escaping @Sendable () -> HallieKindWordsBook = { .empty }
+            loadKindWords: @escaping @Sendable () -> HallieKindWordsBook = { .empty },
+            loadAppOwner: (@Sendable () -> HallieTurnExecutor.Speakers)? = nil
         ) {
             self.startLocalBrain = startLocalBrain
             self.translateAST = translateAST
@@ -277,6 +286,7 @@ enum HallieAppTurnCoordinator {
             self.resolveBiographyPhoto = resolveBiographyPhoto
             self.composeAnswer = composeAnswer
             self.loadKindWords = loadKindWords
+            self.loadAppOwner = loadAppOwner ?? loadSpeakers
         }
 
         private static let productionApplicationSupportRoot = FileManager.default.urls(
@@ -470,7 +480,8 @@ enum HallieAppTurnCoordinator {
                     })
                 return await composer.compose(plan: plan, history: history)
             },
-            loadKindWords: { HallieKindWordsStore.shared.book() })
+            loadKindWords: { HallieKindWordsStore.shared.book() },
+            loadAppOwner: { HallieTurnExecutor.Speakers.fromDefaults() })
         }
     }
 
@@ -603,6 +614,7 @@ enum HallieAppTurnCoordinator {
                     HallieKindWords.greetingOffer(
                         result: result,
                         speakers: dependencies.loadSpeakers(),
+                        appOwner: dependencies.loadAppOwner(),
                         profiles: dependencies.loadProfiles(),
                         loadBook: dependencies.loadKindWords)
                 }.value
