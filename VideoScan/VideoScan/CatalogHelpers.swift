@@ -182,8 +182,6 @@ struct CatalogContent: View {
     @State var transcodeRequest: TranscodeRequest?
     /// Non-nil presents the "Clean Up Video" recipe confirmation sheet.
     @State var cleanupRequest: CleanupRequest?
-    /// Non-nil presents the "Trim Master…" in/out point sheet.
-    @State var trimRequest: TrimRequest?
     /// Non-nil presents the "Verification Results" sheet (GH #128/#135;
     /// since the GH #137 consolidation it also carries the Balance
     /// Audio offer — the retired standalone Balance sheet's job).
@@ -826,10 +824,6 @@ struct CatalogContent: View {
         // as the transcode sheet above (never chained isPresented).
         .sheet(item: $cleanupRequest) { request in
             CleanupSheet(request: request)
-        }
-        // "Trim Master…" in/out point picker. Same .sheet(item:) shape.
-        .sheet(item: $trimRequest) { request in
-            TrimSheet(request: request)
         }
         // Archive Angel ▸ Show Copies… (read-only, S4). The façade holds
         // the request; the host presents it with the same .sheet(item:) shape.
