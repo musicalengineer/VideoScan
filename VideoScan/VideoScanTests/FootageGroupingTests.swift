@@ -204,7 +204,7 @@ struct FootageEvidenceRuleTests {
         #expect(F.grouped(F.run([a, b]), a, b))
     }
 
-    @Test("A/V pair: High → Likely, Medium → Possible, Low → nothing; combined output joins the pair")
+    @Test("A/V pair: High → Likely, Medium / Low → nothing; combined output joins the pair")
     func avPairs() {
         let pid = UUID()
         var v = F.v("V.mxf", 30, stream: StreamType.videoOnly.rawValue)
@@ -216,8 +216,7 @@ struct FootageEvidenceRuleTests {
         #expect(F.grouped(r, v, a) && F.grouped(r, v, combined))
         #expect(r.memberships[a.id]?.role == .avHalf)
         v.pairConfidence = .medium
-        let r2 = F.run([v, a])
-        #expect(r2.memberships[a.id]?.confidence == FootageConfidence.possible)
+        #expect(F.run([v, a]).memberships[a.id] == nil, "a Medium correlation is a guess, not evidence")
         v.pairConfidence = .low
         #expect(F.run([v, a]).memberships[a.id] == nil, "a Low correlation is a guess, not evidence")
     }

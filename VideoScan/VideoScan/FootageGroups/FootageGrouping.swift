@@ -11,7 +11,10 @@
 //   Confirmed  the person said "same footage" (FootageDecision.same)
 //   Likely     recorded lineage (derivedFrom + derivationKind)
 //              combinedFromPairID → the pair it was combined from
-//              an A/V pair correlated High (pairGroupID)
+//              an A/V pair correlated High (pairGroupID) — Medium and Low
+//                correlations are guesses by length (calibration 2026-09-23
+//                paired 00002.V… with 00044.A…, and clips 0.5 s apart), so
+//                they are NOT evidence
 //              same Avid material package UMID, same stream type
 //              same FCP `com.apple.proapps.mediaIdentifier`
 //              FCP `<event>/Transcoded Media/**/X.*` ↔ `<event>/Original Media/X.*`
@@ -26,10 +29,7 @@
 //                are reused by every camera) + the same length
 //              the same name except one trailing counter ("-3", "_7")
 //                + the same length (DickyTheBoysDadBreen-1985 / -1985-3)
-//              an A/V pair correlated Medium (Low correlations are guesses
-//                by length and are NOT evidence — calibration 2026-09-23
-//                found Low pairs 0.7 s apart)
-//   DURATION ALONE NEVER MAKES AN EDGE. (Sensor: FootageGroupingSensorTests.)
+//   DURATION ALONE NEVER MAKES AN EDGE. (Sensor: FootageDurationAloneSensorTests.)
 //
 // ── GROUPS ────────────────────────────────────────────────────────────────
 // Connected components by union-find, taking edges strongest first
@@ -373,8 +373,8 @@ enum FootageGrouping {
             }
         }
 
-        /// A/V pairs (High → Likely, Medium → Possible, Low → nothing) and
-        /// the file combined from a pair.
+        /// A/V pairs (High → Likely; Medium / Low → nothing) and the file
+        /// combined from a pair.
         mutating func avPairs() {
             let xs = self.xs
             let pairs = buckets { xs[$0].pairGroupID?.uuidString }
@@ -383,11 +383,9 @@ enum FootageGrouping {
                 let hub = m.first { xs[$0].streamTypeRaw != StreamType.audioOnly.rawValue } ?? first
                 for i in m where i != hub {
                     let conf = min(xs[i].pairConfidence ?? .low, xs[hub].pairConfidence ?? .low)
-                    switch conf {
-                    case .high: add(i, hub, .avPairHigh, conf.rawValue)
-                    case .medium: add(i, hub, .avPairWeak, conf.rawValue)
-                    case .low: continue
-                    }
+                    // `.avPairWeak` stays in the vocabulary (a Possible
+                    // link) but no correlation grade produces it today.
+                    if conf == .high { add(i, hub, .avPairHigh, conf.rawValue) }
                 }
             }
             for i in idx {
