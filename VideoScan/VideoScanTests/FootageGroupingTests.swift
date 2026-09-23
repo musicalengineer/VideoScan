@@ -103,12 +103,31 @@ struct FootageStemTests {
 @Suite("Find Similar Footage — evidence rules")
 struct FootageEvidenceRuleTests {
 
-    @Test("same full content hash → Identical, different names")
-    func identicalHash() {
+    @Test("same segmented content hash (sampled windows) → Likely, 'not yet verified', never 'same bytes' (codex #1674)")
+    func sampledContentHashIsLikely() {
         let a = F.v("A.mov", 100, hash: "v1:aa"), b = F.v("Totally Different.mov", 50, hash: "v1:aa")
         let r = F.run([a, b])
         #expect(F.grouped(r, a, b))
+        #expect(r.memberships[a.id]?.confidence == .likely)
+        #expect(r.memberships[a.id]?.evidence.contains { $0.contains("not yet verified") } == true)
+        #expect(r.memberships.values.flatMap(\.evidence).allSatisfy { !$0.contains("same bytes") })
+    }
+
+    @Test("same whole-file digest, CURRENT on both → Identical; recorded but not current → Likely")
+    func currentDigestIsIdentical() {
+        var a = F.v("A.mov", 100), b = F.v("Totally Different.mov", 50)
+        a.fixityDigest = "sha-1"; b.fixityDigest = "sha-1"
+        a.fixityFresh = true; b.fixityFresh = true
+        let r = F.run([a, b])
+        #expect(F.grouped(r, a, b))
         #expect(r.memberships[a.id]?.confidence == .identical)
+        #expect(a.sameBytes(as: b))
+        b.fixityFresh = false
+        let r2 = F.run([a, b])
+        #expect(F.grouped(r2, a, b))
+        #expect(r2.memberships[a.id]?.confidence == .likely, "one side changed or offline since it was hashed")
+        #expect(!a.sameBytes(as: b))
+        #expect(r2.memberships.values.flatMap(\.evidence).allSatisfy { !$0.contains("same bytes") })
     }
 
     @Test("same sampled signature + size NOMINATES (Likely), never Identical")
@@ -243,7 +262,10 @@ struct FootageComponentRuleTests {
         let r = F.run([a, b, c])
         #expect(F.grouped(r, a, c))
         #expect(r.memberships[a.id]?.confidence == .likely)
-        let r2 = F.run([a, b])
+        var a2 = a, b2 = b
+        a2.fixityDigest = "sha-t"; b2.fixityDigest = "sha-t"
+        a2.fixityFresh = true; b2.fixityFresh = true
+        let r2 = F.run([a2, b2])
         #expect(r2.memberships[a.id]?.confidence == .identical)
     }
 
@@ -279,8 +301,15 @@ struct FootageComponentRuleTests {
         let r = F.run(xs, cap: 4)
         #expect(r.stats.largestGroup <= 4)
         #expect(r.stats.refusedByCap > 0)
-        let ident = (0..<10).map { _ in F.v("X.mov", 5, hash: "v1:same") }
+        let ident = (0..<10).map { _ in
+            var x = F.v("X.mov", 5, hash: "v1:same")
+            x.fixityDigest = "sha-same"; x.fixityFresh = true
+            return x
+        }
         #expect(F.run(ident, cap: 4).stats.largestGroup == 10)
+        // Sampled-only copies are a nomination (Likely): the cap applies.
+        let sampled = (0..<10).map { _ in F.v("X.mov", 5, hash: "v1:same") }
+        #expect(F.run(sampled, cap: 4).stats.largestGroup <= 4)
     }
 
     @Test("'Not the same' splits even byte-identical files; 'Same footage' joins what no rule would")

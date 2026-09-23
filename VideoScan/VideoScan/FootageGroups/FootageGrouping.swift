@@ -6,8 +6,11 @@
 // pool (@concurrent) and is table-testable.
 //
 // ── EVIDENCE (each edge keeps its reason) ─────────────────────────────────
-//   Identical  same full content hash (`contentHash`, the h: key)
-//              same whole-file SHA-256 (`contentFixity`)
+//   Identical  same whole-file SHA-256 on BOTH sides, each still CURRENT:
+//                the stored ContentFixity describes the file on disk now
+//                (`describesFileNow` — device, inode, size, mtime, ctime;
+//                stat only, the job's "Checking stored digests" step, the
+//                ArchiveAngelFixityCheck semantics). codex #1674 F1.
 //   Confirmed  the person said "same footage" (FootageDecision.same)
 //   Likely     recorded lineage (derivedFrom + derivationKind)
 //              combinedFromPairID → the pair it was combined from
@@ -22,10 +25,20 @@
 //                folder (ArchiveItemVersions' rule) AND the same length
 //              same normalized name (FootageStem) AND length within ±2
 //                frames at the record's own frame rate AND no conflicting
-//                date prefixes ("1990-12-25 X" ≠ "1994-12-25 X")
-//              same sampled signature (partialMD5 + size) — a NOMINATION:
-//                refused when the two full hashes are known and differ,
-//                never "Identical" (codex, #1633 review)
+//                date prefixes ("1990-12-25 X" ≠ "1994-12-25 X") — checked
+//                against EVERY date already in both groups, not just the
+//                two endpoints (codex #1674 F2: an undated "X" must not
+//                bridge 1990 and 1994)
+//              same SAMPLED signature — a NOMINATION, never "Identical",
+//                never "same bytes" (codex #1633, #1674 F1):
+//                · the segmented `contentHash` (FileHasher: three 1 MiB
+//                  windows + size) — two files can differ everywhere else
+//                · partialMD5 + size
+//                refused when the members' whole-file digests disagree
+//              the same whole-file SHA-256 RECORDED on both, but one or both
+//                no longer describes its file (rewritten, offline, a pre-
+//                ctime stamp, an archive digest with no stamp) — likewise a
+//                nomination
 //   Possible   a camera-counter name (Clip 03, MVI_1234 — generic stems
 //                are reused by every camera) + the same length
 //              the same name except one trailing counter ("-3", "_7")
@@ -47,13 +60,23 @@
 //      (a record in no group yet) as a leaf, and a leaf never hosts another
 //      Possible edge. So Possible links form stars of depth one around a
 //      member; two multi-member groups are never merged by a Possible edge.
+//   4. Dates: a NAME-based link (name + length, camera counter, trailing
+//      counter, promote collision) is refused when any date prefix in one
+//      group is incompatible with any in the other (codex #1674 F2). Each
+//      group carries its set of distinct date prefixes.
 //
 // ── MEMORY (worst case) ───────────────────────────────────────────────────
 // Per record: one FootageStem.Analysis (~200 B) + union-find arrays (~40 B)
 // + dictionary buckets (~150 B). Edges: star-shaped per bucket, so at most
-// a few per record; the name/duration window is capped at
-// `maxWindowPartners` per record. 100k records ≈ 50 MB peak, freed when the
-// run returns. Nothing scales with file size; no media is opened.
+// a few per record; the name/duration window EXAMINES at most
+// `maxWindowExamined` candidates per record (accepted or not — codex #1674
+// F5: rejected candidates used to be free, so 20k same-name, same-length,
+// different-date files went quadratic). 100k records ≈ 50 MB peak, freed
+// when the run returns. Nothing scales with file size; no media is opened.
+//
+// CANCELLATION. The two window rules and the union pass poll
+// `Task.isCancelled` every few thousand records / edges and stop early,
+// setting `Stats.cancelled`; a cancelled result is never applied.
 //
 // (For Rick: union-find ≈ the classic disjoint-set forest with path
 // halving + union by size; `inout Stats` ≈ passing a stats struct by
@@ -74,6 +97,11 @@ struct FootageInput: Sendable, Equatable {
     var contentHash: String
     var partialMD5: String
     var fixityDigest: String?
+    /// True when `fixityDigest` is a ContentFixity whose stamp still
+    /// describes the file on disk NOW (a stat, taken off-main by the job).
+    /// Only then may it prove byte identity. Default false: a pure run
+    /// with no stat knows nothing current.
+    var fixityFresh: Bool
     var derivedFrom: UUID?
     var derivationKind: String?
     var cleanupRecipeID: String?
@@ -97,7 +125,8 @@ struct FootageInput: Sendable, Equatable {
 
     init(id: UUID = UUID(), filename: String, fullPath: String = "", durationSeconds: Double = 0,
          frameRate: String = "29.97", sizeBytes: Int64 = 0, contentHash: String = "", partialMD5: String = "",
-         fixityDigest: String? = nil, derivedFrom: UUID? = nil, derivationKind: String? = nil,
+         fixityDigest: String? = nil, fixityFresh: Bool = false, derivedFrom: UUID? = nil,
+         derivationKind: String? = nil,
          cleanupRecipeID: String? = nil, pairGroupID: UUID? = nil, pairConfidence: PairConfidence? = nil,
          combinedFromPairID: UUID? = nil, materialPackageUMID: String = "",
          streamTypeRaw: String = StreamType.videoAndAudio.rawValue, mediaIdentifier: String? = nil,
@@ -108,6 +137,7 @@ struct FootageInput: Sendable, Equatable {
         self.fullPath = fullPath.isEmpty ? "/Volumes/T/" + filename : fullPath
         self.durationSeconds = durationSeconds; self.frameRate = frameRate; self.sizeBytes = sizeBytes
         self.contentHash = contentHash; self.partialMD5 = partialMD5; self.fixityDigest = fixityDigest
+        self.fixityFresh = fixityFresh
         self.derivedFrom = derivedFrom; self.derivationKind = derivationKind; self.cleanupRecipeID = cleanupRecipeID
         self.pairGroupID = pairGroupID; self.pairConfidence = pairConfidence
         self.combinedFromPairID = combinedFromPairID; self.materialPackageUMID = materialPackageUMID
@@ -117,24 +147,42 @@ struct FootageInput: Sendable, Equatable {
         self.decisions = decisions; self.isHidden = isHidden; self.existing = existing
     }
 
-    /// "h:<hash>" / "f:<sha256>" / "p:<md5>:<size>" — the key two byte
-    /// copies share (the full keys first; "p:" is only a nomination).
+    /// Any whole-file digest on record (current or not) — for CONFLICTS:
+    /// two different recorded digests refuse a sampled nomination.
+    var storedDigest: String? {
+        guard let f = fixityDigest, !f.isEmpty else { return nil }
+        return f
+    }
+
+    /// The whole-file digest ONLY when it still describes the file now.
+    var verifiedDigest: String? { fixityFresh ? storedDigest : nil }
+
+    /// "f:<sha256>" / "h:<hash>" / "p:<md5>:<size>" — the key a group's
+    /// probable byte copies share, used ONLY to give them one role (never
+    /// shown as evidence, never a reason to group).
     var identityKey: String {
+        if let f = verifiedDigest { return "f:" + f }
         if !contentHash.isEmpty { return "h:" + contentHash }
-        if let f = fixityDigest, !f.isEmpty { return "f:" + f }
         if !partialMD5.isEmpty, sizeBytes > 0 { return "p:\(partialMD5):\(sizeBytes)" }
         return ""
     }
 
-    /// Byte-identical as far as the catalog can tell: the same full content
-    /// hash or whole-file digest, or the same sampled signature + size when
-    /// at least one side has no full hash (a nomination, never a conflict).
+    /// PROVEN byte-identical: both whole-file digests are current and equal
+    /// (codex #1674 F1). Sampled keys never prove this — FileHasher's
+    /// segmented hash reads three 1 MiB windows, and two files can differ
+    /// everywhere else.
     func sameBytes(as o: FootageInput) -> Bool {
-        // A whole-file digest outranks every other key: two known, different
-        // SHA-256s are different bytes, whatever the sampled keys say (QA
-        // 2026-09-23 — a segmented contentHash can collide on files that
-        // differ outside the sampled regions).
-        if let f = fixityDigest, !f.isEmpty, let g = o.fixityDigest, !g.isEmpty { return f == g }
+        guard let f = verifiedDigest, let g = o.verifiedDigest else { return false }
+        return f == g
+    }
+
+    /// PROBABLY byte copies — the same current digest, or the same sampled
+    /// key with no recorded digest disagreeing. Drives only the displayed
+    /// role ("copy"); the evidence line and the confidence stay honest
+    /// ("same sampled signature … (not yet verified)", Likely).
+    func probablySameBytes(as o: FootageInput) -> Bool {
+        if sameBytes(as: o) { return true }
+        if let f = storedDigest, let g = o.storedDigest, f != g { return false }
         if !contentHash.isEmpty, contentHash == o.contentHash { return true }
         if !contentHash.isEmpty, !o.contentHash.isEmpty { return false }
         return !partialMD5.isEmpty && partialMD5 == o.partialMD5 && sizeBytes > 0 && sizeBytes == o.sizeBytes
@@ -146,7 +194,8 @@ struct FootageInput: Sendable, Equatable {
 enum FootageGrouping {
 
     /// Bump when a rule changes: every record's answer is then rewritten.
-    static let algorithmVersion = 1
+    /// 2 = codex #1674 (sampled ≠ Identical, component dates, bounded window).
+    static let algorithmVersion = 2
     static let defaultCap = 64
     /// Reasons kept per member (the sheet shows them as chips).
     static let maxReasons = 6
@@ -155,6 +204,14 @@ enum FootageGrouping {
     /// Name/duration window: partners compared per record (a bucket of
     /// thousands of equal-length "IMG_0001"s can't go quadratic).
     static let maxWindowPartners = 32
+    /// …and candidates EXAMINED per record, accepted or not (codex #1674
+    /// F5). The hard bound: the window costs O(records × this).
+    static let maxWindowExamined = 128
+    /// Trailing-counter rule: partners linked / candidates examined.
+    static let maxCounterPartners = 8
+    static let maxCounterExamined = 64
+    /// Records (window rules) / edges (union pass) between cancel polls.
+    static let cancelPollStride = 4096
 
     struct Options: Sendable, Equatable {
         var cap: Int = FootageGrouping.defaultCap
@@ -164,7 +221,6 @@ enum FootageGrouping {
 
     enum Reason: String, Sendable, CaseIterable, Comparable {
         case personSaidSame
-        case sameContentHash
         case sameFixity
         case lineage
         case combinedFromPair
@@ -175,6 +231,7 @@ enum FootageGrouping {
         case promoteCollision
         case nameAndDuration
         case sampledSignature
+        case recordedDigest
         case genericNameAndDuration
         case counterNameAndDuration
         case avPairWeak
@@ -182,11 +239,21 @@ enum FootageGrouping {
         var confidence: FootageConfidence {
             switch self {
             case .personSaidSame: return .confirmed
-            case .sameContentHash, .sameFixity: return .identical
+            case .sameFixity: return .identical
             case .lineage, .combinedFromPair, .avPairHigh, .materialPackage, .fcpMediaIdentifier,
-                 .fcpOriginalTranscoded, .promoteCollision, .nameAndDuration, .sampledSignature:
+                 .fcpOriginalTranscoded, .promoteCollision, .nameAndDuration, .sampledSignature,
+                 .recordedDigest:
                 return .likely
             case .genericNameAndDuration, .counterNameAndDuration, .avPairWeak: return .possible
+            }
+        }
+
+        /// Links whose evidence is the NAME — they must agree with every
+        /// date already in both groups (rule 4, codex #1674 F2).
+        var isNameBased: Bool {
+            switch self {
+            case .nameAndDuration, .genericNameAndDuration, .counterNameAndDuration, .promoteCollision: return true
+            default: return false
             }
         }
 
@@ -219,6 +286,13 @@ enum FootageGrouping {
         var refusedByCap = 0
         var refusedPossibleChain = 0
         var refusedByPerson = 0
+        /// Name-based links refused because the two groups' dates conflict.
+        var refusedByDate = 0
+        /// Candidates the name/length window examined (bounded, F5).
+        var windowExamined = 0
+        /// The run was cancelled mid-phase: the result is partial and must
+        /// not be applied.
+        var cancelled = false
         var groups = 0
         var members = 0
         var groupsByConfidence: [FootageConfidence: Int] = [:]
@@ -248,7 +322,51 @@ enum FootageGrouping {
         var considered: [Bool]
         var analyses: [FootageStem.Analysis]
         var tolerance: [Double]
+        /// Parsed date prefix per input (DateKey.unknown when none).
+        var dateKeys: [DateKey]
         var indexByID: [UUID: Int]
+    }
+
+    /// A filename date prefix ("1990-12-25", "1990-xx-xx", "xxxx-12") as
+    /// three integer parts, -1 = unknown ("xx", "xxxx", absent). Exactly
+    /// `ArchiveItemVersions.datesCompatible`, without splitting strings in
+    /// the inner loops (sensor: Footage1674DateKeyTests). A part that
+    /// mixes digits and x ("1x") only equals itself, as a string would.
+    struct DateKey: Sendable, Hashable {
+        /// Year, month, day codes; -1 = unknown.
+        var y: Int32, m: Int32, d: Int32
+
+        static let unknown = DateKey(y: -1, m: -1, d: -1)
+
+        init(y: Int32, m: Int32, d: Int32) { self.y = y; self.m = m; self.d = d }
+
+        init(_ prefix: String?) {
+            guard let prefix else { self = .unknown; return }
+            var out: [Int32] = [-1, -1, -1]
+            for (k, comp) in prefix.split(separator: "-").prefix(3).enumerated() {
+                if comp.allSatisfy({ $0 == "x" }) { continue }
+                // Base 11 (x = 10): unique per fixed-width part.
+                var v: Int32 = 0
+                for ch in comp.utf8 {
+                    let digit: Int32 = ch >= 48 && ch <= 57 ? Int32(ch - 48) : 10
+                    v = v &* 11 &+ digit
+                }
+                out[k] = v
+            }
+            self.init(y: out[0], m: out[1], d: out[2])
+        }
+
+        var year: Int32 { y }
+        var isUnknown: Bool { y < 0 && m < 0 && d < 0 }
+
+        func compatible(with o: DateKey) -> Bool {
+            (y < 0 || o.y < 0 || y == o.y) && (m < 0 || o.m < 0 || m == o.m) && (d < 0 || o.d < 0 || d == o.d)
+        }
+
+        /// Order used to put equal dates next to each other in a window.
+        func precedes(_ o: DateKey) -> Bool {
+            y != o.y ? y < o.y : m != o.m ? m < o.m : d < o.d
+        }
     }
 
     struct Components: Sendable {
@@ -277,18 +395,22 @@ enum FootageGrouping {
         var analyses: [FootageStem.Analysis] = []
         analyses.reserveCapacity(inputs.count)
         var tolerance = [Double](repeating: 0.1, count: inputs.count)
+        var dateKeys: [DateKey] = []
+        dateKeys.reserveCapacity(inputs.count)
         var indexByID: [UUID: Int] = [:]
         indexByID.reserveCapacity(inputs.count)
         for (i, x) in inputs.enumerated() {
             indexByID[x.id] = i
             considered[i] = options.includeHidden || !x.isHidden
-            analyses.append(FootageStem.analyze(x.filename))
+            let a = FootageStem.analyze(x.filename)
+            analyses.append(a)
+            dateKeys.append(DateKey(a.datePrefix))
             tolerance[i] = FootageStem.durationTolerance(frameRate: x.frameRate)
         }
         stats.inputs = inputs.count
         stats.considered = considered.lazy.filter { $0 }.count
         return Prepared(inputs: inputs, considered: considered, analyses: analyses,
-                        tolerance: tolerance, indexByID: indexByID)
+                        tolerance: tolerance, dateKeys: dateKeys, indexByID: indexByID)
     }
 
     // MARK: Phase 2 — evidence
@@ -307,6 +429,8 @@ enum FootageGrouping {
         for (r, n) in b.counts { stats.edgesByReason[r, default: 0] += n }
         stats.sampledConflicts += b.sampledConflicts
         stats.fullHashConflicts += b.fullHashConflicts
+        stats.windowExamined += b.windowExamined
+        if b.cancelled { stats.cancelled = true }
         return b.out
     }
 
@@ -321,6 +445,9 @@ enum FootageGrouping {
         var counts: [Reason: Int] = [:]
         var sampledConflicts = 0
         var fullHashConflicts = 0
+        var windowExamined = 0
+        /// Set when Task.isCancelled was seen: the window rules stop early.
+        var cancelled = false
         /// Normalized-name buckets sorted by length (built by nameAndDuration).
         var byKey: [String: [Int]] = [:]
         /// isGenericStem compiles its regexes per call — cache per NAME KEY
@@ -353,20 +480,30 @@ enum FootageGrouping {
             }
         }
 
-        /// Same whole-file digest; same segmented content hash UNLESS the
-        /// members' whole-file digests disagree (then each digest class is
-        /// its own identity and members without a digest join none — a
-        /// conflict is never guessed through).
+        /// Byte identity and its nominations (codex #1674 F1):
+        ///   · the same whole-file digest, CURRENT on both → Identical
+        ///   · the same digest recorded, not current on both → Likely
+        ///   · the same segmented content hash (sampled windows) → Likely,
+        ///     refused when the members' recorded digests disagree (a
+        ///     conflict is never guessed through)
         mutating func identical() {
             let xs = self.xs
+            star(buckets { xs[$0].verifiedDigest }, .sameFixity)
+            let byDigest = buckets { xs[$0].storedDigest }
+            for key in byDigest.keys.sorted() {
+                guard let m = byDigest[key], let first = m.first, m.count > 1 else { continue }
+                let hub = m.first { xs[$0].fixityFresh } ?? first
+                for i in m where i != hub && !(xs[i].fixityFresh && xs[hub].fixityFresh) {
+                    add(i, hub, .recordedDigest)
+                }
+            }
             let byHash = buckets { xs[$0].contentHash }
             for key in byHash.keys.sorted() {
-                guard let m = byHash[key], m.count > 1 else { continue }
-                let digests = Set(m.compactMap { xs[$0].fixityDigest }.filter { !$0.isEmpty })
+                guard let m = byHash[key], let hub = m.first, m.count > 1 else { continue }
+                let digests = Set(m.compactMap { xs[$0].storedDigest })
                 if digests.count > 1 { fullHashConflicts += 1; continue }
-                if let hub = m.first { for i in m.dropFirst() { add(i, hub, .sameContentHash) } }
+                for i in m.dropFirst() { add(i, hub, .sampledSignature) }
             }
-            star(buckets { xs[$0].fixityDigest }, .sameFixity)
         }
 
         /// A nomination, refused on a full-hash conflict; an unhashed member
@@ -381,7 +518,7 @@ enum FootageGrouping {
                 // Refused when EITHER full-hash kind disagrees inside the
                 // bucket: the segmented content hash or the whole-file digest.
                 let known = Set(m.map { xs[$0].contentHash }.filter { !$0.isEmpty })
-                let digests = Set(m.compactMap { xs[$0].fixityDigest }.filter { !$0.isEmpty })
+                let digests = Set(m.compactMap { xs[$0].storedDigest })
                 if known.count > 1 || digests.count > 1 { sampledConflicts += 1; continue }
                 let hub = m.first { !xs[$0].contentHash.isEmpty } ?? first
                 for i in m where i != hub && xs[i].contentHash.isEmpty { add(i, hub, .sampledSignature) }
@@ -461,56 +598,129 @@ enum FootageGrouping {
         }
 
         /// Same normalized name + length within ±2 frames. Buckets sorted by
-        /// length; a sliding window compares near lengths only.
+        /// length (then date, so equal dates sit together); a sliding
+        /// window compares near lengths only. Bounded by what it EXAMINES,
+        /// not what it accepts (codex #1674 F5), and split by year first
+        /// when a bucket holds several concrete years — "1990-… X" and
+        /// "1994-… X" are never compared at all.
         mutating func nameAndDuration() {
             let xs = self.xs
+            let dk = p.dateKeys
             for i in idx where xs[i].durationSeconds >= minDurationSeconds {
                 let k = p.analyses[i].key
                 if k.count >= 3 { byKey[k, default: []].append(i) }
             }
-            for k in byKey.keys { byKey[k]?.sort { xs[$0].durationSeconds < xs[$1].durationSeconds } }
+            for k in byKey.keys {
+                byKey[k]?.sort { a, b in
+                    xs[a].durationSeconds != xs[b].durationSeconds
+                        ? xs[a].durationSeconds < xs[b].durationSeconds : dk[a].precedes(dk[b])
+                }
+            }
+            var sincePoll = 0
             for k in byKey.keys.sorted() {
                 guard let m = byKey[k], m.count > 1 else { continue }
-                for (pos, i) in m.enumerated() { window(m, from: pos, anchor: i) }
+                sincePoll += m.count
+                if sincePoll >= cancelPollStride {
+                    sincePoll = 0
+                    if Task.isCancelled { cancelled = true; return }
+                }
+                for part in yearPartitions(m) {
+                    for pos in part.list.indices { window(part.list, from: pos, year: part.year) }
+                }
             }
         }
 
-        private mutating func window(_ m: [Int], from pos: Int, anchor i: Int) {
-            var partners = 0
+        /// One list per concrete year (its members + the year-less ones),
+        /// plus the year-less ones alone; or the whole bucket when it has
+        /// at most one concrete year, or when re-walking the year-less
+        /// members per year would cost more than the split saves.
+        func yearPartitions(_ m: [Int]) -> [(list: [Int], year: Int32?)] {
+            let dk = p.dateKeys
+            var byYear: [Int32: [Int]] = [:]
+            var yearless: [Int] = []
+            for i in m {
+                let y = dk[i].year
+                if y < 0 { yearless.append(i) } else { byYear[y, default: []].append(i) }
+            }
+            guard byYear.count > 1, byYear.count * yearless.count <= 4 * m.count else { return [(m, nil)] }
+            var out: [(list: [Int], year: Int32?)] = []
+            for y in byYear.keys.sorted() {
+                out.append((merged(byYear[y] ?? [], yearless), y))
+            }
+            if yearless.count > 1 { out.append((yearless, nil)) }
+            return out
+        }
+
+        /// Merge two lists already in window order.
+        private func merged(_ a: [Int], _ b: [Int]) -> [Int] {
+            let xs = self.xs, dk = p.dateKeys
+            var out: [Int] = []
+            out.reserveCapacity(a.count + b.count)
+            var i = 0, j = 0
+            while i < a.count || j < b.count {
+                if j >= b.count { out.append(a[i]); i += 1; continue }
+                if i >= a.count { out.append(b[j]); j += 1; continue }
+                let x = a[i], y = b[j]
+                let xFirst = xs[x].durationSeconds != xs[y].durationSeconds
+                    ? xs[x].durationSeconds < xs[y].durationSeconds : !dk[y].precedes(dk[x])
+                if xFirst { out.append(x); i += 1 } else { out.append(y); j += 1 }
+            }
+            return out
+        }
+
+        /// `year` set: this is that year's list — a pair of two year-less
+        /// members belongs to the year-less list, not here.
+        private mutating func window(_ m: [Int], from pos: Int, year: Int32?) {
+            let i = m[pos]
+            let dk = p.dateKeys
+            var partners = 0, examined = 0
             var q = pos + 1
-            while q < m.count, partners < maxWindowPartners {
+            while q < m.count, partners < maxWindowPartners, examined < maxWindowExamined {
                 let j = m[q]
+                q += 1
                 let delta = xs[j].durationSeconds - xs[i].durationSeconds
                 if delta > FootageStem.maxDurationTolerance { break }
-                if delta <= max(p.tolerance[i], p.tolerance[j]), datesAgree(i, j, p) {
+                examined += 1
+                if let year, dk[i].year != year, dk[j].year != year { continue }
+                if delta <= max(p.tolerance[i], p.tolerance[j]), dk[i].compatible(with: dk[j]) {
                     let generic = isGeneric(i) || isGeneric(j)
                     add(j, i, generic ? .genericNameAndDuration : .nameAndDuration, frameDelta(i, j, p))
                     partners += 1
                 }
-                q += 1
             }
+            windowExamined += examined
         }
 
         /// Same name but one trailing counter + same length → Possible.
+        /// Bounded by candidates examined as well as linked (F5's pattern).
         mutating func trailingCounters() {
             let xs = self.xs
+            let dk = p.dateKeys
+            var sincePoll = 0
             for i in idx where xs[i].durationSeconds >= minDurationSeconds {
                 guard let base = p.analyses[i].counterBaseKey, let m = byKey[base] else { continue }
+                sincePoll += 1
+                if sincePoll >= cancelPollStride {
+                    sincePoll = 0
+                    if Task.isCancelled { cancelled = true; return }
+                }
                 let d = xs[i].durationSeconds
                 var lo = 0, hi = m.count
                 while lo < hi {  // first member with duration ≥ d − max tolerance
                     let mid = (lo + hi) / 2
                     if xs[m[mid]].durationSeconds < d - FootageStem.maxDurationTolerance { lo = mid + 1 } else { hi = mid }
                 }
-                var partners = 0
+                var partners = 0, examined = 0
                 var q = lo
-                while q < m.count, partners < 8, xs[m[q]].durationSeconds <= d + FootageStem.maxDurationTolerance {
+                while q < m.count, partners < maxCounterPartners, examined < maxCounterExamined,
+                      xs[m[q]].durationSeconds <= d + FootageStem.maxDurationTolerance {
                     let j = m[q]
-                    if j != i, lengthsMatch(i, j, p), datesAgree(i, j, p) {
+                    q += 1
+                    examined += 1
+                    if j != i, lengthsMatch(i, j, p), dk[i].compatible(with: dk[j]) {
                         add(i, j, .counterNameAndDuration, frameDelta(i, j, p))
                         partners += 1
                     }
-                    q += 1
                 }
             }
         }
@@ -531,6 +741,9 @@ enum FootageGrouping {
 
     static func components(_ p: Prepared, edges: [Edge], options: Options, stats: inout Stats) -> Components {
         var uf = UnionFind(count: p.inputs.count, cap: options.cap)
+        for i in p.inputs.indices where p.considered[i] && !p.dateKeys[i].isUnknown {
+            uf.dates[i] = [p.dateKeys[i]]
+        }
         // Cannot-link lists (the person's "not the same"), both directions.
         for (i, x) in p.inputs.enumerated() where p.considered[i] {
             for d in x.decisions where d.verdict == .notSame {
@@ -546,12 +759,15 @@ enum FootageGrouping {
             if a.reason != b.reason { return a.reason < b.reason }
             return a.a != b.a ? a.a < b.a : a.b < b.b
         }
-        for k in order { uf.offer(edges[k], stats: &stats) }
+        for (n, k) in order.enumerated() {
+            if n % cancelPollStride == 0, Task.isCancelled { stats.cancelled = true; break }
+            uf.offer(edges[k], stats: &stats)
+        }
         let root = (0..<p.inputs.count).map { uf.find($0) }
         return Components(root: root, size: uf.size, confidence: uf.confidence, acceptedByRoot: uf.accepted)
     }
 
-    /// Disjoint-set forest with the three documented merge rules.
+    /// Disjoint-set forest with the four documented merge rules.
     struct UnionFind {
         var parent: [Int]
         var size: [Int]
@@ -559,6 +775,8 @@ enum FootageGrouping {
         var confidence: [Int: FootageConfidence] = [:]
         var accepted: [Int: [Reason: Int]] = [:]
         var forbidden: [Int: [Int]] = [:]
+        /// Distinct known date prefixes per root (rule 4). Absent = none.
+        var dates: [Int: [DateKey]] = [:]
         let cap: Int
 
         init(count: Int, cap: Int) {
@@ -597,6 +815,12 @@ enum FootageGrouping {
                 stats.refusedByCap += 1
                 return
             }
+            // Rule 4 — a name link must agree with every date in BOTH groups
+            // (codex #1674 F2: no undated bridge between 1990 and 1994).
+            if e.reason.isNameBased, !datesAgree(ra, rb) {
+                stats.refusedByDate += 1
+                return
+            }
             if size[ra] < size[rb] { swap(&ra, &rb) }
             parent[rb] = ra
             size[ra] += size[rb]
@@ -610,6 +834,19 @@ enum FootageGrouping {
             accepted[rb] = nil
             stats.acceptedByReason[e.reason, default: 0] += 1
             if let fb = forbidden[rb] { forbidden[ra, default: []].append(contentsOf: fb); forbidden[rb] = nil }
+            if let db = dates[rb] {
+                var da = dates[ra] ?? []
+                for d in db where !da.contains(d) { da.append(d) }
+                dates[ra] = da
+                dates[rb] = nil
+            }
+        }
+
+        /// Every known date of one root is compatible with every one of the other.
+        func datesAgree(_ ra: Int, _ rb: Int) -> Bool {
+            guard let da = dates[ra], let db = dates[rb] else { return true }
+            for x in da { for y in db where !x.compatible(with: y) { return false } }
+            return true
         }
 
         /// The endpoint a Possible edge would attach as a leaf, or nil when
@@ -673,12 +910,15 @@ enum FootageGrouping {
         let oVerdict = verdicts[o] ?? none
         let groupID = m.map { xs[$0].id }.min { $0.uuidString < $1.uuidString } ?? xs[o].id
 
-        // Roles; byte-identical members share the most specific one.
+        // Roles; probable byte copies share the most specific one. (The
+        // "copy" role is a display label; the evidence line and the
+        // group's confidence say whether the bytes were proven.)
         var roles: [Int: FootageRole] = [:]
         for i in m {
             roles[i] = i == o ? .original : FootageOriginality.role(
                 of: xs[i], analysis: p.analyses[i], verdict: verdicts[i] ?? none,
-                original: xs[o], originalVerdict: oVerdict, identicalToOriginal: xs[i].sameBytes(as: xs[o]))
+                original: xs[o], originalVerdict: oVerdict,
+                identicalToOriginal: xs[i].probablySameBytes(as: xs[o]))
         }
         var byIdentity: [String: [Int]] = [:]
         for i in m where i != o && roles[i] != .copy && !xs[i].identityKey.isEmpty {
@@ -725,12 +965,6 @@ enum FootageGrouping {
         return stem.isEmpty ? nil : event + "|" + stem
     }
 
-    /// Date prefixes that both exist must be compatible ("xx" = unknown).
-    /// "1990-12-25 Christmas" and "1994-12-25 Christmas" are two Christmases.
-    static func datesAgree(_ i: Int, _ j: Int, _ p: Prepared) -> Bool {
-        ArchiveItemVersions.datesCompatible(p.analyses[i].datePrefix, p.analyses[j].datePrefix)
-    }
-
     static func folderKey(_ path: String) -> String {
         (path as NSString).deletingLastPathComponent.lowercased()
     }
@@ -770,9 +1004,10 @@ enum FootageGrouping {
         let detail = e.detail.isEmpty ? "" : " (\(e.detail))"
         switch e.reason {
         case .personSaidSame: return "you said: same footage as \(other)"
-        case .sameContentHash: return "same bytes as \(other)"
-        case .sameFixity: return "same bytes (whole-file SHA-256) as \(other)"
+        case .sameFixity: return "same bytes (whole-file SHA-256, checked current) as \(other)"
         case .sampledSignature: return "same sampled signature + size as \(other) (not yet verified)"
+        case .recordedDigest:
+            return "same whole-file SHA-256 as \(other) when last read (a file has changed or is offline since — not yet verified)"
         case .lineage:
             return side == .derived ? "made from \(other)\(detail)" : "\(other) was made from it\(detail)"
         case .combinedFromPair:

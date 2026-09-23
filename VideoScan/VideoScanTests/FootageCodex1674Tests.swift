@@ -144,6 +144,70 @@ struct Footage1674SampledNotIdenticalTests {
         #expect(b.footage?.confidence != .identical, "b's digest is stale — it proves nothing now")
         #expect(!(b.footage?.evidence ?? []).contains { $0.contains("same bytes") })
     }
+
+    @Test("two real byte-identical files with CURRENT digests → Identical, 'same bytes (… checked current)'")
+    func currentDigestsThroughJob() async throws {
+        let (m, sb) = try C4.model("f1current")
+        defer { sb.cleanup() }
+        let fa = sb.root.appendingPathComponent("test_cur_a.bin"), fb = sb.root.appendingPathComponent("test_cur_b.bin")
+        let body = Data(repeating: 3, count: 8192)
+        try body.write(to: fa)
+        try body.write(to: fb)
+        let digest = try C4.sha256(fa)
+        let a = C4.rec("Reunion.mov", dur: 0, size: 8192), b = C4.rec("Totally other.mov", dur: 0, size: 8192)
+        a.fullPath = fa.path
+        b.fullPath = fb.path
+        a.contentFixity = try #require(ContentFixity.captured(path: fa.path, digest: digest, byteCount: 8192))
+        b.contentFixity = try #require(ContentFixity.captured(path: fb.path, digest: digest, byteCount: 8192))
+        m.records = [a, b]
+        let job = await C4.run(m)
+        #expect(a.footage?.confidence == .identical && a.footage?.groupID == b.footage?.groupID)
+        #expect((a.footage?.evidence ?? []).contains { $0.contains("checked current") })
+        #expect(job.summary?.digestsChecked == 2 && job.summary?.digestsCurrent == 2)
+    }
+}
+
+// MARK: - DateKey ≡ ArchiveItemVersions.datesCompatible
+
+@Suite("codex #1674 — DateKey answers exactly as datesCompatible")
+struct Footage1674DateKeyTests {
+
+    static let prefixes: [String?] = [nil, "1990-12-25", "1990-xx-xx", "1990", "1990-12", "xxxx-12-25", "xxxx",
+                                      "1994-12-25", "1990-1x-25", "1990-12-2x", "1990-xx-25", "1990-11-25",
+                                      "xxxx-xx-26"]
+
+    @Test("every pair agrees")
+    func table() {
+        for a in Self.prefixes {
+            for b in Self.prefixes {
+                let want = ArchiveItemVersions.datesCompatible(a, b)
+                let got = FootageGrouping.DateKey(a).compatible(with: FootageGrouping.DateKey(b))
+                #expect(got == want, "\(a ?? "nil") vs \(b ?? "nil")")
+            }
+        }
+    }
+}
+
+// MARK: - F5 cancellation inside the linking phase
+
+@Suite("codex #1674 F5 — Stop is honoured INSIDE the linking phase")
+struct Footage1674CancellationTests {
+
+    @Test("a cancelled task stops the name window early and marks the result cancelled")
+    func cancelledEarly() async {
+        let xs = Footage1674WindowBoundTests.conflicting(sameYear: false)
+        let t = Task { () -> FootageGrouping.Stats in
+            var stats = FootageGrouping.Stats()
+            let p = FootageGrouping.prepare(xs, options: .init(), stats: &stats)
+            while !Task.isCancelled { await Task.yield() }
+            _ = FootageGrouping.edges(p, stats: &stats)
+            return stats
+        }
+        t.cancel()
+        let stats = await t.value
+        #expect(stats.cancelled)
+        #expect(stats.windowExamined == 0, "examined \(stats.windowExamined) after the Stop")
+    }
 }
 
 // MARK: - F2 (P2): component dates
@@ -243,7 +307,10 @@ struct Footage1674DecisionRevisionTests {
         first.resume()
         await first.task?.value
         await second.task?.value
+        await first.followUp?.task?.value
         #expect(a.footage == nil && b.footage == nil, "the rejected group was written by a stale run")
+        #expect(first.discardedStale)
+        #expect(first.followUp != nil, "the discarded run queued its own fresh run")
     }
 
     @Test("Not same during a pause with NO rerun request → the stale run queues one itself")
