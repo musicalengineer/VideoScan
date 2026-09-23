@@ -67,7 +67,45 @@ extension ArchiveAngelCandidate {
             duplicateGroupID: r.duplicateGroupID,
             contentKey: VideoScanModel.ledgerContentKey(for: r),
             deviceModel: r.originModel ?? "",
-            captureDate: r.embeddedCreationDate)
+            captureDate: r.embeddedCreationDate,
+            duplicateGroupCount: r.duplicateGroupCount,
+            duplicateDisposition: r.duplicateDisposition,
+            userDateConfidence: r.userDateConfidence,
+            originMake: r.originMake,
+            originEncoder: r.originEncoder)
+    }
+
+    /// The slice of a record the recommendation classifier reads — no
+    /// keeper policy, no readiness, no volume probe (Consolidation S3a:
+    /// the nudge's inputs, cheap enough for the Archive tab's memo over
+    /// every not-yet-archived record). Scorer-only facts keep their
+    /// neutral defaults; a record projected this way is never SCORED.
+    @MainActor
+    init(recommendationFactsOf r: VideoRecord) {
+        self.init(
+            id: r.id,
+            filename: r.filename,
+            fullPath: r.fullPath,
+            sizeBytes: r.sizeBytes,
+            durationSeconds: r.durationSeconds,
+            streamTypeRaw: r.streamTypeRaw,
+            isPlayable: r.isPlayable,
+            starRating: r.starRating,
+            mediaDisposition: r.mediaDisposition,
+            archiveStage: r.archiveStage,
+            junkScore: r.junkScore,
+            userDate: r.userDate,
+            inferredRecordDate: r.inferredRecordDate,
+            inferredDateConfidence: r.inferredDateConfidence,
+            videoCodec: r.videoCodec,
+            duplicateGroupID: r.duplicateGroupID,
+            deviceModel: r.originModel ?? "",
+            captureDate: r.embeddedCreationDate,
+            duplicateGroupCount: r.duplicateGroupCount,
+            duplicateDisposition: r.duplicateDisposition,
+            userDateConfidence: r.userDateConfidence,
+            originMake: r.originMake,
+            originEncoder: r.originEncoder)
     }
 
     /// The projection the job uses: keeper policy built ONCE by the

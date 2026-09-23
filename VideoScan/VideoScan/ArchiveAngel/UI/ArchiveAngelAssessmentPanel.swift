@@ -105,8 +105,8 @@ struct ArchiveAngelAssessmentPanel: View {
                 Button("Show in Catalog") { showCandidatesInCatalog() }
                     .controlSize(.small)
                     .fixedSize()
-                    .disabled(store.candidateCount == 0)
-                    .help("Focus the Catalog on every grade A and B record. Show ▸ Archive Candidates keeps the same view as a filter.")
+                    .disabled(angel.candidateIDs.isEmpty)
+                    .help("Focus the Catalog on every Ready, Needs a date and Worth a look record. Show ▸ Archive Candidates keeps the same view as a filter.")
                 Menu {
                     Button("Assess Now") { angel.assessNow() }
                         .disabled(sweep.status.isRunning || !angel.sweepEnabled)
@@ -128,19 +128,19 @@ struct ArchiveAngelAssessmentPanel: View {
                     .padding(.top, 2)
             }
         }
-        .task(id: store.computedAt) { rebuildTop() }
+        .task(id: angel.recommendations.revision) { rebuildTop() }
     }
 
     // MARK: Headline
 
-    /// "1 ready · 106 nearly · 394 candidates · updated 5 min ago" — the
-    /// Angel's own grades (A / B / C), nothing else.
+    /// "12 ready · 30 need a date · 10 prepared · assessed 5 min ago" —
+    /// the façade's ONE set of numbers (S3b), the same the nudge and the
+    /// catalog filter read. O(1): the counts are computed off the body.
     private var headline: String {
-        let g = store.gradeCounts()
-        let a = g[.a] ?? 0, b = g[.b] ?? 0, c = g[.c] ?? 0
+        let summary = angel.recommendations
         var s: String
-        if store.isLoaded {
-            s = "\(a.formatted()) ready · \(b.formatted()) nearly ready · \(c.formatted()) candidates"
+        if summary.isAssessed {
+            s = summary.headline
             if let at = store.computedAt {
                 let f = RelativeDateTimeFormatter()
                 f.unitsStyle = .abbreviated
@@ -159,7 +159,10 @@ struct ArchiveAngelAssessmentPanel: View {
     }
 
     private var statusHelp: String {
-        "Grades: A ready · B nearly ready · C candidate · D weak · X excluded by the floor. "
+        let r = angel.recommendations
+        return "Ready: passes the floors, you vouched (Important, ★★+, stage Ready/Master) or it grades A, and it has at least a year. "
+        + "Needs a date: the same, undated. Worth a look (\(r.count(.worthALook).formatted())): grade B nobody vouched. "
+        + "Prepared: waiting for your review. Rules: Archive Angel policy (policy.json). "
         + "Re-scored at launch, a minute after any catalog edit, and every 15 minutes while the app is open. "
         + sweep.status.line
     }
@@ -169,7 +172,7 @@ struct ArchiveAngelAssessmentPanel: View {
     private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
             if top.isEmpty {
-                Text(store.isLoaded ? "No grade A or B candidates yet." : "Waiting for the first assessment…")
+                Text(angel.recommendations.isAssessed ? "Nothing is recommended yet." : "Waiting for the first assessment…")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .padding(8)
@@ -203,8 +206,8 @@ struct ArchiveAngelAssessmentPanel: View {
                 .padding(.vertical, 5)
                 Divider()
             }
-            if store.candidateCount > top.count {
-                Text("Top \(top.count) of \(store.candidateCount.formatted()) — Show candidates in Catalog lists them all.")
+            if angel.candidateIDs.count > top.count {
+                Text("Top \(top.count) of \(angel.candidateIDs.count.formatted()) — Show in Catalog lists them all.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .padding(8)
@@ -214,14 +217,15 @@ struct ArchiveAngelAssessmentPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
-    /// Ranked A/B ids → rows. `rankedEligibleIDs` already sorts by score;
-    /// filter to candidates and stop at topCount before touching records.
+    /// The façade's ranked recommendations (Ready, then Needs a date, then
+    /// Worth a look — each by score) → rows; stop at topCount before
+    /// touching records.
     private func rebuildTop() {
         var rows: [Row] = []
         rows.reserveCapacity(Self.topCount)
-        for id in store.rankedEligibleIDs() {
+        for id in angel.recommendations.ranked {
             guard rows.count < Self.topCount else { break }
-            guard let ev = store.record(for: id), ev.isCandidate,
+            guard let ev = store.record(for: id),
                   let rec = model.record(forID: id) else { continue }
             rows.append(Row(id: id, filename: rec.filename, path: rec.fullPath,
                             durationSeconds: rec.durationSeconds, grade: ev.grade, score: ev.score,

@@ -31,18 +31,20 @@ enum ArchiveAngelGrade: String, Codable, Sendable, CaseIterable, Comparable {
         }
     }
 
-    /// Pure band from a score. Rejections are graded X by `from(record:)`.
+    /// Pure band from a score under the built-in bands (A ≥ 100, B ≥ 60,
+    /// C ≥ 25, D ≥ 1). Rejections are graded X by the record's init.
     static func from(score: Int) -> ArchiveAngelGrade {
-        switch score {
-        case 100...: return .a
-        case 60...99: return .b
-        case 25...59: return .c
-        case 1...24: return .d
-        default: return .x
-        }
+        AngelGradeBands.standard.grade(for: score)
     }
 
-    /// The default "Archive candidates" filter = A + B.
+    /// The same under the policy's bands (`grades` in policy.json, S3b).
+    static func from(score: Int, bands: AngelGradeBands) -> ArchiveAngelGrade {
+        bands.grade(for: score)
+    }
+
+    /// A + B — the "Archive candidates" set for a record the classifier
+    /// has not classified (an evidence file from before S3b, a test-built
+    /// record). A classified record answers with its class instead.
     static let candidateGrades: Set<ArchiveAngelGrade> = [.a, .b]
 
     static func < (lhs: ArchiveAngelGrade, rhs: ArchiveAngelGrade) -> Bool {
@@ -70,31 +72,61 @@ struct ArchiveAngelEvidenceRecord: Codable, Sendable, Equatable {
     /// that pass, so without this a never-proposed variant of skipped
     /// footage came back "New to you" from the cache. Rules v9.
     var familySkips: Double
+    /// Consolidation S3b — the recommendation classifier's answer, written
+    /// by the sweep (nil in a file from before S3b or a checkpoint):
+    /// the class, why (vouches, "grade A", "3 copies — this one"), the year
+    /// the date rule found, and how many copies collapsed onto this one.
+    var recommendation: ArchiveAngelRecommendationClass?
+    var reasons: [String]?
+    var year: Int?
+    var copies: Int?
+    /// A policy floor's own words when `rejection == .policyRule`.
+    var excludedBy: String?
 
     init(score: Int, lines: [ArchiveAngelEvidence], rejection: ArchiveAngelRejection?,
          useCount: Int, lastUsed: Date?, computedAt: Date, timesProposed: Int = 0,
-         familySkips: Double = 0) {
+         familySkips: Double = 0, bands: AngelGradeBands = .standard, excludedBy: String? = nil) {
         self.score = score
         self.lines = lines
         self.rejection = rejection
         self.useCount = useCount
         self.lastUsed = lastUsed
         self.computedAt = computedAt
-        self.grade = rejection == nil ? ArchiveAngelGrade.from(score: score) : .x
+        self.grade = rejection == nil ? bands.grade(for: score) : .x
         self.timesProposed = timesProposed
         self.familySkips = familySkips
+        self.excludedBy = excludedBy
     }
 
     /// Scored (cleared the floor) — any of A–D.
     var isEligible: Bool { rejection == nil }
-    /// In the default candidates filter (A + B).
-    var isCandidate: Bool { ArchiveAngelGrade.candidateGrades.contains(grade) }
 
-    /// "AAA grade B (72) — ★★ · Donna (confirmed) · played 14 times"
+    /// The class this record is in: the classifier's, or — for a record it
+    /// never saw — the grade's nearest (A → Ready, B → Worth a look,
+    /// C/D → Not now, X → Excluded).
+    var recommendationClass: ArchiveAngelRecommendationClass {
+        if let recommendation { return recommendation }
+        switch grade {
+        case .a: return .ready
+        case .b: return .worthALook
+        case .c, .d: return .notNow
+        case .x: return .excluded
+        }
+    }
+
+    /// In the "Archive candidates" set: Ready, Needs a date or Worth a look.
+    var isCandidate: Bool { recommendationClass.isRecommended }
+
+    /// "AAA grade B (72) — ★★ · Donna (confirmed) · played 14 times";
+    /// a classified record adds its class: "AAA grade A (112) · Ready — …".
     func summary(maxLines: Int = 3) -> String {
-        if let r = rejection { return "AAA excluded — " + r.rawValue }
+        if let r = rejection { return "AAA excluded — " + (excludedBy.map { r.rawValue + ": " + $0 } ?? r.rawValue) }
         let why = lines.prefix(maxLines).map(\.line).joined(separator: " · ")
-        let head = "AAA grade \(grade.rawValue) (\(score))"
+        var head = "AAA grade \(grade.rawValue) (\(score))"
+        if let recommendation { head += " · " + recommendation.label }
+        if recommendation == .anotherCopy || recommendation == .excluded, let first = reasons?.first {
+            return head + " — " + first
+        }
         return why.isEmpty ? head : head + " — " + why
     }
 }
@@ -179,6 +211,15 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     /// Where "policy changed" / load refusals are said (console + file log
     /// via the façade). Default: the unified log only.
     var log: (String) -> Void = { _ in }
+    /// Called after every replace / clear, AFTER the new file is in place
+    /// (a `$revision` sink runs in willSet and would read the old file).
+    /// The façade rebuilds its class counts here.
+    var didChange: () -> Void = {}
+    /// Set by `load()` when evidence.json on disk was scored under an OLDER
+    /// rules version (ignored, as always): the version and its grade
+    /// histogram, so the first sweep under the new rules can log old → new
+    /// once. Cleared by the sweep that logs it.
+    var olderRules: (rulesVersion: Int, grades: [ArchiveAngelGrade: Int])?
 
     init(directory: URL = ArchiveAngelEvidenceStore.defaultDirectory,
          policyFingerprint: String = AngelRecommendationPolicy.defaultFingerprint) {
@@ -198,6 +239,14 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     /// Everything that cleared the floor (A–D) — what the Angel ranks over.
     var eligibleCount: Int { file?.eligible ?? 0 }
     var consideredCount: Int { file?.considered ?? 0 }
+
+    /// Class histogram — one O(records) pass.
+    func classCounts() -> [ArchiveAngelRecommendationClass: Int] {
+        guard let f = file else { return [:] }
+        var out: [ArchiveAngelRecommendationClass: Int] = [:]
+        for r in f.records.values { out[r.recommendationClass, default: 0] += 1 }
+        return out
+    }
 
     /// Grade histogram — one O(records) pass, for the finish line.
     func gradeCounts() -> [ArchiveAngelGrade: Int] {
@@ -227,6 +276,33 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
             .map(\.key)
     }
 
+    /// The Prepare order (QA on S3): records whose class Prepare takes,
+    /// by (tier = index in `prepare`, score desc, id); an UNCLASSIFIED
+    /// eligible record (a pre-S3b or test-built file) takes the last tier,
+    /// so old evidence still prepares by score. `skipped` = eligible
+    /// records in classes Prepare does not take. One O(records) pass + sort.
+    func rankedPrepareIDs(_ prepare: [ArchiveAngelRecommendationClass]) -> (ids: [(UUID, Int)], skipped: Int) {
+        guard let f = file else { return ([], 0) }
+        var rows: [(UUID, Int, Int)] = []
+        var skipped = 0
+        for (id, r) in f.records where r.isEligible {
+            if prepare.isEmpty {
+                rows.append((id, 0, r.score))   // no class filter: score order
+            } else if let k = r.recommendation {
+                guard let tier = prepare.firstIndex(of: k) else { skipped += 1; continue }
+                rows.append((id, tier, r.score))
+            } else {
+                rows.append((id, prepare.count, r.score))
+            }
+        }
+        rows.sort { a, b in
+            if a.1 != b.1 { return a.1 < b.1 }
+            if a.2 != b.2 { return a.2 > b.2 }
+            return a.0.uuidString < b.0.uuidString
+        }
+        return (rows.map { ($0.0, $0.1) }, skipped)
+    }
+
     /// Floor rejections by reason — one O(records) pass, for the Angel
     /// plan's "rejected" summary when picks come from evidence.
     func rejectionCounts() -> [ArchiveAngelRejection: Int] {
@@ -243,6 +319,7 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
         file = newFile
         candidateIDs = Set(newFile.records.filter { $0.value.isCandidate }.map(\.key))
         revision &+= 1
+        didChange()
     }
 
     /// Forget everything (tests, "Rescore now" reset).
@@ -250,6 +327,7 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
         file = nil
         candidateIDs = []
         revision &+= 1
+        didChange()
     }
 
     /// Load from disk off-main and publish. A missing, malformed,
@@ -259,7 +337,13 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     @discardableResult
     func load() async -> Bool {
         let url = fileURL
-        guard let loaded = await Self.loadOffMain(url) else { return false }
+        guard let loaded = await Self.loadOffMain(url) else {
+            olderRules = await Self.olderRulesOffMain(url)
+            if let old = olderRules {
+                log("Archive Angel Assessment: evidence.json was scored under rules v\(old.rulesVersion) — re-scoring under v\(ArchiveAngelScorer.rulesVersion)")
+            }
+            return false
+        }
         if let why = Self.policyMismatch(stamped: loaded.policyFingerprint, current: policyFingerprint) {
             log("Archive Angel Assessment: evidence.json ignored — " + why + "; re-scoring")
             return false
@@ -295,6 +379,24 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
               f.storeVersion == ArchiveAngelEvidenceFile.currentVersion,
               f.rulesVersion == ArchiveAngelScorer.rulesVersion else { return nil }
         return f
+    }
+
+    /// The rules version and grade histogram of an evidence.json scored
+    /// under OLDER rules; nil when there is none (or it is current, or
+    /// unreadable). One decode, off-main.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func olderRulesOffMain(_ url: URL) async -> (rulesVersion: Int, grades: [ArchiveAngelGrade: Int])? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        guard let f = try? dec.decode(ArchiveAngelEvidenceFile.self, from: data),
+              f.storeVersion == ArchiveAngelEvidenceFile.currentVersion,
+              f.rulesVersion < ArchiveAngelScorer.rulesVersion, f.complete else { return nil }
+        var grades: [ArchiveAngelGrade: Int] = [:]
+        for r in f.records.values { grades[r.grade, default: 0] += 1 }
+        return (f.rulesVersion, grades)
     }
 
     #if compiler(>=6.2)

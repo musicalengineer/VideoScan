@@ -36,6 +36,10 @@ protocol AngelCatalog: AnyObject {
     func archiveAngelSweepCandidates() -> [ArchiveAngelCandidate]
     /// The shared "is this archived?" predicate (never a private subset).
     func isArchivedOrVersionOfArchived(_ rec: VideoRecord) -> Bool
+    /// LIVE: may this record be recommended right now? Not purged, set
+    /// aside or superseded, and nothing Promote would refuse permanently
+    /// (the 2026-09-16 "already promoted" guard). O(1) — index lookups.
+    func isRecommendableNow(_ rec: VideoRecord) -> Bool
     /// The keeper policy, built once per pass by the caller.
     func duplicateKeeperPolicy() -> DuplicateKeeperPolicy
     /// Console + videoscan.log — a user-visible line.
@@ -72,7 +76,7 @@ protocol AngelJobRunner: AnyObject {
     @discardableResult
     func startArchiveAngelByUser(count: Int, recordIDs: [UUID]?, makeLossless: Bool,
                                  model: VideoScanModel, bufferRoot: URL,
-                                 weights: ArchiveAngelWeights) -> ArchiveAngelJob
+                                 policy: AngelRecommendationPolicy) -> ArchiveAngelJob
 }
 
 /// The Master Archive: where Promote puts things.

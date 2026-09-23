@@ -9,14 +9,14 @@ extension MediaFileOperationsCenter {
     /// their companions in the buffer, stop for review. One active Angel
     /// at a time; a second request is parked as refused.
     ///
-    /// `bufferRoot` and `weights` come from the façade (its AngelEnvironment
+    /// `bufferRoot` and `policy` come from the façade (its AngelEnvironment
     /// and recommendation policy) — the center hard-codes neither.
     @discardableResult
     func startArchiveAngel(count: Int, makeLossless: Bool, model: VideoScanModel,
-                           bufferRoot: URL, weights: ArchiveAngelWeights) -> ArchiveAngelJob {
+                           bufferRoot: URL, policy: AngelRecommendationPolicy) -> ArchiveAngelJob {
         launchArchiveAngel(
             ArchiveAngelJob(model: model, center: self, count: count, makeLossless: makeLossless,
-                            bufferRoot: bufferRoot, weights: weights),
+                            bufferRoot: bufferRoot, policy: policy),
             model: model,
             plan: "consider \(count) candidates, lossless \(makeLossless ? "on" : "off")")
     }
@@ -25,10 +25,10 @@ extension MediaFileOperationsCenter {
     /// 2026-09-11): exactly these records, same batch/review flow.
     @discardableResult
     func startArchiveAngel(recordIDs: [UUID], makeLossless: Bool, model: VideoScanModel,
-                           bufferRoot: URL, weights: ArchiveAngelWeights) -> ArchiveAngelJob {
+                           bufferRoot: URL, policy: AngelRecommendationPolicy) -> ArchiveAngelJob {
         launchArchiveAngel(
             ArchiveAngelJob(model: model, center: self, count: recordIDs.count, makeLossless: makeLossless,
-                            bufferRoot: bufferRoot, explicitRecordIDs: recordIDs, weights: weights),
+                            bufferRoot: bufferRoot, explicitRecordIDs: recordIDs, policy: policy),
             model: model,
             plan: "prepare \(recordIDs.count) selected record(s), lossless \(makeLossless ? "on" : "off")")
     }

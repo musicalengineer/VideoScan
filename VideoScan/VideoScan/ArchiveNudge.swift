@@ -66,6 +66,12 @@ struct ArchiveNudge: Equatable, Sendable {
         }
     }
 
+    /// REFERENCE IMPLEMENTATION (Consolidation S3a, 2026-09-22): the Archive
+    /// tab now reads `ArchiveAngel.nudge(for:)` — the one recommendation
+    /// classifier under its legacy nudge rules — and this function stays
+    /// only so ArchiveAngelRecommendationsLegacyParityTests can prove the
+    /// two agree. S4 removes it with the Helper UI.
+    ///
     /// Build from the not-yet-archived assets. One entry per recording:
     /// copies of the same content (a duplicate group) collapse to the
     /// chosen keeper, or — when no keeper was chosen yet — to the

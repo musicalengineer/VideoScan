@@ -48,9 +48,10 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     /// a 40-second clip is refused with its reason, never silently — but
     /// nothing else is ranked or dropped.
     let explicitRecordIDs: [UUID]?
-    /// The recommendation policy's scorer table (the façade's
-    /// AngelRecommendationPolicy; `.standard` by default = today's rules).
-    let weights: ArchiveAngelWeights
+    /// The recommendation policy (the façade's AngelRecommendationPolicy;
+    /// `.builtIn` by default): its floors, signals, weights and tables.
+    let policy: AngelRecommendationPolicy
+    var weights: ArchiveAngelWeights { policy.weights }
 
     /// The batch plan — rewritten (and saved) after every step.
     @Published private(set) var plan: ArchiveAngelPlan
@@ -87,7 +88,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
     init(model: VideoScanModel, center: MediaFileOperationsCenter,
          count: Int, makeLossless: Bool, bufferRoot: URL,
-         explicitRecordIDs: [UUID]? = nil, weights: ArchiveAngelWeights = .standard) {
+         explicitRecordIDs: [UUID]? = nil, policy: AngelRecommendationPolicy = .builtIn) {
         self.model = model
         self.center = center
         let wanted = max(1, explicitRecordIDs?.count ?? count)
@@ -95,7 +96,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         self.makeLossless = makeLossless
         self.bufferRoot = bufferRoot
         self.explicitRecordIDs = explicitRecordIDs
-        self.weights = weights
+        self.policy = policy
         let dir = ArchiveAngelPlanStore.newBatchDir(bufferRoot: bufferRoot)
         self.plan = ArchiveAngelPlan(batchDir: dir, requestedCount: wanted, makeLossless: makeLossless)
     }
@@ -118,22 +119,20 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     /// Duration: an explicit pick is judged against
     /// `explicitPickMinimumDurationSeconds` (60 s), not the automatic
     /// 2-minute floor (Rick 2026-09-21) — raising the proposal floor must
-    /// not refuse a 90 s clip Rick chose himself. The Live Photo motion
-    /// and recent-phone-clip exclusions are off here for the same reason.
+    /// not refuse a 90 s clip Rick chose himself. Every floor the policy
+    /// marks `explicitPicks: false` (Live Photo motion, recent phone clips)
+    /// is off here for the same reason (`forExplicitPicks`).
     nonisolated static func explicitSelection(
         ids: [UUID], inFlight: Set<UUID>, now: Date = Date(),
-        weights base: ArchiveAngelWeights = .standard,
+        policy base: AngelRecommendationPolicy = .builtIn,
         project: (UUID) -> ArchiveAngelCandidate?
     ) -> ArchiveAngelSelection {
         var picks: [ArchiveAngelPick] = []
         var rejected: [ArchiveAngelRejection: Int] = [:]
         var seen = Set<UUID>()
-        var weights = base
-        weights.minimumDurationSeconds = weights.explicitPickMinimumDurationSeconds
         // Rick 2026-09-21: the Live Photo / recent-phone-clip rules keep
         // the Angel from PROPOSING such files; a hand-picked one goes.
-        weights.excludeLivePhotoMotion = false
-        weights.excludeRecentPhoneClips = false
+        let policy = base.forExplicitPicks()
         for id in ids where seen.insert(id).inserted {
             guard var candidate = project(id) else { continue }
             if inFlight.contains(id) { rejected[.inAnotherBatch, default: 0] += 1; continue }
@@ -141,7 +140,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             // fatigue) does not apply to an explicit pick.
             candidate.attention = .none
             candidate.familySkips = 0
-            switch ArchiveAngelScorer.verdict(candidate, weights: weights, now: now) {
+            switch ArchiveAngelScorer.verdict(candidate, policy: policy, now: now) {
             case .eligible(let score, let evidence):
                 picks.append(.init(candidate: candidate, score: score, evidence: evidence))
             case .rejected(let reason):
@@ -362,17 +361,23 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             ArchiveAngelPlanStore.inFlightRecordIDs(bufferRoot: root)
         }.value
         if !inFlight.isEmpty { note("Archive Angel: \(inFlight.count) record(s) already in a prepared batch — skipping them") }
+        // QA on S3: a record purged, set aside, superseded or already
+        // promoted since the evidence was written is never projected.
+        let live = { (id: UUID) -> VideoRecord? in
+            guard let r = model.record(forID: id), model.isRecommendableNow(r) else { return nil }
+            return r
+        }
         if let ids = explicitRecordIDs {
             selection = Self.explicitSelection(
-                ids: ids, inFlight: inFlight, weights: weights,
-                project: { id in model.record(forID: id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } })
+                ids: ids, inFlight: inFlight, policy: self.policy,
+                project: { id in live(id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } })
             consideredCount = ids.count
             note("Archive Angel: preparing \(selection.picks.count) of \(ids.count) selected record(s)")
         } else if let fromEvidence = Self.selectFromEvidence(
-            store: model.archiveAngel.store, count: requestedCount, now: Date(), weights: weights, excluding: inFlight,
+            store: model.archiveAngel.store, count: requestedCount, now: Date(), policy: self.policy, excluding: inFlight,
             attentionChangedAt: model.archiveAngel.attention.lastEventAt,
             attentionRevision: model.archiveAngel.attention.revision,
-            project: { id in model.record(forID: id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
+            project: { id in live(id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
             selection = fromEvidence.selection
             consideredCount = model.archiveAngel.store.consideredCount
             let age = max(0, Int(Date().timeIntervalSince(fromEvidence.computedAt) / 60))
@@ -394,11 +399,12 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                 }
             }
             if stopRequested { finishCancelled(); return }
-            ArchiveAngelScorer.markDerivatives(&candidates, weights: weights)   // T10 H3: same rule as the sweep
+            ArchiveAngelScorer.markDerivatives(&candidates, policy: self.policy)   // T10 H3: same rule as the sweep
             ArchiveAngelScorer.applyFamilyAttention(&candidates, weights: weights)   // Phase 1: same rule as the sweep
 
             // Spotlight play history for the eligible ones only, off-main.
-            let eligiblePaths = candidates.filter { ArchiveAngelScorer.hardFloor($0, weights: weights) == nil }.map(\.fullPath)
+            let rules = self.policy
+            let eligiblePaths = candidates.filter { ArchiveAngelScorer.hardFloor($0, policy: rules) == nil }.map(\.fullPath)
             subtitleText = "Reading play history for \(eligiblePaths.count) eligible files…"
             let readings = await Self.readPlayHistoryOffMain(paths: eligiblePaths)
             for i in candidates.indices {
@@ -410,7 +416,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             if stopRequested { finishCancelled(); return }
             let skipped = candidates.filter { inFlight.contains($0.id) }.count
             var walked = ArchiveAngelScorer.select(candidates.filter { !inFlight.contains($0.id) }, count: requestedCount,
-                                                   weights: weights)
+                                                   policy: rules, byClass: true)
             if skipped > 0 { walked.rejected[.inAnotherBatch, default: 0] += skipped }
             selection = walked
             consideredCount = candidates.count

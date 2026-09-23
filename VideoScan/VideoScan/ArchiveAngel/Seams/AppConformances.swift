@@ -26,6 +26,10 @@ extension VideoScanModel: AngelCatalog, AngelNavigator, AngelArchive, AngelLedge
 
     var isCatalogBusyForAngel: Bool { isScanning || isCombining }
 
+    func isRecommendableNow(_ rec: VideoRecord) -> Bool {
+        !rec.isPurged && !rec.isSetAside && !rec.isSuperseded && !promoteWouldRefusePermanently(rec)
+    }
+
     func angelLog(_ line: String) {
         log(line)
         appLog.write(line)
@@ -70,16 +74,16 @@ extension MediaFileOperationsCenter: AngelJobRunner {
     @discardableResult
     func startArchiveAngelByUser(count: Int, recordIDs: [UUID]?, makeLossless: Bool,
                                  model: VideoScanModel, bufferRoot: URL,
-                                 weights: ArchiveAngelWeights) -> ArchiveAngelJob {
+                                 policy: AngelRecommendationPolicy) -> ArchiveAngelJob {
         if let recordIDs {
             return self.startedByUser {
                 $0.startArchiveAngel(recordIDs: recordIDs, makeLossless: makeLossless, model: model,
-                                     bufferRoot: bufferRoot, weights: weights)
+                                     bufferRoot: bufferRoot, policy: policy)
             }
         }
         return self.startedByUser {
             $0.startArchiveAngel(count: count, makeLossless: makeLossless, model: model,
-                                 bufferRoot: bufferRoot, weights: weights)
+                                 bufferRoot: bufferRoot, policy: policy)
         }
     }
 }

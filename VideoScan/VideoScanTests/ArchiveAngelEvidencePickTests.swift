@@ -164,8 +164,9 @@ struct ArchiveAngelEvidencePickTests {
         let a = UUID(), b = UUID(), c = UUID()
         let s = store(records: [a: rec(150, at: now), b: rec(90, at: now), c: rec(40, at: now)], now: now)
         let pick = ArchiveAngelJob.selectFromEvidence(store: s, count: 2, now: now) { id in
-            // `a` was archived since the assessment.
-            ArchiveAngelCandidate(id: id, filename: "\(id).mov", archiveStage: id == a ? .masterAssigned : .none)
+            // `a` was archived since the assessment. (S3b: archiveStage
+            // Master is a VOTE, not "archived" — the Master Archive copy is.)
+            ArchiveAngelCandidate(id: id, filename: "\(id).mov", isOnMasterArchive: id == a)
         }
         #expect(pick?.selection.picks.map(\.candidate.id) == [b, c])
         #expect(pick?.selection.rejected[.alreadyArchived] == 1)

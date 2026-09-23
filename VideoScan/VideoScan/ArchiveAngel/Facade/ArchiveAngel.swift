@@ -72,6 +72,12 @@ final class ArchiveAngel: ObservableObject {
     /// default and never reads Rick's preference.
     @Published private(set) var sweepEnabled: Bool
     @Published private(set) var batches = Batches()
+    /// ONE set of numbers (S3b): the class counts every surface reads —
+    /// the nudge, the strip headline, the badge, the catalog filter.
+    /// Rebuilt by `rebuildRecommendations()` (ArchiveAngel+Recommendations).
+    @Published private(set) var recommendations = ArchiveAngelRecommendationSummary()
+    /// The pending live recount after a catalog change.
+    var recountTask: Task<Void, Never>?
     /// Refreshes are stamped when requested; a scan publishes only if it
     /// is newer than what is on screen (codex review 2026-09-20 #9).
     private var refreshGeneration = 0
@@ -112,6 +118,14 @@ final class ArchiveAngel: ObservableObject {
         self.policySource = loaded.source
         self.policyNotices = loaded.notices
         facadeLog.info("recommendation policy: \(loaded.source.rawValue, privacy: .public) “\(loaded.policy.name, privacy: .public)” schema \(loaded.policy.schemaVersion) fingerprint \(loaded.policy.fingerprint, privacy: .public)")
+        // After every evidence replace (the new file is in place): recount.
+        store.didChange = { [weak self] in self?.rebuildRecommendations() }
+    }
+
+    /// The one writer of `recommendations` (the rebuild lives in an
+    /// extension file; `private(set)` stays in this one).
+    func publishRecommendations(_ summary: ArchiveAngelRecommendationSummary) {
+        recommendations = summary
     }
 
     // MARK: Lifecycle
@@ -140,7 +154,7 @@ final class ArchiveAngel: ObservableObject {
                 guard let self else { return (0, nil) }
                 return (self.attention.revision, self.attention.lastEventAt)
             },
-            weights: policy.weights,
+            policy: policy,
             log: { [weak self] line in self?.catalog?.angelLog(line) }
         ), enabled: sweepEnabled)
 
@@ -162,7 +176,7 @@ final class ArchiveAngel: ObservableObject {
             // No sidecar, or one assessed under older rules: the grades
             // are needed now, not in 90 s — a pass is under 2 s.
             self.sweep.scheduleLaunchRun(delay: loaded ? nil : 15)
-            facadeLog.info("launch done — evidence \(loaded ? "loaded" : "missing or old rules", privacy: .public)")
+            facadeLog.info("launch done — evidence \(loaded ? "loaded" : "missing or old rules", privacy: .public); \(self.recommendations.headline, privacy: .public)")
         }
     }
 
@@ -177,6 +191,8 @@ final class ArchiveAngel: ObservableObject {
     /// every records change — O(1), never logged.
     func catalogChanged() {
         sweep.noteCatalogChanged()
+        // The classes follow the LIVE catalog now, the scores at the next sweep.
+        scheduleRecommendationsRecount()
     }
 
     /// Attention events were just ledgered: fold them into the memory and
@@ -189,21 +205,34 @@ final class ArchiveAngel: ObservableObject {
 
     // MARK: Recommend (O(1) reads — safe in a row or an inspector)
 
-    /// Grade A + B ids — the catalog's "Archive candidates" filter set.
-    var candidateIDs: Set<UUID> { store.candidateIDs }
+    /// Ready + Needs a date + Worth a look, not already in a prepared
+    /// batch — the catalog's "Archive Candidates" filter set (S3b: the
+    /// classes, the same numbers the Archive tab shows).
+    var candidateIDs: Set<UUID> { recommendations.candidateIDs }
 
     func evidence(for id: UUID) -> Evidence? { store.record(for: id) }
 
-    func badge(for id: UUID) -> Badge? { ArchiveAngelCatalogBadge.make(for: store.record(for: id)) }
-
-    /// Bumps on EVERY sweep result (rows re-render their badge on it).
-    var evidenceRevisionPublisher: AnyPublisher<Int, Never> {
-        store.$revision.removeDuplicates().dropFirst().eraseToAnyPublisher()
+    /// The record's class after the batches' overlay (nil = not assessed
+    /// and not in a batch).
+    func recommendationClass(for id: UUID) -> ArchiveAngelRecommendationClass? {
+        if recommendations.preparedIDs.contains(id) { return .prepared }
+        if recommendations.promotedIDs.contains(id) { return .promoted }
+        return store.record(for: id)?.recommendationClass
     }
 
-    /// Changes only when the A + B set does (the filter recomputes on it).
+    func badge(for id: UUID) -> Badge? {
+        ArchiveAngelCatalogBadge.make(for: store.record(for: id), prepared: recommendations.preparedIDs.contains(id))
+    }
+
+    /// Bumps on EVERY recount — every sweep result and every batch change
+    /// (rows re-render their badge on it).
+    var evidenceRevisionPublisher: AnyPublisher<Int, Never> {
+        $recommendations.map(\.revision).removeDuplicates().dropFirst().eraseToAnyPublisher()
+    }
+
+    /// Changes only when the candidate set does (the filter recomputes on it).
     var candidateIDsPublisher: AnyPublisher<Set<UUID>, Never> {
-        store.$candidateIDs.removeDuplicates().dropFirst().eraseToAnyPublisher()
+        $recommendations.map(\.candidateIDs).removeDuplicates().dropFirst().eraseToAnyPublisher()
     }
 
     /// "Assess Now": re-score every record (a few seconds).
@@ -264,7 +293,7 @@ final class ArchiveAngel: ObservableObject {
         }
         let job = runner.startArchiveAngelByUser(count: count, recordIDs: recordIDs, makeLossless: lossless,
                                                  model: model, bufferRoot: environment.bufferRoot,
-                                                 weights: policy.weights)
+                                                 policy: policy)
         switch job.state {
         case .failed(let message): note("Archive Angel: Prepare \(what) — refused: \(message)")
         default: note("Archive Angel: Prepare \(what) — started “\(job.title)” (\(job.state.isActive ? "running" : "finished"))")
@@ -332,7 +361,9 @@ final class ArchiveAngel: ObservableObject {
                     }
                 }
                 self.batches = Batches(ready: ready, unreadable: unreadable, hygiene: hygiene)
-                facadeLog.info("refreshBatches done — \(ready.count) ready batch(es), \(unreadable.count) unreadable, \(hygiene.batches.count) in the buffer (generation \(generation))")
+                // Prepared / promoted rows move between classes: recount.
+                self.rebuildRecommendations()
+                facadeLog.info("refreshBatches done — \(ready.count) ready batch(es), \(unreadable.count) unreadable, \(hygiene.batches.count) in the buffer (generation \(generation)); \(self.recommendations.headline, privacy: .public)")
             }
         }
     }

@@ -20,7 +20,7 @@ struct ArchiveAngelFloorTests {
 
     @Test("floor reasons", arguments: [
         (ArchiveAngelCandidate(streamTypeRaw: StreamType.audioOnly.rawValue), ArchiveAngelRejection.notVideo),
-        (ArchiveAngelCandidate(archiveStage: .masterAssigned), .alreadyArchived),
+        (ArchiveAngelCandidate(isOnMasterArchive: true), .alreadyArchived),
         (ArchiveAngelCandidate(isOnMasterArchive: true), .alreadyArchived),
         (ArchiveAngelCandidate(hasArchivedDuplicate: true), .duplicateArchived),
         (ArchiveAngelCandidate(isPlayable: "No"), .notPlayable),

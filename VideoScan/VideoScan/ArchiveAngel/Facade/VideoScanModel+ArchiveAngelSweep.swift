@@ -19,9 +19,9 @@ extension VideoScanModel {
         for r in active {
             out.append(ArchiveAngelCandidate.project(r, model: self, policy: policy))
         }
-        let weights = archiveAngel.policy.weights   // the recommendation policy (S2; default = today's table)
-        ArchiveAngelScorer.markDerivatives(&out, weights: weights)   // T10 H3: needs the whole set (one O(n) pass)
-        ArchiveAngelScorer.applyFamilyAttention(&out, weights: weights)   // Phase 1: a variant of a skipped file is not new
+        let rules = archiveAngel.policy   // the recommendation policy (S3b: floors, signals, tables as data)
+        ArchiveAngelScorer.markDerivatives(&out, policy: rules)   // T10 H3: needs the whole set (one O(n) pass)
+        ArchiveAngelScorer.applyFamilyAttention(&out, weights: rules.weights)   // Phase 1: a variant of a skipped file is not new
         return out
     }
 }
