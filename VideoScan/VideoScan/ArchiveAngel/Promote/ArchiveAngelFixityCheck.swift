@@ -6,7 +6,10 @@
 // of the app uses to let a stored digest stand in for a read. The Archive
 // Angel lends Rick's hand-entered facts across a digest match only when
 // BOTH the donor's and the target's fixity pass it: a donor rewritten at
-// the same size keeps its size but not its stamp.
+// the same size keeps its size but not its stamp. The same holds for the
+// archive-copy ↔ promotion-source link (codex #1665): the discovery walk
+// reaches linked records, so they are stat'ed here too, and the link
+// lends only between two fresh ends.
 //
 // Stat only — never a read of the file's contents (the fixity design:
 // stat-level identity, the digest stands in for the read). Runs OFF the
