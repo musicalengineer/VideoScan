@@ -413,3 +413,75 @@ struct ArchiveVolumeProtectionCodex1642UnknownPlacementTests {
         #expect(snap?.verdict(forPath: sb.archiveVolume.appendingPathComponent("MoviesExpansion/a.mov").path) == .onArchiveVolume)
     }
 }
+
+@Suite("Archive volume protection — codex #1650 unresolved scan-target aliases", .serialized)
+@MainActor
+struct ArchiveVolumeProtectionCodex1650PendingAliasTests {
+
+    private let ident = identityProbe(["/Users/test/CatalogAlias": ("/Volumes/FamilyArchive/MoviesExpansion", "/Volumes/FamilyArchive"),
+                                       "/Volumes/FamilyArchive": ("/Volumes/FamilyArchive", "/Volumes/FamilyArchive")])
+
+    private func designated() -> VideoScanModel {
+        let model = isolatedModel()
+        model.masterArchive = MasterArchiveDesignation(targetPath: "/Volumes/FamilyArchive",
+                                                       rootPath: "/Volumes/FamilyArchive/Breen_Family_Archive",
+                                                       volumeUUID: "UUID-ARCH")
+        return model
+    }
+
+    /// codex #1650: a FIRST scan-target alias, snapshot provisional, no
+    /// previous mapping — catalog removal must be a transient refusal.
+    @Test func firstScanTargetAliasWhileProvisionalIsATransientRefusal() async {
+        let model = designated()
+        model.scanTargets = [CatalogScanTarget(searchPath: "/Users/test/CatalogAlias")]
+        let row = record("/Users/test/CatalogAlias/a.mov")
+        model.records = [row]
+        #expect(model.isArchiveVolumeSnapshotFresh == false, "fixture: provisional")
+        #expect(model.archiveVolumeProtection()?.verdict(forPath: row.fullPath) == .unprovable)
+        #expect(model.purgeRecords(ids: [row.id]) == 0)
+        #expect(model.removeFromCatalog(recordIDs: [row.id]) == 0)
+        #expect(row.purgedAt == nil && row.setAsideReason == nil, "no catalog write")
+        let text = await consoleText(model)
+        #expect(text.contains("try again in a moment"), "\(text)")
+        // The build resolves it: an alias of FamilyArchive → refused for good.
+        await ArchiveVolumeProtection.$mountIdentityProbe.withValue(ident) {
+            await ArchiveVolumeProtection.$networkMountRootsProbe.withValue({ [] }) {
+                await ArchiveVolumeProtection.$mountedVolumeRootsProbe.withValue({ ["/Volumes/FamilyArchive"] }) {
+                    await MasterArchiveDesignation.$volumeUUIDProbe.withValue(uuidProbe(["/Volumes/FamilyArchive": "UUID-ARCH"])) {
+                        await model.refreshArchiveVolumeSnapshot(force: true)
+                        #expect(model.archiveVolumeProtection()?.verdict(forPath: row.fullPath) == .onArchiveVolume)
+                        #expect(model.purgeRecords(ids: [row.id]) == 0)
+                    }
+                }
+            }
+        }
+        #expect(row.purgedAt == nil)
+    }
+
+    /// A NEW scan target added after a build is pending until the next
+    /// build; once resolved as NOT an alias, its rows are removable.
+    @Test func newScanTargetAfterABuildIsPendingThenAllowedWhenNotAnAlias() async {
+        let model = designated()
+        model.scanTargets = [CatalogScanTarget(searchPath: "/Users/test/Movies")]
+        let old = record("/Users/test/Movies/a.mov")
+        let fresh = record("/Users/test/NewTarget/b.mov")
+        model.records = [old, fresh]
+        await ArchiveVolumeProtection.$mountIdentityProbe.withValue(ident) {
+            await ArchiveVolumeProtection.$networkMountRootsProbe.withValue({ [] }) {
+                await ArchiveVolumeProtection.$mountedVolumeRootsProbe.withValue({ ["/Volumes/FamilyArchive"] }) {
+                    await MasterArchiveDesignation.$volumeUUIDProbe.withValue(uuidProbe(["/Volumes/FamilyArchive": "UUID-ARCH"])) {
+                        await model.refreshArchiveVolumeSnapshot(force: true)
+                        model.scanTargets.append(CatalogScanTarget(searchPath: "/Users/test/NewTarget"))
+                        let p = model.archiveVolumeProtection()
+                        #expect(p?.verdict(forPath: fresh.fullPath) == .unprovable, "the new target is not resolved yet")
+                        #expect(p?.verdict(forPath: old.fullPath) == .clear, "an already-resolved target is not held up")
+                        #expect(model.purgeRecords(ids: [fresh.id]) == 0)
+                        await model.refreshArchiveVolumeSnapshot(force: true)
+                        #expect(model.purgeRecords(ids: [fresh.id]) == 1, "resolved: not an alias → removable")
+                    }
+                }
+            }
+        }
+        #expect(fresh.purgedAt != nil)
+    }
+}

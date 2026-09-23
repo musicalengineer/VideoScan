@@ -123,6 +123,11 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
     /// Built without disk access while the real snapshot is (re)built.
     /// Its "unprovable" is TRANSIENT.
     let isProvisional: Bool
+    /// Provisional only: lower-cased scan-target roots NO build has
+    /// resolved yet (a first / newly added scan target). Any one could be a
+    /// symlink into FamilyArchive, so paths under them are unprovable until
+    /// the build says (codex #1650). Always empty in a built snapshot.
+    var pendingAliasRoots: [String] = []
 
     // MARK: Seams
 
@@ -331,7 +336,23 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
     /// provisional snapshot is exact instead of `.unknown`.
     static func provisional(designation d: MasterArchiveDesignation?,
                             previous: ArchiveVolumeProtection? = nil,
-                            provenBootFolder: Bool = false) -> ArchiveVolumeProtection? {
+                            provenBootFolder: Bool = false,
+                            pendingAliasCandidates: [String] = []) -> ArchiveVolumeProtection? {
+        guard var snap = provisionalIgnoringPending(designation: d, previous: previous,
+                                                    provenBootFolder: provenBootFolder) else { return nil }
+        let pending = pendingAliasCandidates.map { canonical($0).lowercased() }.filter { $0.count > 1 }
+        guard !pending.isEmpty else { return snap }
+        snap = ArchiveVolumeProtection(label: snap.label, placement: snap.placement, archiveRoots: snap.archiveRoots,
+                                       aliasRoots: snap.aliasRoots, protectedFolders: snap.protectedFolders,
+                                       expectedUUID: snap.expectedUUID, isResolved: snap.isResolved,
+                                       provenOtherRoots: snap.provenOtherRoots, isProvisional: true,
+                                       pendingAliasRoots: pending)
+        return snap
+    }
+
+    private static func provisionalIgnoringPending(designation d: MasterArchiveDesignation?,
+                                                   previous: ArchiveVolumeProtection?,
+                                                   provenBootFolder: Bool) -> ArchiveVolumeProtection? {
         guard let d else { return nil }
         if let previous {
             let unresolve = previous.placement != .bootFolder && previous.expectedUUID != nil
@@ -392,6 +413,9 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
         }
         for alias in aliasRoots where lower.hasPrefix(alias) {
             if Self.isInsideLexically(path: lower, root: alias) { return .onArchiveVolume }
+        }
+        for pending in pendingAliasRoots where lower.hasPrefix(pending) {
+            if Self.isInsideLexically(path: lower, root: pending) { return .unprovable }
         }
         if placement == .bootFolder { return .clear }
         // The boot disk is never an external archive; a custom mount that

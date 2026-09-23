@@ -73,9 +73,14 @@ extension VideoScanModel {
         scheduleArchiveVolumeSnapshotRebuild()
         // The last build for THIS designation keeps its proven spellings
         // protected while the new one is built.
+        // Scan targets no build has resolved yet are pending (codex #1650):
+        // all of them before the first build, only the new ones after.
+        let sameDesignation = cache.builtFor == d
+        let resolved = sameDesignation ? Set(cache.builtForCandidates) : []
         return ArchiveVolumeProtection.provisional(designation: d,
-                                                   previous: cache.builtFor == d ? cache.snapshot : nil,
-                                                   provenBootFolder: cache.provenBootFolder == d)
+                                                   previous: sameDesignation ? cache.snapshot : nil,
+                                                   provenBootFolder: cache.provenBootFolder == d,
+                                                   pendingAliasCandidates: archiveAliasCandidates.filter { !resolved.contains($0) })
     }
 
     /// True when `archiveVolumeProtection()` is returning a real (built)
