@@ -402,6 +402,10 @@ enum ArchiveAngelRecommendations {
         var copies: Int = 1
         /// The Angel's score when floors are used (orders the lists).
         var score: Int = 0
+        /// The recording key this record was collapsed under with other
+        /// copies (every member of a group of 2+; nil otherwise) — Prepare
+        /// reclassifies the group live from it (codex #1643 A4).
+        var copyKey: String?
     }
 
     /// A row of a recommended list.
@@ -458,7 +462,9 @@ enum ArchiveAngelRecommendations {
                     members, prefer: rules.copies.prefer,
                     isKeeper: { candidates[$0].duplicateDisposition == .keep },
                     isBetter: byOrder) else { continue }
-            for m in members where m != kept {
+            for m in members {
+                verdicts[m].copyKey = k
+                guard m != kept else { continue }
                 verdicts[m].kind = .anotherCopy
                 verdicts[m].reasons = ["Another copy of \(candidates[kept].filename) is the one recommended"]
             }
@@ -500,10 +506,15 @@ enum ArchiveAngelRecommendations {
         }
         // 0. Safety floors are never overridden (QA on S3): a gone,
         // archived, offline or non-video file is Excluded even when the
-        // rules ignore the Angel's floors.
-        if let rejection = ev?.rejection, ArchiveAngelRejection.safetyReasons.contains(rejection) {
+        // rules ignore the Angel's floors. codex #1643 A2: read from the
+        // scorer's independent SAFETY pass (`safetyRejection`) — the first
+        // recorded rejection may be an optional floor that fired earlier in
+        // policy order ("Too short" on an offline tape). Evidence from
+        // before that pass falls back to the recorded rejection.
+        if let ev, let safety = ev.safetyRejection
+            ?? ev.rejection.flatMap({ ArchiveAngelRejection.safetyReasons.contains($0) ? $0 : nil }) {
             v.kind = .excluded
-            v.reasons = [rejection.rawValue]
+            v.reasons = [safety.rawValue]
             return v
         }
         // 1. The Angel's floors.

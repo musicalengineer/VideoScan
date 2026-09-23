@@ -13,7 +13,8 @@
 //              because they act on the total so far)
 //   grades     the A/B/C/D score bands
 //   tables     originality ranks, delivery codecs, family-origin folders,
-//              app-cache folders + name pattern, the derivative index cap
+//              app-cache folders + stem names/globs (no regex — codex
+//              #1643), the derivative index cap
 //   recommend  the classes (Ready / Needs a date / Worth a look), vouches,
 //              the date rule, the copy chooser
 //
@@ -61,6 +62,8 @@ struct AngelGradeBands: Codable, Sendable, Equatable {
 // MARK: - Tables
 
 /// The lookup tables the built-in floors, signals and the batch order read.
+/// No field is a regular expression (codex #1643): the app-cache stem rule
+/// is AngelStemMatcher's closed, linear-time language.
 struct AngelPolicyTables: Codable, Sendable, Equatable {
     /// "Most original" rank of an ffprobe codec name, 0 = most original
     /// (T10 H2, Rick 2026-09-11) — a tie-break only, never points.
@@ -74,43 +77,53 @@ struct AngelPolicyTables: Codable, Sendable, Equatable {
     var familyOriginFolders: [String]
     /// Folder names an editing app writes for itself (whole components).
     var appCacheFolders: [String]
-    /// A file stem that is a bare tool noun ("Cache-30", "render_7").
-    var appCacheNamePattern: String
+    /// A file stem that is a bare tool noun ("Cache", "render") —
+    /// compared whole, case-insensitively.
+    var appCacheStemNames: [String]
+    /// true: a noun may carry a number — one optional separator (space,
+    /// `_`, `-`) then digits ("Cache-30", "render_7", "tmp12").
+    var appCacheStemNumbered: Bool
+    /// Extra whole-stem patterns: literal text, `*` = any run ("render*",
+    /// "*_proxy", "pre*post", "*cache*"). At most one `*`, or two when
+    /// they are the first and last character. Default: none.
+    var appCacheStemGlobs: [String]
     /// T10 H3: originals indexed per key when relating exports to their
     /// originals — bounds the pass at 100k same-named clips.
     var maxOriginalsPerKey: Int
 
-    // Derived once (lower-cased lookups, the compiled pattern). Not
+    // Derived once (lower-cased lookups, the compiled stem matcher). Not
     // encoded, not compared (`==` below reads only the fields above).
     private(set) var originalityLower: [String: Int] = [:]
     private(set) var deliveryCodecSet: Set<String> = []
     private(set) var appCacheFolderSet: Set<String> = []
     private(set) var familyOriginLower: [String] = []
-    /// nil only for a pattern that does not compile (validation refuses
-    /// such a policy). NSRegularExpression is immutable and Sendable.
-    private(set) var appCacheRegex: NSRegularExpression?
+    /// Linear time, no backtracking (AngelStemMatcher).
+    private(set) var appCacheStemMatcher = AngelStemMatcher(names: [], numbered: false, globs: [])
 
     static func == (a: AngelPolicyTables, b: AngelPolicyTables) -> Bool {
         a.originality == b.originality && a.originalityUnknown == b.originalityUnknown
             && a.deliveryCodecs == b.deliveryCodecs && a.familyOriginFolders == b.familyOriginFolders
-            && a.appCacheFolders == b.appCacheFolders && a.appCacheNamePattern == b.appCacheNamePattern
+            && a.appCacheFolders == b.appCacheFolders && a.appCacheStemNames == b.appCacheStemNames
+            && a.appCacheStemNumbered == b.appCacheStemNumbered && a.appCacheStemGlobs == b.appCacheStemGlobs
             && a.maxOriginalsPerKey == b.maxOriginalsPerKey
     }
 
     private enum CodingKeys: String, CodingKey {
         case originality, originalityUnknown, deliveryCodecs, familyOriginFolders, appCacheFolders
-        case appCacheNamePattern, maxOriginalsPerKey
+        case appCacheStemNames, appCacheStemNumbered, appCacheStemGlobs, maxOriginalsPerKey
     }
 
     init(originality: [String: Int], originalityUnknown: Int, deliveryCodecs: [String],
-         familyOriginFolders: [String], appCacheFolders: [String], appCacheNamePattern: String,
-         maxOriginalsPerKey: Int) {
+         familyOriginFolders: [String], appCacheFolders: [String], appCacheStemNames: [String],
+         appCacheStemNumbered: Bool, appCacheStemGlobs: [String], maxOriginalsPerKey: Int) {
         self.originality = originality
         self.originalityUnknown = originalityUnknown
         self.deliveryCodecs = deliveryCodecs
         self.familyOriginFolders = familyOriginFolders
         self.appCacheFolders = appCacheFolders
-        self.appCacheNamePattern = appCacheNamePattern
+        self.appCacheStemNames = appCacheStemNames
+        self.appCacheStemNumbered = appCacheStemNumbered
+        self.appCacheStemGlobs = appCacheStemGlobs
         self.maxOriginalsPerKey = maxOriginalsPerKey
         derive()
     }
@@ -122,7 +135,9 @@ struct AngelPolicyTables: Codable, Sendable, Equatable {
         deliveryCodecs = try c.decode([String].self, forKey: .deliveryCodecs)
         familyOriginFolders = try c.decode([String].self, forKey: .familyOriginFolders)
         appCacheFolders = try c.decode([String].self, forKey: .appCacheFolders)
-        appCacheNamePattern = try c.decode(String.self, forKey: .appCacheNamePattern)
+        appCacheStemNames = try c.decode([String].self, forKey: .appCacheStemNames)
+        appCacheStemNumbered = try c.decode(Bool.self, forKey: .appCacheStemNumbered)
+        appCacheStemGlobs = try c.decode([String].self, forKey: .appCacheStemGlobs)
         maxOriginalsPerKey = try c.decode(Int.self, forKey: .maxOriginalsPerKey)
         derive()
     }
@@ -134,7 +149,9 @@ struct AngelPolicyTables: Codable, Sendable, Equatable {
         try c.encode(deliveryCodecs, forKey: .deliveryCodecs)
         try c.encode(familyOriginFolders, forKey: .familyOriginFolders)
         try c.encode(appCacheFolders, forKey: .appCacheFolders)
-        try c.encode(appCacheNamePattern, forKey: .appCacheNamePattern)
+        try c.encode(appCacheStemNames, forKey: .appCacheStemNames)
+        try c.encode(appCacheStemNumbered, forKey: .appCacheStemNumbered)
+        try c.encode(appCacheStemGlobs, forKey: .appCacheStemGlobs)
         try c.encode(maxOriginalsPerKey, forKey: .maxOriginalsPerKey)
     }
 
@@ -143,12 +160,13 @@ struct AngelPolicyTables: Codable, Sendable, Equatable {
         deliveryCodecSet = Set(deliveryCodecs.map { $0.lowercased() })
         appCacheFolderSet = Set(appCacheFolders.map { $0.lowercased() })
         familyOriginLower = familyOriginFolders.map { $0.lowercased() }
-        appCacheRegex = appCacheNamePattern.count <= Self.maxPatternLength
-            ? try? NSRegularExpression(pattern: appCacheNamePattern, options: [.caseInsensitive]) : nil
+        // A glob validation refuses compiles to nothing here; such a table
+        // never runs — validation refuses the whole policy.
+        appCacheStemMatcher = AngelStemMatcher(names: appCacheStemNames, numbered: appCacheStemNumbered,
+                                               globs: appCacheStemGlobs)
     }
 
     static let maxEntries = 500
-    static let maxPatternLength = 300
 
     var problems: [String] {
         var out: [String] = []
@@ -162,35 +180,8 @@ struct AngelPolicyTables: Codable, Sendable, Equatable {
         }
         if !(0...100).contains(originalityUnknown) { out.append("tables.originalityUnknown = \(originalityUnknown) — must be 0…100") }
         if !(1...64).contains(maxOriginalsPerKey) { out.append("tables.maxOriginalsPerKey = \(maxOriginalsPerKey) — must be 1…64") }
-        if appCacheNamePattern.count > Self.maxPatternLength {
-            out.append("tables.appCacheNamePattern is longer than \(Self.maxPatternLength) characters")
-        } else if let why = Self.patternRisk(appCacheNamePattern) {
-            out.append("tables.appCacheNamePattern " + why)
-        }
+        out += AngelStemMatcher.problems(names: appCacheStemNames, globs: appCacheStemGlobs)
         return out
-    }
-
-    /// Why a user pattern must not run, or nil (QA on S3: ReDoS). It runs
-    /// on the main actor once per record, so: (1) no REPEATED group — a
-    /// group followed by `+`, `*` or `{` (nested quantifiers, `(a|aa)*`)
-    /// is where catastrophic backtracking lives; `(…)?` is fine; (2) it
-    /// must compile; (3) a probe against a worst-case stem stays under
-    /// 20 ms. Pure over the pattern.
-    static func patternRisk(_ pattern: String) -> String? {
-        // An unescaped `)` followed by a repetition.
-        if pattern.range(of: #"(?<!\\)\)[+*{]"#, options: .regularExpression) != nil {
-            return "repeats a group (`(…)+`, `(…)*`, `(…){n,}`) — refused: that shape can hang the sweep (ReDoS)"
-        }
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return "is not a valid regular expression"
-        }
-        let probe = String(repeating: "a1_-", count: 64) + "!"
-        let start = Date()
-        _ = re.firstMatch(in: probe, range: NSRange(probe.startIndex..., in: probe))
-        if Date().timeIntervalSince(start) > 0.02 {
-            return "is too slow on a 257-character name — refused (ReDoS guard)"
-        }
-        return nil
     }
 
     static let standard = AngelPolicyTables(
@@ -218,7 +209,11 @@ struct AngelPolicyTables: Codable, Sendable, Equatable {
             "render files", "transcoded media", "proxy media", "analysis files", "thumbnail media",
             "cache", "caches", "renders", "proxies", "thumbnails", "temp", "tmp", ".cache", ".thumbnails",
         ],
-        appCacheNamePattern: #"^(cache|render|proxy|proxies|preview|thumb|thumbnail|temp|tmp)([ _-]?\d+)?$"#,
+        // Exactly the retired `^(cache|render|proxy|proxies|preview|thumb|
+        // thumbnail|temp|tmp)([ _-]?\d+)?$` (AngelStemMatcherTests: parity).
+        appCacheStemNames: ["cache", "render", "proxy", "proxies", "preview", "thumb", "thumbnail", "temp", "tmp"],
+        appCacheStemNumbered: true,
+        appCacheStemGlobs: [],
         maxOriginalsPerKey: 8)
 }
 
@@ -234,7 +229,9 @@ enum AngelPolicyDefaults {
     /// changes its kind or reason — or drops it — is REFUSED whole.
     static let safetyFloorIDs: [String] = ["notVideo", "onMasterArchive", "archivedCopy", "fileGone", "volumeOffline"]
 
-    static var safetyFloors: [AngelRule] { floors.filter { safetyFloorIDs.contains($0.id) } }
+    /// The canonical safety floors, in policy order. A `let` (computed
+    /// once): the scorer's independent safety pass reads it per record.
+    static let safetyFloors: [AngelRule] = floors.filter { safetyFloorIDs.contains($0.id) }
 
     /// Problems with the safety floors in `floors`; empty = all intact.
     static func safetyProblems(in floors: [AngelRule]) -> [String] {

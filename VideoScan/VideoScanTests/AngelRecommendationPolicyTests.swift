@@ -196,6 +196,7 @@ struct ArchiveAngelRecommendationPolicyTests {
         defer { try? FileManager.default.removeItem(at: sandbox) }
 
         let plain = ArchiveAngel(model: model, environment: environment(root: dir, policy: dir.appendingPathComponent("absent.json")))
+        await plain.policyLoaded()   // codex #1643: the policy loads off the main actor
         #expect(plain.policySource == .bundled)
         plain.launch()
         await plain.sweep.runAndWait(reason: "test")
@@ -208,6 +209,7 @@ struct ArchiveAngelRecommendationPolicyTests {
         let url = dir.appendingPathComponent("policy.json")
         try p.encodedJSON().write(to: url)
         let custom = ArchiveAngel(model: model, environment: environment(root: dir, policy: url))
+        await custom.policyLoaded()
         #expect(custom.policySource == .userOverride)
         custom.launch()
         await custom.sweep.runAndWait(reason: "test")
@@ -397,7 +399,7 @@ struct ArchiveAngelRecommendationPolicyTests {
         (#"{"schemaVersion": 2, "floors": [{"id": "x", "kind": "match", "when": [{"field": "lenght", "op": "<", "value": 5}]}]}"#, "unknown field \"lenght\""),
         (#"{"schemaVersion": 2, "signals": [{"id": "x", "kind": "tooShort"}]}"#, "does not belong in signals"),
         (#"{"schemaVersion": 2, "floors": [{"id": "x", "kind": "match", "whne": []}]}"#, "needs at least one condition"),
-        (#"{"schemaVersion": 2, "tables": {"appCacheNamePattern": "(unclosed"}}"#, "not a valid regular expression"),
+        (#"{"schemaVersion": 2, "tables": {"appCacheNamePattern": "(unclosed"}}"#, "is a regular expression — no longer read"),
         (#"{"schemaVersion": 2, "grades": {"a": 50, "b": 60}}"#, "grades must rise"),
         (#"{"schemaVersion": 2, "recommend": {"classes": [{"class": "maybe"}]}}"#, "unknown class"),
         (#"{"schemaVersion": 2, "recommend": {"classes": [{"class": "ready", "when": [{"field": "grade", "op": "==", "value": "E"}]}]}}"#, "is not a grade"),
@@ -500,6 +502,7 @@ struct ArchiveAngelRecommendationPolicyTests {
         let (model, _, sandbox) = try ninetySecondClipModel(dir)
         defer { try? FileManager.default.removeItem(at: sandbox) }
         let angel = ArchiveAngel(model: model, environment: environment(root: dir, policy: bad))
+        await angel.policyLoaded()
         #expect(angel.policySource == .bundled)
         #expect(angel.policy == .builtIn)
         angel.launch()
