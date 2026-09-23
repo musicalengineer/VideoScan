@@ -223,7 +223,7 @@ struct ArchiveAngelCodex1673Tests {
 
     @Test("SENSOR: every lending edge kind is blocked by a non-fresh endpoint (declared fresh set, pure lender logic)")
     func everyEdgeNeedsFreshEnds() {
-        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 10, mtimeNs: 0, ctimeNs: 1)
+        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 10, mtimeNs: 0, ctimeNs: 1, volumeUUID: "0978904A-3D3C-4546-BC51-5A53F32BCB23")   // usable: ctime + volume
         func rec(_ name: String, digest: String) -> VideoRecord {
             let r = MasterArchiveTestSupport.makeRecord(path: "/Volumes/T/\(name)")
             r.sizeBytes = 10; r.durationSeconds = 600

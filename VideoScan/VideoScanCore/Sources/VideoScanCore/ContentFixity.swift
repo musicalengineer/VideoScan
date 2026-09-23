@@ -6,109 +6,95 @@
 // `ArchiveFixity` is the Master Archive's read-back proof and lives only on
 // archive copies. This is the general one: whenever the app has hashed a
 // whole file — a keeper during duplicate verification, an archive copy at
-// audit — the digest is kept HERE together with a stat stamp of the file
-// the digest describes. A later stat that reproduces the stamp means the
-// bytes have not been rewritten or replaced, so the stored digest may
-// stand in for a fresh read of that side.
+// audit, a Bind Fixity to Volume pass — the digest is kept HERE together
+// with a stamp of the file the digest describes. A later stamp that
+// reproduces it means the bytes have not been rewritten or replaced, so
+// the stored digest may stand in for a fresh read of that side.
 //
 // THE STAMP MUST INCLUDE ctime (QA on 462b034b, MAJOR 1). Device, inode,
 // size and mtime are all reproducible by ordinary tools — `cp -p`,
 // `rsync -t --inplace`, `touch -r` — after an in-place rewrite of the SAME
-// size (DV tapes of equal length have identical byte counts). A stale
-// digest would then vouch for bytes the keeper no longer holds, and a
-// duplicate equal to the OLD bytes — the last copy of them — would be
-// deleted. `st_ctimespec` is set by the kernel on every inode change
-// (data write, rename, chmod, utimes) and cannot be set by user tools, so
-// a verification-grade match requires it. Fixities written before the
-// ctime field existed decode with `unknownCtime` and are treated as
-// absent: one keeper re-read, then a proper stamp.
+// size. `st_ctimespec` is set by the kernel on every inode change and
+// cannot be set by user tools, so a verification-grade match requires it
+// (full nanoseconds).
 //
-// VOLUME IDENTITY (2026-09-23). The stamp used to name its volume by
-// `st_dev`, which macOS reassigns on every mount — after a replug or a
-// reboot 1,429 of Rick's 1,493 stamps failed ONLY on the device number,
-// so "Identical" was unreachable in Find Similar Footage, Archive Angel
-// lent nothing, and Delete Duplicates re-read keepers and siblings it had
-// already proven. Device numbers are also REUSED across different disks
-// (measured: 16777252 was LaCieWorkspace's, is now Projects'). The design:
+// THE STAMP MUST NAME ITS VOLUME PERSISTENTLY (2026-09-23; codex #1707).
+// `st_dev` is handed out per mount: the same disk gets a new one after a
+// replug or reboot (1,429 of Rick's 1,493 stamps failed only on it), and a
+// number one disk gave up is later handed to ANOTHER disk (measured:
+// 16777252 was LaCieWorkspace's, is now Projects'). So:
 //
-//   identity  = volume UUID + inode + size + mtime + ctime
-//               (`volumeUUID`, ADDITIVE — old catalogs decode unchanged)
-//   st_dev    = kept, but only the legacy same-mount fast path for stamps
-//               that carry no UUID; it never overrides a UUID.
+//   PERSISTENT DIGEST POLICY (`describesFileNow`, `isUsableForVerification`)
+//     identity = volume UUID + inode + size + mtime + ctime (+ sha256,
+//                byteCount == size). The volume UUID is the persistent
+//                one (`VolumeIdentity`: getattrlist ATTR_VOL_UUID ≡
+//                NSURL volumeUUIDStringKey — never volumeIdentifierKey,
+//                which is per-mount). st_dev is not consulted at all.
+//     A stamp WITHOUT a volume UUID — every stamp written before this
+//     change, and any stamp of a volume that reports none — is NOT usable:
+//     "absent" to the gate, exactly like a pre-ctime stamp. It records no
+//     proof of which volume produced the digest, and nothing recorded at
+//     stamp time identifies the mount epoch it was taken in (macOS exposes
+//     no mount generation; st_dev is reused), so same-mount trust cannot be
+//     proven either. One full re-read with before/after identity checks
+//     (Delete Duplicates' keeper read, Verify Archive Copies, or the
+//     "Bind Fixity to Volume" job) replaces it with a UUID-bearing stamp.
+//     A missing or unresolvable UUID is never a wildcard.
 //
-// ONE comparison — `FileIdentityStamp.describesSameFile(now:…)` — is used
-// by every "is this still the file I stamped?" question in the app
-// (`describesFileNow`, `stampMatches`, the quarantine/resume identity,
-// the removal-boundary recheck). A source sensor pins that nothing else
-// compares a stored stamp's device for freshness.
+//   SAME-OPERATION IDENTITY (`stampMatches`, `matchesIgnoringChangeTime`,
+//     `isSameFile`, the `==` checks inside one verification)
+//     Two stats of ONE operation, seconds apart: device must match, and the
+//     UUIDs must be equal (both known and equal, or both unknown) — a device
+//     number can never bypass a KNOWN UUID mismatch.
 //
-// The rule, stored stamp S vs a stat taken now N:
-//   • S has a UUID  → N must have the SAME UUID (st_dev ignored). N with
-//                     no UUID (cannot resolve now) → NOT the same: refuse.
-//   • S has none    → legacy: S.device == N.device (today's rule, no
-//                     looser), or — for the resume/quarantine identity,
-//                     which has always ignored the device — not compared.
-//   • then inode, size, mtime, and (verification grade) ctime must match.
+//   RESUME IDENTITY (`LegacyVolumeRule.notCompared`, the Delete Duplicates
+//     resume/quarantine check): a recorded UUID must reproduce; a plan
+//     written before UUIDs keeps its original device-blind rule.
 //
-// Old stamps are UPGRADED, never guessed: `upgradedToVolumeIdentity`
-// binds a pre-UUID stamp to today's volume UUID only when inode, size,
-// mtime and ctime all reproduce AND the volume is proven to be the one the
-// stamp was taken on — either the device number still matches (legacy
-// rule) or the volume UUID resolved NOW equals the UUID the catalog record
-// was scanned from (`ScanContext.volumeUUID`). Anything else stays stale:
-// one re-read writes a proper stamp. The app writes upgrades back to the
-// catalog (VideoScanModel+FixityStampUpgrade), logged once per volume.
+// Capture binds the UUID and the stat to ONE opened file: open → fstat +
+// fgetattrlist on that descriptor → stat(path) must still name the same
+// device+inode (else nil: the path moved under us). A volume cannot change
+// under an open descriptor; a forced unmount makes the calls fail (nil).
 //
-// Cases this rule was checked against (tests in ContentFixityVolumeIdentityTests):
-//   remount, same disk, new st_dev ............ fresh (the fix)
-//   same disk remounted at another path ....... fresh (stat follows the
-//                                               record's path; UUID equal)
-//   different disk at the same path ........... stale (UUID differs)
-//   APFS inode reused after delete ............ stale (ctime/mtime/size)
-//   clonefile / Finder duplicate .............. stale (new inode)
-//   Time Machine / Finder restore ............. stale (new inode)
-//   replaced via rename (atomic save) ......... stale (new inode)
-//   in-place same-size rewrite, mtime put back  stale (ctime)
-//   UUID cannot be resolved now ............... stale
+// Cases (tests in ContentFixityVolumeIdentityTests):
+//   new stamp, remount, same UUID, new st_dev ..... fresh (the fix)
+//   same disk remounted at another path ........... fresh (UUID equal)
+//   different disk at the same path / reused dev .. stale (UUID differs)
+//   legacy stamp (no UUID), any mount ............. untrusted until re-read
+//   APFS inode reuse / clonefile / restore /
+//   rename-replace / symlink retarget ............. stale (inode/ctime)
+//   same-size rewrite, mtime put back ............. stale (ctime)
+//   UUID cannot be resolved now ................... stale
 //
-// What this is NOT: `contentHash` (the v1 segmented candidate signature)
-// and `partialMD5` sample a few windows and can never prove two files the
-// same (design #320). Nothing here weakens that rule: the file being
-// DELETED is always read in full at the moment of deletion; the stamp only
-// spares a second full read of the file that survives.
+// What this is NOT: `contentHash` and `partialMD5` sample a few windows and
+// can never prove two files the same (design #320). The file being DELETED
+// is always read in full at the moment of deletion; the stamp only spares a
+// second full read of the file that survives.
 //
 // (For Rick: two POD structs. `FileIdentityStamp` ≈ the `struct stat`
 // fields that change when a file is replaced or rewritten, plus the
-// volume's UUID; `ContentFixity` ≈ digest + byte count + that stamp +
-// when it was computed. Swift synthesises `==`/`hash` member-wise, like a
-// defaulted `operator==` in C++20.)
+// volume's UUID; `ContentFixity` ≈ digest + byte count + that stamp. Swift
+// synthesises `==`/`hash` member-wise, like a defaulted C++20 operator==.)
 
 import Darwin
 import Foundation
 
-/// Filesystem identity + mutation stamp from one `stat` (plus the volume
-/// UUID). Inode + volume detect a path replacement; size + nanosecond
-/// mtime detect an in-place rewrite by a well-behaved writer; nanosecond
-/// ctime detects one that put the mtime back. `stat` follows symlinks on
-/// purpose — it describes the bytes a reader would actually hash.
+/// Filesystem identity + mutation stamp of one opened file.
 public struct FileIdentityStamp: Codable, Equatable, Hashable, Sendable {
-    /// `st_dev` at capture. Valid only for the mount it was taken on —
-    /// see the file header. Used for same-instant identity (hard links)
-    /// and as the legacy fast path for stamps without `volumeUUID`.
+    /// `st_dev` at capture — valid only for the mount it was read on. Used
+    /// for same-operation identity (hard links, the quarantine move), never
+    /// by the persistent digest policy.
     public let device: UInt64
     public let inode: UInt64
     public let size: Int64
-    /// Modification time as nanoseconds since the epoch (tv_sec * 1e9 +
-    /// tv_nsec) — one integer, no float rounding, Codable as-is.
+    /// Modification time, nanoseconds since the epoch.
     public let mtimeNs: Int64
-    /// Inode change time, same encoding. Kernel-set on every inode change;
-    /// not settable by user tools. `unknownCtime` for stamps written
-    /// before 2026-09-20 (decoded from JSON without the key) — such a
-    /// stamp can never satisfy `describesFileNow`.
+    /// Inode change time, same encoding. Kernel-set; `unknownCtime` for
+    /// stamps written before 2026-09-20.
     public let ctimeNs: Int64
-    /// The volume's UUID (uppercase) at capture — the remount-proof volume
-    /// identity. nil for stamps written before 2026-09-23 and for volumes
-    /// that report none; such a stamp is judged by `device` (legacy).
+    /// The volume's persistent UUID (uppercase) at capture. nil for stamps
+    /// written before 2026-09-23 and for volumes that report none — such a
+    /// stamp can never satisfy the persistent policy.
     public let volumeUUID: String?
 
     public static let unknownCtime: Int64 = -1
@@ -148,37 +134,41 @@ public struct FileIdentityStamp: Codable, Equatable, Hashable, Sendable {
         try c.encodeIfPresent(volumeUUID, forKey: .volumeUUID)
     }
 
-    /// True when the stamp carries a kernel ctime — the only kind that may
-    /// stand in for a read.
+    /// True when the stamp carries a kernel ctime.
     public var hasChangeTime: Bool { ctimeNs != Self.unknownCtime }
+
+    /// True when the stamp names its volume persistently.
+    public var isBoundToVolume: Bool { volumeUUID != nil }
 
     // MARK: - THE comparison
 
-    /// Whether the ctime must reproduce too.
     public enum ChangeTimeRule: Sendable {
-        /// Verification grade — the only grade that may stand in for a read.
+        /// Verification grade: ctime known on the stored stamp and equal.
         case mustMatch
-        /// A rename changes ctime; used only across the quarantine move
-        /// and for the user-visible "nothing ordinary touched it" check.
+        /// A rename changes ctime; only across the quarantine move and
+        /// for the user-visible "nothing ordinary touched it" check.
         case ignored
     }
 
-    /// How a stamp WITHOUT a volume UUID names its volume.
-    public enum LegacyVolumeRule: Sendable {
-        /// The device number must reproduce (today's freshness rule).
-        case deviceMustMatch
-        /// Not compared — the resume/quarantine identity, which has always
-        /// accepted a replugged drive's new device number.
-        case notCompared
+    /// Which volume rule applies — see the file header.
+    public enum VolumeRule: Sendable {
+        /// Persistent digest policy: the stored stamp MUST carry a UUID
+        /// and `current` must carry the same one. st_dev not consulted.
+        case persistentUUID
+        /// Two stats of one operation: same device AND same UUID-or-none.
+        case sameOperation
+        /// Delete Duplicates resume/quarantine: a recorded UUID must
+        /// reproduce; a pre-UUID plan's stamp is device-blind (as it was
+        /// written under). Never used for the digest policy.
+        case resumeAcrossRemount
     }
 
     /// THE one "is `current` still the file this stamp describes?" check
-    /// (self = the STORED stamp; `current` = a stat taken now). Every
-    /// freshness question in the app goes through here — see the header.
+    /// (self = the STORED/earlier stamp; `current` = a stamp taken now).
     public func describesSameFile(now current: FileIdentityStamp,
                                   changeTime: ChangeTimeRule = .mustMatch,
-                                  legacyVolume: LegacyVolumeRule = .deviceMustMatch) -> Bool {
-        guard isOnSameVolume(asNow: current, legacyVolume: legacyVolume) else { return false }
+                                  volume: VolumeRule) -> Bool {
+        guard isOnSameVolume(asNow: current, rule: volume) else { return false }
         guard inode == current.inode, size == current.size, mtimeNs == current.mtimeNs else { return false }
         switch changeTime {
         case .mustMatch: return hasChangeTime && ctimeNs == current.ctimeNs
@@ -186,56 +176,73 @@ public struct FileIdentityStamp: Codable, Equatable, Hashable, Sendable {
         }
     }
 
-    /// The volume half of `describesSameFile`. A UUID, when this stamp has
-    /// one, decides alone — `st_dev` is reassigned on every mount and
-    /// reused across disks. A current stat with no UUID cannot prove it.
-    public func isOnSameVolume(asNow current: FileIdentityStamp,
-                               legacyVolume: LegacyVolumeRule = .deviceMustMatch) -> Bool {
-        if let mine = volumeUUID { return current.volumeUUID == mine }
-        switch legacyVolume {
-        case .deviceMustMatch: return device == current.device
-        case .notCompared: return true
+    /// The volume half of `describesSameFile`.
+    public func isOnSameVolume(asNow current: FileIdentityStamp, rule: VolumeRule) -> Bool {
+        switch rule {
+        case .persistentUUID:
+            guard let mine = volumeUUID else { return false }        // no proof of volume
+            return current.volumeUUID == mine                        // nil now never matches
+        case .sameOperation:
+            // A device number never overrides a known UUID mismatch.
+            return device == current.device && volumeUUID == current.volumeUUID
+        case .resumeAcrossRemount:
+            if let mine = volumeUUID { return current.volumeUUID == mine }
+            return true
         }
     }
 
-    /// Same volume, inode, size and mtime — the fields a rename cannot
-    /// change. For comparing a file across a move (the quarantine step).
-    /// self = the file NOW; `stored` = the stamp taken before the move.
-    public func matchesIgnoringChangeTime(_ stored: FileIdentityStamp) -> Bool {
-        stored.describesSameFile(now: self, changeTime: .ignored)
+    /// Same volume, inode, size and mtime across the quarantine MOVE (one
+    /// operation). self = the file NOW; `before` = its stamp before the move.
+    public func matchesIgnoringChangeTime(_ before: FileIdentityStamp) -> Bool {
+        before.describesSameFile(now: self, changeTime: .ignored, volume: .sameOperation)
     }
 
-    /// True when both stamps name ONE inode on one device — two names for
-    /// the same file (hard link, or two spellings on a case-insensitive
-    /// volume). Deleting "the duplicate" would delete the only copy.
-    /// SAME-INSTANT only (two stats of one pass): a device number is valid
-    /// only for the mount it was read on.
+    /// Both stamps name ONE inode on one device — two names for the same
+    /// file (hard link, case-insensitive spelling). SAME-OPERATION only.
     public func isSameFile(as other: FileIdentityStamp) -> Bool {
         device == other.device && inode == other.inode
     }
 
-    /// nil when the path cannot be stat'ed (missing, permission, offline
-    /// volume) — callers treat that as "cannot verify", never as a match.
-    ///
-    /// The volume UUID is read BETWEEN two stats and kept only when both
-    /// stats name the same device + inode — so it is the UUID of the
-    /// volume the stamped file was on, even if a mount changed under the
-    /// call (then the UUID is nil: identity not proven). The returned
-    /// fields are the second stat's.
+    // MARK: - Capture
+
+    /// Stamp the file at `path`, UUID and stat bound to one opened file
+    /// (see the header). nil when the path cannot be stat'ed, or no longer
+    /// names the opened file. A file that can be stat'ed but not opened
+    /// (no read permission) gets a stat-only stamp WITHOUT a volume UUID:
+    /// fine for same-operation identity, never usable for the digest policy.
     public static func capture(path: String) -> FileIdentityStamp? {
-        var first = stat()
-        guard stat(path, &first) == 0 else { return nil }
-        let uuid = VolumeIdentity.uuid(forPath: path)
+        let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else {
+            var info = stat()
+            guard stat(path, &info) == 0 else { return nil }
+            return stamp(from: info, volumeUUID: nil)
+        }
+        defer { close(fd) }
+        return capture(fd: fd, path: path)
+    }
+
+    /// Stamp an ALREADY-OPEN file: fstat + the volume UUID of the same
+    /// descriptor, then `path` (when given) must still name this device +
+    /// inode. The hashing paths stamp through the descriptor they read.
+    public static func capture(fd: Int32, path: String?) -> FileIdentityStamp? {
         var info = stat()
-        guard stat(path, &info) == 0 else { return nil }
-        let bound = first.st_dev == info.st_dev && first.st_ino == info.st_ino
-        return FileIdentityStamp(
+        guard fstat(fd, &info) == 0 else { return nil }
+        let uuid = VolumeIdentity.uuid(forDescriptor: fd, path: path)
+        if let path {
+            var named = stat()
+            guard stat(path, &named) == 0, named.st_dev == info.st_dev, named.st_ino == info.st_ino else { return nil }
+        }
+        return stamp(from: info, volumeUUID: uuid)
+    }
+
+    private static func stamp(from info: stat, volumeUUID: String?) -> FileIdentityStamp {
+        FileIdentityStamp(
             device: UInt64(info.st_dev),
             inode: UInt64(info.st_ino),
             size: Int64(info.st_size),
             mtimeNs: Int64(info.st_mtimespec.tv_sec) &* 1_000_000_000 &+ Int64(info.st_mtimespec.tv_nsec),
             ctimeNs: Int64(info.st_ctimespec.tv_sec) &* 1_000_000_000 &+ Int64(info.st_ctimespec.tv_nsec),
-            volumeUUID: bound ? uuid : nil)
+            volumeUUID: volumeUUID)
     }
 }
 
@@ -244,12 +251,9 @@ public struct ContentFixity: Codable, Equatable, Hashable, Sendable {
     /// "sha256" today; the tag exists so a future algorithm never has to
     /// reinterpret old digests.
     public let algorithm: String
-    /// Lowercase hex SHA-256 of EVERY byte of the file — the same value
-    /// `CatalogStore.sha256HexStreaming` and the archive manifest carry,
-    /// so the archive's fixity and the verification gate's agree.
+    /// Lowercase hex SHA-256 of EVERY byte of the file.
     public let digest: String
-    /// Bytes the digest covers. Always equals `stamp.size`; kept
-    /// separately so a digest can be compared without a stamp.
+    /// Bytes the digest covers. Always equals `stamp.size`.
     public let byteCount: Int64
     /// The file as it was when `digest` was computed.
     public let stamp: FileIdentityStamp
@@ -266,44 +270,41 @@ public struct ContentFixity: Codable, Equatable, Hashable, Sendable {
         self.computedAt = computedAt
     }
 
-    /// The USER-VISIBLE stamp check: same volume, inode, size and mtime.
-    /// Enough to say "nothing ordinary touched this file"; NOT enough to
-    /// stand in for a read — a same-size in-place rewrite with the mtime
-    /// put back reproduces all four. Diagnostics and tests use this; the
-    /// verification gate uses `describesFileNow`. A nil `current` (stat
-    /// failed) never matches.
+    /// The USER-VISIBLE, same-operation check: same device + UUID-or-none,
+    /// inode, size, mtime. NOT enough to stand in for a read. Diagnostics
+    /// and tests only; nil never matches.
     public func stampMatches(_ current: FileIdentityStamp?) -> Bool {
         guard let current else { return false }
-        return stamp.describesSameFile(now: current, changeTime: .ignored) && current.size == byteCount
+        return stamp.describesSameFile(now: current, changeTime: .ignored, volume: .sameOperation)
+            && current.size == byteCount
     }
 
-    /// Stat `path` now and compare (user-visible stamp).
     public func stampMatches(path: String) -> Bool {
         stampMatches(FileIdentityStamp.capture(path: path))
     }
 
-    /// The VERIFICATION-GRADE check: same volume (UUID, or the legacy
-    /// device rule), inode, size, mtime AND kernel ctime, with a stored
-    /// stamp that carries one. Only this may let the stored digest stand
-    /// in for reading the file.
+    /// THE PERSISTENT DIGEST POLICY: sha256, a stored stamp with ctime AND
+    /// a volume UUID, and `current` on the same volume UUID with the same
+    /// inode, size, mtime and ctime, and size == byteCount. Only this may
+    /// let the stored digest stand in for reading the file.
     public func describesFileNow(_ current: FileIdentityStamp?) -> Bool {
-        guard let current else { return false }
-        return stamp.describesSameFile(now: current, changeTime: .mustMatch) && current.size == byteCount
+        guard let current, isUsableForVerification else { return false }
+        return stamp.describesSameFile(now: current, changeTime: .mustMatch, volume: .persistentUUID)
+            && current.size == byteCount
     }
 
-    /// True when this fixity can ever satisfy `describesFileNow`: sha256
-    /// with a ctime-bearing stamp. A pre-ctime fixity is "absent" to the
-    /// gate — one re-read replaces it.
+    /// True when this fixity can ever satisfy `describesFileNow`: sha256,
+    /// ctime-bearing and volume-bound. Anything else is "absent" to the
+    /// gate — one full re-read replaces it.
     public var isUsableForVerification: Bool {
-        algorithm == Self.sha256 && stamp.hasChangeTime
+        algorithm == Self.sha256 && stamp.hasChangeTime && stamp.isBoundToVolume
     }
 
     /// Build a fixity for a file that was JUST hashed in full: stat it and
     /// bind the digest to that stamp. When `before` (a stamp taken BEFORE
-    /// the read) is given, the after-stamp must equal it — the file must
-    /// not have changed under the read — as `SignatureVerification.verify`
-    /// requires. nil when the stat fails, the size on disk no longer
-    /// equals the byte count hashed, or before ≠ after.
+    /// the read) is given, the after-stamp must equal it exactly. nil when
+    /// the stat fails, the size no longer equals the byte count hashed, or
+    /// before ≠ after.
     public static func captured(path: String, digest: String, byteCount: Int64,
                                 before: FileIdentityStamp? = nil,
                                 computedAt: Date = Date()) -> ContentFixity? {
@@ -311,54 +312,5 @@ public struct ContentFixity: Codable, Equatable, Hashable, Sendable {
               stamp.size == byteCount else { return nil }
         if let before, before != stamp { return nil }
         return ContentFixity(digest: digest, byteCount: byteCount, stamp: stamp, computedAt: computedAt)
-    }
-
-    // MARK: - Upgrading a pre-UUID stamp
-
-    /// What `upgradedToVolumeIdentity` concluded for one record.
-    public enum VolumeIdentityUpgrade: Equatable, Sendable {
-        /// The stamp already carries a volume UUID — nothing to do.
-        case alreadyBound
-        /// Proven: the same file on the same volume. Store this fixity
-        /// (same digest and computedAt, stamp = the stat taken now).
-        case upgraded(ContentFixity)
-        /// Not proven — left exactly as it is (stale until a re-read).
-        case notUpgraded(Reason)
-
-        public enum Reason: String, Sendable, CaseIterable {
-            /// Pre-ctime or non-sha256 — never usable; a re-read replaces it.
-            case notUsable = "not usable for verification"
-            /// The file cannot be stat'ed now.
-            case offline = "offline"
-            /// Inode, size, mtime or ctime differ — a different or changed file.
-            case fileChanged = "file changed"
-            /// The volume reports no UUID now (or a mount raced the stat).
-            case noVolumeIdentityNow = "volume identity unavailable"
-            /// Device differs and the record's scan-time volume UUID is
-            /// missing or differs from today's — cannot prove same disk.
-            case volumeNotProven = "volume not proven"
-        }
-    }
-
-    /// Bind a pre-UUID stamp to today's volume UUID — ONLY when proven.
-    /// `current` = a stat of the record's path taken now;
-    /// `recordVolumeUUID` = the UUID the record was scanned from
-    /// (`ScanContext.volumeUUID`; "" when unknown). See the file header.
-    public func upgradedToVolumeIdentity(current: FileIdentityStamp?,
-                                         recordVolumeUUID: String) -> VolumeIdentityUpgrade {
-        guard stamp.volumeUUID == nil else { return .alreadyBound }
-        guard isUsableForVerification else { return .notUpgraded(.notUsable) }
-        guard let current else { return .notUpgraded(.offline) }
-        guard stamp.inode == current.inode, stamp.size == current.size,
-              stamp.mtimeNs == current.mtimeNs, stamp.ctimeNs == current.ctimeNs,
-              current.size == byteCount else { return .notUpgraded(.fileChanged) }
-        guard let nowUUID = current.volumeUUID else { return .notUpgraded(.noVolumeIdentityNow) }
-        // Same mount (legacy rule — already fresh today), or a remount of
-        // the very volume the record was scanned from.
-        let sameMount = stamp.device == current.device
-        let scannedFromThisVolume = VolumeIdentity.normalized(recordVolumeUUID) == nowUUID
-        guard sameMount || scannedFromThisVolume else { return .notUpgraded(.volumeNotProven) }
-        return .upgraded(ContentFixity(algorithm: algorithm, digest: digest, byteCount: byteCount,
-                                       stamp: current, computedAt: computedAt))
     }
 }

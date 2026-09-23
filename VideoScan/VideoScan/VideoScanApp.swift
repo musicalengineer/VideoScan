@@ -595,11 +595,6 @@ struct VideoScanApp: App {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak catalogModel] in
                                 catalogModel?.checkForUnfinishedDeleteDuplicatesPlans()
                             }
-                            // Pre-2026-09-23 fixity stamps named their volume
-                            // by st_dev (reassigned on every mount): bind the
-                            // provable ones to the volume UUID. AFTER
-                            // applyReadOnlyMode — a viewer never writes.
-                            catalogModel.noteFixityStampUpgradeDue(trigger: "launch")
                         }
                         // Archive Angel phase 2: the scoring sweep parks
                         // while an Angel or Promote job is active

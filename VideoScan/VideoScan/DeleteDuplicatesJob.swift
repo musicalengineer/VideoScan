@@ -1889,10 +1889,12 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// change. A recorded stamp that carries a volume UUID (2026-09-23)
     /// must also be on THAT volume — a different disk mounted at the same
     /// path is not the plan's file. The one shared comparison
-    /// (`FileIdentityStamp.describesSameFile`); pre-UUID plans keep the
-    /// device-blind rule they were written under.
+    /// (`FileIdentityStamp.describesSameFile`, resume rule); pre-UUID plans
+    /// keep the device-blind rule they were written under. This is the
+    /// resume identity of a file the plan itself moved — NOT the persistent
+    /// digest policy (`describesFileNow`), which never trusts a pre-UUID stamp.
     nonisolated static func quarantineIdentityMatches(recorded: FileIdentityStamp, current: FileIdentityStamp) -> Bool {
-        recorded.describesSameFile(now: current, changeTime: .mustMatch, legacyVolume: .notCompared)
+        recorded.describesSameFile(now: current, changeTime: .mustMatch, volume: .resumeAcrossRemount)
     }
 
     /// Move an orphaned quarantined file back to its original path. Only

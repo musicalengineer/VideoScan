@@ -205,7 +205,8 @@ struct SignatureVerificationOneSidedTests {
         let live = try #require(FileIdentityStamp.capture(path: keeper.path))
         let old = ContentFixity(digest: plainSHA256(keeper), byteCount: Int64(size),
                                 stamp: FileIdentityStamp(device: live.device, inode: live.inode,
-                                                         size: live.size, mtimeNs: live.mtimeNs))
+                                                         size: live.size, mtimeNs: live.mtimeNs,
+                                                         volumeUUID: live.volumeUUID))
         #expect(old.stampMatches(path: keeper.path) && !old.isUsableForVerification)
         let counter = ReadCounter()
         let proof = try SignatureVerification.verifyAgainstStoredKeeper(
@@ -291,14 +292,17 @@ struct ContentFixityTests {
         #expect(fx.stamp.ctimeNs == FileIdentityStamp.unknownCtime)
         #expect(!fx.stamp.hasChangeTime)
         #expect(!fx.isUsableForVerification)
-        let live = FileIdentityStamp(device: 1, inode: 2, size: 3, mtimeNs: 4, ctimeNs: 99)
-        #expect(fx.stampMatches(live), "the user-visible stamp still matches")
-        #expect(!fx.describesFileNow(live), "but it may never stand in for a read")
-        // A fixity WITH ctime: the strict check needs it to reproduce.
+        let liveUnbound = FileIdentityStamp(device: 1, inode: 2, size: 3, mtimeNs: 4, ctimeNs: 99)
+        #expect(fx.stampMatches(liveUnbound), "the user-visible stamp still matches")
+        #expect(!fx.describesFileNow(liveUnbound), "but it may never stand in for a read")
+        // A fixity WITH ctime and a volume UUID: the strict check needs both to reproduce.
+        let live = FileIdentityStamp(device: 1, inode: 2, size: 3, mtimeNs: 4, ctimeNs: 99, volumeUUID: "0978904A-3D3C-4546-BC51-5A53F32BCB23")
         let strict = ContentFixity(digest: "ab", byteCount: 3, stamp: live)
         #expect(strict.isUsableForVerification && strict.describesFileNow(live))
-        #expect(!strict.describesFileNow(FileIdentityStamp(device: 1, inode: 2, size: 3, mtimeNs: 4, ctimeNs: 100)))
-        #expect(strict.stampMatches(FileIdentityStamp(device: 1, inode: 2, size: 3, mtimeNs: 4, ctimeNs: 100)))
+        #expect(!strict.describesFileNow(FileIdentityStamp(device: 1, inode: 2, size: 3, mtimeNs: 4, ctimeNs: 100, volumeUUID: "0978904A-3D3C-4546-BC51-5A53F32BCB23")))
+        #expect(strict.stampMatches(FileIdentityStamp(device: 1, inode: 2, size: 3, mtimeNs: 4, ctimeNs: 100, volumeUUID: "0978904A-3D3C-4546-BC51-5A53F32BCB23")))
+        #expect(!ContentFixity(digest: "ab", byteCount: 3, stamp: liveUnbound).isUsableForVerification,
+                "ctime without a volume UUID is not usable either (codex #1707)")
     }
 
     @Test func capturedRequiresTheBeforeStampToReproduce() throws {

@@ -45,10 +45,6 @@ extension VideoScanModel {
         // Master Archive follows its volume UUID: a remount at a new path
         // rehomes the designation (docs/archive_promotion_workflow.md §3).
         reresolveMasterArchiveMount()
-        // A drive that was away has its pre-UUID fixity stamps bound to
-        // its volume identity now (debounced, stat-only, off-main; see
-        // +FixityStampUpgrade).
-        noteFixityStampUpgradeDue(trigger: "mount")
         notifyTargetsChanged()
     }
 

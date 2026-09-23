@@ -9,9 +9,12 @@
 //   • the remount is simulated exactly as it happens — same file, same
 //     volume UUID, a different st_dev — and must now count as fresh;
 //   • a different disk (another UUID) must stay stale;
-//   • the old-stamp upgrade pass upgrades ONLY what it can prove, is
-//     compare-and-set, respects read-only, and is idempotent;
-//   • scale: 100k records / 100k captures under budget;
+//   • a legacy stamp (no UUID) is untrusted everywhere until ONE full
+//     re-read binds it (codex #1707) — the rehash engine refuses a remount,
+//     a missing UUID or a retarget mid-read; the Bind Fixity to Volume job
+//     binds, pauses (gives the disk back), is compare-and-set, respects
+//     read-only, and is resumable by construction;
+//   • scale: 100k records under budget;
 //   • sensor: no app code compares a stored stamp's device number for
 //     freshness outside the one comparison.
 //
@@ -40,7 +43,7 @@ private func withStamp(_ f: ContentFixity, _ s: FileIdentityStamp) -> ContentFix
     ContentFixity(algorithm: f.algorithm, digest: f.digest, byteCount: f.byteCount, stamp: s, computedAt: f.computedAt)
 }
 
-@Suite("Fixity stamp volume identity — consumers and upgrade pass", .serialized)
+@Suite("Fixity stamp volume identity — consumers, rehash, Bind Fixity to Volume", .serialized)
 @MainActor
 struct FixityStampVolumeIdentityTests {
 
@@ -76,7 +79,7 @@ struct FixityStampVolumeIdentityTests {
             .init(id: other, path: a.path, fixity: withStamp(fx, onOtherDisk(remounted(fx.stamp)))),
             .init(id: legacy, path: a.path, fixity: withStamp(fx, remounted(fx.stamp, keepUUID: false))),
         ])
-        #expect(fresh == [remount], "remount fresh; other disk stale; legacy stays stale until upgraded")
+        #expect(fresh == [remount], "remount fresh; other disk stale; legacy untrusted until re-read")
         // Find Similar Footage goes through the same probe + check.
         let rec = MasterArchiveTestSupport.makeRecord(path: a.path)
         rec.contentFixity = withStamp(fx, remounted(fx.stamp))
@@ -138,71 +141,165 @@ struct FixityStampVolumeIdentityTests {
                 "a different disk at the keeper's path is not the planned keeper")
     }
 
-    // MARK: The upgrade pass
+    // MARK: Legacy stamps are untrusted until re-read (codex #1707)
 
-    @Test func upgradePassBindsOnlyProvenLegacyStampsAndIsIdempotent() async throws {
-        let r = try rig("pass"); defer { r.sb.cleanup() }
-        let realUUID = try #require(VolumeIdentity.uuid(forPath: r.sb.sources.path))
-        func legacyRecord(_ name: String, seed: UInt64, scanUUID: String,
-                          mutate: (FileIdentityStamp) -> FileIdentityStamp) throws -> VideoRecord {
-            let (url, fx) = try r.file(name, seed: seed)
-            let rec = MasterArchiveTestSupport.makeRecord(path: url.path)
-            rec.sizeBytes = 4_096
-            rec.scanContext.volumeUUID = scanUUID
-            rec.scanContext.volumeName = "Scratch"
-            rec.contentFixity = withStamp(fx, mutate(remounted(fx.stamp, keepUUID: false)))
-            return rec
-        }
-        let proven = try legacyRecord("proven.mov", seed: 1, scanUUID: realUUID.lowercased()) { $0 }
-        let otherScan = try legacyRecord("otherscan.mov", seed: 2, scanUUID: otherDiskUUID) { $0 }
-        let noScan = try legacyRecord("noscan.mov", seed: 3, scanUUID: "") { $0 }
-        let changed = try legacyRecord("changed.mov", seed: 4, scanUUID: realUUID) {
-            FileIdentityStamp(device: $0.device, inode: $0.inode, size: $0.size, mtimeNs: $0.mtimeNs, ctimeNs: $0.ctimeNs &- 1)
-        }
-        let offline = MasterArchiveTestSupport.makeRecord(path: r.sb.sources.appendingPathComponent("gone.mov").path)
-        offline.scanContext.volumeUUID = realUUID
-        offline.contentFixity = try #require(proven.contentFixity)
-        let (bURL, bound) = try r.file("bound.mov", seed: 5)
-        let alreadyBound = MasterArchiveTestSupport.makeRecord(path: bURL.path)
-        alreadyBound.contentFixity = bound
-        r.model.records = [proven, otherScan, noScan, changed, offline, alreadyBound]
-        let before = r.model.records.map(\.contentFixity)
-        #expect(proven.contentFixity?.describesFileNow(FileIdentityStamp.capture(path: proven.fullPath)) == false,
-                "precondition: today's bug — the remounted legacy stamp is stale")
-
-        let report = await r.model.upgradeLegacyFixityStampsNow(trigger: "test")
-        #expect(report.candidates == 5)
-        #expect(report.written == 1)
-        #expect(report.upgradedByVolume == ["Scratch": 1])
-        #expect(report.notUpgradedByVolume["Scratch"] == [.volumeNotProven: 2, .fileChanged: 1])
-        let offlineLabel = VideoScanModel.fixityVolumeLabel(forPath: offline.fullPath)
-        #expect(report.notUpgradedByVolume[offlineLabel] == [.offline: 1])
-        let up = try #require(proven.contentFixity)
-        #expect(up.stamp.volumeUUID == realUUID && up.digest == before[0]?.digest && up.computedAt == before[0]?.computedAt)
-        #expect(up.describesFileNow(FileIdentityStamp.capture(path: proven.fullPath)))
-        for (i, rec) in r.model.records.enumerated() where rec !== proven {
-            #expect(rec.contentFixity == before[i], "\(rec.filename) must be left exactly as it was")
-        }
-        // Idempotent: the upgraded record is no longer a candidate; the rest
-        // are re-examined and still refused.
-        let again = await r.model.upgradeLegacyFixityStampsNow(trigger: "test")
-        #expect(again.candidates == 4 && again.written == 0)
-        // And the consumer sees it: Archive Angel lends from it now.
-        let probes = ArchiveAngelFixityCheck.probes(for: [proven])
-        #expect(await ArchiveAngelFixityCheck.fresh(probes) == [proven.id])
-    }
-
-    @Test func upgradePassWritesNothingOnAReadOnlyCatalog() async throws {
-        let r = try rig("readonly"); defer { r.sb.cleanup() }
+    @Test func legacyStampIsUntrustedEverywhereUntilRebound() async throws {
+        let r = try rig("legacy"); defer { r.sb.cleanup() }
         let (url, fx) = try r.file("a.mov")
         let rec = MasterArchiveTestSupport.makeRecord(path: url.path)
-        rec.scanContext.volumeUUID = fx.stamp.volumeUUID ?? ""
+        rec.sizeBytes = 4_096
+        // The pre-fix stamp of THIS file on THIS mount — same device even.
+        rec.contentFixity = withStamp(fx, FileIdentityStamp(device: fx.stamp.device, inode: fx.stamp.inode,
+                                                            size: fx.stamp.size, mtimeNs: fx.stamp.mtimeNs,
+                                                            ctimeNs: fx.stamp.ctimeNs))
+        r.model.records = [rec]
+        #expect(rec.contentFixity?.isUsableForVerification == false)
+        #expect(ArchiveAngelFixityCheck.probes(for: [rec]).isEmpty, "Angel: not even a candidate")
+        #expect(VideoScanModel.footageFixityProbe(rec) == nil, "Footage: never Identical on it")
+        var c = DeletionTierCandidates()
+        c.otherCopies = [.init(path: url.path, fixity: rec.contentFixity, label: "sibling a.mov")]
+        #expect(DeletionTierFacts.gather(c, digest: fx.digest).remainingVerifiedCopies == 1)
+        #expect(DeleteDuplicatesJob.siblingsThatMayNeedReading(c, keeperDigest: nil, goal: 2) == [url.path],
+                "Delete Duplicates plans a proving read for it")
+
+        let job = BindFixityToVolumeJob(scopePath: r.sb.sources.path, scopeLabel: "Scratch", model: r.model)
+        job.start(); await job.task?.value
+        #expect(job.tally.bound == 1, "\(job.summaryLine)")
+        let bound = try #require(rec.contentFixity)
+        #expect(bound.stamp.volumeUUID != nil && bound.digest == fx.digest)
+        #expect(await ArchiveAngelFixityCheck.fresh(ArchiveAngelFixityCheck.probes(for: [rec])) == [rec.id])
+    }
+
+    // MARK: The rehash engine
+
+    @Test func rehashBindsWithMatchingDigestAndUUID() throws {
+        let r = try rig("rehash"); defer { r.sb.cleanup() }
+        let (url, fx) = try r.file("a.mov", seed: 3)
+        guard case .bound(let got) = FixityRebind.rehash(path: url.path, control: .init()) else {
+            Issue.record("expected a binding"); return
+        }
+        #expect(got.digest == fx.digest && got.byteCount == 4_096)
+        #expect(got.stamp == fx.stamp, "the stamp of the very file, volume UUID included")
+        #expect(got.describesFileNow(FileIdentityStamp.capture(path: url.path)))
+    }
+
+    /// A remount between the before-capture and the after-capture (the
+    /// resolver answers another UUID the second time) — refused.
+    @Test func remountDuringTheReadRefuses() throws {
+        let r = try rig("remount"); defer { r.sb.cleanup() }
+        let (url, _) = try r.file("a.mov")
+        let real = try #require(VolumeIdentity.uuid(forPath: url.path))
+        final class Calls: @unchecked Sendable { var n = 0; let lock = NSLock() }
+        let calls = Calls()
+        let flip: @Sendable (String) -> String? = { _ in
+            calls.lock.withLock { calls.n += 1; return calls.n == 1 ? real : otherDiskUUID }
+        }
+        let outcome = VolumeIdentity.$resolverOverride.withValue(flip) {
+            FixityRebind.rehash(path: url.path, control: .init())
+        }
+        #expect(outcome == .changedDuringRead("changed during the read (volume)"), "\(outcome)")
+    }
+
+    @Test func rehashRefusesWithoutAVolumeUUIDAndReportsOfflineAndStop() throws {
+        let r = try rig("refuse"); defer { r.sb.cleanup() }
+        let (url, _) = try r.file("a.mov")
+        let none = VolumeIdentity.$resolverOverride.withValue({ _ in nil }) {
+            FixityRebind.rehash(path: url.path, control: .init())
+        }
+        #expect(none == .noVolumeIdentity)
+        #expect(FixityRebind.rehash(path: url.path + ".gone", control: .init()) == .offline)
+        let stop = FixityRebind.Control(); stop.requestStop()
+        #expect(FixityRebind.rehash(path: url.path, control: stop) == .interrupted)
+    }
+
+    /// A symlink retargeted after the plan: the rehash binds the NEW target
+    /// honestly (a fresh read of what the path names now), and the OLD
+    /// stored fixity never describes it.
+    @Test func symlinkRetargetNeverLendsTheOldDigest() throws {
+        let r = try rig("symlink"); defer { r.sb.cleanup() }
+        let (a, fxA) = try r.file("a.mov", seed: 1)
+        let (b, _) = try r.file("b.mov", seed: 2)
+        let link = r.sb.sources.appendingPathComponent("link.mov")
+        #expect(symlink(a.path, link.path) == 0)
+        let old = try #require(ContentFixity.captured(path: link.path, digest: fxA.digest, byteCount: 4_096))
+        #expect(unlink(link.path) == 0 && symlink(b.path, link.path) == 0)
+        #expect(!old.describesFileNow(FileIdentityStamp.capture(path: link.path)))
+        guard case .bound(let now) = FixityRebind.rehash(path: link.path, control: .init()) else {
+            Issue.record("expected a binding of the new target"); return
+        }
+        #expect(now.digest != fxA.digest)
+    }
+
+    // MARK: The job
+
+    @Test func jobBindsTheVolumeAndIsResumableByConstruction() async throws {
+        let r = try rig("job"); defer { r.sb.cleanup() }
+        var recs: [VideoRecord] = []
+        for i in 0..<3 {
+            let (url, fx) = try r.file("f\(i).mov", seed: UInt64(i + 1))
+            let rec = MasterArchiveTestSupport.makeRecord(path: url.path)
+            rec.contentFixity = withStamp(fx, remounted(fx.stamp, keepUUID: false))
+            recs.append(rec)
+        }
+        // A digest that no longer matches the bytes: stored anew, named.
+        let (wURL, wfx) = try r.file("wrong.mov", seed: 9)
+        let wrong = MasterArchiveTestSupport.makeRecord(path: wURL.path)
+        wrong.contentFixity = ContentFixity(digest: String(repeating: "0", count: 64), byteCount: 4_096,
+                                            stamp: remounted(wfx.stamp, keepUUID: false))
+        let gone = MasterArchiveTestSupport.makeRecord(path: r.sb.sources.appendingPathComponent("gone.mov").path)
+        gone.contentFixity = recs[0].contentFixity
+        let (bURL, bfx) = try r.file("bound.mov", seed: 5)
+        let already = MasterArchiveTestSupport.makeRecord(path: bURL.path)
+        already.contentFixity = bfx
+        r.model.records = recs + [wrong, gone, already]
+        #expect(r.model.fixityRebindCandidates(prefix: r.sb.sources.path).count == 5)
+
+        let job = BindFixityToVolumeJob(scopePath: r.sb.sources.path, scopeLabel: "Scratch", model: r.model)
+        job.start(); await job.task?.value
+        #expect(job.state == .finished(summary: job.summaryLine), "\(job.state)")
+        #expect(job.tally.bound == 4 && job.tally.digestChanged == 1 && job.tally.offline == 1, "\(job.tally)")
+        #expect(job.tally.boundBytes == 4 * 4_096)
+        for rec in recs + [wrong] {
+            #expect(rec.contentFixity?.describesFileNow(FileIdentityStamp.capture(path: rec.fullPath)) == true)
+        }
+        #expect(wrong.contentFixity?.digest == wfx.digest)
+        #expect(already.contentFixity == bfx, "an already-bound fixity is never touched")
+        #expect(gone.contentFixity?.stamp.volumeUUID == nil, "an offline record keeps its (untrusted) fixity")
+        // Resumable by construction: only the offline one is left.
+        #expect(r.model.fixityRebindCandidates(prefix: r.sb.sources.path).map(\.id) == [gone.id])
+    }
+
+    @Test func jobPauseGivesWayAndResumeFinishes() async throws {
+        let r = try rig("pause"); defer { r.sb.cleanup() }
+        let (url, fx) = try r.file("a.mov")
+        let rec = MasterArchiveTestSupport.makeRecord(path: url.path)
+        rec.contentFixity = withStamp(fx, remounted(fx.stamp, keepUUID: false))
+        r.model.records = [rec]
+        let job = BindFixityToVolumeJob(scopePath: r.sb.sources.path, scopeLabel: "Scratch", model: r.model)
+        job.pause()
+        job.start()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(job.state == .running && job.isPaused && rec.contentFixity?.stamp.volumeUUID == nil)
+        job.resume()
+        await job.task?.value
+        #expect(job.tally.bound == 1 && rec.contentFixity?.stamp.volumeUUID != nil)
+    }
+
+    @Test func jobRefusesOnAReadOnlyCatalogAndAnAbsentVolume() async throws {
+        let r = try rig("ro"); defer { r.sb.cleanup() }
+        let (url, fx) = try r.file("a.mov")
+        let rec = MasterArchiveTestSupport.makeRecord(path: url.path)
         let legacy = withStamp(fx, remounted(fx.stamp, keepUUID: false))
         rec.contentFixity = legacy
         r.model.records = [rec]
         r.model.isReadOnly = true
-        let report = await r.model.upgradeLegacyFixityStampsNow(trigger: "test")
-        #expect(report.written == 0 && rec.contentFixity == legacy)
+        let ro = BindFixityToVolumeJob(scopePath: r.sb.sources.path, scopeLabel: "Scratch", model: r.model)
+        ro.start(); await ro.task?.value
+        #expect(ro.wasRefused && rec.contentFixity == legacy)
+        r.model.isReadOnly = false
+        let away = BindFixityToVolumeJob(scopePath: "/Volumes/NotHere-\(UUID().uuidString)", scopeLabel: "NotHere", model: r.model)
+        away.start(); await away.task?.value
+        #expect(away.wasRefused)
     }
 
     @Test func writeBackIsCompareAndSet() throws {
@@ -212,47 +309,30 @@ struct FixityStampVolumeIdentityTests {
         let legacy = withStamp(fx, remounted(fx.stamp, keepUUID: false))
         rec.contentFixity = legacy
         r.model.records = [rec]
-        let item = FixityStampUpgradeItem(id: rec.id, path: rec.fullPath, fixity: legacy,
-                                          recordVolumeUUID: fx.stamp.volumeUUID ?? "", volumeLabel: "Scratch")
-        let outcome = legacy.upgradedToVolumeIdentity(current: fx.stamp, recordVolumeUUID: item.recordVolumeUUID)
-        guard case .upgraded = outcome else { Issue.record("precondition: provable"); return }
-        // A job re-read the file meanwhile and stored a newer fixity.
-        rec.contentFixity = fx
-        var report = FixityStampUpgradeReport()
-        r.model.applyFixityStampUpgrades([(item, outcome)], into: &report)
-        #expect(report.written == 0 && report.skippedAtWrite == 1)
-        #expect(rec.contentFixity == fx, "the newer fixity is never overwritten")
+        let item = try #require(r.model.fixityRebindCandidates(prefix: r.sb.sources.path).first)
+        rec.contentFixity = fx          // a job re-read it meanwhile
+        #expect(r.model.applyFixityRebind(item, fixity: fx) == .recordChanged)
+        #expect(rec.contentFixity == fx)
     }
 
     // MARK: Scale
 
-    /// 100k records (a few real files, many rows): the main-actor
-    /// snapshot and the off-main stat pass both under budget.
-    @Test func upgradePassScalesToAHundredThousandRecords() async throws {
+    @Test func candidateScanScalesToAHundredThousandRecords() throws {
         let r = try rig("scale"); defer { r.sb.cleanup() }
-        var files: [(URL, ContentFixity)] = []
-        for i in 0..<8 { files.append(try r.file("f\(i).mov", seed: UInt64(i + 1))) }
-        let uuid = files[0].1.stamp.volumeUUID ?? ""
+        let (url, fx) = try r.file("a.mov")
+        let legacy = withStamp(fx, remounted(fx.stamp, keepUUID: false))
         var recs: [VideoRecord] = []
         recs.reserveCapacity(100_000)
         for i in 0..<100_000 {
-            let (url, fx) = files[i % files.count]
-            let rec = MasterArchiveTestSupport.makeRecord(path: url.path)
-            rec.scanContext.volumeUUID = uuid
-            rec.contentFixity = withStamp(fx, remounted(fx.stamp, keepUUID: false))
+            let rec = MasterArchiveTestSupport.makeRecord(path: i % 2 == 0 ? url.path : "/Volumes/Other/\(i).mov")
+            rec.contentFixity = i % 4 == 0 ? fx : legacy
             recs.append(rec)
         }
         r.model.records = recs
-        let clock = ContinuousClock()
-        var items: [FixityStampUpgradeItem] = []
-        let snap = clock.measure { items = r.model.legacyFixityStampItems() }
-        #expect(items.count == 100_000)
-        #expect(snap < .seconds(1), "main-actor snapshot \(snap)")
-        let start = clock.now
-        let results = await VideoScanModel.computeFixityStampUpgrades(items)
-        let pass = clock.now - start
-        #expect(results.allSatisfy { if case .upgraded = $0.outcome { return true } else { return false } })
-        #expect(pass < .seconds(10), "off-main stat pass \(pass)")
+        var items: [FixityRebindItem] = []
+        let elapsed = ContinuousClock().measure { items = r.model.fixityRebindCandidates(prefix: r.sb.sources.path) }
+        #expect(items.count == 25_000)
+        #expect(elapsed < .seconds(2), "\(elapsed)")
     }
 
     // MARK: Sensor
@@ -279,6 +359,8 @@ struct FixityStampVolumeIdentityTests {
             // hard-link de-dup keys from stats of ONE gather pass.
             "VideoScan/DeleteDuplicatesPlan.swift": 1,
             "VideoScan/DeleteDuplicatesSiblingProof.swift": 1,
+            // names which identity field moved, for the log line only.
+            "VideoScan/FixityRebind.swift": 1,
         ]
         let pattern = try NSRegularExpression(pattern:
             #"(\.device\s*[!=]=)|([!=]=\s*[\w.()]*\.device\b)|(st_dev\)?\s*[!=]=)|([!=]=\s*[\w.()]*st_dev\b)|(\\\(\w+\.device\))"#)
@@ -300,9 +382,18 @@ struct FixityStampVolumeIdentityTests {
         #expect(found == reviewed, "device-number comparisons changed: \(found.sorted { $0.key < $1.key })")
         // The consumers really use the one comparison.
         let job = try String(contentsOf: Self.projectDir.appendingPathComponent("VideoScan/DeleteDuplicatesJob.swift"), encoding: .utf8)
-        #expect(job.contains("recorded.describesSameFile(now: current, changeTime: .mustMatch, legacyVolume: .notCompared)"))
+        #expect(job.contains("recorded.describesSameFile(now: current, changeTime: .mustMatch, volume: .resumeAcrossRemount)"))
         let check = try String(contentsOf: Self.projectDir.appendingPathComponent(
             "VideoScan/ArchiveAngel/Promote/ArchiveAngelFixityCheck.swift"), encoding: .utf8)
         #expect(check.contains("p.fixity.describesFileNow(FileIdentityStamp.capture(path: p.path))"))
+        // Terabytes of reads are Rick's decision: nothing starts the job at
+        // launch or on mount (codex #1707), and no stat-only upgrade exists.
+        for rel in ["VideoScan/VideoScanApp.swift", "VideoScan/VideoScanModel+VolumeLifecycle.swift", "VideoScan/VideoScanModel.swift"] {
+            let text = try String(contentsOf: Self.projectDir.appendingPathComponent(rel), encoding: .utf8)
+            #expect(!text.contains("startBindFixityToVolume") && !text.contains("FixityStampUpgrade"), "\(rel)")
+        }
+        let core = try String(contentsOf: Self.projectDir.appendingPathComponent(
+            "VideoScanCore/Sources/VideoScanCore/ContentFixity.swift"), encoding: .utf8)
+        #expect(!core.contains("upgradedToVolumeIdentity"))
     }
 }

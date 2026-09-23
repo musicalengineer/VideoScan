@@ -36,6 +36,5 @@ struct ContentFixityRemountReproTests {
 
         #expect(fixity.describesFileNow(afterRemount),
                 "same file, same volume, new st_dev after a remount — must still be current")
-        #expect(fixity.stampMatches(afterRemount))
     }
 }

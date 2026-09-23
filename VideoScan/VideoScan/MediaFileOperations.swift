@@ -151,6 +151,12 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// exports). Pause/Stop between phases and apply slices.
     /// FindSimilarFootageJob.
     case findSimilarFootage
+    /// "Bind Fixity to Volume" (2026-09-23, codex #1707): re-read every
+    /// file on one volume whose stored whole-file digest predates volume
+    /// identity, in full, with before/after identity checks on the same
+    /// opened file, and re-store it bound to the volume's persistent UUID.
+    /// Read-only on media; catalog writes only. BindFixityToVolumeJob.
+    case bindFixity
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -184,6 +190,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         // only reads.
         case .pruneCopies: return "TRASH"
         case .findSimilarFootage: return "Footage"
+        case .bindFixity: return "Bind"
         }
     }
 
@@ -214,6 +221,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .deleteDuplicates: return "delete duplicates"
         case .pruneCopies: return "trash copies"
         case .findSimilarFootage: return "find similar footage"
+        case .bindFixity: return "bind fixity"
         }
     }
 }

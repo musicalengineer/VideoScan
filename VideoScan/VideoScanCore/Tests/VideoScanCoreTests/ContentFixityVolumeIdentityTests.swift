@@ -2,10 +2,12 @@
 // The 2026-09-23 volume-identity rule for FileIdentityStamp / ContentFixity
 // (see the ContentFixity.swift header). Positive: a remount (new st_dev,
 // same volume UUID) keeps a digest current. Negative — every one must stay
-// STALE: a different disk at the same path, inode reuse, clone, restore,
-// rename-replace, same-size rewrite with mtime put back, UUID not
-// resolvable now. Old-stamp upgrade rule, Codable compatibility, the
-// task-local resolver seam (isolation), and a 100k scale budget.
+// STALE: a different disk at the same path (even with a reused st_dev),
+// inode reuse, clone, restore, rename-replace, symlink retarget, same-size
+// rewrite with mtime put back, UUID not resolvable now. LEGACY stamps (no
+// UUID) are untrusted on any mount (codex #1707: no proof of which volume
+// produced the digest). Codable compatibility, the task-local resolver
+// seam (isolation), and a 100k scale budget.
 
 import Darwin
 import Foundation
@@ -36,33 +38,42 @@ private func scratch(_ tag: String) throws -> URL {
 @Suite("ContentFixity volume identity — comparison rule")
 struct ContentFixityVolumeIdentityRuleTests {
 
-    @Test func remountSameVolumeNewDeviceIsFresh() {
+    @Test func newStampRemountSameVolumeNewDeviceIsFresh() {
         let stored = stamp()
         let now = stamp(dev: 16_777_249)            // LaCieWorkspace after the 9/23 remount
         #expect(fixity(stored).describesFileNow(now))
-        #expect(fixity(stored).stampMatches(now))
-        #expect(stored.describesSameFile(now: now))
-    }
-
-    /// Same disk mounted at a different PATH: the stat follows the
-    /// record's (migrated) path; the comparison itself never sees a path.
-    @Test func sameDiskAtAnotherMountPointIsFresh() {
-        #expect(fixity(stamp()).describesFileNow(stamp(dev: 99)))
+        #expect(fixity(stored).describesFileNow(stamp(dev: 99)), "same disk at another mount point")
     }
 
     /// A different disk at the same path — even one handed the SAME st_dev
     /// (device numbers are reused across disks, measured 2026-09-23) and
     /// holding a file with the same inode, size and times — is stale.
-    @Test func differentDiskSamePathIsStaleEvenWithAReusedDeviceNumber() {
-        let stored = stamp()
-        #expect(!fixity(stored).describesFileNow(stamp(uuid: uuidB)))
-        #expect(!fixity(stored).describesFileNow(stamp(dev: 1, uuid: uuidB)))
-        #expect(!fixity(stored).stampMatches(stamp(uuid: uuidB)))
+    @Test func differentDiskIsStaleEvenWithAReusedDeviceNumber() {
+        #expect(!fixity(stamp()).describesFileNow(stamp(uuid: uuidB)))
+        #expect(!fixity(stamp()).describesFileNow(stamp(dev: 1, uuid: uuidB)))
     }
 
-    @Test func uuidNotResolvableNowIsStaleEvenOnTheSameDevice() {
+    @Test func uuidNotResolvableNowIsNeverAWildcard() {
         #expect(!fixity(stamp()).describesFileNow(stamp(uuid: nil)))
-        #expect(!fixity(stamp()).stampMatches(stamp(uuid: nil)))
+    }
+
+    /// codex #1707: a legacy stamp records no volume — today's UUID plus a
+    /// matching inode/size/mtime/ctime cannot prove which disk produced the
+    /// digest, and no mount epoch was recorded. Untrusted on ANY mount,
+    /// including one with the very same st_dev.
+    @Test func legacyStampIsUntrustedOnAnyMount() {
+        let legacy = fixity(stamp(uuid: nil))
+        #expect(!legacy.isUsableForVerification)
+        #expect(!legacy.describesFileNow(stamp(uuid: nil)), "same device, no UUID either side")
+        #expect(!legacy.describesFileNow(stamp()), "same device, UUID now")
+        #expect(!legacy.describesFileNow(stamp(dev: 16_777_249)), "remounted")
+    }
+
+    @Test func legacyCatalogJSONIsUntrusted() throws {
+        let json = #"{"algorithm":"sha256","digest":"7a4f","byteCount":660299659,"computedAt":0,"stamp":{"device":16777255,"inode":1915518,"size":660299659,"mtimeNs":1275630050000000000,"ctimeNs":1786994248712435423}}"#
+        let f = try JSONDecoder().decode(ContentFixity.self, from: Data(json.utf8))
+        #expect(f.stamp.volumeUUID == nil && !f.isUsableForVerification)
+        #expect(!f.describesFileNow(stamp()))
     }
 
     /// APFS reuses inode numbers after a delete; the new file's size,
@@ -76,38 +87,39 @@ struct ContentFixityVolumeIdentityRuleTests {
         #expect(!f.describesFileNow(nil))
     }
 
-    @Test func preCtimeStampNeverVerifiesEvenWithAUUID() {
+    @Test func preCtimeOrOtherAlgorithmNeverVerifies() {
         let old = stamp(ctime: FileIdentityStamp.unknownCtime)
-        #expect(!fixity(old).describesFileNow(old))
-        #expect(!fixity(old).isUsableForVerification)
+        #expect(!fixity(old).describesFileNow(old) && !fixity(old).isUsableForVerification)
+        let md5 = ContentFixity(algorithm: "md5", digest: "ab", byteCount: stamp().size, stamp: stamp())
+        #expect(!md5.isUsableForVerification && !md5.describesFileNow(stamp()))
+        let short = ContentFixity(digest: "ab", byteCount: stamp().size - 1, stamp: stamp())
+        #expect(!short.describesFileNow(stamp()), "byteCount must equal the size now")
     }
 
-    /// A stamp WITHOUT a UUID keeps exactly the pre-fix rule: device must
-    /// match. Nothing old becomes fresh by the comparison alone.
-    @Test func legacyStampKeepsTheDeviceRule() {
-        let legacy = stamp(uuid: nil)
-        #expect(fixity(legacy).describesFileNow(stamp(uuid: nil)))
-        #expect(fixity(legacy).describesFileNow(stamp()))              // now has a UUID: device still equal
-        #expect(!fixity(legacy).describesFileNow(stamp(dev: 16_777_249)))
-        #expect(!fixity(legacy).describesFileNow(stamp(dev: 16_777_249, uuid: nil)))
+    /// Same-operation identity: device AND UUID-or-none; a device number
+    /// never bypasses a known UUID mismatch; one side unknown ≠ the other.
+    @Test func sameOperationNeedsDeviceAndUUIDAgreement() {
+        #expect(stamp().describesSameFile(now: stamp(), volume: .sameOperation))
+        #expect(!stamp().describesSameFile(now: stamp(dev: 1), volume: .sameOperation))
+        #expect(!stamp().describesSameFile(now: stamp(uuid: uuidB), volume: .sameOperation))
+        #expect(!stamp().describesSameFile(now: stamp(uuid: nil), volume: .sameOperation))
+        #expect(stamp(uuid: nil).describesSameFile(now: stamp(uuid: nil), volume: .sameOperation))
+        #expect(stamp(dev: 3, ctime: 5).matchesIgnoringChangeTime(stamp(dev: 3)))
+        #expect(!stamp(ctime: 5, uuid: uuidB).matchesIgnoringChangeTime(stamp()))
+        #expect(fixity(stamp(uuid: nil)).stampMatches(stamp(uuid: nil)), "diagnostic check, same operation")
+        #expect(!fixity(stamp()).stampMatches(stamp(dev: 1)))
     }
 
-    /// The resume/quarantine identity: legacy stamps stay device-blind (as
-    /// they always were); a UUID-bearing stamp demands the same volume.
-    @Test func quarantineRuleIsDeviceBlindOnlyForLegacyStamps() {
-        #expect(stamp(uuid: nil).describesSameFile(now: stamp(dev: 1, uuid: uuidB), legacyVolume: .notCompared))
-        #expect(stamp().describesSameFile(now: stamp(dev: 1), legacyVolume: .notCompared))
-        #expect(!stamp().describesSameFile(now: stamp(uuid: uuidB), legacyVolume: .notCompared))
-        #expect(!stamp().describesSameFile(now: stamp(uuid: nil), legacyVolume: .notCompared))
+    /// Delete Duplicates resume: legacy plans stay device-blind (as written);
+    /// a recorded UUID must reproduce.
+    @Test func resumeRuleIsDeviceBlindOnlyForLegacyPlans() {
+        #expect(stamp(uuid: nil).describesSameFile(now: stamp(dev: 1, uuid: uuidB), volume: .resumeAcrossRemount))
+        #expect(stamp().describesSameFile(now: stamp(dev: 1), volume: .resumeAcrossRemount))
+        #expect(!stamp().describesSameFile(now: stamp(uuid: uuidB), volume: .resumeAcrossRemount))
+        #expect(!stamp().describesSameFile(now: stamp(uuid: nil), volume: .resumeAcrossRemount))
     }
 
-    @Test func matchesIgnoringChangeTimeFollowsTheVolumeRule() {
-        let before = stamp()
-        #expect(stamp(dev: 3, ctime: 5).matchesIgnoringChangeTime(before))
-        #expect(!stamp(ctime: 5, uuid: uuidB).matchesIgnoringChangeTime(before))
-    }
-
-    @Test func sameInstantHardLinkCheckStillUsesDeviceAndInode() {
+    @Test func sameInstantHardLinkCheckUsesDeviceAndInode() {
         #expect(stamp().isSameFile(as: stamp(uuid: uuidB)))
         #expect(!stamp().isSameFile(as: stamp(dev: 2)))
     }
@@ -182,70 +194,45 @@ struct ContentFixityVolumeIdentityDiskTests {
         #expect(now?.volumeUUID == uuidB)
         #expect(!fx.describesFileNow(now))
     }
-}
 
-@Suite("ContentFixity volume identity — old-stamp upgrade")
-struct ContentFixityVolumeIdentityUpgradeTests {
-
-    @Test func remountedLegacyStampFromTheScannedVolumeIsUpgraded() throws {
-        let legacy = fixity(stamp(uuid: nil))
-        let now = stamp(dev: 16_777_249)
-        guard case .upgraded(let up) = legacy.upgradedToVolumeIdentity(current: now, recordVolumeUUID: uuidA.lowercased()) else {
-            Issue.record("expected an upgrade"); return
-        }
-        #expect(up.stamp == now && up.digest == legacy.digest && up.computedAt == legacy.computedAt)
-        #expect(up.describesFileNow(now))
-        #expect(up.describesFileNow(stamp(dev: 5)), "and survives the next remount")
-        #expect(!legacy.describesFileNow(now), "the comparison alone never accepts it")
+    /// A symlink retargeted to a byte-identical copy with the same times:
+    /// the path resolves to another inode — stale. And a retarget between
+    /// open and the path check makes the capture refuse (nil).
+    @Test func symlinkRetargetIsStaleAndARaceRefuses() throws {
+        let dir = try scratch("symlink"); defer { try? FileManager.default.removeItem(at: dir) }
+        let a = dir.appendingPathComponent("a.mov"), b = dir.appendingPathComponent("b.mov")
+        let link = dir.appendingPathComponent("link.mov")
+        try Data(repeating: 6, count: 8192).write(to: a)
+        #expect(copyfile(a.path, b.path, nil, copyfile_flags_t(COPYFILE_ALL)) == 0)
+        #expect(symlink(a.path, link.path) == 0)
+        let fx = fixity(try #require(FileIdentityStamp.capture(path: link.path)))
+        let fd = open(link.path, O_RDONLY)
+        defer { close(fd) }
+        #expect(unlink(link.path) == 0 && symlink(b.path, link.path) == 0)
+        #expect(!fx.describesFileNow(FileIdentityStamp.capture(path: link.path)))
+        #expect(FileIdentityStamp.capture(fd: fd, path: link.path) == nil, "the path no longer names the opened file")
+        #expect(FileIdentityStamp.capture(fd: fd, path: nil)?.inode == fx.stamp.inode)
     }
 
-    @Test func sameMountLegacyStampIsUpgradedWithoutAScanUUID() {
-        let legacy = fixity(stamp(uuid: nil))
-        #expect(legacy.upgradedToVolumeIdentity(current: stamp(), recordVolumeUUID: "") == .upgraded(fixity(stamp())
-            .withComputedAt(legacy.computedAt)))
+    /// A file that can be stat'ed but not opened gets a stamp WITHOUT a
+    /// UUID: fine for same-operation checks, never usable for the policy.
+    @Test func unreadableFileGetsAnUnboundStamp() throws {
+        let dir = try scratch("unreadable"); defer { try? FileManager.default.removeItem(at: dir) }
+        let a = dir.appendingPathComponent("a.mov"); try Data(count: 64).write(to: a)
+        #expect(chmod(a.path, 0) == 0)
+        defer { chmod(a.path, 0o644) }
+        let s = try #require(FileIdentityStamp.capture(path: a.path))
+        #expect(s.volumeUUID == nil)
+        #expect(!fixity(s).isUsableForVerification)
     }
 
-    @Test func everyUnprovenCaseIsLeftStale() {
-        let legacy = fixity(stamp(uuid: nil))
-        let moved = stamp(dev: 16_777_249)
-        #expect(legacy.upgradedToVolumeIdentity(current: moved, recordVolumeUUID: "") == .notUpgraded(.volumeNotProven))
-        #expect(legacy.upgradedToVolumeIdentity(current: moved, recordVolumeUUID: uuidB) == .notUpgraded(.volumeNotProven))
-        #expect(legacy.upgradedToVolumeIdentity(current: stamp(dev: 1, uuid: uuidB), recordVolumeUUID: uuidA)
-                == .notUpgraded(.volumeNotProven))
-        #expect(legacy.upgradedToVolumeIdentity(current: nil, recordVolumeUUID: uuidA) == .notUpgraded(.offline))
-        #expect(legacy.upgradedToVolumeIdentity(current: stamp(dev: 1, uuid: nil), recordVolumeUUID: uuidA)
-                == .notUpgraded(.noVolumeIdentityNow))
-        #expect(legacy.upgradedToVolumeIdentity(current: stamp(uuid: nil), recordVolumeUUID: uuidA)
-                == .notUpgraded(.noVolumeIdentityNow))
-        for changed in [stamp(dev: 1, ino: 2), stamp(dev: 1, size: 3), stamp(dev: 1, mtime: 4), stamp(dev: 1, ctime: 5)] {
-            #expect(legacy.upgradedToVolumeIdentity(current: changed, recordVolumeUUID: uuidA) == .notUpgraded(.fileChanged))
-        }
-        let preCtime = fixity(stamp(ctime: FileIdentityStamp.unknownCtime, uuid: nil))
-        #expect(preCtime.upgradedToVolumeIdentity(current: moved, recordVolumeUUID: uuidA) == .notUpgraded(.notUsable))
-        #expect(fixity(stamp()).upgradedToVolumeIdentity(current: moved, recordVolumeUUID: uuidA) == .alreadyBound)
-    }
-
-    /// Exhaustive-ish sweep: an upgrade is only ever produced when the
-    /// four file fields reproduce, and its stamp IS the current stat.
-    @Test func anUpgradeNeverInventsFields() {
-        let legacy = fixity(stamp(uuid: nil))
-        let devs: [UInt64] = [16_777_255, 1]
-        let uuids: [String?] = [uuidA, uuidB, nil]
-        for dev in devs {
-            for u in uuids {
-                for delta in 0..<5 {
-                    let now = stamp(dev: dev, ino: 1_915_518 + (delta == 1 ? 1 : 0), size: 660_299_659 + (delta == 2 ? 1 : 0),
-                                    mtime: 1_275_630_050_000_000_000 + (delta == 3 ? 1 : 0),
-                                    ctime: 1_786_994_248_712_435_423 + (delta == 4 ? 1 : 0), uuid: u)
-                    for rec in ["", uuidA, uuidB] {
-                        if case .upgraded(let up) = legacy.upgradedToVolumeIdentity(current: now, recordVolumeUUID: rec) {
-                            #expect(delta == 0 && u != nil && up.stamp == now)
-                            #expect(dev == 16_777_255 || rec == u, "device moved: only the scanned volume's UUID proves it")
-                        }
-                    }
-                }
-            }
-        }
+    /// The descriptor path and the path path agree on the real UUID.
+    @Test func descriptorAndPathUUIDsAgree() throws {
+        let dir = try scratch("fd"); defer { try? FileManager.default.removeItem(at: dir) }
+        let a = dir.appendingPathComponent("a.mov"); try Data(count: 64).write(to: a)
+        let fd = open(a.path, O_RDONLY); defer { close(fd) }
+        #expect(VolumeIdentity.uuid(forDescriptor: fd, path: nil) == VolumeIdentity.uuid(forPath: a.path))
+        #expect(VolumeIdentity.uuid(forPath: a.path) != nil)
     }
 }
 
@@ -298,27 +285,23 @@ struct ContentFixityVolumeIdentitySeamTests {
 @Suite("ContentFixity volume identity — scale")
 struct ContentFixityVolumeIdentityScaleTests {
 
-    /// 100k stored-vs-current comparisons + 100k upgrade decisions: the
+    /// 100k stored-vs-current comparisons: the
     /// comparison is pure field compares; budget is generous for Debug.
     @Test func hundredThousandComparisonsUnderBudget() {
         let n = 100_000
         let stored = (0..<n).map { i in fixity(stamp(ino: UInt64(i), uuid: i % 2 == 0 ? uuidA : nil)) }
         let current = (0..<n).map { i in stamp(dev: 9, ino: UInt64(i)) }
         let clock = ContinuousClock()
-        var fresh = 0, upgraded = 0
+        var fresh = 0
         let elapsed = clock.measure {
-            for i in 0..<n {
-                if stored[i].describesFileNow(current[i]) { fresh += 1 }
-                if case .upgraded = stored[i].upgradedToVolumeIdentity(current: current[i], recordVolumeUUID: uuidA) { upgraded += 1 }
-            }
+            for i in 0..<n where stored[i].describesFileNow(current[i]) { fresh += 1 }
         }
-        #expect(fresh == n / 2, "UUID stamps fresh across the remount; legacy ones not by comparison")
-        #expect(upgraded == n / 2, "legacy ones upgrade via the scanned-volume UUID")
+        #expect(fresh == n / 2, "UUID stamps fresh across the remount; legacy ones never")
         #expect(elapsed < .seconds(2), "\(elapsed)")
     }
 
-    /// Real captures (stat + getattrlist + stat) — the per-file cost the
-    /// consumers and the upgrade pass pay. 20k on one file < 2 s.
+    /// Real captures (open + fstat + fgetattrlist + stat + close) — the
+    /// per-file cost every consumer pays. 20k on one file < 3 s.
     @Test func captureCostUnderBudget() throws {
         let dir = try scratch("cost"); defer { try? FileManager.default.removeItem(at: dir) }
         let a = dir.appendingPathComponent("a.mov"); try Data(count: 64).write(to: a)
@@ -327,12 +310,6 @@ struct ContentFixityVolumeIdentityScaleTests {
             for _ in 0..<20_000 where FileIdentityStamp.capture(path: a.path)?.volumeUUID != nil { withUUID += 1 }
         }
         #expect(withUUID == 20_000)
-        #expect(elapsed < .seconds(2), "\(elapsed)")
-    }
-}
-
-private extension ContentFixity {
-    func withComputedAt(_ d: Date) -> ContentFixity {
-        ContentFixity(algorithm: algorithm, digest: digest, byteCount: byteCount, stamp: stamp, computedAt: d)
+        #expect(elapsed < .seconds(3), "\(elapsed)")
     }
 }
