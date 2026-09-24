@@ -26,8 +26,13 @@
 //   • resumable by construction — a bound record is no longer a
 //     candidate, so re-running continues where the last run stopped;
 //   • honest progress by bytes, with a ticker during long files;
-//   • catalog writes are compare-and-set on the main actor, saved every
-//     25 bindings and at the end; refused on a read-only catalog;
+//   • catalog writes are compare-and-set on the main actor; every 25
+//     bindings (or 60 s), on Stop, on disconnect and at the end the job
+//     AWAITS an acknowledged durable save (codex #1721 P2-2 — the
+//     debounced save can be starved and never reports failure). Only
+//     acknowledged bindings are reported "stored"; a failed save stops the
+//     job, says so on the row and in the log, and leaves it resumable;
+//     refused on a read-only catalog;
 //   • a digest that CHANGES on the re-read is stored (it is what the file
 //     holds now — the old one was unprovable) and named in the log;
 //   • one START line (the Center), one summary line (console, videoscan.log,
@@ -81,6 +86,18 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
     private(set) var summaryLine = ""
     /// The run Task — internal so tests can await it.
     private(set) var task: Task<Void, Never>?
+    /// TEST SEAM: replaces the acknowledged catalog save (inject a failure,
+    /// count checkpoints). nil in production.
+    var saveCatalogForTesting: (@MainActor () async -> Bool)?
+    /// Bindings between acknowledged saves.
+    var checkpointEvery = 25
+    /// Bindings whose catalog save was ACKNOWLEDGED durable.
+    private(set) var storedCount = 0
+    /// True when an acknowledged save failed — the row and log say so.
+    private(set) var saveFailed = false
+    /// Bindings made in memory since the last acknowledged save.
+    private var unsaved = 0
+    private var lastSave = Date()
 
     var title: String { "Bind Fixity to Volume — \(scopeLabel)" }
     var subtitle: String { subtitleText }
@@ -113,7 +130,7 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         state = .cancelling
         isPausedValue = false
         control.requestStop()
-        subtitleText = "Stopping — bindings already stored are kept…"
+        subtitleText = "Stopping — saving the bindings made so far…"
         task?.cancel()
     }
 
@@ -204,26 +221,26 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         guard await acquireGates() else { await releaseGates(); finish(cancelled: ()); return }
 
         var doneBytes: Int64 = 0
-        var sinceSave = 0
         for (i, item) in items.enumerated() {
             guard let outcome = await readOne(item, index: i, count: items.count, doneBytes: doneBytes, total: total)
             else { break }
             doneBytes += item.bytes
             fractionValue = Double(doneBytes) / Double(total)
             record(outcome, for: item, model: model)
-            if case .bound = outcome { sinceSave += 1 }
-            if sinceSave >= 25 { model.saveCatalogDebounced(); sinceSave = 0 }
+            if unsaved >= checkpointEvery || (unsaved > 0 && Date().timeIntervalSince(lastSave) >= 60) {
+                guard await persist(model: model) else { await failSave(model: model); return }
+            }
             // The whole volume went away — not a verdict on its files.
             if outcome == .offline, !FileManager.default.fileExists(atPath: scopePath) {
                 await releaseGates()
-                if tally.bound > 0 { model.saveCatalogDebounced() }
+                guard await persist(model: model) else { await failSave(model: model); return }
                 finishSummary(model: model, ending: "stopped — \(scopeLabel) disconnected")
-                finish(failed: "\(scopeLabel) was disconnected — \(tally.bound) binding(s) stored; start again when it is back")
+                finish(failed: "\(scopeLabel) was disconnected — \(storedCount) binding(s) saved; start again when it is back")
                 return
             }
         }
         await releaseGates()
-        if tally.bound > 0 { model.saveCatalogDebounced() }
+        guard await persist(model: model) else { await failSave(model: model); return }
         if stopped {
             finishSummary(model: model, ending: "stopped")
             finish(cancelled: ())
@@ -231,6 +248,36 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         }
         finishSummary(model: model, ending: "done")
         finish(success: summaryLine)
+    }
+
+    /// Await an ACKNOWLEDGED durable catalog save of the bindings made
+    /// since the last one. True when there was nothing to save or the
+    /// save is on disk.
+    private func persist(model: VideoScanModel) async -> Bool {
+        guard unsaved > 0 else { return true }
+        subtitleText = "Saving the catalog (\(unsaved) new binding\(unsaved == 1 ? "" : "s"))…"
+        let ok: Bool
+        if let saveCatalogForTesting { ok = await saveCatalogForTesting() } else { ok = await model.saveCatalogAcknowledged() }
+        if ok {
+            storedCount += unsaved
+            unsaved = 0
+            lastSave = Date()
+        } else {
+            saveFailed = true
+        }
+        return ok
+    }
+
+    /// A save was not acknowledged: stop reading, say so, stay resumable.
+    private func failSave(model: VideoScanModel) async {
+        await releaseGates()
+        let pending = unsaved
+        finishSummary(model: model, ending: "stopped — catalog save FAILED")
+        let message = "The catalog could not be saved — \(pending) binding(s) are only in memory (\(storedCount) saved); "
+            + "no media was changed. Stopped; start Bind Fixity to Volume again once the catalog can be saved — it resumes where it stopped."
+        model.log("  ⚠️ " + message)
+        bindFixityLog.error("\(message, privacy: .public)")
+        finish(failed: message)
     }
 
     /// Read one file, restarting it after a pause (the disk slot is given
@@ -261,9 +308,9 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         case .bound(let fixity):
             switch model.applyFixityRebind(item, fixity: fixity) {
             case .written:
-                tally.bound += 1; tally.boundBytes += fixity.byteCount
+                tally.bound += 1; tally.boundBytes += fixity.byteCount; unsaved += 1
             case .digestChanged:
-                tally.bound += 1; tally.boundBytes += fixity.byteCount; tally.digestChanged += 1
+                tally.bound += 1; tally.boundBytes += fixity.byteCount; tally.digestChanged += 1; unsaved += 1
                 bindFixityLog.warning("bind fixity: \(item.path, privacy: .public) — the re-read digest differs from the stored one (stored the new one)")
                 model.log("  ⚠️ \(name): its bytes are not what was hashed before — stored the digest it holds now")
             case .recordChanged:
@@ -289,8 +336,11 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
 
     private func finishSummary(model: VideoScanModel, ending: String) {
         let t = tally
-        var line = "Bind Fixity to Volume — \(scopeLabel) (\(ending)): \(t.bound.formatted()) of \(t.planned.formatted()) bound "
-            + "(\(ByteCountFormatter.string(fromByteCount: t.boundBytes, countStyle: .file)) read)"
+        let read = ByteCountFormatter.string(fromByteCount: t.boundBytes, countStyle: .file)
+        var line = saveFailed
+            ? "Bind Fixity to Volume — \(scopeLabel) (\(ending)): \(t.bound.formatted()) of \(t.planned.formatted()) re-read (\(read)), "
+                + "only \(storedCount.formatted()) saved to the catalog"
+            : "Bind Fixity to Volume — \(scopeLabel) (\(ending)): \(storedCount.formatted()) of \(t.planned.formatted()) stored (\(read) read)"
         var notes: [String] = []
         if t.digestChanged > 0 { notes.append("\(t.digestChanged) held different bytes than before") }
         if t.changedDuringRead > 0 { notes.append("\(t.changedDuringRead) changed during the read") }
@@ -323,7 +373,7 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
 
     private func finish(cancelled: Void) {
         state = .cancelled
-        subtitleText = "Stopped — \(tally.bound) binding(s) already stored are kept"
+        subtitleText = "Stopped — \(storedCount) binding(s) saved to the catalog are kept"
         isPausedValue = false
     }
 }

@@ -315,6 +315,75 @@ struct FixityStampVolumeIdentityTests {
         #expect(rec.contentFixity == fx)
     }
 
+    // MARK: codex #1721 P2-1 — a FIFO must never block the rehash
+
+    /// Runs `body` on its own thread; true when it returned within `seconds`.
+    private func finishes(within seconds: Double, _ body: @escaping @Sendable () -> Void) async -> Bool {
+        await withCheckedContinuation { cont in
+            let done = DispatchSemaphore(value: 0)
+            Thread.detachNewThread { body(); done.signal() }
+            DispatchQueue.global().async { cont.resume(returning: done.wait(timeout: .now() + seconds) == .success) }
+        }
+    }
+
+    @Test func aFifoNeverBlocksTheRehash() async throws {
+        let r = try rig("fifo"); defer { r.sb.cleanup() }
+        let fifo = r.sb.sources.appendingPathComponent("tape.mov").path
+        #expect(mkfifo(fifo, 0o644) == 0)
+        // Unblock any reader a broken build left waiting in open(2).
+        defer { let w = open(fifo, O_WRONLY | O_NONBLOCK); if w >= 0 { close(w) } }
+        final class Box: @unchecked Sendable { var stopped: FixityRebind.Outcome?; var live: FixityRebind.Outcome? }
+        let box = Box()
+        let stop = FixityRebind.Control(); stop.requestStop()
+        let prestopped = await finishes(within: 3) { box.stopped = FixityRebind.rehash(path: fifo, control: stop) }
+        #expect(prestopped, "a pre-stopped rehash must return before any I/O")
+        #expect(box.stopped == .interrupted)
+        let live = await finishes(within: 3) { box.live = FixityRebind.rehash(path: fifo, control: .init()) }
+        #expect(live, "a FIFO with no writer must be refused, not waited on")
+        if case .unreadable(let why)? = box.live { #expect(why.contains("not a regular file")) } else {
+            Issue.record("expected .unreadable(not a regular file), got \(String(describing: box.live))")
+        }
+    }
+
+    // MARK: codex #1721 P2-2 — "stored" only after an acknowledged save
+
+    private func legacyRecords(_ r: Rig, count: Int) throws -> [VideoRecord] {
+        try (0..<count).map { i in
+            let (url, fx) = try r.file("s\(i).mov", seed: UInt64(i + 1))
+            let rec = MasterArchiveTestSupport.makeRecord(path: url.path)
+            rec.contentFixity = withStamp(fx, remounted(fx.stamp, keepUUID: false))
+            return rec
+        }
+    }
+
+    @Test func checkpointsAreAcknowledgedSaves() async throws {
+        let r = try rig("ack"); defer { r.sb.cleanup() }
+        r.model.records = try legacyRecords(r, count: 7)
+        final class Saves: @unchecked Sendable { var n = 0 }
+        let saves = Saves()
+        let job = BindFixityToVolumeJob(scopePath: r.sb.sources.path, scopeLabel: "Scratch", model: r.model)
+        job.checkpointEvery = 3
+        job.saveCatalogForTesting = { saves.n += 1; return true }
+        job.start(); await job.task?.value
+        #expect(saves.n == 3, "after 3, after 6, and at completion — got \(saves.n)")
+        #expect(job.storedCount == 7 && !job.saveFailed)
+        #expect(job.state == .finished(summary: job.summaryLine) && job.summaryLine.contains("7 of 7 stored"), "\(job.summaryLine)")
+    }
+
+    @Test func aFailedSaveIsSurfacedAndNothingClaimsStored() async throws {
+        let r = try rig("ackfail"); defer { r.sb.cleanup() }
+        r.model.records = try legacyRecords(r, count: 4)
+        let job = BindFixityToVolumeJob(scopePath: r.sb.sources.path, scopeLabel: "Scratch", model: r.model)
+        job.checkpointEvery = 2
+        job.saveCatalogForTesting = { false }
+        job.start(); await job.task?.value
+        #expect(job.saveFailed && job.storedCount == 0)
+        guard case .failed(let message) = job.state else { Issue.record("expected failed, got \(job.state)"); return }
+        #expect(message.contains("could not be saved"), "\(message)")
+        #expect(!job.summaryLine.contains(" stored"), "\(job.summaryLine)")
+        #expect(job.tally.bound == 2, "stops at the first failed checkpoint — resumable, nothing more read")
+    }
+
     // MARK: Scale
 
     @Test func candidateScanScalesToAHundredThousandRecords() throws {

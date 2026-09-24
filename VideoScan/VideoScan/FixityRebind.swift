@@ -10,7 +10,10 @@
 // (ContentFixity.swift header).
 //
 // Per file, everything through ONE opened descriptor:
-//   open(path) → before = fstat + fgetattrlist(ATTR_VOL_UUID) on the fd,
+//   interrupted? → return before any I/O (codex #1721)
+//   open(path, O_NONBLOCK) → fstat: regular file only (a FIFO/device
+//                is refused, never waited on), then blocking reads
+//              → before = fstat + fgetattrlist(ATTR_VOL_UUID) on the fd,
 //                and stat(path) must still name the same device+inode
 //   SHA-256 of every byte through that fd (ArchivePromoteEngine.sha256 —
 //                the app's one hasher), counting the bytes
@@ -77,12 +80,25 @@ enum FixityRebind {
     /// I/O — call it off the main actor.
     static func rehash(path: String, control: Control) -> Outcome {
         control.resetBytes()
-        let fd = open(path, O_RDONLY | O_CLOEXEC)
+        // codex #1721 P2-1: a stopped/paused job does no I/O at all.
+        guard !control.shouldInterrupt else { return .interrupted }
+        // O_NONBLOCK: a FIFO (or device) put where a media file was must
+        // never block open(2) waiting for a writer — it would hold the
+        // volume gate with no cancellation point. A path pre-check would
+        // be racy; the type is checked on the OPENED descriptor below.
+        let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else {
             let e = errno
             return e == ENOENT ? .offline : .unreadable("open: \(String(cString: strerror(e)))")
         }
         defer { close(fd) }
+        var kind = stat()
+        guard fstat(fd, &kind) == 0 else { return .unreadable("fstat: \(String(cString: strerror(errno)))") }
+        guard (kind.st_mode & S_IFMT) == S_IFREG else { return .unreadable("not a regular file") }
+        // A regular file: ordinary blocking reads from here on.
+        let flags = fcntl(fd, F_GETFL)
+        if flags >= 0 { _ = fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) }
+        guard !control.shouldInterrupt else { return .interrupted }
         guard let before = FileIdentityStamp.capture(fd: fd, path: path) else {
             return .changedDuringRead("the path no longer names the opened file")
         }
