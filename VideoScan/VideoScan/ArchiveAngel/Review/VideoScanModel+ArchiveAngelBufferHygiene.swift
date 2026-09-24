@@ -47,6 +47,11 @@
 // scheduled — and a retry finds the plan still `.ready` on disk, so it
 // writes the lines exactly once.
 //
+// OFF-MAIN I/O (codex #1714 R3, 2026-09-23): the verb is async; the path
+// stats, the current plan.json read and its full-fsync `.discarded` save
+// run in `@concurrent` helpers, with the batch CLAIMED live for the whole
+// span. Only the ledger line and the scheduling stay on the main actor.
+//
 // Main-actor cost: bookkeeping only (#10). The folder size comes from
 // the caller (the card row already has it); when the caller has none
 // (the review sheet's Discard) the walk runs in the detached removal
@@ -125,6 +130,74 @@ struct ArchiveAngelBatchClearAllOutcome: Sendable {
 
 extension VideoScanModel {
 
+    /// Test seam (codex #1714 R3): called at the start of each off-main
+    /// disk phase with its name ("path", "plan") and the batch folder. A
+    /// test records which thread ran it and can stall it (for its own batch
+    /// only — suites run in parallel) to stand in for slow storage. Nil in
+    /// production; always compiled so Release test runs can set it.
+    nonisolated(unsafe) static var clearDiskProbe: (@Sendable (String, String) -> Void)?
+
+    /// What the off-main checks found (codex #1714 R3): the path guards and
+    /// the folder's existence (phase 1), then the CURRENT plan.json read and
+    /// — for an undecided batch — its `.discarded` save (phase 2).
+    enum ClearDiskPhase: Sendable {
+        case refused(ArchiveAngelBatchClearOutcome.Refusal)
+        /// The plan could not be saved `.discarded`.
+        case saveFailed(String)
+        /// Ready to remove: the current plan (saved `.discarded` when it was
+        /// undecided) and the undecided rows that returned to the pool.
+        case ready(ArchiveAngelPlan, undecided: [UUID])
+    }
+
+    /// Phase 1, OFF the main actor: the lexical / symlink / canonical path
+    /// guard and "is the folder still there" — each a stat on the buffer
+    /// volume, which may be slow or hung external storage. `@concurrent`
+    /// because in this project a plain `nonisolated async` runs on the
+    /// CALLER's actor (Approachable Concurrency) — C++: this is the
+    /// std::async(std::launch::async, …) version, not the deferred one.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func clearPathChecks(batchDir: String) async -> ArchiveAngelBatchClearOutcome.Refusal? {
+        clearDiskProbe?("path", batchDir)
+        let parent = URL(fileURLWithPath: batchDir).standardizedFileURL.deletingLastPathComponent()
+        do {
+            try ArchiveAngelPlanStore.checkBatchFolder(batchDir, bufferRoot: parent)
+        } catch {
+            return .notABatchFolder(error.localizedDescription)
+        }
+        return FileManager.default.fileExists(atPath: batchDir) ? nil : .gone
+    }
+
+    /// Phase 2, OFF the main actor, with the batch already CLAIMED (live)
+    /// by the caller: read the current plan.json (never the caller's copy,
+    /// #1), refuse a promoting one, and save an undecided batch `.discarded`
+    /// (a full-fsync write) BEFORE anything is deleted. The ledger is not
+    /// touched here — the caller writes it on the main actor only after
+    /// `.ready` came back, preserving save-before-ledger (#2).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func clearPlanPhase(batchDir: String, reason: String, at now: Date) async -> ClearDiskPhase {
+        clearDiskProbe?("plan", batchDir)
+        var plan: ArchiveAngelPlan
+        do {
+            plan = try ArchiveAngelPlanStore.load(batchDir: batchDir)
+        } catch {
+            return .refused(.unreadable(error.localizedDescription))
+        }
+        if plan.status == .promoting { return .refused(.promoting) }
+        guard plan.status == .ready || plan.status == .preparing else { return .ready(plan, undecided: []) }
+        let undecided = plan.entries.filter { $0.status == .ready }.map(\.id)
+        plan.status = .discarded
+        plan.finishedAt = plan.finishedAt ?? now
+        plan.log.append("Cleared from the buffer — \(reason); \(undecided.count) undecided row(s) returned to the pool")
+        guard ArchiveAngelPlanStore.saveLogged(plan, context: "clearing the batch") else {
+            return .saveFailed("could not save plan.json as discarded — nothing was cleared; try again")
+        }
+        return .ready(plan, undecided: undecided)
+    }
+
     /// Clear one batch from the buffer. `reason` is the human line for the
     /// plan log, the ledger and the app log ("discarded by you in the
     /// review sheet", "Clear all from the buffer card"). `bytes` is the
@@ -133,77 +206,76 @@ extension VideoScanModel {
     /// removal; production never passes it — the path guard runs before it
     /// either way. `retireCompanions` is false only from Clear all, which
     /// retires them in one pass afterwards.
+    ///
+    /// ASYNC since 2026-09-23 (codex #1714 R3): every stat, the plan.json
+    /// read and its full-fsync save run off the main actor, so Clear on a
+    /// slow or hung external buffer no longer stalls the UI. The main
+    /// actor keeps only the bookkeeping, in the same order as before:
+    /// path guards → folder gone → live (now an atomic CLAIM, held from
+    /// here until the removal ends, so no job can start on the batch while
+    /// its plan is read and saved) → unreadable → promoting → save
+    /// `.discarded` → ledger → removal.
     @discardableResult
     func clearArchiveAngelBatch(_ snapshot: ArchiveAngelPlan, reason: String, bytes: Int64? = nil,
                                 at now: Date = Date(),
                                 remove: (@Sendable (ArchiveAngelPlan) throws -> Void)? = nil,
-                                retireCompanions: Bool = true)
+                                retireCompanions: Bool = true) async
     -> ArchiveAngelBatchClearOutcome {
         var out = ArchiveAngelBatchClearOutcome(batchID: snapshot.batchID)
-        let fm = FileManager.default
-        let parent = URL(fileURLWithPath: snapshot.batchDir).standardizedFileURL.deletingLastPathComponent()
+        let batchDir = snapshot.batchDir
+        let parent = URL(fileURLWithPath: batchDir).standardizedFileURL.deletingLastPathComponent()
 
         // Safeguards first — the path (lexical, symlink, canonical), then
-        // the state on disk.
-        do {
-            try ArchiveAngelPlanStore.checkBatchFolder(snapshot.batchDir, bufferRoot: parent)
-        } catch {
-            out.refusal = .notABatchFolder(error.localizedDescription)
-        }
-        if out.refusal == nil, !fm.fileExists(atPath: snapshot.batchDir) {
-            out.refusal = .gone
-        }
-        if out.refusal == nil, ArchiveAngelLiveBatches.isLive(snapshot.batchDir) {
+        // the state on disk. Off-main.
+        if let refusal = await Self.clearPathChecks(batchDir: batchDir) {
+            out.refusal = refusal
+        } else if !ArchiveAngelLiveBatches.claim(batchDir) {
             out.refusal = .live
-        }
-        // The truth is plan.json, not the caller's copy (idempotence), and
-        // a copy is never a substitute for it (#1).
-        var plan = snapshot
-        if out.refusal == nil {
-            do {
-                plan = try ArchiveAngelPlanStore.load(batchDir: snapshot.batchDir)
-            } catch {
-                out.refusal = .unreadable(error.localizedDescription)
-            }
-        }
-        if out.refusal == nil, plan.status == .promoting {
-            out.refusal = .promoting
         }
         if let refusal = out.refusal {
             note("Archive Angel: not clearing \(snapshot.batchID) — \(refusal.text)")
             return out
         }
 
-        out.bytesFreed = bytes ?? 0
-
-        // An undecided batch: the decision, durably, before anything is
+        // Claimed. The truth is plan.json, not the caller's copy
+        // (idempotence), and a copy is never a substitute for it (#1); an
+        // undecided batch's decision is saved durably before anything is
         // deleted — and before the ledger hears of it (#2).
-        var undecided: [UUID] = []
-        if plan.status == .ready || plan.status == .preparing {
-            undecided = plan.entries.filter { $0.status == .ready }.map(\.id)
-            plan.status = .discarded
-            plan.finishedAt = plan.finishedAt ?? now
-            plan.log.append("Cleared from the buffer — \(reason); \(undecided.count) undecided row(s) returned to the pool")
-            guard ArchiveAngelPlanStore.saveLogged(plan, context: "clearing the batch") else {
-                out.error = "could not save plan.json as discarded — nothing was cleared; try again"
-                note("Archive Angel: not clearing \(plan.batchID) — \(out.error ?? ""); the folder, its records and the ledger are untouched")
-                return out
-            }
+        let plan: ArchiveAngelPlan
+        let undecided: [UUID]
+        switch await Self.clearPlanPhase(batchDir: batchDir, reason: reason, at: now) {
+        case .refused(let refusal):
+            ArchiveAngelLiveBatches.end(batchDir)
+            out.refusal = refusal
+            note("Archive Angel: not clearing \(snapshot.batchID) — \(refusal.text)")
+            return out
+        case .saveFailed(let why):
+            ArchiveAngelLiveBatches.end(batchDir)
+            out.error = why
+            note("Archive Angel: not clearing \(snapshot.batchID) — \(why); the folder, its records and the ledger are untouched")
+            return out
+        case .ready(let current, let rows):
+            plan = current
+            undecided = rows
+        }
+
+        out.bytesFreed = bytes ?? 0
+        if !undecided.isEmpty {
             ledgerAngelAttention(.angelCleared, recordIDs: undecided, batchID: plan.batchID, reason: reason, at: now)
             out.rowsReturned = undecided.count
         }
 
-        // The files, off the main actor. Live while it runs, so a second
-        // Clear, the settle and the hygiene report all see "busy". The
-        // companion records go AFTER the files, and only for files that
-        // are confirmed gone (#4).
+        // The files, off the main actor. The claim taken above is handed to
+        // the removal task (its `defer` releases it), so a second Clear, the
+        // settle and the hygiene report all see "busy" throughout. The
+        // companion records go AFTER the files, and only for files that are
+        // confirmed gone (#4).
         let remover: @Sendable (ArchiveAngelPlan) throws -> Void = remove
             ?? { try ArchiveAngelPlanStore.removeBatchFolder($0, bufferRoot: parent) }
         let batchID = plan.batchID, known = bytes, planForRemoval = plan
         let companionReason = "batch cleared — \(reason)"
-        ArchiveAngelLiveBatches.begin(plan.batchDir)
         out.removal = Task.detached(priority: .utility) { [weak self] in
-            defer { ArchiveAngelLiveBatches.end(planForRemoval.batchDir) }
+            defer { ArchiveAngelLiveBatches.end(batchDir) }
             // The walk the caller did not do (#10): here, never on main.
             let freed = known ?? ArchiveAngelPlanStore.folderBytes(planForRemoval.batchDir, fm: .default)
             let failure: String?
@@ -235,14 +307,18 @@ extension VideoScanModel {
     /// outcomes; nothing stops the loop, and no removal runs inline here.
     /// The companion records of every cleared batch are retired in ONE
     /// catalog pass once every removal has landed (#10) — `finished`.
+    /// Batches are cleared one after another, in the order given (each
+    /// one's plan I/O off the main actor).
     @discardableResult
     func clearArchiveAngelBatches(_ plans: [ArchiveAngelPlan], bytes: [String: Int64] = [:],
                                   reason: String, at now: Date = Date(),
-                                  remove: (@Sendable (ArchiveAngelPlan) throws -> Void)? = nil)
+                                  remove: (@Sendable (ArchiveAngelPlan) throws -> Void)? = nil) async
     -> ArchiveAngelBatchClearAllOutcome {
-        let outcomes = plans.map {
-            clearArchiveAngelBatch($0, reason: reason, bytes: bytes[$0.batchID], at: now, remove: remove,
-                                   retireCompanions: false)
+        var outcomes: [ArchiveAngelBatchClearOutcome] = []
+        outcomes.reserveCapacity(plans.count)
+        for plan in plans {
+            outcomes.append(await clearArchiveAngelBatch(plan, reason: reason, bytes: bytes[plan.batchID], at: now,
+                                                         remove: remove, retireCompanions: false))
         }
         let known = outcomes.reduce(Int64(0)) { $0 + ($1.cleared ? $1.bytesFreed : 0) }
         let done = outcomes.filter(\.cleared).count

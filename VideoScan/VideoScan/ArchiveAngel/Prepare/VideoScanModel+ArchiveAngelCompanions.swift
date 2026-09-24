@@ -18,7 +18,9 @@
 // from the array (caches and indexes hold the record).
 //
 // RECONCILED, not assumed (codex review 2026-09-20 #4): a record is
-// retired only when its file is CONFIRMED gone. Every caller invokes this
+// retired only when its file is CONFIRMED gone — ENOENT on a mounted
+// volume, never merely "fileExists is false" (codex #1714 R1: a folder the
+// app cannot enter hides a surviving file; that record is kept and logged). Every caller invokes this
 // AFTER the removal has finished (the detached removals hop back to the
 // main actor for it); a record whose file survived — a read-only folder,
 // a file ffmpeg still held — keeps its record and is logged as a
@@ -40,6 +42,41 @@
 import Foundation
 import VideoScanCore
 
+/// What one `lstat` of a companion path ESTABLISHED (codex #1714 R1,
+/// 2026-09-23). `FileManager.fileExists` answers false for a file that is
+/// gone AND for one inside a folder the app may not enter, an I/O error or
+/// a drive that is not mounted — codex's mode-000 probe: removal failed,
+/// `fileExists` said false, and the 18-byte file was intact once the
+/// permission came back. Retiring a catalog record needs POSITIVE absence:
+/// ENOENT / ENOTDIR, on a volume that is mounted. Anything else is
+/// `.unknown`, and the record is kept. (Same rule as the Delete
+/// Duplicates put-back: `DeleteDuplicatesJob.strandedPresence`.)
+enum ArchiveAngelFilePresence: Equatable, Sendable {
+    case present
+    case absent
+    case unknown(String)
+
+    nonisolated static func of(_ path: String, mountedRoots: Set<String>? = nil,
+                               volumesRoot: String = "/Volumes/") -> ArchiveAngelFilePresence {
+        var info = stat()
+        if lstat(path, &info) == 0 { return .present }
+        let code = errno
+        guard code == ENOENT || code == ENOTDIR else {
+            return .unknown(String(cString: strerror(code)))
+        }
+        // An unmounted drive's paths are ENOENT too — that is not absence.
+        if path.hasPrefix(volumesRoot) {
+            let name = path.dropFirst(volumesRoot.count).split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
+            let root = volumesRoot + name
+            guard !name.isEmpty,
+                  (mountedRoots ?? VolumeReachability.currentMountedRoots()).contains(root) else {
+                return .unknown("\(root) is not mounted")
+            }
+        }
+        return .absent
+    }
+}
+
 extension VideoScanModel {
 
     /// One batch (optionally only some of its entry folders) to reconcile.
@@ -58,27 +95,27 @@ extension VideoScanModel {
     @discardableResult
     func forgetArchiveAngelCompanions(batchDir: String, entryIDs: Set<UUID>? = nil,
                                       reason: String, at now: Date = Date(),
-                                      fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> Int {
+                                      presence: (String) -> ArchiveAngelFilePresence = { ArchiveAngelFilePresence.of($0) }) -> Int {
         forgetArchiveAngelCompanions(scopes: [.init(batchDir: batchDir, entryIDs: entryIDs)],
-                                     reason: reason, at: now, fileExists: fileExists)
+                                     reason: reason, at: now, presence: presence)
     }
 
     /// Several whole batches in ONE catalog pass (Clear all, #10).
     @discardableResult
     func forgetArchiveAngelCompanions(batchDirs: [String], reason: String, at now: Date = Date(),
-                                      fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> Int {
+                                      presence: (String) -> ArchiveAngelFilePresence = { ArchiveAngelFilePresence.of($0) }) -> Int {
         forgetArchiveAngelCompanions(scopes: batchDirs.map { .init(batchDir: $0) },
-                                     reason: reason, at: now, fileExists: fileExists)
+                                     reason: reason, at: now, presence: presence)
     }
 
     /// The companions of the rows listed, by entry id.
     @discardableResult
     func forgetArchiveAngelCompanions(of entries: [ArchiveAngelPlan.Entry], in plan: ArchiveAngelPlan,
                                       reason: String, at now: Date = Date(),
-                                      fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> Int {
+                                      presence: (String) -> ArchiveAngelFilePresence = { ArchiveAngelFilePresence.of($0) }) -> Int {
         guard !entries.isEmpty else { return 0 }
         return forgetArchiveAngelCompanions(batchDir: plan.batchDir, entryIDs: Set(entries.map(\.id)),
-                                            reason: reason, at: now, fileExists: fileExists)
+                                            reason: reason, at: now, presence: presence)
     }
 
     /// After `ArchiveAngelPlanStore.settleInterruptedBatches`: a discarded
@@ -89,20 +126,22 @@ extension VideoScanModel {
     /// whose file is gone.
     @discardableResult
     func forgetArchiveAngelCompanions(settled plans: [ArchiveAngelPlan],
-                                      fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> Int {
+                                      presence: (String) -> ArchiveAngelFilePresence = { ArchiveAngelFilePresence.of($0) }) -> Int {
         var total = 0
         for plan in plans {
             if plan.status == .discarded {
                 total += forgetArchiveAngelCompanions(batchDir: plan.batchDir, reason: "interrupted batch discarded",
-                                                      fileExists: fileExists)
+                                                      presence: presence)
                 continue
             }
+            // Positively gone only (codex #1714 R1): a row folder that
+            // cannot be examined is not a removed one.
             let gone = plan.entries.filter { e in
                 e.status == .failed
-                    && !fileExists(URL(fileURLWithPath: plan.batchDir).appendingPathComponent(e.id.uuidString).path)
+                    && presence(URL(fileURLWithPath: plan.batchDir).appendingPathComponent(e.id.uuidString).path) == .absent
             }
             total += forgetArchiveAngelCompanions(of: gone, in: plan, reason: "interrupted before the row was prepared",
-                                                  fileExists: fileExists)
+                                                  presence: presence)
         }
         return total
     }
@@ -112,7 +151,7 @@ extension VideoScanModel {
     /// kept and named in the log.
     @discardableResult
     func forgetArchiveAngelCompanions(scopes: [ArchiveAngelCompanionScope], reason: String, at now: Date = Date(),
-                                      fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> Int {
+                                      presence: (String) -> ArchiveAngelFilePresence = { ArchiveAngelFilePresence.of($0) }) -> Int {
         struct Root { let prefix: String; let batchID: String; let entryPrefixes: [String]? }
         let roots: [Root] = scopes.compactMap { scope in
             let prefix = Self.folderPrefix(scope.batchDir)
@@ -123,15 +162,34 @@ extension VideoScanModel {
         guard !roots.isEmpty else { return 0 }
         var retired: [(VideoRecord, String)] = []
         var survivors: [(VideoRecord, String)] = []
+        var unconfirmed: [(VideoRecord, String, String)] = []
         for rec in records where !rec.isPurged {
             guard let root = roots.first(where: { rec.fullPath.hasPrefix($0.prefix) }) else { continue }
             if let prefixes = root.entryPrefixes, !prefixes.contains(where: { rec.fullPath.hasPrefix($0) }) { continue }
-            if fileExists(rec.fullPath) {
+            switch presence(rec.fullPath) {
+            case .present:
                 survivors.append((rec, root.batchID))
-                continue
+            case .unknown(let why):
+                // codex #1714 R1: `fileExists == false` also answers a
+                // folder it may not enter (EACCES), an I/O error or an
+                // unmounted drive — a SURVIVING file read as deleted.
+                // Only ENOENT on a reachable volume retires a record.
+                unconfirmed.append((rec, root.batchID, why))
+            case .absent:
+                rec.purgedAt = now
+                retired.append((rec, root.batchID))
             }
-            rec.purgedAt = now
-            retired.append((rec, root.batchID))
+        }
+        if !unconfirmed.isEmpty {
+            let byBatch = Dictionary(grouping: unconfirmed, by: \.1)
+            for (batchID, kept) in byBatch.sorted(by: { $0.key < $1.key }) {
+                let line = "Archive Angel: kept \(kept.count) companion record(s) of \(batchID) — "
+                    + "could not confirm their files are gone (\(kept[0].2)) — \(reason): "
+                    + kept.prefix(5).map { $0.0.filename }.joined(separator: ", ")
+                    + (kept.count > 5 ? " and \(kept.count - 5) more" : "")
+                log(line)
+                appLog.write(line)
+            }
         }
         if !survivors.isEmpty {
             let byBatch = Dictionary(grouping: survivors, by: \.1)
@@ -213,7 +271,8 @@ extension VideoScanModel {
     /// the count.
     @discardableResult
     func reconcileArchiveAngelBufferAtLaunch(bufferRoot: URL,
-                                             fileExists: @escaping @Sendable (String) -> Bool = VideoScanModel.fileIsOnDisk) async -> Int {
+                                             presence: @escaping @Sendable (String) -> ArchiveAngelFilePresence
+                                                 = { ArchiveAngelFilePresence.of($0) }) async -> Int {
         // Main actor: which records live under the buffer, and in which folders.
         var recordsInBatch: [String: Int] = [:]
         var entriesOfBatch: [String: Set<String>] = [:]
@@ -229,16 +288,29 @@ extension VideoScanModel {
 
         // Off-main: one stat per batch folder, one per row folder of the
         // batches that are still there.
-        let (goneBatches, goneEntries): ([String], [String: [String]]) = await Task.detached(priority: .utility) {
+        // Only a folder POSITIVELY gone counts (codex #1714 R1): one that
+        // cannot be examined — no permission, I/O error, drive not mounted —
+        // keeps its records and is named in the log line.
+        let (goneBatches, goneEntries, unreadable): ([String], [String: [String]], [String]) =
+            await Task.detached(priority: .utility) {
             var gone: [String] = []
             var goneRows: [String: [String]] = [:]
+            var unknown: [String] = []
             for dir in batchDirs {
-                if !fileExists(dir) { gone.append(dir); continue }
-                for entry in (entryDirs[dir] ?? []).sorted() where !fileExists(entry) {
-                    goneRows[dir, default: []].append(entry)
+                switch presence(dir) {
+                case .absent: gone.append(dir); continue
+                case .unknown: unknown.append(dir); continue
+                case .present: break
+                }
+                for entry in (entryDirs[dir] ?? []).sorted() {
+                    switch presence(entry) {
+                    case .absent: goneRows[dir, default: []].append(entry)
+                    case .unknown: unknown.append(entry)
+                    case .present: break
+                    }
                 }
             }
-            return (gone, goneRows)
+            return (gone, goneRows, unknown)
         }.value
 
         // Main actor: retire through the one entry point, per batch. The
@@ -251,14 +323,14 @@ extension VideoScanModel {
         if !goneBatches.isEmpty {
             retired += forgetArchiveAngelCompanions(batchDirs: goneBatches,
                                                     reason: ArchiveAngelLaunchReconcile.batchFolderGone,
-                                                    at: now, fileExists: { _ in false })
+                                                    at: now, presence: { _ in .absent })
         }
         for (dir, entries) in goneEntries.sorted(by: { $0.key < $1.key }) {
             let ids = Set(entries.compactMap { UUID(uuidString: ($0 as NSString).lastPathComponent) })
             guard !ids.isEmpty else { continue }
             retired += forgetArchiveAngelCompanions(batchDir: dir, entryIDs: ids,
                                                     reason: ArchiveAngelLaunchReconcile.entryFolderGone,
-                                                    at: now, fileExists: { _ in false })
+                                                    at: now, presence: { _ in .absent })
         }
         let checked = recordsInBatch.values.reduce(0, +)
         let line = "Archive Angel: launch reconciliation — \(checked) companion record(s) under the buffer in "
@@ -266,6 +338,13 @@ extension VideoScanModel {
             + "\(goneEntries.values.reduce(0) { $0 + $1.count }) row folder(s) gone; retired \(retired) record(s)"
         log(line)
         appLog.write(line)
+        if !unreadable.isEmpty {
+            let kept = "Archive Angel: launch reconciliation kept the records of \(unreadable.count) folder(s) "
+                + "it could not examine (permission, I/O or drive not mounted) — not treated as gone: "
+                + unreadable.prefix(5).map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
+            log(kept)
+            appLog.write(kept)
+        }
         return retired
     }
 }

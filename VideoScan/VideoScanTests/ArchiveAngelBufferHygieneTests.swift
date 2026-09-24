@@ -317,7 +317,7 @@ struct ArchiveAngelBufferHygieneClearTests {
         model.records = [a, b, skipped, promoted, failed, compA, compB, elsewhere]
         plan = try ArchiveAngelPlanStore.load(batchDir: plan.batchDir)
 
-        let out = model.clearArchiveAngelBatch(plan, reason: "test clear")
+        let out = await model.clearArchiveAngelBatch(plan, reason: "test clear")
         #expect(out.cleared && out.refusal == nil && out.error == nil)
         #expect(out.rowsReturned == 2, "the two undecided rows")
         #expect(out.bytesFreed == 0, "no figure handed in: the walk is the removal task's, never the main actor's (#10)")
@@ -349,7 +349,7 @@ struct ArchiveAngelBufferHygieneClearTests {
         let comp = companion(plan.batchDir + "/\(a.id.uuidString)/a.mov.vs.archive.mov", of: a)
         model.records = [a, comp]
         struct Boom: Error {}
-        let out = model.clearArchiveAngelBatch(plan, reason: "test", remove: { _ in throw Boom() })
+        let out = await model.clearArchiveAngelBatch(plan, reason: "test", remove: { _ in throw Boom() })
         #expect(out.cleared && out.refusal == nil, "scheduled — the failure is reported by the task")
         let removal = try #require(await out.removal?.value)
         #expect(!removal.removed && removal.failure != nil, "the removal failed")
@@ -379,7 +379,7 @@ struct ArchiveAngelBufferHygieneClearTests {
         let leftover = companion(plan.batchDir + "/\(f.id.uuidString)/f.mov.vs.archive.mov", of: f)
         model.records = [p, f, leftover]
 
-        let out = model.clearArchiveAngelBatch(plan, reason: "free the leftovers", bytes: 3_700_000_000)
+        let out = await model.clearArchiveAngelBatch(plan, reason: "free the leftovers", bytes: 3_700_000_000)
         #expect(out.cleared && out.rowsReturned == 0)
         #expect(out.bytesFreed == 3_700_000_000, "the caller's measurement is used, not a re-walk")
         let removal = try #require(await out.removal?.value)
@@ -398,19 +398,19 @@ struct ArchiveAngelBufferHygieneClearTests {
         let live = try makeBatch(sb, name: "batch-live", status: .ready, rows: [entry(a, .ready)])
         model.records = [a]
         ArchiveAngelLiveBatches.begin(live.batchDir)
-        let out = model.clearArchiveAngelBatch(live, reason: "test")
+        let out = await model.clearArchiveAngelBatch(live, reason: "test")
         ArchiveAngelLiveBatches.end(live.batchDir)
         #expect(out.refusal == .live && !out.cleared && out.bytesFreed == 0 && out.rowsReturned == 0)
         #expect(FileManager.default.fileExists(atPath: live.planURL.path))
         #expect(try ArchiveAngelPlanStore.load(batchDir: live.batchDir).status == .ready, "untouched")
 
         let promoting = try makeBatch(sb, name: "batch-promoting", status: .promoting, rows: [entry(a, .ready)])
-        let out2 = model.clearArchiveAngelBatch(promoting, reason: "test")
+        let out2 = await model.clearArchiveAngelBatch(promoting, reason: "test")
         #expect(out2.refusal == .promoting && FileManager.default.fileExists(atPath: promoting.planURL.path))
         #expect(await clearedLines(model).isEmpty)
 
         // Once the job has let go, the same batch clears.
-        let out3 = model.clearArchiveAngelBatch(live, reason: "test")
+        let out3 = await model.clearArchiveAngelBatch(live, reason: "test")
         #expect(out3.cleared)
         #expect(await out3.removal?.value.removed == true)
     }
@@ -428,7 +428,7 @@ struct ArchiveAngelBufferHygieneClearTests {
         let compA = companion(one.batchDir + "/\(a.id.uuidString)/a.mov.vs.archive.mov", of: a)
         let compC = companion(three.batchDir + "/\(c.id.uuidString)/c.mov.vs.archive.mov", of: c)
         model.records.append(contentsOf: [compA, compC])
-        let all = model.clearArchiveAngelBatches([one, two, three], bytes: [one.batchID: 10, three.batchID: 20], reason: "Clear all")
+        let all = await model.clearArchiveAngelBatches([one, two, three], bytes: [one.batchID: 10, three.batchID: 20], reason: "Clear all")
         let outs = all.outcomes
         #expect(outs.map(\.cleared) == [true, false, true])
         #expect(outs[1].refusal == .promoting)
@@ -460,19 +460,19 @@ struct ArchiveAngelBufferHygieneClearTests {
         let plan = try makeBatch(sb, name: "batch-twice", status: .ready, rows: [entry(a, .ready)])
         model.records = [a]
 
-        let first = model.clearArchiveAngelBatch(plan, reason: "first")
+        let first = await model.clearArchiveAngelBatch(plan, reason: "first")
         #expect(first.cleared && first.rowsReturned == 1)
 
         // Before the removal lands the batch is busy (live); a tiny folder may
         // already be gone by now — either way nothing is written.
-        let during = model.clearArchiveAngelBatch(plan, reason: "again — removal in flight")
+        let during = await model.clearArchiveAngelBatch(plan, reason: "again — removal in flight")
         #expect(during.refusal == .live || during.refusal == .gone, "\(String(describing: during.refusal))")
         #expect(during.rowsReturned == 0 && !during.cleared && during.removal == nil)
 
         #expect(await first.removal?.value.removed == true)
         #expect(!FileManager.default.fileExists(atPath: plan.batchDir))
 
-        let second = model.clearArchiveAngelBatch(plan, reason: "second — stale snapshot")
+        let second = await model.clearArchiveAngelBatch(plan, reason: "second — stale snapshot")
         #expect(second.refusal == .gone)
         #expect(second.rowsReturned == 0, "a row already returned to the pool must not be returned again")
         #expect(second.cleared == false, "nothing was there to clear")
@@ -484,7 +484,7 @@ struct ArchiveAngelBufferHygieneClearTests {
         let again = try makeBatch(sb, name: "batch-stale", status: .ready, rows: [entry(a, .ready)])
         var onDisk = again; onDisk.status = .discarded
         try ArchiveAngelPlanStore.save(onDisk)
-        let third = model.clearArchiveAngelBatch(again, reason: "stale snapshot, decided on disk")
+        let third = await model.clearArchiveAngelBatch(again, reason: "stale snapshot, decided on disk")
         #expect(third.cleared && third.rowsReturned == 0)
         #expect(await third.removal?.value.removed == true)
 
@@ -494,7 +494,7 @@ struct ArchiveAngelBufferHygieneClearTests {
     }
 
     @Test("QA RED: the verb refuses a plan whose batchDir is not a batch-… folder (defense for the ONE delete entry point; ArchiveAngelPlan.swift:543)")
-    func refusesAFolderThatIsNotABatch() throws {
+    func refusesAFolderThatIsNotABatch() async throws {
         // No production caller builds such a plan today (scanBatches only yields
         // bufferRoot/batch-*), but this is THE entry point that deletes, and
         // removeBatchFolder is a bare removeItem(atPath:) with no guard.
@@ -508,7 +508,7 @@ struct ArchiveAngelBufferHygieneClearTests {
         var plan = ArchiveAngelPlan(batchDir: stranger.path, requestedCount: 0, makeLossless: false, entries: [])
         plan.status = .promoted   // a "leftover": the verb goes straight to remove
 
-        let out = model.clearArchiveAngelBatch(plan, reason: "test")
+        let out = await model.clearArchiveAngelBatch(plan, reason: "test")
         #expect(out.removalScheduled == false && out.removal == nil && out.cleared == false)
         if case .notABatchFolder(let why)? = out.refusal { #expect(why.contains("not a batch-… folder")) } else { Issue.record("\(String(describing: out.refusal))") }
         #expect(FileManager.default.fileExists(atPath: keep.path), "a folder that is not batch-… must never be removed")
@@ -548,7 +548,7 @@ struct ArchiveAngelBufferHygieneClearTests {
         let displayed = try ArchiveAngelPlanStore.load(batchDir: plan.batchDir)   // what the card/sheet holds
         try Data("{ not json".utf8).write(to: plan.planURL)                       // …then the disk goes bad
 
-        let out = model.clearArchiveAngelBatch(displayed, reason: "test")
+        let out = await model.clearArchiveAngelBatch(displayed, reason: "test")
         guard case .unreadable(let why)? = out.refusal else { Issue.record("\(String(describing: out.refusal))"); return }
         #expect(!why.isEmpty)
         #expect(!out.cleared && !out.removalScheduled && out.removal == nil && out.rowsReturned == 0)
@@ -561,7 +561,7 @@ struct ArchiveAngelBufferHygieneClearTests {
         #expect(lines.count == 1 && lines[0].contains("can't be read"), "\(lines)")
         // A missing plan.json (the folder exists) is the same refusal.
         try FileManager.default.removeItem(at: plan.planURL)
-        let again = model.clearArchiveAngelBatch(displayed, reason: "test")
+        let again = await model.clearArchiveAngelBatch(displayed, reason: "test")
         if case .unreadable = again.refusal {} else { Issue.record("\(String(describing: again.refusal))") }
         #expect(FileManager.default.fileExists(atPath: plan.batchDir))
     }
@@ -580,7 +580,7 @@ struct ArchiveAngelBufferHygieneClearTests {
         try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: plan.batchDir)
         defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: plan.batchDir) }
 
-        let failed = model.clearArchiveAngelBatch(plan, reason: "test")
+        let failed = await model.clearArchiveAngelBatch(plan, reason: "test")
         #expect(failed.refusal == nil && failed.error != nil && !failed.cleared, "\(String(describing: failed.error))")
         #expect(failed.rowsReturned == 0 && !failed.removalScheduled && failed.removal == nil)
         #expect(!comp.isPurged && fm.fileExists(atPath: comp.fullPath))
@@ -590,7 +590,7 @@ struct ArchiveAngelBufferHygieneClearTests {
 
         // Retry once the disk is writable again.
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: plan.batchDir)
-        let retry = model.clearArchiveAngelBatch(plan, reason: "test")
+        let retry = await model.clearArchiveAngelBatch(plan, reason: "test")
         #expect(retry.cleared && retry.error == nil && retry.rowsReturned == 2)
         let removal = try #require(await retry.removal?.value)
         #expect(removal.removed && removal.companionsRetired == 1)
@@ -620,7 +620,7 @@ struct ArchiveAngelBufferHygieneClearTests {
         defer { ArchiveAngelLiveBatches.end(live.batchDir) }
         #expect(ArchiveAngelLiveBatches.isLive(alias.path), "liveness is keyed on the canonical folder")
 
-        let out = model.clearArchiveAngelBatch(viaAlias, reason: "test")
+        let out = await model.clearArchiveAngelBatch(viaAlias, reason: "test")
         guard case .notABatchFolder(let why)? = out.refusal else { Issue.record("\(String(describing: out.refusal))"); return }
         #expect(why.contains("symlink"), Comment(rawValue: why))
         #expect(!out.cleared && out.removal == nil && out.rowsReturned == 0)
@@ -630,7 +630,7 @@ struct ArchiveAngelBufferHygieneClearTests {
 
         // Not live either: still refused — an alias is never a batch.
         ArchiveAngelLiveBatches.end(live.batchDir)
-        let idle = model.clearArchiveAngelBatch(viaAlias, reason: "test")
+        let idle = await model.clearArchiveAngelBatch(viaAlias, reason: "test")
         if case .notABatchFolder = idle.refusal {} else { Issue.record("\(String(describing: idle.refusal))") }
         ArchiveAngelLiveBatches.begin(live.batchDir)
 
@@ -668,7 +668,7 @@ struct ArchiveAngelBufferHygieneClearTests {
         try fm.createSymbolicLink(at: alias, withDestinationURL: elsewhere)
         let viaAlias = try ArchiveAngelPlanStore.load(batchDir: alias.path)
 
-        let out = model.clearArchiveAngelBatch(viaAlias, reason: "test")
+        let out = await model.clearArchiveAngelBatch(viaAlias, reason: "test")
         if case .notABatchFolder = out.refusal {} else { Issue.record("\(String(describing: out.refusal))") }
         #expect(!out.cleared && out.removal == nil)
         #expect(try ArchiveAngelPlanStore.load(batchDir: elsewhere.path).status == .ready)
@@ -731,13 +731,13 @@ struct ArchiveAngelBufferHygieneClearTests {
 
         let clock = ContinuousClock()
         var all: ArchiveAngelBatchClearAllOutcome?
-        let sync = clock.measure {
-            all = model.clearArchiveAngelBatches(plans, reason: "Clear all")   // no bytes: the walks are off-main
+        let sync = await clock.measure {
+            all = await model.clearArchiveAngelBatches(plans, reason: "Clear all")   // no bytes: the walks are off-main
         }
         let outcome = try #require(all)
         let refusals = outcome.outcomes.map { String(describing: $0.refusal) }
         #expect(outcome.outcomes.filter { !$0.cleared }.isEmpty, "\(refusals)")
-        #expect(sync < .milliseconds(400), "the verb's synchronous part (6 plan reads + 3 fsync'd saves, no record walk): \(sync)")
+        #expect(sync < .milliseconds(400), "the verb up to scheduling (6 plan reads + 3 fsync'd saves, now off-main; no record walk): \(sync)")
         let total = await clock.measure { _ = await outcome.finished.value }
         #expect(sync + total < .seconds(5), "6 removals + one pass over 100k records: \(sync + total)")
         #expect(await outcome.finished.value == 6, "every companion, in the one pass")

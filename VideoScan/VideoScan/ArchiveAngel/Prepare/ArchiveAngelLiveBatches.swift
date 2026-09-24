@@ -30,6 +30,20 @@ enum ArchiveAngelLiveBatches {
         live.withLock { $0[key, default: 0] += 1 }
     }
 
+    /// Mark a batch live ONLY if nothing else has it — an atomic
+    /// check-and-begin (codex #1714 R3: Clear now reads and saves the plan
+    /// off the main actor, so "is it live?" and "begin" must be one step,
+    /// or a job could start between them). True = claimed; balance with
+    /// `end`.
+    nonisolated static func claim(_ batchDir: String) -> Bool {
+        let key = normalized(batchDir)
+        return live.withLock { state in
+            guard state[key] == nil else { return false }
+            state[key] = 1
+            return true
+        }
+    }
+
     nonisolated static func end(_ batchDir: String) {
         let key = normalized(batchDir)
         live.withLock { state in

@@ -104,7 +104,7 @@ struct ArchiveAngelCompanionForgetTests {
         model.records.append(contentsOf: [a, b, c, d])
         // Only the reclaimed row's folder is gone; the real failure's folder still exists.
         let existing: Set<String> = [keptDir + "/\(realFailure.uuidString)", keptDir + "/\(ready.uuidString)"]
-        let n = model.forgetArchiveAngelCompanions(settled: [kept, gone], fileExists: { existing.contains($0) })
+        let n = model.forgetArchiveAngelCompanions(settled: [kept, gone], presence: { existing.contains($0) ? .present : .absent })
         #expect(n == 2)
         #expect(a.isPurged && d.isPurged)
         #expect(!b.isPurged && !c.isPurged)
