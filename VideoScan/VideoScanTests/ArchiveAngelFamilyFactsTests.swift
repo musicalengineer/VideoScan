@@ -154,13 +154,17 @@ struct ArchiveAngelFamilyFactsTests {
         // A whole-file repair of the original (same length) is an equivalent.
         let child = rec("tape_balanced.mov", hash: ""); child.derivedFrom = original.id
         child.derivationKind = "balanceAudio"; child.durationSeconds = 600
+        // …only while its own fixity is fresh too (codex #1673: every lending
+        // edge needs both ends fresh; a repair's bytes differ by design).
+        child.sizeBytes = 10
+        child.contentFixity = ContentFixity(digest: String(repeating: "ef", count: 32), byteCount: 10, stamp: stamp)
         let lookalike = rec("00000.MTS", hash: "v1:other"); lookalike.duplicateGroupID = g
         lookalike.userDate = "1987-06"; lookalike.userDateConfidence = "known"; lookalike.userPlace = "Somewhere"
         model.records = [original, twin, child, lookalike]
         // `fresh`: the stat-verified set (declared here — this unit test pins
         // the lender logic; ArchiveAngelCodex1659Tests pins the stat).
         let r = ArchiveAngelFamilyFacts.relatives(of: original, index: .init(active: model.records), catalog: model,
-                                                  fresh: [original.id, twin.id])
+                                                  fresh: [original.id, twin.id, child.id])
         #expect(Set(r.identity.map(\.id)) == [twin.id, child.id])
         #expect(r.similar.map(\.id) == [lookalike.id])
         let got = ArchiveAngelFamilyFacts.inherited(for: original, relatives: r)

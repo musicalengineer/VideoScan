@@ -61,6 +61,10 @@ struct ArchiveAngelBoundarySensorTests {
         // S4: the catalog's Show Copies… sheet host (the façade's
         // `showCopies(of:)` / `copies(of:)` are reached through `archiveAngel`).
         "ArchiveAngelShowCopiesHost",
+        // codex #1674 F1 (2026-09-23): Find Similar Footage reuses the Angel's
+        // pure, stat-only freshness check so "Identical" means the same thing
+        // in both features. It reads no Angel state — a shared utility, not a leak.
+        "ArchiveAngelFixityCheck",
     ]
 
     /// Angel files that ARE the seams: they may touch app globals.

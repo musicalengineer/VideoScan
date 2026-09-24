@@ -108,9 +108,12 @@ extension GedcomFamilyGraph {
                 grouped[Int(partner)] = true
                 members.append(partner)
             }
+            // Husband first, then wife, then anyone else; name and id break
+            // ties. Split out of the sort closure: the nested ternaries in a
+            // tuple comparison timed out the CI type checker (Xcode 26.3,
+            // run 35930657961).
             let persons = members.compactMap { people[index.ids[Int($0)]] }
-                .sorted { ($0.sex == "M" ? 0 : $0.sex == "F" ? 1 : 2, $0.name, $0.id)
-                    < ($1.sex == "M" ? 0 : $1.sex == "F" ? 1 : 2, $1.name, $1.id) }
+                .sorted(by: Self.coupleOrder)
             guard let first = persons.first, let o = index.ordinal(of: first.id),
                   let pathA = indexA.path(fromOrdinal: o),
                   let pathB = indexB.path(fromOrdinal: o) else { continue }
@@ -132,5 +135,22 @@ extension GedcomFamilyGraph {
         let disputed = links.filter { Set($0.childOfFamilies).count > 1 }
         return CommonAncestry(sharedAncestorCount: sharedCount, meetings: meetings,
                               undatedLinks: undated, disputedParentLinks: disputed)
+    }
+
+    /// Couple order for a meeting: husband (M), then wife (F), then others;
+    /// then name, then id. Same order the inline tuple comparison produced.
+    static func coupleOrder(_ a: Person, _ b: Person) -> Bool {
+        let ra = sexRank(a.sex), rb = sexRank(b.sex)
+        if ra != rb { return ra < rb }
+        if a.name != b.name { return a.name < b.name }
+        return a.id < b.id
+    }
+
+    private static func sexRank(_ sex: String?) -> Int {
+        switch sex {
+        case "M": return 0
+        case "F": return 1
+        default: return 2
+        }
     }
 }
