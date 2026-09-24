@@ -445,7 +445,7 @@ struct ArchiveAngelScaleCharacterizationTests {
         #expect(result.needsDate.count == Self.pinnedNudgeNear)
         #expect(head == Self.pinnedNudgeHead)
         // Projection + classify (the S3a parity test's budget; assess alone had 1 s).
-        #expect(s < 1.5, "legacy rules over 100k in \(s) s")
+        #expect(s < PerformanceLane.debugCeiling(seconds: 1.5), "legacy rules over 100k in \(s) s")
     }
 
     @Test("RULES v10 AS DATA: the data-driven scorer reproduces every v10 pin exactly (grades, reasons, score sum, batch)")
@@ -507,7 +507,7 @@ struct ArchiveAngelScaleCharacterizationTests {
         #expect(result.counts.values.reduce(0, +) == 100_000)
         #expect(result.counts == Self.pinnedClasses)
         #expect(result.ready.count == result.counts[.ready] ?? 0)
-        #expect(s < 1, "unified classify over 100k in \(s) s")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "unified classify over 100k in \(s) s")
     }
 
     @Test("the background sweep stores the same grade histogram as the pure path (10k, no Spotlight, no disk budget)")

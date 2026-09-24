@@ -272,7 +272,7 @@ struct HallieCatalogSuperlativeTests {
         #expect(byLength.first?.durationSeconds == longest)
         #expect(bySize.count == n)
         #expect((bySize.first?.sizeBytes ?? 0) <= (bySize.last?.sizeBytes ?? 0))
-        #expect(elapsed < .seconds(4), "two 100k sorts took \(elapsed) (budget 4 s)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(4)), "two 100k sorts took \(elapsed) (budget 4 s)")
 
         // End to end through the executor: 100k snapshots, one turn. Unique
         // durations, so the pick is the value and not the path tie-break.
@@ -286,6 +286,6 @@ struct HallieCatalogSuperlativeTests {
         let turnElapsed = clock.now - turnStart
         #expect(turn.result.outcome == .answered, Comment(rawValue: turn.result.prose))
         #expect(turn.result.prose.contains("is clip_99999.mov (27h 46m 40s)"), Comment(rawValue: turn.result.prose))
-        #expect(turnElapsed < .seconds(6), "the 100k ordered turn took \(turnElapsed) (budget 6 s)")
+        #expect(turnElapsed < PerformanceLane.debugCeiling(.seconds(6)), "the 100k ordered turn took \(turnElapsed) (budget 6 s)")
     }
 }

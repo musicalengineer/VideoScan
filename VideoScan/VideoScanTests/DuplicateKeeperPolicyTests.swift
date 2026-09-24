@@ -335,7 +335,7 @@ struct DuplicateKeeperScaleTests {
         let elapsed = start.duration(to: .now)
 
         #expect(keeper != nil)
-        #expect(elapsed < .seconds(2), "100k keeper election exceeded 2 s: \(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "100k keeper election exceeded 2 s: \(elapsed)")
         // Sensor: the winner is online, on the top listed volume, and
         // star-rated — never an offline/retired volume, whatever the
         // technical scores say.

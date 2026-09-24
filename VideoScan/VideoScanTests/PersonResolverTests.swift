@@ -157,7 +157,7 @@ struct PersonResolverTests {
         let elapsed = started.duration(to: .now)
 
         #expect(result == .tooMany(limit: 6))
-        #expect(elapsed < .milliseconds(100),
+        #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(100)),
                 "person-list rejection exceeded 100 ms: \(elapsed)")
     }
 

@@ -152,7 +152,7 @@ struct DossierDashboardRefreshTests {
         // design and runs OFF the render path (timer callback, gated).
         // 5 s is generous even for the M1 nightly runner; M4 does this
         // in well under a second.
-        #expect(refilter < .seconds(5),
+        #expect(refilter < PerformanceLane.debugCeiling(.seconds(5)),
                 "100k refilter took \(refilter) — exceeds the explicit budget")
 
         // The idle tick at the same scale must not touch records at all.
@@ -164,7 +164,7 @@ struct DossierDashboardRefreshTests {
             )
             #expect(out == nil)
         }
-        #expect(idle < .milliseconds(250),
+        #expect(idle < PerformanceLane.debugCeiling(.milliseconds(250)),
                 "idle tick at 100k took \(idle) — it must be O(volumes), not O(records)")
     }
 

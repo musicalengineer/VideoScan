@@ -130,7 +130,8 @@ struct TranscodeArchiveFollowupTests {
     /// A real encode whose output name is taken by a catalogued file on
     /// the archive volume: the existing bytes are untouched and the new
     /// derivative lands beside it under a free name, and the job says so.
-    @Test func transcodeOntoAnOccupiedArchiveNamePublishesBesideAndKeepsTheOriginal() async throws {
+    @Test(.enabled(if: CleanupTestMedia.runsHardwareProResTests, CleanupTestMedia.hardwareProResSkipReason))
+    func transcodeOntoAnOccupiedArchiveNamePublishesBesideAndKeepsTheOriginal() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("transcode-beside"); defer { sb.cleanup() }
         let model = MasterArchiveTestSupport.makeModel(sb)
         try MasterArchiveTestSupport.initialize(model, in: sb)
@@ -198,7 +199,7 @@ struct ArchiveSnapshotMainThreadTests {
                 let start = ContinuousClock.now
                 model.refreshDossierCountsNow()
                 let elapsed = start.duration(to: .now)
-                #expect(elapsed < .seconds(2), "100k refresh exceeded 2 s: \(elapsed)")
+                #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "100k refresh exceeded 2 s: \(elapsed)")
             }
         }
         #expect(counter.mainThreadCalls == 0,
@@ -411,7 +412,8 @@ struct TranscodeReplaceTrashTests {
     /// Off the archive: Replace moves the old file to the Trash (through
     /// the seam — never the user's real Trash), and only once the new
     /// output is complete; the new file takes the name.
-    @Test func replaceOffTheArchiveTrashesTheOldFileAfterTheNewOneExists() async throws {
+    @Test(.enabled(if: CleanupTestMedia.runsHardwareProResTests, CleanupTestMedia.hardwareProResSkipReason))
+    func replaceOffTheArchiveTrashesTheOldFileAfterTheNewOneExists() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("transcode-replace"); defer { sb.cleanup() }
         let model = MasterArchiveTestSupport.makeModel(sb)
         try MasterArchiveTestSupport.initialize(model, in: sb)
@@ -455,7 +457,8 @@ struct TranscodeReplaceTrashTests {
     /// Replace chosen for a file whose path text says "boot disk" but
     /// whose OWN volume is FamilyArchive (a symlinked / custom mount
     /// path): the removal-time UUID check keeps it; nothing is trashed.
-    @Test func replaceOnAFileWhoseOwnVolumeIsTheArchiveKeepsItAndPublishesBeside() async throws {
+    @Test(.enabled(if: CleanupTestMedia.runsHardwareProResTests, CleanupTestMedia.hardwareProResSkipReason))
+    func replaceOnAFileWhoseOwnVolumeIsTheArchiveKeepsItAndPublishesBeside() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("transcode-uuid"); defer { sb.cleanup() }
         let model = MasterArchiveTestSupport.makeModel(sb)
         let srcURL = sb.sources.appendingPathComponent("test_src.mov")

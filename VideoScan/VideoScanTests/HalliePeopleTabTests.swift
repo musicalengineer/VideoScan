@@ -419,7 +419,7 @@ struct HalliePeopleTabTests {
             profiles: profiles, graph: nil, cyberBrain: nil, scope: .catalog)
         let elapsed = ContinuousClock.now - start
 
-        #expect(elapsed < .seconds(10), Comment(rawValue: "100k roster took \(elapsed)"))
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(10)), Comment(rawValue: "100k roster took \(elapsed)"))
         #expect(result.prose.contains("Person 000000 (also Alias 000000)"))
         #expect(result.prose.contains("Person 000023 (also Alias 000023)"))
         #expect(!result.prose.contains("Person 000024"))

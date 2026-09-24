@@ -252,7 +252,7 @@ struct VolumeStatusCacheTests {
         let elapsed = Date().timeIntervalSince(start)
         #expect(out.count == 10)
         #expect(out["/Volumes/Perf0"]?.totalRecords == 10_000)
-        #expect(elapsed < 2.0,
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 2.0),
                 "Single-pass aggregate at 100k×10 must stay well under 2 s (got \(elapsed)s)")
     }
 }

@@ -353,7 +353,7 @@ struct ScanTargetRecordFactsTests {
         #expect(facts.count == 20)
         // Exactly 5,000 live on each volume; origin rows no longer count.
         #expect(facts[targets[0].id]?.records == 5_000)
-        #expect(elapsed < 1.0,
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 1.0),
                 "projection at 100k×20 must stay well under 1 s (got \(elapsed)s)")
     }
 
@@ -372,7 +372,7 @@ struct ScanTargetRecordFactsTests {
         }
         let elapsed = Date().timeIntervalSince(start)
         #expect(acc > 0)
-        #expect(elapsed < 0.5, "100k body-side reads must be O(1) each (got \(elapsed)s)")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 0.5), "100k body-side reads must be O(1) each (got \(elapsed)s)")
     }
 
     /// codex #1417: the first cut asked one `TargetRemovalScope` per
@@ -410,7 +410,7 @@ struct ScanTargetRecordFactsTests {
         #expect(facts[targets[0].id]?.records == 5_000, "volume root: its direct files are under no other target")
         #expect(facts[targets[1].id]?.records == 0, "first nested folder is covered by the volume target")
         #expect(facts[targets[19].id]?.records == 0, "deepest nested root is covered by all 19 ancestors")
-        #expect(elapsed < 1.0,
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 1.0),
                 "nested 100k×20 must cost the same order as flat 100k×20 (got \(elapsed)s)")
     }
 

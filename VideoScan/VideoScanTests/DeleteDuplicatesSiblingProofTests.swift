@@ -596,7 +596,7 @@ struct DeleteDuplicatesForecastTests {
         let pure = t0.duration(to: .now)
         #expect(f.rowBuckets.count == n)
         #expect(f.tally(.needsSiblingReads).files == n / 2 && f.tally(.trash).files == n / 2, "\(f.buckets)")
-        #expect(pure < .seconds(3), "100k-row forecast took \(pure)")
+        #expect(pure < PerformanceLane.debugCeiling(.seconds(3)), "100k-row forecast took \(pure)")
 
         // The live-catalog path: 100k rows (50k families of keeper + 2
         // extras + 1 sibling) — built once, timed from the call.
@@ -623,7 +623,7 @@ struct DeleteDuplicatesForecastTests {
         let built = t1.duration(to: .now)
         #expect(lf.rowBuckets.count == n)
         #expect(lf.tally(.cannotCheck).files == n, "the keepers' drive is not mounted — no stat, just the mount table")
-        #expect(built < .seconds(6), "100k-row live forecast took \(built)")
+        #expect(built < PerformanceLane.debugCeiling(.seconds(6)), "100k-row live forecast took \(built)")
     }
 }
 

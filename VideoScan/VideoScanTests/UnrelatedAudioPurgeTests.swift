@@ -281,7 +281,7 @@ struct UnrelatedAudioPurgeScaleTests {
                 "expected \(junkCount) unrelated-audio candidates, got \(count)")
         // Precompute-then-O(1) over 100k must be trivial; a 2 s ceiling
         // catches any accidental O(N²) regression.
-        #expect(elapsed < 2.0, "count scan took \(elapsed)s over 100k records")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 2.0), "count scan took \(elapsed)s over 100k records")
 
         // candidateIDs agrees with count (same criterion, dedup by id).
         #expect(UnrelatedAudioPurge.candidateIDs(in: records).count == junkCount)

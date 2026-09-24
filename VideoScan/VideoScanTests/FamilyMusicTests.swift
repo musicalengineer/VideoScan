@@ -317,14 +317,14 @@ struct FamilyMusicScaleTests {
         let shelf = FamilyMusicShelf.build(from: records, isArchived: { _ in false })
         let shelfMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         #expect(shelf.count == 25)
-        #expect(shelfMs < 250, "shelf pass over 100k took \(Int(shelfMs)) ms — budget 250 ms")
+        #expect(shelfMs < PerformanceLane.debugCeiling(milliseconds: 250), "shelf pass over 100k took \(Int(shelfMs)) ms — budget 250 ms")
 
         let memo = RenderMemo<ArchiveCategoryKey, ArchiveCategorySnapshot>()
         let t1 = CFAbsoluteTimeGetCurrent()
         let snap = ArchiveCategorySnapshot.cached(in: memo, model: m, volumeSearchPaths: [])
         let computeMs = (CFAbsoluteTimeGetCurrent() - t1) * 1000
         #expect(snap.count(for: .music) == 25)
-        #expect(computeMs < 2_000, "snapshot at 100k took \(Int(computeMs)) ms — budget 2 s")
+        #expect(computeMs < PerformanceLane.debugCeiling(milliseconds: 2_000), "snapshot at 100k took \(Int(computeMs)) ms — budget 2 s")
 
         for _ in 0..<1_000 { _ = ArchiveCategorySnapshot.cached(in: memo, model: m, volumeSearchPaths: []) }
         #expect(memo.computeCount == 1, "1,000 renders must not recompute")

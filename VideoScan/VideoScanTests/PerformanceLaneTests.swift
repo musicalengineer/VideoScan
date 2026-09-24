@@ -90,6 +90,41 @@ struct PerformanceLaneTests {
     }
 }
 
+/// 2026-09-24 (CI run 36068753075): the 100k scale budgets now all route
+/// through `debugCeiling`. These pin that the widening happens ONLY on a
+/// GitHub-hosted runner — every local / nightly / fleet run still asserts
+/// the original number.
+@Suite("PerformanceLane — hosted-runner Debug ceiling")
+struct PerformanceLaneHostedRunnerTests {
+
+    @Test("off GitHub the ceiling is exactly the budget; CI=1 alone does not widen it")
+    func localCeilingIsTheBudget() {
+        for budget in [Duration.milliseconds(200), .milliseconds(400), .seconds(1), .seconds(2), .seconds(4)] {
+            #expect(PerformanceLane.debugCeiling(budget, environment: [:]) == budget)
+            #expect(PerformanceLane.debugCeiling(budget, environment: ["CI": "1"]) == budget)
+            #expect(PerformanceLane.debugCeiling(budget, environment: ["GITHUB_ACTIONS": "false"]) == budget)
+        }
+    }
+
+    @Test("on a GitHub-hosted runner the ceiling is 3× the budget")
+    func hostedCeilingIsTripled() {
+        #expect(PerformanceLane.debugCeiling(.seconds(2), environment: ["GITHUB_ACTIONS": "true"]) == .seconds(6))
+        #expect(PerformanceLane.debugCeiling(.milliseconds(400), environment: ["GITHUB_ACTIONS": "true"]) == .milliseconds(1_200))
+    }
+
+    /// Sensor on the LIVE process: a run on Rick's machines (no
+    /// GITHUB_ACTIONS=true) must be held to the unscaled budget.
+    @Test("sensor: this process's ceiling matches its environment")
+    func liveCeilingMatchesEnvironment() {
+        let onGitHub = ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
+        let ceiling = PerformanceLane.debugCeiling(.seconds(2))
+        #expect(ceiling == (onGitHub ? .seconds(6) : .seconds(2)), "GITHUB_ACTIONS=\(onGitHub) ceiling \(ceiling)")
+        // The Double forms use the same multiplier.
+        #expect(PerformanceLane.debugCeiling(seconds: 2.0) == (onGitHub ? 6.0 : 2.0))
+        #expect(PerformanceLane.debugCeiling(milliseconds: 1_500) == (onGitHub ? 4_500 : 1_500))
+    }
+}
+
 @Suite("PerformanceLane — load-aware Debug ceiling")
 struct PerformanceLaneLoadTests {
 

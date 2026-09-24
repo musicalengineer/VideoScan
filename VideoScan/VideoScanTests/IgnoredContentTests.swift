@@ -459,7 +459,7 @@ struct IgnoredContentScaleTests {
         #expect(plan.junkCameBackCount == 50_000)
         #expect(plan.rows.count == 50_000)
         #expect(plan.archivedCopyCount == 0)
-        #expect(elapsed < .seconds(15), "100k records × 100k-entry store dry run took \(elapsed) — budget 15s")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(15)), "100k records × 100k-entry store dry run took \(elapsed) — budget 15s")
     }
 
     @Test("100k store lookups are O(1): under 1 s")
@@ -481,7 +481,7 @@ struct IgnoredContentScaleTests {
             }
         }
         #expect(hits == 200_000)
-        #expect(elapsed < .seconds(1), "200k lookups took \(elapsed) — budget 1s")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "200k lookups took \(elapsed) — budget 1s")
     }
 }
 
@@ -582,7 +582,7 @@ struct IgnoredContentSensorTests {
         #expect(second.rows.first?.cameBack == true)
         #expect(second.rows.first?.reason == .livePhotoComplement)
         #expect(second.livePhotoComplementCount == 0, "junk-first: not double counted by the filename rule")
-        #expect(elapsed < .seconds(10), "gate + 100k dry run took \(elapsed) — budget 10s")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(10)), "gate + 100k dry run took \(elapsed) — budget 10s")
 
         // The override: Put Back in Catalog on the original forgets the
         // content — the copy is no longer "junk that came back".

@@ -143,6 +143,6 @@ struct CatalogArchivedInsideRootTests {
         for r in records where m.pfNotYetArchived(r) { notYet += 1 }
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         #expect(notYet == 98_000)
-        #expect(ms < 1_500, "100k predicate calls took \(Int(ms)) ms — budget 1.5 s")
+        #expect(ms < PerformanceLane.debugCeiling(milliseconds: 1_500), "100k predicate calls took \(Int(ms)) ms — budget 1.5 s")
     }
 }

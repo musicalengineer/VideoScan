@@ -412,7 +412,7 @@ struct DeleteDuplicatesSafetyTests {
 
         #expect(selection.targets.count == 99_999)
         #expect(selection.skippedCount == 0)
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "100k duplicate planning exceeded 2 seconds: \(elapsed)")
     }
 

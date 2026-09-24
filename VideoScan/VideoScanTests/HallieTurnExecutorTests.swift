@@ -458,7 +458,7 @@ struct HallieTurnExecutorTests {
         ])
         #expect(answer.outcome == .answered)
         #expect(answer.prose.contains("Tim Zeta"))
-        #expect(elapsed < .seconds(3),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(3)),
                 "100k injected-profile clarification took \(elapsed)")
     }
 
@@ -590,7 +590,7 @@ struct HallieTurnExecutorTests {
 
         #expect(result.outcome == .answered)
         #expect(result.citations.count == ArchivistPresenceExecutor.maxCitations)
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "direct shared execution took \(elapsed) for 100k prebuilt snapshots")
     }
 
@@ -613,7 +613,7 @@ struct HallieTurnExecutorTests {
 
         #expect(partialPresence.count < records.count,
                 "cancelled presence capture must not finish all 100k records")
-        #expect(presenceElapsed < .seconds(3),
+        #expect(presenceElapsed < PerformanceLane.debugCeiling(.seconds(3)),
                 "presence capture took \(presenceElapsed) to observe cancellation")
 
         let aggregateTask = Task { @MainActor in
@@ -627,7 +627,7 @@ struct HallieTurnExecutorTests {
 
         #expect(partialAggregate.count < records.count,
                 "cancelled aggregate capture must not finish all 100k records")
-        #expect(aggregateElapsed < .seconds(3),
+        #expect(aggregateElapsed < PerformanceLane.debugCeiling(.seconds(3)),
                 "aggregate capture took \(aggregateElapsed) to observe cancellation")
     }
 

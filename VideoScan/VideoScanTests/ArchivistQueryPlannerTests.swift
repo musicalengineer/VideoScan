@@ -253,7 +253,7 @@ struct ArchivistQueryPlannerTests {
         let elapsed = started.duration(to: .now)
 
         #expect(plan == .tooManyPeople(limit: 6))
-        #expect(elapsed < .milliseconds(100),
+        #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(100)),
                 "planner rejection exceeded 100 ms: \(elapsed)")
     }
 

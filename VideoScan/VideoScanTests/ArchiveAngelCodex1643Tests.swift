@@ -511,7 +511,7 @@ struct ArchiveAngelCodex1643ScaleTests {
         }
         #expect(mismatches == 0, "the filter and the effective class disagree on \(mismatches) records")
         for k in ArchiveAngelRecommendationClass.allCases where k != .prepared { #expect(s.count(k) == (counts[k] ?? 0), "\(k)") }
-        #expect(elapsed < .seconds(2), "\(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "\(elapsed)")
     }
 
     @Test("SENSOR A4: a 100k-record evidence file, 30k of them in 3-copy groups — the pick of 25 reclassifies groups live in under 2 s (Debug)")
@@ -546,7 +546,7 @@ struct ArchiveAngelCodex1643ScaleTests {
         for p in pick?.selection.picks ?? [] where p.candidate.duplicateGroupID != nil {
             #expect(p.candidate.duplicateDisposition == .keep, "a grouped pick is the group's Keep copy")
         }
-        #expect(elapsed < .seconds(2), "\(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "\(elapsed)")
     }
 }
 

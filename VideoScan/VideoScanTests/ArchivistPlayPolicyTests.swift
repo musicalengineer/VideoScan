@@ -60,6 +60,6 @@ struct ArchivistPlayPolicyTests {
                                                 isReachable: { _ in false })
         let elapsed = CFAbsoluteTimeGetCurrent() - started
         #expect(choice == .none)
-        #expect(elapsed < 0.25, "100k selection took \(elapsed)s — budget is 250ms")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 0.25), "100k selection took \(elapsed)s — budget is 250ms")
     }
 }

@@ -126,7 +126,7 @@ struct FamilyTreeModelReuseTests {
             await model.prepareForAppearance(revision: "large", settings: Self.settings)
         }
         #expect(model.diskLoadAttempts == attempts)
-        #expect(clock.now - start < .seconds(2))
+        #expect(clock.now - start < PerformanceLane.debugCeiling(.seconds(2)))
     }
 
     /// A model that has never loaded must load, whatever the revision.

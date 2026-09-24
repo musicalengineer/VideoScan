@@ -402,7 +402,7 @@ struct MediaDistributionScaleTests {
 
         #expect(d.slices.count == 8)                        // 10 live volumes → 7 + Other
         #expect(d.totalFiles + d.retiredFiles + (100_000 / 97 + 1) == 100_000)
-        #expect(elapsed < .milliseconds(500),
+        #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(500)),
                 "media distribution took \(elapsed) for 100k records — over the 0.5 s budget")
     }
 }

@@ -167,7 +167,7 @@ struct AnalysisScopeFilterTests {
         #expect(keptCount == 50_000)
         #expect(tally.audio == 37_500)
         #expect(tally.photos == 12_500)
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "100k scope pass took \(elapsed) — budget 2s")
     }
 
@@ -191,7 +191,7 @@ struct AnalysisScopeFilterTests {
         #expect(cov.total == 100_000)
         #expect(cov.eligible == 75_000, "audio quarter must be out of eligible")
         #expect(cov.outOfScopeCount == 25_000)
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "100k coverage pass took \(elapsed) — budget 2s")
     }
 }

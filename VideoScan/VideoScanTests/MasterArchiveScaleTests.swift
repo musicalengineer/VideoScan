@@ -46,7 +46,7 @@ struct MasterArchiveScaleTests {
         let lookupMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         #expect(hits == 5_000)
         #expect(index.rebuildCount == 1, "one rebuild for 100k lookups (was \(index.rebuildCount))")
-        #expect(lookupMs < 1_500, "100k lookups took \(Int(lookupMs)) ms — budget 1.5 s incl. one O(n) rebuild")
+        #expect(lookupMs < PerformanceLane.debugCeiling(milliseconds: 1_500), "100k lookups took \(Int(lookupMs)) ms — budget 1.5 s incl. one O(n) rebuild")
 
         // Reverse direction + predicates: still no rebuild.
         let t1 = CFAbsoluteTimeGetCurrent()
@@ -61,7 +61,7 @@ struct MasterArchiveScaleTests {
         #expect(has == 5_000)
         #expect(notYet == 95_000)
         #expect(index.rebuildCount == 1)
-        #expect(predMs < 1_500, "predicates over 105k records took \(Int(predMs)) ms")
+        #expect(predMs < PerformanceLane.debugCeiling(milliseconds: 1_500), "predicates over 105k records took \(Int(predMs)) ms")
 
         // A mutation announcement invalidates ONCE.
         model.noteCatalogRecordsMutated()
@@ -95,7 +95,7 @@ struct MasterArchiveScaleTests {
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         #expect(plan.entries.count == 2_000)
         #expect(plan.totalBytes == 2_000_000)
-        #expect(ms < 2_000, "plan for 2k of 100k took \(Int(ms)) ms")
+        #expect(ms < PerformanceLane.debugCeiling(milliseconds: 2_000), "plan for 2k of 100k took \(Int(ms)) ms")
     }
 
     /// Rick 2026-08-25: byte-identical originals on OTHER volumes are

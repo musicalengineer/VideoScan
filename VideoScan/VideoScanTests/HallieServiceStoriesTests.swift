@@ -649,7 +649,7 @@ struct HallieServiceStoriesTests {
         let started = Date()
         let result = try await ask("anyone in the American Revolution", context: context)
         let elapsed = Date().timeIntervalSince(started)
-        #expect(elapsed < 2.0, "family-wide ask took \(elapsed)s (Debug budget 2 s)")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 2.0), "family-wide ask took \(elapsed)s (Debug budget 2 s)")
         #expect(result.prose.contains("military facts tied to the American Revolution by its own words or date for 1000 people, including:"))
         #expect(result.prose.components(separatedBy: " — ").count - 1 == HallieTurnExecutor.ServiceAnswer.maximumListed)
     }

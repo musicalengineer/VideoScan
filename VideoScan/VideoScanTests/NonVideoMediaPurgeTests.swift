@@ -203,7 +203,7 @@ struct NonVideoMediaPurgeClassificationTests {
         let start = Date()
         let c = NonVideoMediaPurge.classify(records: records)
         let elapsed = Date().timeIntervalSince(start)
-        #expect(elapsed < 2.0, "classify(100k, single-cell) took \(elapsed)s")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 2.0), "classify(100k, single-cell) took \(elapsed)s")
 
         #expect(c.extensions == ["wav"])        // .mov never offered
         #expect(c.volumeKeys == ["Dominant"])

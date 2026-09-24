@@ -178,7 +178,7 @@ struct ArchivistAggregateExecutorTests {
         #expect(result.rankings.isEmpty)
         #expect(result.factualAnswer.prose
                 == "I can compare at most 6 anchor people at once.")
-        #expect(elapsed < .milliseconds(100),
+        #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(100)),
                 "oversized aggregate query took \(elapsed) instead of failing fast")
     }
 
@@ -339,7 +339,7 @@ struct ArchivistAggregateExecutorTests {
         #expect(snapshots.first?.id == record.id)
         #expect(snapshots.last?.id == record.id)
         #expect(snapshots.allSatisfy { $0.fullPath == record.fullPath })
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "main-actor aggregate capture took \(elapsed) for 100k records")
     }
 
@@ -366,7 +366,7 @@ struct ArchivistAggregateExecutorTests {
         #expect(result.rankings.first?.recordCount == 100_000)
         #expect(result.rankings.first?.sampleCitations.count
                 == ArchivistAggregateExecutor.maxSampleCitationsPerPerson)
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "detached aggregate execution took \(elapsed) for 100k records")
     }
 }

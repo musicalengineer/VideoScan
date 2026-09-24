@@ -267,7 +267,7 @@ struct ArchivistKeywordBoundaryTests {
 
         #expect(result.evidence.totalMatchCount == 0,
                 "'cia' must not match 'special' at any scale")
-        #expect(elapsed < 12.0,
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 12.0),
                 "100k-record keyword scan took \(elapsed)s")
     }
 

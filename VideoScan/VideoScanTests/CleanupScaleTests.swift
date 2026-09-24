@@ -90,7 +90,7 @@ struct CleanupScaleTests {
         // Budget: stub render + one copy + one ffprobe + one O(100k)
         // firstIndex. An O(n²)-class regression lands in minutes, not
         // seconds.
-        #expect(elapsed < 30.0,
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 30.0),
                 "Full cleanup job at 100k records took \(elapsed)s — catalog registration has regressed")
     }
 
@@ -183,7 +183,7 @@ struct CleanupScaleTests {
         let elapsed = Date().timeIntervalSince(start)
         // 1,000 row-gate evaluations against a 100k catalog. An O(records)
         // gate would cost ≥ 10^8 record touches and blow far past this.
-        #expect(elapsed < 1.0,
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 1.0),
                 "Menu gate took \(elapsed)s for 1,000 evaluations at 100k records — something now scans the catalog per row")
         // Sanity so the loop can't be optimized into nothing.
         #expect(blockedCount >= 0)
