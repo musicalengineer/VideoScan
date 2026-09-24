@@ -210,6 +210,51 @@ struct Footage1674CancellationTests {
     }
 }
 
+// MARK: - codex #1717 P3: Stop is polled INSIDE one huge name bucket
+
+@Suite("codex #1717 P3 — the name window polls Stop inside a single bucket")
+struct Footage1717InnerCancelTests {
+
+    @Test("one 12k-member bucket: a Stop after the bucket starts is seen mid-bucket, cancelled = true")
+    func cancelInsideOneBucket() {
+        // Every file is "Christmas" at the same length, all undated — ONE
+        // bucket, one partition. The outer (between-bucket) poll runs once,
+        // before the bucket; Stop arrives just after it. Before the fix the
+        // whole bucket ran to the end with Stop ignored.
+        let xs = (0..<12_000).map { i in
+            FootageInput(filename: "Christmas.mov", durationSeconds: 600, sizeBytes: Int64(i + 1))
+        }
+        var stats = FootageGrouping.Stats()
+        let p = FootageGrouping.prepare(xs, options: .init(), stats: &stats)
+        var b = FootageGrouping.EdgeBuilder(p: p)
+        var polls = 0
+        b.cancelCheck = { polls += 1; return polls >= 2 }   // the outer poll says go, the next says Stop
+        b.nameAndDuration()
+        #expect(b.cancelled, "Stop inside the bucket must be honoured (polls \(polls))")
+        #expect(polls == 2, "stopped at the first inner poll")
+        let everyWindow = xs.count * FootageGrouping.maxWindowExamined
+        #expect(b.windowExamined <= FootageGrouping.cancelPollStride * FootageGrouping.maxWindowExamined,
+                "examined \(b.windowExamined) (whole bucket ≈ \(everyWindow)) before honouring Stop")
+    }
+
+    @Test("never cancelled: the inner poll changes nothing — same edges as a run with no Stop")
+    func noStopNoChange() {
+        let xs = (0..<9_000).map { i in
+            FootageInput(filename: "Christmas.mov", durationSeconds: 600 + Double(i % 7), sizeBytes: Int64(i + 1))
+        }
+        var s1 = FootageGrouping.Stats(), s2 = FootageGrouping.Stats()
+        let p = FootageGrouping.prepare(xs, options: .init(), stats: &s1)
+        _ = FootageGrouping.prepare(xs, options: .init(), stats: &s2)
+        var a = FootageGrouping.EdgeBuilder(p: p), b = FootageGrouping.EdgeBuilder(p: p)
+        var polls = 0
+        b.cancelCheck = { polls += 1; return false }
+        a.nameAndDuration(); b.nameAndDuration()
+        #expect(!a.cancelled && !b.cancelled)
+        #expect(polls > 1, "the inner poll ran (\(polls))")
+        #expect(a.out == b.out && a.windowExamined == b.windowExamined)
+    }
+}
+
 // MARK: - F2 (P2): component dates
 
 @Suite("codex #1674 F2 — an undated bridge never joins two different dates")

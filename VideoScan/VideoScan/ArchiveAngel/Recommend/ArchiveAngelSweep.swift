@@ -295,6 +295,7 @@ final class ArchiveAngelSweep: ObservableObject {
         var index = 0
         let sliceSize = max(1, cfg.sliceSize)
         var sinceCheckpoint = 0
+        var nextCheckpointSave = max(1, cfg.checkpointEvery)
 
         while index < total {
             if Task.isCancelled { status = enabled ? .idle : .disabled; return }
@@ -380,6 +381,21 @@ final class ArchiveAngelSweep: ObservableObject {
             if sinceCheckpoint >= cfg.checkpointEvery, index < total {
                 sinceCheckpoint = 0
                 cfg.log("Archive Angel Assessment: \(index.formatted()) of \(total.formatted())")
+            }
+            // The partial file is written on a DOUBLING schedule (first at
+            // `checkpointEvery`, then each time the scored count has doubled),
+            // not at every log line. Each checkpoint re-encodes every record
+            // scored so far, so a fixed 5,000 cadence made a 100k sweep
+            // encode ~1.05M records — measured 2026-09-23 on the M5 Pro: ~70%
+            // of the sweep's samples in JSONEncoder (Release 5.7 s, Debug
+            // 7.7 s). Doubling bounds the total to under 2× the final file
+            // (O(n), was O(n²/checkpointEvery)). A partial file is never
+            // fresh and never resumed from — it only keeps grades visible
+            // after a mid-sweep quit — so at most half the progress so far
+            // is unsaved, the price of a linear sweep. The log contract (one
+            // line per `checkpointEvery`) is unchanged.
+            if index >= nextCheckpointSave, index < total {
+                nextCheckpointSave = index * 2
                 let checkpoint = ArchiveAngelEvidenceFile(computedAt: now, complete: false,
                                                           considered: index, eligible: eligible, records: records,
                                                           attentionRevision: attention.revision,

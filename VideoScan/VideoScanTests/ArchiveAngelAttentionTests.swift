@@ -660,7 +660,13 @@ struct ArchiveAngelCurationSimulationTests {
         }
         let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
         print("[angel-sim] 100k family pass + select: \(String(format: "%.2f", seconds)) s")
-        #expect(seconds < 4, "100k in \(seconds) s")
+        print("[angel-perf] familyPassSelect100k \(PerformanceLane.configurationName) \(elapsed)")
+        // Budget kept at 4 s (measured 2026-09-23, suite alone, 5 reps
+        // interleaved, M5 Pro): Debug median 1.91 s (2.66 s before the
+        // RankKey sort). The full Debug battery on the M4 Max ran the old
+        // code at 4.17 s — ×1.57 its M5-alone time; the same factor puts
+        // this at ~3.0 s, inside the budget without widening it.
+        #expect(seconds < 4, "100k in \(seconds) s (\(PerformanceLane.loadDescription()))")
     }
 
     @Test("a promote-everything user is never slowed down: Phase 1 picks the same top ten as today on round one")

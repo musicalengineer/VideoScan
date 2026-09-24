@@ -582,9 +582,9 @@ enum ArchiveAngelScorer {
         }
         let tables = p.tables
         var order: (ArchiveAngelPick, ArchiveAngelPick) -> Bool = { rank($0, $1, tables: tables) }
+        var tier: [UUID: Int] = [:]
         if byClass, !p.recommend.prepareClasses.isEmpty {
             let result = ArchiveAngelRecommendations.classify(candidates, evidence: evidence, rules: p.recommend, now: now)
-            var tier: [UUID: Int] = [:]
             let prepare = p.recommend.prepareClasses
             for (i, v) in result.verdicts.enumerated() {
                 if let t = prepare.firstIndex(of: v.kind) { tier[candidates[i].id] = t }
@@ -592,12 +592,14 @@ enum ArchiveAngelScorer {
             let before = picks.count
             picks = picks.filter { tier[$0.id] != nil }
             if before > picks.count { rejected[.notRecommendedNow, default: 0] += before - picks.count }
-            order = { a, b in
+            order = { [tier] a, b in
                 let ta = tier[a.id] ?? .max, tb = tier[b.id] ?? .max
                 return ta != tb ? ta < tb : rank(a, b, tables: tables)
             }
         }
-        picks.sort(by: order)
+        // = `picks.sort(by: order)`, over small keys (ArchiveAngelScorer+Sets.swift).
+        picks = sortedByRank(picks, tables: tables,
+                             tier: byClass && !p.recommend.prepareClasses.isEmpty ? { tier[$0.id] ?? .max } : { _ in 0 })
         picks = onePerDuplicateGroup(picks, rejected: &rejected, collapseBy: p.recommend.copies.batchCollapseBy)
         picks = onePerFamily(picks, rejected: &rejected)
         let kept = withFreshSlots(picks, count: max(0, count), weights: w, by: order)
@@ -784,76 +786,6 @@ enum ArchiveAngelScorer {
     }
 
     // MARK: helpers
-
-    /// T10 H3. One pass over a candidate set: an export (a stem carrying a
-    /// derivative token, `ArchiveAngelNaming.derivativeBaseStem`) is marked
-    /// with its original's filename when a RELATED, USABLE original is in
-    /// the set. Related = same folder; else same duplicate group; else same
-    /// grandparent folder AND the same known year (inferred or user date).
-    /// Usable = passes the hard floor (online, playable, a video, not junk,
-    /// not too short, not a cache) and runs at least 0.9 × the export (an
-    /// original is not shorter than its export). Otherwise the export is
-    /// left alone — it is the best copy the family has. codex #1306: the
-    /// earlier any-folder fallback let "Clip 01" in another tree displace
-    /// an unrelated export.
-    ///
-    /// O(n): originals are indexed under exact keys (folder|stem,
-    /// group|stem, grandparent|year|stem), at most `maxOriginalsPerKey`
-    /// per key, so 5,000 same-named "Clip 01" originals cost 8 compares per
-    /// export, never n².
-    static var maxOriginalsPerKey: Int { AngelPolicyTables.standard.maxOriginalsPerKey }
-
-    static func markDerivatives(_ candidates: inout [ArchiveAngelCandidate],
-                                weights w: ArchiveAngelWeights = .standard) {
-        markDerivatives(&candidates, policy: AngelRecommendationPolicy.builtIn.with(weights: w))
-    }
-
-    static func markDerivatives(_ candidates: inout [ArchiveAngelCandidate], policy p: AngelRecommendationPolicy) {
-        let maxOriginalsPerKey = p.tables.maxOriginalsPerKey
-        var byFolder: [String: [Int]] = [:]        // "folder|stem" → indices
-        var byGroup: [String: [Int]] = [:]         // "group|stem"  → indices
-        var byGrandparent: [String: [Int]] = [:]   // "grandparent|year|stem" → indices
-        func add(_ table: inout [String: [Int]], _ key: String, _ i: Int) {
-            var list = table[key, default: []]
-            guard list.count < maxOriginalsPerKey else { return }
-            list.append(i)
-            table[key] = list
-        }
-        // The base stem once per candidate (one regex pass, not two).
-        let bases: [String?] = candidates.map {
-            ArchiveAngelNaming.derivativeBaseStem(($0.filename as NSString).deletingPathExtension)?.lowercased()
-        }
-        for (i, c) in candidates.enumerated() {
-            var probe = c
-            probe.attention = .none                                          // a resting original is still the original
-            guard bases[i] == nil,                                           // an export is never an original
-                  c.derivativeOfOriginal == nil,
-                  hardFloor(probe, policy: p) == nil else { continue }      // usable NOW
-            let stem = (c.filename as NSString).deletingPathExtension.lowercased()
-            let folder = (c.fullPath as NSString).deletingLastPathComponent
-            add(&byFolder, folder + "|" + stem, i)
-            if let g = c.duplicateGroupID { add(&byGroup, g.uuidString + "|" + stem, i) }
-            if let year = c.knownYear {
-                let grandparent = (folder as NSString).deletingLastPathComponent
-                add(&byGrandparent, grandparent + "|\(year)|" + stem, i)
-            }
-        }
-        for i in candidates.indices {
-            guard let base = bases[i] else { continue }
-            let export = candidates[i]
-            let folder = (export.fullPath as NSString).deletingLastPathComponent
-            var related: [Int] = byFolder[folder + "|" + base] ?? []
-            if related.isEmpty, let g = export.duplicateGroupID { related = byGroup[g.uuidString + "|" + base] ?? [] }
-            if related.isEmpty, let year = export.knownYear {
-                let grandparent = (folder as NSString).deletingLastPathComponent
-                related = byGrandparent[grandparent + "|\(year)|" + base] ?? []
-            }
-            guard let original = related.first(where: { j in
-                j != i && candidates[j].durationSeconds >= 0.9 * export.durationSeconds
-            }) else { continue }
-            candidates[i].derivativeOfOriginal = candidates[original].filename
-        }
-    }
 
     /// The "Has notes, 2 tags, people…" items. `notes` means a HUMAN note
     /// (the projection filters machine text out of userNotes, T10 H1).

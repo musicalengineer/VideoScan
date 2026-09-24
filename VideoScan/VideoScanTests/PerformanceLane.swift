@@ -84,6 +84,49 @@ enum PerformanceLane {
         budget * hostedRunnerFactor(environment: ProcessInfo.processInfo.environment)
     }
 
+    /// A Debug ceiling that also allows for a machine that is measurably
+    /// busy — the full Debug battery runs suites in parallel on every core,
+    /// and a pure-CPU 100k pass then takes longer than it does alone.
+    ///
+    /// Measured 2026-09-23 (Archive Angel 100k scale tests): each suite
+    /// ALONE on the M5 Pro, Debug, passed with 24–33% headroom; the same
+    /// tests in a full Debug battery on the M4 Max ran 1.42–1.64× their
+    /// M5-alone times (machine difference and load together) and 4–20%
+    /// over budget. Use this only where the measured time is honest
+    /// per-record work with no algorithmic slack left — speed up first.
+    /// `loadedHeadroom` (default 1.5×) applies only when the machine is
+    /// busy (1-minute load average at or above half the active cores); a
+    /// quiet Debug run is held to the plain budget. Release never
+    /// stretches: it gets `budget` (× the hosted-runner factor only, as
+    /// `debugCeiling`), so the product's numbers stay authoritative.
+    static func loadAwareDebugCeiling(_ budget: Duration, loadedHeadroom: Double = 1.5) -> Duration {
+        let factor = loadFactor(debugBuild: isDebugBuild, loadAverage: currentLoadAverage(),
+                                activeProcessors: ProcessInfo.processInfo.activeProcessorCount,
+                                loadedHeadroom: loadedHeadroom)
+        return debugCeiling(budget) * factor
+    }
+
+    /// Pure form of the load rule, for tests of the rule itself.
+    static func loadFactor(debugBuild: Bool, loadAverage: Double?, activeProcessors: Int,
+                           loadedHeadroom: Double) -> Double {
+        guard debugBuild, let load = loadAverage, activeProcessors > 0,
+              load >= Double(activeProcessors) / 2 else { return 1 }
+        return max(1, loadedHeadroom)
+    }
+
+    /// The 1-minute load average, or nil when the kernel won't say.
+    static func currentLoadAverage() -> Double? {
+        var samples = [Double](repeating: 0, count: 1)
+        return getloadavg(&samples, 1) == 1 ? samples[0] : nil
+    }
+
+    /// "load 9.3 on 16 cores" — for a failure message that says whether the
+    /// headroom was in play.
+    static func loadDescription() -> String {
+        let load = currentLoadAverage().map { String(format: "%.1f", $0) } ?? "?"
+        return "\(configurationName), load \(load) on \(ProcessInfo.processInfo.activeProcessorCount) cores"
+    }
+
     /// Why a run is not authoritative, for a skip message that says what to
     /// do rather than just "skipped".
     static func explanation(optInKey: String) -> String {

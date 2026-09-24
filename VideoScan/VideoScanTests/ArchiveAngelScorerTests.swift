@@ -524,6 +524,7 @@ struct ArchiveAngelDerivativeTests {
         let started = ContinuousClock.now
         ArchiveAngelScorer.markDerivatives(&cands)
         let elapsed = ContinuousClock.now - started
+        print("[angel-perf] markDerivatives100k \(PerformanceLane.configurationName) \(elapsed)")
         let markedCount = cands.filter { $0.derivativeOfOriginal != nil }.count
         #expect(markedCount == 5_000, "every export beside its tape is marked: \(markedCount)")
         #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "100k markDerivatives took \(elapsed)")
@@ -637,6 +638,14 @@ struct ArchiveAngelSelectionTests {
         #expect(sel.overflow == 1)
     }
 
+    // Budget (measured 2026-09-23, suite alone, 5 reps interleaved, M5 Pro):
+    // Debug median 1.18 s (1.45 s before the RankKey sort), Release ~0.46 s.
+    // What is left is per-record floor/signal interpretation — every row is
+    // scored. The full Debug battery on the M4 Max ran the old code at
+    // 2.21 s, ×1.52 its M5-alone time; the same factor puts this at ~1.8 s
+    // against 2 s — too thin to be a reliable gate. So the Debug budget
+    // widens 1.5× only on a measurably busy machine (load ≥ half the
+    // cores); a quiet Debug run and Release are held to 2 s.
     @Test("SCALE: 100k candidates select in under 2 s (Debug ceiling, widened on hosted runners)")
     func scale() {
         var cands: [ArchiveAngelCandidate] = []
@@ -654,8 +663,10 @@ struct ArchiveAngelSelectionTests {
         let started = ContinuousClock.now
         let sel = ArchiveAngelScorer.select(cands, count: 50)
         let elapsed = ContinuousClock.now - started
+        print("[angel-perf] select100k \(PerformanceLane.configurationName) \(elapsed)")
         #expect(sel.picks.count == 50)
-        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "100k select took \(elapsed)")
+        #expect(elapsed < PerformanceLane.loadAwareDebugCeiling(.seconds(2)),
+                "100k select took \(elapsed) (\(PerformanceLane.loadDescription()))")
     }
 }
 

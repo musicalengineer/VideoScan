@@ -498,6 +498,7 @@ struct ArchiveAngelCodex1643ScaleTests {
         let s = ArchiveAngelRecommendationSummary.make(evidence: records, prepared: prepared, promoted: promoted.subtracting(prepared),
                                                        revision: 1, live: live)
         let elapsed = ContinuousClock.now - started
+        print("[angel-perf] a3Summary100k \(PerformanceLane.configurationName) \(elapsed)")
         var mismatches = 0
         var counts: [ArchiveAngelRecommendationClass: Int] = [:]
         for (id, r) in records {
@@ -540,6 +541,7 @@ struct ArchiveAngelCodex1643ScaleTests {
         let started = ContinuousClock.now
         let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now) { live[$0] }
         let elapsed = ContinuousClock.now - started
+        print("[angel-perf] a4LiveGroupPick100k \(PerformanceLane.configurationName) \(elapsed)")
         #expect(pick?.selection.picks.count == 25)
         for p in pick?.selection.picks ?? [] where p.candidate.duplicateGroupID != nil {
             #expect(p.candidate.duplicateDisposition == .keep, "a grouped pick is the group's Keep copy")

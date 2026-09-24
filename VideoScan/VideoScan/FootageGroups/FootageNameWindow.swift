@@ -81,10 +81,22 @@ extension FootageGrouping.EdgeBuilder {
             sincePoll += m.count
             if sincePoll >= FootageGrouping.cancelPollStride {
                 sincePoll = 0
-                if Task.isCancelled { cancelled = true; return }
+                if cancelCheck() { cancelled = true; return }
             }
+            // codex #1717 P3: one bucket can hold most of the catalog (every
+            // "Christmas.mov"), so Stop is also polled INSIDE it — every
+            // `cancelPollStride` window starts (each bounded by
+            // maxWindowExamined), not only between buckets.
+            var sinceInnerPoll = 0
             for part in yearPartitions(m) {
-                for pos in part.list.indices { window(part.list, from: pos, year: part.year) }
+                for pos in part.list.indices {
+                    sinceInnerPoll += 1
+                    if sinceInnerPoll >= FootageGrouping.cancelPollStride {
+                        sinceInnerPoll = 0
+                        if cancelCheck() { cancelled = true; return }
+                    }
+                    window(part.list, from: pos, year: part.year)
+                }
             }
         }
     }
@@ -161,7 +173,7 @@ extension FootageGrouping.EdgeBuilder {
             sincePoll += 1
             if sincePoll >= FootageGrouping.cancelPollStride {
                 sincePoll = 0
-                if Task.isCancelled { cancelled = true; return }
+                if cancelCheck() { cancelled = true; return }
             }
             let d = xs[i].durationSeconds
             var lo = 0, hi = m.count

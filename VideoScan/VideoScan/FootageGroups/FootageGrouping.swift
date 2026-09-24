@@ -406,6 +406,9 @@ enum FootageGrouping {
         var windowExamined = 0
         /// Set when Task.isCancelled was seen: the window rules stop early.
         var cancelled = false
+        /// How the window rules poll for Stop — `Task.isCancelled`; a test
+        /// injects a counter to cancel at an exact poll (codex #1717 P3).
+        var cancelCheck: () -> Bool = { Task.isCancelled }
         /// Normalized-name buckets sorted by length (built by nameAndDuration).
         var byKey: [String: [Int]] = [:]
         /// isGenericStem compiles its regexes per call — cache per NAME KEY
