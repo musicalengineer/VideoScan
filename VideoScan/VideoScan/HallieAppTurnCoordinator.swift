@@ -1275,7 +1275,7 @@ enum HallieAppTurnCoordinator {
                         assets.identity = directory
                         FamilyAssetConfigurationCenter.shared.publishIdentity(directory)
                     }
-                    let graphMatches = context.graph?.people.values.filter {
+                    let graphMatches = context.graph?.visiblePeople.filter {
                         $0.name.compare(
                             canonicalName,
                             options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
@@ -1305,7 +1305,7 @@ enum HallieAppTurnCoordinator {
                 // resumes the gallery ask. Only for an answered biography
                 // about ONE person with two or more files.
                 if result.outcome == .answered, result.clarification == nil {
-                    let graphMatches = context.graph?.people.values.filter {
+                    let graphMatches = context.graph?.visiblePeople.filter {
                         $0.name.compare(
                             canonicalName,
                             options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame

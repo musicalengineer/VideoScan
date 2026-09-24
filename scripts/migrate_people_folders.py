@@ -17,8 +17,15 @@ WHAT IT DOES
 
 SAFETY
   • Nothing moves without --apply. Bare, it prints the plan and asks nothing.
-  • Every move is appended to a manifest AS IT HAPPENS, so an interrupted run
-    is still reversible: --undo <manifest>.
+  • Every move is journaled BEFORE it happens — the entry, with the file's
+    identity (size + SHA-256), is fsync'd to the manifest first, then the
+    file moves — so an interrupted run is still reversible: --undo <manifest>.
+    (codex #1710, 2026-09-23: the move used to come first, and a flush is
+    not a durable write, so a crash could leave a moved file the manifest
+    never heard of.)
+  • Undo moves a file back ONLY if what sits at the recorded destination is
+    still the file that was moved there (same size and content digest).
+    A replaced or reused path is reported and left alone.
   • A filename that exists in two sources is kept under a suffixed name
     rather than overwritten — two different photos, both kept.
   • A folder with no FamilySearch ID is LEFT ALONE. That is Rick's rule for
@@ -29,8 +36,11 @@ SAFETY
     python3 scripts/migrate_people_folders.py                 # plan only
     python3 scripts/migrate_people_folders.py --apply         # ask, then move
     python3 scripts/migrate_people_folders.py --undo <file>   # put it all back
+    python3 scripts/migrate_people_folders.py --undo <file> --trust-unverified
+        # a manifest from before identities were recorded: move its entries
+        # back by path alone (the old behaviour), after reading the warning
 """
-import argparse, collections, json, os, re, shutil, sys
+import argparse, collections, hashlib, json, os, re, shutil, stat, sys
 from datetime import datetime
 
 ARCHIVE = "/Volumes/FamilyArchive/Breen_Family_Archive/40_Family_Tree"
@@ -256,24 +266,93 @@ def ask(comp, count, candidates, why, people):
 
 # ---------------------------------------------------------------- moving
 
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def identity(path):
+    """What makes this the SAME file later: kind, size and a content digest.
+
+    A folder (People/ entries can hold sub-folders) is identified by the
+    sorted list of everything under it with each file's size and digest.
+    A symlink by its target — never followed. Returns None when the path
+    does not exist."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(st.st_mode):
+        return {"kind": "link", "target": os.readlink(path)}
+    if stat.S_ISDIR(st.st_mode):
+        h = hashlib.sha256()
+        for dirpath, dirs, files in os.walk(path):
+            dirs.sort()
+            for name in sorted(files):
+                full = os.path.join(dirpath, name)
+                rel = os.path.relpath(full, path)
+                sub = identity(full) or {}
+                h.update(json.dumps([rel, sub], sort_keys=True).encode())
+        return {"kind": "dir", "tree_sha256": h.hexdigest()}
+    return {"kind": "file", "size": st.st_size, "sha256": _sha256(path)}
+
+
+def same_identity(recorded, path):
+    """True only when `path` is provably the recorded file."""
+    if not recorded:
+        return False
+    return identity(path) == recorded
+
+
+def _fsync_dir(path):
+    """Make a rename / create in `path` durable. Best effort on filesystems
+    that refuse a directory fsync (some network volumes) — the journal's own
+    fsync still stands."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def journal(log, entry):
+    """Append one manifest line and make it DURABLE before returning:
+    flush Python's buffer, then fsync the file. Only then may the operation
+    it describes happen."""
+    log.write(json.dumps(entry) + "\n")
+    log.flush()
+    os.fsync(log.fileno())
+
+
 def move_folder(src_dir, dst_dir, manifest, log):
     os.makedirs(dst_dir, exist_ok=True)
     for name in files_in(src_dir):
         src = os.path.join(src_dir, name)
         dst = os.path.join(dst_dir, name)
-        if os.path.exists(dst):
+        if os.path.lexists(dst):
             stem, ext = os.path.splitext(name)
             tag = os.path.basename(src_dir)
             dst = os.path.join(dst_dir, f"{stem}--from-{tag}{ext}")
             n = 2
-            while os.path.exists(dst):
+            while os.path.lexists(dst):
                 dst = os.path.join(dst_dir, f"{stem}--from-{tag}-{n}{ext}")
                 n += 1
-        shutil.move(src, dst)
-        entry = {"from": src, "to": dst}
+        # JOURNAL, THEN MOVE. The entry names what is about to move and how
+        # to recognise it afterwards; it is on disk before the file moves.
+        entry = {"from": src, "to": dst, "identity": identity(src)}
+        journal(log, entry)
         manifest.append(entry)
-        log.write(json.dumps(entry) + "\n")
-        log.flush()
+        shutil.move(src, dst)
+        _fsync_dir(dst_dir)
+        _fsync_dir(src_dir)
         print(f"      {name}  →  {os.path.basename(dst)}")
     # Finder leaves a .DS_Store behind, which kept every emptied source
     # folder alive and visible — so People/ still SHOWED two Donnas even
@@ -283,17 +362,19 @@ def move_folder(src_dir, dst_dir, manifest, log):
             path = os.path.join(src_dir, junk)
             if os.path.exists(path):
                 os.remove(path)
+        # Journaled first as well; recreating an empty folder that was in
+        # fact never removed is harmless.
+        entry = {"removed_empty_dir": src_dir}
+        journal(log, entry)
+        manifest.append(entry)
         try:
             os.rmdir(src_dir)                      # only ever an EMPTY dir
-            entry = {"removed_empty_dir": src_dir}
-            manifest.append(entry)
-            log.write(json.dumps(entry) + "\n")
-            log.flush()
+            _fsync_dir(os.path.dirname(src_dir))
         except OSError:
             pass
 
 
-def undo(path):
+def undo(path, trust_unverified=False):
     """Put everything back, and SAY what could not be.
 
     A manifest goes stale the moment anything moves afterwards — Rick
@@ -301,27 +382,56 @@ def undo(path):
     is normal, not corruption. What is not acceptable is an undo that skips
     those quietly and still reports success: he would believe the archive
     was restored when part of it was not.
+
+    IDENTITY, NOT PATH (codex #1710): a file is moved back only when what
+    sits at the recorded destination is the file that was moved there. If
+    the path now holds something else — replaced, reused, re-saved — moving
+    it "back" would put a different file into the original person's folder
+    under the original name. Those are reported and left alone.
     """
     entries = [json.loads(l) for l in open(path) if l.strip()]
-    restored, dirs, missing, blocked = 0, 0, [], []
+    restored, dirs, never_moved = 0, 0, 0
+    missing, blocked, replaced, unverified = [], [], [], []
     for e in reversed(entries):
         if "removed_empty_dir" in e:
             os.makedirs(e["removed_empty_dir"], exist_ok=True)
             dirs += 1
             continue
-        if not os.path.exists(e["to"]):
-            missing.append(e)
+        if "from" not in e:
             continue
-        if os.path.exists(e["from"]):
+        recorded = e.get("identity")
+        if "identity" not in e and not trust_unverified:
+            # A manifest written before identities were recorded: there is
+            # no way to prove the file at "to" is the one that moved.
+            unverified.append(e)
+            continue
+        if not os.path.lexists(e["to"]):
+            # Journaled but never moved (interrupted between the two), or
+            # moved on since. Only the first is "fine", and only when the
+            # original is provably still where it started.
+            if recorded and same_identity(recorded, e["from"]):
+                never_moved += 1
+            else:
+                missing.append(e)
+            continue
+        if "identity" in e and not same_identity(recorded, e["to"]):
+            replaced.append(e)
+            continue
+        if os.path.lexists(e["from"]):
             # Something is already sitting where this file came from.
             # Never overwrite it.
             blocked.append(e)
             continue
         os.makedirs(os.path.dirname(e["from"]), exist_ok=True)
         shutil.move(e["to"], e["from"])
+        _fsync_dir(os.path.dirname(e["from"]))
+        _fsync_dir(os.path.dirname(e["to"]))
         restored += 1
 
     print(f"restored {restored} file(s) and {dirs} folder(s)")
+    if never_moved:
+        print(f"{never_moved} file(s) were journaled but never moved "
+              "(the run was interrupted) — they are still where they started")
     if missing:
         print(f"\n{len(missing)} file(s) were NOT where the manifest left them — "
               "moved or renamed since, so they were left alone:")
@@ -331,13 +441,26 @@ def undo(path):
             found = _find_by_name(os.path.dirname(os.path.dirname(e["to"])),
                                   os.path.basename(e["to"]))
             print(f"     now in      {found or '(not found anywhere under People/)'}")
+    if replaced:
+        print(f"\n{len(replaced)} path(s) now hold a DIFFERENT file than the one "
+              "moved there — left alone, nothing moved back:")
+        for e in replaced:
+            print(f"  {e['to']}")
     if blocked:
         print(f"\n{len(blocked)} file(s) could not go back — something is already there:")
         for e in blocked:
             print(f"  {e['from']}")
-    if missing or blocked:
+    if unverified:
+        print(f"\n{len(unverified)} entr{'y' if len(unverified) == 1 else 'ies'} in this manifest "
+              "predate identity recording, so the undo cannot prove the file at each "
+              "destination is the one that moved. Left alone. Re-run with "
+              "--trust-unverified to move them back by path, as the old undo did.")
+    if missing or blocked or replaced or unverified:
         print("\nThe undo did what it safely could. Nothing was overwritten "
               "and nothing was deleted.")
+    return {"restored": restored, "dirs": dirs, "never_moved": never_moved,
+            "missing": len(missing), "blocked": len(blocked),
+            "replaced": len(replaced), "unverified": len(unverified)}
 
 
 def _find_by_name(root, name):
@@ -356,6 +479,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="actually move files")
     ap.add_argument("--undo", metavar="MANIFEST")
+    ap.add_argument("--trust-unverified", action="store_true",
+                    help="with --undo: move back entries from a manifest written "
+                         "before identities were recorded, by path alone")
     ap.add_argument("--gedcom", default=GEDCOM)
     ap.add_argument("--archive", default=ARCHIVE,
                     help="archive root (tests point this at a sandbox)")
@@ -369,7 +495,7 @@ def main():
     PEOPLE = os.path.join(ARCHIVE, "People")
 
     if args.undo:
-        undo(args.undo)
+        undo(args.undo, trust_unverified=args.trust_unverified)
         return
 
     if not os.path.isdir(PEOPLE):
@@ -461,6 +587,7 @@ def main():
     manifest_path = os.path.join(ARCHIVE, f"people-migration-{stamp}.jsonl")
     manifest = []
     with open(manifest_path, "w") as log:
+        _fsync_dir(ARCHIVE)                    # the manifest itself exists durably
         for (fs, target), sources in sorted(moves.items(), key=lambda kv: kv[0][1]):
             dst = os.path.join(PEOPLE, target)
             print(f"\n  {target}")

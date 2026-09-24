@@ -2089,7 +2089,7 @@ struct ArchivistChatWindow: View {
     /// pictures gets no chip. Unknown or ambiguous names, and unknown
     /// death years, keep the chip (never guess).
     static func mayOfferMedia(for canonicalName: String, in graph: GedcomFamilyGraph) -> Bool {
-        let matches = graph.people.values.filter {
+        let matches = graph.visiblePeople.filter {
             $0.name.compare(canonicalName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
         }
         guard matches.count == 1 else { return true }

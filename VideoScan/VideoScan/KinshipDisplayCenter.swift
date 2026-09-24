@@ -61,7 +61,9 @@ final class KinshipDisplayCenter: ObservableObject {
         var built: [TreePersonChoice] = []
         if let graph {
             built.reserveCapacity(graph.people.count)
-            for person in graph.people.values {
+            // The picker offers the ruled view: a record Rick hid is not
+            // something to anchor a profile to (codex #1710 (3)).
+            for person in graph.people.values where !graph.isHidden(person.id) {
                 let fsid: String? = person.familySearchID.flatMap { $0.isEmpty ? nil : $0 }
                 built.append(TreePersonChoice(pointer: person.id, familySearchID: fsid,
                                               name: person.name, birthYear: person.birthYear))

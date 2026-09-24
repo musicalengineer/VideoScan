@@ -38,7 +38,8 @@ extension HallieLineageAnswer {
         var scopeLabel = ""
         switch scope {
         case .wholeTree:
-            pool = Array(graph.people.values)
+            // The ruled view (codex #1710 (3)): a record Rick hid never wins.
+            pool = graph.visiblePeople
         case .surname(let typed):
             let resolved = resolvedSurname(typed, graph: graph)
             pool = graph.people(withSurname: resolved)

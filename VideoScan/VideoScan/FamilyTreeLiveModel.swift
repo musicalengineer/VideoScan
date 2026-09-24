@@ -621,6 +621,10 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// except hiding a record he has called a duplicate; not knowing who
     /// someone is must never hide them.
     private(set) var identityDecisions = FamilyIdentityDecisions()
+    /// True while a ruling exists only in memory (the archive was not
+    /// writable when it was made): a reload must not replace it with the
+    /// file's older contents.
+    private var identityRulingsUnsaved = false
 
     /// True when Rick has ruled this record is a duplicate of another. The
     /// ruling is keyed on the FamilySearch id, so it survives the re-pull
@@ -747,7 +751,10 @@ final class FamilyTreeLiveModel: ObservableObject {
         // loader. Either way the bundle is built here, off the main actor.
         let configuration = usesSharedCache ? FamilyAssetConfigurationCenter.shared.snapshot() : nil
         let overlayStore = personRefreshOverlayStore
-        let loaded = await Task.detached(priority: .userInitiated) { [weak self] () -> (FamilyGraphFileLoader.Outcome, FamilyTreeLaunchBundle?) in
+        let rulings = identityDecisions
+        let keepInMemoryRulings = identityRulingsUnsaved
+        let loaded = await Task.detached(priority: .userInitiated) { [weak self] ()
+            -> (FamilyGraphFileLoader.Outcome, FamilyTreeLaunchBundle?, FamilyIdentityDecisions?) in
             let progress: (String) -> Void = { phase in
                 Task { @MainActor [weak self] in
                     guard let self, self.loadGeneration == generation else { return }
@@ -766,12 +773,22 @@ final class FamilyTreeLiveModel: ObservableObject {
                 mark = clock.now
                 let bundle = shared.loaded.map { FamilyTreeLaunchBundle.Cache.shared.bundle(for: $0, settings: settings) }
                 Self.logStep("load: launch bundle (rows + identity + anchors)", took: clock.now - mark, people: people)
-                return (outcome, bundle)
+                // The shared cache ruled `outcome.graph` from the file on
+                // disk; the tab adopts the same file so its menus and its
+                // installed graph agree with Hallie (codex #1710/#1711).
+                // Rulings this model holds only in memory (a read-only
+                // archive) are kept.
+                let onDisk = keepInMemoryRulings ? nil
+                    : FamilyIdentityDecisions.load(from: directory, log: { appLog.write($0) })
+                return (outcome, bundle, onDisk)
             }
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)
             loader.compiledStore = store
             loader.progress = progress
-            let outcome = Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory)
+            var outcome = Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory)
+            // The same ruled view the shared cache hands out (codex #1711),
+            // before the bundle is built from it.
+            if let raw = outcome.graph { outcome = outcome.replacingGraph(raw.applyingIdentityRulings(rulings)) }
             let people = outcome.graph?.people.count ?? 0
             Self.logStep("load: decode/parse", took: clock.now - mark, people: people)
             // Sidebar rows, the group-photo identity directory and the
@@ -780,7 +797,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             mark = clock.now
             let bundle = outcome.graph.map { FamilyTreeLaunchBundle.build(graph: $0, settings: settings) }
             Self.logStep("load: launch bundle (rows + identity + anchors)", took: clock.now - mark, people: people)
-            return (outcome, bundle)
+            return (outcome, bundle, nil)
         }.value
         guard generation == loadGeneration else {
             // A genuinely newer LOAD is in flight and will install; this
@@ -792,6 +809,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             return
         }
         loadPhase = nil
+        if let onDisk = loaded.2, !identityRulingsUnsaved { identityDecisions = onDisk }
         install(outcome: loaded.0, bundle: loaded.1)
         loadedAppearanceSettings = settings
         if isLive, let revision { loadedRevision = revision }
@@ -1035,6 +1053,12 @@ final class FamilyTreeLiveModel: ObservableObject {
     private func installSteps(graph newGraph: GedcomFamilyGraph?,
                               bundle: FamilyTreeLaunchBundle?,
                               settings: FamilyTreeLaunchBundle.Settings) {
+        // Every installed graph is the RULED query view (codex #1711):
+        // the shared-cache path arrives ruled (this is then a no-op — same
+        // rulings, same value), an injected or synchronous loader's graph
+        // is ruled here. Before 2026-09-23 the installed graph carried no
+        // suppression at all; only the sidebar filter hid the rows.
+        let newGraph = newGraph.map { $0.applyingIdentityRulings(identityDecisions) }
         loadWarning = nil
         let previousPerson = selectedID.flatMap { graph?.people[$0] }
         let sourceKey = newGraph.map(Self.sourceKey)
@@ -1184,6 +1208,7 @@ final class FamilyTreeLiveModel: ObservableObject {
                 ? FamilyTreeBookmarks() : FamilyTreeBookmarks.load(from: directory)
         }
         if sourceChanged {
+            identityRulingsUnsaved = false
             identityDecisions = source.access == .unavailable
                 ? FamilyIdentityDecisions()
                 : FamilyIdentityDecisions.load(from: directory, log: { appLog.write($0) })
@@ -1931,10 +1956,13 @@ final class FamilyTreeLiveModel: ObservableObject {
             existing.duplicateOf = nil
             updated.record(existing)
         }
-        identityDecisions = updated
+        // SAVE FIRST (codex #1710): a ruling the disk refused must not be
+        // in force in this tab alone — Hallie reads the file, so the two
+        // would disagree until relaunch. A failed save changes nothing.
         if let directory = bookmarksDirectory ?? originalsDirectory as URL?, sourceAccess == .readWrite {
             do {
                 try updated.save(to: directory)
+                identityRulingsUnsaved = false
                 appLog.write("Family Tree: \(hidden ? "HID" : "un-hid") \(person.name) (\(fsid)) — "
                     + "\(updated.suppressedFamilySearchIDs.count) record(s) now hidden")
             } catch {
@@ -1942,25 +1970,24 @@ final class FamilyTreeLiveModel: ObservableObject {
                 return false
             }
         } else {
+            identityRulingsUnsaved = true
             appLog.write("Family Tree: ruling for \(fsid) kept in memory only — the archive is not writable")
         }
-        // Copy first: `suppressedIDs(in:)` reads `graph` while the
-        // assignment needs exclusive access to it.
-        let recomputed = suppressedIDs(in: graph)
-        graph?.suppressedPersonIDs = recomputed
+        identityDecisions = updated
+        // The installed graph becomes the ruled view of the NEW rulings —
+        // the same function the shared cache uses, so hidden records,
+        // redirects and relationship edges all move together (the old code
+        // recomputed only the hidden set, leaving redirects stale).
+        graph = graph?.applyingIdentityRulings(updated)
+        kinshipCenter?.install(graph: graph)
+        // Hallie: FamilyGraphSharedCache keys on the rulings file's content
+        // revision, so the save above makes its next turn re-rule the
+        // cached tree (no decode). No explicit invalidation needed — and a
+        // hand edit of the file reaches it the same way.
         PersonPhotoCenter.shared.invalidate()
         refilter()
         rebuildScene()
         return true
-    }
-
-    private func suppressedIDs(in graph: GedcomFamilyGraph?) -> Set<String> {
-        guard let graph else { return [] }
-        let ids = identityDecisions.suppressedFamilySearchIDs
-        guard !ids.isEmpty else { return [] }
-        return Set(graph.people.values.compactMap {
-            ($0.familySearchID.map(ids.contains) ?? false) ? $0.id : nil
-        })
     }
 
     func notePhotoChoiceWritten() {

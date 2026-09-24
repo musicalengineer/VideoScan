@@ -134,6 +134,13 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
         /// load. Only this part changing does NOT re-run the loader — the
         /// cached base graph is re-overlaid (see `outcome(for:)`).
         var overlayStamp: String = "none"
+        /// The identity-rulings file's content revision (codex #1710,
+        /// 2026-09-23): SHA-256 of family-identity-decisions.json, "none"
+        /// without one. A Hide / Unhide in the Family Tree tab or a hand
+        /// edit changes it, so Hallie's next turn sees the ruling. Like the
+        /// overlay, only this part changing does NOT re-run the loader —
+        /// the cached base is re-ruled.
+        var rulingsRevision: String = "none"
 
         func sameBase(as other: Key) -> Bool {
             directory == other.directory && access == other.access && storeRoot == other.storeRoot
@@ -199,12 +206,18 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
             lock.withLock { entry = nil }
             return (nil, nil)
         }
+        // The rulings are read ONCE per call, with the revision of those
+        // exact bytes: the key and the ruled graph can never describe two
+        // different files.
+        let ruled = FamilyIdentityDecisions.loadWithRevision(from: configuration.gedcomDirectory(),
+                                                             log: { [log] in log($0) })
         let key = Key(directory: configuration.gedcomDirectory(),
                       access: configuration.access,
                       storeRoot: store?.root,
                       pointer: store?.readPointer(),
                       gedcomFiles: Self.gedcomStamps(in: configuration.gedcomDirectory()),
-                      overlayStamp: overlayStore?.stamp() ?? "none")
+                      overlayStamp: overlayStore?.stamp() ?? "none",
+                      rulingsRevision: ruled.revision)
         return lock.withLock {
             if let entry, entry.key == key {
                 let loaded = Loaded(graph: entry.graph, compiled: entry.compiled, token: entry.token, reused: true)
@@ -212,8 +225,9 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
             }
             let base: FamilyGraphFileLoader.Outcome
             if let entry, entry.key.sameBase(as: key) {
-                // Only the overlay moved (an Apply / Undo): same tree, new
-                // facts. No decode, no parse — re-overlay the cached base.
+                // Only the overlay or the rulings moved (an Apply / Undo, a
+                // Hide / Unhide): same tree. No decode, no parse — re-overlay
+                // and re-rule the cached base.
                 base = entry.base
             } else {
                 loadCount += 1
@@ -235,41 +249,20 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
                 to: baseGraph, store: overlayStore,
                 discoveryDirectory: configuration.gedcomDirectory(),
                 canWrite: configuration.access == .readWrite, log: log)
-            let outcome = base.replacingGraph(overlaid)
-            var graph = overlaid
-            // Apply Rick's identity rulings to THE graph, once, here —
-            // the one place Hallie, kinship, the People tab and the Family
-            // Tree all get their tree from. "hallie needs to honor FT hide."
-            let rulings = FamilyIdentityDecisions.load(from: configuration.gedcomDirectory(),
-                                                       log: { log($0) })
-            let suppressed = rulings.suppressedFamilySearchIDs
-            if !suppressed.isEmpty {
-                var hidden: Set<String> = []
-                for person in graph.people.values {
-                    if let fsid = person.familySearchID, suppressed.contains(fsid) {
-                        hidden.insert(person.id)
-                    }
-                }
-                graph.suppressedPersonIDs = hidden
-                // …and where each one's traffic goes, so the phrase that
-                // names the duplicate still answers with the right person.
-                var byFSID: [String: String] = [:]
-                for person in graph.people.values {
-                    if let fsid = person.familySearchID { byFSID[fsid] = person.id }
-                }
-                var redirect: [String: String] = [:]
-                for id in hidden {
-                    guard let fsid = graph.people[id]?.familySearchID else { continue }
-                    let target = rulings.preferred(.familySearch(fsid))
-                    if let targetFSID = target.familySearchID, targetFSID != fsid,
-                       let targetID = byFSID[targetFSID] {
-                        redirect[id] = targetID
-                    }
-                }
-                graph.preferredPersonID = redirect
-                log("[hallie] identity rulings: \(hidden.count) record(s) hidden as duplicates "
+            // ONE ruled query view (codex #1711): the rulings are applied to
+            // the graph FIRST and the returned outcome is built from that
+            // same value, so the Family Tree tab (which installs
+            // `outcome.graph`) and Hallie (which reads `loaded.graph`) can
+            // never disagree about who is hidden. Before 2026-09-23 the
+            // outcome was captured from the unruled graph and a separate
+            // copy was ruled — a value type, so the ruling never reached it.
+            let graph = overlaid.applyingIdentityRulings(ruled.decisions)
+            let outcome = base.replacingGraph(graph)
+            if !graph.suppressedPersonIDs.isEmpty {
+                let suppressed = ruled.decisions.suppressedFamilySearchIDs
+                log("[hallie] identity rulings: \(graph.suppressedPersonIDs.count) record(s) hidden as duplicates "
                     + "(\(suppressed.sorted().joined(separator: ", "))); "
-                    + "\(redirect.count) redirected to the record Rick verified")
+                    + "\(graph.preferredPersonID.count) redirected to the record Rick verified")
             }
             let token = UUID()
             // The overlay stamp is re-read AFTER the apply: a retirement

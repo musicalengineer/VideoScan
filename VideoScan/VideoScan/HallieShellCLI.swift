@@ -306,9 +306,15 @@ enum HallieShellCLI {
                         var isDirectory: ObjCBool = false
                         guard fm.fileExists(atPath: requested.path,
                                             isDirectory: &isDirectory) else { return nil }
-                        return isDirectory.boolValue
+                        let raw = isDirectory.boolValue
                             ? FamilyGraphFileLoader(originalsDirectory: requested).loadNewest()
                             : GedcomFamilyGraph(fileURL: requested)
+                        // The rulings beside that GEDCOM (if any) apply to an
+                        // explicit --gedcom too — the same ruled view as the
+                        // default path (codex #1710 "other graph construction
+                        // paths"). Read-only: nothing is written.
+                        let folder = isDirectory.boolValue ? requested : requested.deletingLastPathComponent()
+                        return raw?.applyingIdentityRulings(FamilyIdentityDecisions.load(from: folder))
                     }
                     // Default path = the promoted artifact only, cached
                     // for the life of the shell process (codex #792).

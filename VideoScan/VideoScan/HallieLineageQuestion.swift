@@ -1630,7 +1630,7 @@ enum HallieLineageAnswer {
                     : have.contains(token)
             }
         }
-        let found = graph.people.values.filter(matches).sorted { $0.id < $1.id }
+        let found = graph.visiblePeople.filter(matches).sorted { $0.id < $1.id }
         switch found.count {
         case 0: return nil
         case 1:
