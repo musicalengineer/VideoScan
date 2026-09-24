@@ -174,6 +174,26 @@ public enum TestHostDetection {
         return found
     }
 
+    // MARK: Test-host Application Support
+
+    /// THE one stand-in for ~/Library/Application Support inside a test
+    /// host (QA follow-up 2026-09-24): a private per-process temp directory
+    /// shaped like the real one, so `<root>/VideoScan/cyberbrain`,
+    /// `<root>/VideoScan/Hallie/…` and the family-asset roots keep their
+    /// relative layout. nil outside a test host — the caller then uses the
+    /// real directory. Every app default that would otherwise name the
+    /// real Application Support routes through here; do not grow a copy.
+    /// `store` names the caller in the once-per-store fail-safe log line.
+    public static func sandboxedApplicationSupportRoot(for store: String) -> URL? {
+        guard isTestHost else { return nil }
+        let sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "VideoScan-test-appsupport-\(ProcessInfo.processInfo.processIdentifier)",
+                isDirectory: true)
+        reportSandboxedProductionStore(store, sandbox: sandbox, overrideKey: nil)
+        return sandbox
+    }
+
     // MARK: Fail-safe logging
 
     private static let announced = OSAllocatedUnfairLock(initialState: Set<String>())

@@ -115,4 +115,24 @@ struct CyberBrainDefaultRootSandboxTests {
             applicationSupportRoot: explicit)
         #expect(pinned.roots.assets.path.hasPrefix("/tmp/ExplicitSupport/"))
     }
+
+    /// QA follow-up 2026-09-24 (second pass): Hallie's live wiring built its
+    /// CyberBrain, pronunciation and drill paths from the REAL Application
+    /// Support, and the lexicon's default file sat there too.
+    @Test func hallieLiveRootsAndPronunciationDefaultsAreSandboxed() throws {
+        let real = try realAppSupportVideoScan()
+        let support = HallieAppTurnCoordinator.Dependencies.productionApplicationSupportRoot
+        let roots = HallieLiveDependencyRoots(applicationSupportRoot: support)
+        let paths = [roots.cyberBrain, roots.pronunciationFile, roots.drillFile,
+                     HalliePronunciationLexicon.defaultFileURL,
+                     PronunciationDrillStore.defaultFileURL]
+        for url in paths {
+            let path = try #require(url, "a Hallie live root resolved to nil").standardizedFileURL.path
+            #expect(!path.hasPrefix(real), "Hallie default is real App Support: \(path)")
+            #expect(path.contains("\(ProcessInfo.processInfo.processIdentifier)"), "not per-process: \(path)")
+        }
+        // One sandbox, not a copy per store: the brain the live wiring
+        // uses is the same one FamilyTreeNotesStorage hands out.
+        #expect(roots.cyberBrain?.standardizedFileURL == FamilyTreeNotesStorage.productionRootURL?.standardizedFileURL)
+    }
 }

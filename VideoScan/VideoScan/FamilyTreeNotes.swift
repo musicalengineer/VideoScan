@@ -156,17 +156,9 @@ enum FamilyTreeNotesStorage {
     /// FamilyGraphCompiledStore.production. No env override: no test has
     /// ever needed the real brain, and none should.
     static var productionRootURL: URL? {
-        if TestHostDetection.isTestHost {
-            let sandbox = FileManager.default.temporaryDirectory
-                .appendingPathComponent(
-                    "VideoScan-test-cyberbrain-\(ProcessInfo.processInfo.processIdentifier)",
-                    isDirectory: true)
-            TestHostDetection.reportSandboxedProductionStore(
-                "FamilyTreeNotesStorage.productionRootURL", sandbox: sandbox, overrideKey: nil)
-            return sandbox
-        }
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first?.appendingPathComponent("VideoScan/cyberbrain", isDirectory: true)
+        let support = TestHostDetection.sandboxedApplicationSupportRoot(for: "FamilyTreeNotesStorage.productionRootURL")
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        return support?.appendingPathComponent("VideoScan/cyberbrain", isDirectory: true)
     }
 
     /// Load the archive and build an index; nil when no brain exists yet.
