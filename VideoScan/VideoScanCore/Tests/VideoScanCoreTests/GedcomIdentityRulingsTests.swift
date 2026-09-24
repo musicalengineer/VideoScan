@@ -271,6 +271,31 @@ struct GedcomIdentityRulingsTests {
         #expect(line.dropFirst().first?.people.map(\.id) == ["@B@"], "…and on to Bridget")
     }
 
+    /// QA follow-up 2026-09-24: `directAncestorLine` climbed raw parent
+    /// pointers, so Kathleen's only parent family (@F4@, wife = the hidden
+    /// duplicate @I5@) took the climb THROUGH the record Rick hid and never
+    /// reached the verified Mary.
+    @Test func theDirectAncestorClimbGoesThroughTheVerifiedRecordNeverAHiddenOne() throws {
+        let ruled = rawWithIndex().applyingIdentityRulings(Self.rulings)
+        let kathleen = try #require(ruled.people["@K@"])
+        let mary = try #require(ruled.people["@I7@"])
+        let toMary = try #require(ruled.directAncestorLine(from: kathleen, to: mary),
+                                  "Kathleen's verified mother is not on her direct line")
+        #expect(toMary.generations == 1)
+        #expect(ids(toMary.chain) == ["@K@", "@I7@"])
+
+        let bridget = try #require(ruled.people["@B@"])
+        let toBridget = try #require(ruled.directAncestorLine(from: kathleen, to: bridget))
+        #expect(toBridget.generations == 2)
+        #expect(ids(toBridget.chain) == ["@K@", "@I7@", "@B@"])
+        for chain in [toMary.chain, toBridget.chain] {
+            #expect(!chain.contains { ruled.isHidden($0.id) }, "a chain passed through a hidden record")
+        }
+        let hidden = try #require(ruled.people["@I5@"])
+        #expect(ruled.directAncestorLine(from: kathleen, to: hidden) == nil,
+                "the hidden duplicate is nobody's ancestor in the ruled view")
+    }
+
     // MARK: ISOLATION — the raw graph is untouched
 
     @Test func theRawGraphKeepsItsRawAnswersAndIndex() {

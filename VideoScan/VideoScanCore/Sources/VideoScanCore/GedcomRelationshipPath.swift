@@ -145,8 +145,14 @@ extension GedcomFamilyGraph {
                 // the same primary-family ruling `relatives(.parents)` uses
                 // (Rick, 2026-09-02: a family FamilySearch itself knows
                 // outranks a stray local one).
-                let primary = primaryParentFamily(of: person)
-                let parents = [primary?.husband, primary?.wife].compactMap { $0 }.compactMap { people[$0] }
+                //
+                // Read THROUGH the identity rulings (QA follow-up
+                // 2026-09-24): `relatives(.parents)` is exactly the
+                // primary family's two slots on a raw graph, and on a
+                // ruled view it hands a hidden duplicate parent to the
+                // record Rick verified. Raw pointers climbed through the
+                // hidden record and never reached the verified one.
+                let parents = relatives(.parents, of: person)
                 for parent in parents where depth[parent.id] == nil {
                     depth[parent.id] = generation + 1
                     cameFrom[parent.id] = person.id
