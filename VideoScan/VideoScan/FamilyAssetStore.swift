@@ -419,6 +419,7 @@ final class FamilyAssetConfigurationCenter: @unchecked Sendable {
         applicationSupportRoot: URL? = nil
     ) -> FamilyAssetConfiguration {
         let support = applicationSupportRoot
+            ?? testHostApplicationSupportSandbox()
             ?? FileManager.default.urls(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask).first
@@ -441,6 +442,25 @@ final class FamilyAssetConfigurationCenter: @unchecked Sendable {
             roots: roots,
             access: access,
             legacyGEDCOMDirectory: legacyGEDCOMDirectory)
+    }
+
+    /// The DEFAULT Application Support root inside a test host: a private
+    /// per-process temp directory, never the real one (QA follow-up
+    /// 2026-09-24). This default feeds `shared`'s initial snapshot, which
+    /// is FamilyTreeLiveModel's default GEDCOM, bookmarks and document
+    /// directory — a test that forgot to inject one read Rick's real
+    /// family tree and could write bookmarks beside it. Same rule and
+    /// detector as FamilyGraphCompiledStore.production. An explicit
+    /// `applicationSupportRoot` is always honoured; nil outside tests.
+    private static func testHostApplicationSupportSandbox() -> URL? {
+        guard TestHostDetection.isTestHost else { return nil }
+        let sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "VideoScan-test-appsupport-\(ProcessInfo.processInfo.processIdentifier)",
+                isDirectory: true)
+        TestHostDetection.reportSandboxedProductionStore(
+            "FamilyAssetConfigurationCenter.configuration", sandbox: sandbox, overrideKey: nil)
+        return sandbox
     }
 }
 

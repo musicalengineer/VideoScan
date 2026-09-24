@@ -70,3 +70,49 @@ struct AppTestHostDetectionProbe {
         #expect(!underRealStore, "compiled store resolved to production=\(productionRoot) app=\(appRoot)")
     }
 }
+
+/// QA follow-up 2026-09-24: the CyberBrain default root and the family
+/// asset configuration's default Application Support root are the
+/// DEFAULTS for FamilyTreeLiveModel, the pronunciation lexicon and the
+/// live pronunciation writer. Under a test host neither may resolve into
+/// the real ~/Library/Application Support/VideoScan — that is Rick's
+/// family knowledge and GEDCOM.
+@Suite("Production CyberBrain and family-asset defaults are sandboxed in a test host")
+struct CyberBrainDefaultRootSandboxTests {
+
+    private func realAppSupportVideoScan() throws -> String {
+        try #require(FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first)
+            .appendingPathComponent("VideoScan", isDirectory: true).standardizedFileURL.path
+    }
+
+    @Test func cyberBrainProductionRootIsNotTheRealBrain() throws {
+        let real = try realAppSupportVideoScan()
+        let root = try #require(FamilyTreeNotesStorage.productionRootURL).standardizedFileURL.path
+        #expect(!root.hasPrefix(real), "CyberBrain default resolved to the real brain: \(root)")
+        #expect(root.contains("\(ProcessInfo.processInfo.processIdentifier)"),
+                "sandbox must be per-process: \(root)")
+        let lexiconDefault = try #require(HalliePronunciationLexicon.defaultCyberBrainRootURL)
+            .standardizedFileURL.path
+        #expect(!lexiconDefault.hasPrefix(real), "lexicon brain default is real: \(lexiconDefault)")
+    }
+
+    @Test func familyAssetConfigurationDefaultSupportRootIsSandboxed() throws {
+        let real = try realAppSupportVideoScan()
+        let config = FamilyAssetConfigurationCenter.configuration(
+            masterArchiveRoot: nil, masterIsSafelyAvailable: true, readOnly: true)
+        let paths = [config.roots.assets.path,
+                     config.roots.thumbnailCache.path,
+                     config.gedcomDirectory().path,
+                     config.legacyGEDCOMDirectory?.path ?? ""]
+            .map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        for path in paths where !path.isEmpty {
+            #expect(!path.hasPrefix(real), "default family-asset path is real App Support: \(path)")
+        }
+        // An explicit support root is still honoured exactly.
+        let explicit = URL(fileURLWithPath: "/tmp/ExplicitSupport", isDirectory: true)
+        let pinned = FamilyAssetConfigurationCenter.configuration(
+            masterArchiveRoot: nil, masterIsSafelyAvailable: true, readOnly: true,
+            applicationSupportRoot: explicit)
+        #expect(pinned.roots.assets.path.hasPrefix("/tmp/ExplicitSupport/"))
+    }
+}
