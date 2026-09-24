@@ -222,16 +222,11 @@ public struct FamilyGraphCompiledStore {
             .appendingPathComponent("compiled", isDirectory: true)
     }
 
-    /// True when this process is a test host. Detected in Core, without
-    /// the app target's `TestEnvironment`, by the markers XCTest and Swift
-    /// Testing both set.
-    static var isRunningInATestHost: Bool {
-        let env = ProcessInfo.processInfo.environment
-        return env["XCTestConfigurationFilePath"] != nil
-            || env["XCTestBundlePath"] != nil
-            || env["XCTestSessionIdentifier"] != nil
-            || env["SWIFT_TESTING_ENABLED"] != nil
-    }
+    /// True when this process is a test host (unit, `swift test` Swift
+    /// Testing, Xcode host, or the app under XCUITest). The old four-env-key
+    /// check missed `swift test` entirely — codex #1713; see
+    /// TestHostDetection.swift.
+    static var isRunningInATestHost: Bool { TestHostDetection.isTestHost }
 
     /// THE REAL STORE IS UNREACHABLE FROM A TEST HOST (2026-09-17).
     ///
@@ -257,6 +252,8 @@ public struct FamilyGraphCompiledStore {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("VideoScan-test-compiled-\(ProcessInfo.processInfo.processIdentifier)",
                                     isDirectory: true)
+        TestHostDetection.reportSandboxedProductionStore(
+            "FamilyGraphCompiledStore.production", sandbox: sandbox, overrideKey: compiledRootEnvironmentKey)
         var store = FamilyGraphCompiledStore(root: sandbox)
         store.log = { _ in }
         return store

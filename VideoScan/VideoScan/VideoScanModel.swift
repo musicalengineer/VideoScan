@@ -983,16 +983,8 @@ final class VideoScanModel: ObservableObject {
     // Internal so VideoScanModel+ScanTargetPersistence can gate persistence
     // during XCTest runs.
     static var isRunningTests: Bool {
-        if NSClassFromString("XCTestCase") != nil { return true }
-        let env = ProcessInfo.processInfo.environment
-        if env["XCTestConfigurationFilePath"] != nil { return true }
-        if env["XCTestBundlePath"] != nil { return true }
-        if env["SWIFT_TESTING_ENABLED"] != nil { return true }
-        if env["VS_UI_TEST"] == "1" { return true } // UI-test target — see TestEnvironment.detect
-        if Bundle.allBundles.contains(where: { $0.bundlePath.hasSuffix(".xctest") }) {
-            return true
-        }
-        return false
+        // The shared detector (codex #1713) — incl. VS_UI_TEST=1 and `swift test`.
+        TestEnvironment.isTestHost
     }
 
     init() {
