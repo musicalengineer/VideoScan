@@ -995,7 +995,14 @@ struct CatalogView: View {
     }
 
     /// Alerts and the remaining maintenance sheets, in their original order.
+    /// Two halves, not one chain: a single 15-modifier chain timed out
+    /// Xcode 26.3's type checker on CI (ContentView.swift:999, run 36054431013).
     private func withAlerts<V: View>(_ view: V) -> some View {
+        withMaintenanceAlerts(withDuplicateAlerts(view))
+    }
+
+    /// Volume-rename notice and the Delete Duplicates picker/confirmations.
+    private func withDuplicateAlerts<V: View>(_ view: V) -> some View {
         view
         .alert(
             volumeRenameNoticeTitle(model.pendingVolumeRenameNotice),
@@ -1076,6 +1083,11 @@ struct CatalogView: View {
                  : "\n\nA run ended with a file it could not put back (its original path was occupied). Put Back moves it to where it lived — nothing is verified or deleted.")
                  + " Not Now keeps the offer in the Media File Operations window.")
         }
+    }
+
+    /// Re-correlate, purge/caption sheets and the catalog-wide confirmations.
+    private func withMaintenanceAlerts<V: View>(_ view: V) -> some View {
+        view
         .alert("Clear & Re-correlate All", isPresented: $showClearRecorrelateConfirm) {
             Button("Clear All Pairs & Re-correlate", role: .destructive) {
                 model.log("\nClearing ALL pairs and re-correlating from scratch...")
