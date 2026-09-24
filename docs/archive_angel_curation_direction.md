@@ -110,16 +110,17 @@ Data (durable, auditable — every action already logged per Rick's rule):
   `timesProposed`, `timesSkipped`, `lastProposedAt`, `lastSkippedAt`.
 
 Scoring:
-- **Fatigue:** `effective = score × 0.7^skips`, skips older than 90 days count
-  half. Three skips → **resting** for 90 days (excluded, with the reason shown:
+- **Fatigue:** `effective = score × 0.5^skips` (`fatigueFactor`; was 0.7 in the
+  first draft), skips older than 90 days count half. Three skips → **resting** for 90 days (excluded, with the reason shown:
   "Resting — you passed 3 times, back in December").
 - **Family fatigue:** members of one event family share half of each other's
   fatigue; **at most one family member per batch** (extend the existing
   `duplicateOfPick` gate). Family key: derivative base stem + date hint +
   folder, plus the share-out tokens (`clip\d`, `fixed`, `denoise`, `edit`,
   `v\d`, `_1`).
-- **Novelty:** `+15` for never proposed; a batch reserves ~3 of 10 slots for
-  "fresh eyes" (never proposed, decent score) — the explore arm.
+- **Novelty:** NOT points (the first draft's `+15` bonus was dropped). A batch
+  reserves ~3 of 10 slots (`freshShare` 0.3) for "fresh eyes" — never
+  proposed, score ≥ `freshMinimumScore` (25) — the explore arm.
 
 Proof (the metric, not a vibe): a simulation test over a 10k-record synthetic
 catalog with a "user" who skips every pick for 10 rounds, asserting
@@ -158,8 +159,8 @@ gentle daily target; sound optional.
 
 ## Numbers to keep honest
 
-The fatigue factor (0.7), the rest interval (90 days), the three fresh slots
-and the novelty bonus are starting guesses. The Phase 1 simulation is the
+The fatigue factor (0.5), the rest interval (90 days) and the three fresh
+slots are starting guesses. The Phase 1 simulation is the
 instrument for tuning them; the Angel testbed
 (`scripts/angel_testbed.py`) measures the cost side.
 

@@ -1,5 +1,5 @@
 // ArchiveAngelSweep.swift
-// Archive Angel phase 2 (docs/archive_angel_phase2_design.md): the
+// Archive Angel phase 2 (archive_angel_phase2_design.md, retired — git show f82bbd69^:docs/archive_angel_phase2_design.md): the
 // background scoring sweep. Sibling of PreviewSweepService in spirit —
 // configuration closures, an interaction gate, pacing, a @Published
 // status — but the work item is "score one record", not "make one

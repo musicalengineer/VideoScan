@@ -1,6 +1,6 @@
 // ArchiveAngelReviewSheet.swift
 // Archive Angel — Stage 2: "Recommended To Be Archived"
-// (docs/archive_angel_design.md §6). One row per prepared candidate with
+// (archive_angel_design.md, retired — git show f82bbd69^:docs/archive_angel_design.md §6). One row per prepared candidate with
 // the WHY lines, the companions that were made (and why the others were
 // not), an editable archive name, date and notes, and a checkbox. Promote
 // hands the selection to ArchiveAngelPromoter → the existing Promote job.

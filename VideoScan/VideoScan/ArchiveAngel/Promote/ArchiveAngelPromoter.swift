@@ -1,5 +1,5 @@
 // ArchiveAngelPromoter.swift
-// Archive Angel — Stage 2 executor (docs/archive_angel_design.md §6).
+// Archive Angel — Stage 2 executor (archive_angel_design.md, retired — git show f82bbd69^:docs/archive_angel_design.md §6).
 //
 // The review sheet IS the confirmation, so this goes straight from the
 // reviewed plan to the existing Promote job (buildPromotePlan →

@@ -1,5 +1,5 @@
 // ArchiveAngelPlan.swift
-// Archive Angel — the batch plan (docs/archive_angel_design.md §5–§6).
+// Archive Angel — the batch plan (archive_angel_design.md, retired — git show f82bbd69^:docs/archive_angel_design.md §5–§6).
 //
 // `plan.json` in the batch folder is the SOURCE OF TRUTH for Stage 2: the
 // candidates, their scores and why-lines, every preparation step's outcome

@@ -1,5 +1,5 @@
 // ArchiveAngelStartSheet.swift
-// Archive Angel — Stage 1 entry (docs/archive_angel_design.md §3): how
+// Archive Angel — Stage 1 entry (archive_angel_design.md, retired — git show f82bbd69^:docs/archive_angel_design.md §3): how
 // many to consider, whether to make FFV1 lossless copies for at-risk
 // formats (AMPAS/LOC practice; off by default for speed — Rick 2026-09-09,
 // a later pass can add them), where the buffer lives.

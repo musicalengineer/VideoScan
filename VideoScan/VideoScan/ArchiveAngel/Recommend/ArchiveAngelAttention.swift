@@ -13,7 +13,8 @@
 // here is authoritative; delete the cache and the ledger rebuilds it.
 //
 // How the scorer uses it (ArchiveAngelScorer, rules v8):
-//   • novelty      — never proposed → +noveltyBonus (the explore arm);
+//   • novelty      — never proposed → a reserved fresh slot (freshShare,
+//                    freshMinimumScore) — the explore arm; NOT points;
 //   • fatigue      — score × fatigueFactor^effectiveSkips, printed as a
 //                    negative evidence line so the score is still the sum
 //                    of its printed reasons;

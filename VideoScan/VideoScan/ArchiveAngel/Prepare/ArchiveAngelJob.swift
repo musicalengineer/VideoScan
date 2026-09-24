@@ -1,5 +1,5 @@
 // ArchiveAngelJob.swift
-// Archive Angel — Stage 1 as an MFO job (docs/archive_angel_design.md §3–§5).
+// Archive Angel — Stage 1 as an MFO job (archive_angel_design.md, retired — git show f82bbd69^:docs/archive_angel_design.md §3–§5).
 //
 // Consider N candidates → prepare each one's companions in the buffer →
 // stop for review. The plan (`plan.json` in the batch folder) is saved

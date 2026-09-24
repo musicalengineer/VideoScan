@@ -1,5 +1,5 @@
 // ArchiveAngelEvidenceStore.swift
-// Archive Angel phase 2 (docs/archive_angel_phase2_design.md): the SIDECAR
+// Archive Angel phase 2 (archive_angel_phase2_design.md, retired — git show f82bbd69^:docs/archive_angel_phase2_design.md): the SIDECAR
 // that holds the background sweep's machine-tier evidence — one record per
 // catalog id: the score and its printed why-lines, or the hard-floor
 // rejection. Fully re-derivable, so a stale or missing file is harmless and

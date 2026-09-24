@@ -1,5 +1,5 @@
 // ArchiveAngelScorer.swift
-// Archive Angel — Stage 1 candidate selection (docs/archive_angel_design.md §3).
+// Archive Angel — Stage 1 candidate selection (archive_angel_design.md, retired — git show f82bbd69^:docs/archive_angel_design.md §3).
 //
 // PURE CORE. Takes Sendable inputs projected from VideoRecord, returns a
 // verdict per candidate: eligible with a score AND the evidence lines that
