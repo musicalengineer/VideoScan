@@ -129,4 +129,62 @@ struct ArchiveAngelA4DeterminismTests {
             #expect(!(pick?.selection.picks.contains { $0.candidate.filename == "anchor.mov" } ?? true), "seed \(seed)")
         }
     }
+
+    /// QA follow-up 2026-09-24. A row's arrival key (tier, score) must be
+    /// an UPPER bound on what it can add — the band cut relies on it. A
+    /// copy group arrives at its best CACHED tier; here that is the 0-star
+    /// anchor's Worth a look (tier 1), because the Keep is cached as
+    /// Another copy (not a Prepare class). Live, the vouched, dated Keep
+    /// classifies Ready (tier 0) — above the band the 30 Ready plains set —
+    /// so a band check made on the arrival key alone cut the best file in
+    /// the catalog. Either the Keep is picked, or the evidence pick
+    /// declines (nil) and the job walks.
+    @Test("a Keep whose LIVE class outranks its group's cached tier is not cut by the tier band")
+    func keepWhoseLiveClassOutranksCachedTier() {
+        let now = Date()
+        let d = Date(timeIntervalSince1970: 773_000_000)
+        for seed in UInt64(1)...20 {
+            var rng = A4RNG(state: seed &* 104_729)
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("angel-a4tier-\(seed)-\(UUID().uuidString.prefix(6))")
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let store = ArchiveAngelEvidenceStore(directory: dir)
+            var records: [UUID: ArchiveAngelEvidenceRecord] = [:]
+            var live: [UUID: ArchiveAngelCandidate] = [:]
+            func add(_ name: String, score: Int, kind: ArchiveAngelRecommendationClass, stars: Int,
+                     group: UUID? = nil, keep: Bool = false) -> UUID {
+                let id = rng.uuid()
+                var r = ArchiveAngelEvidenceRecord(score: score, lines: [], rejection: nil, useCount: 0, lastUsed: nil, computedAt: now)
+                r.recommendation = kind
+                r.copyKey = group.map { "group:" + $0.uuidString }
+                records[id] = r
+                live[id] = ArchiveAngelCandidate(id: id, filename: name, fullPath: "/Volumes/T/\(name)", durationSeconds: 1800,
+                                                 starRating: stars, duplicateGroupID: group, captureDate: d,
+                                                 duplicateGroupCount: group == nil ? 0 : 2,
+                                                 duplicateDisposition: keep ? .keep : .none)
+                return id
+            }
+            for i in 0..<30 { _ = add("plain\(i).mov", score: 120, kind: .ready, stars: 3) }
+            let g = rng.uuid()
+            _ = add("anchor.mov", score: 100, kind: .worthALook, stars: 0, group: g)
+            let keep = add("keep.mov", score: 150, kind: .anotherCopy, stars: 3, group: g, keep: true)
+            store.replace(with: ArchiveAngelEvidenceFile(computedAt: now, complete: true, considered: records.count,
+                                                         eligible: records.count, records: records))
+            let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now) { live[$0] }
+            guard let pick else { continue }       // declined → the catalog walk decides; acceptable
+            #expect(pick.selection.picks.map(\.id).contains(keep),
+                    "seed \(seed): the live-Ready 150-point Keep was cut by the band its Worth-a-look anchor arrived in")
+        }
+    }
+
+    /// The guard on its own: a live choice that outranks the row's arrival
+    /// key (better tier, or a higher score) breaks the band's upper-bound
+    /// invariant; anything at or below it keeps it.
+    @Test("the arrival-bound guard: live tier above arrival, or live score above arrival, breaks the bound")
+    func arrivalBoundGuard() {
+        #expect(ArchiveAngelJob.liveChoiceExceedsArrival(liveTier: 0, liveScore: 100, arrivalTier: 1, arrivalScore: 150))
+        #expect(ArchiveAngelJob.liveChoiceExceedsArrival(liveTier: 1, liveScore: 151, arrivalTier: 1, arrivalScore: 150))
+        #expect(!ArchiveAngelJob.liveChoiceExceedsArrival(liveTier: 1, liveScore: 150, arrivalTier: 1, arrivalScore: 150))
+        #expect(!ArchiveAngelJob.liveChoiceExceedsArrival(liveTier: 2, liveScore: 999, arrivalTier: 1, arrivalScore: 150))
+        #expect(!ArchiveAngelJob.liveChoiceExceedsArrival(liveTier: 1, liveScore: 90, arrivalTier: 1, arrivalScore: 150))
+    }
 }

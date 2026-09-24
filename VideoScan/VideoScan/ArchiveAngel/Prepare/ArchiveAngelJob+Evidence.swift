@@ -143,6 +143,13 @@ extension ArchiveAngelJob {
                 groupCandidate = choice.candidate
                 groupKind = choice.kind
                 tier = prepare.isEmpty ? 0 : (prepare.firstIndex(of: choice.kind) ?? prepare.count)
+                // The arrival key must bound what this row adds (QA
+                // follow-up 2026-09-24): a live choice that outranks it
+                // means earlier cuts may have been wrong — walk instead.
+                if Self.liveChoiceExceedsArrival(liveTier: tier, liveScore: choice.evidence.score,
+                                                 arrivalTier: rowTier, arrivalScore: arrivalScore) {
+                    return nil
+                }
             }
             // THE effective class (codex #1643 A3): in a batch → skipped;
             // refused live (gone, purged, set aside, superseded, promoted)
@@ -199,6 +206,19 @@ extension ArchiveAngelJob {
         let overflow = max(0, ranked.ids.count - projections) + (kept.count - picks.count)
         return EvidencePick(selection: .init(picks: picks, overflow: overflow, rejected: rejected),
                             computedAt: store.computedAt ?? now, projections: projections)
+    }
+
+    /// The band cut's invariant (QA follow-up 2026-09-24): a row's arrival
+    /// key must be an UPPER bound on what it can add. A copy group arrives
+    /// at its best CACHED tier and score; its live choice can be better —
+    /// a Keep cached as Another copy that now classifies Ready. True when
+    /// the live (tier, score) outranks the arrival key in the band's own
+    /// order (lower tier first, then higher score): the rows already cut
+    /// or passed may have held something better, so the evidence pick is
+    /// not trustworthy and the caller walks the catalog.
+    static func liveChoiceExceedsArrival(liveTier: Int, liveScore: Int,
+                                         arrivalTier: Int, arrivalScore: Int) -> Bool {
+        liveTier != arrivalTier ? liveTier < arrivalTier : liveScore > arrivalScore
     }
 
     // MARK: Live copy groups (codex #1643 A4)
