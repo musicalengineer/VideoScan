@@ -133,6 +133,13 @@ public struct CyberBrainItem: Codable, Sendable, Equatable, Identifiable {
     public let disputesItemIDs: [String]
     public let createdAt: Date
     public let updatedAt: Date
+    /// The structured side of a military-service story (Rick 2026-09-23).
+    /// Only on a `lifeEvents` item (kind `event`), whose `text` is the brief
+    /// story itself — so a reader that predates this field still has the
+    /// story as an ordinary passage. Optional and omitted when nil: files
+    /// written before this field decode unchanged and re-encode
+    /// byte-identically.
+    public let service: CyberBrainServiceRecord?
 
     public init(
         id: String,
@@ -148,7 +155,8 @@ public struct CyberBrainItem: Codable, Sendable, Equatable, Identifiable {
         supersedesItemID: String? = nil,
         disputesItemIDs: [String] = [],
         createdAt: Date,
-        updatedAt: Date
+        updatedAt: Date,
+        service: CyberBrainServiceRecord? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -164,6 +172,102 @@ public struct CyberBrainItem: Codable, Sendable, Equatable, Identifiable {
         self.disputesItemIDs = disputesItemIDs
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.service = service
+    }
+}
+
+/// One person's military service, as the family knows it (Rick
+/// 2026-09-23: "the american revolution, the civil war, world war 1 and
+/// world war 2 … brief is good because we're lacking some details").
+///
+/// Facts only — every field is something the family actually said. What is
+/// not known stays nil / empty / `.unknown`; Hallie says "the family doesn't
+/// know" rather than filling a gap. The story Hallie tells is the carrying
+/// item's `text`; the source line comes from the item's first source.
+public struct CyberBrainServiceRecord: Codable, Sendable, Equatable {
+    /// Which war. `other` covers peacetime service and wars without a case
+    /// of their own; `nil` (absent) means the family doesn't know.
+    public enum Conflict: String, Codable, Sendable, CaseIterable {
+        case americanRevolution, civilWar, worldWarI, worldWarII, other
+    }
+
+    /// Whether the person saw combat, as far as the family knows.
+    public enum Combat: String, Codable, Sendable, CaseIterable {
+        case yes, no, unknown
+    }
+
+    /// How the family knows it — this decides Hallie's source line and her
+    /// offer wording ("the family story of …" for tradition).
+    public enum Basis: String, Codable, Sendable, CaseIterable {
+        /// A family member stated it as fact (e.g. Rick about his father).
+        case confirmedByFamily
+        /// Handed down; nobody has seen a document yet.
+        case familyTradition
+        /// A service record, discharge paper or similar was seen.
+        case documented
+    }
+
+    /// One battle or campaign the family names. Nothing is inferred from
+    /// the conflict: an engagement exists only when someone named it.
+    public struct Engagement: Codable, Sendable, Equatable {
+        public let name: String
+        public let date: CyberBrainQualifiedDate?
+        public let place: String?
+
+        public init(name: String, date: CyberBrainQualifiedDate? = nil, place: String? = nil) {
+            self.name = name
+            self.date = date
+            self.place = place
+        }
+    }
+
+    public let conflict: Conflict?
+    /// The army / service / side, as the family names it: "United States
+    /// Marine Corps", "British Army", "Confederate States Army".
+    public let force: String
+    /// Any role the family knows ("enlisted man", "officer"); nil = unknown.
+    public let roleNote: String?
+    /// When they served, qualified; nil = unknown.
+    public let serviceDates: CyberBrainQualifiedDate?
+    public let engagements: [Engagement]
+    public let combat: Combat
+    public let basis: Basis
+
+    public init(
+        conflict: Conflict?,
+        force: String,
+        roleNote: String? = nil,
+        serviceDates: CyberBrainQualifiedDate? = nil,
+        engagements: [Engagement] = [],
+        combat: Combat = .unknown,
+        basis: Basis
+    ) {
+        self.conflict = conflict
+        self.force = force
+        self.roleNote = roleNote
+        self.serviceDates = serviceDates
+        self.engagements = engagements
+        self.combat = combat
+        self.basis = basis
+    }
+
+    /// `engagements` and `combat` may be absent in a hand-written record:
+    /// they decode as `[]` and `.unknown`, the same "the family doesn't
+    /// know" the initializer defaults to (QA P3, 2026-09-24 — one terse
+    /// record must not fail the whole CyberBrain load). Everything else is
+    /// decoded exactly as the synthesized decoder did; encoding is still
+    /// synthesized, so a re-written file carries both keys explicitly.
+    /// C++ analogy: a hand-written deserializing constructor beside the
+    /// compiler-generated serializer.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        conflict = try container.decodeIfPresent(Conflict.self, forKey: .conflict)
+        force = try container.decode(String.self, forKey: .force)
+        roleNote = try container.decodeIfPresent(String.self, forKey: .roleNote)
+        serviceDates = try container.decodeIfPresent(CyberBrainQualifiedDate.self, forKey: .serviceDates)
+        engagements = try container.decodeIfPresent([Engagement].self, forKey: .engagements) ?? []
+        combat = try container.decodeIfPresent(Combat.self, forKey: .combat) ?? .unknown
+        basis = try container.decode(Basis.self, forKey: .basis)
     }
 }
 

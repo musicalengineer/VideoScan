@@ -1255,7 +1255,7 @@ enum HallieAppTurnCoordinator {
                 loadBook: dependencies.loadKindWords)
 
             let photo: ArchivistBiographyPhoto?
-            if result.clarification == nil,
+            if result.needsNoChoice,
                case .graph(let payload) = ast,
                payload.operation == .biography,
                let canonicalName = result.catalogPersonName {

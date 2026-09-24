@@ -178,6 +178,36 @@ CyberBrainSource
   notes?
 ```
 
+### 6.0 Service records (added 2026-09-23, additive)
+
+A military-service story is an ordinary `lifeEvents` item (kind `event`)
+whose `text` is the brief story Hallie tells (2–4 sentences), plus an
+optional structured `service` object:
+
+```text
+service
+  conflict?      americanRevolution | civilWar | worldWarI | worldWarII | other
+                 (absent = the family doesn't know)
+  force          "United States Marine Corps", "British Army", "Confederate States Army"
+  roleNote?
+  serviceDates?  qualified date (§6.2)
+  engagements[]  { name, date?, place? } — only battles someone named
+  combat         yes | no | unknown
+  basis          confirmedByFamily | familyTradition | documented
+```
+
+Why an optional field on an existing item kind rather than a new kind: a
+reader that predates it still has the story as a passage. The strict loader
+rejects unknown keys, so a file carrying `service` must not be written until
+every build that reads it knows the field — the 2026-09-23 data write was
+therefore split: the three story items (schema-1 fields only) first, the
+`service` objects after the merge and rebuild.
+
+Hallie tells the story on request (the biography OFFERS it); the
+biography planner withholds a structured story unless it is all the family
+has. Dated facts about the wars themselves (their year spans) live in
+`WorldKnowledge`, not here.
+
 ### 6.1 Stable identity
 
 Display names are not identities. CyberBrain uses its own durable person ID

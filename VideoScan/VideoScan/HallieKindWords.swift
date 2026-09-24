@@ -268,8 +268,11 @@ enum HallieKindWords {
     /// shapes and never reach the book.
     static func isBiographyAnswer(_ result: HallieTurnExecutor.Result,
                                   ast: ArchivistQueryAST?) -> Bool {
+        // An OFFER after the biography (the service story, 2026-09-23) is
+        // not a which-one: the biography is complete and still earns its
+        // kind word, placed before the offer (see `biographyOffer`).
         guard result.route == .graph, result.outcome == .answered,
-              result.clarification == nil,
+              result.clarification == nil || result.clarification?.stage.isOffer == true,
               case .graph(let payload)? = ast, payload.operation == .biography else { return false }
         return true
     }
@@ -303,8 +306,14 @@ enum HallieKindWords {
                   profiles: profiles, graph: graph),
               let uuid = profileUUID(profile),
               let person = book.people[uuid] else { return nil }
+        // The kind word follows the biography, not the offer: the anchor
+        // stops before a trailing offer so the question stays last.
+        var anchor = result.prose
+        if let offer = result.answerPlan?.trailingOffer, anchor.hasSuffix(offer) {
+            anchor = String(anchor.dropLast(offer.count))
+        }
         return Offer(uuid: uuid, display: person.display, lines: person.lines,
-                     occasion: .subject, anchor: result.prose)
+                     occasion: .subject, anchor: anchor)
     }
 
     /// The current user's own kind word for a greeting, or nil.

@@ -132,13 +132,30 @@ enum HallieTurnExecutor {
         /// selects it and resumes the carried gallery intent; "no" is the
         /// client's to clear with an "Okay." (HallieClarificationDecline).
         case galleryOffer
+        /// "Would you like to hear how Richard Harding Breen Sr served his
+        /// country?" after a biography, or "Whose story would you like to
+        /// hear?" after a family-wide service answer (2026-09-23): the
+        /// candidates are the CyberBrain people whose service story "yes" /
+        /// a pick tells; "no" is the client's to clear with an "Okay."
+        case serviceOffer
+
+        /// An OFFER Hallie made, not a which-one question: nobody is being
+        /// guessed at, the answer before it is complete, and "no" just
+        /// closes it.
+        var isOffer: Bool {
+            switch self {
+            case .galleryOffer, .serviceOffer: return true
+            case .profileIdentity, .gedcomPerson, .cyberBrainPerson, .suggestedIdentity: return false
+            }
+        }
 
         func accepts(_ source: IdentitySource) -> Bool {
             switch (self, source) {
             case (.profileIdentity, .peopleProfile), (.gedcomPerson, .gedcom),
                  (.cyberBrainPerson, .cyberBrain),
                  (.suggestedIdentity, .peopleProfile), (.suggestedIdentity, .gedcom),
-                 (.galleryOffer, .peopleProfile), (.galleryOffer, .gedcom):
+                 (.galleryOffer, .peopleProfile), (.galleryOffer, .gedcom),
+                 (.serviceOffer, .cyberBrain):
                 return true
             default:
                 return false
@@ -775,11 +792,16 @@ enum HallieTurnExecutor {
         /// the offered intent. Facts, basis, citations, attachments and the
         /// answer plan are untouched — the sentence is a question Hallie
         /// asks, never a claim about the family.
+        ///
+        /// A route that built its own plan gets the offer on the plan too
+        /// (HallieAnswerPlan.trailingOffer), so a model-phrased answer still
+        /// ends with the question its pending "yes" answers (2026-09-23).
         func offering(_ sentence: String, clarification offer: Clarification) -> Result {
-            Result(
+            let separated = prose.hasSuffix(" ") || prose.isEmpty ? sentence : " " + sentence
+            return Result(
                 route: route,
                 outcome: outcome,
-                prose: prose.hasSuffix(" ") || prose.isEmpty ? prose + sentence : prose + " " + sentence,
+                prose: prose + separated,
                 basisLine: basisLine,
                 queryDescription: queryDescription,
                 citations: citations,
@@ -789,7 +811,7 @@ enum HallieTurnExecutor {
                 matchCount: matchCount,
                 mediaAction: mediaAction,
                 offeredActions: offeredActions,
-                answerPlan: answerPlan,
+                answerPlan: answerPlan?.offering(separated),
                 composedBy: composedBy,
                 transcriptText: transcriptText.map { $0 + " " + sentence },
                 attachments: attachments,
@@ -815,10 +837,15 @@ enum HallieTurnExecutor {
             guard !note.isEmpty, answerPlan?.provenanceNote != note else { return self }
             let plan = (answerPlan ?? HallieAnswerPlan.derive(from: self))
                 .carrying(provenance: note)
+            // An offer stays the last sentence: the note goes in before it.
+            var noted = prose + note
+            if let offer = answerPlan?.trailingOffer, prose.hasSuffix(offer) {
+                noted = String(prose.dropLast(offer.count)) + note + offer
+            }
             return Result(
                 route: route,
                 outcome: outcome,
-                prose: prose + note,
+                prose: noted,
                 basisLine: basisLine,
                 queryDescription: queryDescription,
                 citations: citations,
@@ -1275,9 +1302,14 @@ enum HallieTurnExecutor {
                    rawPayload, request: request, context: context, dependencies: dependencies) {
                 return handled
             }
-            let result = try await executeGraphCase(
+            var result = try await executeGraphCase(
                 rawPayload, request: request, context: context,
                 dependencies: dependencies)
+            // A biography of someone with a service story ends by offering
+            // it (+Service, Rick 2026-09-23): "Would you like to hear how
+            // … served his country?" — "yes" tells the brief story.
+            result = ServiceAnswer.offeringStory(
+                on: result, payload: rawPayload, request: request, context: context)
             // The binding is evidence: say what "you" and "I" meant.
             if let note = bindingNote(request.intent.speakerBindings) {
                 return result.prefixingBasis(note)
