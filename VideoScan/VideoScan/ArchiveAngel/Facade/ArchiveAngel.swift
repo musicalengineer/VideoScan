@@ -210,7 +210,8 @@ final class ArchiveAngel: ObservableObject {
             // cleared before the companion-retirement fix) are retired
             // once per launch — stats off-main, the catalog on main
             // (2026-09-21; VideoScanModel+ArchiveAngelCompanions).
-            await catalog.reconcileArchiveAngelBufferAtLaunch(bufferRoot: root, fileExists: VideoScanModel.fileIsOnDisk)
+            await catalog.reconcileArchiveAngelBufferAtLaunch(bufferRoot: root,
+                                                         presence: { ArchiveAngelFilePresence.of($0) })
             // The evidence is read under the LOADED policy's stamp.
             await self.policyLoaded()
             // Attention memory first (the scorer reads it), then the grades.

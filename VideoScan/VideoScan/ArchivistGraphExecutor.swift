@@ -962,7 +962,7 @@ enum ArchivistGraphExecutor {
         }
         let fuzzyIDs = HallieSpellingRecovery.bestMatches(
             typed: typedName,
-            candidates: inputs.graph.people.values.map {
+            candidates: inputs.graph.visiblePeople.map {
                 (identity: $0.id, spellings: [$0.name])
             })
         let fuzzyPeople = fuzzyIDs.compactMap { inputs.graph.people[$0] }

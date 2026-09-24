@@ -411,7 +411,7 @@ enum HallieKindWords {
         if let name = answeredName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
             // The same by-name tree match the coordinator's photo and
             // gallery offers use for a biography subject.
-            let matches = graph?.people.values.filter {
+            let matches = graph?.visiblePeople.filter {
                 $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
             } ?? []
             if matches.count > 1 { return nil }

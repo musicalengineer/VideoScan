@@ -472,12 +472,17 @@ struct ArchiveAngelReviewSheet: View {
         // ledger lines for the undecided rows (half a skip), the plan saved
         // .discarded before anything is deleted, the catalogued companions
         // retired (codex #1572), the folder removed, the log line.
-        let outcome = model.clearArchiveAngelBatch(plan, reason: "discarded by you in the review sheet")
-        // `cleared`, not `refusal == nil`: a failed plan save is an error
-        // with no refusal, and the sheet's copy must not claim a decision
-        // that did not persist (codex review 2026-09-20 #2).
-        if outcome.cleared { plan.status = .discarded }
-        dismiss()
+        // Async (codex #1714 R3): the plan read and save run off the main
+        // actor; the sheet closes once the decision has landed.
+        let snapshot = plan
+        Task { @MainActor in
+            let outcome = await model.clearArchiveAngelBatch(snapshot, reason: "discarded by you in the review sheet")
+            // `cleared`, not `refusal == nil`: a failed plan save is an error
+            // with no refusal, and the sheet's copy must not claim a decision
+            // that did not persist (codex review 2026-09-20 #2).
+            if outcome.cleared { plan.status = .discarded }
+            dismiss()
+        }
     }
 
     /// Stat the rows' whole-file fixity off the main actor first (codex
@@ -533,24 +538,48 @@ struct ArchiveAngelReviewSheet: View {
 
     /// The unchecked-at-Promote pass, idempotent per (batch, row): every
     /// ready row that is not selected AND has no `uncheckedNotedAt` yet
-    /// gets one `angelSkipped` ledger line (reason "unchecked") and the
-    /// stamp; the plan is saved so the stamp outlives this sheet. A
-    /// retried Promote (identity refused, nothing to promote, a failed
-    /// job) finds the stamp and emits nothing (codex 2026-09-20 #7).
+    /// gets the stamp and one `angelSkipped` ledger line (reason
+    /// "unchecked"). A retried Promote (identity refused, nothing to
+    /// promote, a failed job) finds the stamp and emits nothing (codex
+    /// 2026-09-20 #7).
+    ///
+    /// ORDER (codex #1714 R2, 2026-09-23): the stamped plan is SAVED FIRST
+    /// and the ledger hears of the decision only once that save succeeded.
+    /// The old order — stamp in memory, ledger line, then a save whose
+    /// failure was ignored — left the stamp only in this sheet: close and
+    /// reopen, and the same unchecked row was noted again (codex's probe:
+    /// ledger 1 → 2 for one decision), pushing it toward the 90-day rest
+    /// rule twice. On a failed save nothing is stamped, nothing is written
+    /// to the ledger, and a retry (or a reopen) notes it exactly once. A
+    /// crash between the save and the ledger line loses that one line —
+    /// the under-count, never the double count.
+    /// `save` is the test seam (production: the fsync'd plan store).
     /// Returns the ids noted this time. Main actor; the production path.
     @MainActor
     @discardableResult
     static func noteUncheckedAtPromote(plan: inout ArchiveAngelPlan, model: VideoScanModel,
-                                       at now: Date = Date()) -> [UUID] {
+                                       at now: Date = Date(),
+                                       save: (ArchiveAngelPlan) -> Bool = {
+                                           ArchiveAngelPlanStore.saveLogged($0, context: "review/promote (unchecked noted)")
+                                       }) -> [UUID] {
+        var stamped = plan
         var noted: [UUID] = []
-        for i in plan.entries.indices
-        where plan.entries[i].status == .ready && !plan.entries[i].selected && plan.entries[i].uncheckedNotedAt == nil {
-            plan.entries[i].uncheckedNotedAt = now
-            noted.append(plan.entries[i].id)
+        for i in stamped.entries.indices
+        where stamped.entries[i].status == .ready && !stamped.entries[i].selected
+            && stamped.entries[i].uncheckedNotedAt == nil {
+            stamped.entries[i].uncheckedNotedAt = now
+            noted.append(stamped.entries[i].id)
         }
         guard !noted.isEmpty else { return [] }
+        guard save(stamped) else {
+            let line = "Archive Angel: \(noted.count) unchecked row(s) of \(plan.batchID) NOT noted as passed — "
+                + "plan.json could not be saved; the next Promote will note them"
+            model.log(line)
+            appLog.write(line)
+            return []
+        }
+        plan = stamped
         model.ledgerAngelAttention(.angelSkipped, recordIDs: noted, batchID: plan.batchID, reason: "unchecked", at: now)
-        ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote (unchecked noted)")
         return noted
     }
 

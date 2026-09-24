@@ -47,12 +47,13 @@ protocol AngelCatalog: AnyObject {
     /// Retire the catalogued companions of batches a settle reclaimed
     /// (VideoScanModel+ArchiveAngelCompanions). Returns records retired.
     @discardableResult
+    /// `presence`: positive absence only (codex #1714 R1).
     func forgetArchiveAngelCompanions(settled plans: [ArchiveAngelPlan],
-                                      fileExists: (String) -> Bool) -> Int
+                                      presence: (String) -> ArchiveAngelFilePresence) -> Int
     /// Launch pass over the buffer (VideoScanModel+ArchiveAngelCompanions).
     @discardableResult
     func reconcileArchiveAngelBufferAtLaunch(bufferRoot: URL,
-                                             fileExists: @escaping @Sendable (String) -> Bool) async -> Int
+                                             presence: @escaping @Sendable (String) -> ArchiveAngelFilePresence) async -> Int
 
     // Show Copies… (S4) — the copy-family walk (Review/ArchiveAngelShowCopies).
 

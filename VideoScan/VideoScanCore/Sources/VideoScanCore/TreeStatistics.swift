@@ -196,7 +196,8 @@ public enum TreeStatistics {
                                    in graph: GedcomFamilyGraph) -> [GedcomFamilyGraph.Person] {
         switch scope {
         case .wholeTree:
-            return Array(graph.people.values)
+            // Rick's identity rulings: a hidden duplicate is not counted twice.
+            return graph.visiblePeople
         case .ancestors(let id, let maxGenerations):
             guard let root = graph.people[id] else { return [] }
             return graph.ancestorLine(of: root, line: .both, generations: maxGenerations)

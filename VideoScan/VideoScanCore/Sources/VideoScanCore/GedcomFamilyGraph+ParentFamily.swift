@@ -11,6 +11,15 @@
 // Until 2026-09-02 `relatives(.mother)` returned both, and so did every
 // walk built on the compiled parent table.
 //
+// IDENTITY RULINGS (codex #1710/#1712, 2026-09-23): every parent read here
+// goes through `queryPerson`, so a record Rick hid is nobody's parent and a
+// duplicate he resolved counts as the record he verified — in the ranking
+// facts too. That applies HIS PERSON rulings only. It does not decide which
+// of several genuinely different parent families is right (Eileen Latta's
+// three FAMC links are his open ruling): the ranking below is unchanged,
+// and every surviving different parent is still reported as an alternate,
+// never dropped in silence.
+//
 // The rule is READ-TIME SELECTION ONLY: the GEDCOM, the compiled tree
 // and FamilySearch are never edited. Ranking (`ParentFamilyRank`) is one
 // pure comparator, table-tested in GedcomParentFamilyTests:
@@ -131,21 +140,24 @@ extension GedcomFamilyGraph {
             let family = families[firstID]!
             let rank = rank(of: family, id: firstID, order: 0)
             return ParentFamilyChoice(primaryFamilyID: firstID,
-                                      father: family.husband.flatMap { people[$0] },
-                                      mother: family.wife.flatMap { people[$0] },
+                                      father: queryPerson(family.husband),
+                                      mother: queryPerson(family.wife),
                                       ranks: [rank], alternates: [])
         }
         let ranks = rankedParentFamilies(ids)
         let primaryID = ranks[0].familyID
         let primary = families[primaryID]!
-        let father = primary.husband.flatMap { people[$0] }
-        let mother = primary.wife.flatMap { people[$0] }
+        let father = queryPerson(primary.husband)
+        let mother = queryPerson(primary.wife)
         var alternates: [AlternateParent] = []
         for id in ids where id != primaryID {
             let family = families[id]!
             for (role, pointer, primaryParent) in [(ParentRole.father, family.husband, father),
                                                     (ParentRole.mother, family.wife, mother)] {
-                guard let pointer, let person = people[pointer] else { continue }
+                // `queryPerson`: a hidden parent is nobody's parent; a
+                // duplicate Rick resolved reads as the record he verified —
+                // and is then skipped just below as the same person.
+                guard let person = queryPerson(pointer) else { continue }
                 if person.id == primaryParent?.id { continue }   // the same record listed twice
                 alternates.append(AlternateParent(
                     role: role, person: person, familyID: id,
@@ -181,8 +193,8 @@ extension GedcomFamilyGraph {
     }
 
     private func rank(of family: Family, id: String, order: Int) -> ParentFamilyRank {
-        let husband = family.husband.flatMap { people[$0] }
-        let wife = family.wife.flatMap { people[$0] }
+        let husband = queryPerson(family.husband)
+        let wife = queryPerson(family.wife)
         return ParentFamilyRank(
             familyID: id,
             hasBothParents: husband != nil && wife != nil,

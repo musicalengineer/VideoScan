@@ -40,7 +40,7 @@ extension HallieTurnExecutor {
         /// The latest four-digit birth year recorded anywhere in the tree.
         static func latestBirthYear(in graph: GedcomFamilyGraph) -> Int? {
             var latest: Int?
-            for person in graph.people.values {
+            for person in graph.people.values where !graph.isHidden(person.id) {
                 guard let year = trailingYear(person.birthDate) else { continue }
                 latest = max(latest ?? year, year)
             }

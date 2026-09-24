@@ -622,7 +622,8 @@ public struct GedcomFamilyGraph: Sendable {
     /// Recorded family units in the person's FAMS order. Missing pointers
     /// are ignored; children never migrate between units.
     public func familyUnits(of person: Person) -> [FamilyUnit] {
-        person.spouseOfFamilies.compactMap { familyID in
+        if !suppressedPersonIDs.isEmpty { return ruledFamilyUnits(of: person) }
+        return person.spouseOfFamilies.compactMap { familyID in
             guard let family = families[familyID] else { return nil }
             let isHusband = family.husband == person.id
             let isWife = family.wife == person.id
@@ -692,8 +693,13 @@ public struct GedcomFamilyGraph: Sendable {
         key = key.trimmingCharacters(in: .whitespaces)
         guard !key.isEmpty else { return [] }
         // Surname postings narrow; the exact predicate confirms
-        // (GedcomFamilyGraph+Index.swift, 2026-08-28).
-        return indexedPeople(withSurnameKey: key)
+        // (GedcomFamilyGraph+Index.swift, 2026-08-28). A record Rick ruled
+        // out of sight is not a member of the family roster (codex #1710
+        // (3)): his duplicate must not reappear in "the Breens" or win an
+        // earliest-born answer. Not redirected — the record he verified
+        // is in the roster on its own surname, or it is not a member.
+        let found = indexedPeople(withSurnameKey: key)
+        return suppressedPersonIDs.isEmpty ? found : found.filter { !suppressedPersonIDs.contains($0.id) }
     }
 
     // MARK: Lookup
@@ -711,7 +717,13 @@ public struct GedcomFamilyGraph: Sendable {
     /// Family Tree. Filtering at each of those instead would mean 25 places
     /// to remember, and the one that got forgotten would be the one that
     /// answered Rick's uncle with the wrong grandmother.
-    public var suppressedPersonIDs: Set<String> = []
+    ///
+    /// `internal(set)` (codex #1710, 2026-09-23): set ONLY through
+    /// `applyingIdentityRulings(_:)` (GedcomFamilyGraph+IdentityRulings.swift),
+    /// which also derives the redirect sources and the ruled topology. Two
+    /// app paths used to assign these fields by hand and got different
+    /// answers from the same rulings.
+    public internal(set) var suppressedPersonIDs: Set<String> = []
 
     /// Where a suppressed record's traffic goes: hidden person id → the
     /// record a human said is the right one.
@@ -721,25 +733,17 @@ public struct GedcomFamilyGraph: Sendable {
     /// right one "Mary Christina O'Connor", and searching the first phrase
     /// found only the record now hidden. Rick's requirement is "so we always
     /// get the right one" — not "so we get neither".
-    public var preferredPersonID: [String: String] = [:]
+    public internal(set) var preferredPersonID: [String: String] = [:]
+
+    /// The inverse of `preferredPersonID`: verified record id → the hidden
+    /// duplicates that hand their traffic to it, sorted. Derived by
+    /// `applyingIdentityRulings`; the ruled relationship view reads a
+    /// verified person's marriages and children through their duplicates
+    /// too (a child recorded under the duplicate is still their child).
+    var redirectSources: [String: [String]] = [:]
 
     public func people(matching typed: String) -> [Person] {
-        let found = peopleMatchingUnfiltered(typed)
-        guard !suppressedPersonIDs.isEmpty else { return found }
-        var out: [Person] = []
-        var seen = Set<String>()
-        for person in found {
-            // A hidden record hands its traffic to the record a human said
-            // is the right one, so the phrase that names the duplicate still
-            // answers — with the right person.
-            let id = suppressedPersonIDs.contains(person.id)
-                ? preferredPersonID[person.id]
-                : person.id
-            guard let id, !suppressedPersonIDs.contains(id),
-                  let resolved = people[id], seen.insert(id).inserted else { continue }
-            out.append(resolved)
-        }
-        return out
+        ruledLookupResult(peopleMatchingUnfiltered(typed))
     }
 
     private func peopleMatchingUnfiltered(_ typed: String) -> [Person] {
@@ -795,7 +799,9 @@ public struct GedcomFamilyGraph: Sendable {
         // Predicate shared with `NameIndex` (see +NameIndex.swift) so the
         // indexed and linear paths can never drift apart.
         guard let tokens = Self.namedLikeTokens(typed) else { return [] }
-        return indexedPeople(namedLikeTokens: tokens)
+        // Same hidden → verified hand-off as `people(matching:)` (codex
+        // #1710 (3): only that one door honoured the rulings).
+        return ruledLookupResult(indexedPeople(namedLikeTokens: tokens))
     }
 
     /// Surnames a woman may be known by that her NAME records do not
@@ -896,7 +902,8 @@ public struct GedcomFamilyGraph: Sendable {
     /// honestly rather than guessing.
     /// Every marriage the tree records for a person, in file order.
     public func marriages(of person: Person) -> [Marriage] {
-        person.spouseOfFamilies.compactMap { id -> Marriage? in
+        if !suppressedPersonIDs.isEmpty { return ruledMarriages(of: person) }
+        return person.spouseOfFamilies.compactMap { id -> Marriage? in
             guard let family = families[id] else { return nil }
             let spouseID = [family.husband, family.wife].compactMap { $0 }.first { $0 != person.id }
             return Marriage(spouse: spouseID.flatMap { people[$0] }, date: family.marriageDate)
@@ -904,6 +911,11 @@ public struct GedcomFamilyGraph: Sendable {
     }
 
     public func relatives(_ relation: Relation, of person: Person) -> [Person] {
+        // Rick's identity rulings (codex #1710 (3)): a hidden record is
+        // not anyone's relative; a duplicate he resolved hands its edges to
+        // the record he verified. Raw records are untouched — this is the
+        // query view (GedcomFamilyGraph+IdentityRulings.swift).
+        if !suppressedPersonIDs.isEmpty { return ruledRelatives(relation, of: person) }
         func lookup(_ id: String?) -> Person? {
             guard let id else { return nil }
             return people[id]
