@@ -44,8 +44,8 @@ struct TestEnvironmentSharedDetectorTests {
 struct AppTestHostDetectionProbe {
 
     @Test @MainActor func reportDetection() throws {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first!.appendingPathComponent("VideoScan", isDirectory: true).standardizedFileURL.path
+        let appSupport = try #require(FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first)
+            .appendingPathComponent("VideoScan", isDirectory: true).standardizedFileURL.path
         let productionRoot = FamilyGraphCompiledStore.production.root.standardizedFileURL.path
         let appRoot = FamilyGraphCompiledStore.app.root.standardizedFileURL.path
         let underRealStore = productionRoot.hasPrefix(appSupport) || appRoot.hasPrefix(appSupport)

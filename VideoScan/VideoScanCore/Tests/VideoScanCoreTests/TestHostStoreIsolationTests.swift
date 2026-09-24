@@ -24,18 +24,18 @@ import Testing
 @Suite("Test-host store isolation (codex #1713)")
 struct TestHostStoreIsolationTests {
 
-    private static var realApplicationSupportVideoScan: String {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first!.appendingPathComponent("VideoScan", isDirectory: true).standardizedFileURL.path
+    static func realApplicationSupportVideoScan() throws -> String {
+        try #require(FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first)
+            .appendingPathComponent("VideoScan", isDirectory: true).standardizedFileURL.path
     }
 
     /// No env mutation here: a concurrently running override test may set
     /// VIDEOSCAN_FAMILY_TREE_COMPILED_ROOT to a /private/tmp scratch path,
     /// which is also not Application Support — the assertion holds either way.
     @Test("production compiled store is never the real Application Support root under a test runner")
-    func productionStoreIsSandboxed() {
+    func productionStoreIsSandboxed() throws {
         let root = FamilyGraphCompiledStore.production.root.standardizedFileURL.path
-        #expect(!root.hasPrefix(Self.realApplicationSupportVideoScan),
+        #expect(!root.hasPrefix(try Self.realApplicationSupportVideoScan()),
                 "FamilyGraphCompiledStore.production resolved to the REAL store (\(root)) inside a test process")
     }
 }
@@ -53,8 +53,7 @@ struct TestHostDetectionProbe {
 
     @Test func reportDetection() throws {
         let root = FamilyGraphCompiledStore.production.root.standardizedFileURL.path
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first!.appendingPathComponent("VideoScan", isDirectory: true).standardizedFileURL.path
+        let appSupport = try TestHostStoreIsolationTests.realApplicationSupportVideoScan()
         let underRealStore = root.hasPrefix(appSupport)
 
         if let reportPath = ProcessInfo.processInfo.environment["VS_TEST_HOST_PROBE_REPORT"],
