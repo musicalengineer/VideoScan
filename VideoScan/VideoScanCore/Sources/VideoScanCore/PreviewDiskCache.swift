@@ -153,20 +153,9 @@ public final class PreviewDiskCache: @unchecked Sendable {
             .appendingPathComponent("preview-cache", isDirectory: true)
     }
 
-    /// True when this process is a unit-test host. Multi-signal — see
-    /// MetadataCache.isRunningTests (mirrored, not shared).
-    private static var isRunningTests: Bool {
-        if NSClassFromString("XCTestCase") != nil { return true }
-        let env = ProcessInfo.processInfo.environment
-        if env["XCTestConfigurationFilePath"] != nil { return true }
-        if env["XCTestBundlePath"] != nil { return true }
-        if env["SWIFT_TESTING_ENABLED"] != nil { return true }
-        if env["VS_UI_TEST"] == "1" { return true }
-        if Bundle.allBundles.contains(where: { $0.bundlePath.hasSuffix(".xctest") }) {
-            return true
-        }
-        return false
-    }
+    /// True when this process is a test host (incl. VS_UI_TEST=1). The
+    /// shared detector — codex #1713, TestHostDetection.swift.
+    private static var isRunningTests: Bool { TestHostDetection.isTestHost }
 
     // MARK: - State
 

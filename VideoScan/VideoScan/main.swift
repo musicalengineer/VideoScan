@@ -9,13 +9,11 @@ import SwiftUI
 // XCTestBundlePath / XCTestSessionIdentifier / XCTestConfigurationFilePath
 // (the last one present-but-empty, hence `!= nil`) on the host process at
 // launch. Pinned by TestHostGateTests.
-let isTestHost: Bool = {
-    let env = ProcessInfo.processInfo.environment
-    return env["XCTESTCONFIGURATION_TEMP_DIR"] != nil
-        || env["XCTestConfigurationFilePath"] != nil
-        || env["XCTestBundlePath"] != nil
-        || env["XCTestSessionIdentifier"] != nil
-}()
+//
+// Since codex #1713 (2026-09-23) this is the shared detector's runner-only
+// flavour (same env keys, plus argv/loaded-test-code signals); it still
+// deliberately ignores VS_UI_TEST so the app under XCUITest boots fully.
+let isTestHost: Bool = TestEnvironment.isUnitTestProcess
 
 let isPersonEvaluation = CommandLine.arguments.contains("--person-eval")
 let isRecipeCalibration = CommandLine.arguments.contains("--recipe-calibrate")

@@ -11,7 +11,7 @@ final class DashboardState: ObservableObject {
     init() {
         chipName = Self.detectChipName()
         // Skip timer-based polling when running as a test host
-        if NSClassFromString("XCTestCase") == nil {
+        if !TestEnvironment.isUnitTestProcess {  // shared detector, codex #1713
             startSystemMetrics()
         }
         catalogLog.start(append: true)
