@@ -284,7 +284,7 @@ struct RipAllFramesSheet: View {
         let options = AllFramesRipper.Options(sampling: sampling,
                                               estimatedFrames: estimatedFrames,
                                               estimatedBytes: estimatedBytes)
-        fileOpsCenter.startedByUser {
+        _ = fileOpsCenter.startedByUser {
             $0.startRipAllFrames(record: record,
                                  destinationParent: parent,
                                  options: options)

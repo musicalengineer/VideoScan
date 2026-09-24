@@ -161,7 +161,7 @@ struct MediaFileOperationsWindow: View {
             Divider()
             if let pending = model.pendingDeleteDuplicatesResume {
                 DeleteDuplicatesResumeBanner(plan: pending,
-                                             onResume: { center.startedByUser { $0.resumeDeleteDuplicates(plan: pending, model: model) } },
+                                             onResume: { _ = center.startedByUser { $0.resumeDeleteDuplicates(plan: pending, model: model) } },
                                              onPutBack: { model.putBackStrandedDuplicates() },
                                              onDiscard: { model.discardPendingDeleteDuplicatesPlan() })
                 Divider()

@@ -928,7 +928,7 @@ struct CatalogContent: View {
         panel.allowsMultipleSelection = false
         panel.prompt = "Select"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
-        fileOpsCenter.startedByUser { $0.startExtract(record: rec, destinationParent: dest) }
+        _ = fileOpsCenter.startedByUser { $0.startExtract(record: rec, destinationParent: dest) }
         // The job brings the operations window forward itself (not key,
         // Settings-gated) — MediaFileOperationsWindowForwarder, 2026-09-21.
     }

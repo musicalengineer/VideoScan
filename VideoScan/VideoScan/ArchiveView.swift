@@ -374,7 +374,7 @@ struct ArchiveView: View {
             // every archive copy, restores archiveFixity on a manifest
             // match, flags mismatches loudly.
             Button("Verify Copies…") {
-                fileOpsCenter.startedByUser { $0.startVerifyArchiveCopies(model: model) }
+                _ = fileOpsCenter.startedByUser { $0.startVerifyArchiveCopies(model: model) }
                 MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // Media File Operations window (legacy id)
             }
             .disabled(model.isReadOnly)

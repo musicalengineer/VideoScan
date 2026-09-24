@@ -549,7 +549,7 @@ struct VerifyAudioSheet: View {
     }
 
     private func startBalance(_ diagnosis: AudioVerifyDiagnosis) {
-        fileOpsCenter.startedByUser {
+        _ = fileOpsCenter.startedByUser {
             $0.startBalanceAudio(record: request.record,
                                  fromDiagnosis: diagnosis,
                                  model: model,
@@ -563,7 +563,7 @@ struct VerifyAudioSheet: View {
 
     private func startRebuild(finding: AudioVerifyFinding,
                               diagnosis: AudioVerifyDiagnosis) {
-        fileOpsCenter.startedByUser {
+        _ = fileOpsCenter.startedByUser {
             $0.startRebuildAudio(record: request.record,
                                  reason: VerifyAudioRules.noteFragment(for: finding),
                                  shape: diagnosis.shape,

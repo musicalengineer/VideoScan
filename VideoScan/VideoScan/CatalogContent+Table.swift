@@ -590,7 +590,7 @@ extension CatalogContent {
                         // selected. Distinct from the volume-level
                         // Compare & Rescue feature.
                         Button("Compare These Two Files…") {
-                            fileOpsCenter.startedByUser {
+                            _ = fileOpsCenter.startedByUser {
                                 $0.startCompare(recordA: fileA, recordB: fileB)
                             }
                             // The compare result lives in the job window — in front (codex #964).
@@ -990,7 +990,7 @@ extension CatalogContent {
                         // v1: Donna is the only tuned recipe.
                         Menu("Find and Tag") {
                             Button("Donna") {
-                                fileOpsCenter.startedByUser {
+                                _ = fileOpsCenter.startedByUser {
                                     $0.startFindPerson(person: "Donna",
                                                        records: selectedRecs,
                                                        model: model)
@@ -1246,7 +1246,7 @@ extension CatalogContent {
         Button(activeRecs.count > 1
                ? "Verify Video (\(activeRecs.count) Files)"
                : "Verify Video") {
-            fileOpsCenter.startedByUser { center in
+            _ = fileOpsCenter.startedByUser { center in
                 for r in verifiableRecs {
                     model.noteMissingFileForUserAction(r)
                     center.startVerifyVideo(record: r, model: model)
@@ -1289,7 +1289,7 @@ extension CatalogContent {
                ? "Verify Audio (\(activeRecs.count) Files)"
                : "Verify Audio") {
             // One scope for the whole selection: N jobs, one raise.
-            fileOpsCenter.startedByUser { center in
+            _ = fileOpsCenter.startedByUser { center in
                 for r in verifiableRecs {
                     model.noteMissingFileForUserAction(r)
                     center.startVerifyAudio(record: r, model: model)
@@ -1329,7 +1329,7 @@ extension CatalogContent {
             Button(damagedRecs.count > 1
                    ? "Repair Damaged Audio (\(damagedRecs.count) Files)"
                    : "Repair Damaged Audio") {
-                fileOpsCenter.startedByUser { center in
+                _ = fileOpsCenter.startedByUser { center in
                     for r in damagedRecs {
                         center.startVerifyAudio(record: r, model: model, autoRepair: true)
                     }
@@ -1446,7 +1446,7 @@ extension CatalogContent {
         }
         let modern = reachable.filter { rec in !needsReformat.contains(where: { $0.id == rec.id }) }
 
-        fileOpsCenter.startedByUser { center in
+        _ = fileOpsCenter.startedByUser { center in
             for rec in modern {
                 center.startAnalyzeOne(record: rec, model: model,
                                        orchestrator: captionOrchestrator,
@@ -1471,7 +1471,7 @@ extension CatalogContent {
         alert.addButton(withTitle: needsReformat.count == reachable.count ? "Cancel" : "Skip These")
         let reformat = alert.runModal() == .alertFirstButtonReturn
         if reformat {
-            fileOpsCenter.startedByUser { center in
+            _ = fileOpsCenter.startedByUser { center in
                 for rec in needsReformat {
                     center.startReformat(record: rec, model: model,
                                          orchestrator: captionOrchestrator)
@@ -1491,7 +1491,7 @@ extension CatalogContent {
                                      audioCodec: rec.audioCodec)
             && !rec.needsReformat {
             // Modern codec — analyze directly.
-            fileOpsCenter.startedByUser {
+            _ = fileOpsCenter.startedByUser {
                 $0.startAnalyzeOne(record: rec, model: model,
                                    orchestrator: captionOrchestrator,
                                    stages: stages)
@@ -1521,7 +1521,7 @@ extension CatalogContent {
         alert.addButton(withTitle: "Reformat and Analyze")
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn {
-            fileOpsCenter.startedByUser {
+            _ = fileOpsCenter.startedByUser {
                 $0.startReformat(record: rec, model: model,
                                  orchestrator: captionOrchestrator)
             }
