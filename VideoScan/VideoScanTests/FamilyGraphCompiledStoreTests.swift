@@ -677,6 +677,69 @@ struct FamilyGraphCompiledStoreTests {
         #expect(box.loader(store).loadNewestOutcome().compiled == true)
     }
 
+    /// (c) 2026-09-24 — Rick's live tree after a codec bump: CURRENT is a
+    /// promoted single-file generation (a merged .ged carrying N pulls),
+    /// PREVIOUS is the older two-file tree. The first intact generation
+    /// decides: the stale previous must NOT outrank current (that offered
+    /// "Recompile 2 pulls" and would have promoted the pre-merge tree);
+    /// the loader rebuilds current's merged file instead.
+    @Test func versionRefusedSingleFileCurrentIsNotOutrankedByAMultiSourcePrevious() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let older = Date(timeIntervalSinceNow: -7200)
+        let a = try box.write(GedcomSyntheticPedigree.gedcom(people: 120, generations: 5), as: "a.ged", mtime: older)
+        let b = try box.write(Self.pullB, as: "b.ged", mtime: older)
+        let store = box.store()
+        let twoPull = try #require(GedcomFamilyGraph(fileURL: a)).merged(with: try #require(GedcomFamilyGraph(fileURL: b)))
+        let previousGeneration = try #require(store.ingest(graph: twoPull, sources: [a, b]))
+        // A real merged .ged, as the app writes it: one file carrying THREE
+        // logical pulls (its _VS_SOURCE lines) — like familysearch-merged-mco.
+        let c = try box.write(GedcomSyntheticPedigree.gedcom(people: 40, generations: 3), as: "c.ged", mtime: older)
+        let threePull = twoPull.merged(with: try #require(GedcomFamilyGraph(fileURL: c)))
+        try FileManager.default.removeItem(at: c)
+        let merged = try box.write(threePull.gedcomText(), as: "merged.ged", mtime: Date(timeIntervalSinceNow: -3600))
+        let mergedGraph = try #require(GedcomFamilyGraph(fileURL: merged))
+        #expect(mergedGraph.sourceProvenance.count == 3, "fixture: the merged file carries 3 pulls")
+        #expect(store.ingest(graph: mergedGraph, sources: [merged]) != nil)
+        var pointer = try #require(store.readPointer())
+        #expect(pointer.previous != nil, "the two-file tree is the previous generation")
+        _ = previousGeneration
+        pointer.codec = 3
+        try JSONEncoder().encode(pointer).write(to: store.pointerURL)
+
+        #expect(store.multiSourceGenerationNeedingRecompile() == nil)
+        let outcome = box.loader(store).loadNewestOutcome()
+        #expect(outcome.needsRecompile.isEmpty, "must not offer to recompile the stale two-file previous")
+        #expect(outcome.compiled == true)
+        #expect(outcome.selectedURL?.resolvingSymlinksInPath() == merged.resolvingSymlinksInPath())
+        #expect(outcome.graph?.people.count == mergedGraph.people.count)
+        #expect(!box.logLines.contains("not demoting"))
+        let after = try #require(store.readPointer())
+        #expect(after.codec == GedcomCompiledTree.codecVersion)
+        #expect(store.readManifest(after.current)?.sources.map(\.fileName) == ["merged.ged"])
+    }
+
+    /// (d) The 9/17 protection still holds: a NARROWED current (one file,
+    /// one pull) must not beat the intact two-pull previous — the loader
+    /// offers Recompile of the two pulls rather than rebuilding one file.
+    @Test func versionRefusedNarrowedCurrentStillDefersToTheTwoPullPrevious() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let old = Date(timeIntervalSinceNow: -3600)
+        let a = try box.write(GedcomSyntheticPedigree.gedcom(people: 120, generations: 5), as: "a.ged", mtime: old)
+        let b = try box.write(Self.pullB, as: "b.ged", mtime: old)
+        let store = box.store()
+        let twoPull = try #require(GedcomFamilyGraph(fileURL: a)).merged(with: try #require(GedcomFamilyGraph(fileURL: b)))
+        #expect(store.ingest(graph: twoPull, sources: [a, b]) != nil)
+        #expect(store.ingest(graph: try #require(GedcomFamilyGraph(fileURL: b)), sources: [b]) != nil)
+        var pointer = try #require(store.readPointer())
+        pointer.codec = 3
+        try JSONEncoder().encode(pointer).write(to: store.pointerURL)
+
+        let outcome = box.loader(store).loadNewestOutcome()
+        #expect(outcome.graph == nil)
+        #expect(outcome.needsRecompile == [a, b])
+        #expect(store.readPointer() == pointer, "pointer untouched")
+    }
+
     /// (b) Same, but one of the two sources was deleted: the generation
     /// cannot be recompiled as it was, so the newest-file path is allowed
     /// and the log says which source is missing.

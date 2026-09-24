@@ -369,7 +369,13 @@ enum HallieTypoNormalizer {
     static func hasTripleRun(_ lower: String) -> Bool {
         let chars = Array(lower)
         guard chars.count >= 3 else { return false }
-        return (2..<chars.count).contains { chars[$0] == chars[$0 - 1] && chars[$0] == chars[$0 - 2] }
+        // A plain loop: the one-line `contains` closure timed out CI's
+        // Xcode 26.3 type checker (run 36065155765).
+        for index in 2..<chars.count {
+            let current: Character = chars[index]
+            if current == chars[index - 1] && current == chars[index - 2] { return true }
+        }
+        return false
     }
 
     /// "helllo" → "hello", "hiii" → "hi", "thankss" → "thanks". A triple

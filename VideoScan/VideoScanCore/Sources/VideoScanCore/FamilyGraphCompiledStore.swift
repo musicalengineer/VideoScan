@@ -383,15 +383,24 @@ public struct FamilyGraphCompiledStore {
     /// source it records still exists unchanged. The loader must not
     /// quietly recompile the newest single file over it (Donna's tree
     /// vanished that way); it reports these sources so the UI can offer
-    /// "Recompile". Checks current, then previous. Nil when the pointer
-    /// matches the running versions, or when no such generation exists.
+    /// "Recompile". Checks current, then previous — but previous only
+    /// outranks an intact current when it carries MORE LOGICAL pulls. A
+    /// merged .ged is one physical file carrying N pulls: on 2026-09-24 a
+    /// codec bump made the physical-count rule offer to rebuild Rick's
+    /// pre-merge two-pull tree over his three-pull merged one. A narrowed
+    /// current (one file, one pull — the 9/17 case) still defers to the
+    /// two-pull previous. Nil when the pointer matches the running
+    /// versions, or when no such generation exists.
     public func multiSourceGenerationNeedingRecompile() -> (generation: String, sources: [URL])? {
         guard let pointer = readPointer(), !Self.versionsMatch(pointer) else { return nil }
-        for generation in [pointer.current, pointer.previous].compactMap({ $0 }) {
-            guard let manifest = usableManifest(generation), manifest.sources.count > 1 else { continue }
-            return (generation, manifest.sources.map { URL(fileURLWithPath: $0.path) })
+        let current = usableManifest(pointer.current)
+        if let current, current.sources.count > 1 {
+            return (current.generation, current.sources.map { URL(fileURLWithPath: $0.path) })
         }
-        return nil
+        guard let previousName = pointer.previous, let previous = usableManifest(previousName),
+              previous.sources.count > 1,
+              previous.logicalSources.count > (current?.logicalSources.count ?? 0) else { return nil }
+        return (previous.generation, previous.sources.map { URL(fileURLWithPath: $0.path) })
     }
 
     /// A recovery candidate: a multi-source generation that is source-intact
@@ -454,9 +463,13 @@ public struct FamilyGraphCompiledStore {
     /// generation, and only on a path that is already broken.
     public func intactMultiSourceGeneration() -> RecoveryCandidate? {
         let pointerAtLookup = readPointer()
+        // Never "recover" to FEWER pulls than an intact current carries
+        // (a merged single-file current may hold more logical pulls than
+        // any multi-file generation — 2026-09-24).
+        let floor = pointerAtLookup.flatMap { usableManifest($0.current) }?.logicalSources.count ?? 0
         let candidates = generations()
             .compactMap { readManifest($0) }
-            .filter { $0.sources.count > 1 && $0.verification.isEmpty }
+            .filter { $0.sources.count > 1 && $0.verification.isEmpty && $0.logicalSources.count > floor }
             .sorted { $0.createdAt > $1.createdAt }
         for manifest in candidates where usableManifest(manifest.generation) != nil {
             guard let graph = decode(generation: manifest.generation) else {
