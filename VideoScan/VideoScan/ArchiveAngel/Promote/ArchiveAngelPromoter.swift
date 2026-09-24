@@ -128,6 +128,25 @@ final class ArchiveAngelPromoter: ObservableObject {
     func promote(plan: inout ArchiveAngelPlan, model: VideoScanModel,
                  center: MediaFileOperationsCenter, freshFixity: Set<UUID> = [],
                  onFinished: @escaping @MainActor (ArchiveAngelPlan) -> Void) -> PromoteToArchiveJob? {
+        // THE BATCH IS CLAIMED FIRST (QA follow-up 2026-09-24). Clear reads
+        // and saves plan.json off the main actor while it holds the batch
+        // (codex #1714 R3), and the sheet only closes once it lands — so
+        // Promote could start on a batch being discarded, stamping facts
+        // and saving a .promoting plan over the .discarded one. An atomic
+        // claim (not isLive-then-begin) makes the two exclusive. Refused:
+        // nothing stamped, nothing saved, the plan untouched, the other
+        // holder's claim left as it was. Held through setup and handed to
+        // the job on start; every early return below releases it.
+        let claimedDir = plan.batchDir
+        guard ArchiveAngelLiveBatches.claim(claimedDir) else {
+            let line = "Archive Angel: Promote refused — this batch is being cleared or worked on right now; "
+                + "nothing was changed (\((claimedDir as NSString).lastPathComponent))"
+            model.log(line)
+            appLog.write(line)
+            return nil
+        }
+        var claimHandedToJob = false
+        defer { if !claimHandedToJob { ArchiveAngelLiveBatches.end(claimedDir) } }
         guard model.masterArchiveRootPath != nil else {
             Self.note("Archive Angel: Promote refused — no Master Archive designated", plan: &plan, model: model)
             ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
@@ -260,8 +279,8 @@ final class ArchiveAngelPromoter: ObservableObject {
         job.ledgerActor = .angel   // Media Ledger: "archived … (Archive Angel)"
         self.job = job
         var snapshot = plan
-        let planID = plan.id, liveDir = plan.batchDir
-        ArchiveAngelLiveBatches.begin(liveDir)
+        let planID = plan.id, liveDir = claimedDir
+        claimHandedToJob = true            // the claim taken above is now the job's; the watcher ends it
         Self.inFlight[planID] = self
         watch(job) { [weak self] in
             guard let self, let job = self.job, !job.state.isActive else { return }
