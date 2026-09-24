@@ -12,7 +12,10 @@
 // FootageInput / FootageGrouping values cross.
 //
 // SAFETY. Reads catalog metadata only — no media is opened, no file is
-// touched. Writes only `footage` (the machine answer) on records, and
+// touched. The one filesystem call is a `stat` of each record that carries
+// a stored whole-file digest (ContentFixity), off-main, so a digest counts
+// as byte identity only while it still describes the file (codex #1674
+// F1; ArchiveAngelFixityCheck semantics). Writes only `footage` (the machine answer) on records, and
 // `footageDecisions` when the person answers. Writes NO dates. Human
 // decisions are never rewritten by a run.
 //
@@ -71,7 +74,11 @@ struct FootageRunSummary: Sendable, Equatable {
     var refusedByCap = 0
     var refusedPossibleChain = 0
     var refusedByPerson = 0
+    var refusedByDate = 0
     var sampledConflicts = 0
+    /// Stored digests checked / still current (F1).
+    var digestsChecked = 0
+    var digestsCurrent = 0
     var elapsed: TimeInterval = 0
 
     var line: String {
@@ -84,10 +91,12 @@ struct FootageRunSummary: Sendable, Equatable {
         if !conf.isEmpty { s += " (\(conf))" }
         s += "; largest \(largestGroup); original not in catalog for \(originalNotInCatalog)"
         s += "; \(recordsChanged) record\(recordsChanged == 1 ? "" : "s") updated, \(recordsCleared) cleared"
-        if refusedByCap + refusedPossibleChain + refusedByPerson + sampledConflicts > 0 {
+        if refusedByCap + refusedPossibleChain + refusedByPerson + sampledConflicts + refusedByDate > 0 {
             s += "; refused: cap \(refusedByCap), possible-chain \(refusedPossibleChain), "
-                + "your answers \(refusedByPerson), sampled-hash conflicts \(sampledConflicts)"
+                + "your answers \(refusedByPerson), sampled-hash conflicts \(sampledConflicts), "
+                + "different dates \(refusedByDate)"
         }
+        if digestsChecked > 0 { s += "; whole-file digests current \(digestsCurrent) of \(digestsChecked)" }
         return s + String(format: "; %.1f s", elapsed)
     }
 }
@@ -117,10 +126,56 @@ extension VideoScanModel {
 
     /// The ONE main-actor pass over `records`.
     func footageInputs() -> [FootageInput] {
+        footageInputsAndProbes().inputs
+    }
+
+    /// The same pass, plus one stat probe per record whose stored
+    /// ContentFixity could prove identity (sha256 + a ctime stamp). An
+    /// ArchiveFixity has no stamp, so it can refuse a nomination but never
+    /// prove one.
+    func footageInputsAndProbes() -> (inputs: [FootageInput], probes: [ArchiveAngelFixityCheck.Probe]) {
         var out: [FootageInput] = []
         out.reserveCapacity(records.count)
-        for r in records { out.append(FootageInput(record: r)) }
-        return out
+        var probes: [ArchiveAngelFixityCheck.Probe] = []
+        for r in records {
+            out.append(FootageInput(record: r))
+            if let p = Self.footageFixityProbe(r) { probes.append(p) }
+        }
+        return (out, probes)
+    }
+
+    /// The stat probe for one record, when its stored digest could prove
+    /// identity (the calibration uses the same rule).
+    static func footageFixityProbe(_ r: VideoRecord) -> ArchiveAngelFixityCheck.Probe? {
+        guard let f = r.contentFixity, f.isUsableForVerification else { return nil }
+        return ArchiveAngelFixityCheck.Probe(id: r.id, path: r.fullPath, fixity: f)
+    }
+
+    /// Stat each probe off-main (ArchiveAngelFixityCheck.fresh: stat only,
+    /// `describesFileNow`), in chunks so a Stop is honoured between them.
+    /// nil when cancelled.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func footageCurrentDigests(_ probes: [ArchiveAngelFixityCheck.Probe],
+                                                  chunk: Int = 256) async -> Set<UUID>? {
+        var ok = Set<UUID>()
+        var start = 0
+        while start < probes.count {
+            if Task.isCancelled { return nil }
+            let end = min(start + chunk, probes.count)
+            ok.formUnion(await ArchiveAngelFixityCheck.fresh(Array(probes[start..<end])))
+            start = end
+        }
+        return ok
+    }
+
+    /// Mark the inputs whose stored digest is current (pure).
+    nonisolated static func markCurrentDigests(_ inputs: [FootageInput], current: Set<UUID>) -> [FootageInput] {
+        guard !current.isEmpty else { return inputs }
+        var xs = inputs
+        for i in xs.indices where current.contains(xs[i].id) { xs[i].fixityFresh = true }
+        return xs
     }
 
     // MARK: Off-main phases (@concurrent — really leave the main actor)
@@ -150,32 +205,71 @@ extension VideoScanModel {
 
     // MARK: Apply (main actor, in slices)
 
-    /// Record ids a scoped run writes: every in-scope record, plus every
-    /// member of a group that touches the scope.
+    /// Record ids a scoped run writes: every in-scope record plus the whole
+    /// CONNECTED UNIT it sits in — records joined by a new group OR an old
+    /// one, transitively (codex #1674 F3: old {A,B}, new {B,C}, scope A
+    /// must re-answer C too, or B's new group is published without it).
     nonisolated static func footageTouchedIDs(result: FootageGrouping.Result, inputs: [FootageInput],
                                               scope: FootageScope) -> Set<UUID> {
         if scope == .catalog { return Set(inputs.map(\.id)) }
+        var old: [UUID: UUID] = [:]
+        for x in inputs { if let g = x.existing?.groupID { old[x.id] = g } }
+        let units = footageConnectedUnits(ids: inputs.map(\.id), newGroup: { result.memberships[$0]?.groupID },
+                                          oldGroup: { old[$0] })
         var touched = Set<UUID>()
-        var groupsInScope = Set<UUID>()
         for x in inputs where scope.contains(id: x.id, path: x.fullPath) {
             touched.insert(x.id)
-            if let g = result.memberships[x.id]?.groupID { groupsInScope.insert(g) }
-            // An old group the record was in: its other members are re-answered too.
-            if let old = x.existing?.groupID { groupsInScope.insert(old) }
-        }
-        for x in inputs {
-            if let g = result.memberships[x.id]?.groupID, groupsInScope.contains(g) { touched.insert(x.id) }
-            if let old = x.existing?.groupID, groupsInScope.contains(old) { touched.insert(x.id) }
+            if let u = units.unitOf[x.id] { touched.formUnion(units.units[u]) }
         }
         return touched
     }
 
+    /// Connected units over "shares a new group" ∪ "shares an old group".
+    /// Records in no group are left out (they are their own unit). Units
+    /// and their members are sorted, so the order is deterministic.
+    /// (For Rick: the same disjoint-set forest as the grouping, over
+    /// record indices, keyed by the group ids each record carries.)
+    nonisolated static func footageConnectedUnits(ids: [UUID], newGroup: (UUID) -> UUID?,
+                                                  oldGroup: (UUID) -> UUID?) -> (units: [[UUID]], unitOf: [UUID: Int]) {
+        var parent: [Int] = []
+        func find(_ x: Int) -> Int {
+            var x = x
+            while parent[x] != x { parent[x] = parent[parent[x]]; x = parent[x] }
+            return x
+        }
+        var grouped: [UUID] = []
+        var firstByKey: [String: Int] = [:]
+        for id in ids {
+            let n = newGroup(id), o = oldGroup(id)
+            guard n != nil || o != nil else { continue }
+            let me = grouped.count
+            grouped.append(id)
+            parent.append(me)
+            for key in [n.map { "n:" + $0.uuidString }, o.map { "o:" + $0.uuidString }].compactMap({ $0 }) {
+                if let other = firstByKey[key] {
+                    let ra = find(me), rb = find(other)
+                    if ra != rb { parent[ra] = rb }
+                } else {
+                    firstByKey[key] = me
+                }
+            }
+        }
+        var byRoot: [Int: [UUID]] = [:]
+        for (i, id) in grouped.enumerated() { byRoot[find(i), default: []].append(id) }
+        let units = byRoot.values.map { $0.sorted { $0.uuidString < $1.uuidString } }
+            .sorted { $0[0].uuidString < $1[0].uuidString }
+        var unitOf: [UUID: Int] = [:]
+        for (u, members) in units.enumerated() { for id in members { unitOf[id] = u } }
+        return (units, unitOf)
+    }
+
     /// Write the run's answers onto records — only where they changed.
     /// Slices of about `sliceSize` records with a yield between (the UI
-    /// stays live on a 100k catalog), cut at GROUP boundaries: every member
-    /// of a group — new, or the old group a record is leaving — is written
-    /// in the same slice, so a Stop never leaves a group half-written (QA
-    /// 2026-09-23). `checkpoint` is polled per slice (Stop / pause wait).
+    /// stays live on a 100k catalog), cut at UNIT boundaries: a unit is the
+    /// connected closure of new and old groups (codex #1674 F3), written
+    /// in one slice, so a Stop never leaves a group half-written or a
+    /// record pointing at a group its partner has left. `checkpoint` is
+    /// polled per slice (Stop / pause wait / a newer decision).
     func applyFootage(_ result: FootageGrouping.Result, touched: Set<UUID>, sliceSize: Int = 2000,
                       progress: ((Double) -> Void)? = nil,
                       checkpoint: (() async -> Bool)? = nil) async -> (changed: Int, cleared: Int, stopped: Bool) {
@@ -211,23 +305,19 @@ extension VideoScanModel {
         return (changed, cleared, false)
     }
 
-    /// Touched ids partitioned into write units: one per NEW group (its
-    /// members), one per OLD group being dissolved (its members that join
-    /// no new group), and singletons for the rest. Deterministic order.
+    /// Touched ids partitioned into write units: the connected closure of
+    /// the NEW groups and the OLD groups records are carrying now (so a
+    /// record leaving {A,B} for {B,C} is written with A and C), plus
+    /// singletons for the rest. Deterministic order.
     func footageApplyUnits(_ result: FootageGrouping.Result, touched: Set<UUID>) -> [[UUID]] {
-        var byGroup: [String: [UUID]] = [:]
-        for id in touched {
-            let key: String
-            if let g = result.memberships[id]?.groupID {
-                key = "n:" + g.uuidString
-            } else if let old = record(forID: id)?.footage?.groupID {
-                key = "o:" + old.uuidString
-            } else {
-                key = "s:" + id.uuidString
-            }
-            byGroup[key, default: []].append(id)
-        }
-        return byGroup.keys.sorted().compactMap { k in byGroup[k]?.sorted { $0.uuidString < $1.uuidString } }
+        let ids = touched.sorted { $0.uuidString < $1.uuidString }
+        var old: [UUID: UUID] = [:]
+        for id in ids { if let g = record(forID: id)?.footage?.groupID { old[id] = g } }
+        let closure = Self.footageConnectedUnits(ids: ids, newGroup: { result.memberships[$0]?.groupID },
+                                                 oldGroup: { old[$0] })
+        var units = closure.units
+        for id in ids where closure.unitOf[id] == nil { units.append([id]) }
+        return units
     }
 
     private func finishFootageApply(changed: Int, cleared: Int) {
@@ -264,6 +354,8 @@ extension VideoScanModel {
             ra.forgetFootageDecision(about: b)
             rb.forgetFootageDecision(about: a)
         }
+        // A run already holding a snapshot must not apply it now (F4).
+        footageDecisionRevision &+= 1
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
         let answer = verdict?.rawValue ?? "forgotten"

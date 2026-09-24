@@ -108,18 +108,32 @@ struct ArchiveAngelCodex1654Tests {
         balanced.derivedFrom = tape.id; balanced.derivationKind = BalanceAudioFix.derivationKind
         balanced.durationSeconds = 3600.4
         model.records = [tape, trim, balanced]
-        let down = ArchiveAngelFamilyFacts.inherited(for: trim, relatives: relatives(model, trim))
+        // Every lending edge needs both ends stat-verified fresh (codex #1673
+        // P1-2): each record carries a usable fixity and the fresh set is
+        // DECLARED here (pure lender logic; ArchiveAngelCodex1673Tests pins
+        // the stat).
+        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 10, mtimeNs: 0, ctimeNs: 1)
+        for (r, d) in [(tape, "a1"), (trim, "b2"), (balanced, "c3")] {
+            r.sizeBytes = 10
+            r.contentFixity = ContentFixity(digest: String(repeating: d, count: 32), byteCount: 10, stamp: stamp)
+        }
+        let fresh: Set<UUID> = [tape.id, trim.id, balanced.id]
+        #expect(ArchiveAngelFamilyFacts.inherited(for: trim, relatives: relatives(model, trim)).date == nil,
+                "no stat, no lending — not even down to a trim (codex #1673)")
+        let down = ArchiveAngelFamilyFacts.inherited(for: trim, relatives: relatives(model, trim, fresh: fresh))
         #expect(down.date?.value == "1987", "a trim takes its tape's date")
         #expect(down.attestationKinds == nil, "…but not its backup answers: different bytes")
-        let equiv = ArchiveAngelFamilyFacts.inherited(for: balanced, relatives: relatives(model, balanced))
+        let equiv = ArchiveAngelFamilyFacts.inherited(for: balanced, relatives: relatives(model, balanced, fresh: fresh))
         #expect(equiv.date?.value == "1987", "a whole-file repair takes its source's date")
         // And the tape takes a whole-file repair's date (equivalent), never a trim's.
         tape.userDate = nil; balanced.userDate = "1988"; balanced.userDateConfidence = "estimated"
-        let up = ArchiveAngelFamilyFacts.inherited(for: tape, relatives: relatives(model, tape))
+        let up = ArchiveAngelFamilyFacts.inherited(for: tape, relatives: relatives(model, tape, fresh: fresh))
         #expect(up.date?.value == "1988")
+        #expect(ArchiveAngelFamilyFacts.inherited(for: tape, relatives: relatives(model, tape, fresh: [tape.id])).date == nil,
+                "a repair outside the fresh set lends nothing (codex #1673)")
         // A "balanced" copy that is a different length is NOT an equivalent.
         balanced.durationSeconds = 600
-        let cut = ArchiveAngelFamilyFacts.inherited(for: tape, relatives: relatives(model, tape))
+        let cut = ArchiveAngelFamilyFacts.inherited(for: tape, relatives: relatives(model, tape, fresh: fresh))
         #expect(cut.date == nil)
     }
 

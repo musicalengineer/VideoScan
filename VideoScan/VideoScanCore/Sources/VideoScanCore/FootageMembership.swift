@@ -32,7 +32,9 @@ import Foundation
 /// confidence is its WEAKEST link on the path that joined it (the grouping
 /// takes strong links first, so that path is the strongest available).
 public enum FootageConfidence: String, Codable, Sendable, CaseIterable, Comparable {
-    /// Byte-identical (a full content hash or whole-file fixity matched).
+    /// Byte-identical: both whole-file SHA-256s matched AND each still
+    /// describes its file on disk (codex #1674 — a sampled signature or a
+    /// stale digest is at most `likely`).
     case identical
     /// The person said "same footage". Ranks between identical and likely:
     /// it never lowers a group below what the machine proved.
@@ -72,7 +74,9 @@ public enum FootageConfidence: String, Codable, Sendable, CaseIterable, Comparab
 /// What a member is relative to the group's likely original.
 public enum FootageRole: String, Codable, Sendable, CaseIterable {
     case original
-    /// Same bytes as the likely original.
+    /// Probably the same bytes as the likely original (a current whole-file
+    /// digest, or a sampled signature nobody contradicts — the group's
+    /// confidence and the evidence line say which).
     case copy
     /// Re-encoded (HandBrake / ffmpeg / the Angel's .vs.* outputs, another codec).
     case reEncode
