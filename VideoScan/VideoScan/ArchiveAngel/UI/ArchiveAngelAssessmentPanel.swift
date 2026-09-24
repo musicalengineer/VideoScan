@@ -8,9 +8,15 @@
 // One line of grades + freshness + the sweep's live status, an "Assess
 // now" link, a "Prepare batch…" button (the existing start sheet), a
 // "Show candidates in Catalog" jump, and a chevron turndown listing the
-// top-ranked A/B candidates with Show in Catalog / Show in Finder per row.
-// The ranked list is built OUTSIDE body (task keyed on computedAt): the
-// ranking is O(eligible log eligible), never O(records) per render.
+// recommended files.
+//
+// Rick 2026-09-24 (senior-friendly redesign): the turndown is
+// ArchiveAngelRecommendationList — ten large rows at a time with status
+// words ("Ready to archive" / "Needs a date"…) instead of a letter grade and
+// a score, and Hallie-style buttons (Play, Show in Catalog, Show in Finder,
+// Promote/Prepare to Archive, Archive Readiness). The row models are built
+// OUTSIDE body (task keyed on the recommendations revision and the page
+// size): O(rows shown) record lookups, never O(records) per render.
 
 import SwiftUI
 
@@ -27,20 +33,15 @@ struct ArchiveAngelAssessmentPanel: View {
     /// number of batches). nil = nothing to review → no chip.
     var review: (ready: Int, batches: Int)? = nil
     var openReview: () -> Void = {}
+    /// Archive Angel's Prepare for exactly these records — a row's
+    /// "Prepare to Archive" (the strip owns the MFO center).
+    var prepareRecords: ([UUID]) -> Void = { _ in }
 
     @State private var isOpen = false
-    @State private var top: [Row] = []
-    static let topCount = 25
-
-    struct Row: Identifiable, Equatable {
-        let id: UUID
-        let filename: String
-        let path: String
-        let durationSeconds: Double
-        let grade: ArchiveAngelGrade
-        let score: Int
-        let why: String
-    }
+    @State private var rows: [ArchiveAngelListRow] = []
+    @State private var shownCount = ArchiveAngelAssessmentPanel.pageSize
+    /// Rows per page (Rick 2026-09-24: ten, clearly, beats twenty-five).
+    static let pageSize = 10
 
     /// ONE strip in the Archive pane (Rick 2026-09-22: the sidebar had
     /// three overlapping Angel entries). Left: the grades, click to open
@@ -55,14 +56,14 @@ struct ArchiveAngelAssessmentPanel: View {
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.right")
                             .rotationEffect(.degrees(isOpen ? 90 : 0))
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(.secondary)
-                            .frame(width: 10)
+                            .frame(width: 14)
                         Image(systemName: "sparkles").foregroundStyle(Color.orange)
                         Text("Archive Angel")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(size: 17, weight: .semibold))
                         Text(headline)
-                            .font(.system(size: 13))
+                            .font(.system(size: 15))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -85,9 +86,9 @@ struct ArchiveAngelAssessmentPanel: View {
                                  ? "\(review.ready) to review"
                                  : "\(review.ready) to review (+\(review.batches - 1) more)")
                         }
-                        .font(.system(size: 12, weight: .medium))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
+                        .font(.system(size: 15, weight: .medium))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
                         .background(Capsule().fill(Color.orange.opacity(0.18)))
                         .foregroundStyle(Color.orange)
                     }
@@ -97,13 +98,13 @@ struct ArchiveAngelAssessmentPanel: View {
                     .help("Archive Angel prepared a batch. Review the recommendations, rename or deselect, then Promote.")
                 }
                 Button("Prepare Batch…") { prepare() }
-                    .controlSize(.small)
+                    .controlSize(.large)
                     .fixedSize()
                     .disabled(model.isReadOnly)
                     .accessibilityIdentifier("archive.angelPrepare")
                     .help("Pick how many to prepare (10/25/35/50); the Angel takes the top-graded candidates, verifies audio and makes access copies in the buffer, then asks for review. Nothing reaches the archive until you press Promote.")
                 Button("Show in Catalog") { showCandidatesInCatalog() }
-                    .controlSize(.small)
+                    .controlSize(.large)
                     .fixedSize()
                     .disabled(angel.candidateIDs.isEmpty)
                     .help("Focus the Catalog on every Ready, Needs a date and Worth a look record. Show ▸ Archive Candidates keeps the same view as a filter.")
@@ -123,12 +124,24 @@ struct ArchiveAngelAssessmentPanel: View {
                 .help("Assess now re-scores every record (a few seconds). Assess continuously scores catalog fields and Spotlight play counts only — never media bytes — and parks whenever you are working or a job is running.")
             }
             if isOpen {
-                list
+                ArchiveAngelRecommendationList(
+                    rows: rows,
+                    totalCount: angel.recommendations.ranked.count,
+                    isAssessed: angel.recommendations.isAssessed,
+                    isReadOnly: model.isReadOnly,
+                    actions: ArchiveAngelListActions(model: model, angel: angel, prepare: prepareRecords),
+                    showMore: { shownCount += Self.pageSize })
                     .padding(.leading, 16)
-                    .padding(.top, 2)
+                    .padding(.top, 4)
             }
         }
-        .task(id: angel.recommendations.revision) { rebuildTop() }
+        .task(id: RebuildKey(revision: angel.recommendations.revision, shown: shownCount)) { rebuildRows() }
+    }
+
+    /// The list is rebuilt when the recommendations change or a page is added.
+    private struct RebuildKey: Equatable {
+        let revision: Int
+        let shown: Int
     }
 
     // MARK: Headline
@@ -167,71 +180,21 @@ struct ArchiveAngelAssessmentPanel: View {
         + sweep.status.line
     }
 
-    // MARK: Turndown
-
-    private var list: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if top.isEmpty {
-                Text(angel.recommendations.isAssessed ? "Nothing is recommended yet." : "Waiting for the first assessment…")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-            }
-            ForEach(top) { row in
-                HStack(spacing: 8) {
-                    Text(row.grade.rawValue)
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .frame(width: 16, height: 16)
-                        .background(Circle().fill(row.grade == .a ? Color.green.opacity(0.25) : Color.orange.opacity(0.22)))
-                        .help("Grade \(row.grade.rawValue) — \(row.grade.label)")
-                    Text(row.filename)
-                        .font(.system(size: 12, weight: .medium))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(ArchiveAngelScorer.durationText(row.durationSeconds))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    Text(row.why)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    ArchiveAngelRowActions(recordID: row.id, filename: row.filename, sourcePath: row.path)
-                    Text("\(row.score)")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(Capsule().fill(Color.orange.opacity(0.18)))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                Divider()
-            }
-            if angel.candidateIDs.count > top.count {
-                Text("Top \(top.count) of \(angel.candidateIDs.count.formatted()) — Show in Catalog lists them all.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-            }
-        }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-    }
+    // MARK: Turndown rows
 
     /// The façade's ranked recommendations (Ready, then Needs a date, then
-    /// Worth a look — each by score) → rows; stop at topCount before
-    /// touching records.
-    private func rebuildTop() {
-        var rows: [Row] = []
-        rows.reserveCapacity(Self.topCount)
+    /// Worth a look — each by score) → row models; stop at `shownCount`
+    /// before touching more records. O(shownCount) O(1) lookups.
+    private func rebuildRows() {
+        var facts: [ArchiveAngelRowFacts] = []
+        facts.reserveCapacity(shownCount)
         for id in angel.recommendations.ranked {
-            guard rows.count < Self.topCount else { break }
-            guard let ev = store.record(for: id),
-                  let rec = model.record(forID: id) else { continue }
-            rows.append(Row(id: id, filename: rec.filename, path: rec.fullPath,
-                            durationSeconds: rec.durationSeconds, grade: ev.grade, score: ev.score,
-                            why: ev.lines.first?.line ?? ""))
+            guard facts.count < shownCount else { break }
+            guard let rec = model.record(forID: id) else { continue }
+            facts.append(ArchiveAngelRowFacts.make(record: rec, evidence: store.record(for: id),
+                                                   kind: angel.recommendationClass(for: id) ?? .notNow))
         }
-        top = rows
+        rows = ArchiveAngelListRowBuilder.rows(facts)
     }
 
     private func showCandidatesInCatalog() {
