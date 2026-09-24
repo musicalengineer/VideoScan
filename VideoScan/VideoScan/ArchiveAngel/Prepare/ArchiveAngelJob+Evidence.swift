@@ -70,16 +70,22 @@ extension ArchiveAngelJob {
         collected.reserveCapacity(count)
         var rejected = store.rejectionCounts()
         var projections = 0
-        // The score of the count-th distinct-group head seen so far, in
-        // arrival (descending score) order. Once the next head scores
-        // strictly below it, nothing later can enter the batch — except
-        // the explore arm: past the band only never-proposed records that
-        // clear `freshMinimumScore` are projected, until `freshWanted` new
-        // files are in hand or the scan budget is spent. A group's
-        // first-arrived member carries the group's best score, so this
-        // band is the same one the final `rank` order would cut at.
+        // The band: the count-th best (class tier, score) among the
+        // distinct-group picks ACTUALLY collected so far. Rows arrive in
+        // (tier, arrival score) order, and a row's arrival key is an upper
+        // bound on what it can add (a copy group arrives at its best
+        // eligible member — `rankedPrepareIDs`). So once a row arrives
+        // strictly below the band, nothing later can enter the batch —
+        // except the explore arm: past the band only never-proposed
+        // records that clear `freshMinimumScore` are projected, until
+        // `freshWanted` new files are in hand or the scan budget is spent.
+        // The cut falls between whole arrival bands, so which rows are
+        // read never depends on the order of equal keys (record ids) —
+        // codex #1643 A4 ruling, 2026-09-23: before it, a group whose live
+        // Keep scored below its cached row lowered the band to that Keep's
+        // score and ~1 run in 5 walked the whole file.
         var bandGroups: Set<UUID> = []
-        var distinctSeen = 0
+        var best: [(tier: Int, score: Int)] = []     // best-first, at most `count`
         // QA on S3: the band is (class tier, score) — Ready before Worth a
         // look whatever the scores (Prepare agrees with the numbers).
         var bandKey: (tier: Int, score: Int)? = nil
@@ -101,13 +107,13 @@ extension ArchiveAngelJob {
         // codex #1643 A4: copy key → members (built on first use; O(records)).
         var groupIndex: [String: [UUID]]?
         var settledGroups: Set<String> = []
-        for (id, rowTier) in ranked.ids {
+        for (id, rowTier, arrivalScore) in ranked.ids {
             guard let evidence = store.record(for: id) else { continue }
-            if let band = bandKey, rowTier > band.tier || (rowTier == band.tier && evidence.score < band.score) { pastBand = true }
+            if let band = bandKey, rowTier > band.tier || (rowTier == band.tier && arrivalScore < band.score) { pastBand = true }
             if pastBand {
                 if freshCollected >= freshWanted || extraLooks >= freshScanBudget { break }
                 extraLooks += 1
-                if evidence.score < weights.freshMinimumScore { continue }
+                if arrivalScore < weights.freshMinimumScore { continue }
                 if evidence.timesProposed > 0 || evidence.familySkips > 0 { continue }
             }
             // The copies of this recording, reclassified LIVE: the pick is
@@ -169,8 +175,13 @@ extension ArchiveAngelJob {
             let familyIsNew = seenFamilies.insert(candidate.resolvedFamilyKey).inserted
             if candidate.isFreshToPerson, groupIsNew, familyIsNew { freshCollected += 1 }
             if !pastBand, candidate.duplicateGroupID.map({ bandGroups.insert($0).inserted }) ?? true {
-                distinctSeen += 1
-                if distinctSeen == count { bandKey = (tier, pickEvidence.score) }
+                let key = (tier: tier, score: pickEvidence.score)
+                let at = best.firstIndex { key.tier < $0.tier || (key.tier == $0.tier && key.score > $0.score) } ?? best.count
+                if at < count {
+                    best.insert(key, at: at)
+                    if best.count > count { best.removeLast() }
+                }
+                if best.count == count { bandKey = best[count - 1] }
             }
         }
         let tables = policy.tables

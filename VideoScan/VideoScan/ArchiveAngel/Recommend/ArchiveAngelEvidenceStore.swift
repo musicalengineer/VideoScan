@@ -292,30 +292,54 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     }
 
     /// The Prepare order (QA on S3): records whose class Prepare takes,
-    /// by (tier = index in `prepare`, score desc, id); an UNCLASSIFIED
-    /// eligible record (a pre-S3b or test-built file) takes the last tier,
-    /// so old evidence still prepares by score. `skipped` = eligible
-    /// records in classes Prepare does not take. One O(records) pass + sort.
-    func rankedPrepareIDs(_ prepare: [ArchiveAngelRecommendationClass]) -> (ids: [(UUID, Int)], skipped: Int) {
+    /// by (tier = index in `prepare`, ARRIVAL score desc, id); an
+    /// UNCLASSIFIED eligible record (a pre-S3b or test-built file) takes the
+    /// last tier, so old evidence still prepares by score. `skipped` =
+    /// eligible records in classes Prepare does not take. Two O(records)
+    /// passes + one sort.
+    ///
+    /// Arrival score (Manager ruling on codex #1643 A4, 2026-09-23): a row
+    /// that carries a copy key arrives at the score of its group's
+    /// HIGHEST-SCORING ELIGIBLE member (and the best Prepare tier any member
+    /// holds), because Prepare re-decides the group live and a Keep chosen
+    /// after the sweep may outscore the cached pick. Ranked by the cached
+    /// row's own score, such a group arrived late: the scan either stopped
+    /// before it (the Keep was missed) or ran to the end of the file — which
+    /// of the two depended on the random record ids. The arrival score is an
+    /// UPPER bound on whatever that group can put in the batch, which is what
+    /// lets `selectFromEvidence` stop exactly.
+    func rankedPrepareIDs(_ prepare: [ArchiveAngelRecommendationClass])
+    -> (ids: [(id: UUID, tier: Int, score: Int)], skipped: Int) {
         guard let f = file else { return ([], 0) }
-        var rows: [(UUID, Int, Int)] = []
+        func tier(_ r: ArchiveAngelEvidenceRecord) -> Int? {
+            if prepare.isEmpty { return 0 }                  // no class filter: score order
+            guard let k = r.recommendation else { return prepare.count }
+            return prepare.firstIndex(of: k)
+        }
+        var groupScore: [String: Int] = [:]
+        var groupTier: [String: Int] = [:]
+        for r in f.records.values where r.isEligible {
+            guard let key = r.copyKey else { continue }
+            groupScore[key] = max(groupScore[key] ?? r.score, r.score)
+            if let t = tier(r) { groupTier[key] = min(groupTier[key] ?? t, t) }
+        }
+        var rows: [(id: UUID, tier: Int, score: Int, order: String)] = []
         var skipped = 0
         for (id, r) in f.records where r.isEligible {
-            if prepare.isEmpty {
-                rows.append((id, 0, r.score))   // no class filter: score order
-            } else if let k = r.recommendation {
-                guard let tier = prepare.firstIndex(of: k) else { skipped += 1; continue }
-                rows.append((id, tier, r.score))
-            } else {
-                rows.append((id, prepare.count, r.score))
+            guard var t = tier(r) else { skipped += 1; continue }
+            var score = r.score
+            if let key = r.copyKey {
+                score = max(score, groupScore[key] ?? score)
+                t = min(t, groupTier[key] ?? t)
             }
+            rows.append((id, t, score, id.uuidString))
         }
         rows.sort { a, b in
-            if a.1 != b.1 { return a.1 < b.1 }
-            if a.2 != b.2 { return a.2 > b.2 }
-            return a.0.uuidString < b.0.uuidString
+            if a.tier != b.tier { return a.tier < b.tier }
+            if a.score != b.score { return a.score > b.score }
+            return a.order < b.order
         }
-        return (rows.map { ($0.0, $0.1) }, skipped)
+        return (rows.map { ($0.id, $0.tier, $0.score) }, skipped)
     }
 
     /// Floor rejections by reason — one O(records) pass, for the Angel
