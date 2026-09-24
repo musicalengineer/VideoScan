@@ -39,7 +39,10 @@ struct ArchiveAngelStrip: View {
                 sweep: angel.sweep,
                 prepare: { startRequest = ArchiveAngelStartRequest() },
                 review: angel.batches.ready.first.map { (ready: $0.readyCount, batches: angel.batches.ready.count) },
-                openReview: { openNewestBatch() })
+                openReview: { openNewestBatch() },
+                // A row's "Prepare to Archive" (Rick 2026-09-24): the same
+                // Prepare the catalog's "Prepare with Archive Angel" runs.
+                prepareRecords: { ids in angel.prepare(recordIDs: ids, using: fileOpsCenter) })
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
             if !angel.batches.unreadable.isEmpty {

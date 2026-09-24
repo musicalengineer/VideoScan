@@ -79,7 +79,7 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
     // One function per family of lines keeps each branch short (the
     // cyclomatic-complexity lint); the dispatcher tries them in turn.
     // `[(String) -> String?]` ≈ a C++ array of function pointers.
-    private static let evidenceTranslators: [(String) -> String?] = [
+    private static let evidenceTranslators: [@Sendable (String) -> String?] = [
         exactEvidence, peopleEvidence, playEvidence, dateEvidence, otherEvidence,
     ]
 

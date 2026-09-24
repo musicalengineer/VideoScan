@@ -202,3 +202,46 @@ struct ArchiveAngelListRowScaleTests {
         print("[aa-list] 10k row models in \(elapsed)")
     }
 }
+
+/// Sensor: the senior-friendly list stays senior-friendly. A later edit
+/// that puts the letter grade or the score back on a row, shrinks the page
+/// back to 25, drops a button, or presents the readiness sheet with
+/// isPresented fails here.
+@Suite("Archive Angel list — senior-friendly sensor")
+struct ArchiveAngelListSeniorSensorTests {
+
+    private func source(_ relative: String) throws -> String {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan").appendingPathComponent(relative)
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    @Test func tenRowsAPage() {
+        #expect(ArchiveAngelAssessmentPanel.pageSize == 10)
+    }
+
+    @Test func rowShowsNoGradeNoScoreAndAllFiveButtons() throws {
+        let row = try source("ArchiveAngel/UI/ArchiveAngelListRowView.swift")
+        #expect(!row.contains(".score"))
+        #expect(!row.contains(".grade"))
+        for id in ["play", "showInCatalog", "showInFinder", "promote", "readiness"] {
+            #expect(row.contains("\"archiveAngel.list.\(id)\""), "button \(id)")
+        }
+        #expect(row.contains("size: .large"))
+        let panel = try source("ArchiveAngel/UI/ArchiveAngelAssessmentPanel.swift")
+        #expect(!panel.contains("row.grade"))
+        #expect(!panel.contains("row.score"))
+    }
+
+    @Test func readinessSheetIsItemDriven() throws {
+        let list = try source("ArchiveAngel/UI/ArchiveAngelRecommendationList.swift")
+        #expect(list.contains(".sheet(item: $readiness)"))
+        #expect(!list.contains(".sheet(isPresented:"))
+    }
+
+    @Test func hallieKeepsItsRegularButtons() throws {
+        let hallie = try source("ArchivistCitationRow.swift")
+        #expect(hallie.contains("ColorActionButton(") && hallie.contains("size: .regular"),
+                "Hallie and the Angel list share one button style")
+    }
+}
