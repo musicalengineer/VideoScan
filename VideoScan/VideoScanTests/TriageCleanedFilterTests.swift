@@ -139,7 +139,7 @@ struct TriageCleanedFilterTests {
         // single-digit milliseconds even in a Debug build on the M1.
         // 2s is a complexity-class sensor (O(n) → O(n²) would blow
         // through it), not a micro-benchmark.
-        #expect(elapsed < 2.0,
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 2.0),
                 "Cleaned count pass took \(elapsed)s at 100k records — expected well under 2s")
     }
 }

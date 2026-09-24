@@ -154,6 +154,6 @@ struct ArchiveTimelineBuildTests {
         let tl = ArchiveTimeline.build(items: items)
         let elapsed = ContinuousClock.now - start
         #expect(tl.datedCount + tl.undated.count == 100_000)
-        #expect(elapsed < .seconds(2), "100k build took \(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "100k build took \(elapsed)")
     }
 }

@@ -553,6 +553,6 @@ struct DuplicateCrossVolumeDeleteTests {
         #expect(sel.targets.count == 99_998)
         #expect(sel.sameVolumeCount == 49_999 && sel.crossVolumeCount == 49_999)
         #expect(menu.first?.count == 99_998)
-        #expect(elapsed < .seconds(2), "100k cross-volume selection exceeded 2 s: \(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "100k cross-volume selection exceeded 2 s: \(elapsed)")
     }
 }

@@ -462,7 +462,7 @@ struct TidyCatalogScaleTests {
         #expect(model.records.allSatisfy { $0.setAsideReason == nil })
 
         let total = start.duration(to: .now)
-        #expect(total < .seconds(15),
+        #expect(total < PerformanceLane.debugCeiling(.seconds(15)),
                 "100k dry-run(\(planned)) + apply + undo took \(total) — budget 15s")
     }
 }

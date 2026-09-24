@@ -590,7 +590,7 @@ struct FootageScaleTests {
         let elapsed = Date().timeIntervalSince(t0)
         print(String(format: "FootageScaleTests phases: prepare %.2f s, edges %.2f s, components %.2f s, assemble %.2f s",
                      t1.timeIntervalSince(t0), t2.timeIntervalSince(t1), t3.timeIntervalSince(t2), Date().timeIntervalSince(t3)))
-        #expect(elapsed < 3.0, "100k grouping took \(elapsed) s")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 3.0), "100k grouping took \(elapsed) s")
         #expect(r.stats.groups > 1000, "expected thousands of groups, got \(r.stats.groups)")
         #expect(r.stats.largestGroup <= FootageGrouping.defaultCap)
         print("FootageScaleTests: 100k records → \(r.stats.groups) groups, \(r.stats.members) members in \(String(format: "%.2f", elapsed)) s")

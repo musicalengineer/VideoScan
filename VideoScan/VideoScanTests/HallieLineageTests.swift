@@ -837,7 +837,7 @@ struct HallieLineageAnswerTests {
         let t0 = Date()
         let r = HallieLineageAnswer.gedcomProvenance(person: "Donna", surname: "hudson", context: ctx(big))
         let elapsed = Date().timeIntervalSince(t0)
-        #expect(elapsed < 1.0, "one provenance answer on 100k people (index pre-built) took \(elapsed)s")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 1.0), "one provenance answer on 100k people (index pre-built) took \(elapsed)s")
         #expect(r.prose.contains("I can trace 15 generations back from Donna"), Comment(rawValue: String(r.prose.prefix(400))))
         #expect(r.prose.contains("of her recorded ancestors carry the surname Hudson"))
         #expect(r.prose.contains("aren’t among her recorded ancestors"), "stray Hudsons are named, not claimed")

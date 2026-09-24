@@ -121,6 +121,6 @@ struct CatalogShowingSummaryTests {
         let elapsed = Date().timeIntervalSince(t0)
         #expect(split.archived.count == 10_000)
         #expect(split.shown.count == 90_000)
-        #expect(elapsed < 0.5, "split took \(elapsed)s for 100k records")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 0.5), "split took \(elapsed)s for 100k records")
     }
 }

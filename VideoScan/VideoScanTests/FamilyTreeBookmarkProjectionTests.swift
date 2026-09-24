@@ -78,6 +78,6 @@ struct FamilyTreeBookmarkProjectionTests {
         let projected = marks.matchingPeople(in: rows, id: \.id)
         let elapsed = clock.now - start
         #expect(projected == expected)
-        #expect(elapsed < .milliseconds(500), "100k-person bookmark projection took \(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(500)), "100k-person bookmark projection took \(elapsed)")
     }
 }

@@ -353,7 +353,7 @@ struct DeleteVolumeCatalogPlanTests {
         let elapsed = Date().timeIntervalSince(start)
         print("planTargetRemoval 100k×20: \(String(format: "%.3f", elapsed)) s")
         #expect(plan.count == 5_000)
-        #expect(elapsed < 1.0, "one O(records) pass at the gesture (got \(elapsed)s)")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 1.0), "one O(records) pass at the gesture (got \(elapsed)s)")
 
         model.records.append(makeRecord("/Volumes/Perf3/late/arrival.mov"))
         let result = model.deleteCatalogForTarget(victim, plan: plan)

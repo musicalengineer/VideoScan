@@ -560,7 +560,7 @@ struct CatalogStorageScaleTests {
 
         #expect(t.fileCount == 100_000)
         #expect(t.waterfallBalances)
-        #expect(elapsed < .seconds(3),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(3)),
                 "storage totals took \(elapsed) for 100k records — suspect O(n²)")
     }
 

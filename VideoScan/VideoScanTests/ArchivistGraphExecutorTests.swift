@@ -803,7 +803,7 @@ struct ArchivistGraphExecutorTests {
 
         #expect(result.conclusion == .answered)
         #expect(result.evidence?.subjectID == "@I3@")
-        #expect(elapsed < .seconds(5),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(5)),
                 "100k injected profiles exceeded the 5 s execution budget: \(elapsed)")
     }
 

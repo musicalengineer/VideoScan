@@ -294,7 +294,7 @@ struct RecordDateResolverScaleTests {
             buckets[r.source, default: 0] += 1
         }
         let elapsed = Date().timeIntervalSince(start)
-        #expect(elapsed < 3.0, "100k resolves took \(elapsed)s")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 3.0), "100k resolves took \(elapsed)s")
         #expect((buckets[.embedded] ?? 0) > 30_000)
         #expect((buckets[.filename] ?? 0) > 10_000)
         #expect((buckets[.userDate] ?? 0) > 5_000)

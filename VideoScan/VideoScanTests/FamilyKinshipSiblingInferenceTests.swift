@@ -999,9 +999,9 @@ struct FamilyKinshipSiblingInferenceScaleTests {
         #expect(names(chained.relatives(of: node("S999"), relation: .parent)) == ["PA", "PB"])
         #expect(chained.relatives(of: node("PA"), relation: .child).count == 1_000)
         #expect(chained.warnings.isEmpty)
-        #expect(chained.derivationDuration < .milliseconds(200),
+        #expect(chained.derivationDuration < PerformanceLane.debugCeiling(.milliseconds(200)),
                 "derivation over a 1,000-sibling chain in 100k profiles took \(chained.derivationDuration)")
-        #expect(baseline.derivationDuration < .milliseconds(50),
+        #expect(baseline.derivationDuration < PerformanceLane.debugCeiling(.milliseconds(50)),
                 "derivation with no sibling rows took \(baseline.derivationDuration)")
     }
 }

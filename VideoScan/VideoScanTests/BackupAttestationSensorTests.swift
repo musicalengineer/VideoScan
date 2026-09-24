@@ -408,7 +408,7 @@ struct BackupAttestationProtectionScaleTests {
         #expect(summary.cloud == .mixed && summary.offsite == .mixed)
         #expect(Set(summary.workingVolumesOnline + summary.workingVolumesOffline) == Set(volumes))
         #expect(summary.displayLine.hasPrefix("Archive ✓verified · 95000 working copies ("))
-        #expect(elapsed < .seconds(3), "protectionSummary took \(elapsed) for 100k records × 5k groups")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(3)), "protectionSummary took \(elapsed) for 100k records × 5k groups")
 
         // A single-family batch reads like the design line.
         let one = model.protectionSummary(for: [batch[1]]) { _ in true }

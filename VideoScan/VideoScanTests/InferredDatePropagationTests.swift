@@ -1332,13 +1332,13 @@ struct InferredDatePropagationPersistenceAndScaleTests {
         // Bucketing 100k references + 15k regex scans + 5k group walks is
         // well under a second in Debug; 3 s only trips on a complexity
         // regression (e.g. an O(records) sibling search per group).
-        #expect(elapsed < .seconds(3),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(3)),
                 "catch-up took \(elapsed) for 100k records / 5k groups")
 
         var second = VideoScanModel.InferredDateCatchUpResult()
         let again = clock.measure { second = model.catchUpInferredDates(trigger: "scale") }
         #expect(second.total == 0, "idempotent at scale")
-        #expect(again < .seconds(3))
+        #expect(again < PerformanceLane.debugCeiling(.seconds(3)))
     }
 }
 

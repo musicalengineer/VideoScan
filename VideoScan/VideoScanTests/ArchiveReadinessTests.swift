@@ -148,7 +148,7 @@ struct ArchiveReadinessLogicTests {
         }
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         #expect(atRisk == 50_000)
-        #expect(ms < 2_000, "100k assessments took \(Int(ms)) ms")
+        #expect(ms < PerformanceLane.debugCeiling(milliseconds: 2_000), "100k assessments took \(Int(ms)) ms")
     }
 }
 

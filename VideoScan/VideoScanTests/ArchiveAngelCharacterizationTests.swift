@@ -445,7 +445,7 @@ struct ArchiveAngelScaleCharacterizationTests {
         #expect(result.needsDate.count == Self.pinnedNudgeNear)
         #expect(head == Self.pinnedNudgeHead)
         // Projection + classify (the S3a parity test's budget; assess alone had 1 s).
-        #expect(s < 1.5, "legacy rules over 100k in \(s) s")
+        #expect(s < PerformanceLane.debugCeiling(seconds: 1.5), "legacy rules over 100k in \(s) s")
     }
 
     @Test("RULES v10 AS DATA: the data-driven scorer reproduces every v10 pin exactly (grades, reasons, score sum, batch)")

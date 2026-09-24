@@ -294,7 +294,7 @@ struct ArchiveAngelShowCopiesTests {
         let s = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
         print("[angel-s4] show copies over 100k: \(String(format: "%.3f", s)) s")
         #expect(req?.familyCount == 2)
-        #expect(s < 2, "Show Copies over 100k records took \(s) s")
+        #expect(s < PerformanceLane.debugCeiling(seconds: 2), "Show Copies over 100k records took \(s) s")
     }
 }
 

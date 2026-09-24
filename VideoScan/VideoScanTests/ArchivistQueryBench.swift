@@ -60,10 +60,10 @@ struct ArchivistQueryBench {
                     "'\(query)': indexed \(indexedMs) ms slower than linear \(linearMs) ms")
             // Loose absolute ceiling — the archivist applies queries per
             // chat message; even Debug on a loaded box must stay interactive.
-            #expect(indexedMs < 2_000, "'\(query)' took \(indexedMs) ms at 100k")
+            #expect(indexedMs < PerformanceLane.debugCeiling(milliseconds: 2_000), "'\(query)' took \(indexedMs) ms at 100k")
         }
         print(String(format: "bench index rebuild at 100k: %.0f ms", buildMs))
-        #expect(buildMs < 60_000, "100k rebuild took \(buildMs) ms")
+        #expect(buildMs < PerformanceLane.debugCeiling(milliseconds: 60_000), "100k rebuild took \(buildMs) ms")
     }
 
     /// knownPeople() feeds archivist autocomplete on every keystroke —
@@ -76,7 +76,7 @@ struct ArchivistQueryBench {
         let vocabMs = Self.ms { names = index.knownPeople().count }
         print(String(format: "bench knownPeople: %.3f ms (%d names)", vocabMs, names))
         #expect(names > 0)
-        #expect(vocabMs < 100, "knownPeople took \(vocabMs) ms")
+        #expect(vocabMs < PerformanceLane.debugCeiling(milliseconds: 100), "knownPeople took \(vocabMs) ms")
     }
 
     /// NL preprocessing throughput: normalize+compose is everything the

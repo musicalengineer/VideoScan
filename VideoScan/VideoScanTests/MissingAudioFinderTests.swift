@@ -399,7 +399,7 @@ struct MissingAudioScaleTests {
         let t0 = Date()
         let (cands, report) = MissingAudioFinder.hiddenCatalogCandidates(video: v, hidden: h, config: testConfig())
         let elapsed = Date().timeIntervalSince(t0)
-        #expect(elapsed < 5.0, "tier a took \(elapsed)s over 100k records")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 5.0), "tier a took \(elapsed)s over 100k records")
         #expect(report.examined == 100_000)
         // Every candidate must carry a real signal: the planted stem
         // matches (i = 0 has duration 0 → unknown → stem-only; the other

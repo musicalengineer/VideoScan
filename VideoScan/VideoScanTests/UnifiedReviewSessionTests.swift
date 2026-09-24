@@ -275,7 +275,7 @@ struct UnifiedReviewSessionTests {
                                     topN: 100, controlK: 5,
                                     alreadyLabeled: [], rng: &rng)
         }
-        #expect(elapsed < .seconds(10),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(10)),
                 "candidate scoring at 100k records took \(elapsed) — the phase transition will feel it")
         #expect(result?.stats.candidatesSurfaced == 1_000)
         // topN positives + up to controlK controls.

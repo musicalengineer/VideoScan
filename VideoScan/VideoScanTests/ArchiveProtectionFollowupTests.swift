@@ -199,7 +199,7 @@ struct ArchiveSnapshotMainThreadTests {
                 let start = ContinuousClock.now
                 model.refreshDossierCountsNow()
                 let elapsed = start.duration(to: .now)
-                #expect(elapsed < .seconds(2), "100k refresh exceeded 2 s: \(elapsed)")
+                #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "100k refresh exceeded 2 s: \(elapsed)")
             }
         }
         #expect(counter.mainThreadCalls == 0,
