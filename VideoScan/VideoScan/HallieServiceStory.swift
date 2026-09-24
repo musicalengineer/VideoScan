@@ -40,8 +40,36 @@ enum HallieServiceStory {
 
     // MARK: - The story itself
 
+    /// The source a story's "how we know" line speaks for. For a family
+    /// TRADITION that is the source that IS the tradition, wherever it sits
+    /// in `sourceIDs` (QA P2-2, 2026-09-24: with the teller listed first,
+    /// Hallie said "family tradition, from Rick"): first a source whose
+    /// title or notes say "tradition", then one whose attribution the story
+    /// itself names ("According to … Barry Lark"), else the first source.
+    /// Any other basis keeps the first source.
+    ///
+    /// C++ analogy: `lookup` is a `std::function<const Source*(const std::string&)>`.
+    static func provenanceSource(for item: CyberBrainItem,
+                                 lookup: (String) -> CyberBrainSource?) -> CyberBrainSource? {
+        let sources = item.sourceIDs.compactMap(lookup)
+        guard item.service?.basis == .familyTradition, sources.count > 1 else { return sources.first }
+        if let tradition = sources.first(where: { source in
+            [source.title, source.notes ?? ""].contains { $0.range(of: "tradition", options: .caseInsensitive) != nil }
+        }) {
+            return tradition
+        }
+        let story = item.text.lowercased()
+        if let named = sources.first(where: { source in
+            guard let who = source.attribution?.trimmingCharacters(in: .whitespaces), !who.isEmpty else { return false }
+            return story.contains(who.lowercased())
+        }) {
+            return named
+        }
+        return sources.first
+    }
+
     /// The line that says how the family knows the story, from the item's
-    /// first source and the record's basis.
+    /// provenance source (`provenanceSource`) and the record's basis.
     static func sourceLine(item: CyberBrainItem, record: CyberBrainServiceRecord,
                            source: CyberBrainSource?) -> String {
         let who = source?.attribution?.trimmingCharacters(in: .whitespaces)
@@ -82,11 +110,11 @@ enum HallieServiceStory {
             verb = "served in the \(record.force)"
         }
         var line = "\(name) \(verb)"
-        let places = record.engagements.map(\.name)
+        let places = record.engagements.map { engagementPhrase($0.name) }
         switch places.count {
         case 0: break
-        case 1: line += " at the \(places[0])"
-        case 2: line += " at the \(places[0]) and the \(places[1])"
+        case 1: line += " at \(places[0])"
+        case 2: line += " at \(places[0]) and \(places[1])"
         default: line += " in \(places.count) battles the family names"
         }
         var notes: [String] = []
@@ -104,6 +132,21 @@ enum HallieServiceStory {
         }
         if !notes.isEmpty { line += " (\(notes.joined(separator: "; ")))" }
         return line + "."
+    }
+
+    /// An engagement's name as it reads after "at": "the First Battle of
+    /// Fort Wagner", "the Siege of Petersburg" — a battle, siege or campaign
+    /// takes "the"; a bare place ("Fort Wagner", "Gettysburg") takes none
+    /// (QA P3, 2026-09-24: "at the Fort Wagner"). A name that already
+    /// starts with "the" is left as given.
+    static func engagementPhrase(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("the ") { return trimmed }
+        let isBattle = lower.range(
+            of: #"^(?:(?:first|second|third|fourth|fifth|\d+(?:st|nd|rd|th)) )?(?:battles?|siege|campaign|raid|assault|skirmish|engagement|landings?)\b|\b(?:battles?|siege|campaign|raid|assault|skirmish|landings?) (?:of|at|on)\b"#,
+            options: .regularExpression) != nil
+        return isBattle ? "the " + trimmed : trimmed
     }
 
     // MARK: - The offer

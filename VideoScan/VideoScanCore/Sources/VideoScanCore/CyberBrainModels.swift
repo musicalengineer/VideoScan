@@ -250,6 +250,25 @@ public struct CyberBrainServiceRecord: Codable, Sendable, Equatable {
         self.combat = combat
         self.basis = basis
     }
+
+    /// `engagements` and `combat` may be absent in a hand-written record:
+    /// they decode as `[]` and `.unknown`, the same "the family doesn't
+    /// know" the initializer defaults to (QA P3, 2026-09-24 — one terse
+    /// record must not fail the whole CyberBrain load). Everything else is
+    /// decoded exactly as the synthesized decoder did; encoding is still
+    /// synthesized, so a re-written file carries both keys explicitly.
+    /// C++ analogy: a hand-written deserializing constructor beside the
+    /// compiler-generated serializer.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        conflict = try container.decodeIfPresent(Conflict.self, forKey: .conflict)
+        force = try container.decode(String.self, forKey: .force)
+        roleNote = try container.decodeIfPresent(String.self, forKey: .roleNote)
+        serviceDates = try container.decodeIfPresent(CyberBrainQualifiedDate.self, forKey: .serviceDates)
+        engagements = try container.decodeIfPresent([Engagement].self, forKey: .engagements) ?? []
+        combat = try container.decodeIfPresent(Combat.self, forKey: .combat) ?? .unknown
+        basis = try container.decode(Basis.self, forKey: .basis)
+    }
 }
 
 public struct CyberBrainQualifiedDate: Codable, Sendable, Equatable {

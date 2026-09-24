@@ -129,6 +129,34 @@ struct MilitaryServiceCoreTests {
         }
     }
 
+    /// QA P3 (2026-09-24): a hand-written record with no battles and no
+    /// combat key must not fail the whole CyberBrain load.
+    @Test("a service record without engagements or combat loads with [] and .unknown")
+    func missingOptionalServiceFieldsDefault() throws {
+        let archive = archive(people: [
+            CyberBrainPerson(id: "person.harold", canonicalName: "Harold River",
+                             lifeEvents: [serviceEvent("event.harold.service", person: "person.harold",
+                                                       text: "Harold River served.", record: marines)]),
+        ])
+        var json = try #require(try JSONSerialization.jsonObject(with: CyberBrainWriter.encode(archive)) as? [String: Any])
+        var people = try #require(json["people"] as? [[String: Any]])
+        var events = try #require(people[0]["lifeEvents"] as? [[String: Any]])
+        var service = try #require(events[0]["service"] as? [String: Any])
+        service.removeValue(forKey: "engagements")
+        service.removeValue(forKey: "combat")
+        events[0]["service"] = service
+        people[0]["lifeEvents"] = events
+        json["people"] = people
+        let root = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        try write(try JSONSerialization.data(withJSONObject: json), to: root)
+        let loaded = try CyberBrainLoader(rootURL: root).load()
+        let record = try #require(loaded.people.first?.lifeEvents.first?.service)
+        #expect(record.engagements.isEmpty)
+        #expect(record.combat == .unknown)
+        #expect(record.force == "United States Marine Corps")
+        #expect(record.basis == .confirmedByFamily)
+    }
+
     @Test("a service record rides only on a life event, names its force, and names its battles")
     func validatorRules() throws {
         let onBiography = archive(people: [

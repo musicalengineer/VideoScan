@@ -104,12 +104,14 @@ extension HallieTurnExecutor {
                     // unknown name keeps the ordinary not-found flow.
                     if treePerson == nil {
                         guard isKnownPerson(requestedName, context: context) else { return nil }
-                        return nothingRecorded(about: displayName(requestedName), requested: requestedName)
+                        return nothingRecorded(about: displayName(requestedName), requested: requestedName,
+                                               treeChecked: context.graph != nil)
                     }
                 }
             }
             guard person != nil || treePerson != nil else {
-                return nothingRecorded(about: displayName(requestedName), requested: requestedName)
+                return nothingRecorded(about: displayName(requestedName), requested: requestedName,
+                                       treeChecked: context.graph != nil)
             }
             return personAnswer(person: person, treePerson: treePerson,
                                 requested: requestedName, context: context)
@@ -133,7 +135,7 @@ extension HallieTurnExecutor {
                 let stories = storyItems(for: person, index: index)
                 if !stories.isEmpty {
                     for item in stories {
-                        let source = item.sourceIDs.first.flatMap { index.source(id: $0) }
+                        let source = HallieServiceStory.provenanceSource(for: item) { index.source(id: $0) }
                         sentences.append(HallieServiceStory.story(item: item, source: source))
                         cite(item, index: index, into: &citations)
                         itemIDs.append(item.id)
@@ -153,7 +155,7 @@ extension HallieTurnExecutor {
                 itemIDs.append("gedcom:\(treePerson.id)")
             }
             guard !sentences.isEmpty else {
-                return nothingRecorded(about: name, requested: requested)
+                return nothingRecorded(about: name, requested: requested, treeChecked: context.graph != nil)
             }
             let prose = sentences.joined(separator: " ")
             return Result(
@@ -199,7 +201,8 @@ extension HallieTurnExecutor {
                 + (ask.branch.map { " branch=\($0.rawValue)" } ?? "")
             guard !stories.listed.isEmpty || !tree.isEmpty else {
                 return nothingForWar(scope: scope, isWar: ask.branch == nil,
-                                     storiedWars: stories.storiedWars, queryDescription: queryDescription)
+                                     storiedWars: stories.storiedWars, treeChecked: context.graph != nil,
+                                     queryDescription: queryDescription)
             }
             var paragraphs: [String] = []
             var citations: [KnowledgeCitation] = []
@@ -229,7 +232,8 @@ extension HallieTurnExecutor {
                 knowledgeCitations: citations,
                 catalogPersonName: shown.count == 1 && tree.isEmpty ? shown.first?.name : nil,
                 answerPlan: HallieAnswerPlan(route: .graph, shape: .fixed, fallbackText: prose))
-            return offeringStories(on: result, people: shown.compactMap(\.storyPerson), context: context)
+            return offeringStories(on: result, people: shown.compactMap(\.storyPerson),
+                                   listedCount: shown.count + tree.count, context: context)
         }
 
         private static func familyStories(_ ask: HallieServiceQuestion.FamilyAsk, context: Context) -> FamilyStories {
@@ -336,11 +340,17 @@ extension HallieTurnExecutor {
 
         /// One story → "Would you like to hear his story?"; several → pick a
         /// name. A tree-only answer offers nothing (there is no story).
+        /// When the answer lists OTHER people too (a passage, a tree fact),
+        /// "his story" could be anyone's: the offer names the person
+        /// (QA P3, 2026-09-24).
         private static func offeringStories(on result: Result, people: [CyberBrainPerson],
-                                            context: Context) -> Result {
+                                            listedCount: Int, context: Context) -> Result {
             guard let first = people.first else { return result }
+            let whose = listedCount > 1
+                ? HallieServiceStory.possessive(first.canonicalName)
+                : storyPronounPhrase(first, context: context)
             let offer = people.count == 1
-                ? "Would you like to hear \(storyPronounPhrase(first, context: context)) story?"
+                ? "Would you like to hear \(whose) story?"
                 : "Whose story would you like to hear?"
             let clarification = makeClarification(
                 intent: storyIntent(for: first), stage: .serviceOffer,
@@ -357,24 +367,31 @@ extension HallieTurnExecutor {
 
         /// No record for the war asked about: say so plainly, point at the
         /// stories the family DOES have, and invite a new one.
+        /// `treeChecked` false (no tree loaded): nothing is said about the
+        /// tree — it was not consulted (QA P3, 2026-09-24).
         private static func nothingForWar(scope: String?, isWar: Bool,
                                           storiedWars: Set<HallieServiceQuestion.War>,
+                                          treeChecked: Bool,
                                           queryDescription: String) -> Result {
             var prose: String
             if let scope {
-                prose = "Nobody in the family has told me about service in \(scope), and the family tree I have records "
-                    + (isWar ? "no military service from those years." : "none.")
+                prose = "Nobody in the family has told me about service in \(scope)"
+                    + (treeChecked
+                       ? ", and the family tree I have records " + (isWar ? "no military service from those years." : "none.")
+                       : ".")
                 let others = HallieServiceQuestion.War.allCases.filter(storiedWars.contains).map(\.name)
                 if !others.isEmpty {
                     prose += " I do have family stories from " + joinedList(others) + " — ask me about those."
                 }
             } else {
-                prose = "I don't have anything from the family about military service yet, and the family tree I have records none."
+                prose = "I don't have anything from the family about military service yet"
+                    + (treeChecked ? ", and the family tree I have records none." : ".")
             }
             prose += " If you know of someone who served, tell me — say “let me tell you about” and their name — and I'll remember it."
             return Result(
                 route: .graph, outcome: .declined, prose: prose,
-                basisLine: "Basis: Breen Family CyberBrain has no service record or passage for this, and the family tree records no military fact for it.",
+                basisLine: "Basis: Breen Family CyberBrain has no service record or passage for this"
+                    + (treeChecked ? ", and the family tree records no military fact for it." : "; no tree is loaded, so none was checked."),
                 queryDescription: queryDescription, citations: [], catalogPersonName: nil,
                 answerPlan: HallieAnswerPlan(route: .graph, shape: .fixed, fallbackText: prose))
         }
@@ -558,12 +575,17 @@ extension HallieTurnExecutor {
             return "Basis: " + parts.joined(separator: "; ") + "."
         }
 
-        private static func nothingRecorded(about name: String, requested: String) -> Result {
-            let prose = "I don't have anything from the family about \(name)'s military service, and the family tree records none. If you tell me — “let me tell you about \(name)” — I'll remember it."
+        /// `treeChecked` false (no tree loaded): the tree is not claimed to
+        /// record none — it was never consulted (QA P3, 2026-09-24).
+        private static func nothingRecorded(about name: String, requested: String,
+                                            treeChecked: Bool) -> Result {
+            let tree = treeChecked ? ", and the family tree records none" : ""
+            let prose = "I don't have anything from the family about \(name)'s military service\(tree). If you tell me — “let me tell you about \(name)” — I'll remember it."
             return Result(
                 route: .graph, outcome: .declined,
                 prose: prose,
-                basisLine: "Basis: Breen Family CyberBrain has no service record or passage about \(name); the family tree records no military fact for them.",
+                basisLine: "Basis: Breen Family CyberBrain has no service record or passage about \(name)"
+                    + (treeChecked ? "; the family tree records no military fact for them." : "; no tree is loaded, so none was checked."),
                 queryDescription: "shape=graph operation=biography person=\(requested) \(topicDescription)",
                 citations: [], catalogPersonName: nil,
                 answerPlan: HallieAnswerPlan(route: .graph, shape: .fixed, fallbackText: prose))

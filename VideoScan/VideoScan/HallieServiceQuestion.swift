@@ -280,9 +280,28 @@ enum HallieServiceQuestion {
     private static let familyScopePattern =
         #"\b(?:famil(?:y|ies|y's|ys)|ancestors?|ancestry|relatives?|forefathers|forebears|anyone|anybody|someone|somebody|any of us|grandparents|great[- ]grandparents|kin|the breens)\b"#
 
-    /// Service in the military sense, unambiguous on its own.
+    /// Service in the military sense, unambiguous on its own — a military
+    /// NOUN or a verb that only means soldiering. Deliberately NOT here
+    /// (QA P2-1, 2026-09-24): bare "fight"/"fought" ("who in the family
+    /// fought cancer", "why did my grandparents fight so much"), bare
+    /// "served in the" ("served in the peace corps") and a bare branch word
+    /// ("worked at the navy yard") — those count only in the shapes below.
     private static let strongServicePattern =
-        #"\b(?:military|veterans?|vets|soldiers?|sailors?|marines|marine corps|army|navy|air force|coast guard|armed forces|enlisted|drafted|fought|fight|fighting|battles?|combat|war (?:service|record|history|stories|story|veterans?)|served (?:(?:his|her|their|our|the) )?country|service in the|served in the|serve in the|serving in the|redcoats?|continental army|confedera(?:cy|te)|union army)\b"#
+        #"\b(?:military|veterans?|vets|soldiers?|sailors?|airm[ae]n|armed forces|enlisted|drafted|combat|war (?:service|record|history|stories|story|veterans?)|served (?:(?:his|her|their|our|the) )?country|redcoats?|continental army|confedera(?:cy|te)|union army)\b"#
+
+    /// A branch named as something one serves IN: "in the navy", "with the
+    /// marines", "joined the army". Not a place or a shop that carries the
+    /// word ("the navy yard", "an army surplus store").
+    private static let branchNoun =
+        #"(?:(?:us |u\.s\. |united states |british |royal |confederate |union |continental )?(?:army|navy|marines|marine corps|air force|coast guard|national guard|reserves|usmc|the corps))(?! (?:yards?|shipyards?|surplus|stores?|depots?|base exchange))\b"#
+    private static let inABranchPattern =
+        #"\b(?:in|with|for|into|join|joined|joining) (?:the |a )?"# + branchNoun
+
+    /// "fight"/"fought" is service only when it is fought IN something
+    /// military: "fight in WWII", "fought with the marines", "fight for the
+    /// confederacy" — a war or a branch after in/at/for/with.
+    private static let foughtInPattern =
+        #"\b(?:fight|fought|fighting) (?:in|at|for|with|on) (?:the |a |any )?(?:"# + war + "|" + branchNoun + #")\b"#
 
     /// "served" / "service" with nothing after it that makes it another
     /// kind of service: "who in the family served?", "any family service
@@ -349,6 +368,8 @@ enum HallieServiceQuestion {
             || text.hasPrefix("who in our ") || text.hasPrefix("which of us")
         guard scoped else { return nil }
         let serviceWords = match(strongServicePattern, in: text) != nil
+            || match(inABranchPattern, in: text) != nil
+            || match(foughtInPattern, in: text) != nil
             || match(bareServedAtEndPattern, in: text) != nil
             || match(inAWarPattern, in: text) != nil
             || text.contains("military history") || text.contains("war history")
