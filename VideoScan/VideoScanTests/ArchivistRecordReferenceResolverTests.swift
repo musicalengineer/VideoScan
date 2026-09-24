@@ -661,7 +661,7 @@ struct ArchivistRecordReferenceResolverTests {
         }
         let elapsed = ContinuousClock.now - started
         #expect(index.rebuildCount == 1)
-        #expect(elapsed < .seconds(2), "50 memoised lookups over 100k records took \(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "50 memoised lookups over 100k records took \(elapsed)")
 
         let linearStart = ContinuousClock.now
         #expect(resolvedID(ArchivistRecordReferenceResolver.resolve(file: "clip_73421.mov", in: records)) == target.id)
@@ -674,7 +674,7 @@ struct ArchivistRecordReferenceResolverTests {
         #expect(isNotFound(linearMiss, name: "the clip_73421.mov"))
         #expect(similar(linearMiss)?.ids == [target.id])
         let linear = ContinuousClock.now - linearStart
-        #expect(linear < .seconds(3), "three linear resolutions over 100k records took \(linear)")
+        #expect(linear < PerformanceLane.debugCeiling(.seconds(3)), "three linear resolutions over 100k records took \(linear)")
 
         // The same misses through the memo: the linear token tier, no
         // rebuild; the did-you-mean probes are memo lookups — a five-word
@@ -693,7 +693,7 @@ struct ArchivistRecordReferenceResolverTests {
         #expect(similar(memoMiss)?.ids == [target.id])
         let memoMissElapsed = ContinuousClock.now - memoMissStart
         #expect(index.rebuildCount == 1)
-        #expect(memoMissElapsed < .seconds(3), "three memo misses over 100k records took \(memoMissElapsed)")
+        #expect(memoMissElapsed < PerformanceLane.debugCeiling(.seconds(3)), "three memo misses over 100k records took \(memoMissElapsed)")
 
         // A new version rebuilds once more; the same version never does.
         _ = ArchivistRecordReferenceResolver.resolve(

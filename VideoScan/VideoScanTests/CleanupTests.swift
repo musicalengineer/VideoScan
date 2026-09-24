@@ -343,7 +343,8 @@ struct CleanupTests {
     }
 
     @Test("MANDATORY M4 integration: vorbis-audio fixture renders with pcm_s16le audio and probes clean",
-          .timeLimit(.minutes(2)))
+          .timeLimit(.minutes(2)),
+          .enabled(if: CleanupTestMedia.runsHardwareProResTests, CleanupTestMedia.hardwareProResSkipReason))
     func vorbisAudioModernizedEndToEnd() async throws {
         try #require(CleanupTestMedia.toolsAvailable,
                      "ffmpeg/ffprobe are required project dependencies")
@@ -386,6 +387,36 @@ struct CleanupTests {
                 "vorbis must be modernized to pcm_s16le; got \(out.audio?.codec_name ?? "nil")")
         #expect(out.video?.codec_name == "prores")
         #expect(abs(out.durationSeconds - srcProbe.durationSeconds) <= 0.5)
+    }
+
+    // MARK: - VideoToolbox gate (CI run 36068753075)
+
+    @Test("hardware-ProRes gate: skips only on a GitHub-hosted runner whose encoder fails")
+    func hardwareProResGateRule() {
+        let gh = ["GITHUB_ACTIONS": "true"]
+        #expect(CleanupTestMedia.runsHardwareProResTests(encoderWorks: true, environment: gh))
+        #expect(!CleanupTestMedia.runsHardwareProResTests(encoderWorks: false, environment: gh))
+        // Off GitHub a broken encoder is a real regression: run, and fail.
+        #expect(CleanupTestMedia.runsHardwareProResTests(encoderWorks: false, environment: [:]))
+        #expect(CleanupTestMedia.runsHardwareProResTests(encoderWorks: false, environment: ["CI": "1"]))
+        #expect(CleanupTestMedia.runsHardwareProResTests(encoderWorks: true, environment: [:]))
+    }
+
+    @Test("the probe tells a real encoder from a missing one")
+    func encoderProbeDiscriminates() throws {
+        try #require(CleanupTestMedia.toolsAvailable, "ffmpeg/ffprobe are required project dependencies")
+        #expect(!CleanupTestMedia.encoderOpens(["-c:v", "no_such_encoder_vs"]), "an unknown encoder must probe false")
+        #expect(CleanupTestMedia.encoderOpens(["-c:v", "rawvideo"]), "a software encoder must probe true")
+    }
+
+    /// Sensor: on a real Mac the hardware ProRes encoder must work, so the
+    /// gate above can never quietly skip the render tests on Rick's fleet.
+    @Test("sensor: off GitHub-hosted runners, prores_videotoolbox encodes")
+    func hardwareProResWorksOffGitHub() throws {
+        try #require(CleanupTestMedia.toolsAvailable, "ffmpeg/ffprobe are required project dependencies")
+        let onGitHub = ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
+        #expect(onGitHub || CleanupTestMedia.proResVideoToolboxEncodes,
+                "prores_videotoolbox failed to encode one frame on a non-hosted Mac — a real regression")
     }
 
     // MARK: - m3: sheet and job share one planned destination

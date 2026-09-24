@@ -113,6 +113,7 @@ struct CleanupMediaMatrixTests {
 
     @Test("VHS Quick Clean renders every matrix container faithfully",
           .timeLimit(.minutes(2)),
+          .enabled(if: CleanupTestMedia.runsHardwareProResTests, CleanupTestMedia.hardwareProResSkipReason),
           arguments: matrixCases)
     func vhsQuickCleanAcrossTheMatrix(testCase: CleanupMatrixCase) async throws {
         try #require(CleanupTestMedia.toolsAvailable,

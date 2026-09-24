@@ -28,7 +28,8 @@ struct CleanupSensorTests {
     // MARK: - (a) Original byte-identical after a full REAL job
 
     @Test("the original file is byte-identical (sha256 + mtime) after a full real-engine job",
-          .timeLimit(.minutes(2)))
+          .timeLimit(.minutes(2)),
+          .enabled(if: CleanupTestMedia.runsHardwareProResTests, CleanupTestMedia.hardwareProResSkipReason))
     func originalUntouchedAfterFullRealJob() async throws {
         try #require(CleanupTestMedia.toolsAvailable,
                      "ffmpeg/ffprobe are required project dependencies")

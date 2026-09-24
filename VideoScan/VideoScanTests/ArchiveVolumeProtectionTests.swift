@@ -317,7 +317,7 @@ struct ArchiveVolumeProtectionTests {
         let elapsed = start.duration(to: .now)
         #expect(menu.map(\.path) == ["/Volumes/CrucialX9"])
         #expect(menu.first?.count == 49_999)
-        #expect(elapsed < .seconds(2), "100k menu exceeded 2 s: \(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "100k menu exceeded 2 s (scaled on a GitHub-hosted runner): \(elapsed)")
     }
 }
 

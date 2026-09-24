@@ -507,7 +507,7 @@ struct ArchiveAngelScaleCharacterizationTests {
         #expect(result.counts.values.reduce(0, +) == 100_000)
         #expect(result.counts == Self.pinnedClasses)
         #expect(result.ready.count == result.counts[.ready] ?? 0)
-        #expect(s < 1, "unified classify over 100k in \(s) s")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "unified classify over 100k in \(s) s")
     }
 
     @Test("the background sweep stores the same grade histogram as the pure path (10k, no Spotlight, no disk budget)")

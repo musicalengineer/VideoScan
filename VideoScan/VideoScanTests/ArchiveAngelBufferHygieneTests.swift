@@ -737,9 +737,9 @@ struct ArchiveAngelBufferHygieneClearTests {
         let outcome = try #require(all)
         let refusals = outcome.outcomes.map { String(describing: $0.refusal) }
         #expect(outcome.outcomes.filter { !$0.cleared }.isEmpty, "\(refusals)")
-        #expect(sync < .milliseconds(400), "the verb up to scheduling (6 plan reads + 3 fsync'd saves, now off-main; no record walk): \(sync)")
+        #expect(sync < PerformanceLane.debugCeiling(.milliseconds(400)), "the verb up to scheduling (6 plan reads + 3 fsync'd saves, now off-main; no record walk): \(sync)")
         let total = await clock.measure { _ = await outcome.finished.value }
-        #expect(sync + total < .seconds(5), "6 removals + one pass over 100k records: \(sync + total)")
+        #expect(sync + total < PerformanceLane.debugCeiling(.seconds(5)), "6 removals + one pass over 100k records: \(sync + total)")
         #expect(await outcome.finished.value == 6, "every companion, in the one pass")
         for out in outcome.outcomes {
             let r = try #require(await out.removal?.value)

@@ -366,7 +366,7 @@ struct ArchivistAggregateExecutorTests {
         #expect(result.rankings.first?.recordCount == 100_000)
         #expect(result.rankings.first?.sampleCitations.count
                 == ArchivistAggregateExecutor.maxSampleCitationsPerPerson)
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "detached aggregate execution took \(elapsed) for 100k records")
     }
 }

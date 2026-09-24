@@ -666,7 +666,9 @@ struct ArchiveAngelCurationSimulationTests {
         // RankKey sort). The full Debug battery on the M4 Max ran the old
         // code at 4.17 s — ×1.57 its M5-alone time; the same factor puts
         // this at ~3.0 s, inside the budget without widening it.
-        #expect(seconds < 4, "100k in \(seconds) s (\(PerformanceLane.loadDescription()))")
+        // Hosted-runner factor only (GitHub virtual M1s, 2–3× slower); no load
+        // headroom — the budget is deliberately not widened locally.
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(4)), "100k in \(seconds) s (\(PerformanceLane.loadDescription()))")
     }
 
     @Test("a promote-everything user is never slowed down: Phase 1 picks the same top ten as today on round one")

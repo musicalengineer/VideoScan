@@ -66,7 +66,7 @@ struct ArchivistQuestionParserTests {
 
         #expect(parsed.possessors.count == 6)
         #expect(parsed.possessors.last?.personText == "Rick")
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "100k-word kinship parse exceeded 2 seconds: \(elapsed)")
     }
 }
