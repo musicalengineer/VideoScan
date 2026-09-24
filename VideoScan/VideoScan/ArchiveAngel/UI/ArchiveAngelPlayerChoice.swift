@@ -59,15 +59,28 @@ enum ArchiveAngelPlayerChoice {
     /// `log`), then hands the record to the shared opener. An offline
     /// volume is said, not attempted.
     @MainActor
-    static func play(_ rec: VideoRecord, log: (String) -> Void) {
-        guard VolumeReachability.isReachable(path: rec.fullPath) else {
+    static func play(_ rec: VideoRecord, log: @escaping (String) -> Void) {
+        // The drive question from the mount table (QA P2-2) — a missing
+        // file on a mounted disk is "not found", not "offline".
+        guard VolumeReachability.isVolumeReachable(path: rec.fullPath) else {
             let volume = MediaVolumeGatePolicy.volumeRoot(forPath: rec.fullPath)
             log("Archive Angel: \(rec.filename) is on an offline drive (\(volume)) — connect it to play.")
             return
         }
         let d = decide(filename: rec.filename, ext: rec.ext, videoCodec: rec.videoCodec,
                        audioCodec: rec.audioCodec, hasVLC: MediaOpener.hasVLC)
-        log("Archive Angel: " + d.sentence)
-        MediaOpener.open([rec])
+        let path = rec.fullPath
+        Task { @MainActor in
+            // One stat, off the main actor (a spun-down disk can take seconds).
+            let exists = await Task.detached(priority: .userInitiated) {
+                FileManager.default.fileExists(atPath: path)
+            }.value
+            guard exists else {
+                log("Archive Angel: \(rec.filename) was not found — its drive is connected but the file is not there (moved or deleted since cataloging).")
+                return
+            }
+            log("Archive Angel: " + d.sentence)
+            MediaOpener.open([rec])
+        }
     }
 }

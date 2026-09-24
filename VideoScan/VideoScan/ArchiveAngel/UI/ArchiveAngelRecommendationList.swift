@@ -18,6 +18,8 @@ struct ArchiveAngelRecommendationList: View {
     let totalCount: Int
     let isAssessed: Bool
     let isReadOnly: Bool
+    /// An Archive Angel or Promote job is running — rows' Prepare waits.
+    var angelJobRunning = false
     let actions: ArchiveAngelListActions
     let showMore: () -> Void
 
@@ -35,6 +37,7 @@ struct ArchiveAngelRecommendationList: View {
                 ArchiveAngelListRowView(
                     row: row,
                     isReadOnly: isReadOnly,
+                    angelJobRunning: angelJobRunning,
                     onPlay: { actions.play(row) },
                     onShowInCatalog: { actions.showInCatalog(row) },
                     onShowInFinder: { actions.showInFinder(row) },
