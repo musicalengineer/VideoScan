@@ -10,6 +10,7 @@
 // `#require` is ASSERT_TRUE (stops the test).
 
 import Foundation
+import MachO
 import Testing
 @testable import VideoScan
 
@@ -57,6 +58,20 @@ struct PerformanceLaneTests {
         #expect(authoritative([Self.key: "1"]), "variable absent = coverage off")
     }
 
+    /// True when any loaded Mach-O image carries LLVM profile counters.
+    /// Not `dlsym("__llvm_profile_write_file")`: the profile runtime's
+    /// symbols are hidden, so dlsym says "not instrumented" even on a
+    /// coverage build (nightly 2026-09-24 went red on exactly that).
+    private static func anyImageHasProfileCounters() -> Bool {
+        (0..<_dyld_image_count()).contains { index in
+            guard let header = _dyld_get_image_header(index) else { return false }
+            var size: UInt = 0
+            return header.withMemoryRebound(to: mach_header_64.self, capacity: 1) {
+                getsectiondata($0, "__DATA", "__llvm_prf_cnts", &size) != nil && size > 0
+            }
+        }
+    }
+
     /// Sensor: the environment rule must agree with what the binary actually
     /// is. A coverage build links the LLVM profile runtime; a non-coverage
     /// build does not. If Xcode ever changes what it puts in
@@ -65,7 +80,7 @@ struct PerformanceLaneTests {
     @Test("sensor: env rule agrees with the live binary's instrumentation")
     func envRuleMatchesBinaryInstrumentation() {
         let env = ProcessInfo.processInfo.environment
-        let instrumented = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "__llvm_profile_write_file") != nil
+        let instrumented = Self.anyImageHasProfileCounters()
         let envSaysCoverageOn = PerformanceLane.coverageEnabled(environment: env)
         #expect(envSaysCoverageOn == !authoritative(env.merging([Self.key: "1"]) { $1 }),
                 "isAuthoritative must use the same coverage rule")
