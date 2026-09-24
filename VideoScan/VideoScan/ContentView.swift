@@ -1047,7 +1047,7 @@ struct CatalogView: View {
                 // progress in bytes, rate + ETA, Pause/Stop, a saved plan
                 // for resume, and the file list on click.
                 startFileOperation("Delete Duplicates") {
-                    $0.startedByUser { $0.startDeleteDuplicates(onVolume: deleteTargetVolume, model: model) }
+                    _ = $0.startedByUser { $0.startDeleteDuplicates(onVolume: deleteTargetVolume, model: model) }
                 }
                 MediaFileOperationsWindowOpener.openInFront(openWindow)
             }
@@ -1065,7 +1065,7 @@ struct CatalogView: View {
                 Button("Resume") {
                     // The user ACCEPTED the offer — that is a user start.
                     startFileOperation("Resume Deleting Duplicates") {
-                        $0.startedByUser { $0.resumeDeleteDuplicates(plan: plan, model: model) }
+                        _ = $0.startedByUser { $0.resumeDeleteDuplicates(plan: plan, model: model) }
                     }
                     MediaFileOperationsWindowOpener.openInFront(openWindow)
                 }
