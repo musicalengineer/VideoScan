@@ -60,7 +60,9 @@ struct ArchiveAngelStatusWordsTests {
     }
 
     @Test func noAudioTrackIsNotANeed() {
-        #expect(ArchiveAngelStatusWords.words(facts(.ready, audio: .noAudioTrack, audioStatus: "")) == "Ready to archive")
+        let f = facts(.ready, audio: .noAudioTrack, audioStatus: "")
+        #expect(ArchiveAngelStatusWords.needs(f).isEmpty)
+        #expect(ArchiveAngelStatusWords.words(f) == "Ready — no sound track", "QA P3 2026-09-24")
     }
 
     @Test func twoNeedsJoinWithAndRepairsFirst() {
@@ -243,5 +245,86 @@ struct ArchiveAngelListSeniorSensorTests {
         let hallie = try source("ArchivistCitationRow.swift")
         #expect(hallie.contains("ColorActionButton(") && hallie.contains("size: .regular"),
                 "Hallie and the Angel list share one button style")
+    }
+}
+
+/// QA follow-ups on the merged list (2026-09-24, fix/aa-list-qa).
+@Suite("Archive Angel list — QA follow-ups")
+struct ArchiveAngelListQAFollowUpTests {
+
+    // P2-1: a verified-OK file with an informational note is VERIFIED.
+    // ArchiveReadiness maps status "ok" + a non-damage note to
+    // .verifiedProblem(note); Prepare skips the audio verify for it
+    // ("Already verified: ok"), so calling it "needs audio checked" left it
+    // stuck forever.
+    @Test func okWithANoteIsNotAnAudioCheck() {
+        let f = facts(.ready, audio: .verifiedProblem("surround audio (6 channels)"), audioStatus: "ok")
+        #expect(!ArchiveAngelStatusWords.needs(f).contains(.audioCheck))
+        #expect(ArchiveAngelStatusWords.words(f) == "Ready to archive")
+        #expect(ArchiveAngelListRowBuilder.row(f).route == .direct)
+        let e = ArchiveAngelReadinessExplanation.make(f)
+        let all = e.missing.flatMap { [$0.what, $0.todo] } + e.facts.map(\.value)
+        #expect(!all.contains { $0.contains("Nobody has checked") })
+        #expect(e.facts.contains { $0.label == "Sound" && $0.value.contains("surround audio (6 channels)") },
+                "the note is information, not a need")
+    }
+
+    @Test func genuineDamageStillNeedsRepair() {
+        var f = facts(.ready, audio: .verifiedProblem("Damaged audio — invalid codec"), audioStatus: "damaged")
+        f.audioVerifyNote = "Damaged audio — invalid codec"
+        #expect(ArchiveAngelStatusWords.words(f) == "Needs audio repair")
+    }
+
+    @Test func onlyNeverVerifiedNeedsAudioChecked() {
+        #expect(ArchiveAngelStatusWords.needs(facts(.ready, audio: .notVerified, audioStatus: "")) == [.audioCheck])
+    }
+
+    // P3: a video-only file says so.
+    @Test func videoOnlyReadySaysNoSoundTrack() {
+        let f = facts(.ready, audio: .noAudioTrack, audioStatus: "")
+        #expect(ArchiveAngelStatusWords.words(f) == "Ready — no sound track")
+        #expect(ArchiveAngelListRowBuilder.row(f).isReady)
+        #expect(ArchiveAngelListRowBuilder.row(f).route == .direct)
+    }
+
+    // P2-2: a missing file on the boot disk is not a disconnected drive.
+    @MainActor
+    @Test func missingFileOnAMountedVolumeIsNotDriveNotConnected() {
+        let rec = VideoRecord()
+        rec.filename = "gone.mov"
+        rec.fullPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aa-list-missing-\(UUID().uuidString).mov").path
+        let f = ArchiveAngelRowFacts.make(record: rec, evidence: nil, kind: .ready)
+        #expect(f.isReachable, "the boot volume is mounted")
+        let row = ArchiveAngelListRowBuilder.row(f)
+        #expect(row.location.text != "drive not connected")
+    }
+
+    @Test func locationWords() {
+        #expect(ArchiveAngelFileLocation.from(volumeReachable: false, fileExists: nil) == .driveNotConnected)
+        #expect(ArchiveAngelFileLocation.from(volumeReachable: true, fileExists: false) == .fileNotFound)
+        #expect(ArchiveAngelFileLocation.from(volumeReachable: true, fileExists: true) == .available)
+        #expect(ArchiveAngelFileLocation.from(volumeReachable: true, fileExists: nil) == .available, "not probed yet")
+        #expect(ArchiveAngelFileLocation.driveNotConnected.text == "drive not connected")
+        #expect(ArchiveAngelFileLocation.fileNotFound.text == "file not found")
+        #expect(ArchiveAngelFileLocation.available.text == nil)
+    }
+
+    // P3: Promote/Prepare dims when the file can't be reached; Prepare
+    // is off while an Angel job runs.
+    @Test func promoteEnablement() {
+        let ready = ArchiveAngelListRowBuilder.row(facts(.ready))
+        let needs = ArchiveAngelListRowBuilder.row(facts(.worthALook))
+        #expect(ready.promoteEnabled(readOnly: false, angelJobRunning: false))
+        #expect(ready.promoteEnabled(readOnly: false, angelJobRunning: true), "direct Promote queues its own job")
+        #expect(!needs.promoteEnabled(readOnly: false, angelJobRunning: true), "Prepare waits for the running Angel job")
+        #expect(needs.promoteEnabled(readOnly: false, angelJobRunning: false))
+        #expect(!ready.promoteEnabled(readOnly: true, angelJobRunning: false))
+        var off = facts(.ready)
+        off.isReachable = false
+        #expect(!ArchiveAngelListRowBuilder.row(off).promoteEnabled(readOnly: false, angelJobRunning: false))
+        var missing = facts(.ready)
+        missing.fileExists = false
+        #expect(!ArchiveAngelListRowBuilder.row(missing).promoteEnabled(readOnly: false, angelJobRunning: false))
     }
 }

@@ -68,6 +68,34 @@ struct ArchiveAngelRowFacts: Sendable, Equatable, Identifiable {
     var volumeName: String = ""
     /// Is the volume mounted right now?
     var isReachable: Bool = true
+    /// Does the file exist? nil = not probed (yet).
+    var fileExists: Bool?
+}
+
+// MARK: - Where the file is
+
+/// Can the file be reached right now? QA 2026-09-24 (P2-2): the DRIVE
+/// question (VolumeReachability.isVolumeReachable — mount table, never a
+/// file stat) is kept apart from the FILE question (an off-main exists
+/// probe), so a missing file on the boot disk reads "file not found", not
+/// "drive not connected" (Rick's 2026-09-21 M4drive bug class).
+enum ArchiveAngelFileLocation: Equatable, Sendable {
+    case available, driveNotConnected, fileNotFound
+
+    /// `fileExists` nil = not probed yet → assume available.
+    static func from(volumeReachable: Bool, fileExists: Bool?) -> ArchiveAngelFileLocation {
+        guard volumeReachable else { return .driveNotConnected }
+        return fileExists == false ? .fileNotFound : .available
+    }
+
+    /// The row's words; nil when there is nothing to say.
+    var text: String? {
+        switch self {
+        case .available: return nil
+        case .driveNotConnected: return "drive not connected"
+        case .fileNotFound: return "file not found"
+        }
+    }
 }
 
 // MARK: - What is missing
@@ -112,15 +140,16 @@ enum ArchiveAngelStatusWords {
     static func needs(_ f: ArchiveAngelRowFacts) -> [ArchiveAngelNeed] {
         guard f.kind.isRecommended else { return [] }
         var out: [ArchiveAngelNeed] = []
-        // Audio: a damaged verdict is a repair; a verified-with-a-finding
-        // ("silent audio") or never-verified track needs a listen.
+        // Audio: a damaged verdict is a repair; a NEVER-verified track
+        // needs checking. QA 2026-09-24 (P2-1): status "ok" with an
+        // informational note ("surround audio (6 channels)", "2 live audio
+        // tracks") reaches us as .verifiedProblem(note) but IS verified —
+        // Prepare skips it ("Already verified: ok"), so calling it a need
+        // left the file stuck. The sheet shows the note as information.
         if f.audioVerifyStatus == "damaged" {
             out.append(.audioRepair(note: f.audioVerifyNote))
-        } else {
-            switch f.audio {
-            case .notVerified, .verifiedProblem: out.append(.audioCheck)
-            case .verifiedOK, .noAudioTrack: break
-            }
+        } else if f.audio == .notVerified {
+            out.append(.audioCheck)
         }
         switch f.videoVerifyStatus {
         case "broken": out.append(.videoRepair(note: f.videoVerifyNote))
@@ -152,7 +181,14 @@ enum ArchiveAngelStatusWords {
         }
     }
 
-    static func words(_ f: ArchiveAngelRowFacts) -> String { words(kind: f.kind, needs: needs(f)) }
+    static func words(_ f: ArchiveAngelRowFacts) -> String { words(f, needs: needs(f)) }
+
+    /// As above, plus the video-only note on a Ready file (QA P3: a
+    /// picture-only file should not look like one with checked sound).
+    static func words(_ f: ArchiveAngelRowFacts, needs: [ArchiveAngelNeed]) -> String {
+        if isReady(kind: f.kind, needs: needs), f.audio == .noAudioTrack { return "Ready — no sound track" }
+        return words(kind: f.kind, needs: needs)
+    }
 
     /// Ready means: the Angel says Ready AND nothing is missing.
     static func isReady(kind: ArchiveAngelRecommendationClass, needs: [ArchiveAngelNeed]) -> Bool {
@@ -215,6 +251,21 @@ struct ArchiveAngelListRow: Identifiable, Equatable, Sendable {
     let needs: [ArchiveAngelNeed]
     let route: ArchiveAngelPromoteRoute
     let isReachable: Bool
+    let location: ArchiveAngelFileLocation
+
+    /// The Promote/Prepare button (QA P3): off on a read-only viewer, when
+    /// the file can't be reached (matches the row's words), for a class the
+    /// Angel does not recommend, and — Prepare only — while an Archive Angel
+    /// or Promote job is running (a second Prepare would queue behind it
+    /// and the sweep is parked). Direct Promote opens its sheet regardless.
+    func promoteEnabled(readOnly: Bool, angelJobRunning: Bool) -> Bool {
+        guard !readOnly, location == .available else { return false }
+        switch route {
+        case .direct: return true
+        case .prepare: return !angelJobRunning
+        case .unavailable: return false
+        }
+    }
 }
 
 enum ArchiveAngelListRowBuilder {
@@ -231,10 +282,11 @@ enum ArchiveAngelListRowBuilder {
         let needs = ArchiveAngelStatusWords.needs(f)
         return ArchiveAngelListRow(
             id: f.id, filename: f.filename, path: f.fullPath,
-            statusWords: ArchiveAngelStatusWords.words(kind: f.kind, needs: needs),
+            statusWords: ArchiveAngelStatusWords.words(f, needs: needs),
             isReady: ArchiveAngelStatusWords.isReady(kind: f.kind, needs: needs),
             needs: needs,
             route: ArchiveAngelPromoteRoute.route(kind: f.kind, needs: needs),
-            isReachable: f.isReachable)
+            isReachable: f.isReachable,
+            location: .from(volumeReachable: f.isReachable, fileExists: f.fileExists))
     }
 }
