@@ -35,6 +35,11 @@ struct ArchiveAngelReviewSheet: View {
     @State private var copiesRequest: ArchiveAngelShowCopiesRequest?
     /// The pre-Promote fixity stat is running (codex #1659).
     @State private var verifyingFixity = false
+    /// A Clear is in flight (QA follow-up 2026-09-24): it is async and the
+    /// sheet stays open until it lands, so Promote and a second Discard
+    /// are disabled meanwhile. The promoter's batch claim is the real
+    /// guard; this keeps the buttons from offering what it would refuse.
+    @State private var discarding = false
 
     init(plan: ArchiveAngelPlan) {
         _plan = State(initialValue: plan)
@@ -421,7 +426,7 @@ struct ArchiveAngelReviewSheet: View {
             HStack {
                 if !isDone && !isPromoting {
                     Button("Discard batch…", role: .destructive) { showDiscardConfirm = true }
-                        .disabled(model.isReadOnly)
+                        .disabled(model.isReadOnly || discarding || verifyingFixity)
                 }
                 Spacer()
                 if isDone {
@@ -444,7 +449,7 @@ struct ArchiveAngelReviewSheet: View {
                     } else {
                         Button("Promote \(selectedCount)") { promote() }
                             .keyboardShortcut(.defaultAction)
-                            .disabled(model.isReadOnly || isPromoting || verifyingFixity)
+                            .disabled(model.isReadOnly || isPromoting || verifyingFixity || discarding)
                             .accessibilityIdentifier("archiveAngel.promote")
                     }
                 }
@@ -463,7 +468,9 @@ struct ArchiveAngelReviewSheet: View {
     }
 
     private func keepAndClose() {
-        ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
+        // Never save the sheet's copy over a Clear that is landing: it
+        // would write the batch back as ready over its .discarded plan.
+        if !discarding { ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote") }
         dismiss()
     }
 
@@ -474,8 +481,11 @@ struct ArchiveAngelReviewSheet: View {
         // retired (codex #1572), the folder removed, the log line.
         // Async (codex #1714 R3): the plan read and save run off the main
         // actor; the sheet closes once the decision has landed.
+        guard !discarding, !verifyingFixity, !isPromoting else { return }
+        discarding = true
         let snapshot = plan
         Task { @MainActor in
+            defer { discarding = false }
             let outcome = await model.clearArchiveAngelBatch(snapshot, reason: "discarded by you in the review sheet")
             // `cleared`, not `refusal == nil`: a failed plan save is an error
             // with no refusal, and the sheet's copy must not claim a decision
@@ -489,7 +499,7 @@ struct ArchiveAngelReviewSheet: View {
     /// #1659: only copies whose digest still describes the file may lend
     /// Rick's facts), then promote in the same main-actor turn.
     private func promote() {
-        guard !verifyingFixity else { return }
+        guard !verifyingFixity, !discarding else { return }
         verifyingFixity = true
         Task { @MainActor in
             let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)

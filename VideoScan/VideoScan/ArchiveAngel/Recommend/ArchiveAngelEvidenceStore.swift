@@ -321,7 +321,16 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
         for r in f.records.values where r.isEligible {
             guard let key = r.copyKey else { continue }
             groupScore[key] = max(groupScore[key] ?? r.score, r.score)
-            if let t = tier(r) { groupTier[key] = min(groupTier[key] ?? t, t) }
+            // A cached Another copy is a member the classifier COLLAPSED —
+            // its own class was a recommended one — and Prepare re-chooses
+            // the group live (codex #1643 A4): a Keep marked after the
+            // sweep wins in its own class, which the cache never recorded.
+            // The group's arrival tier must be an upper bound on that
+            // (QA follow-up 2026-09-24: a live-Ready Keep in a group that
+            // arrived at Worth a look was cut by the band), so such a
+            // member bounds the group at the best tier.
+            let t = r.recommendation == .anotherCopy ? 0 : tier(r)
+            if let t { groupTier[key] = min(groupTier[key] ?? t, t) }
         }
         var rows: [(id: UUID, tier: Int, score: Int, order: String)] = []
         var skipped = 0

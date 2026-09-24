@@ -295,6 +295,9 @@ enum HallieShellCLI {
             self.composeAnswer = composeAnswer
         }
 
+        /// CLI-only: the real Application Support (CyberBrain, catalog) on
+        /// purpose — `--hallie-shell` is Rick's tool, not a test host. Never
+        /// a test default; tests inject their own Dependencies.
         static var production: Dependencies {
             var production = Dependencies(
                 loadCatalog: { FileBackedCatalogSource.loadRecords(from: $0) },

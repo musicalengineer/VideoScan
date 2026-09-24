@@ -287,4 +287,61 @@ struct ArchiveAngelResidualsTests {
         #expect(await model.clearArchiveAngelBatch(promoting, reason: "r3").refusal == .promoting)
         #expect(!ArchiveAngelLiveBatches.isLive(other), "a refused clear kept the batch claimed")
     }
+
+    // MARK: Promote vs an in-flight Clear (QA follow-up 2026-09-24)
+
+    /// One promotable row — the working fixture of ArchiveAngelCodex1659Tests
+    /// (a real 512-byte file, a 3-star record, an initialized master archive).
+    private func promotableFixture(_ label: String) throws
+        -> (sb: MasterArchiveTestSupport.Sandbox, model: VideoScanModel, plan: ArchiveAngelPlan) {
+        let sb = try MasterArchiveTestSupport.makeSandbox(label)
+        let model = try makeModel(sb)
+        model.scanTargets = []
+        model.previewSweep.stop()
+        model.archiveAngel.sweep.stop()
+        let file = sb.sources.appendingPathComponent("test_\(label).bin")
+        try Data((0..<512).map { UInt8(truncatingIfNeeded: $0 &* 13 &+ 1) }).write(to: file)
+        let rec = MasterArchiveTestSupport.makeRecord(path: file.path, starRating: 3)
+        rec.durationSeconds = 600; rec.videoCodec = "h264"; rec.audioCodec = "aac"; rec.isPlayable = "Yes"
+        model.records = [rec]
+        let row = ArchiveAngelPlan.Entry(id: rec.id, sourcePath: rec.fullPath, filename: rec.filename,
+                                         sizeBytes: rec.sizeBytes, sourceContentHash: rec.contentHash,
+                                         sourceModifiedAt: nil, durationSeconds: 600, score: 105, evidence: [],
+                                         proposedName: rec.filename, proposedDate: nil, status: .ready)
+        var plan = ArchiveAngelPlan(batchDir: sb.root.appendingPathComponent("buffer/batch-\(label)").path,
+                                    requestedCount: 1, makeLossless: false, entries: [row])
+        plan.status = .ready
+        return (sb, model, plan)
+    }
+
+    @Test("Promote refuses a batch an in-flight Clear has claimed (nil, status unchanged, claim untouched); the same fixture unclaimed DOES start")
+    func promoteRefusesABatchClaimedByClear() async throws {
+        // CONTROL FIRST — so the refusal below cannot pass for another reason.
+        let control = try promotableFixture("promote_claim_control"); defer { control.sb.cleanup() }
+        var controlPlan = control.plan
+        let started = ArchiveAngelPromoter().promote(plan: &controlPlan, model: control.model,
+                                                     center: MediaFileOperationsCenter()) { _ in }
+        #expect(started != nil, "control: the unclaimed fixture did not start — \(controlPlan.log.suffix(3))")
+        #expect(controlPlan.status == .promoting)
+        started?.cancel()
+        await started?.task?.value
+
+        // The same fixture, its batch claimed the way Clear claims it.
+        let f = try promotableFixture("promote_claim_claimed"); defer { f.sb.cleanup() }
+        var plan = f.plan
+        try #require(ArchiveAngelLiveBatches.claim(plan.batchDir), "precondition: the batch was not idle")
+        defer { ArchiveAngelLiveBatches.end(f.plan.batchDir) }
+        let refused = ArchiveAngelPromoter().promote(plan: &plan, model: f.model,
+                                                     center: MediaFileOperationsCenter()) { _ in }
+        #expect(refused == nil, "Promote started on a batch a Clear holds")
+        #expect(plan.status != .promoting)
+        #expect(plan.status == .ready, "the plan status moved: \(plan.status)")
+        #expect(plan.entries.allSatisfy { $0.status == .ready }, "a row was touched")
+        #expect((try? ArchiveAngelPlanStore.load(batchDir: plan.batchDir)) == nil,
+                "the refused promote wrote plan.json under the Clear")
+        #expect(ArchiveAngelLiveBatches.isLive(plan.batchDir), "the refusal released the Clear's claim")
+        #expect(await consoleContains(f.model, "Promote refused"), "the refusal was not logged")
+        refused?.cancel()          // only reached when red: never leave a job running
+        await refused?.task?.value
+    }
 }

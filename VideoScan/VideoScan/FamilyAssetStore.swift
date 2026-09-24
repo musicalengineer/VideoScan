@@ -419,6 +419,7 @@ final class FamilyAssetConfigurationCenter: @unchecked Sendable {
         applicationSupportRoot: URL? = nil
     ) -> FamilyAssetConfiguration {
         let support = applicationSupportRoot
+            ?? TestHostDetection.sandboxedApplicationSupportRoot(for: "FamilyAssetConfigurationCenter.configuration")
             ?? FileManager.default.urls(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask).first
