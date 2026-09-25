@@ -648,6 +648,21 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             // is verified again below rather than assumed fine.
             step(idx, .verifyAudio, .skipped, note: "Already verified: \(rec.audioVerifyStatus)")
             diagnosis = cached
+        } else if let waited = await waitForRunningVerify(of: rec, index: idx, center: center) {
+            // QA 2026-09-25 MAJOR-1: an Angel Check (or Rick) was already
+            // verifying this file. Its verdict is ours; starting a second
+            // one would be refused as a duplicate, and without a diagnosis
+            // the balance step used to be skipped and the access copy cut
+            // from unbalanced sound.
+            switch waited {
+            case .diagnosis(let d):
+                diagnosis = d
+                step(idx, .verifyAudio, .done,
+                     note: ArchiveAngelAudioOutcome.from(d).headline + " (waited for the sound check in progress)")
+            case .stopped:
+                step(idx, .verifyAudio, .skipped,
+                     note: wasSkipped(idx) ? skipStepNote : "Stopped while waiting for the sound check in progress")
+            }
         } else if let vj = center.startVerifyAudio(record: rec, model: model) {
             currentSubJob = vj
             await vj.task?.value
@@ -766,6 +781,27 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             step(idx, .losslessCopy, .skipped, note: "Lossless copy not needed — \(codec) original is the preservation master")
         }
         _ = await savePlan()
+    }
+
+    enum RunningVerify { case diagnosis(AudioVerifyDiagnosis), stopped }
+
+    /// A Verify Audio job already running for `rec` (an Angel Check, or
+    /// Rick's own): wait for it — polling, so a Stop or a Skip of this row
+    /// ends the wait at once — and hand back its diagnosis. It is NOT made
+    /// `currentSubJob`: this job did not start it and must never cancel it.
+    /// nil = none was running, or it ended without a diagnosis (the caller
+    /// then verifies on its own).
+    private func waitForRunningVerify(of rec: VideoRecord, index idx: Int,
+                                      center: MediaFileOperationsCenter) async -> RunningVerify? {
+        guard let running = center.activeVerifyAudioJob(forRecordID: rec.id) else { return nil }
+        note("Archive Angel: \(rec.filename) — a sound check is already running; waiting for its verdict")
+        while running.state.isActive {
+            if stopRequested || wasSkipped(idx) { return .stopped }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        if let d = running.diagnosis { return .diagnosis(d) }
+        note("Archive Angel: \(rec.filename) — the running sound check ended without a verdict; checking it here")
+        return nil
     }
 
     /// A Balance Audio output already catalogued for `rec` whose file is

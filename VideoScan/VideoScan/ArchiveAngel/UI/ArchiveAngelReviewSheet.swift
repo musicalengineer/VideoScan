@@ -499,6 +499,7 @@ struct ArchiveAngelReviewSheet: View {
     /// #1659: only copies whose digest still describes the file may lend
     /// Rick's facts), then promote in the same main-actor turn.
     private func promote() {
+        model.archiveAngel.noteInteraction()   // Angel Checks wait while you work (QA MAJOR-2)
         guard !verifyingFixity, !discarding else { return }
         verifyingFixity = true
         Task { @MainActor in

@@ -47,6 +47,23 @@ struct ArchiveAngelStatusWordsTests {
         #expect(ArchiveAngelStatusWords.words(f) == "Needs audio checked")
     }
 
+    @Test func aFileAngelChecksIsHandlingSaysCheckingNotNeeds() {
+        var f = facts(.ready, audio: .notVerified, audioStatus: "")
+        f.isBeingChecked = true
+        #expect(ArchiveAngelStatusWords.needs(f) == [.audioChecking])
+        #expect(ArchiveAngelStatusWords.words(f) == "Checking the sound…")
+        #expect(!ArchiveAngelStatusWords.isReady(kind: .ready, needs: [.audioChecking]), "still not ready")
+        #expect(ArchiveAngelPromoteRoute.route(kind: .ready, needs: [.audioChecking]) == .prepare)
+        // With another need the check trails it.
+        var g = facts(.needsDate, audio: .notVerified, audioStatus: "", date: .undated)
+        g.isBeingChecked = true
+        #expect(ArchiveAngelStatusWords.words(g) == "Needs a date — checking the sound…")
+        // Not being checked: the old words, unchanged.
+        #expect(ArchiveAngelStatusWords.words(facts(.ready, audio: .notVerified, audioStatus: "")) == "Needs audio checked")
+        let step = ArchiveAngelReadinessExplanation.step(.audioChecking)
+        #expect(step.what.contains("checking its sound right now"))
+    }
+
     @Test func damagedAudioNeedsAudioRepair() {
         var f = facts(.ready, audio: .verifiedProblem("Damaged audio — invalid codec"), audioStatus: "damaged")
         f.audioVerifyNote = "Damaged audio — invalid codec"

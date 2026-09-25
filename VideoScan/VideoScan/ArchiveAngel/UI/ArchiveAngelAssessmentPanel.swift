@@ -100,13 +100,13 @@ struct ArchiveAngelAssessmentPanel: View {
                     .accessibilityIdentifier("archive.angelReview")
                     .help("Archive Angel prepared a batch. Review the recommendations, rename or deselect, then Promote.")
                 }
-                Button("Prepare Batch…") { prepare() }
+                Button("Prepare Batch…") { angel.noteInteraction(); prepare() }
                     .controlSize(.large)
                     .fixedSize()
                     .disabled(model.isReadOnly)
                     .accessibilityIdentifier("archive.angelPrepare")
                     .help("Pick how many to prepare (10/25/35/50); the Angel takes the top-graded candidates, verifies audio and makes access copies in the buffer, then asks for review. Nothing reaches the archive until you press Promote.")
-                Button("Show in Catalog") { showCandidatesInCatalog() }
+                Button("Show in Catalog") { angel.noteInteraction(); showCandidatesInCatalog() }
                     .controlSize(.large)
                     .fixedSize()
                     .disabled(angel.candidateIDs.isEmpty)
@@ -118,19 +118,29 @@ struct ArchiveAngelAssessmentPanel: View {
                     Toggle("Assess Continuously", isOn: Binding(
                         get: { angel.sweepEnabled },
                         set: { angel.setContinuous($0) }))
+                    // Angel Checks (docs/archive_angel_wise_design.md §4).
+                    Toggle("Check Sound in the Background", isOn: Binding(
+                        get: { angel.checksEnabled },
+                        set: { angel.setChecks($0) }))
+                        .accessibilityIdentifier("archive.angelChecks")
+                    Toggle("Keep Footage Groups Current", isOn: Binding(
+                        get: { angel.footageAutoEnabled },
+                        set: { angel.setFootageAuto($0) }))
+                        .accessibilityIdentifier("archive.angelFootageAuto")
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help("Assess now re-scores every record (a few seconds). Assess continuously scores catalog fields and Spotlight play counts only — never media bytes — and parks whenever you are working or a job is running.")
+                .help("Assess now re-scores every record (a few seconds). Assess continuously scores catalog fields and Spotlight play counts only — never media bytes — and parks whenever you are working or a job is running. Check Sound in the Background runs Verify Audio on the top of the list, one file at a time, only while you are not using the app (at most 12 an hour); it writes the verdict on the record and changes nothing else. Keep Footage Groups Current re-runs Find Similar Footage (catalog metadata only) when its groups are a day old.")
             }
             if isOpen {
                 ArchiveAngelRecommendationList(
                     rows: rows,
                     totalCount: angel.recommendations.ranked.count,
                     isAssessed: angel.recommendations.isAssessed,
+                    checkingCount: angel.checkingIDs.count,
                     isReadOnly: model.isReadOnly,
                     angelJobRunning: angelJobRunning,
                     actions: ArchiveAngelListActions(model: model, angel: angel, prepare: prepareRecords),
@@ -139,13 +149,16 @@ struct ArchiveAngelAssessmentPanel: View {
                     .padding(.top, 4)
             }
         }
-        .task(id: RebuildKey(revision: angel.recommendations.revision, shown: shownCount)) { await rebuildRows() }
+        .task(id: RebuildKey(revision: angel.recommendations.revision, shown: shownCount,
+                             checking: angel.checkingIDs)) { await rebuildRows() }
     }
 
-    /// The list is rebuilt when the recommendations change or a page is added.
+    /// The list is rebuilt when the recommendations change, a page is
+    /// added, or Angel Checks picks up / finishes a file (≤ 21 ids).
     private struct RebuildKey: Equatable {
         let revision: Int
         let shown: Int
+        let checking: Set<UUID>
     }
 
     // MARK: Headline
@@ -172,6 +185,8 @@ struct ArchiveAngelAssessmentPanel: View {
         case .disabled: s += " · assessment off"
         default: break
         }
+        let checking = angel.checkingIDs.count
+        if checking > 0 { s += " · \(checking) being checked" }
         return s
     }
 
@@ -181,7 +196,8 @@ struct ArchiveAngelAssessmentPanel: View {
         + "Needs a date: the same, undated. Worth a look (\(r.count(.worthALook).formatted())): grade B nobody vouched. "
         + "Prepared: waiting for your review. Rules: Archive Angel policy (policy.json). "
         + "Re-scored at launch, a minute after any catalog edit, and every 15 minutes while the app is open. "
-        + sweep.status.line
+        + "Check Sound in the Background verifies the sound of the top recommendations while you are away, so a row is Ready or Needs repair instead of unchecked. "
+        + sweep.status.line + ". " + angel.checks.status.line
     }
 
     // MARK: Turndown rows
@@ -196,7 +212,8 @@ struct ArchiveAngelAssessmentPanel: View {
             guard facts.count < shownCount else { break }
             guard let rec = model.record(forID: id) else { continue }
             facts.append(ArchiveAngelRowFacts.make(record: rec, evidence: store.record(for: id),
-                                                   kind: angel.recommendationClass(for: id) ?? .notNow))
+                                                   kind: angel.recommendationClass(for: id) ?? .notNow,
+                                                   isBeingChecked: angel.checkingIDs.contains(id)))
         }
         rows = ArchiveAngelListRowBuilder.rows(facts)
         // Then say which files are missing from a connected drive — the

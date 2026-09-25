@@ -709,6 +709,24 @@ final class MediaFileOperationsCenter: ObservableObject {
     private var verifyDiagnosisOrder: [UUID] = []
     static let verifyDiagnosisCap = 200
 
+    /// The START line's plan for a Verify Audio job. An Archive Angel
+    /// check says so (QA 2026-09-25 MINOR-7: videoscan.log could not tell
+    /// the app's own background check from Rick's until it ended).
+    nonisolated static func verifyAudioStartPlan(autoRepair: Bool, angelCheck: Bool) -> String {
+        if angelCheck { return "Archive Angel check (background) — diagnose the audio track" }
+        return autoRepair ? "diagnose + repair if damaged" : "diagnose the audio track"
+    }
+
+    /// The Verify Audio job running for this record right now, if any —
+    /// Archive Angel's Prepare waits for it instead of being refused as a
+    /// duplicate (QA 2026-09-25 MAJOR-1). O(jobs).
+    func activeVerifyAudioJob(forRecordID id: UUID) -> VerifyAudioJob? {
+        for job in jobs where job.state.isActive {
+            if let v = job as? VerifyAudioJob, v.record.id == id { return v }
+        }
+        return nil
+    }
+
     /// The most recent completed diagnosis for a record this session,
     /// or nil (never verified this session / evicted by the cap).
     func verifyDiagnosis(forRecordID id: UUID) -> AudioVerifyDiagnosis? {
@@ -1242,6 +1260,7 @@ final class MediaFileOperationsCenter: ObservableObject {
     func startVerifyAudio(record: VideoRecord,
                           model: VideoScanModel,
                           autoRepair: Bool = false,
+                          angelCheck: Bool = false,
                           diagnoseOverride: (@Sendable (String) async throws -> AudioVerifyDiagnosis)? = nil) -> VerifyAudioJob? {
         let duplicate = jobs.contains { job in
             guard job.state.isActive, let v = job as? VerifyAudioJob else { return false }
@@ -1277,7 +1296,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         guard add(job) else { return job }
         job.start()
         fileOpsLog.info("verifyAudio started: \(record.filename, privacy: .public) (autoRepair=\(autoRepair))")
-        logStart(job, plan: autoRepair ? "diagnose + repair if damaged" : "diagnose the audio track")
+        logStart(job, plan: Self.verifyAudioStartPlan(autoRepair: autoRepair, angelCheck: angelCheck))
         return job
     }
 

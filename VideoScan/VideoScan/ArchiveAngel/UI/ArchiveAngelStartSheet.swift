@@ -110,7 +110,7 @@ struct ArchiveAngelStartSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Start") { start() }
+                Button("Start") { angel.noteInteraction(); start() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(model.isReadOnly || model.masterArchiveRootPath == nil)
                     .accessibilityIdentifier("archiveAngel.start")
