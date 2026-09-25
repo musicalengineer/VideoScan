@@ -148,17 +148,109 @@ def diff_of(sha: str) -> str:
     return text
 
 
-def ask(endpoint: str, model: str, prompt: str, timeout: float) -> tuple[str, float, str | None]:
+# How long one review may take, and how long a reply may run (2026-09-25).
+#
+# qwen3.8 is a THINKING model: on a 40 KB diff (Angel Checks, 9d7df1e8) it
+# reasoned past the old 600 s ceiling and past a hand-passed 900 s, so the
+# commit came back as a transport error and was never reviewed. The wait
+# goes to 40 min, and the reply (thinking included) is capped at
+# NUM_PREDICT tokens so a runaway answer ends instead of holding the model.
+# Measured 2026-09-25 on the M4: 24,576 tokens of qwen3.8 thinking took
+# 494–615 s, inside the 2400 s wait; 8,192 cut off parts it later answered.
+DEFAULT_TIMEOUT_SECONDS = 2400.0
+NUM_PREDICT = 24576
+
+
+def interpret(payload: dict, num_predict: int = NUM_PREDICT) -> tuple[str, str | None]:
+    """(answer, error) from an /api/chat reply. Pure — table-tested.
+
+    A reply cut off by the NUM_PREDICT cap (done_reason "length") is an
+    ERROR, never a finding: half a thought is not a verdict, and an
+    unclosed <think> block would otherwise be read as a flagged review.
+    """
+    answer = (payload.get("message") or {}).get("content", "")
+    if payload.get("done_reason") == "length":
+        return "", (f"reply cut off at the {num_predict}-token cap before an answer "
+                    f"(raise --num-predict): " + answer[-200:].replace("\n", " "))
+    answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S).strip()
+    if not answer:
+        # An empty reply is a transport/server failure, never a finding:
+        # keep the raw payload so the cause (memory, context, load) is
+        # readable in the verdict file.
+        return "", "empty reply: " + json.dumps(payload)[:600]
+    return answer, None
+
+
+# Big commits are reviewed a few files at a time (2026-09-25). qwen3.8
+# reasoned past 24,576 tokens (494 s) on the 40 KB Angel Checks diff and
+# never answered; with thinking off it answered "NO FINDINGS" in 1 s on the
+# same diff, which carried four confirmed MAJOR defects. A diff above
+# SPLIT_OVER characters is cut at file boundaries into parts of at most
+# SPLIT_OVER characters (a single larger file is one part of its own), each
+# carrying the commit's message and --stat so the model knows the whole.
+SPLIT_OVER = 16_000
+
+
+def split_diff(diff: str, limit: int = SPLIT_OVER) -> list[str]:
+    """Pure. The whole diff when it fits; otherwise header + file groups."""
+    if len(diff) <= limit or "\ndiff --git " not in diff:
+        return [diff]
+    head, _, rest = diff.partition("\ndiff --git ")
+    files = ["diff --git " + f for f in ("\ndiff --git " + rest).split("\ndiff --git ") if f]
+    parts, current = [], ""
+    for f in files:
+        if current and len(current) + len(f) > limit:
+            parts.append(current)
+            current = ""
+        current += ("\n" if current else "") + f
+    if current:
+        parts.append(current)
+    total = len(parts)
+    return [f"{head}\n\n[part {i} of {total} of this commit's diff]\n{p}" for i, p in enumerate(parts, 1)]
+
+
+def review_unit(ask_fn, diff: str, limit: int = SPLIT_OVER) -> tuple[str, str, float, str | None]:
+    """(state, text, seconds, error) for one commit, part by part. Pure but
+    for `ask_fn(prompt) -> (answer, seconds, error)`. Any part that errored
+    makes the commit ERROR (it was not fully reviewed, so it is retried);
+    otherwise any flagged part makes it FLAGGED; else quiet."""
+    parts = split_diff(diff, limit)
+    seconds, answers, errors = 0.0, [], []
+    for i, part in enumerate(parts, 1):
+        answer, secs, error = ask_fn("Review this change.\n\n```diff\n" + part + "\n```")
+        seconds += secs
+        tag = f"[part {i}/{len(parts)}] " if len(parts) > 1 else ""
+        if error:
+            errors.append(tag + str(error))
+        elif not clean(answer):
+            answers.append(tag + answer)
+    if errors:
+        # The parts that DID answer are kept in the verdict file: a finding
+        # in part 2 is worth reading even when part 1 must be retried.
+        return "ERROR", "\n\n".join(errors + answers), seconds, "; ".join(errors)
+    if answers:
+        return "FLAGGED", "\n\n".join(answers), seconds, None
+    return "quiet", "NO FINDINGS" + (f" ({len(parts)} parts)" if len(parts) > 1 else ""), seconds, None
+
+
+def ask(endpoint: str, model: str, prompt: str, timeout: float,
+        num_predict: int = NUM_PREDICT, think: bool = True) -> tuple[str, float, str | None]:
     body = json.dumps({
         "model": model,
         "messages": [{"role": "system", "content": SYSTEM},
                      {"role": "user", "content": prompt}],
         "stream": False,
+        # think: False asks a thinking model (qwen3.x) to answer without its
+        # reasoning pass — faster, shallower; --no-think, for diffs it
+        # cannot finish thinking about inside the cap.
+        "think": think,
         # num_ctx: without it ollama runs the model at its MAXIMUM context
         # (262K), and a 32B reviewer on a 48 GB Mac came back with empty
         # 200 replies that were counted as 25/25 FLAGGED (2026-09-01).
         # A diff plus the system prompt is a few thousand tokens.
-        "options": {"temperature": 0, "seed": 101, "num_ctx": 32768},
+        # num_predict: the reply cap (thinking included), see NUM_PREDICT.
+        "options": {"temperature": 0, "seed": 101, "num_ctx": 32768,
+                    "num_predict": num_predict},
     }).encode()
     request = urllib.request.Request(
         f"{endpoint.rstrip('/')}/api/chat", data=body,
@@ -169,14 +261,8 @@ def ask(endpoint: str, model: str, prompt: str, timeout: float) -> tuple[str, fl
             payload = json.loads(response.read())
     except Exception as exc:                      # noqa: BLE001 - report, never raise
         return "", time.monotonic() - started, str(exc)
-    answer = (payload.get("message") or {}).get("content", "")
-    answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S).strip()
-    if not answer:
-        # An empty reply is a transport/server failure, never a finding:
-        # keep the raw payload so the cause (memory, context, load) is
-        # readable in the verdict file.
-        return "", time.monotonic() - started, "empty reply: " + json.dumps(payload)[:600]
-    return answer, time.monotonic() - started, None
+    answer, error = interpret(payload, num_predict)
+    return answer, time.monotonic() - started, error
 
 
 def clean(answer: str) -> bool:
@@ -202,7 +288,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="review what is staged, before you commit it")
     parser.add_argument("--working", action="store_true",
                         help="review the working tree, committed or not")
-    parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS,
+                        help=f"seconds to wait for one review (default {DEFAULT_TIMEOUT_SECONDS:.0f})")
+    parser.add_argument("--num-predict", type=int, default=NUM_PREDICT,
+                        help=f"reply cap in tokens, thinking included (default {NUM_PREDICT})")
+    parser.add_argument("--split-over", type=int, default=SPLIT_OVER,
+                        help=f"review a diff larger than this many characters a few files "
+                             f"at a time (default {SPLIT_OVER})")
+    parser.add_argument("--no-think", action="store_true",
+                        help="ask a thinking model to answer without its reasoning pass")
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
     if not args.model:
@@ -221,28 +315,29 @@ def main(argv: list[str] | None = None) -> int:
         print("nothing to review")
         return 0
     print(f"model    {args.model}")
+    print(f"limits   wait {args.timeout:.0f} s per review, reply cap {args.num_predict} tokens, "
+          f"thinking {'off' if args.no_think else 'on'}, split over {args.split_over} chars")
     print(f"units    {len(rows)}")
     print(f"out      {out}\n", flush=True)
 
     flagged, quiet, broken = [], [], []
     for index, (short, subject, diff) in enumerate(rows, 1):
-        prompt = ("Review this change.\n\n```diff\n" + diff + "\n```")
-        answer, seconds, error = ask(args.endpoint, args.model, prompt, args.timeout)
-
-        if error:
+        state, text, seconds, error = review_unit(
+            lambda prompt: ask(args.endpoint, args.model, prompt, args.timeout,
+                               args.num_predict, not args.no_think),
+            diff, args.split_over)
+        answer = text
+        if state == "ERROR":
             broken.append((short, subject, error))
-            state = "ERROR"
-        elif clean(answer):
+        elif state == "quiet":
             quiet.append((short, subject))
-            state = "quiet"
         else:
             flagged.append((short, subject, answer))
-            state = "FLAGGED"
 
         (out / f"{index:02d}-{short}.md").write_text(
             f"# {short}  {subject}\n\n"
             f"- model: {args.model}\n- seconds: {seconds:.1f}\n"
-            f"- verdict: {state}\n\n---\n\n{error or answer}\n")
+            f"- verdict: {state}\n\n---\n\n{answer}\n")
         print(f"[{index:>2}/{len(rows)}] {state:<8} {short}  {subject[:56]}"
               f"   {seconds:>5.0f}s", flush=True)
 
