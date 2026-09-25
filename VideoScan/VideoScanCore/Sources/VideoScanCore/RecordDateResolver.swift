@@ -198,6 +198,22 @@ public enum RecordDateResolver {
                abs(iy - ey) > contentStampToleranceYears {
                 return i
             }
+            // Rules v12 (2026-09-25, docs/archive_angel_wise_design.md §3.2):
+            // a stamp with NO camera behind it (a transcoder's, or one of
+            // unknown origin — ≤ 0.85) is a copy-era date whenever the name
+            // says otherwise. "DickyDonnaDancing1992.mov" stamped 2026-04-03
+            // by Apple ProRes 422 was filmed in 1992; the Angel called it
+            // Ready under 2026. The filename year wins, at the filename's
+            // precision and confidence (0.5 — Promote flags it low-
+            // confidence). A device-stamped date (0.95) is never outvoted
+            // by a name; a disagreement within ±2 years is clock slop.
+            if e.confidence <= embeddedConfidenceUnknownOrigin,
+               let f = fromFilename(), let fy = f.year, let ey = e.year,
+               abs(fy - ey) > contentStampToleranceYears {
+                return RecordDateResolution(year: f.year, month: f.month, day: f.day, precision: f.precision,
+                                            confidence: f.confidence, source: f.source,
+                                            hadRejectedSignal: rejectedInferred)
+            }
             return e
         }
         if let i = inferred() { return i }
