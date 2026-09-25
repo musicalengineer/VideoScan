@@ -223,7 +223,9 @@ def review_unit(ask_fn, diff: str, limit: int = SPLIT_OVER) -> tuple[str, str, f
         elif not clean(answer):
             answers.append(tag + answer)
     if errors:
-        return "ERROR", "\n\n".join(errors), seconds, "; ".join(errors)
+        # The parts that DID answer are kept in the verdict file: a finding
+        # in part 2 is worth reading even when part 1 must be retried.
+        return "ERROR", "\n\n".join(errors + answers), seconds, "; ".join(errors)
     if answers:
         return "FLAGGED", "\n\n".join(answers), seconds, None
     return "quiet", "NO FINDINGS" + (f" ({len(parts)} parts)" if len(parts) > 1 else ""), seconds, None
@@ -333,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         (out / f"{index:02d}-{short}.md").write_text(
             f"# {short}  {subject}\n\n"
             f"- model: {args.model}\n- seconds: {seconds:.1f}\n"
-            f"- verdict: {state}\n\n---\n\n{error or answer}\n")
+            f"- verdict: {state}\n\n---\n\n{answer}\n")
         print(f"[{index:>2}/{len(rows)}] {state:<8} {short}  {subject[:56]}"
               f"   {seconds:>5.0f}s", flush=True)
 

@@ -106,3 +106,11 @@ def test_review_unit_all_quiet():
     d = _diff([("a.swift", 3000), ("b.swift", 3000)])
     state, text, _, _ = rrc.review_unit(lambda _p: ("NO FINDINGS", 1.0, None), d, limit=7000)
     assert state == "quiet" and text == "NO FINDINGS (2 parts)"
+
+
+def test_an_errored_commit_keeps_the_findings_of_the_parts_that_answered():
+    d = _diff([("a.swift", 3000), ("b.swift", 3000)])
+    replies = iter([("", 2.0, "cut off"), ("Finding 1: bug in b", 1.0, None)])
+    state, text, _, error = rrc.review_unit(lambda _p: next(replies), d, limit=7000)
+    assert state == "ERROR" and error == "[part 1/2] cut off"
+    assert "[part 2/2] Finding 1: bug in b" in text
