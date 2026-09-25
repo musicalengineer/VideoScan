@@ -37,6 +37,7 @@ private final class World {
     var verdicts: [UUID: (status: String, note: String)] = [:]
     var missingPaths: Set<String> = []
     var busy = false
+    var anyJobActive = false
     var readOnly = false
     var lastInteraction: CFAbsoluteTime?
     var clock: CFAbsoluteTime = 1_000_000
@@ -74,6 +75,7 @@ private final class World {
             isExternallyBusy: { [unowned self] in self.busy })
         cfg.fileExists = { path in !missing.contains(path) }
         cfg.lastInteraction = { [unowned self] in self.lastInteraction }
+        cfg.isAnyJobActive = { [unowned self] in self.anyJobActive }
         cfg.isReadOnly = { [unowned self] in self.readOnly }
         cfg.now = { [now = self.now] in now }
         cfg.clock = { [unowned self] in self.clock }
@@ -84,6 +86,12 @@ private final class World {
         cfg.quietSeconds = 120
         return cfg
     }
+}
+
+private final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n }
 }
 
 private func settle(_ n: Int = 20) async {
@@ -305,5 +313,134 @@ struct ArchiveAngelChecksLoopTests {
         #expect(w2.log.last == "Archive Angel checks: 2 so far this launch — 1 ok · 0 damaged · 1 failed · 0 skipped")
         #expect(w2.log.contains("Archive Angel check: b.mov — failed (Could not check the audio — ffprobe died)"))
         c2.stop()
+    }
+
+    // MARK: QA 2026-09-25 (feature/angel-checks review) — red first
+
+    @Test("QA MAJOR-3: stop() while a stat is in flight starts nothing afterwards, and a tick after stop() never runs two loops")
+    func stopMidStatStartsNothingAndNeverDoublesTheLoop() async {
+        let w = World()
+        let a = w.add("a.mov"); _ = w.add("b.mov")
+        var cfg = w.configuration()
+        cfg.fileExists = { _ in   // a stat on a spun-down disk: slow, ignores cancellation (detached, as in production)
+            await Task.detached { try? await Task.sleep(nanoseconds: 150_000_000) }.value
+            return true
+        }
+        let checks = ArchiveAngelChecks()
+        checks.configure(cfg, enabled: true)
+        checks.tick()
+        await settle(2)                        // loop 1 is inside fileExists
+        #expect(w.started.isEmpty)
+        checks.stop()
+        checks.tick()                          // loop 2
+        await settle(60)                       // both stats return
+        #expect(w.started.count <= 1, "stop() was followed by \(w.started.count) starts")
+        #expect(w.startedIDs.filter { $0 == a }.count <= 1, "a.mov started by two loops")
+        checks.tick()
+        await settle(60)
+        #expect(w.started.count <= 1, "a third loop ran beside the second (\(w.startedIDs.count) starts)")
+        if case .checking = checks.status { #expect(checks.runningID != nil, "status says checking with nothing running") }
+        for j in w.started where j.state.isActive { j.finish(.cancelled) }
+        checks.stop()
+    }
+
+    @Test("QA MAJOR-3: setEnabled(false) during a stat — nothing starts and the status says off, not checking")
+    func offMidStatStartsNothing() async {
+        let w = World()
+        _ = w.add("a.mov")
+        var cfg = w.configuration()
+        cfg.fileExists = { _ in
+            await Task.detached { try? await Task.sleep(nanoseconds: 100_000_000) }.value
+            return true
+        }
+        let checks = ArchiveAngelChecks()
+        checks.configure(cfg, enabled: true)
+        checks.tick()
+        await settle(2)
+        checks.setEnabled(false)
+        await settle(40)
+        #expect(w.started.isEmpty, "a Verify Audio started after the person turned checks off")
+        #expect(checks.status == .disabled)
+        #expect(checks.runningID == nil && checks.checkingIDs.isEmpty)
+    }
+
+    @Test("QA MAJOR-2: parked while any other file operation is active (Rick's own verify, balance, transcode)")
+    func parksBehindAnyActiveJob() async {
+        let w = World()
+        _ = w.add("a.mov")
+        w.anyJobActive = true
+        let checks = ArchiveAngelChecks()
+        checks.configure(w.configuration(), enabled: true)
+        checks.tick()
+        await settle()
+        #expect(checks.status == .parked(reason: "another file operation is running"))
+        #expect(w.started.isEmpty)
+        w.anyJobActive = false
+        await settle()
+        #expect(w.started.count == 1)
+        w.started[0].finish(.finished(summary: ""))
+        await settle(40)
+        checks.stop()
+    }
+
+    @Test("QA MINOR-5: after the hour's wait the queue is rebuilt — a record verified meanwhile is not checked again")
+    func hourWaitRebuildsTheQueue() async {
+        let w = World()
+        let a = w.add("a.mov"), b = w.add("b.mov")
+        var cfg = w.configuration()
+        cfg.maxPerHour = 1
+        let t0 = w.now, calls = CallCounter()
+        cfg.now = { calls.next() <= 2 ? t0 : t0.addingTimeInterval(3599.5) }   // the hour's wait = the 1 s floor
+        let checks = ArchiveAngelChecks()
+        checks.configure(cfg, enabled: true)
+        checks.tick()
+        await settle()
+        #expect(w.startedIDs == [a])
+        w.started[0].finish(.finished(summary: ""))
+        await settle(10)
+        if case .parked(let r) = checks.status { #expect(r.hasPrefix("1 checks this hour")) } else { Issue.record("\(checks.status)") }
+        w.facts[b]?.audioNotVerified = false          // verified by hand during the wait
+        try? await Task.sleep(nanoseconds: 1_400_000_000)
+        #expect(w.startedIDs == [a], "b.mov was started from a queue snapshot taken before the wait")
+        for j in w.started where j.state.isActive { j.finish(.cancelled) }
+        checks.stop()
+    }
+
+    @Test("QA MINOR-6: a skip costs nothing — missing files do not spend the per-launch budget")
+    func skipsDoNotSpendTheLaunchBudget() async {
+        let w = World()
+        _ = w.add("gone1.mov"); _ = w.add("gone2.mov")
+        w.missingPaths = ["/Volumes/T/gone1.mov", "/Volumes/T/gone2.mov"]
+        var cfg = w.configuration()
+        cfg.maxPerLaunch = 2
+        let checks = ArchiveAngelChecks()
+        checks.configure(cfg, enabled: true)
+        await checks.tickAndWait()
+        #expect(w.started.isEmpty && checks.counts.skipped == 2)
+        let here = w.add("here.mov")
+        checks.tick()   // not tickAndWait: the loop waits on the fake job this test finishes below
+        await settle()
+        #expect(w.startedIDs == [here], "two 'file not found' skips spent the launch budget: \(checks.status.line)")
+        for j in w.started where j.state.isActive { j.finish(.cancelled) }
+        checks.stop()
+    }
+
+    @Test("qwen e11c815c (guard — the claim did not reproduce): turning checks off while parked on the hourly budget leaves them off, and nothing else starts")
+    func offDuringHourWaitStaysOff() async {
+        let w = World()
+        _ = w.add("a.mov"); _ = w.add("b.mov")
+        var cfg = w.configuration()
+        cfg.maxPerHour = 1
+        let checks = ArchiveAngelChecks()
+        checks.configure(cfg, enabled: true)
+        checks.tick()
+        await settle()
+        w.started[0].finish(.finished(summary: ""))
+        await settle(10)
+        #expect(checks.status.isParked)
+        checks.setEnabled(false)
+        await settle(20)
+        #expect(checks.status == .disabled, "a woken loop overwrote the status: \(checks.status.line)")
+        #expect(w.started.count == 1)
     }
 }

@@ -131,6 +131,11 @@ final class ArchiveAngelChecks: ObservableObject {
         var verdict: @MainActor (UUID) -> (status: String, note: String)?
         /// Scan / Angel / Promote running — never START a check.
         var isExternallyBusy: @MainActor () -> Bool
+        /// ANY Media File Operations job is active (QA 2026-09-25 MAJOR-2).
+        /// Before a start no check of ours is running, so an active job is
+        /// someone else's — Rick's own Verify, Balance, Transcode — and a
+        /// background read must not queue up beside it.
+        var isAnyJobActive: @MainActor () -> Bool = { false }
         /// The person's last interaction (CFAbsoluteTime); nil = never.
         var lastInteraction: @MainActor () -> CFAbsoluteTime? = { nil }
         /// A read-only viewer never verifies (it cannot persist a verdict).
@@ -164,6 +169,9 @@ final class ArchiveAngelChecks: ObservableObject {
     @Published private(set) var counts = Counts()
     /// Records this launch already checked (or skipped) — never twice.
     private(set) var checkedThisLaunch: Set<UUID> = []
+    /// Checks actually STARTED this launch — what `maxPerLaunch` counts
+    /// (QA MINOR-6: a skip reads nothing, so it costs nothing).
+    private(set) var startedThisLaunch = 0
     /// Start times inside the sliding hour (`maxPerHour`).
     private(set) var startTimes: [Date] = []
     /// The check in flight, if any.
@@ -173,6 +181,11 @@ final class ArchiveAngelChecks: ObservableObject {
     private var enabled = false
     private var debounceTask: Task<Void, Never>?
     private var loopTask: Task<Void, Never>?
+    /// The live loop's token (QA MAJOR-3). `stop()` / off clear it; a loop
+    /// whose token is no longer current exits at its next await without
+    /// touching any state, and its continuation never clears a newer
+    /// loop's handle. (≈ a generation counter guarding a worker thread.)
+    private var loopToken: UUID?
     private var rerunRequested = false
 
     init() {}
@@ -192,8 +205,7 @@ final class ArchiveAngelChecks: ObservableObject {
             debounceTask?.cancel(); debounceTask = nil
             // A running check finishes on its own (it is an ordinary job);
             // the loop just stops picking.
-            loopTask?.cancel(); loopTask = nil
-            checkingIDs = []
+            abandonLoop()
             status = .disabled
         } else if loopTask == nil {
             status = .idle
@@ -205,9 +217,23 @@ final class ArchiveAngelChecks: ObservableObject {
     /// its own lifecycle.
     func stop() {
         debounceTask?.cancel(); debounceTask = nil
-        loopTask?.cancel(); loopTask = nil
-        checkingIDs = []
+        abandonLoop()
         status = enabled ? .idle : .disabled
+    }
+
+    /// End the live loop: its token goes stale (it exits at its next await
+    /// and writes nothing), the rows stop claiming a check.
+    private func abandonLoop() {
+        loopToken = nil
+        loopTask?.cancel(); loopTask = nil
+        rerunRequested = false
+        runningID = nil
+        checkingIDs = []
+    }
+
+    /// Is the loop holding `token` still the live one?
+    private func isLive(_ token: UUID) -> Bool {
+        !Task.isCancelled && enabled && loopToken == token
     }
 
     // MARK: Triggers
@@ -230,10 +256,15 @@ final class ArchiveAngelChecks: ObservableObject {
     func tick() {
         guard enabled, configuration != nil else { return }
         if loopTask != nil { rerunRequested = true; return }
+        let token = UUID()
+        loopToken = token
         loopTask = Task { [weak self] in
-            await self?.performLoop()
-            guard let self else { return }
+            await self?.performLoop(token)
+            // Only the live loop clears the handle (QA MAJOR-3: a stale
+            // continuation used to nil a NEWER loop's handle → two loops).
+            guard let self, self.loopToken == token else { return }
             self.loopTask = nil
+            self.loopToken = nil
             if self.rerunRequested {
                 self.rerunRequested = false
                 self.tick()
@@ -249,15 +280,19 @@ final class ArchiveAngelChecks: ObservableObject {
 
     // MARK: The loop
 
-    private func performLoop() async {
-        while enabled, let cfg = configuration {
-            if Task.isCancelled { return }
+    /// Every await is followed by `isLive(token)`: a loop that was stopped,
+    /// turned off or superseded while it waited returns WITHOUT touching
+    /// state (whoever stopped it already set the status) and never starts
+    /// a job (QA MAJOR-3; qwen on e11c815c).
+    private func performLoop(_ token: UUID) async {
+        while isLive(token), let cfg = configuration {
             guard !cfg.isReadOnly() else {
                 checkingIDs = []
                 status = .idle
                 return
             }
-            // The queue: the first `lookahead` ranked ids that qualify.
+            // The queue: the first `lookahead` ranked ids that qualify —
+            // rebuilt on every pass, never reused across a wait.
             let queue = Self.queue(ranked: cfg.ranked(), lookahead: cfg.lookahead,
                                    checked: checkedThisLaunch, facts: cfg.facts)
             guard !queue.isEmpty else {
@@ -265,77 +300,108 @@ final class ArchiveAngelChecks: ObservableObject {
                 status = .idle
                 return
             }
-            guard await budgetAllows(cfg) else { return }
+            switch budget(cfg) {
+            case .launchSpent:
+                return
+            case .wait(let seconds):
+                // QA MINOR-5: after the hour's wait the queue is REBUILT (a
+                // file verified by hand meanwhile is not read again). The
+                // sleep throws on cancel, so stop()/off end it at once.
+                do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) } catch { return }
+                continue
+            case .allowed:
+                break
+            }
             checkingIDs = Set(queue.map(\.id))
-            guard await parkedUntilFree(cfg) else { checkingIDs = []; return }
+            guard await parkedUntilFree(cfg, token) else { return }
             // Take the first whose file is really there (stat off-main).
-            guard let f = await firstPresent(in: queue, cfg: cfg) else { continue }
+            let present = await firstPresent(in: queue, cfg: cfg, token: token)
+            guard isLive(token) else { return }
+            guard let f = present else { continue }
             guard let job = cfg.start(f.id) else {
                 record(f, outcome: .skipped(reason: "a verify job for this file is already running"), cfg: cfg)
                 continue
             }
-            guard await run(f, job: job, cfg: cfg) else { return }
+            guard await run(f, job: job, cfg: cfg, token: token) else { return }
             // Loop: the recount the verdict triggered may have reordered the
             // list; the queue is rebuilt from `ranked` at the top.
         }
-        checkingIDs = []
-        status = enabled ? .idle : .disabled
     }
 
+    enum Budget: Equatable { case allowed, launchSpent, wait(seconds: Double) }
+
     /// Budgets — a row must not say "checking" for a check that is not
-    /// coming, so the queue is cleared while a budget is spent. Per launch:
-    /// false (done until relaunch). Per hour: waits for the window to free,
-    /// then true (the caller rebuilds the queue); false when cancelled.
-    private func budgetAllows(_ cfg: Configuration) async -> Bool {
-        if checkedThisLaunch.count >= cfg.maxPerLaunch {
+    /// coming, so the queue is cleared while a budget is spent. Per launch
+    /// (checks STARTED, not skips — QA MINOR-6): done until relaunch. Per
+    /// hour: the seconds until the sliding window frees.
+    private func budget(_ cfg: Configuration) -> Budget {
+        if startedThisLaunch >= cfg.maxPerLaunch {
             checkingIDs = []
             status = .parked(reason: "\(cfg.maxPerLaunch) checks this launch — more after a relaunch")
-            return false
+            return .launchSpent
         }
         let now = cfg.now()
         startTimes.removeAll { now.timeIntervalSince($0) >= 3600 }
-        guard startTimes.count >= cfg.maxPerHour, let oldest = startTimes.min() else { return true }
+        guard startTimes.count >= cfg.maxPerHour, let oldest = startTimes.min() else { return .allowed }
         checkingIDs = []
         let wait = max(1, 3600 - now.timeIntervalSince(oldest))
         status = .parked(reason: "\(cfg.maxPerHour) checks this hour — next in \(Int(wait / 60) + 1) min")
-        try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
-        return !Task.isCancelled
+        return .wait(seconds: wait)
+    }
+
+    /// Why a check may not START now, or nil. Order: other jobs first
+    /// (they are reading a disk), then the person.
+    private static func parkReason(_ cfg: Configuration) -> String? {
+        if cfg.isExternallyBusy() { return "another job is using the catalog" }
+        if cfg.isAnyJobActive() { return "another file operation is running" }
+        if interacting(cfg) { return "you are working" }
+        return nil
     }
 
     /// Park while the app is busy or the person is working. False when
-    /// cancelled or disabled meanwhile.
-    private func parkedUntilFree(_ cfg: Configuration) async -> Bool {
-        while cfg.isExternallyBusy() || Self.interacting(cfg) {
-            status = .parked(reason: cfg.isExternallyBusy() ? "another job is using the catalog"
-                                                            : "you are working")
-            try? await Task.sleep(nanoseconds: UInt64(max(0.01, cfg.parkPollSeconds) * 1_000_000_000))
-            if Task.isCancelled || !enabled { return false }
+    /// the loop stopped meanwhile.
+    private func parkedUntilFree(_ cfg: Configuration, _ token: UUID) async -> Bool {
+        while let reason = Self.parkReason(cfg) {
+            status = .parked(reason: reason)
+            do {
+                try await Task.sleep(nanoseconds: UInt64(max(0.01, cfg.parkPollSeconds) * 1_000_000_000))
+            } catch { return false }
+            if !isLive(token) { return false }
         }
         return true
     }
 
     /// The first queued file that exists on disk; the missing ones are
-    /// skipped (logged, once per launch).
-    private func firstPresent(in queue: [ArchiveAngelCheckFacts], cfg: Configuration) async -> ArchiveAngelCheckFacts? {
+    /// skipped (logged, once per launch). nil when none, or when the loop
+    /// stopped during a stat (the caller checks `isLive`).
+    private func firstPresent(in queue: [ArchiveAngelCheckFacts], cfg: Configuration,
+                              token: UUID) async -> ArchiveAngelCheckFacts? {
         for f in queue {
-            if await cfg.fileExists(f.fullPath) { return f }
+            let exists = await cfg.fileExists(f.fullPath)
+            // The stat is detached and ignores cancellation: re-check.
+            guard isLive(token) else { return nil }
+            if exists { return f }
             record(f, outcome: .skipped(reason: "file not found"), cfg: cfg)
-            if Task.isCancelled { return nil }
         }
         return nil
     }
 
     /// One check: wait for the ordinary job to settle, read the verdict,
-    /// log. False when cancelled mid-way.
-    private func run(_ f: ArchiveAngelCheckFacts, job: any MediaFileOperationJob, cfg: Configuration) async -> Bool {
+    /// log. False when the loop stopped meanwhile (the job runs on — it is
+    /// an ordinary MFO job the person can see and cancel).
+    private func run(_ f: ArchiveAngelCheckFacts, job: any MediaFileOperationJob, cfg: Configuration,
+                     token: UUID) async -> Bool {
         runningID = f.id
         checkedThisLaunch.insert(f.id)
+        startedThisLaunch += 1
         startTimes.append(cfg.now())
         status = .checking(filename: f.filename)
         checksLog.info("check START: \(f.filename, privacy: .public)")
         while job.state.isActive {
-            try? await Task.sleep(nanoseconds: UInt64(max(1, cfg.jobPollMilliseconds)) * 1_000_000)
-            if Task.isCancelled { runningID = nil; return false }
+            do {
+                try await Task.sleep(nanoseconds: UInt64(max(1, cfg.jobPollMilliseconds)) * 1_000_000)
+            } catch { return false }
+            guard isLive(token) else { return false }
         }
         let outcome = Self.outcome(of: job.state, verdict: cfg.verdict(f.id))
         runningID = nil
