@@ -228,6 +228,22 @@ actor PauseGate {
     private var autoPauseEnabled = true
     private var autoPaused = false
 
+    /// How the gate asks "is memory low right now?". Production always uses
+    /// the process-wide MemoryPressureMonitor; tests inject a fixed answer so
+    /// they neither depend on the host's free RAM (a 7 GB CI runner sits
+    /// under the 4 GB floor) nor poison the shared monitor for other suites.
+    /// C++ analogy: a std::function<bool()> strategy member with a default.
+    private let pressureCheck: @Sendable () async -> Bool
+
+    /// How long the auto-pause loop sleeps between memory re-checks.
+    private let recheckInterval: Duration
+
+    init(pressureCheck: @escaping @Sendable () async -> Bool = { await MemoryPressureMonitor.shared.checkPressure() },
+         recheckInterval: Duration = .milliseconds(500)) {
+        self.pressureCheck = pressureCheck
+        self.recheckInterval = recheckInterval
+    }
+
     var isPaused: Bool { _isPaused }
 
     /// Pause all tasks waiting on this gate.
@@ -262,10 +278,19 @@ actor PauseGate {
     /// Called by tasks at safe checkpoints (between videos, between probes).
     /// Suspends if paused; returns immediately if not.
     /// Also checks memory pressure and auto-pauses if needed.
+    ///
+    /// Cancellation: a caller cancelled while AUTO-paused returns at once
+    /// (the caller re-checks Task.isCancelled after this call). Before
+    /// 2026-09-25 the re-check loop used `try? await Task.sleep`, which
+    /// swallows CancellationError and returns immediately — so a cancelled
+    /// waiter hot-spun on the actor for as long as memory stayed low, and a
+    /// Swift Testing time limit (which cancels, then awaits) could never end
+    /// a test stuck here. A MANUAL pause still waits for resume(): Stop paths
+    /// (stopCombine etc.) call resume() to release those waiters.
     func waitIfPaused() async {
         // Check memory pressure if auto-pause is enabled
         if autoPauseEnabled && !_isPaused {
-            let pressureHigh = await MemoryPressureMonitor.shared.checkPressure()
+            let pressureHigh = await pressureCheck()
             if pressureHigh {
                 _isPaused = true
                 autoPaused = true
@@ -284,12 +309,19 @@ actor PauseGate {
 
         if autoPaused {
             while _isPaused {
-                let stillHigh = await MemoryPressureMonitor.shared.checkPressure()
+                if Task.isCancelled { return }
+                let stillHigh = await pressureCheck()
                 if !stillHigh {
                     resume()
                     break
                 }
-                try? await Task.sleep(for: .milliseconds(500))
+                do {
+                    try await Task.sleep(for: recheckInterval)
+                } catch {
+                    // Task.sleep throws only CancellationError: the caller
+                    // was stopped. Leave the gate paused for other waiters.
+                    return
+                }
             }
             return
         }
