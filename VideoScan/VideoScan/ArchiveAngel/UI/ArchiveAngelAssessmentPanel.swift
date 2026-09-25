@@ -36,6 +36,9 @@ struct ArchiveAngelAssessmentPanel: View {
     /// Archive Angel's Prepare for exactly these records — a row's
     /// "Prepare to Archive" (the strip owns the MFO center).
     var prepareRecords: ([UUID]) -> Void = { _ in }
+    /// An Archive Angel or Promote job is running (QA P3: a row's Prepare
+    /// is off meanwhile). The strip reads it from the MFO center.
+    var angelJobRunning = false
 
     @State private var isOpen = false
     @State private var rows: [ArchiveAngelListRow] = []
@@ -129,13 +132,14 @@ struct ArchiveAngelAssessmentPanel: View {
                     totalCount: angel.recommendations.ranked.count,
                     isAssessed: angel.recommendations.isAssessed,
                     isReadOnly: model.isReadOnly,
+                    angelJobRunning: angelJobRunning,
                     actions: ArchiveAngelListActions(model: model, angel: angel, prepare: prepareRecords),
                     showMore: { shownCount += Self.pageSize })
                     .padding(.leading, 16)
                     .padding(.top, 4)
             }
         }
-        .task(id: RebuildKey(revision: angel.recommendations.revision, shown: shownCount)) { rebuildRows() }
+        .task(id: RebuildKey(revision: angel.recommendations.revision, shown: shownCount)) { await rebuildRows() }
     }
 
     /// The list is rebuilt when the recommendations change or a page is added.
@@ -185,7 +189,7 @@ struct ArchiveAngelAssessmentPanel: View {
     /// The façade's ranked recommendations (Ready, then Needs a date, then
     /// Worth a look — each by score) → row models; stop at `shownCount`
     /// before touching more records. O(shownCount) O(1) lookups.
-    private func rebuildRows() {
+    private func rebuildRows() async {
         var facts: [ArchiveAngelRowFacts] = []
         facts.reserveCapacity(shownCount)
         for id in angel.recommendations.ranked {
@@ -195,6 +199,11 @@ struct ArchiveAngelAssessmentPanel: View {
                                                    kind: angel.recommendationClass(for: id) ?? .notNow))
         }
         rows = ArchiveAngelListRowBuilder.rows(facts)
+        // Then say which files are missing from a connected drive — the
+        // stats run off the main actor (QA P2-2), O(rows shown).
+        let probed = await ArchiveAngelRowFacts.probeExistence(facts)
+        guard !Task.isCancelled else { return }
+        rows = ArchiveAngelListRowBuilder.rows(probed)
     }
 
     private func showCandidatesInCatalog() {

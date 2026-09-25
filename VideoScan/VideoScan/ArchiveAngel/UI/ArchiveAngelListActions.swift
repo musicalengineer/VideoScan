@@ -66,10 +66,12 @@ struct ArchiveAngelListActions {
     }
 
     func readiness(_ row: ArchiveAngelListRow) -> ArchiveAngelReadinessExplanation? {
-        guard let f = facts(row.id) else {
+        guard var f = facts(row.id) else {
             gone(row)
             return nil
         }
+        // The row's off-main existence probe, carried over (no stat here).
+        if row.location == .fileNotFound { f.fileExists = false }
         return ArchiveAngelReadinessExplanation.make(f)
     }
 

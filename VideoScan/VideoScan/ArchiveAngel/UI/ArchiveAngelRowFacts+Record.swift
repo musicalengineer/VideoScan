@@ -40,7 +40,10 @@ extension ArchiveAngelRowFacts {
         var seen = Set(confirmed)
         f.otherPeople = (r.detectedPeople + r.suspectedPeople).filter { seen.insert($0).inserted }
         f.volumeName = VolumeReachability.volumeName(forPath: r.fullPath)
-        f.isReachable = VolumeReachability.isReachable(path: r.fullPath)
+        // The DRIVE question only (mount table, no stat — QA P2-2); whether
+        // the file itself exists is probed off-main by the list
+        // (`probeExistence`) and filled into `fileExists`.
+        f.isReachable = VolumeReachability.isVolumeReachable(path: r.fullPath)
         return f
     }
 
@@ -58,5 +61,18 @@ extension ArchiveAngelRowFacts {
                                              filename: r.filename)
         guard res.precision != .unknown else { return nil }
         return UserDateEntry.friendlyDisplay(res.isoString)
+    }
+
+    /// Stat each file whose drive is up, OFF the main actor (a stat on a
+    /// spun-down disk can take seconds — the beachball class). O(rows).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func probeExistence(_ facts: [ArchiveAngelRowFacts]) async -> [ArchiveAngelRowFacts] {
+        facts.map { f in
+            var f = f
+            if f.isReachable { f.fileExists = FileManager.default.fileExists(atPath: f.fullPath) }
+            return f
+        }
     }
 }

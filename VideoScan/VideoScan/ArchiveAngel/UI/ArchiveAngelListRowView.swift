@@ -14,6 +14,8 @@ import SwiftUI
 struct ArchiveAngelListRowView: View {
     let row: ArchiveAngelListRow
     let isReadOnly: Bool
+    /// An Archive Angel or Promote job is running (Prepare waits for it).
+    var angelJobRunning = false
     let onPlay: () -> Void
     let onShowInCatalog: () -> Void
     let onShowInFinder: () -> Void
@@ -30,8 +32,8 @@ struct ArchiveAngelListRowView: View {
                     .textSelection(.enabled)
                     .help(row.path)
                 statusChip
-                if !row.isReachable {
-                    Text("drive not connected")
+                if let where_ = row.location.text {
+                    Text(where_)
                         .font(.system(size: 15))
                         .foregroundStyle(.secondary)
                 }
@@ -88,9 +90,9 @@ struct ArchiveAngelListRowView: View {
         ColorActionButton(title: row.route.buttonTitle,
                           systemImage: row.route == .direct ? "archivebox.fill" : "wand.and.stars",
                           color: ColorActionButton.Palette.archive, size: .large, action: onPromote)
-            .help(isReadOnly ? "This Mac is a read-only viewer of the catalog." : row.route.help)
-            .disabled(isReadOnly || !promoteAvailable)
-            .opacity(isReadOnly || !promoteAvailable ? 0.45 : 1)
+            .help(promoteHelp)
+            .disabled(!promoteEnabled)
+            .opacity(promoteEnabled ? 1 : 0.45)
             .accessibilityIdentifier("archiveAngel.list.promote")
         ColorActionButton(title: "Archive Readiness", systemImage: "info.circle",
                           color: ColorActionButton.Palette.info, size: .large, action: onReadiness)
@@ -98,8 +100,21 @@ struct ArchiveAngelListRowView: View {
             .accessibilityIdentifier("archiveAngel.list.readiness")
     }
 
-    private var promoteAvailable: Bool {
-        if case .unavailable = row.route { return false }
-        return true
+    private var promoteEnabled: Bool {
+        row.promoteEnabled(readOnly: isReadOnly, angelJobRunning: angelJobRunning)
+    }
+
+    /// Says why the button is off, in the same words as the row.
+    private var promoteHelp: String {
+        if isReadOnly { return "This Mac is a read-only viewer of the catalog." }
+        switch row.location {
+        case .driveNotConnected: return "Connect the drive this file is on first."
+        case .fileNotFound: return "The file is not where the catalog says — it may have been moved or deleted."
+        case .available: break
+        }
+        if row.route == .prepare, angelJobRunning {
+            return "Archive Angel is busy with another job — try again when it finishes (see the Media File Operations window)."
+        }
+        return row.route.help
     }
 }

@@ -179,3 +179,22 @@ struct ArchiveAngelReadinessExplanationTests {
         #expect(e.worthIt.hasPrefix("Yes, once"))
     }
 }
+
+@Suite("Archive Angel — Archive Readiness sound line")
+struct ArchiveAngelReadinessSoundFactTests {
+    private func sound(_ audio: ArchiveReadiness.Audio, status: String, note: String = "") -> String? {
+        var f = ArchiveAngelRowFacts(id: UUID(), filename: "a.mov", fullPath: "/Volumes/X/a.mov", kind: .ready)
+        f.audio = audio
+        f.audioVerifyStatus = status
+        f.audioVerifyNote = note
+        return ArchiveAngelReadinessExplanation.make(f).facts.first { $0.label == "Sound" }?.value
+    }
+
+    @Test func soundFactForEachState() {
+        #expect(sound(.verifiedOK, status: "ok") == "Checked — sounds fine")
+        #expect(sound(.verifiedProblem("2 live audio tracks"), status: "ok", note: "2 live audio tracks") == "Checked — 2 live audio tracks")
+        #expect(sound(.notVerified, status: "") == "Not checked yet")
+        #expect(sound(.noAudioTrack, status: "") == "No sound track (picture only)")
+        #expect(sound(.verifiedProblem("Damaged audio — x"), status: "damaged", note: "Damaged audio — x")?.hasPrefix("Damaged") == true)
+    }
+}

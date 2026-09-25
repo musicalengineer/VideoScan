@@ -42,7 +42,8 @@ struct ArchiveAngelStrip: View {
                 openReview: { openNewestBatch() },
                 // A row's "Prepare to Archive" (Rick 2026-09-24): the same
                 // Prepare the catalog's "Prepare with Archive Angel" runs.
-                prepareRecords: { ids in angel.prepare(recordIDs: ids, using: fileOpsCenter) })
+                prepareRecords: { ids in angel.prepare(recordIDs: ids, using: fileOpsCenter) },
+                angelJobRunning: (fileOpsCenter as any AngelJobRunner).isBusy)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
             if !angel.batches.unreadable.isEmpty {

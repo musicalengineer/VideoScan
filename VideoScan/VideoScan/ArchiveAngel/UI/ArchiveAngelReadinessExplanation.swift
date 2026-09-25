@@ -256,6 +256,7 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
             out.append(Fact(label: "Length", value: ArchiveAngelScorer.durationText(f.durationSeconds)))
         }
         out.append(Fact(label: "Date", value: dateValue(f)))
+        out.append(Fact(label: "Sound", value: soundValue(f)))
         out.append(Fact(label: "People", value: peopleValue(f)))
         out.append(Fact(label: "Copies", value: copiesValue(f)))
         out.append(Fact(label: "Where", value: whereValue(f)))
@@ -277,6 +278,20 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
         return y / 10 * 10
     }
 
+    /// The sound check, as information (QA P2-1: an "ok" verdict with a
+    /// note is checked, and the note is worth knowing — not a need).
+    private static func soundValue(_ f: ArchiveAngelRowFacts) -> String {
+        if f.audioVerifyStatus == "damaged" {
+            return "Damaged — " + stripPrefix(f.audioVerifyNote, "Damaged audio — ", fallback: "the sound check found a problem")
+        }
+        switch f.audio {
+        case .verifiedOK: return "Checked — sounds fine"
+        case .verifiedProblem(let note): return "Checked — " + note
+        case .notVerified: return "Not checked yet"
+        case .noAudioTrack: return "No sound track (picture only)"
+        }
+    }
+
     private static func peopleValue(_ f: ArchiveAngelRowFacts) -> String {
         let names = f.confirmedPeople + f.otherPeople.filter { !f.confirmedPeople.contains($0) }.map { $0 + " (not confirmed)" }
         return names.isEmpty ? "Nobody tagged yet" : names.joined(separator: ", ")
@@ -291,7 +306,11 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
 
     private static func whereValue(_ f: ArchiveAngelRowFacts) -> String {
         var s = f.volumeName.isEmpty ? f.fullPath : "\(f.volumeName) — \(f.fullPath)"
-        if !f.isReachable { s += " (that drive is not connected right now)" }
+        switch ArchiveAngelFileLocation.from(volumeReachable: f.isReachable, fileExists: f.fileExists) {
+        case .driveNotConnected: s += " (that drive is not connected right now)"
+        case .fileNotFound: s += " (the drive is connected but the file is not there — moved or deleted?)"
+        case .available: break
+        }
         return s
     }
 
