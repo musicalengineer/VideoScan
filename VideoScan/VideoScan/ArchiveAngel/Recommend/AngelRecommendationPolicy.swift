@@ -334,7 +334,9 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
                 tables.removeValue(forKey: "appCacheNamePattern")
                 tables["appCacheStemNames"] = names
                 tables["appCacheStemNumbered"] = numbered
-                tables["appCacheStemGlobs"] = [String]()
+                // The retired pattern said nothing about globs, so the file
+                // keeps the built-in ones (rules v12 added `*_compilation_*`
+                // — a v11-era copy must not silently drop it).
                 given["tables"] = tables
                 fileNotes.append("tables.appCacheNamePattern (a regular expression) is no longer read — read as "
                                  + "appCacheStemNames \(names)\(numbered ? ", numbered" : ""), the same rule; "
@@ -452,7 +454,7 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
         ruleKeys(given["signals"], at: "signals", allowed: ruleKeySet)
         ruleKeys(recommend?["exclude"], at: "recommend.exclude", allowed: ruleKeySet)
         ruleKeys(recommend?["vouch"], at: "recommend.vouch", allowed: ruleKeySet)
-        ruleKeys(recommend?["classes"], at: "recommend.classes", allowed: ["class", "when", "note"])
+        ruleKeys(recommend?["classes"], at: "recommend.classes", allowed: ["class", "when", "note", "line"])
         return out.sorted()
     }
 

@@ -142,7 +142,7 @@ struct ArchiveAngelEvidenceStoreTests {
         #expect(await fresh.save() == false)
     }
 
-    @Test("SENSOR (codex #1345; floor 2026-09-21; S3b 2026-09-22): a v8, v9 or v10 sidecar is ignored (v10 noted for the old → new log); v11 loads")
+    @Test("SENSOR (codex #1345; floor 2026-09-21; S3b 2026-09-22; v12 2026-09-25): a v8, v9 or v10 sidecar is ignored (v10 noted for the old → new log); the current version loads")
     @MainActor
     func staleV6SidecarIgnored() async throws {
         let dir = tempDir("v6")
@@ -153,7 +153,7 @@ struct ArchiveAngelEvidenceStoreTests {
                                   considered: 1, eligible: 1, records: [id: rec(110)]))
         #expect(await store.save())
         var json = try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as! [String: Any]
-        #expect(json["rulesVersion"] as? Int == 11, "this sensor pins the bump; re-pin it on the next rules change")
+        #expect(json["rulesVersion"] as? Int == 12, "this sensor pins the bump; re-pin it on the next rules change")
 
         json["rulesVersion"] = 8
         try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
@@ -178,12 +178,21 @@ struct ArchiveAngelEvidenceStoreTests {
         #expect(v10.olderRules?.rulesVersion == 10)
         #expect(v10.olderRules?.grades == [.a: 1])
 
+        // v12 (2026-09-25): v11 graded the Angel's buffer companions and
+        // conversion-stamped tapes as Ready — ignored, remembered for the log.
         json["rulesVersion"] = 11
         try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
         let v11 = ArchiveAngelEvidenceStore(directory: dir)
-        #expect(await v11.load())
-        #expect(v11.candidateIDs == [id])
-        #expect(v11.olderRules == nil)
+        #expect(await v11.load() == false)
+        #expect(!v11.isLoaded && v11.candidateIDs.isEmpty)
+        #expect(v11.olderRules?.rulesVersion == 11)
+
+        json["rulesVersion"] = ArchiveAngelScorer.rulesVersion
+        try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)
+        let current = ArchiveAngelEvidenceStore(directory: dir)
+        #expect(await current.load())
+        #expect(current.candidateIDs == [id])
+        #expect(current.olderRules == nil)
 
         // A real v8 file (records without `familySkips`) fails to decode even
         // with the number forged: the shape itself is the guard. (A

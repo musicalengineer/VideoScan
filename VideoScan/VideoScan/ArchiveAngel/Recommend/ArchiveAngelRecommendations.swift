@@ -82,19 +82,26 @@ enum ArchiveAngelRecommendationClass: String, Codable, Sendable, CaseIterable {
 
 // MARK: - Rule set
 
-/// One class rule: `{ "class": "ready", "when": [ … ] }`.
+/// One class rule: `{ "class": "ready", "when": [ … ], "line": "…" }`.
 struct AngelClassRule: Codable, Sendable, Equatable {
     var assign: String
     var when: [AngelCondition] = []
     var note: String = ""
+    /// Rules v12: the reason a person reads when THIS rule assigns the
+    /// class ("Unusually large for its length — check it before
+    /// archiving"). Empty = no reason line (the built-in Ready / Needs a
+    /// date / Worth a look rules say nothing; the vouches and the grade
+    /// do). `{year}` is replaced by the date rule's year.
+    var line: String = ""
     private(set) var resolvedClass: ArchiveAngelRecommendationClass?
 
-    private enum CodingKeys: String, CodingKey { case assign = "class", when, note }
+    private enum CodingKeys: String, CodingKey { case assign = "class", when, note, line }
 
-    init(_ assign: ArchiveAngelRecommendationClass, when: [AngelCondition] = [], note: String = "") {
+    init(_ assign: ArchiveAngelRecommendationClass, when: [AngelCondition] = [], note: String = "", line: String = "") {
         self.assign = assign.rawValue
         self.when = when
         self.note = note
+        self.line = line
         self.resolvedClass = assign
     }
 
@@ -103,6 +110,7 @@ struct AngelClassRule: Codable, Sendable, Equatable {
         assign = try c.decode(String.self, forKey: .assign)
         when = try c.decodeIfPresent([AngelCondition].self, forKey: .when) ?? []
         note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
+        line = try c.decodeIfPresent(String.self, forKey: .line) ?? ""
         resolvedClass = ArchiveAngelRecommendationClass(rawValue: assign)
     }
 
@@ -111,6 +119,14 @@ struct AngelClassRule: Codable, Sendable, Equatable {
         try c.encode(assign, forKey: .assign)
         if !when.isEmpty { try c.encode(when, forKey: .when) }
         if !note.isEmpty { try c.encode(note, forKey: .note) }
+        if !line.isEmpty { try c.encode(line, forKey: .line) }
+    }
+
+    /// The reason line with `{year}` filled in (nil when the rule has none).
+    func reasonLine(year: Int?) -> String? {
+        guard !line.isEmpty else { return nil }
+        guard line.contains("{year}") else { return line }
+        return line.replacingOccurrences(of: "{year}", with: year.map(String.init) ?? "this year")
     }
 }
 
@@ -254,6 +270,9 @@ struct AngelRecommendRules: Codable, Sendable, Equatable {
                            + ArchiveAngelRecommendationClass.assignable.map(\.rawValue).joined(separator: ", "))
             }
             if rule.when.count > AngelRule.maxConditionsPerRule { out.append("\(here): more than \(AngelRule.maxConditionsPerRule) conditions") }
+            if rule.line.count > AngelRule.maxLineLength || rule.note.count > AngelRule.maxLineLength {
+                out.append("\(here): line/note longer than \(AngelRule.maxLineLength) characters")
+            }
             for cond in rule.when { out += cond.problems(allowClassifierFields: true).map { "\(here): \($0)" } }
         }
         out += copies.problems
@@ -650,10 +669,13 @@ enum ArchiveAngelRecommendations {
             if rule.vouches { ctx.vouched = true }
         }
         v.points = ctx.vouchPoints
-        // 4. Classes.
+        // 4. Classes. Rules v12: the assigning rule's own line (if any) is
+        // the first reason — it says WHY this class and not the next one
+        // ("Dated 2026, but it looks like a digitization…").
         for rule in rules.classes {
             guard let assigned = rule.resolvedClass, AngelCondition.all(rule.when, c, &ctx) else { continue }
             v.kind = assigned
+            if let line = rule.reasonLine(year: ctx.dateResolution(c).year) { v.reasons.insert(line, at: 0) }
             break
         }
         if v.kind == .ready || v.kind == .needsDate || v.kind == .worthALook {

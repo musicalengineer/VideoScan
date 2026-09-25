@@ -161,7 +161,19 @@ extension ArchiveAngelCandidate {
         // Phase 1 attention memory: what the Angel already showed about
         // this file or any copy of its content.
         c.attention = model.archiveAngel.attention.summary(recordID: r.id, contentKey: c.contentKey)
+        // Rules v12: a companion inside the Angel's own buffer is never
+        // material (the `angelWorkingCopy` safety floor). One string prefix
+        // test per record; the root is standardized once per façade.
+        c.isAngelWorkingCopy = Self.isUnder(bufferRoot: model.archiveAngel.environment.bufferRoot, path: r.fullPath)
         return c
+    }
+
+    /// Is `path` inside the Angel's buffer root (the root itself or any
+    /// descendant)? Pure — a prefix test on the standardized root.
+    nonisolated static func isUnder(bufferRoot: URL, path: String) -> Bool {
+        let root = bufferRoot.standardizedFileURL.path
+        guard !root.isEmpty, root != "/" else { return false }
+        return path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
     }
 }
 

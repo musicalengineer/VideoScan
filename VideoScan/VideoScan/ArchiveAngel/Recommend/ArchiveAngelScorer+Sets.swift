@@ -9,6 +9,26 @@ import VideoScanCore
 
 extension ArchiveAngelScorer {
 
+    /// Rules v12 (docs/archive_angel_wise_design.md §3.6): a footage group
+    /// (Find Similar Footage, Likely or stronger — a Possible group is
+    /// shown to the person, never decided for them) whose likely original
+    /// is already archived is DONE: its other members (rank > 0 — the
+    /// re-encodes, transcodes, exports and copies) are never proposed as
+    /// new material. `archivedGroups` = the group ids whose original the
+    /// catalog holds an archive copy of (the model's one O(n) pre-pass,
+    /// VideoScanModel+ArchiveAngelSweep). Pure; O(n), one set lookup per
+    /// candidate. The original itself (rank 0) is left to the ordinary
+    /// `archivedCopy` / `onMasterArchive` floors, which know it directly.
+    static func markArchivedFootage(_ candidates: inout [ArchiveAngelCandidate], archivedGroups: Set<UUID>) {
+        guard !archivedGroups.isEmpty else { return }
+        for i in candidates.indices {
+            guard let g = candidates[i].footageGroupID, archivedGroups.contains(g),
+                  let conf = candidates[i].footageConfidence, conf != .possible,
+                  (candidates[i].footageRank ?? 0) > 0 else { continue }
+            candidates[i].archivedFootageOriginal = true
+        }
+    }
+
     /// T10 H3. One pass over a candidate set: an export (a stem carrying a
     /// derivative token, `ArchiveAngelNaming.derivativeBaseStem`) is marked
     /// with its original's filename when a RELATED, USABLE original is in

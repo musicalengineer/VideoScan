@@ -93,8 +93,13 @@ extension ArchiveAngelScorer {
             }
         case .onMasterArchive:
             return c.isOnMasterArchive ? .alreadyArchived : nil
+        case .angelWorkingCopy:
+            // Rules v12: the Angel's own buffer is never material.
+            return c.isAngelWorkingCopy ? .angelWorkingCopy : nil
         case .archivedCopy:
-            return c.hasArchivedDuplicate ? .duplicateArchived : nil
+            // Rules v12: a footage group whose likely original is archived
+            // is done — its re-encodes and exports read the same reason.
+            return c.hasArchivedDuplicate || c.archivedFootageOriginal ? .duplicateArchived : nil
         case .notPlayable:
             let playable = c.isPlayable.lowercased()
             return playable.hasPrefix("no") || playable.contains("unsupported") ? .notPlayable : nil
