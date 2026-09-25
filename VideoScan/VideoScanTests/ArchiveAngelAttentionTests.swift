@@ -641,7 +641,11 @@ struct ArchiveAngelCurationSimulationTests {
         #expect(after.distinct >= 60, "Phase 1: mostly new files each round (\(after.distinct))")
         #expect(after.maxRepeats <= 3, "no file proposed more than three times (\(after.maxRepeats))")
         #expect(after.familiesTouched >= 60)
-        #expect(after.seconds < 5, "10 rounds over 10k records in \(after.seconds) s")
+        // Debug wall-clock budget: 5 s on our machines; widened only on a
+        // GitHub-hosted runner (shared VM, measured 5.15–5.79 s there,
+        // 2026-09-24/25) by the one shared rule, PerformanceLane.debugCeiling.
+        #expect(after.seconds < PerformanceLane.debugCeiling(seconds: 5),
+                "10 rounds over 10k records in \(after.seconds) s")
     }
 
     @Test("SCALE (codex #1573): 100k candidates, a tenth of them with skips — the family pass + one selection under 4 s, ranked output, one per family")

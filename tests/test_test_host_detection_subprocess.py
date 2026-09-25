@@ -30,6 +30,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,6 +79,13 @@ class ProbeAssertions:
         return report
 
 
+# VideoScanCore imports Darwin-only modules (os.Logger, MachO) and has never
+# built on Linux, so on the ubuntu Python-tests runner `swift test` fails with
+# "error: Build failed" before the probe can run. The detector under test is a
+# macOS-app concern; run this probe on macOS only.
+@unittest.skipUnless(sys.platform == "darwin",
+                     "VideoScanCore is macOS-only (imports os/MachO); `swift test` cannot build it on "
+                     + sys.platform)
 class SwiftTestCoreProbe(ProbeAssertions, unittest.TestCase):
     """The broken path: `swift test` + Swift Testing, no XCTest env keys."""
 

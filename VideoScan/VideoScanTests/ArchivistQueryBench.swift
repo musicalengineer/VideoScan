@@ -23,13 +23,30 @@ struct ArchivistQueryBench {
     static func ms(_ body: () -> Void) -> Double {
         let t0 = ContinuousClock.now
         body()
-        return Double((ContinuousClock.now - t0).components.attoseconds) / 1e15
+        return milliseconds(ContinuousClock.now - t0)
+    }
+
+    /// Whole seconds AND the fraction. `Duration.components` splits into
+    /// (seconds, attoseconds-within-the-second); reading attoseconds alone
+    /// dropped every whole second. On the CI runner (2026-09-24, run
+    /// 36074213433) a 1.02 s linear scan was reported as "19.99 ms", so
+    /// the indexed-vs-linear comparison failed against a phantom number.
+    static func milliseconds(_ d: Duration) -> Double {
+        Double(d.components.seconds) * 1e3 + Double(d.components.attoseconds) / 1e15
     }
 
     /// The archivist's bread-and-butter query shapes at 100k records:
     /// person, person+era+kind, era+kind. Asserts the planner's indexed
     /// path is never SLOWER than the canonical linear scan, and prints
     /// both so codex can track the ratio over time.
+    /// Pin for the timer itself: a duration over one second keeps its
+    /// whole seconds (the 2026-09-24 phantom "19.99 ms" was 1.02 s).
+    @Test func benchTimerKeepsWholeSeconds() {
+        #expect(abs(Self.milliseconds(.seconds(1) + .milliseconds(20)) - 1_020) < 1e-6)
+        #expect(abs(Self.milliseconds(.milliseconds(48)) - 48) < 1e-6)
+        #expect(abs(Self.milliseconds(.seconds(3)) - 3_000) < 1e-6)
+    }
+
     @Test func personQueryShapesAt100k() {
         let records = CatalogSearchProfileBench.makeRickShapedCorpus(100_000)
         let index = CatalogSearchIndex()
