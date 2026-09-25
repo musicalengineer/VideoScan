@@ -185,6 +185,7 @@ writes only changed answers. Setting "Keep footage groups current", default ON.
 
 1. Background Verify Audio on recommended files, default ON, 12 files/hour,
    only while you are not using the app — yes? *(recommend yes)*
+   **DECIDED 2026-09-25 (Rick): yes — default ON, 12/hour.**
 2. Keep footage groups current automatically (a 1-second metadata pass that
    writes footage groups into the catalog) — yes? *(recommend yes)*
 3. May a background check touch a mounted drive that may have spun down? Today
