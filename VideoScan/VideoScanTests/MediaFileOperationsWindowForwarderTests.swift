@@ -396,6 +396,7 @@ struct MediaFileOperationsWindowForwardSensorTests {
         "ArchiveAngel/Prepare/ArchiveAngelJob.swift",        // Angel's child verify/balance/transcode
         "ArchiveAngel/Promote/ArchiveAngelPromoter.swift",   // the promote the Angel hands off
         "ArchiveAngel/Facade/VideoScanModel+ArchiveAngelSweep.swift",
+        "ArchiveAngel/Check/ArchiveAngelChecks.swift",       // Angel Checks: background Verify Audio (§4)
     ]
 
     @Test func userStartSitesAreMarked() throws {
