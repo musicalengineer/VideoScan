@@ -47,6 +47,8 @@ protocol AngelCatalog: AnyObject {
     /// Checks read bytes, so they wait for a longer quiet spell than the
     /// scoring sweep. nil = never.
     var lastUserInteractionAt: CFAbsoluteTime? { get }
+    /// The person pressed something (an Angel row or strip button).
+    func noteUserInteraction()
     /// Keep footage current (docs/archive_angel_wise_design.md §5): how
     /// many active records carry a footage group, and the newest run
     /// stamp among them. O(n), once per launch and rarely after.
@@ -102,6 +104,8 @@ protocol AngelNavigator: AnyObject {
 protocol AngelJobRunner: AnyObject {
     /// An Archive Angel or Promote job is active — the sweep parks.
     var isBusy: Bool { get }
+    /// Any Media File Operations job is active (Angel Checks park).
+    var hasActiveJobs: Bool { get }
     /// Start a batch the USER asked for (claims user origin, so the MFO
     /// window comes forward). `recordIDs` nil = the Angel picks `count`.
     @discardableResult

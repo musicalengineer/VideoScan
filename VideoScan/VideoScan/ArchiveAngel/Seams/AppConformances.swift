@@ -35,9 +35,14 @@ extension VideoScanModel: AngelCatalog, AngelNavigator, AngelArchive, AngelLedge
         appLog.write(line)
     }
 
-    /// The preview sweep's gate is the one every interactive catalog path
-    /// pings (`previewSweep.noteUserInteraction`); Angel Checks read it.
+    /// The preview sweep's gate: thumbnail/filmstrip requests ping it, and
+    /// so do the Archive Angel's own buttons (`noteUserInteraction` below).
     var lastUserInteractionAt: CFAbsoluteTime? { previewSweep.gate.lastInteraction }
+
+    /// The Archive tab's own buttons ping the same gate (QA MAJOR-2: only
+    /// thumbnail/filmstrip requests fed it, so Angel Checks thought Rick
+    /// was away while he worked the Angel list).
+    func noteUserInteraction() { previewSweep.noteUserInteraction() }
 
     /// Keep footage current (§5): ONE pass over the active records.
     func footageCurrency() -> (grouped: Int, newestScan: Date?) {
@@ -124,8 +129,12 @@ extension MediaFileOperationsCenter: AngelJobRunner {
     /// file's two user-origin scopes; a background verify must not raise
     /// the window).
     func startVerifyAudioForAngel(record: VideoRecord, model: VideoScanModel) -> (any MediaFileOperationJob)? {
-        startVerifyAudio(record: record, model: model)
+        startVerifyAudio(record: record, model: model, angelCheck: true)
     }
+
+    /// Angel Checks park while ANY file operation is active (QA MAJOR-2):
+    /// before a start no check of the Angel's runs, so it is someone else's.
+    var hasActiveJobs: Bool { jobs.contains { $0.state.isActive } }
 
     /// Keep footage current: background origin, whole catalog.
     func startFindSimilarFootageForAngel(model: VideoScanModel) -> (any MediaFileOperationJob)? {

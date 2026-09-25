@@ -26,6 +26,10 @@ struct ArchiveAngelSettings: Equatable {
     static let makeLosslessKey = "archiveAngel.makeLossless"
     static let checksEnabledKey = "archiveAngel.checksEnabled"
     static let footageAutoEnabledKey = "archiveAngel.footageAutoEnabled"
+    /// When "Keep footage groups current" last STARTED a run (QA 2026-09-25
+    /// MAJOR-4: a run that changes no answer leaves every record's
+    /// `scannedAt` where it was, so the records cannot say "current").
+    static let footageLastAutoRunAtKey = "archiveAngel.footageLastAutoRunAt"
 
     static let defaultBatchCount = 25
 
@@ -55,4 +59,19 @@ struct ArchiveAngelSettings: Equatable {
     static func saveMakeLossless(_ on: Bool, to defaults: UserDefaults) { defaults.set(on, forKey: makeLosslessKey) }
     static func saveChecksEnabled(_ on: Bool, to defaults: UserDefaults) { defaults.set(on, forKey: checksEnabledKey) }
     static func saveFootageAutoEnabled(_ on: Bool, to defaults: UserDefaults) { defaults.set(on, forKey: footageAutoEnabledKey) }
+    /// The footage stamp is read and written only where it is safe: never
+    /// in a test host still pointed at `.standard` (the app's own domain —
+    /// Rick's real preferences). There it is nil / not written; the façade
+    /// keeps it in memory instead.
+    static func footageLastAutoRunAt(in defaults: UserDefaults, isTestHost: Bool) -> Date? {
+        guard persistsFootageStamp(defaults, isTestHost: isTestHost) else { return nil }
+        return defaults.object(forKey: footageLastAutoRunAtKey) as? Date
+    }
+    static func saveFootageLastAutoRunAt(_ at: Date, to defaults: UserDefaults, isTestHost: Bool) {
+        guard persistsFootageStamp(defaults, isTestHost: isTestHost) else { return }
+        defaults.set(at, forKey: footageLastAutoRunAtKey)
+    }
+    static func persistsFootageStamp(_ defaults: UserDefaults, isTestHost: Bool) -> Bool {
+        !(isTestHost && defaults === UserDefaults.standard)
+    }
 }

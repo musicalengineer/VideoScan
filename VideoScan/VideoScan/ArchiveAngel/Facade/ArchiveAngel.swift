@@ -91,7 +91,14 @@ final class ArchiveAngel: ObservableObject {
     /// Keep footage current: the automatic run fires once after the first
     /// COMPLETE sweep of a launch, and again after a catalog change once
     /// `footageRearmSeconds` have passed since the last automatic run.
-    private(set) var lastFootageAutoRunAt: Date?
+    /// Persisted (QA MAJOR-4) in the environment's defaults — never in a
+    /// test host's `.standard` (Rick's real preferences; see
+    /// `ArchiveAngelSettings.persistsFootageStamp`), where it is in memory.
+    var lastFootageAutoRunAt: Date? {
+        ArchiveAngelSettings.footageLastAutoRunAt(in: environment.defaults, isTestHost: environment.isTestHost)
+            ?? footageRunInMemory
+    }
+    private var footageRunInMemory: Date?
     private var footageArmed = true
     private var footageRearmTask: Task<Void, Never>?
     /// The last stalled count logged (only a change is logged).
@@ -298,6 +305,7 @@ final class ArchiveAngel: ObservableObject {
                 return self.jobRunner?.isBusy ?? true   // no runner yet = nothing can start
             })
         cfg.lastInteraction = { [weak self] in self?.catalog?.lastUserInteractionAt }
+        cfg.isAnyJobActive = { [weak self] in self?.jobRunner?.hasActiveJobs ?? true }
         cfg.isReadOnly = { [weak self] in self?.catalog?.isReadOnly ?? true }
         cfg.log = { [weak self] line in self?.note(line) }
         return cfg
@@ -317,9 +325,17 @@ final class ArchiveAngel: ObservableObject {
             onMasterArchive: onMaster)
     }
 
+    /// The person pressed an Angel button (a row, the strip, a sheet):
+    /// Angel Checks wait `quietSeconds` before reading a disk (QA MAJOR-2).
+    /// O(1), never logged.
+    func noteInteraction() {
+        catalog?.noteUserInteraction()
+    }
+
     /// "Check Sound in the Background": persist, then start/stop the loop.
     func setChecks(_ on: Bool) {
         note("Archive Angel: Check Sound in the Background → \(on ? "on" : "off") — START")
+        noteInteraction()   // the person is here: a first check waits the quiet window
         checksEnabled = on
         ArchiveAngelSettings.saveChecksEnabled(on, to: environment.defaults)
         checks.setEnabled(on)
@@ -373,19 +389,26 @@ final class ArchiveAngel: ObservableObject {
     func considerFootageRun(trigger: String, now: Date = Date()) -> Bool {
         guard footageArmed, footageAutoEnabled, let model, let catalog, let runner = jobRunner else { return false }
         guard !catalog.isReadOnly, !catalog.isCatalogBusyForAngel, !runner.isBusy else { return false }
-        let currency = catalog.footageCurrency()
-        let stale = currency.grouped == 0 || currency.newestScan.map { now.timeIntervalSince($0) > Self.footageStaleSeconds } ?? true
+        // QA MAJOR-4: currency is WHEN THE LAST AUTOMATIC RUN STARTED, not
+        // the newest record stamp — a run that changes no answer writes
+        // nothing, so on a stable catalog the record stamps never move and
+        // every launch used to start a whole-catalog run.
+        let last = lastFootageAutoRunAt
+        let stale = last.map { now.timeIntervalSince($0) > Self.footageStaleSeconds } ?? true
         footageArmed = false
+        let currency = catalog.footageCurrency()
+        let lastText = last.map { Self.dayFormatter.string(from: $0) } ?? "never"
         guard stale else {
-            facadeLog.info("keep footage current (\(trigger, privacy: .public)): current — \(currency.grouped) grouped, newest \(currency.newestScan.map { $0.description } ?? "none", privacy: .public)")
+            facadeLog.info("keep footage current (\(trigger, privacy: .public)): current — last automatic run \(lastText, privacy: .public), \(currency.grouped) grouped")
             return false
         }
-        note("Archive Angel: Keep footage groups current — START (\(trigger); \(currency.grouped) record(s) grouped, newest run \(currency.newestScan.map { Self.dayFormatter.string(from: $0) } ?? "never"))")
+        note("Archive Angel: Keep footage groups current — START (\(trigger); last automatic run \(lastText); \(currency.grouped) record(s) grouped)")
         guard let job = runner.startFindSimilarFootageForAngel(model: model) else {
             note("Archive Angel: Keep footage groups current — not started (the operations center refused it)")
             return false
         }
-        lastFootageAutoRunAt = now
+        footageRunInMemory = now
+        ArchiveAngelSettings.saveFootageLastAutoRunAt(now, to: environment.defaults, isTestHost: environment.isTestHost)
         note("Archive Angel: Keep footage groups current — started “\(job.title)”")
         return true
     }

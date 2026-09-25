@@ -182,8 +182,8 @@ The policy says **what** to recommend, not how the machine paces itself. These s
 - the fresh-slot scan budget (200);
 - the attention memory's cap of 12 events per file;
 - the buffer rules;
-- Angel Checks' pacing (docs/archive_angel_wise_design.md §4): the top 20 recommendations are looked at, one Verify Audio at a time, only after 120 s without you touching the app and while no scan / Angel / Promote job runs, at most 12 an hour and 200 per launch, each file at most once per launch. The switch ("Check Sound in the Background", `archiveAngel.checksEnabled`) is a preference, not a policy rule;
-- Keep footage groups current (§5): Find Similar Footage runs once after the first complete assessment of a launch when nothing is grouped or the newest run is a day old, and again after a catalog change at most every 6 h (`archiveAngel.footageAutoEnabled`).
+- Angel Checks' pacing (docs/archive_angel_wise_design.md §4): the top 20 recommendations are looked at, one Verify Audio at a time, only after 120 s without you touching the app (the Catalog's thumbnails and every Archive Angel button count as touching it) and while no other file operation of any kind is running, at most 12 checks started an hour and 200 started per launch (a skipped file — missing, already being verified — costs nothing), each file at most once per launch. A Prepare pressed while a check reads that same file waits for the check's verdict instead of being refused. The switch ("Check Sound in the Background", `archiveAngel.checksEnabled`) is a preference, not a policy rule;
+- Keep footage groups current (§5): Find Similar Footage runs once after the first complete assessment of a launch when the last automatic run started more than a day ago (or never — the time is kept in `archiveAngel.footageLastAutoRunAt`), and again after a catalog change at most every 6 h (`archiveAngel.footageAutoEnabled`).
 
 ## Worked examples
 

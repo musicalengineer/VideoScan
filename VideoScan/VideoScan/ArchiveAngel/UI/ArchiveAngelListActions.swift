@@ -36,21 +36,25 @@ struct ArchiveAngelListActions {
     }
 
     func play(_ row: ArchiveAngelListRow) {
+        angel.noteInteraction()   // Angel Checks wait while you work (QA MAJOR-2)
         guard let rec = model.record(forID: row.id) else { return gone(row) }
         ArchiveAngelPlayerChoice.play(rec) { model.log($0) }
     }
 
     func showInCatalog(_ row: ArchiveAngelListRow) {
+        angel.noteInteraction()   // Angel Checks wait while you work (QA MAJOR-2)
         ArchiveAngelRowActions.showInCatalog(model: model, recordID: row.id, filename: row.filename)
     }
 
     func showInFinder(_ row: ArchiveAngelListRow) {
+        angel.noteInteraction()   // Angel Checks wait while you work (QA MAJOR-2)
         ArchiveAngelRowActions.showInFinder(model: model, path: row.path)
     }
 
     /// Re-decides the route from a FRESH snapshot (the row may be a
     /// minute old: a date typed since then makes it Ready).
     func promote(_ row: ArchiveAngelListRow) {
+        angel.noteInteraction()   // Angel Checks wait while you work (QA MAJOR-2)
         guard let f = facts(row.id) else { return gone(row) }
         let fresh = ArchiveAngelListRowBuilder.row(f)
         switch fresh.route {
@@ -67,6 +71,7 @@ struct ArchiveAngelListActions {
     }
 
     func readiness(_ row: ArchiveAngelListRow) -> ArchiveAngelReadinessExplanation? {
+        angel.noteInteraction()   // Angel Checks wait while you work (QA MAJOR-2)
         guard var f = facts(row.id) else {
             gone(row)
             return nil

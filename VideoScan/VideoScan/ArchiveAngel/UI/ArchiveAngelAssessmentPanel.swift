@@ -100,13 +100,13 @@ struct ArchiveAngelAssessmentPanel: View {
                     .accessibilityIdentifier("archive.angelReview")
                     .help("Archive Angel prepared a batch. Review the recommendations, rename or deselect, then Promote.")
                 }
-                Button("Prepare Batch…") { prepare() }
+                Button("Prepare Batch…") { angel.noteInteraction(); prepare() }
                     .controlSize(.large)
                     .fixedSize()
                     .disabled(model.isReadOnly)
                     .accessibilityIdentifier("archive.angelPrepare")
                     .help("Pick how many to prepare (10/25/35/50); the Angel takes the top-graded candidates, verifies audio and makes access copies in the buffer, then asks for review. Nothing reaches the archive until you press Promote.")
-                Button("Show in Catalog") { showCandidatesInCatalog() }
+                Button("Show in Catalog") { angel.noteInteraction(); showCandidatesInCatalog() }
                     .controlSize(.large)
                     .fixedSize()
                     .disabled(angel.candidateIDs.isEmpty)
