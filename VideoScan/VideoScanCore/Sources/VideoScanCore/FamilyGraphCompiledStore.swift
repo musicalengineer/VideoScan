@@ -466,10 +466,19 @@ public struct FamilyGraphCompiledStore {
         // Never "recover" to FEWER pulls than an intact current carries
         // (a merged single-file current may hold more logical pulls than
         // any multi-file generation — 2026-09-24).
+        //
+        // `>=`, not `>` (2026-09-25): EQUAL is not fewer. With `>`, an intact
+        // multi-source current excluded ITSELF (its own count is the floor),
+        // so a pointer that names the right generation with the wrong source
+        // keys — exactly how loadCurrent fails and lands here — found no
+        // candidate and fell through to rule 4, the single-file narrowing.
+        // RecoveryOutcomeContractTests.currentCandidateStillChecksForInterveningPromotion
+        // pins this. Contrast rule 3 above, where `>` is right: there a
+        // previous must carry MORE pulls to outrank an intact current.
         let floor = pointerAtLookup.flatMap { usableManifest($0.current) }?.logicalSources.count ?? 0
         let candidates = generations()
             .compactMap { readManifest($0) }
-            .filter { $0.sources.count > 1 && $0.verification.isEmpty && $0.logicalSources.count > floor }
+            .filter { $0.sources.count > 1 && $0.verification.isEmpty && $0.logicalSources.count >= floor }
             .sorted { $0.createdAt > $1.createdAt }
         for manifest in candidates where usableManifest(manifest.generation) != nil {
             guard let graph = decode(generation: manifest.generation) else {
