@@ -61,7 +61,7 @@ jobs:
     # on hosted runners (actions/runner-images#13096). The build has no
     # choice but to use 26.x — see Select Xcode — so the budget has to
     # absorb it. Revisit once a real run gives us the actual number.
-    timeout-minutes: 100
+    timeout-minutes: 120
     permissions:
       contents: write
 
@@ -126,8 +126,9 @@ jobs:
       # See docs/gh-testing-19-may.md for prior binary-search findings.
       - name: Unit tests — pure-logic suites
         # 2026-09-25: the plan is ~9,000 tests; ricksm5 needs ~20 min, the
-        # hosted runner ~1.6x that. 20 min was timing out every push.
-        timeout-minutes: 60
+        # hosted runner ~2.15x that (~47 min, measured 9/25). 20 min was
+        # timing out every push.
+        timeout-minutes: 75
         run: |
           echo "## Unit Tests — Pure-Logic Suites" >> $GITHUB_STEP_SUMMARY
           START=$(date +%s)

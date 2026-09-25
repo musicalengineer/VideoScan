@@ -20,7 +20,10 @@ import os
 //
 // These tests inject the pressure answer (no dependence on the host's RAM,
 // no poisoning of the shared monitor) and bound every wait with a deadline
-// that FAILS instead of hanging.
+// that FAILS instead of hanging. Gates that exercise auto-pause pass
+// `autoPause: true` explicitly: since 2026-09-25 a gate built in a test host
+// defaults auto-pause OFF (see PauseGate.defaultAutoPause and
+// PauseGateTestHostDefaultTests).
 
 @Suite struct PauseGateCancellationTests {
 
@@ -48,7 +51,8 @@ import os
 
     @Test("RED 2026-09-25: a waiter cancelled while AUTO-paused under sustained pressure returns promptly")
     func autoPausedWaiter_cancelled_returnsPromptly() async {
-        let gate = PauseGate(pressureCheck: { true }, recheckInterval: .milliseconds(50))
+        let gate = PauseGate(pressureCheck: { true }, recheckInterval: .milliseconds(50),
+                             autoPause: true)
         let returned = await Self.waiterReturns(on: gate, cancelAfter: .milliseconds(200), within: 3)
         #expect(returned, "a cancelled waiter must not keep polling while memory stays low (the CI hang)")
         await gate.resume()   // releases a spinning waiter if the fix regresses
@@ -56,7 +60,8 @@ import os
 
     @Test("an auto-paused waiter that is NOT cancelled keeps waiting while pressure stays high")
     func autoPausedWaiter_notCancelled_keepsWaiting() async {
-        let gate = PauseGate(pressureCheck: { true }, recheckInterval: .milliseconds(50))
+        let gate = PauseGate(pressureCheck: { true }, recheckInterval: .milliseconds(50),
+                             autoPause: true)
         let returned = await Self.waiterReturns(on: gate, cancelAfter: nil, within: 0.5)
         #expect(!returned, "auto-pause is a real pause: no pressure relief, no return")
         await gate.resume()
@@ -65,7 +70,8 @@ import os
     @Test("an auto-paused waiter resumes by itself when pressure clears")
     func autoPausedWaiter_resumesWhenPressureClears() async {
         let high = OSAllocatedUnfairLock(initialState: true)
-        let gate = PauseGate(pressureCheck: { high.withLock { $0 } }, recheckInterval: .milliseconds(50))
+        let gate = PauseGate(pressureCheck: { high.withLock { $0 } }, recheckInterval: .milliseconds(50),
+                             autoPause: true)
         let clear = Task {
             try? await Task.sleep(for: .milliseconds(300))
             high.withLock { $0 = false }
