@@ -193,8 +193,28 @@ struct CombineNeverOverwritesTests {
 
     // MARK: - Same base name, one output folder
 
-    @Test(arguments: Kind.allCases)
+    /// mov/ProRes + wav: stream-copy mux, no encoder needed — runs everywhere.
+    @Test(arguments: [Kind.movProRes])
     func sameBaseName_twoPairs_oneFolder_bothOutputsKept(_ kind: Kind) async throws {
+        try await Self.sameBaseNameBody(kind)
+    }
+
+    /// Avid MXF pair: MPEG-2 video is not MOV-stream-copy-safe, so Combine
+    /// auto-switches to `.reencodeProRes` = `prores_videotoolbox`. The GitHub
+    /// runner is a virtual M1 with no ProRes encoder (CI run 36192353105:
+    /// okA == false in 0.8 s, while this same run's encoder probe skipped
+    /// every other prores_videotoolbox test). Gated on the project's shared
+    /// capability check: skips ONLY when the encoder is missing AND
+    /// GITHUB_ACTIONS=true; on a real Mac it always runs, and
+    /// CleanupTests' "sensor: off GitHub-hosted runners, prores_videotoolbox
+    /// encodes" fails if the encoder ever goes missing there.
+    @Test(.enabled(if: CleanupTestMedia.runsHardwareProResTests,
+                   CleanupTestMedia.hardwareProResSkipReason))
+    func sameBaseName_twoPairs_oneFolder_bothOutputsKept_mxfPair() async throws {
+        try await Self.sameBaseNameBody(.mxfPair)
+    }
+
+    static func sameBaseNameBody(_ kind: Kind) async throws {
         try #require(Self.toolsPresent, "ffmpeg/ffprobe not found")
         let root = try Self.makeDir("same_base_\(kind)")
         defer { try? FileManager.default.removeItem(at: root) }

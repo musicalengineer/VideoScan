@@ -225,7 +225,7 @@ func usedMemoryGB() -> Double {
 actor PauseGate {
     private var _isPaused = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
-    private var autoPauseEnabled = true
+    private var autoPauseEnabled: Bool
     private var autoPaused = false
 
     /// How the gate asks "is memory low right now?". Production always uses
@@ -238,11 +238,48 @@ actor PauseGate {
     /// How long the auto-pause loop sleeps between memory re-checks.
     private let recheckInterval: Duration
 
-    init(pressureCheck: @escaping @Sendable () async -> Bool = { await MemoryPressureMonitor.shared.checkPressure() },
-         recheckInterval: Duration = .milliseconds(500)) {
+    /// The production reading: the shared monitor against the configured floor.
+    static let hostPressureCheck: @Sendable () async -> Bool = {
+        await MemoryPressureMonitor.shared.checkPressure()
+    }
+
+    /// Whether a gate auto-pauses on memory pressure when its creator did
+    /// not say. The app: ON (unchanged). A test host: OFF.
+    ///
+    /// Why a test-host default rather than one opt-out per suite
+    /// (2026-09-25, CI run 36192353105): every gate the app creates — the
+    /// Combine gate, each CatalogScanTarget's scan gate, the Person Finder
+    /// gates — reads the HOST's free RAM against a 4 GB floor. The GitHub
+    /// runner has ~7 GB with ~2 GB free, so ANY test that drives one of
+    /// those pipelines auto-paused on its first checkpoint and waited for
+    /// memory that never came: CombineNeverOverwritesTests one day,
+    /// tripAcrossCountryShapeCatalogsExactlyTheValidMedia the next (a scan's
+    /// probe child waits on its target's gate). Opting out suite by suite
+    /// only fixes the suites someone has already watched hang. Host RAM is
+    /// environment, not the unit under test; the gate's auto-pause logic is
+    /// tested with an injected reading and an explicit `autoPause: true`
+    /// (PauseGateCancellationTests, PauseGateTestHostDefaultTests).
+    /// Pure so both branches are testable. C++ analogy: a constexpr policy
+    /// function the constructor consults when the caller passes std::nullopt.
+    nonisolated static func defaultAutoPause(isTestHost: Bool) -> Bool {
+        !isTestHost
+    }
+
+    /// - Parameter autoPause: `nil` = `defaultAutoPause(isTestHost:)` for this
+    ///   process (on in the app, off in a test host); `true`/`false` = explicit.
+    ///   `setAutoPause(_:)` still overrides later.
+    init(pressureCheck: @escaping @Sendable () async -> Bool = PauseGate.hostPressureCheck,
+         recheckInterval: Duration = .milliseconds(500),
+         autoPause: Bool? = nil) {
         self.pressureCheck = pressureCheck
         self.recheckInterval = recheckInterval
+        self.autoPauseEnabled = autoPause
+            ?? Self.defaultAutoPause(isTestHost: TestHostDetection.isTestHost)
     }
+
+    /// Whether this gate currently consults memory pressure (for tests and
+    /// diagnostics).
+    var isAutoPauseEnabled: Bool { autoPauseEnabled }
 
     var isPaused: Bool { _isPaused }
 

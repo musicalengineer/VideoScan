@@ -225,8 +225,14 @@ struct UnknownExtensionGateTests {
 
 // MARK: - Pipelines (Features 1+3 end-to-end)
 
+// Time limit (2026-09-25, CI run 36192353105): the TripAcrossCountry scan
+// sat auto-paused on the 7 GB runner's free RAM until the 60-minute step
+// timeout. PauseGate now defaults memory auto-pause OFF in a test host; the
+// limit makes any future stall a loud per-test failure. runScan forwards the
+// limit's cancel to the (unstructured) scan task so the stall actually ends.
 @Suite("Discovery-completeness pipelines",
-       .enabled(if: TestMediaGenerator.isAvailable))
+       .enabled(if: TestMediaGenerator.isAvailable),
+       .timeLimit(.minutes(2)))
 struct DiscoveryCompletenessPipelineTests {
 
     // MARK: Helpers (ScanMergeScopeTests conventions)
@@ -260,7 +266,7 @@ struct DiscoveryCompletenessPipelineTests {
         let target = CatalogScanTarget(searchPath: root)
         model.scanTargets.append(target)
         model.startTarget(target)
-        _ = await target.scanTask?.value
+        await ScanTaskAwait.value(of: target)
     }
 
     // MARK: Feature 1 + 3 — the TripAcrossCountry shape
@@ -500,7 +506,7 @@ struct ScanCheckpointHonestyDecodeTests {
 // production storage with UUID temp-path keys + defer delete
 // (RobustScanTests convention); no sidecar is written (no override, test
 // host gate).
-@Suite("Discovery QA fix batch — pipelines")
+@Suite("Discovery QA fix batch — pipelines", .timeLimit(.minutes(2)))
 struct DiscoveryQAFixBatchPipelineTests {
 
     private func makeTempDir(_ label: String) throws -> URL {
@@ -540,7 +546,7 @@ struct DiscoveryQAFixBatchPipelineTests {
         let target = CatalogScanTarget(searchPath: root)
         model.scanTargets.append(target)
         model.startTarget(target)
-        _ = await target.scanTask?.value
+        await ScanTaskAwait.value(of: target)
     }
 
     // MARK: Item 1 — checkpoint-resume honors the honesty hook
@@ -571,7 +577,7 @@ struct DiscoveryQAFixBatchPipelineTests {
         let target = CatalogScanTarget(searchPath: dir.path)
         model.scanTargets = [target]
         model.resumeTarget(target)
-        _ = await target.scanTask?.value
+        await ScanTaskAwait.value(of: target)
 
         #expect(model.records.contains { $0.fullPath == hidden.fullPath },
                 "resume of an enumeration-error checkpoint completed all its paths, but the ORIGINAL walk was incomplete — the merge must NOT prune records under directories that walk never read (RED pre-fix)")
