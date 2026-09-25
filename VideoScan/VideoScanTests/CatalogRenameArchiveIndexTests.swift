@@ -47,7 +47,7 @@ struct CatalogRenameArchiveIndexTests {
 
         func indexFile(_ name: String) -> URL { index.appendingPathComponent(name) }
         var backups: URL { index.appendingPathComponent(ArchiveIndexRename.backupFolder) }
-        var newMedia: String { (root as NSString).appendingPathComponent(CatalogRenameArchiveIndexTests.newRel) }
+        let newMedia: String
         func cleanup() { try? FileManager.default.removeItem(at: tmp) }
     }
 
@@ -82,7 +82,8 @@ struct CatalogRenameArchiveIndexTests {
         let sourceRecord = record(source.path)
         model.records = [archiveRecord, sourceRecord]
         return Fixture(tmp: tmp, root: root.path, index: index, media: media.path, source: source.path,
-                       model: model, archiveRecord: archiveRecord, sourceRecord: sourceRecord)
+                       model: model, archiveRecord: archiveRecord, sourceRecord: sourceRecord,
+                       newMedia: root.appendingPathComponent(newRel).path)
     }
 
     /// Write the five index files. `targets: false` writes only the
@@ -521,11 +522,25 @@ struct CatalogRenameArchiveIndexTests {
         let none = try ArchiveIndexRename.rewriteJSONL(Array(#"{"a":"/q"}"#.utf8), replacements: r, file: "t", lenient: false)
         #expect(none.changedLines == 0)
         #expect(none.bytes == Array(#"{"a":"/q"}"#.utf8))
+
+        // The one-parse fast path must not hide a line holding TWO values,
+        // or one value split over two lines: both refuse, naming the line.
+        for (text, badLine) in [(#"{"a":"/q"}"# + "\n" + #"{"a":1},{"b":2}"# + "\n", 2),
+                                ("[1\n2]\n", 1)] {
+            #expect(!ArchiveIndexRename.allLinesParse(Array(text.utf8)))
+            do {
+                _ = try ArchiveIndexRename.rewriteJSONL(Array(text.utf8), replacements: r, file: "t", lenient: false)
+                Issue.record("\(text) should refuse")
+            } catch let failure as ArchiveIndexRename.Failure {
+                #expect(failure == .unparseable(file: "t", line: badLine, reason: "not valid JSON"))
+            }
+        }
+        #expect(ArchiveIndexRename.allLinesParse(Array((#"{"a":1}"# + "\n\n" + #"{"b":"x"}"# + "\n").utf8)))
     }
 
     // MARK: Scale sensor
 
-    @Test("scale: 50k-line manifest + 50k-line ledger mirror rewrite within budget")
+    @Test("scale: 50k-line manifest + 50k-line promote journal + 50k-line ledger mirror rewrite within budget")
     func scaleFiftyThousandLines() throws {
         let f = try Self.makeFixture("scale")
         defer { f.cleanup() }
@@ -547,6 +562,19 @@ struct CatalogRenameArchiveIndexTests {
         }
         try Data(manifest.utf8).write(to: f.indexFile(MasterArchiveLayout.manifestFilename))
         try MediaLedgerEvent.encodeLines(ledger).write(to: f.indexFile(MediaLedger.mirrorFilename))
+        // Promote journal: the default encoder escapes every `/` as `\/`,
+        // so no line passes the cheap literal pre-filter — the worst case.
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        var journal = Data()
+        for i in 0..<n {
+            let relPath = i == n / 2 ? Self.rel : "30_Video/1990-1999/1994/clip_\(i).mkv"
+            journal.append(try enc.encode(ArchivePromoteJournal.Entry(
+                sourceRecordID: UUID(), sourcePath: "/Volumes/Src/clip_\(i).mkv", destRelPath: relPath,
+                state: .done, sha256: "ab\(i)", copyRecordID: UUID(), at: Self.at)))
+            journal.append(0x0A)
+        }
+        try journal.write(to: f.indexFile(ArchivePromoteJournal.filename))
 
         let clock = ContinuousClock()
         var result = ""
@@ -557,7 +585,9 @@ struct CatalogRenameArchiveIndexTests {
         let rows = ArchiveManifestCSV.rowsBySource(rootPath: f.root)
         #expect(rows.values.filter { $0.relPath == Self.newRel }.count == 1)
         #expect(rows.values.filter { $0.relPath == Self.rel }.isEmpty)
-        let budget = PerformanceLane.debugCeiling(.seconds(4))
-        #expect(elapsed < budget, "50k+50k index rename took \(elapsed) (budget \(budget))")
+        #expect(ArchivePromoteJournal.latestBySource(rootPath: f.root).values.filter { $0.destRelPath == Self.newRel }.count == 1)
+        let budget = PerformanceLane.debugCeiling(.seconds(2))
+        print("[CatalogRenameArchiveIndexTests] 3x50k rename: \(elapsed) (\(PerformanceLane.configurationName))")
+        #expect(elapsed < budget, "3×50k index rename took \(elapsed) (budget \(budget))")
     }
 }

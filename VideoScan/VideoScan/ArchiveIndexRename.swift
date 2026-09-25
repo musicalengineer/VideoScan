@@ -352,7 +352,7 @@ enum ArchiveIndexRename {
         var lineNumber = 1
         var touched = false
         while start <= bytes.count {
-            let end = bytes[start...].firstIndex(of: newline) ?? bytes.count
+            let end = byteIndex(of: newline, in: bytes[start...]) ?? bytes.count
             let line = bytes[start..<end]
             if let replaced = try transform(line, lineNumber) {
                 if !touched {
@@ -377,9 +377,35 @@ enum ArchiveIndexRename {
     /// Cheap pre-filter: a line can only hold a matching JSON string / CSV
     /// cell if it contains an old value literally or has an escape in it.
     private static func mightMatch(_ line: ArraySlice<UInt8>, needles: [[UInt8]]) -> Bool {
-        if line.contains(backslash) { return true }
-        for n in needles where line.firstRange(of: n) != nil { return true }
+        if byteIndex(of: backslash, in: line) != nil { return true }
+        for n in needles where containsBytes(n, in: line) { return true }
         return false
+    }
+
+    // memchr / memmem: the scans run over every byte of every index file,
+    // and the generic Collection versions are ~50× slower in a Debug
+    // build (unspecialized). Same answers, C speed in both configurations.
+    // (`withUnsafeBufferPointer` ≈ taking `&v[0]` + size in C++ — valid
+    // only inside the closure.)
+
+    /// Absolute index of the first `byte` in `slice`, or nil.
+    static func byteIndex(of byte: UInt8, in slice: ArraySlice<UInt8>) -> Int? {
+        slice.withUnsafeBufferPointer { buf -> Int? in
+            guard let base = buf.baseAddress, buf.count > 0,
+                  let hit = memchr(base, Int32(byte), buf.count) else { return nil }
+            return slice.startIndex + (UnsafeRawPointer(hit) - UnsafeRawPointer(base))
+        }
+    }
+
+    /// True when `needle` occurs in `slice` as a contiguous byte run.
+    static func containsBytes(_ needle: [UInt8], in slice: ArraySlice<UInt8>) -> Bool {
+        guard !needle.isEmpty else { return true }
+        return slice.withUnsafeBufferPointer { hay in
+            needle.withUnsafeBufferPointer { n in
+                guard let h = hay.baseAddress, let nb = n.baseAddress, hay.count >= n.count else { return false }
+                return memmem(h, hay.count, nb, n.count) != nil
+            }
+        }
     }
 
     // MARK: CSV (the manifest)
@@ -462,15 +488,21 @@ enum ArchiveIndexRename {
     static func rewriteJSONL(_ bytes: [UInt8], replacements: Replacements, file: String,
                              lenient: Bool) throws -> Rewrite {
         let needles = replacements.values.keys.map { Array($0.utf8) }
+        // Strict mode must prove EVERY line parses. One parse of the whole
+        // file as a JSON array is ~5× cheaper than 50k single-line parses;
+        // only when it fails (or the element count disagrees) do we fall
+        // back to per-line parsing, which names the damaged line.
+        let wholeFileParses = !lenient && allLinesParse(bytes)
         return try mapLines(bytes) { line, number in
             // Blank lines are skipped by every reader; leave them be.
-            guard line.contains(where: { $0 != 0x20 && $0 != 0x09 && $0 != cr }) else { return nil }
-            // Parse EVERY line — a damaged index refuses the rename.
-            guard (try? JSONSerialization.jsonObject(with: Data(line), options: [.fragmentsAllowed])) != nil else {
-                if lenient { return nil }
+            guard line.contains(where: { !isBlank($0) }) else { return nil }
+            // A damaged index refuses the rename (strict) — or, lenient,
+            // the damaged line is simply left alone.
+            if !lenient, !wholeFileParses, !parses(line) {
                 throw Failure.unparseable(file: file, line: number, reason: "not valid JSON")
             }
             guard mightMatch(line, needles: needles) else { return nil }
+            if lenient, !parses(line) { return nil }
             let tokens = jsonStringValues(line)
             var edits: [(Range<Int>, [UInt8])] = []
             var matchedContainers = Set<Int>()
@@ -494,6 +526,38 @@ enum ArchiveIndexRename {
             }
             return rewritten
         }
+    }
+
+    private static func isBlank(_ b: UInt8) -> Bool { b == 0x20 || b == 0x09 || b == cr }
+
+    private static func parses(_ line: ArraySlice<UInt8>) -> Bool {
+        (try? JSONSerialization.jsonObject(with: Data(line), options: [.fragmentsAllowed])) != nil
+    }
+
+    /// True when every non-blank line is ONE JSON value: the lines joined
+    /// as `[l1,l2,…]` parse, and the array has exactly one element per
+    /// line (so `1,2` on one line, or a value split across two lines, is
+    /// caught by the count and sent to the per-line check).
+    /// Memory: one extra copy of the file's bytes, for the call only.
+    static func allLinesParse(_ bytes: [UInt8]) -> Bool {
+        var joined: [UInt8] = [0x5B]
+        joined.reserveCapacity(bytes.count + 2)
+        var count = 0
+        var start = 0
+        while start <= bytes.count {
+            let end = byteIndex(of: newline, in: bytes[start...]) ?? bytes.count
+            let line = bytes[start..<end]
+            if line.contains(where: { !isBlank($0) }) {
+                if count > 0 { joined.append(comma) }
+                joined.append(contentsOf: line)
+                count += 1
+            }
+            if end == bytes.count { break }
+            start = end + 1
+        }
+        joined.append(0x5D)
+        guard let array = (try? JSONSerialization.jsonObject(with: Data(joined))) as? [Any] else { return false }
+        return array.count == count
     }
 
     /// A JSON string value in a line: its raw byte range (quotes included),
