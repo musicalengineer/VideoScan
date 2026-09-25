@@ -159,7 +159,7 @@ DEFAULT_TIMEOUT_SECONDS = 2400.0
 NUM_PREDICT = 8192
 
 
-def interpret(payload: dict) -> tuple[str, str | None]:
+def interpret(payload: dict, num_predict: int = NUM_PREDICT) -> tuple[str, str | None]:
     """(answer, error) from an /api/chat reply. Pure — table-tested.
 
     A reply cut off by the NUM_PREDICT cap (done_reason "length") is an
@@ -168,7 +168,7 @@ def interpret(payload: dict) -> tuple[str, str | None]:
     """
     answer = (payload.get("message") or {}).get("content", "")
     if payload.get("done_reason") == "length":
-        return "", (f"reply cut off at the {NUM_PREDICT}-token cap before an answer "
+        return "", (f"reply cut off at the {num_predict}-token cap before an answer "
                     f"(raise --num-predict): " + answer[-200:].replace("\n", " "))
     answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S).strip()
     if not answer:
@@ -180,12 +180,16 @@ def interpret(payload: dict) -> tuple[str, str | None]:
 
 
 def ask(endpoint: str, model: str, prompt: str, timeout: float,
-        num_predict: int = NUM_PREDICT) -> tuple[str, float, str | None]:
+        num_predict: int = NUM_PREDICT, think: bool = True) -> tuple[str, float, str | None]:
     body = json.dumps({
         "model": model,
         "messages": [{"role": "system", "content": SYSTEM},
                      {"role": "user", "content": prompt}],
         "stream": False,
+        # think: False asks a thinking model (qwen3.x) to answer without its
+        # reasoning pass — faster, shallower; --no-think, for diffs it
+        # cannot finish thinking about inside the cap.
+        "think": think,
         # num_ctx: without it ollama runs the model at its MAXIMUM context
         # (262K), and a 32B reviewer on a 48 GB Mac came back with empty
         # 200 replies that were counted as 25/25 FLAGGED (2026-09-01).
@@ -203,7 +207,7 @@ def ask(endpoint: str, model: str, prompt: str, timeout: float,
             payload = json.loads(response.read())
     except Exception as exc:                      # noqa: BLE001 - report, never raise
         return "", time.monotonic() - started, str(exc)
-    answer, error = interpret(payload)
+    answer, error = interpret(payload, num_predict)
     return answer, time.monotonic() - started, error
 
 
@@ -234,6 +238,8 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"seconds to wait for one review (default {DEFAULT_TIMEOUT_SECONDS:.0f})")
     parser.add_argument("--num-predict", type=int, default=NUM_PREDICT,
                         help=f"reply cap in tokens, thinking included (default {NUM_PREDICT})")
+    parser.add_argument("--no-think", action="store_true",
+                        help="ask a thinking model to answer without its reasoning pass")
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
     if not args.model:
@@ -252,14 +258,14 @@ def main(argv: list[str] | None = None) -> int:
         print("nothing to review")
         return 0
     print(f"model    {args.model}")
-    print(f"limits   wait {args.timeout:.0f} s per review, reply cap {args.num_predict} tokens")
+    print(f"limits   wait {args.timeout:.0f} s per review, reply cap {args.num_predict} tokens, thinking {'off' if args.no_think else 'on'}")
     print(f"units    {len(rows)}")
     print(f"out      {out}\n", flush=True)
 
     flagged, quiet, broken = [], [], []
     for index, (short, subject, diff) in enumerate(rows, 1):
         prompt = ("Review this change.\n\n```diff\n" + diff + "\n```")
-        answer, seconds, error = ask(args.endpoint, args.model, prompt, args.timeout, args.num_predict)
+        answer, seconds, error = ask(args.endpoint, args.model, prompt, args.timeout, args.num_predict, not args.no_think)
 
         if error:
             broken.append((short, subject, error))

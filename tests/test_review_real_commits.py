@@ -31,6 +31,11 @@ def test_a_reply_cut_at_the_cap_is_an_error_not_a_finding():
     assert error.startswith("reply cut off at the 8192-token cap")
 
 
+def test_the_cut_off_error_names_the_cap_actually_used():
+    _, error = rrc.interpret({"done_reason": "length", "message": {"content": ""}}, num_predict=24576)
+    assert error.startswith("reply cut off at the 24576-token cap")
+
+
 def test_an_empty_reply_is_an_error():
     answer, error = rrc.interpret({"done_reason": "stop", "message": {"content": "<think>x</think>"}})
     assert answer == "" and error.startswith("empty reply")
@@ -53,8 +58,9 @@ def test_ask_sends_the_reply_cap_to_ollama():
 
     server = HTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.handle_request, daemon=True).start()
-    answer, _, error = rrc.ask(f"http://127.0.0.1:{server.server_port}", "m", "p", timeout=10, num_predict=123)
+    answer, _, error = rrc.ask(f"http://127.0.0.1:{server.server_port}", "m", "p", timeout=10, num_predict=123, think=False)
     server.server_close()
     assert error is None and answer == "NO FINDINGS"
     assert seen["body"]["options"]["num_predict"] == 123
     assert seen["body"]["options"]["num_ctx"] == 32768
+    assert seen["body"]["think"] is False
