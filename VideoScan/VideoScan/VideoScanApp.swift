@@ -549,6 +549,10 @@ struct VideoScanApp: App {
                     .onAppear {
                         appDelegate.catalogModel = catalogModel
                         appDelegate.fileOpsCenter = fileOpsCenter
+                        // A Catalog rename refuses to rewrite the archive
+                        // index while a Promote appends to it.
+                        let center = fileOpsCenter
+                        catalogModel.archiveIndexWriterActive = { [weak center] in center?.hasActivePromote ?? false }
                         // Hallie on the home network (iPad / MBP) — starts
                         // only if enabled in Hallie's settings.
                         HallieWebAccess.shared.attach(model: catalogModel)

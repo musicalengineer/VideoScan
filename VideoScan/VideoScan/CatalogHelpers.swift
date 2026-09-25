@@ -752,7 +752,8 @@ struct CatalogContent: View {
                 filename: $renameText,
                 originalExt: (renameTarget?.filename as NSString?)?.pathExtension ?? "",
                 onConfirm: { performRename() },
-                onCancel: { showRenameSheet = false }
+                onCancel: { showRenameSheet = false },
+                inArchive: renameTarget.map { model.renameUpdatesArchiveIndex($0) } ?? false
             )
         }
         // Surface rename failures (silent fail was the original bug).

@@ -1481,6 +1481,15 @@ final class VideoScanModel: ObservableObject {
     /// scratch folder). Injectable so a test can point it at a sandbox.
     var mediaLedger = MediaLedger()
 
+    /// True while something is appending to the Master Archive's index
+    /// (a Promote job — the Archive Angel's included). A Catalog rename
+    /// that would rewrite the index refuses while it answers true
+    /// (VideoScanModel+Rename). Wired by VideoScanApp to the Media File
+    /// Operations center; nil (tests, previews) = not busy.
+    /// (`@MainActor () -> Bool` ≈ a std::function that must be called on
+    /// the UI thread.)
+    var archiveIndexWriterActive: (@MainActor () -> Bool)?
+
     /// Find Similar Footage: bumped by every "same footage" / "not the
     /// same" / "forget" answer (codex #1674 F4). A run records the value
     /// when it snapshots the catalog; an apply whose snapshot predates the
