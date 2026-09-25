@@ -52,7 +52,14 @@ extension ArchiveView {
                 ArchiveProgressBar(progress: archiveProgress)
                 // Archive Angel — ONE strip (Rick 2026-09-22), its cards and
                 // sheets (ArchiveAngel/UI/ArchiveAngelStrip.swift, S2).
-                ArchiveAngelStrip(angel: model.archiveAngel, revealArchived: { revealArchivedForAngel() })
+                // Bounded (bug 2026-09-24): the strip's turndown, hygiene
+                // card and ready batch have no height limit of their own;
+                // unbounded they pushed this header and the sidebar top
+                // under the title bar. Hug-then-scroll, capped to a share
+                // of the pane (ArchiveView+Layout.swift).
+                HuggingScrollRegion(maxHeight: ArchivePaneLayout.angelRegionCap(paneHeight: fileListHeight)) {
+                    ArchiveAngelStrip(angel: model.archiveAngel, revealArchived: { revealArchivedForAngel() })
+                }
                 // The Helper's nudge list ("It looks like N files are
                 // ready…") was retired in S4 — the strip above carries the
                 // same Ready / Needs a date numbers.

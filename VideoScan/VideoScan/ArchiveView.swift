@@ -10,6 +10,8 @@ import SwiftUI
 //   ArchiveView+Table.swift       — file table, status cell, context menu
 //   ArchiveView+Categories.swift  — pure derivations (categories, status, people)
 //   ArchiveView+DetailSheet.swift — the per-record detail sheet
+//   ArchiveView+Layout.swift      — vertical layout policy (the header stays
+//                                   on screen; the Angel strip is bounded)
 //   ArchiveHomeState.swift        — entry/hand-off state machine (HOME =
 //                                   Archived + Timeline; see that file)
 
@@ -62,14 +64,28 @@ struct ArchiveView: View {
     // consolidation S2 (2026-09-22); this view only places the strip and
     // tells the façade when to re-read the buffer.
 
+    /// Measured height of the right pane — the Angel region's cap is a
+    /// share of it (ArchivePaneLayout). Written by onGeometryChange only.
+    @State var fileListHeight: CGFloat = 0
+
     var body: some View {
         HSplitView {
             sidebar
                 // Rick 2026-08-19: "plenty of room in this window" — wider
                 // sidebar so MASTER ARCHIVE and the stage rows breathe.
-                .frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
+                // minHeight 0 + alignment .top (bug 2026-09-24): if a pane's
+                // content is ever taller than the window it clips at the
+                // bottom — the header never slides up under the title bar.
+                .frame(minWidth: 260, idealWidth: 300, maxWidth: 380,
+                       minHeight: 0, maxHeight: .infinity, alignment: .top)
             fileList
-                .frame(minWidth: 500)
+                .frame(minWidth: 500, maxWidth: .infinity,
+                       minHeight: 0, maxHeight: .infinity, alignment: .top)
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    proxy.size.height
+                } action: { newHeight in
+                    fileListHeight = newHeight
+                }
         }
         // ContentView renders tabs via `switch selectedTab`, so this view
         // is rebuilt on every tab entry and onAppear IS the entry point.
