@@ -377,8 +377,12 @@ struct ArchiveAngelScaleCharacterizationTests {
     /// ready + 7,586 need a date (no floors, no grades, no copy chooser
     /// beyond a shared group / name + length). Excluded is X minus the two
     /// eligible records that scored 0 (Not now — no floor named them).
+    /// Rules v12 (2026-09-25): `recentDigitization` moves 184 synthetic
+    /// files dated within a year, no device, in a digitizer's codec from
+    /// Ready to Needs a date (14,497 → 14,313; 3,724 → 3,908); nothing in
+    /// the fixture reaches 1 Gbit/s, so Worth a look and the rest hold.
     static let pinnedClasses: [ArchiveAngelRecommendationClass: Int] = [
-        .ready: 14497, .needsDate: 3724, .worthALook: 2155, .notNow: 1235, .excluded: 76827, .anotherCopy: 1562,
+        .ready: 14313, .needsDate: 3908, .worthALook: 2155, .notNow: 1235, .excluded: 76827, .anotherCopy: 1562,
     ]
 
     /// The index `i` of a synthetic record from its UUID.
@@ -578,6 +582,10 @@ struct ArchiveAngelVocabularyTests {
             // QA on S3 (2026-09-22): ADDED.
             "Marked an extra copy — the Keep copy is the one to archive",
             "Not in a class the Angel prepares now (Not now, Needs a date, Another copy)",
+            // Rules v12 (2026-09-25): ADDED — the Angel's own buffer companions.
+            "Archive Angel's own working copy (a prepared companion in the buffer), not material",
+            // QA v12 #6: ADDED — a footage group whose original is archived.
+            "The original of this footage is already in the archive",
         ])
     }
 
@@ -595,7 +603,7 @@ struct ArchiveAngelVocabularyTests {
         #expect(ArchiveAngelPlan.planFilename == "plan.json")
         #expect(ArchiveAngelEvidenceStore.filename == "evidence.json")
         #expect(ArchiveAngelEvidenceFile.currentVersion == 1)
-        #expect(ArchiveAngelScorer.rulesVersion == 11, "S3b 2026-09-22: floors/signals as policy data, stage is a vote, classes")
+        #expect(ArchiveAngelScorer.rulesVersion == 12, "v12 2026-09-25: truthful readiness — working-copy floor, archived footage, recentDigitization / absurdBitrate classes")
     }
 
     @Test("grade bands unchanged: A ≥ 100, B 60–99, C 25–59, D 1–24, else X")

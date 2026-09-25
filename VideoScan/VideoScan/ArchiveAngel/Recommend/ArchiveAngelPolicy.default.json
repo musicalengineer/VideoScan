@@ -11,6 +11,11 @@
       "note" : "The file is in the Master Archive or already has its copy there"
     },
     {
+      "id" : "angelWorkingCopy",
+      "kind" : "angelWorkingCopy",
+      "note" : "A companion Archive Angel prepared in its buffer — never material of its own"
+    },
+    {
       "id" : "fileGone",
       "kind" : "match",
       "note" : "Relocate marked the file deleted or unsalvageable",
@@ -119,6 +124,82 @@
   "name" : "default",
   "recommend" : {
     "classes" : [
+      {
+        "class" : "worthALook",
+        "line" : "Unusually large for its length — check it before archiving",
+        "note" : "A broken encode (over 1 Gbit/s) needs a look, not a promote",
+        "when" : [
+          {
+            "any" : [
+              {
+                "field" : "vouched",
+                "op" : "==",
+                "value" : true
+              },
+              {
+                "field" : "grade",
+                "op" : "in",
+                "value" : [
+                  "A",
+                  "B"
+                ]
+              }
+            ]
+          },
+          {
+            "field" : "averageKbps",
+            "op" : ">=",
+            "value" : 1000000
+          }
+        ]
+      },
+      {
+        "class" : "needsDate",
+        "line" : "Dated {year}, but it looks like a digitization of older footage — confirm when it was filmed",
+        "note" : "Dated within the last year by a machine, no camera named, a digitizer's or editor's codec: confirm the year",
+        "when" : [
+          {
+            "any" : [
+              {
+                "field" : "vouched",
+                "op" : "==",
+                "value" : true
+              },
+              {
+                "field" : "grade",
+                "op" : "==",
+                "value" : "A"
+              }
+            ]
+          },
+          {
+            "field" : "hasUserDate",
+            "op" : "==",
+            "value" : false
+          },
+          {
+            "field" : "yearsAgo",
+            "op" : "<=",
+            "value" : 1
+          },
+          {
+            "field" : "hasCameraOrigin",
+            "op" : "==",
+            "value" : false
+          },
+          {
+            "field" : "videoCodec",
+            "op" : "in",
+            "value" : [
+              "ffv1",
+              "prores",
+              "dvvideo",
+              "mpeg2video",
+              "mjpeg"
+            ]
+          }
+        ]
+      },
       {
         "class" : "ready",
         "when" : [
@@ -344,10 +425,11 @@
       "temp",
       "tmp",
       ".cache",
-      ".thumbnails"
+      ".thumbnails",
+      "personsearchresults"
     ],
     "appCacheStemGlobs" : [
-
+      "*_compilation_*"
     ],
     "appCacheStemNames" : [
       "cache",

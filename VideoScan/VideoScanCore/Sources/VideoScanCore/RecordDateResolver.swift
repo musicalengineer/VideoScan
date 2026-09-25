@@ -14,6 +14,11 @@
 //      (day precision). Confidence by ORIGIN: a named camera/phone
 //      make/model 0.95, a transcoder encoder string only 0.80 (it may
 //      be the re-encode date), neither 0.85.
+//      Rules v12 exception: a stamp with no camera behind it (≤ 0.85)
+//      whose year disagrees by more than 2 years with a year in the
+//      FILENAME is a copy-era date; resolution then continues with
+//      rank 3 (an inferred date agreeing with the stamp keeps the
+//      stamp; a disagreeing one wins) and only then rank 4.
 //      GH #166 exception: an inferred date whose confidence marks
 //      CONTENT evidence agreeing with itself (≥ 0.85 — multi-frame OCR
 //      consensus, or OCR corroborated by transcript/caption) OUTVOTES
@@ -198,6 +203,29 @@ public enum RecordDateResolver {
                abs(iy - ey) > contentStampToleranceYears {
                 return i
             }
+            // Rules v12 (2026-09-25, docs/archive_angel_wise_design.md §3.2):
+            // a stamp with NO camera behind it (a transcoder's, or one of
+            // unknown origin — ≤ 0.85) is a copy-era date whenever the name
+            // says otherwise. "DickyDonnaDancing1992.mov" stamped 2026-04-03
+            // by Apple ProRes 422 was filmed in 1992; the Angel called it
+            // Ready under 2026. A device-stamped date (0.95) is never
+            // outvoted by a name; a disagreement within ±2 years is clock
+            // slop. Once the stamp is discredited the ranking CONTINUES in
+            // order (QA v12 #2): an inferred date (rank 3, ≥ 0.6) that
+            // AGREES with the stamp keeps the stamp — two machine signals
+            // beat a name; one that disagrees wins; only with no inferred
+            // date does the filename year (rank 4, 0.5 — Promote flags it
+            // low-confidence) take over.
+            if e.confidence <= embeddedConfidenceUnknownOrigin,
+               let f = fromFilename(), let fy = f.year, let ey = e.year,
+               abs(fy - ey) > contentStampToleranceYears {
+                if let i = inferred(), let iy = i.year {
+                    return abs(iy - ey) <= contentStampToleranceYears ? e : i
+                }
+                return RecordDateResolution(year: f.year, month: f.month, day: f.day, precision: f.precision,
+                                            confidence: f.confidence, source: f.source,
+                                            hadRejectedSignal: rejectedInferred)
+            }
             return e
         }
         if let i = inferred() { return i }
@@ -280,6 +308,26 @@ public enum FilenameDatePattern {
         }
 
         func plausibleYear(_ y: Int) -> Bool { y >= minYear && y <= maxYear }
+
+        /// Is this digit run one side of a measurement — "WxH"
+        /// ("1920x1080" / "1080x1920"), or a number with a unit glued on
+        /// ("2000k", "2000kbps", "2000fps", "1920p", "48000hz")? Linear in
+        /// the few characters it reads.
+        func isMeasurementToken(_ r: DigitRun) -> Bool {
+            func isDigit(_ i: Int) -> Bool { i >= 0 && i < chars.count && chars[i].isASCII && chars[i].isNumber }
+            func isLetter(_ i: Int) -> Bool { i >= 0 && i < chars.count && chars[i].isLetter }
+            func lower(_ i: Int) -> Character? { i >= 0 && i < chars.count ? Character(chars[i].lowercased()) : nil }
+            // "…x1080" after the run, or "1080x…" before it.
+            if lower(r.end) == "x", isDigit(r.end + 1) { return true }
+            if r.start >= 2, lower(r.start - 1) == "x", isDigit(r.start - 2) { return true }
+            // A unit glued on, ending the token (not the start of a word).
+            let tail = (r.end..<min(chars.count, r.end + 4)).compactMap { lower($0) }
+            let word = String(tail.prefix { $0.isLetter })
+            for unit in ["kbps", "mbps", "fps", "hz", "k", "p"] where word == unit {
+                return !isLetter(r.end + unit.count)
+            }
+            return false
+        }
 
         /// The single separator character between two ADJACENT runs, or nil.
         func separator(_ a: DigitRun, _ b: DigitRun) -> Character? {
@@ -384,6 +432,11 @@ public enum FilenameDatePattern {
             var e = r.start
             if e > 0, s.chars[e - 1] == "_" || s.chars[e - 1] == "-" { e -= 1 }
             if e > 0, s.chars[e - 1].isNumber { continue }
+            // QA v12 #1: a dimension, bitrate or rate is not a year —
+            // "1920x1080", "1080x1920", "2000k", "2000kbps", "2000fps",
+            // "1920p". Only IMMEDIATE neighbours count ("1994pics" and
+            // "Christmas1995Party" stay years).
+            if s.isMeasurementToken(r) { continue }
             var start = e
             while start > 0, s.chars[start - 1].isLetter { start -= 1 }
             let word = String(s.chars[start..<e]).lowercased()

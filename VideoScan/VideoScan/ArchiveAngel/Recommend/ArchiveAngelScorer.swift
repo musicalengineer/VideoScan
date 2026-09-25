@@ -109,6 +109,19 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     /// The group's confidence — only Likely or stronger groups collapse
     /// (a Possible group is shown to the person, not decided for them).
     var footageConfidence: FootageConfidence?
+    /// Rules v12 (2026-09-25, docs/archive_angel_wise_design.md §3): the
+    /// file lives under the Angel's OWN buffer root — a prepared companion
+    /// (`.vs.archive.mov`, `.vs.preserve.mkv`, `_balanced`) waiting for
+    /// review. Two of them reached the live list as "Worth a look". A
+    /// SAFETY floor (`angelWorkingCopy`): the buffer is never material.
+    var isAngelWorkingCopy: Bool
+    /// Rules v12: this record's footage group (Likely or stronger) has its
+    /// likely original already in the archive, and this member is not that
+    /// original (rank > 0). Folded into the `archivedCopy` floor — "A copy
+    /// is already in the archive" — so a re-encode or export of an archived
+    /// tape is never proposed as new material. Set by the sweep's candidate
+    /// builder in one O(n) pre-pass; nowhere else.
+    var archivedFootageOriginal: Bool
 
     /// Rick 2026-09-21: a Live Photo's motion half
     /// (`jpegvideocomplement_*.mov`, ~3 s) is part of a photo, not a video.
@@ -175,7 +188,8 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
          familyKey: String = "", deviceModel: String = "", captureDate: Date? = nil,
          duplicateGroupCount: Int = 0, duplicateDisposition: DuplicateDisposition = .none,
          userDateConfidence: String? = nil, originMake: String? = nil, originEncoder: String? = nil,
-         footageGroupID: UUID? = nil, footageRank: Int? = nil, footageConfidence: FootageConfidence? = nil) {
+         footageGroupID: UUID? = nil, footageRank: Int? = nil, footageConfidence: FootageConfidence? = nil,
+         isAngelWorkingCopy: Bool = false, archivedFootageOriginal: Bool = false) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds; self.streamTypeRaw = streamTypeRaw; self.isPlayable = isPlayable
         self.starRating = starRating; self.mediaDisposition = mediaDisposition; self.archiveStage = archiveStage
@@ -198,6 +212,8 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         self.originEncoder = originEncoder
         self.footageGroupID = footageGroupID; self.footageRank = footageRank
         self.footageConfidence = footageConfidence
+        self.isAngelWorkingCopy = isAngelWorkingCopy
+        self.archivedFootageOriginal = archivedFootageOriginal
     }
 }
 
@@ -266,6 +282,16 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     /// QA on S3: Prepare takes only the classes the policy prepares
     /// (`recommend.prepare`: Ready, then Worth a look by default).
     case notRecommendedNow = "Not in a class the Angel prepares now (Not now, Needs a date, Another copy)"
+    /// Rules v12 (2026-09-25): a file inside the Angel's own buffer — a
+    /// companion it prepared for review. Two reached the live list as
+    /// "Worth a look" (60-minute FFV1 / HEVC copies of a file being
+    /// prepared). A SAFETY floor: the buffer is never material.
+    case angelWorkingCopy = "Archive Angel's own working copy (a prepared companion in the buffer), not material"
+    /// Rules v12, QA v12 #6: a member of a footage group (Find Similar
+    /// Footage, Likely or stronger) whose likely ORIGINAL is archived. Not
+    /// "a copy is in the archive" — this file's bytes may be nowhere in
+    /// it; the footage is. A SAFETY reason (the `archivedCopy` floor).
+    case footageOriginalArchived = "The original of this footage is already in the archive"
 }
 
 extension ArchiveAngelRejection {
@@ -273,7 +299,8 @@ extension ArchiveAngelRejection {
     /// a file excluded for one of these is never recommended, whatever the
     /// class rules say — `useAngelFloors: false` included.
     static let safetyReasons: Set<ArchiveAngelRejection> = [
-        .notVideo, .alreadyArchived, .duplicateArchived, .fileGone, .volumeOffline,
+        .notVideo, .alreadyArchived, .duplicateArchived, .fileGone, .volumeOffline, .angelWorkingCopy,
+        .footageOriginalArchived,
     ]
 }
 
@@ -436,8 +463,14 @@ enum ArchiveAngelScorer {
     /// floors and signals are the policy's rule arrays, archiveStage
     /// Ready/Master is a VOTE (no longer "already archived" — Rick
     /// 2026-09-22), and every record carries its recommendation class
-    /// (Consolidation S3b).
-    static let rulesVersion = 11
+    /// (Consolidation S3b); 12 = truthful readiness (2026-09-25,
+    /// docs/archive_angel_wise_design.md §3): the `angelWorkingCopy` safety
+    /// floor, a footage group's archived original excludes its other
+    /// members (`archivedFootageOriginal`), the `recentDigitization` and
+    /// `absurdBitrate` class rules, Person Finder compilations as app
+    /// output, and RecordDateResolver's filename-year-beats-conversion-
+    /// stamp rule — every v11 sidecar must rescore.
+    static let rulesVersion = 12
 
     /// The verdict for one record under the built-in rules with these
     /// weights. Pure.

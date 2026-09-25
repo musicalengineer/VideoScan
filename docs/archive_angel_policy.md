@@ -45,6 +45,8 @@ So the smallest useful file is:
 
 | Class | Default rule |
 |---|---|
+| **Worth a look** (`absurdBitrate`, rules v12) | Would be recommended (vouched, or grade A/B) but averages 1 Gbit/s or more — a broken encode (a 43 GB file for 37 s) until you have looked. Reason: "Unusually large for its length — check it before archiving" |
+| **Needs a date** (`recentDigitization`, rules v12) | Would be Ready, but the machine's date is within the last year, no camera or phone is named in the tags (neither a make nor a model — `hasCameraOrigin`), no date of yours, and the codec is a digitizer's or an editor's (FFV1, ProRes, DV, MPEG-2, MJPEG) — a tape converted this year, dated by its conversion. Reason: "Dated 2026, but it looks like a digitization of older footage — confirm when it was filmed". A year you type ends it |
 | **Ready** | Passes the floors, AND (someone vouched: Important, ★★ or more, stage Ready/Master, OR grade A), AND dated to at least a year |
 | **Needs a date** | Same as Ready, but not dated |
 | **Worth a look** | Grade B, nobody vouched |
@@ -57,19 +59,20 @@ archiveStage Ready/Master is a **vote** to archive. Only a real Master Archive c
 
 ## Safety floors — these cannot be turned off, by design
 
-Five floors guard against recommending a file the archive must never receive twice or cannot receive at all (the delete-safety principle: refuse over guess):
+Six floors guard against recommending a file the archive must never receive twice or cannot receive at all (the delete-safety principle: refuse over guess):
 
 | Floor | Excludes |
 |---|---|
 | `notVideo` | audio-only files, stills, un-probed files |
 | `onMasterArchive` | a file in the Master Archive, or one that already has its copy there |
-| `archivedCopy` | a file whose content (or original) is already archived |
+| `angelWorkingCopy` | a companion Archive Angel prepared in its own buffer (`~/Movies/VideoScan Buffer/ArchiveAngel`) — never material of its own (rules v12) |
+| `archivedCopy` | a file whose content (or original) is already archived — including the other members of a **footage group** (Find Similar Footage, Likely or stronger) whose likely original is archived (rules v12) |
 | `fileGone` | a record Relocate marked Manually Deleted or Salvage Failed |
 | `volumeOffline` | a file on a volume that isn't mounted |
 
 A `policy.json` that disables one of these, narrows it with `when`, sets `starExempt`, sets `explicitPicks: false`, or changes its kind or reason is **refused whole**. The log names the safety floor, and the bundled default runs. `recommend.useAngelFloors: false` still honours them. You may change their `note` and `line`.
 
-**The safety floors are their own pass** (codex #1643). The reason a file shows is the *first* floor that fires in policy order — so an offline 30-second tape reads "Too short", the lasting reason, not "Volume offline". But every file is also checked against the five safety floors separately, and that result is stored on its own. The classes exclude a file on any safety hit, whichever floor fired first and whatever `useAngelFloors` says.
+**The safety floors are their own pass** (codex #1643). The reason a file shows is the *first* floor that fires in policy order — so an offline 30-second tape reads "Too short", the lasting reason, not "Volume offline". But every file is also checked against the six safety floors separately, and that result is stored on its own. The classes exclude a file on any safety hit, whichever floor fired first and whatever `useAngelFloors` says.
 
 Separately from the floors, the recommendation counts are re-checked against the live catalog about half a second after any catalog change. A record that has been purged, set aside or superseded, or that Promote would refuse (already promoted, an archive copy), stops being counted, listed or badged immediately. It doesn't wait for the next sweep. The counts, the catalog filter, the row badge, the record's class and Prepare all read **one** effective class — the stored class, then the prepared/promoted batches, then this live check — so a badge can never say "Promote me" for a file the counts left out.
 
@@ -95,7 +98,7 @@ A rule is an object. Only `id` and `kind` are required.
 
 ### Floor kinds (`floors`)
 
-`match`, `notVideo`, `onMasterArchive`, `archivedCopy`, `notPlayable`, `pairedHalf`, `livePhotoMotion`, `recentPhoneClip` (`weights.recentPhoneClipYears`), `appCache` (`tables`), `derivativeOfOriginal`, `tooShort` (`weights.minimumDurationSeconds`; explicit picks use `explicitPickMinimumDurationSeconds`), `proxyStream` (`weights.minimumAverageKilobitsPerSecond`), `markedJunk`, `suspectedJunk`, `junkScore` (`weights.junkFloor`), `volumeOffline`, `resting` (the attention memory).
+`match`, `notVideo`, `onMasterArchive`, `angelWorkingCopy`, `archivedCopy`, `notPlayable`, `pairedHalf`, `livePhotoMotion`, `recentPhoneClip` (`weights.recentPhoneClipYears`), `appCache` (`tables`), `derivativeOfOriginal`, `tooShort` (`weights.minimumDurationSeconds`; explicit picks use `explicitPickMinimumDurationSeconds`), `proxyStream` (`weights.minimumAverageKilobitsPerSecond`), `markedJunk`, `suspectedJunk`, `junkScore` (`weights.junkFloor`), `volumeOffline`, `resting` (the attention memory).
 
 ### Signal kinds (`signals`)
 
@@ -115,10 +118,10 @@ A condition is `{ "field": …, "op": …, "value": … }`. To say "any of these
 | Type | Fields | Operators | Value |
 |---|---|---|---|
 | text | `filename` `path` `videoCodec` `deviceModel` `volumeName` | `==` `!=` `contains` `notContains` `hasPrefix` `hasSuffix` · `in` `notIn` | a string · a list of strings |
-| number | `durationSeconds` `durationMinutes` `sizeMB` `averageKbps` `starRating` `junkScore` `tagCount` `useCount` `peopleCount` `year` (yours, else the inferred date) `captureYear` (camera/phone stamp) `duplicateGroupCount` | `==` `!=` `<` `<=` `>` `>=` | a number |
+| number | `durationSeconds` `durationMinutes` `sizeMB` `averageKbps` `starRating` `junkScore` `tagCount` `useCount` `peopleCount` `year` (yours, else the inferred date) `captureYear` (camera/phone stamp) `yearsAgo` (this year minus the year the one date rule places the file under — the year Promote would file it by; unknown when undated, so it never matches) `duplicateGroupCount` | `==` `!=` `<` `<=` `>` `>=` | a number |
 | names | `people` (confirmed) `machinePeople` (detected + suspected) | `contains` `notContains` · `in` `notIn` | a string · a list |
 | choice | `mediaDisposition` (unreviewed, important, recoverable, suspectedJunk, confirmedJunk) · `archiveStage` (none, healthy, masterAssigned, backedUp, readyForArchive, archived, manuallyDeleted, salvageFailed) · `duplicateDisposition` (none, keep, review, extraCopy) · `volumeRole` (unassigned, system, workspace, backup, cloud, archive) | `==` `!=` `in` `notIn` | a case name, or the label the app shows ("Suspected Junk") |
-| true/false | `isPhoneClip` `isLivePhotoMotion` `isHumanMarked` `hasUserNotes` `formatAtRisk` `isOnlyCopy` `isPairedHalf` `volumeOnline` `isOnMasterArchive` `hasArchivedDuplicate` `hasDuplicateGroup` `hasUserDate` `hasCaptions` `hasOCRText` | `==` `!=` | `true` / `false` |
+| true/false | `isPhoneClip` `isLivePhotoMotion` `isHumanMarked` `hasUserNotes` `formatAtRisk` `isOnlyCopy` `isPairedHalf` `volumeOnline` `isOnMasterArchive` `hasArchivedDuplicate` `hasDuplicateGroup` `hasUserDate` `hasCaptions` `hasOCRText` `hasCameraOrigin` | `==` `!=` | `true` / `false` |
 | class rules only | `grade` (A–X) · `eligible` · `vouched` · `dated` · `vouchPoints` | as above | |
 
 ## `recommend`
@@ -129,7 +132,7 @@ A condition is `{ "field": …, "op": …, "value": … }`. To say "any of these
 | `exclude` | Extra copy | Exclusions that only apply to the classes |
 | `vouch` | Important 3 · ★★+ 1 per star · stage Ready 2 · stage Master 1 · Keep (a note) | Who vouched, and how strongly |
 | `date.minimum` | `"year"` | `day` / `month` / `year` / `decade`, or `readinessKnown`, which asks Promote's own date check (ArchiveReadiness) |
-| `classes` | Ready, Needs a date, Worth a look (see above) | Ordered. The first match wins; no match means Not now. |
+| `classes` | absurdBitrate, recentDigitization, Ready, Needs a date, Worth a look (see above) | Ordered. The first match wins; no match means Not now. A class rule may carry a `line` — the reason a person reads when that rule assigns the class; `{year}` in it is replaced by the date rule's year ("undated" when there is none). |
 | `copies.collapseBy` | `footageGroup`, `duplicateGroup`, `nameAndDuration` | How copies of one recording are recognised. `footageGroup` = the group **Find Similar Footage** recorded (copies, re-encodes, transcodes, exports of one recording); `sharedDuplicateGroup` = only duplicate groups of two or more |
 | `copies.prefer` | `userKeeper`, `footageOriginal`, `best` | Which copy stays. `footageOriginal` = the footage group's likely original (the lowest rank Find Similar Footage gave) |
 | `order` | `angelRank` | The order of the lists: `angelRank` (score, then most original) or `vouchPoints` (the old nudge's order) |
@@ -162,11 +165,11 @@ The groups are metadata guesses (Identical / You confirmed / Likely / Possible).
   - `originalityUnknown`
   - `deliveryCodecs` (used by the download cap)
   - `familyOriginFolders` (a leading `.` matches a suffix, like `.imovielibrary`)
-  - `appCacheFolders`
+  - `appCacheFolders` (rules v12 adds `personsearchresults`, Person Finder's output folder)
   - `appCacheStemNames`, `appCacheStemNumbered`, `appCacheStemGlobs` — what counts as an app's cache/render file by its **stem** (the filename without its extension). Compared case-insensitively, always against the whole stem:
     - `appCacheStemNames`: bare tool nouns (default `cache render proxy proxies preview thumb thumbnail temp tmp`). `Cache.mov` matches; `Cache Cod 1998.mov` does not.
     - `appCacheStemNumbered` (default `true`): a noun may carry a number — one optional separator (space, `_` or `-`) and then digits: `Cache-30`, `render_7`, `tmp12`.
-    - `appCacheStemGlobs` (default none): extra patterns. Literal text, where `*` means "any characters": `render*` (starts with), `*_proxy` (ends with), `clip*final` (both), `*cache*` (contains). At most one `*`, or exactly two when they are the first and last character. A pattern of only `*` is refused (it would match every file). Up to 100 patterns and 500 names, each at most 100 characters.
+    - `appCacheStemGlobs` (default `*_compilation_*` — Person Finder's `Donna_compilation_39_h264_720p…` exports, rules v12): extra patterns. Literal text, where `*` means "any characters": `render*` (starts with), `*_proxy` (ends with), `clip*final` (both), `*cache*` (contains). At most one `*`, or exactly two when they are the first and last character. A pattern of only `*` is refused (it would match every file). Up to 100 patterns and 500 names, each at most 100 characters.
 
     **There are no regular expressions in the policy** (codex #1643). A user-supplied pattern could freeze the app: one passed every check and then took more than 2 seconds on a 30-character name, and another hung the check itself. These stem rules are matched in time proportional to the name's length, whatever you write. The defaults match exactly what the old pattern `^(cache|render|proxy|proxies|preview|thumb|thumbnail|temp|tmp)([ _-]?\d+)?$` matched (a test pins this).
 
@@ -265,4 +268,8 @@ A phone clip with no camera date has no `captureYear`, so this rule doesn't fire
 
 - At launch, the console says `Archive Angel: using your recommendation rules "<name>" from …`, or `refused … — <every problem>`.
 - After each sweep, it logs `Archive Angel Assessment: done: A … · ready N · needs a date M · worth a look K · …`.
-- On the first run after a rules-version change, it logs once: `recommendation rules v10 → v11 — before: … now: …`.
+- On the first run after a rules-version change, it logs once: `recommendation rules v11 → v12 — before: … now: …`.
+
+## Rules v12 (2026-09-25) — truthful readiness
+
+Measured on the live catalog that morning and fixed as data (docs/archive_angel_wise_design.md §3): the `angelWorkingCopy` safety floor; a footage group's archived original excludes its other members (`archivedCopy`); the `absurdBitrate` and `recentDigitization` class rules and the `yearsAgo` field; `personsearchresults` and `*_compilation_*` in the app-cache tables. Outside the policy, in the ONE date rule (`RecordDateResolver`): a container stamp with no camera behind it (a transcoder's, or of unknown origin) loses to a filename year that disagrees by more than two years — `DickyDonnaDancing1992.mov` stamped 2026-04-03 by Apple ProRes 422 is filed under 1992 (low confidence), not 2026. An inferred date (on-screen dates, speech) still ranks above the filename: one that agrees with the stamp keeps the stamp, one that disagrees wins. Dimensions and rates in a name (`1920x1080`, `2000k`, `2000fps`, `1920p`) are never read as years. The Catalog's Date column shows the same date, and its tooltip says where it came from. A re-encode or export whose footage group's original is archived is excluded with its own reason, "The original of this footage is already in the archive" (the `archivedCopy` safety floor). Every v11 evidence file re-scores.

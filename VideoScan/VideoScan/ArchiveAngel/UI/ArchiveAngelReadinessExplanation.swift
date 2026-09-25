@@ -181,7 +181,17 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
         case "stage: Master": return "Its archive stage says Master."
         case "the copy to keep": return "You chose this copy as the one to keep."
         case "Not assessed yet": return "Archive Angel has not looked at it yet."
+        case ArchiveAngelRejection.footageOriginalArchived.rawValue:
+            return "Find Similar Footage matched it to footage whose original is already in the archive, so it is not new material."
+        // Rules v12 class-rule lines (AngelPolicyDefaults).
+        case AngelPolicyDefaults.absurdBitrateLine:
+            return "The file is far larger than its length explains — probably a broken encode. Play it before archiving."
         default: break
+        }
+        if r.hasPrefix("Dated "), r.hasSuffix(" — confirm when it was filmed"),
+           let comma = r.range(of: ", but it looks like") {
+            let year = r[r.index(r.startIndex, offsetBy: "Dated ".count)..<comma.lowerBound]
+            return "Its date says \(year), but it looks like a tape or film digitized recently — confirm the year it was actually filmed."
         }
         if r.hasSuffix(" files of the same footage — this one") {
             let n = r.dropLast(" files of the same footage — this one".count)

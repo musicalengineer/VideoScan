@@ -208,12 +208,18 @@ struct AngelPolicyTables: Codable, Sendable, Equatable {
             "imovie cache", "imovie movie cache", "imovie thumbnails", "imovie thumbnails.localized",
             "render files", "transcoded media", "proxy media", "analysis files", "thumbnail media",
             "cache", "caches", "renders", "proxies", "thumbnails", "temp", "tmp", ".cache", ".thumbnails",
+            // Rules v12: Person Finder's compilation output folder — machine
+            // edits of other files, never originals (three reached the live
+            // list as Ready).
+            "personsearchresults",
         ],
         // Exactly the retired `^(cache|render|proxy|proxies|preview|thumb|
         // thumbnail|temp|tmp)([ _-]?\d+)?$` (AngelStemMatcherTests: parity).
         appCacheStemNames: ["cache", "render", "proxy", "proxies", "preview", "thumb", "thumbnail", "temp", "tmp"],
         appCacheStemNumbered: true,
-        appCacheStemGlobs: [],
+        // Rules v12: Person Finder's "Donna_compilation_39_h264_720p…" —
+        // wherever it was copied to.
+        appCacheStemGlobs: ["*_compilation_*"],
         maxOriginalsPerKey: 8)
 }
 
@@ -227,7 +233,7 @@ enum AngelPolicyDefaults {
     /// volume must never be recommended. A policy.json that disables one of
     /// these, narrows it (`when`), exempts stars, spares explicit picks,
     /// changes its kind or reason — or drops it — is REFUSED whole.
-    static let safetyFloorIDs: [String] = ["notVideo", "onMasterArchive", "archivedCopy", "fileGone", "volumeOffline"]
+    static let safetyFloorIDs: [String] = ["notVideo", "onMasterArchive", "angelWorkingCopy", "archivedCopy", "fileGone", "volumeOffline"]
 
     /// The canonical safety floors, in policy order. A `let` (computed
     /// once): the scorer's independent safety pass reads it per record.
@@ -255,6 +261,11 @@ enum AngelPolicyDefaults {
         AngelRule(id: "notVideo", kind: .notVideo, note: "Audio-only files, stills and un-probed files are not videos"),
         AngelRule(id: "onMasterArchive", kind: .onMasterArchive,
                   note: "The file is in the Master Archive or already has its copy there"),
+        // Rules v12 (2026-09-25): the Angel's own buffer — companions it
+        // prepared for review — is never material. Two 60-minute buffer
+        // copies reached the live list as "Worth a look". A safety floor.
+        AngelRule(id: "angelWorkingCopy", kind: .angelWorkingCopy,
+                  note: "A companion Archive Angel prepared in its buffer — never material of its own"),
         // Rick 2026-09-22 (decision 3): archiveStage is never "archived" —
         // but Relocate's terminal stages mean the FILE IS GONE. v10 caught
         // them by accident ("stage ≥ Master"); this names them. Live catalog
@@ -334,6 +345,46 @@ enum AngelPolicyDefaults {
         .init(field: .vouched, op: .eq, value: .bool(true)),
         .init(field: .grade, op: .eq, value: .string("A")),
     ])
+
+    /// "Vouched, or grade A or B" — anything the classes below would
+    /// recommend at all.
+    static let recommendedAtAll = AngelCondition(any: [
+        .init(field: .vouched, op: .eq, value: .bool(true)),
+        .init(field: .grade, op: .in, value: .strings(["A", "B"])),
+    ])
+
+    /// Rules v12 (docs/archive_angel_wise_design.md §3.4): a file whose
+    /// bytes per second no real recording reaches (the live catalog holds
+    /// 116 above 1 Gbps — a 43 GB file for 37 s of picture) is a broken
+    /// encode until a person has looked: Worth a look, never Ready.
+    static let absurdBitrateKbps = 1_000_000.0
+    static let absurdBitrateLine = "Unusually large for its length — check it before archiving"
+    static let absurdBitrateClass = AngelClassRule(
+        .worthALook,
+        when: [recommendedAtAll, .init(field: .averageKbps, op: .ge, value: .number(absurdBitrateKbps))],
+        note: "A broken encode (over 1 Gbit/s) needs a look, not a promote",
+        line: absurdBitrateLine)
+
+    /// Rules v12 (§3.3): a file the ONE date rule places within the last
+    /// year, with no camera or phone named in its tags (make or model — QA v12 #5), in a codec a
+    /// digitizer or an editor writes (FFV1, ProRes, DV, MPEG-2, MJPEG) is
+    /// almost always a tape converted THIS year — the 22 live files under
+    /// "Converted_VHS_Tapes_2026" the Angel called Ready under 2026. It
+    /// needs its date confirmed (one click), so: Needs a date, with the
+    /// reason. A genuine 2026 ProRes export pays one click too — a year the
+    /// person typed outranks everything.
+    static let recentDigitizationCodecs = ["ffv1", "prores", "dvvideo", "mpeg2video", "mjpeg"]
+    static let recentDigitizationLine =
+        "Dated {year}, but it looks like a digitization of older footage — confirm when it was filmed"
+    static let recentDigitizationClass = AngelClassRule(
+        .needsDate,
+        when: [recommendedByPersonOrAngel,
+               .init(field: .hasUserDate, op: .eq, value: .bool(false)),
+               .init(field: .yearsAgo, op: .le, value: .number(1)),
+               .init(field: .hasCameraOrigin, op: .eq, value: .bool(false)),
+               .init(field: .videoCodec, op: .in, value: .strings(recentDigitizationCodecs))],
+        note: "Dated within the last year by a machine, no camera named, a digitizer's or editor's codec: confirm the year",
+        line: recentDigitizationLine)
 }
 
 extension AngelRecommendRules {
@@ -353,6 +404,9 @@ extension AngelRecommendRules {
         vouch: AngelPolicyDefaults.vouch,
         date: AngelDateRule(minimum: "year"),
         classes: [
+            // Rules v12: two truthfulness rules ahead of Ready.
+            AngelPolicyDefaults.absurdBitrateClass,
+            AngelPolicyDefaults.recentDigitizationClass,
             AngelClassRule(.ready, when: [AngelPolicyDefaults.recommendedByPersonOrAngel,
                                           .init(field: .dated, op: .eq, value: .bool(true))]),
             AngelClassRule(.needsDate, when: [AngelPolicyDefaults.recommendedByPersonOrAngel]),

@@ -196,3 +196,9 @@ writes only changed answers. Setting "Keep footage groups current", default ON.
 5. The filename-year-beats-conversion-stamp rule changes the catalog's date for
    every such file, not only the Angel's view (Promote files them under the
    filename year, marked low confidence). *(recommend yes — one truth)*
+6. A footage group whose likely original is an *export* (the camera
+   original is not in the catalog) is still treated as done when that
+   export is archived: its other members are excluded as "The original of
+   this footage is already in the archive". Narrow it to groups whose
+   original has camera evidence? *(QA v12 #7; recommend: keep — drain the
+   catalog; the Readiness sheet names Find Similar Footage as the reason)*

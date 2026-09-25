@@ -409,7 +409,10 @@ struct ModelSchemaTests {
         // Comparing it via Mirror would therefore ALWAYS fail (original has a
         // partner ref, clone has nil) — a false positive. We exclude it here
         // and assert its documented behavior separately below.
-        let excluded: Set<String> = ["pairedWith"]
+        // `displacedStampMemo` (rules v12, QA #3) is a derived, unpersisted
+        // cache of the Date column's resolver answer — keyed by its inputs,
+        // so a clone recomputes it on first read. Not a stored FACT.
+        let excluded: Set<String> = ["pairedWith", "displacedStampMemo"]
 
         // Give the original a paired partner so we can prove the exclusion is
         // real (clone.pairedWith stays nil even though original's is set).
