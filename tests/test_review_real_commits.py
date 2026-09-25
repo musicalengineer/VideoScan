@@ -64,3 +64,45 @@ def test_ask_sends_the_reply_cap_to_ollama():
     assert seen["body"]["options"]["num_predict"] == 123
     assert seen["body"]["options"]["num_ctx"] == 32768
     assert seen["body"]["think"] is False
+
+
+def _diff(files):
+    head = "subject\n\n body\n a.swift | 3 +\n"
+    return head + "".join(f"\ndiff --git a/{n} b/{n}\n" + "+x\n" * size for n, size in files)
+
+
+def test_a_small_diff_is_one_part():
+    d = _diff([("a.swift", 10)])
+    assert rrc.split_diff(d, limit=16_000) == [d]
+
+
+def test_a_big_diff_splits_at_file_boundaries_and_keeps_the_header():
+    d = _diff([("a.swift", 3000), ("b.swift", 3000), ("c.swift", 3000)])
+    parts = rrc.split_diff(d, limit=10_000)
+    assert len(parts) == 3
+    for i, p in enumerate(parts, 1):
+        assert p.startswith("subject")
+        assert f"[part {i} of 3" in p
+    assert "diff --git a/b.swift" in parts[1] and "a.swift b/a.swift" not in parts[1]
+    # every file appears exactly once across the parts
+    assert sum(p.count("diff --git ") for p in parts) == 3
+
+
+def test_review_unit_error_in_any_part_makes_the_commit_unreviewed():
+    d = _diff([("a.swift", 3000), ("b.swift", 3000)])
+    replies = iter([("NO FINDINGS", 1.0, None), ("", 2.0, "timed out")])
+    state, text, secs, error = rrc.review_unit(lambda _p: next(replies), d, limit=7000)
+    assert state == "ERROR" and "timed out" in error and secs == 3.0
+
+
+def test_review_unit_one_flagged_part_flags_the_commit():
+    d = _diff([("a.swift", 3000), ("b.swift", 3000)])
+    replies = iter([("NO FINDINGS", 1.0, None), ("Finding 1: bug", 1.0, None)])
+    state, text, _, error = rrc.review_unit(lambda _p: next(replies), d, limit=7000)
+    assert state == "FLAGGED" and error is None and text.startswith("[part 2/2] Finding 1")
+
+
+def test_review_unit_all_quiet():
+    d = _diff([("a.swift", 3000), ("b.swift", 3000)])
+    state, text, _, _ = rrc.review_unit(lambda _p: ("NO FINDINGS", 1.0, None), d, limit=7000)
+    assert state == "quiet" and text == "NO FINDINGS (2 parts)"

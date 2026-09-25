@@ -179,6 +179,56 @@ def interpret(payload: dict, num_predict: int = NUM_PREDICT) -> tuple[str, str |
     return answer, None
 
 
+# Big commits are reviewed a few files at a time (2026-09-25). qwen3.8
+# reasoned past 24,576 tokens (494 s) on the 40 KB Angel Checks diff and
+# never answered; with thinking off it answered "NO FINDINGS" in 1 s on the
+# same diff, which carried four confirmed MAJOR defects. A diff above
+# SPLIT_OVER characters is cut at file boundaries into parts of at most
+# SPLIT_OVER characters (a single larger file is one part of its own), each
+# carrying the commit's message and --stat so the model knows the whole.
+SPLIT_OVER = 16_000
+
+
+def split_diff(diff: str, limit: int = SPLIT_OVER) -> list[str]:
+    """Pure. The whole diff when it fits; otherwise header + file groups."""
+    if len(diff) <= limit or "\ndiff --git " not in diff:
+        return [diff]
+    head, _, rest = diff.partition("\ndiff --git ")
+    files = ["diff --git " + f for f in ("\ndiff --git " + rest).split("\ndiff --git ") if f]
+    parts, current = [], ""
+    for f in files:
+        if current and len(current) + len(f) > limit:
+            parts.append(current)
+            current = ""
+        current += ("\n" if current else "") + f
+    if current:
+        parts.append(current)
+    total = len(parts)
+    return [f"{head}\n\n[part {i} of {total} of this commit's diff]\n{p}" for i, p in enumerate(parts, 1)]
+
+
+def review_unit(ask_fn, diff: str, limit: int = SPLIT_OVER) -> tuple[str, str, float, str | None]:
+    """(state, text, seconds, error) for one commit, part by part. Pure but
+    for `ask_fn(prompt) -> (answer, seconds, error)`. Any part that errored
+    makes the commit ERROR (it was not fully reviewed, so it is retried);
+    otherwise any flagged part makes it FLAGGED; else quiet."""
+    parts = split_diff(diff, limit)
+    seconds, answers, errors = 0.0, [], []
+    for i, part in enumerate(parts, 1):
+        answer, secs, error = ask_fn("Review this change.\n\n```diff\n" + part + "\n```")
+        seconds += secs
+        tag = f"[part {i}/{len(parts)}] " if len(parts) > 1 else ""
+        if error:
+            errors.append(tag + str(error))
+        elif not clean(answer):
+            answers.append(tag + answer)
+    if errors:
+        return "ERROR", "\n\n".join(errors), seconds, "; ".join(errors)
+    if answers:
+        return "FLAGGED", "\n\n".join(answers), seconds, None
+    return "quiet", "NO FINDINGS" + (f" ({len(parts)} parts)" if len(parts) > 1 else ""), seconds, None
+
+
 def ask(endpoint: str, model: str, prompt: str, timeout: float,
         num_predict: int = NUM_PREDICT, think: bool = True) -> tuple[str, float, str | None]:
     body = json.dumps({
@@ -238,6 +288,9 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"seconds to wait for one review (default {DEFAULT_TIMEOUT_SECONDS:.0f})")
     parser.add_argument("--num-predict", type=int, default=NUM_PREDICT,
                         help=f"reply cap in tokens, thinking included (default {NUM_PREDICT})")
+    parser.add_argument("--split-over", type=int, default=SPLIT_OVER,
+                        help=f"review a diff larger than this many characters a few files "
+                             f"at a time (default {SPLIT_OVER})")
     parser.add_argument("--no-think", action="store_true",
                         help="ask a thinking model to answer without its reasoning pass")
     parser.add_argument("--out", default=None)
@@ -258,24 +311,24 @@ def main(argv: list[str] | None = None) -> int:
         print("nothing to review")
         return 0
     print(f"model    {args.model}")
-    print(f"limits   wait {args.timeout:.0f} s per review, reply cap {args.num_predict} tokens, thinking {'off' if args.no_think else 'on'}")
+    print(f"limits   wait {args.timeout:.0f} s per review, reply cap {args.num_predict} tokens, "
+          f"thinking {'off' if args.no_think else 'on'}, split over {args.split_over} chars")
     print(f"units    {len(rows)}")
     print(f"out      {out}\n", flush=True)
 
     flagged, quiet, broken = [], [], []
     for index, (short, subject, diff) in enumerate(rows, 1):
-        prompt = ("Review this change.\n\n```diff\n" + diff + "\n```")
-        answer, seconds, error = ask(args.endpoint, args.model, prompt, args.timeout, args.num_predict, not args.no_think)
-
-        if error:
+        state, text, seconds, error = review_unit(
+            lambda prompt: ask(args.endpoint, args.model, prompt, args.timeout,
+                               args.num_predict, not args.no_think),
+            diff, args.split_over)
+        answer = text
+        if state == "ERROR":
             broken.append((short, subject, error))
-            state = "ERROR"
-        elif clean(answer):
+        elif state == "quiet":
             quiet.append((short, subject))
-            state = "quiet"
         else:
             flagged.append((short, subject, answer))
-            state = "FLAGGED"
 
         (out / f"{index:02d}-{short}.md").write_text(
             f"# {short}  {subject}\n\n"
