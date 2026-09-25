@@ -391,7 +391,7 @@ enum ArchiveIndexRename {
     /// Absolute index of the first `byte` in `slice`, or nil.
     static func byteIndex(of byte: UInt8, in slice: ArraySlice<UInt8>) -> Int? {
         slice.withUnsafeBufferPointer { buf -> Int? in
-            guard let base = buf.baseAddress, buf.count > 0,
+            guard let base = buf.baseAddress, !buf.isEmpty,
                   let hit = memchr(base, Int32(byte), buf.count) else { return nil }
             return slice.startIndex + (UnsafeRawPointer(hit) - UnsafeRawPointer(base))
         }
