@@ -96,11 +96,12 @@ struct ArchiveAngelChecksPureTests {
     @Test("the queue reads facts for at most `lookahead` ids of a 100k ranked list, in rank order, skipping the checked and the ineligible")
     func queueIsBoundedByLookahead() {
         let ids = (0..<100_000).map { _ in UUID() }
+        let index = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
         var calls = 0
         let checked: Set<UUID> = [ids[1]]
         let queue = ArchiveAngelChecks.queue(ranked: ids, lookahead: 20, checked: checked) { id in
             calls += 1
-            let i = ids.firstIndex(of: id)!
+            let i = index[id] ?? -1
             return ArchiveAngelCheckFacts(id: id, filename: "f\(i)", fullPath: "/Volumes/T/f\(i)",
                                           audioNotVerified: i != 2, hasAudioTrack: i != 3,
                                           volumeMounted: i != 4, onMasterArchive: i == 5)

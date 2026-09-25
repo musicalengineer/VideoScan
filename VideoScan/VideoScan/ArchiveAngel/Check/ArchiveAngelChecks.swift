@@ -370,13 +370,17 @@ final class ArchiveAngelChecks: ObservableObject {
         case .failed(let message): return .failed(reason: message)
         case .cancelled, .cancelling: return .skipped(reason: "cancelled")
         case .running: return .failed(reason: "the check did not settle")
-        case .finished:
-            guard let v = verdict else { return .failed(reason: "the record left the catalog") }
-            switch v.status {
-            case "ok": return .ok(note: v.note)
-            case "damaged": return .damaged(note: v.note)
-            default: return .failed(reason: "no verdict was recorded")
-            }
+        case .finished: return verdictOutcome(verdict)
+        }
+    }
+
+    /// The finished job's word: what the record says now.
+    nonisolated static func verdictOutcome(_ verdict: (status: String, note: String)?) -> ArchiveAngelCheckOutcome {
+        guard let v = verdict else { return .failed(reason: "the record left the catalog") }
+        switch v.status {
+        case "ok": return .ok(note: v.note)
+        case "damaged": return .damaged(note: v.note)
+        default: return .failed(reason: "no verdict was recorded")
         }
     }
 
