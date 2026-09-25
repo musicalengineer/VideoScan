@@ -15,7 +15,7 @@ spec.loader.exec_module(rrc)
 
 def test_defaults_are_the_new_limits():
     assert rrc.DEFAULT_TIMEOUT_SECONDS == 2400.0
-    assert rrc.NUM_PREDICT == 8192
+    assert rrc.NUM_PREDICT == 24576
 
 
 def test_a_finished_answer_is_returned_without_its_thinking():
@@ -28,7 +28,7 @@ def test_a_reply_cut_at_the_cap_is_an_error_not_a_finding():
     answer, error = rrc.interpret({"done_reason": "length",
                                    "message": {"content": "<think>still reasoning about line 12"}})
     assert answer == ""
-    assert error.startswith("reply cut off at the 8192-token cap")
+    assert error.startswith("reply cut off at the 24576-token cap")
 
 
 def test_the_cut_off_error_names_the_cap_actually_used():

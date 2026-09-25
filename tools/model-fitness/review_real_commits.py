@@ -155,8 +155,10 @@ def diff_of(sha: str) -> str:
 # commit came back as a transport error and was never reviewed. The wait
 # goes to 40 min, and the reply (thinking included) is capped at
 # NUM_PREDICT tokens so a runaway answer ends instead of holding the model.
+# Measured 2026-09-25 on the M4: 24,576 tokens of qwen3.8 thinking took
+# 494–615 s, inside the 2400 s wait; 8,192 cut off parts it later answered.
 DEFAULT_TIMEOUT_SECONDS = 2400.0
-NUM_PREDICT = 8192
+NUM_PREDICT = 24576
 
 
 def interpret(payload: dict, num_predict: int = NUM_PREDICT) -> tuple[str, str | None]:
