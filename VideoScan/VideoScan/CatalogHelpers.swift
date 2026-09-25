@@ -752,7 +752,8 @@ struct CatalogContent: View {
                 filename: $renameText,
                 originalExt: (renameTarget?.filename as NSString?)?.pathExtension ?? "",
                 onConfirm: { performRename() },
-                onCancel: { showRenameSheet = false }
+                onCancel: { showRenameSheet = false },
+                inArchive: renameTarget.map { model.renameUpdatesArchiveIndex($0) } ?? false
             )
         }
         // Surface rename failures (silent fail was the original bug).
@@ -940,6 +941,15 @@ struct CatalogContent: View {
         // alert's "Try Again" button. Dismissing here keeps the UI from
         // double-stacking sheet+alert when the alert appears.
         showRenameSheet = false
+
+        // A Promote appends to the archive's index while it runs; renaming
+        // an archive file then would race it (the rename replaces whole
+        // index files). Ask to wait — nothing is renamed.
+        if model.renameUpdatesArchiveIndex(rec),
+           fileOpsCenter.jobs.contains(where: { $0.state.isActive && $0 is PromoteToArchiveJob }) {
+            renameError = "The archive is busy adding files right now. Rename this file after that finishes — nothing was renamed."
+            return
+        }
 
         do {
             try model.renameRecord(rec, toBaseName: renameText)

@@ -213,6 +213,48 @@ final class MediaLedger: @unchecked Sendable {
         guard fsync(indexFD) == 0 else { throw Failure.io("fsync \(MasterArchiveLayout.indexFolder)", errno: errno) }
     }
 
+    // MARK: Rename carry-through (Rick 2026-09-25)
+
+    /// A Catalog rename that touched the archive rewrites the old names in
+    /// place — here too, because the archive's `media-ledger.jsonl` is a
+    /// COPY of this file and the next Promote mirror would otherwise put
+    /// the old names back. Chained on the same ordered worker as appends
+    /// and mirrors, so no append can land between the read and the
+    /// atomic replace (the whole-file replace would drop it). Exact values
+    /// only (ArchiveIndexRename's rules); a damaged line is left alone.
+    @discardableResult
+    func rewriteExactValues(_ replacements: ArchiveIndexRename.Replacements) -> Task<Void, Never> {
+        let previous: Task<Void, Never>? = lock.withLock { tail }
+        let url = fileURL
+        let task = Task(priority: .utility) { [self] in
+            await previous?.value
+            await self.rewriteOffMain(url: url, replacements: replacements)
+        }
+        lock.withLock { tail = task }
+        return task
+    }
+
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated private func rewriteOffMain(url: URL, replacements: ArchiveIndexRename.Replacements) async {
+        do {
+            let changed = try ArchiveIndexRename.rewriteLedgerFile(at: url, replacements: replacements)
+            if changed > 0 {
+                // The narrated sentences quote filenames — drop them.
+                lock.withLock {
+                    revision &+= 1
+                    narratedCache.removeAll(keepingCapacity: true)
+                }
+                mediaLedgerLog.info("ledger: rename updated \(changed) line(s) in \(url.path, privacy: .public)")
+            }
+        } catch {
+            let text = (error as? ArchiveIndexRename.Failure)?.errorDescription ?? error.localizedDescription
+            appLog.write("ledger: rename not carried into \(url.path) — \(text)")
+            mediaLedgerLog.error("ledger rename rewrite failed: \(text, privacy: .public)")
+        }
+    }
+
     static func mirrorURL(rootPath: String) -> URL {
         URL(fileURLWithPath: rootPath, isDirectory: true)
             .appendingPathComponent(MasterArchiveLayout.indexFolder, isDirectory: true)

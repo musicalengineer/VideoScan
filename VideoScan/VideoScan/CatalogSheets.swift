@@ -12,6 +12,9 @@ struct RenameSheet: View {
     let originalExt: String
     let onConfirm: () -> Void
     let onCancel: () -> Void
+    /// The file lives in the Master Archive: say, in plain words, that the
+    /// archive's index follows the rename (Rick 2026-09-25).
+    var inArchive: Bool = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -24,6 +27,12 @@ struct RenameSheet: View {
                 Text(".\(originalExt)")
                     .font(.system(.body, design: .monospaced))
                     .foregroundColor(.secondary)
+            }
+            if inArchive {
+                Text("This file is in the archive — the archive's index is updated too.")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
                 Button("Cancel", role: .cancel, action: onCancel)
