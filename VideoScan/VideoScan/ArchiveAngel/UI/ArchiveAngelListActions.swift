@@ -31,7 +31,8 @@ struct ArchiveAngelListActions {
     func facts(_ id: UUID) -> ArchiveAngelRowFacts? {
         guard let rec = model.record(forID: id) else { return nil }
         return ArchiveAngelRowFacts.make(record: rec, evidence: angel.evidence(for: id),
-                                         kind: angel.recommendationClass(for: id) ?? .notNow)
+                                         kind: angel.recommendationClass(for: id) ?? .notNow,
+                                         isBeingChecked: angel.checkingIDs.contains(id))
     }
 
     func play(_ row: ArchiveAngelListRow) {

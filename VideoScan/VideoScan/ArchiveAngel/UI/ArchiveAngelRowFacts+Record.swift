@@ -11,12 +11,15 @@ import VideoScanCore
 
 extension ArchiveAngelRowFacts {
 
-    /// `kind` is the EFFECTIVE class (ArchiveAngel.recommendationClass).
+    /// `kind` is the EFFECTIVE class (ArchiveAngel.recommendationClass);
+    /// `isBeingChecked` = Angel Checks has the record queued or running
+    /// (`ArchiveAngel.checkingIDs`).
     @MainActor
     static func make(record r: VideoRecord, evidence ev: ArchiveAngelEvidenceRecord?,
-                     kind: ArchiveAngelRecommendationClass) -> ArchiveAngelRowFacts {
+                     kind: ArchiveAngelRecommendationClass, isBeingChecked: Bool = false) -> ArchiveAngelRowFacts {
         let readiness = ArchiveReadiness.assess(record: r)
         var f = ArchiveAngelRowFacts(id: r.id, filename: r.filename, fullPath: r.fullPath, kind: kind)
+        f.isBeingChecked = isBeingChecked
         f.ext = r.ext
         f.videoCodec = r.videoCodec
         f.audioCodec = r.audioCodec

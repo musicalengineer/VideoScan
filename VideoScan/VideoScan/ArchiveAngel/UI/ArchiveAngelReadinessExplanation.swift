@@ -219,6 +219,9 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
         case .audioCheck:
             return Step(what: "Nobody has checked its sound yet.",
                         todo: "Press Prepare to Archive — Archive Angel checks the sound before anything is archived. Or press Play and listen.")
+        case .audioChecking:
+            return Step(what: "Archive Angel is checking its sound right now.",
+                        todo: "Nothing to do — a long tape takes a minute or two; the row updates when the check is done.")
         case .look:
             return Step(what: "It needs a look from you.",
                         todo: "Press Play and decide. If it is worth keeping, give it stars in the Catalog — that tells Archive Angel it matters.")

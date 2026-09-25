@@ -17,6 +17,8 @@ struct ArchiveAngelRecommendationList: View {
     /// Every recommended file (the rows are the first `rows.count`).
     let totalCount: Int
     let isAssessed: Bool
+    /// Files Angel Checks has queued or running (the empty-list line says so).
+    var checkingCount = 0
     let isReadOnly: Bool
     /// An Archive Angel or Promote job is running — rows' Prepare waits.
     var angelJobRunning = false
@@ -28,7 +30,9 @@ struct ArchiveAngelRecommendationList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if rows.isEmpty {
-                Text(isAssessed ? "Nothing is recommended yet." : "Waiting for the first assessment…")
+                Text(!isAssessed ? "Waiting for the first assessment…"
+                     : checkingCount > 0 ? "Nothing ready yet — checking \(checkingCount) file\(checkingCount == 1 ? "" : "s") in the background."
+                     : "Nothing is recommended yet.")
                     .font(.system(size: 16))
                     .foregroundStyle(.secondary)
                     .padding(14)

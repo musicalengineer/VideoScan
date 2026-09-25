@@ -70,6 +70,10 @@ struct ArchiveAngelRowFacts: Sendable, Equatable, Identifiable {
     var isReachable: Bool = true
     /// Does the file exist? nil = not probed (yet).
     var fileExists: Bool?
+    /// Angel Checks (docs/archive_angel_wise_design.md §4): the checker has
+    /// this file queued or running — "Checking the sound…" instead of
+    /// "Needs audio checked".
+    var isBeingChecked: Bool = false
 }
 
 // MARK: - Where the file is
@@ -108,6 +112,9 @@ enum ArchiveAngelNeed: Equatable, Sendable, Hashable {
     case videoRepair(note: String)
     case date
     case audioCheck
+    /// The same missing thing as `audioCheck`, but Angel Checks is on it
+    /// right now (the row says so instead of asking).
+    case audioChecking
     case look
 
     /// The words after "Needs " — kept short for the row.
@@ -117,6 +124,7 @@ enum ArchiveAngelNeed: Equatable, Sendable, Hashable {
         case .videoRepair: return "video repair"
         case .date: return "a date"
         case .audioCheck: return "audio checked"
+        case .audioChecking: return "audio checked"
         case .look: return "a look"
         }
     }
@@ -127,7 +135,7 @@ enum ArchiveAngelNeed: Equatable, Sendable, Hashable {
         case .audioRepair: return 0
         case .videoRepair: return 1
         case .date: return 2
-        case .audioCheck: return 3
+        case .audioCheck, .audioChecking: return 3
         case .look: return 4
         }
     }
@@ -149,7 +157,7 @@ enum ArchiveAngelStatusWords {
         if f.audioVerifyStatus == "damaged" {
             out.append(.audioRepair(note: f.audioVerifyNote))
         } else if f.audio == .notVerified {
-            out.append(.audioCheck)
+            out.append(f.isBeingChecked ? .audioChecking : .audioCheck)
         }
         switch f.videoVerifyStatus {
         case "broken": out.append(.videoRepair(note: f.videoVerifyNote))
@@ -167,6 +175,12 @@ enum ArchiveAngelStatusWords {
     static func words(kind: ArchiveAngelRecommendationClass, needs: [ArchiveAngelNeed]) -> String {
         switch kind {
         case .ready, .needsDate, .worthALook:
+            // Angel Checks: a check in flight is said, not asked for. Alone
+            // it is the whole line; with other needs it trails them.
+            if needs.contains(.audioChecking) {
+                let rest = needs.filter { $0 != .audioChecking }
+                return rest.isEmpty ? Self.checkingWords : words(kind: kind, needs: rest) + " — " + Self.checkingTrailer
+            }
             switch needs.count {
             case 0: return kind == .ready ? "Ready to archive" : "Needs a look"
             case 1: return "Needs " + needs[0].fragment
@@ -182,6 +196,10 @@ enum ArchiveAngelStatusWords {
     }
 
     static func words(_ f: ArchiveAngelRowFacts) -> String { words(f, needs: needs(f)) }
+
+    /// The row while Angel Checks has the file (alone / after other needs).
+    static let checkingWords = "Checking the sound…"
+    static let checkingTrailer = "checking the sound…"
 
     /// As above, plus the video-only note on a Ready file (QA P3: a
     /// picture-only file should not look like one with checked sound).
