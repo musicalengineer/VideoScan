@@ -164,6 +164,30 @@ struct RecordDateResolverPrecedenceTests {
         #expect(r5.isoString == "1992")
     }
 
+    @Test("QA v12 #1: a resolution or bitrate token is not a year — a transcoder stamp must not lose to it")
+    func dimensionTokensAreNotYears() {
+        let res = resolve(embedded: utc(2024, 3, 9), encoder: "Lavf60.16.100", filename: "Donna_dance_1920x1080.mp4")
+        #expect(res.isoString == "2024-03-09", "got \(res.isoString) from \(res.source)")
+        let unk = resolve(embedded: utc(2024, 3, 9), filename: "Christmas Party 1920x1080.mov")
+        #expect(unk.isoString == "2024-03-09", "got \(unk.isoString)")
+        let kbps = resolve(embedded: utc(2024, 3, 9), encoder: "Lavf60", filename: "Export 2000k.mp4")
+        #expect(kbps.isoString == "2024-03-09", "got \(kbps.isoString)")
+    }
+
+    @Test("QA v12 #2: a discredited copy-era stamp falls through to the inferred date (rank 3) before the filename (rank 4)")
+    func discreditedStampFallsThroughInRankOrder() {
+        let r = resolve(embedded: utc(2023, 12, 27), inferred: utc(1991, 12, 25), inferredConf: 0.70,
+                        filename: "Christmas1990-part1.mov")
+        #expect(r.source == .inferred && r.isoString == "1991-12-25", "got \(r.isoString) from \(r.source)")
+        // Agreeing content evidence keeps the stamp: two machine signals beat a name.
+        let agree = resolve(embedded: utc(2023, 12, 27), encoder: "Apple ProRes 422",
+                            inferred: utc(2023, 12, 25), inferredConf: 0.70, filename: "Christmas1990-remake.mov")
+        #expect(agree.source == .embedded, "got \(agree.isoString) from \(agree.source)")
+        // No inferred date: the filename year, as before.
+        let name = resolve(embedded: utc(2023, 12, 27), encoder: "Apple ProRes 422", filename: "Christmas1990-part1.mov")
+        #expect(name.source == .filename && name.isoString == "1990")
+    }
+
     @Test("filesystem dates are never an input — the resolver has no parameter for them (compile-time pin) and unknown stays unknown")
     func noFilesystemDates() {
         #expect(resolve(filename: "IMG_0001.mov").precision == .unknown)
@@ -214,6 +238,16 @@ struct FilenameDatePatternTests {
             ("P1010203.MOV",                         "-"),
             ("test_pm_h264.mp4",                     "-"),
             ("x264_1080p.mkv",                       "-"),
+            // QA v12 finding 1: dimensions, bitrates and frame rates are not years.
+            ("Donna_dance_1920x1080.mp4",            "-"),
+            ("Portrait 1080x1920.mov",               "-"),
+            ("Export 2000k.mp4",                     "-"),
+            ("Export 2000kbps.mp4",                  "-"),
+            ("Slowmo 2000fps.mov",                   "-"),
+            ("Scan 1920p.mov",                       "-"),
+            ("Christmas 1990 1920x1080.mov",         "1990 year"),
+            ("Christmas1995Party.mov",               "1995 year"),
+            ("1994pics.mov",                         "1994 year"),
             ("tape7.dv",                             "-"),
             ("noext",                                "-"),
             ("",                                     "-"),
@@ -224,6 +258,64 @@ struct FilenameDatePatternTests {
 }
 
 // MARK: - Placement (ArchivePathResolver) — the RickGuitar sensor
+
+@Suite("Catalog Date column follows the one date rule (QA v12 #3)")
+struct CatalogDateColumnResolverTests {
+
+    private func tape(_ name: String, stamp: Date, encoder: String? = nil, make: String? = nil) -> VideoRecord {
+        let rec = VideoRecord()
+        rec.filename = name
+        rec.embeddedCreationDate = stamp
+        rec.originEncoder = encoder
+        rec.originMake = make
+        return rec
+    }
+
+    @Test("a conversion-stamped tape shows the filename year, sorts under it, and says where it came from")
+    func conversionStampedTape() {
+        let rec = tape("DickyDonnaDancing1992.mov", stamp: utc(2026, 4, 3), encoder: "Apple ProRes 422")
+        let r = RecordDateResolver.resolve(userDate: nil, embeddedCreationDate: rec.embeddedCreationDate,
+                                           originEncoder: rec.originEncoder, inferredRecordDate: nil,
+                                           inferredDateConfidence: nil, filename: rec.filename, now: testNow)
+        #expect(r.isoString == "1992")
+        #expect(rec.resolvedDateDisplay == "1992", "table shows \(rec.resolvedDateDisplay)")
+        #expect(rec.resolvedDateHelp.contains("filename"), "tooltip must say where 1992 came from")
+        #expect(rec.resolvedDateSortKey == utc(1992, 1, 1))
+    }
+
+    @Test("a camera stamp, or a stamp the name agrees with, is shown exactly as before")
+    func unchangedCases() {
+        let camera = tape("Christmas1990.mov", stamp: utc(2023, 12, 27), make: "Sony")
+        #expect(camera.resolvedDateDisplay == "2023-12-27")
+        #expect(camera.resolvedDateSortKey == utc(2023, 12, 27))
+        let agrees = tape("RickGuitar2025.mov", stamp: utc(2025, 2, 2), encoder: "Lavf60")
+        #expect(agrees.resolvedDateDisplay == "2025-02-02")
+        let noYear = tape("avtest2.mov", stamp: utc(2026, 4, 3), encoder: "Apple ProRes 422")
+        #expect(noYear.resolvedDateDisplay == "2026-04-03")
+        #expect(noYear.resolvedDateHelp.contains("inside the file"))
+    }
+
+    @Test("SCALE: 100k conversion-stamped tapes — 200k Date-column reads stay under the column's budget",
+          .timeLimit(.minutes(1)))
+    func scale() {
+        let names = ["Christmas1990-part1.mov", "MattIsBorn1994.mov", "avtest2.mov", "CapeCodAndMuseum1991.mov"]
+        var records: [VideoRecord] = []
+        records.reserveCapacity(100_000)
+        for i in 0..<100_000 {
+            records.append(tape(names[i % names.count], stamp: utc(2023, 12, 27), encoder: "Apple ProRes 422"))
+        }
+        let clock = ContinuousClock()
+        var filenameYears = 0
+        let elapsed = clock.measure {
+            for r in records {
+                if r.resolvedDateSortKey < utc(2000, 1, 1) { filenameYears += 1 }
+                _ = r.resolvedDateDisplay
+            }
+        }
+        #expect(filenameYears == 75_000)
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "200k reads took \(elapsed)")
+    }
+}
 
 @Suite("Master Archive — embedded date placement")
 struct EmbeddedDatePlacementTests {

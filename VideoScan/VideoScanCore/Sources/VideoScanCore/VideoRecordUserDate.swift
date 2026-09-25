@@ -258,6 +258,7 @@ extension VideoRecord {
         // The container's own creation stamp (2026-08-16) outranks the
         // dossier's inference and the filesystem date — same order the
         // Master Archive resolver uses (RecordDateResolver).
+        if let moved = displacedStampResolution, let d = moved.date { return d }
         if let embedded = embeddedCreationDate { return embedded }
         if let inferred = inferredRecordDate { return inferred }
         return dateCreatedRaw ?? .distantPast
@@ -273,6 +274,7 @@ extension VideoRecord {
         if let ud = userDate {
             return userDateStatus == .known ? ud : ud + " (est.)"
         }
+        if let moved = displacedStampResolution { return moved.isoString }
         if let embedded = embeddedCreationDate {
             return Self.isoDayString(from: embedded)
         }
@@ -280,6 +282,34 @@ extension VideoRecord {
             return Self.isoDayString(from: inferred)
         }
         return dateCreated
+    }
+
+    /// Rules v12 (QA v12 #3): when the ONE date rule (RecordDateResolver)
+    /// sets aside the container stamp — no camera behind it, and the
+    /// filename names a year more than 2 years away — the Date column
+    /// shows and sorts by what the resolver chose, the same date Promote,
+    /// the Archive Angel and Hallie use. nil in every other case, and
+    /// then the column reads exactly as before.
+    ///
+    /// Cost: the resolver runs only for a stamp with no make/model
+    /// (~2,200 of 13,900 live records) and only once per record per input
+    /// change (`displacedStampMemo`); later reads compare a small key.
+    /// The SCALE test pins 200k reads of the worst case under the
+    /// column's 2 s budget (sort comparators read the key per compare).
+    var displacedStampResolution: RecordDateResolution? {
+        guard userDate == nil, let stamp = embeddedCreationDate,
+              originMake == nil, originModel == nil else { return nil }
+        let key = DisplacedStampMemo.Key(filename: filename, stamp: stamp, encoder: originEncoder,
+                                         inferred: inferredRecordDate, inferredConfidence: inferredDateConfidence)
+        if let memo = displacedStampMemo, memo.key == key { return memo.value }
+        let r = RecordDateResolver.resolve(userDate: nil, embeddedCreationDate: stamp,
+                                           originMake: nil, originModel: nil, originEncoder: originEncoder,
+                                           inferredRecordDate: inferredRecordDate,
+                                           inferredDateConfidence: inferredDateConfidence,
+                                           filename: filename)
+        let value = r.source == .embedded || r.precision == .unknown ? nil : r
+        displacedStampMemo = DisplacedStampMemo(key: key, value: value)
+        return value
     }
 
     /// Tooltip explaining WHERE the displayed date came from — the
@@ -291,6 +321,12 @@ extension VideoRecord {
         case .estimated:
             return "Your date — best guess. It outranks any machine date; refine it any time."
         case .unconfirmed:
+            if let moved = displacedStampResolution {
+                let from = moved.source == .filename
+                    ? "the year in the filename (a low-confidence guess)"
+                    : "what the video itself shows (on-screen dates / speech)"
+                return "Taken from \(from). The date written inside the file (\(embeddedDateOriginLabel)) looks like the day it was copied or converted, not when it was filmed. Enter your own in the inspector to override it."
+            }
             if embeddedCreationDate != nil {
                 return "Creation date written inside the file by the camera or app that made it (\(embeddedDateOriginLabel)). Survives copies; enter your own in the inspector to override it."
             }
@@ -314,4 +350,20 @@ extension VideoRecord {
         let dc = utcGregorian.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", dc.year ?? 0, dc.month ?? 0, dc.day ?? 0)
     }
+}
+
+/// The Date column's memo of "was the stamp set aside, and for what?"
+/// (see `VideoRecord.displacedStampResolution`). Keyed by every input
+/// the answer reads except the clock (the filename-year ceiling moves
+/// once a year; a relaunch refreshes it).
+struct DisplacedStampMemo {
+    struct Key: Equatable {
+        var filename: String
+        var stamp: Date
+        var encoder: String?
+        var inferred: Date?
+        var inferredConfidence: Float?
+    }
+    var key: Key
+    var value: RecordDateResolution?
 }

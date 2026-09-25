@@ -457,6 +457,12 @@ public class VideoRecord: Identifiable, Decodable {
     /// Derivatives (trim / balanceAudio outputs) inherit it from their
     /// source record — same footage, same date.
     public var userDate: String?
+    /// Memo for the Date column's "was the container stamp set aside?"
+    /// answer (VideoRecordUserDate.displacedStampResolution) — NOT
+    /// persisted (not in CodingKeys), keyed by every input it reads, so an
+    /// edit to any of them recomputes it. Sort comparators read the key
+    /// per compare; this keeps that O(1) after the first read.
+    var displacedStampMemo: DisplacedStampMemo?
 
     /// Confidence in `userDate`: "estimated" (Rick's best guess, the
     /// entry UI's default) or "known" — where "known" applies AT THE
