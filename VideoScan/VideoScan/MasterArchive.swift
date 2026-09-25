@@ -207,7 +207,10 @@ enum MasterArchiveLayout {
                   promoted here (when, where it came from, its SHA-256
                   fingerprint, who is in it, its rating, where it was
                   shot, and the family's word on cloud / off-site
-                  copies). Append-only.
+                  copies). One row is added per file; when a file is
+                  renamed in the VideoScan Catalog (to fix a typo), the
+                  name is corrected in place here and in the journals
+                  beside it, with a backup in .rename_backups/.
                   README_Naming_and_Layout.txt — this file.
       10_Photos/  Loose photo scans (Apple Photos owns the photo library;
                   this bucket exists for stray scans).
@@ -246,8 +249,10 @@ enum MasterArchiveLayout {
       • Every copy is verified: the SHA-256 in the manifest was computed
         from the file after it landed here. `shasum -a 256 <file>` in
         Terminal should print the same value.
-      • Nothing in 00_Index/ is ever rewritten by hand-tools; the manifest
-        only grows.
+      • Nothing in 00_Index/ is ever rewritten by hand-tools. The
+        manifest grows by one row per file; the only in-place change is
+        a name corrected by a Catalog rename (backed up first, in
+        00_Index/.rename_backups/).
     """
 
     /// Manifest header as written by Initialize BEFORE 2026-08-16 (12

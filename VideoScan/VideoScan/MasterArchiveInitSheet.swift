@@ -68,7 +68,7 @@ struct MasterArchiveInitSheet: View {
                 VStack(alignment: .leading, spacing: 3) {
                     treeLine("\(MasterArchiveLayout.rootFolderName)/", indent: 0)
                     treeLine("\(MasterArchiveLayout.indexFolder)/", indent: 1)
-                    treeLine(MasterArchiveLayout.manifestFilename + "   (header row; append-only)", indent: 2)
+                    treeLine(MasterArchiveLayout.manifestFilename + "   (header row; grows by one row per file; a Catalog rename corrects names in place)", indent: 2)
                     treeLine(MasterArchiveLayout.readmeFilename + "   (the rules, in plain English)", indent: 2)
                     treeLine("\(MasterArchiveLayout.photosBucket)/", indent: 1)
                     treeLine("\(MasterArchiveLayout.audioBucket)/", indent: 1)

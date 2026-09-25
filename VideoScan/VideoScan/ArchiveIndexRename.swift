@@ -9,14 +9,17 @@
 //   - Archive_Inventory_Manifest.csv   (any cell EQUAL to an old value)
 //   - .promote_journal.jsonl           (any JSON string value EQUAL to an old value)
 //   - .attestation_journal.jsonl
-//   - media-ledger.jsonl               (the archive's mirror of the ledger)
 //   - .promote_decisions.jsonl
+// NOT the archive's media-ledger.jsonl: it is only a COPY of the App
+// Support ledger. The rename rewrites that source and re-copies it
+// (MediaLedger.rewriteExactValues, on the ledger's ordered writer).
 // Exact values only — never substrings: `…_misc.mkv` never touches
 // `…_misc.mkv.bak` or a longer folder name. One extra, equally exact rule:
 // a JSON object's `filename` member that equals the old filename is
-// updated ONLY when a path member of that same object matched (the
-// attestation/ledger lines carry both; a lone filename match elsewhere
-// could be a different file with the same name and is left alone).
+// updated ONLY when that same object's `fullPath` or `sourcePath` matched
+// — the member that names the file `filename` describes. (In
+// .promote_decisions, `detail` holds the ARCHIVE path while `filename` is
+// the SOURCE's name; a `detail` match must not touch it — QA m1.)
 //
 // Byte stability: files are processed as raw bytes, line by line. A line
 // with no match is copied through untouched; in a changed line only the
@@ -32,18 +35,30 @@
 //                 00_Index/.rename_backups/<timestamp>/.
 //   3. recheck  — each affected file must still be the file we read
 //                 (inode + size + mtime); a concurrent append refuses.
-//   4. move     — the media file is renamed. Failure ⇒ nothing published.
-//   5. publish  — each index file atomically (AtomicFilePublish, full
-//                 fsync). A failure ROLLS BACK: files already published
+//   4. announce — one catalog.log line (old → new, backup folder) BEFORE
+//                 the move, so a crash mid-rename leaves a trail.
+//   5. move     — the media file is renamed. Failure ⇒ nothing published.
+//   6. publish  — each index file atomically (AtomicFilePublish, full
+//                 fsync), each preceded by the SAME identity recheck: an
+//                 append that landed since prepare (Promote, the
+//                 attestation or decisions writer) would be dropped by the
+//                 whole-file replace, so it refuses instead (QA M1). A
+//                 refusal or failure ROLLS BACK: files already published
 //                 are restored from the in-memory originals and the media
 //                 file is moved back, so the archive is left exactly as it
 //                 was. Only if the rollback itself fails is the state
 //                 mixed — then every path is logged loudly.
+//   A refused rename removes its own backup folder; a successful one
+//   keeps it, and `.rename_backups/` keeps the newest `backupRetention`.
+//   Residual window: the recheck and the rename(2) that publishes are two
+//   syscalls — an append in the microseconds between them is still lost.
+//   The model also refuses while a Promote job runs (the main writer).
 //
 // Memory: one index file's bytes are held at a time during parse, plus
 // the rewritten copy of each AFFECTED file until publish (worst case ≈ 2×
 // the sum of the index files; a 100k-promotion archive is ~20 MB manifest
-// + ~30 MB ledger ⇒ ~100 MB peak). Each read is capped at `readLimit`
+// + ~120 MB promote journal (4 lines per promotion) ⇒ ~280 MB peak, for
+// the length of one rename). Each read is capped at `readLimit`
 // (256 MB) — a larger file refuses rather than being silently truncated.
 //
 // (For Rick: an `enum` with no cases is Swift's namespace — ≈ a C++
@@ -60,13 +75,19 @@ enum ArchiveIndexRename {
 
     /// Index files considered, in publish order (manifest first: it is
     /// the file Verify reads, so it is the one a rollback most wants).
+    /// The ledger mirror is deliberately absent (see the file header).
     static var indexFilenames: [String] {
         [MasterArchiveLayout.manifestFilename,
          ArchivePromoteJournal.filename,
          ArchiveAttestationJournal.filename,
-         MediaLedger.mirrorFilename,
          ArchivePromoteDecisions.filename]
     }
+
+    /// `.rename_backups/` keeps this many timestamp folders (newest).
+    static let backupRetention = 20
+
+    /// The JSON members whose match lets a sibling `filename` follow.
+    static let filenameOwnerKeys: Set<String> = ["fullPath", "sourcePath"]
 
     /// `00_Index/<backupFolder>/<timestamp>/<file>`.
     static let backupFolder = ".rename_backups"
@@ -230,6 +251,7 @@ enum ArchiveIndexRename {
     static func apply(_ plan: Plan,
                       now: Date = Date(),
                       publisher: Publisher = livePublish(_:to:),
+                      announce: (URL) -> Void = { _ in },
                       moveMedia: () throws -> Void,
                       undoMoveMedia: () throws -> Void) throws -> URL? {
         guard !plan.isEmpty else {
@@ -242,32 +264,53 @@ enum ArchiveIndexRename {
 
         // 3. Recheck: still the file we read? (A promote appending between
         //    prepare and here would otherwise be lost by the replace.)
-        for f in plan.files where currentIdentity(root: plan.root, name: f.name) != f.identity {
+        for f in plan.files where !isUnchanged(f, root: plan.root) {
+            removeBackup(backupDir)
             throw Failure.changedDuringRename(file: f.name)
         }
 
-        // 4. Move the media file. Its failure propagates; nothing published.
-        try moveMedia()
+        // 4. The trail a crash would leave, then 5. the media move. Its
+        //    failure propagates; nothing published.
+        announce(backupDir)
+        do {
+            try moveMedia()
+        } catch {
+            removeBackup(backupDir)
+            throw error
+        }
 
-        // 5. Publish, rolling back on the first failure.
+        // 6. Publish, each after its own recheck; roll back on the first
+        //    refusal or failure.
         var published: [FileRewrite] = []
         for f in plan.files {
+            guard isUnchanged(f, root: plan.root) else {
+                throw rollback(published: published, failed: f,
+                               cause: .changedDuringRename(file: f.name), reason: "changed during the rename",
+                               backupDir: backupDir, publisher: publisher, undoMoveMedia: undoMoveMedia)
+            }
             do {
                 try publisher(f.updated, f.url)
                 published.append(f)
             } catch {
                 let reason = ArchiveAttestationJournal.describe(error)
-                throw rollback(published: published, failed: f, reason: reason,
+                throw rollback(published: published, failed: f,
+                               cause: .publishFailedRolledBack(file: f.name, reason: reason), reason: reason,
                                backupDir: backupDir, publisher: publisher, undoMoveMedia: undoMoveMedia)
             }
         }
+        pruneBackups(in: backupDir.deletingLastPathComponent())
         return backupDir
+    }
+
+    private static func isUnchanged(_ f: FileRewrite, root: String) -> Bool {
+        currentIdentity(root: root, name: f.name) == f.identity
     }
 
     /// Undo a half-published plan: restore every published file from its
     /// in-memory original, then move the media back. Returns the error to
     /// throw — rolled back, or (if any undo step failed) the loud one.
-    private static func rollback(published: [FileRewrite], failed: FileRewrite, reason: String,
+    private static func rollback(published: [FileRewrite], failed: FileRewrite,
+                                 cause: Failure, reason: String,
                                  backupDir: URL, publisher: Publisher,
                                  undoMoveMedia: () throws -> Void) -> Failure {
         var problems: [String] = []
@@ -284,9 +327,11 @@ enum ArchiveIndexRename {
             problems.append("the media file keeps its NEW name — could not move it back (\(error.localizedDescription))")
         }
         if problems.isEmpty {
-            appLog.write("Catalog: rename refused — archive index \(failed.name) not updated (\(reason)); \(published.count) index file(s) restored, media file moved back. Backups: \(backupDir.path)")
+            // Everything is back as it was — the backups are redundant.
+            removeBackup(backupDir)
+            appLog.write("Catalog: rename refused — archive index \(failed.name) not updated (\(reason)); \(published.count) index file(s) restored, media file moved back.")
             renameIndexLog.error("rename rolled back: \(failed.name, privacy: .public) — \(reason, privacy: .public)")
-            return .publishFailedRolledBack(file: failed.name, reason: reason)
+            return cause
         }
         let unpublished = [failed.url.path]
         let detail = (["ARCHIVE INDEX RENAME LEFT MIXED STATE — backups at \(backupDir.path)",
@@ -295,6 +340,33 @@ enum ArchiveIndexRename {
         appLog.write("Catalog: RENAME ROLLBACK FAILED — \(detail.replacingOccurrences(of: "\n", with: " | "))")
         renameIndexLog.fault("rename rollback failed: \(detail, privacy: .public)")
         return .publishFailedNotRolledBack(file: failed.name, reason: reason, detail: detail)
+    }
+
+    /// Remove a refused rename's own backup folder (and `.rename_backups/`
+    /// itself when that leaves it empty). Only ever this rename's folder.
+    private static func removeBackup(_ dir: URL) {
+        let fm = FileManager.default
+        try? fm.removeItem(at: dir)
+        let parent = dir.deletingLastPathComponent()
+        if (try? fm.contentsOfDirectory(atPath: parent.path))?.isEmpty == true {
+            try? fm.removeItem(at: parent)
+        }
+    }
+
+    /// Keep the newest `backupRetention` folders (timestamp names sort in
+    /// time order). Only directories directly inside `.rename_backups/`.
+    static func pruneBackups(in parent: URL) {
+        let fm = FileManager.default
+        guard parent.lastPathComponent == backupFolder,
+              let names = try? fm.contentsOfDirectory(atPath: parent.path) else { return }
+        let folders = names.filter { name in
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: parent.appendingPathComponent(name).path, isDirectory: &isDir) && isDir.boolValue
+        }.sorted()
+        guard folders.count > backupRetention else { return }
+        for name in folders.prefix(folders.count - backupRetention) {
+            try? fm.removeItem(at: parent.appendingPathComponent(name))
+        }
     }
 
     static func backupStamp(_ date: Date) -> String {
@@ -413,7 +485,10 @@ enum ArchiveIndexRename {
     /// Rewrite every cell (any column, header excluded) whose decoded value
     /// equals an old value. A row with broken quoting refuses.
     static func rewriteCSV(_ bytes: [UInt8], replacements: Replacements, file: String) throws -> Rewrite {
-        let needles = replacements.values.keys.map { Array($0.utf8) }
+        // The pre-filter looks for a value as it is WRITTEN in a cell: a
+        // `"` is stored doubled (QA M2 — a quoted path was skipped here
+        // while the JSONL rewrite caught it, splitting the index).
+        let needles = replacements.values.keys.map { Array($0.replacingOccurrences(of: "\"", with: "\"\"").utf8) }
         return try mapLines(bytes) { line, number in
             guard number > 1, !line.isEmpty, mightMatch(line, needles: needles) else { return nil }
             var body = line
@@ -509,13 +584,13 @@ enum ArchiveIndexRename {
             for t in tokens {
                 if let new = replacements.values[t.value] {
                     edits.append((t.range, jsonEncode(new, escapeSlashes: t.escapedSlash)))
-                    matchedContainers.insert(t.container)
+                    if let key = t.key, filenameOwnerKeys.contains(key) { matchedContainers.insert(t.container) }
                 }
             }
             guard !edits.isEmpty else { return nil }
             if !replacements.oldFilename.isEmpty, replacements.oldFilename != replacements.newFilename {
                 for t in tokens where t.key == "filename" && t.value == replacements.oldFilename
-                    && matchedContainers.contains(t.container) {
+                    && matchedContainers.contains(t.container) && replacements.values[t.value] == nil {
                     edits.append((t.range, jsonEncode(replacements.newFilename, escapeSlashes: t.escapedSlash)))
                 }
             }
@@ -664,10 +739,14 @@ enum ArchiveIndexRename {
 
     /// Replace byte ranges (absolute indices into the original buffer that
     /// started at `base`) — applied back to front so earlier ranges hold.
+    /// A range overlapping one already applied is skipped: one token, one
+    /// edit, never two.
     private static func splice(_ bytes: [UInt8], base: Int, edits: [(Range<Int>, [UInt8])]) -> [UInt8] {
         var out = bytes
-        for (range, replacement) in edits.sorted(by: { $0.0.lowerBound > $1.0.lowerBound }) {
+        var floor = Int.max
+        for (range, replacement) in edits.sorted(by: { $0.0.lowerBound > $1.0.lowerBound }) where range.upperBound <= floor {
             out.replaceSubrange((range.lowerBound - base)..<(range.upperBound - base), with: replacement)
+            floor = range.lowerBound
         }
         return out
     }

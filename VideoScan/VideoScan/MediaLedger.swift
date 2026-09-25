@@ -216,19 +216,25 @@ final class MediaLedger: @unchecked Sendable {
     // MARK: Rename carry-through (Rick 2026-09-25)
 
     /// A Catalog rename that touched the archive rewrites the old names in
-    /// place — here too, because the archive's `media-ledger.jsonl` is a
-    /// COPY of this file and the next Promote mirror would otherwise put
-    /// the old names back. Chained on the same ordered worker as appends
-    /// and mirrors, so no append can land between the read and the
+    /// place — HERE, because the archive's `media-ledger.jsonl` is only a
+    /// COPY of this file: after the rewrite, when any line changed, the
+    /// mirror is re-copied into `archiveRoot` (QA m2 — the rename never
+    /// edits the copy itself). Chained on the same ordered worker as
+    /// appends and mirrors, so no append can land between the read and the
     /// atomic replace (the whole-file replace would drop it). Exact values
     /// only (ArchiveIndexRename's rules); a damaged line is left alone.
+    /// `archiveRoot` nil (offline / wrong volume) = no mirror.
     @discardableResult
-    func rewriteExactValues(_ replacements: ArchiveIndexRename.Replacements) -> Task<Void, Never> {
+    func rewriteExactValues(_ replacements: ArchiveIndexRename.Replacements,
+                            mirrorIntoArchiveRoot archiveRoot: String?) -> Task<Void, Never> {
         let previous: Task<Void, Never>? = lock.withLock { tail }
         let url = fileURL
         let task = Task(priority: .utility) { [self] in
             await previous?.value
-            await self.rewriteOffMain(url: url, replacements: replacements)
+            let changed = await self.rewriteOffMain(url: url, replacements: replacements)
+            if changed > 0, let archiveRoot {
+                await Self.mirrorOffMain(source: url, root: archiveRoot)
+            }
         }
         lock.withLock { tail = task }
         return task
@@ -237,7 +243,7 @@ final class MediaLedger: @unchecked Sendable {
     #if compiler(>=6.2)
     @concurrent
     #endif
-    nonisolated private func rewriteOffMain(url: URL, replacements: ArchiveIndexRename.Replacements) async {
+    nonisolated private func rewriteOffMain(url: URL, replacements: ArchiveIndexRename.Replacements) async -> Int {
         do {
             let changed = try ArchiveIndexRename.rewriteLedgerFile(at: url, replacements: replacements)
             if changed > 0 {
@@ -248,10 +254,12 @@ final class MediaLedger: @unchecked Sendable {
                 }
                 mediaLedgerLog.info("ledger: rename updated \(changed) line(s) in \(url.path, privacy: .public)")
             }
+            return changed
         } catch {
             let text = (error as? ArchiveIndexRename.Failure)?.errorDescription ?? error.localizedDescription
             appLog.write("ledger: rename not carried into \(url.path) — \(text)")
             mediaLedgerLog.error("ledger rename rewrite failed: \(text, privacy: .public)")
+            return 0
         }
     }
 

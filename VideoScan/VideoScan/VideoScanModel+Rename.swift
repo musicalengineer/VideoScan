@@ -19,12 +19,29 @@ extension VideoScanModel {
     //
     // Renaming is also THE way to fix a typo in a name for files in the
     // Master Archive (Rick 2026-09-25). When the file is inside the archive
-    // — or when an ordinary file's old path is quoted by the archive's
-    // index as a promotion SOURCE — the rename carries through to the
-    // index files in `00_Index/` (ArchiveIndexRename.swift: exact values
-    // only, untouched lines byte-identical, backups first, rollback on a
-    // failed publish). A typo is not history, so the old strings are
-    // fixed in place; no new record kinds.
+    // — or is a promoted SOURCE, whose old path the archive's index quotes
+    // — the rename carries through to the index files in `00_Index/`
+    // (ArchiveIndexRename.swift: exact values only, untouched lines
+    // byte-identical, backups first, rollback on a failed publish). A typo
+    // is not history, so the old strings are fixed in place; no new record
+    // kinds.
+    //
+    // Which renames touch the index (QA m4 — an ordinary rename must never
+    // spin up the archive RAID):
+    //  - inside the archive root                     → yes
+    //  - a source with a promoted archive copy
+    //    (ArchivePromotionIndex, O(1))                → yes
+    //  - anything else                               → no index I/O at all
+    // Guards, in order: archive volume identity (house rule, codex R3
+    // blocker 1: inside-archive refuses, a source skips the index with a
+    // log line), then prepare, then "a Promote is appending" (refuses when
+    // the plan would rewrite anything).
+    //
+    // Cost (main thread, by design for now): an index-touching rename reads
+    // the manifest + journals once — measured 0.73 s Debug on the M5 for
+    // 50k-line manifest + 50k-line promote journal; an ordinary rename pays
+    // one O(1) promotion-index lookup (after the index's once-per-mutation
+    // rebuild) and nothing else.
     //
     // Cross-reference audit (what gets keyed by path or filename):
     //  - `pairedWith` (VideoRecord?): object reference. Unaffected.
@@ -45,8 +62,9 @@ extension VideoScanModel {
     //    becomes a stale entry under the old path. Tolerable leak — the
     //    next rescan adds a new entry under the new name, and the user
     //    can clear via "Clear All Cache."
-    //  - Master Archive index (`00_Index/` manifest + journals + ledger
-    //    mirror) and the App Support media ledger: rewritten, see above.
+    //  - Master Archive index (`00_Index/` manifest + journals) and the App
+    //    Support media ledger (then re-mirrored into the archive): rewritten,
+    //    see above.
     //  - All other call sites that read `fullPath` (`VolumeCompare`,
     //    `PersonFinderView.isInCatalog`, etc.) iterate-then-compare with
     //    no persistent cache, so they pick up the new path automatically.
@@ -64,6 +82,11 @@ extension VideoScanModel {
         /// The archive's index could not be carried through (refused before
         /// anything changed, or rolled back — see the wrapped failure).
         case archiveIndex(ArchiveIndexRename.Failure)
+        /// The mounted volume is not the Master Archive volume
+        /// (`masterArchiveIdentityRefusal`) — an archive file is not renamed.
+        case archiveIdentity(String)
+        /// A Promote job is appending to the archive's index right now.
+        case archiveBusy
 
         var errorDescription: String? {
             switch self {
@@ -81,22 +104,28 @@ extension VideoScanModel {
                 return "Couldn't rename file: \(e.localizedDescription)"
             case .archiveIndex(let f):
                 return f.errorDescription
+            case .archiveIdentity(let reason):
+                return reason
+            case .archiveBusy:
+                return "The archive is busy adding files right now. Rename this file after that finishes — nothing was renamed."
             }
         }
     }
 
     /// True when renaming `record` also updates the Master Archive's index
     /// — the rename sheet's one friendly line. (Only the "file is in the
-    /// archive" case; a source quoted by the index is found at rename time.)
+    /// archive" case; a promoted source's pointers are updated quietly.)
     func renameUpdatesArchiveIndex(_ record: VideoRecord) -> Bool {
         isInsideMasterArchive(path: record.fullPath)
     }
 
     /// The exact old → new values a rename replaces in the archive index.
     /// Archive file: its absolute path (as cataloged, and as root + relPath
-    /// when that spelling differs) and its archive-relative path. Any other
-    /// file: its absolute path only (the manifest's / journals' source
-    /// pointer). Pure — no I/O.
+    /// when that spelling differs) and its archive-relative path — the
+    /// latter only when it has a folder in it (a bare name at the archive
+    /// root would match any `filename` value anywhere). Any other file: its
+    /// absolute path only (the manifest's / journals' source pointer).
+    /// Pure — no I/O.
     nonisolated static func archiveIndexReplacements(oldPath: String, newPath: String,
                                                      archiveRoot: String?) -> ArchiveIndexRename.Replacements {
         var values: [String: String] = [oldPath: newPath]
@@ -105,7 +134,9 @@ extension VideoScanModel {
             let newFilename = (newPath as NSString).lastPathComponent
             let relDir = (oldRel as NSString).deletingLastPathComponent
             let newRel = relDir.isEmpty ? newFilename : relDir + "/" + newFilename
-            values[oldRel] = newRel
+            if oldRel.contains("/") {
+                values[oldRel] = newRel
+            }
             let rootSpelled = (root as NSString).appendingPathComponent(oldRel)
             if rootSpelled != oldPath {
                 values[rootSpelled] = (root as NSString).appendingPathComponent(newRel)
@@ -125,24 +156,26 @@ extension VideoScanModel {
     ///  - If `newBaseName` contains a path separator → throws `.invalidName`.
     ///  - If `record.fullPath` doesn't exist → throws `.sourceMissing`.
     ///  - If the destination path already exists → throws `.destinationExists`.
-    ///  - When a Master Archive is designated and online, the archive
-    ///    index is prepared in memory FIRST; an unreadable / unparseable
-    ///    index file throws `.archiveIndex` and nothing changes.
+    ///  - Archive file on a volume that is not the Master Archive volume →
+    ///    `.archiveIdentity`; a promoted source there renames without
+    ///    touching the index (logged).
+    ///  - The archive index is prepared in memory FIRST; an unreadable /
+    ///    unparseable index file throws `.archiveIndex` and nothing changes.
+    ///    A Promote in progress throws `.archiveBusy` when the index would
+    ///    be rewritten.
     ///  - On `FileManager.moveItem` failure → throws `.filesystem(underlying)`
     ///    and no index file is published.
-    ///  - An index publish failure after the move rolls back (index files
-    ///    restored, media moved back) and throws `.archiveIndex`.
+    ///  - An index publish failure, or an index file that changed under us,
+    ///    after the move rolls back (index files restored, media moved back)
+    ///    and throws `.archiveIndex`.
     ///  - On success: mutates `record.filename` + `record.fullPath`,
-    ///    invalidates the stale thumbnail cache entry, persists via
-    ///    `saveCatalogDebounced()`, and returns the new full path.
+    ///    invalidates the stale thumbnail cache entry, persists (immediately
+    ///    when the archive index changed, else debounced), and returns the
+    ///    new full path.
     ///
     /// Caller decides whether to display the error (UI surfaces alert)
     /// or swallow it (`.nameUnchanged` is normal for "user opened sheet
     /// and clicked OK without changing anything").
-    ///
-    /// Cost: an archive-connected rename reads the index files once on
-    /// the calling (main) thread — tens of MB at 100k promotions, a
-    /// fraction of a second; one gesture, never per record.
     @discardableResult
     func renameRecord(_ record: VideoRecord, toBaseName newBaseName: String,
                       indexPublisher: ArchiveIndexRename.Publisher = ArchiveIndexRename.livePublish(_:to:)) throws -> String {
@@ -163,6 +196,7 @@ extension VideoScanModel {
         }
 
         let oldPath = record.fullPath
+        let oldName = (oldPath as NSString).lastPathComponent
         let dir = (oldPath as NSString).deletingLastPathComponent
         let newPath = (dir as NSString).appendingPathComponent(newFilename)
 
@@ -178,11 +212,23 @@ extension VideoScanModel {
             throw RenameError.destinationExists(newPath)
         }
 
-        // Archive index: prepare everything in memory before touching
-        // anything. Offline / undesignated archive ⇒ an empty plan (the
-        // rename behaves exactly as it always did).
-        let root = masterArchiveRootPath.flatMap { fm.fileExists(atPath: $0) ? $0 : nil }
+        // Archive index: decide cheaply whether it is involved at all, then
+        // prepare everything in memory before touching anything.
         let inArchive = isInsideMasterArchive(path: oldPath)
+        let promotedSource = !inArchive && masterArchiveCopy(of: record) != nil
+        var root: String?
+        if inArchive || promotedSource,
+           let designated = masterArchiveRootPath, fm.fileExists(atPath: designated) {
+            if let refusal = masterArchiveIdentityRefusal() {
+                if inArchive {
+                    appLog.write("Catalog: rename of \(oldName) refused — \(refusal)")
+                    throw RenameError.archiveIdentity(refusal)
+                }
+                appLog.write("Catalog: rename of \(oldName) — archive index NOT updated: \(refusal)")
+            } else {
+                root = designated
+            }
+        }
         let replacements = Self.archiveIndexReplacements(oldPath: oldPath, newPath: newPath,
                                                          archiveRoot: inArchive ? root : nil)
         var plan: ArchiveIndexRename.Plan?
@@ -190,8 +236,12 @@ extension VideoScanModel {
             do {
                 plan = try ArchiveIndexRename.prepare(root: root, replacements: replacements)
             } catch let f as ArchiveIndexRename.Failure {
-                appLog.write("Catalog: rename of \((oldPath as NSString).lastPathComponent) refused — \(f.errorDescription ?? "archive index unreadable")")
+                appLog.write("Catalog: rename of \(oldName) refused — \(f.errorDescription ?? "archive index unreadable")")
                 throw RenameError.archiveIndex(f)
+            }
+            if let p = plan, !p.isEmpty, archiveIndexWriterActive?() == true {
+                appLog.write("Catalog: rename of \(oldName) refused — a Promote is writing to the archive index")
+                throw RenameError.archiveBusy
             }
         }
 
@@ -201,6 +251,10 @@ extension VideoScanModel {
             backupDir = try ArchiveIndexRename.apply(
                 plan ?? ArchiveIndexRename.Plan(root: root ?? "", files: []),
                 publisher: indexPublisher,
+                announce: { dir in
+                    // The crash trail: written BEFORE the media moves.
+                    appLog.write("Catalog: renaming \(oldName) → \(newFilename) — archive index backups in \(dir.path)")
+                },
                 moveMedia: {
                     do {
                         try fm.moveItem(atPath: oldPath, toPath: newPath)
@@ -213,25 +267,24 @@ extension VideoScanModel {
             // A rollback that could NOT move the media back leaves the file
             // at its new name — the record must say where the file IS.
             if case .publishFailedNotRolledBack = f, fm.fileExists(atPath: newPath), !fm.fileExists(atPath: oldPath) {
-                applyRename(record, oldPath: oldPath, newPath: newPath, newFilename: newFilename)
+                applyRename(record, oldPath: oldPath, newPath: newPath, newFilename: newFilename, durable: true)
             }
             throw RenameError.archiveIndex(f)
         }
 
-        applyRename(record, oldPath: oldPath, newPath: newPath, newFilename: newFilename)
+        let indexChanged = !(plan?.isEmpty ?? true)
+        applyRename(record, oldPath: oldPath, newPath: newPath, newFilename: newFilename,
+                    durable: inArchive || indexChanged)
 
         // The App Support ledger is the source the archive's mirror is
-        // copied from; carry the rename there too (chained, off-main) or
-        // the next Promote would copy the old names back.
-        if inArchive || !(plan?.isEmpty ?? true) {
-            mediaLedger.rewriteExactValues(replacements)
+        // copied from; carry the rename there (chained, off-main), then
+        // re-copy the mirror — never edit the copy directly.
+        if root != nil {
+            mediaLedger.rewriteExactValues(replacements, mirrorIntoArchiveRoot: root)
         }
 
-        let oldName = (oldPath as NSString).lastPathComponent
-        if let plan, !plan.isEmpty {
+        if let plan, indexChanged {
             let lines = plan.changedLines, files = plan.files.count
-            // One line, Rick's format; the backup folder (always
-            // 00_Index/.rename_backups/<timestamp>/) goes to the unified log.
             appLog.write("Catalog: renamed \(oldName) → \(newFilename) (archive index: \(lines) line\(lines == 1 ? "" : "s") in \(files) file\(files == 1 ? "" : "s") updated)")
             renameLog.info("rename backups: \(backupDir?.path ?? "?", privacy: .public)")
         } else {
@@ -241,7 +294,10 @@ extension VideoScanModel {
     }
 
     /// The in-memory half of a rename (after the file is at `newPath`).
-    private func applyRename(_ record: VideoRecord, oldPath: String, newPath: String, newFilename: String) {
+    /// `durable`: save the catalog NOW (an archive rename — the catalog and
+    /// the archive index must not disagree after a crash), else debounced.
+    private func applyRename(_ record: VideoRecord, oldPath: String, newPath: String,
+                             newFilename: String, durable: Bool) {
         // Mutate the record in place. `pairedWith`, `pairGroupID`, etc. are
         // identity-keyed (UUID or object reference) so they remain valid;
         // see the cross-reference audit at the top of this file.
@@ -263,6 +319,13 @@ extension VideoScanModel {
         // Persist. This is the line whose absence in the original
         // implementation made the rename appear to revert on relaunch.
         objectWillChange.send()
-        saveCatalogDebounced()
+        if durable {
+            if !saveCatalogNow() {
+                appLog.write("Catalog: rename of \((oldPath as NSString).lastPathComponent) → \(newFilename) — immediate catalog save did not reach disk; the debounced save will retry")
+                saveCatalogDebounced()
+            }
+        } else {
+            saveCatalogDebounced()
+        }
     }
 }
