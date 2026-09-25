@@ -265,66 +265,83 @@ final class ArchiveAngelChecks: ObservableObject {
                 status = .idle
                 return
             }
-            // Budgets — a row must not say "checking" for a check that is
-            // not coming, so the queue is cleared while a budget is spent.
-            if checkedThisLaunch.count >= cfg.maxPerLaunch {
-                checkingIDs = []
-                status = .parked(reason: "\(cfg.maxPerLaunch) checks this launch — more after a relaunch")
-                return
-            }
-            let now = cfg.now()
-            startTimes.removeAll { now.timeIntervalSince($0) >= 3600 }
-            if startTimes.count >= cfg.maxPerHour, let oldest = startTimes.min() {
-                checkingIDs = []
-                let wait = max(1, 3600 - now.timeIntervalSince(oldest))
-                status = .parked(reason: "\(cfg.maxPerHour) checks this hour — next in \(Int(wait / 60) + 1) min")
-                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
-                if Task.isCancelled { return }
-                continue
-            }
+            guard await budgetAllows(cfg) else { return }
             checkingIDs = Set(queue.map(\.id))
-            // Park while the app is busy or the person is working.
-            while cfg.isExternallyBusy() || Self.interacting(cfg) {
-                status = .parked(reason: cfg.isExternallyBusy() ? "another job is using the catalog"
-                                                                : "you are working")
-                try? await Task.sleep(nanoseconds: UInt64(max(0.01, cfg.parkPollSeconds) * 1_000_000_000))
-                if Task.isCancelled || !enabled { checkingIDs = []; return }
-            }
+            guard await parkedUntilFree(cfg) else { checkingIDs = []; return }
             // Take the first whose file is really there (stat off-main).
-            var picked: ArchiveAngelCheckFacts?
-            for f in queue where picked == nil {
-                if await cfg.fileExists(f.fullPath) {
-                    picked = f
-                } else {
-                    record(f, outcome: .skipped(reason: "file not found"), cfg: cfg)
-                }
-                if Task.isCancelled { return }
-            }
-            guard let f = picked else { continue }
-            // Start it.
+            guard let f = await firstPresent(in: queue, cfg: cfg) else { continue }
             guard let job = cfg.start(f.id) else {
                 record(f, outcome: .skipped(reason: "a verify job for this file is already running"), cfg: cfg)
                 continue
             }
-            runningID = f.id
-            checkedThisLaunch.insert(f.id)
-            startTimes.append(cfg.now())
-            status = .checking(filename: f.filename)
-            checksLog.info("check START: \(f.filename, privacy: .public)")
-            // Wait for the job to settle (an ordinary MFO job; poll its state).
-            while job.state.isActive {
-                try? await Task.sleep(nanoseconds: UInt64(max(1, cfg.jobPollMilliseconds)) * 1_000_000)
-                if Task.isCancelled { runningID = nil; return }
-            }
-            let outcome = Self.outcome(of: job.state, verdict: cfg.verdict(f.id))
-            runningID = nil
-            checkingIDs.remove(f.id)
-            note(f, outcome: outcome, cfg: cfg)
+            guard await run(f, job: job, cfg: cfg) else { return }
             // Loop: the recount the verdict triggered may have reordered the
             // list; the queue is rebuilt from `ranked` at the top.
         }
         checkingIDs = []
         status = enabled ? .idle : .disabled
+    }
+
+    /// Budgets — a row must not say "checking" for a check that is not
+    /// coming, so the queue is cleared while a budget is spent. Per launch:
+    /// false (done until relaunch). Per hour: waits for the window to free,
+    /// then true (the caller rebuilds the queue); false when cancelled.
+    private func budgetAllows(_ cfg: Configuration) async -> Bool {
+        if checkedThisLaunch.count >= cfg.maxPerLaunch {
+            checkingIDs = []
+            status = .parked(reason: "\(cfg.maxPerLaunch) checks this launch — more after a relaunch")
+            return false
+        }
+        let now = cfg.now()
+        startTimes.removeAll { now.timeIntervalSince($0) >= 3600 }
+        guard startTimes.count >= cfg.maxPerHour, let oldest = startTimes.min() else { return true }
+        checkingIDs = []
+        let wait = max(1, 3600 - now.timeIntervalSince(oldest))
+        status = .parked(reason: "\(cfg.maxPerHour) checks this hour — next in \(Int(wait / 60) + 1) min")
+        try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+        return !Task.isCancelled
+    }
+
+    /// Park while the app is busy or the person is working. False when
+    /// cancelled or disabled meanwhile.
+    private func parkedUntilFree(_ cfg: Configuration) async -> Bool {
+        while cfg.isExternallyBusy() || Self.interacting(cfg) {
+            status = .parked(reason: cfg.isExternallyBusy() ? "another job is using the catalog"
+                                                            : "you are working")
+            try? await Task.sleep(nanoseconds: UInt64(max(0.01, cfg.parkPollSeconds) * 1_000_000_000))
+            if Task.isCancelled || !enabled { return false }
+        }
+        return true
+    }
+
+    /// The first queued file that exists on disk; the missing ones are
+    /// skipped (logged, once per launch).
+    private func firstPresent(in queue: [ArchiveAngelCheckFacts], cfg: Configuration) async -> ArchiveAngelCheckFacts? {
+        for f in queue {
+            if await cfg.fileExists(f.fullPath) { return f }
+            record(f, outcome: .skipped(reason: "file not found"), cfg: cfg)
+            if Task.isCancelled { return nil }
+        }
+        return nil
+    }
+
+    /// One check: wait for the ordinary job to settle, read the verdict,
+    /// log. False when cancelled mid-way.
+    private func run(_ f: ArchiveAngelCheckFacts, job: any MediaFileOperationJob, cfg: Configuration) async -> Bool {
+        runningID = f.id
+        checkedThisLaunch.insert(f.id)
+        startTimes.append(cfg.now())
+        status = .checking(filename: f.filename)
+        checksLog.info("check START: \(f.filename, privacy: .public)")
+        while job.state.isActive {
+            try? await Task.sleep(nanoseconds: UInt64(max(1, cfg.jobPollMilliseconds)) * 1_000_000)
+            if Task.isCancelled { runningID = nil; return false }
+        }
+        let outcome = Self.outcome(of: job.state, verdict: cfg.verdict(f.id))
+        runningID = nil
+        checkingIDs.remove(f.id)
+        note(f, outcome: outcome, cfg: cfg)
+        return true
     }
 
     /// A skip that costs nothing: counted once per launch, logged, no job.
