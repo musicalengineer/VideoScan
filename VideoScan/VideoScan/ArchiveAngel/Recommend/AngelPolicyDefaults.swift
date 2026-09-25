@@ -366,7 +366,7 @@ enum AngelPolicyDefaults {
         line: absurdBitrateLine)
 
     /// Rules v12 (§3.3): a file the ONE date rule places within the last
-    /// year, with no camera or phone named in its tags, in a codec a
+    /// year, with no camera or phone named in its tags (make or model — QA v12 #5), in a codec a
     /// digitizer or an editor writes (FFV1, ProRes, DV, MPEG-2, MJPEG) is
     /// almost always a tape converted THIS year — the 22 live files under
     /// "Converted_VHS_Tapes_2026" the Angel called Ready under 2026. It
@@ -381,7 +381,7 @@ enum AngelPolicyDefaults {
         when: [recommendedByPersonOrAngel,
                .init(field: .hasUserDate, op: .eq, value: .bool(false)),
                .init(field: .yearsAgo, op: .le, value: .number(1)),
-               .init(field: .deviceModel, op: .eq, value: .string("")),
+               .init(field: .hasCameraOrigin, op: .eq, value: .bool(false)),
                .init(field: .videoCodec, op: .in, value: .strings(recentDigitizationCodecs))],
         note: "Dated within the last year by a machine, no camera named, a digitizer's or editor's codec: confirm the year",
         line: recentDigitizationLine)

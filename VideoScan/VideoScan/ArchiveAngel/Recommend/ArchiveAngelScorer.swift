@@ -287,6 +287,11 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     /// "Worth a look" (60-minute FFV1 / HEVC copies of a file being
     /// prepared). A SAFETY floor: the buffer is never material.
     case angelWorkingCopy = "Archive Angel's own working copy (a prepared companion in the buffer), not material"
+    /// Rules v12, QA v12 #6: a member of a footage group (Find Similar
+    /// Footage, Likely or stronger) whose likely ORIGINAL is archived. Not
+    /// "a copy is in the archive" — this file's bytes may be nowhere in
+    /// it; the footage is. A SAFETY reason (the `archivedCopy` floor).
+    case footageOriginalArchived = "The original of this footage is already in the archive"
 }
 
 extension ArchiveAngelRejection {
@@ -295,6 +300,7 @@ extension ArchiveAngelRejection {
     /// class rules say — `useAngelFloors: false` included.
     static let safetyReasons: Set<ArchiveAngelRejection> = [
         .notVideo, .alreadyArchived, .duplicateArchived, .fileGone, .volumeOffline, .angelWorkingCopy,
+        .footageOriginalArchived,
     ]
 }
 

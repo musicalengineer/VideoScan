@@ -98,8 +98,11 @@ extension ArchiveAngelScorer {
             return c.isAngelWorkingCopy ? .angelWorkingCopy : nil
         case .archivedCopy:
             // Rules v12: a footage group whose likely original is archived
-            // is done — its re-encodes and exports read the same reason.
-            return c.hasArchivedDuplicate || c.archivedFootageOriginal ? .duplicateArchived : nil
+            // is done. A byte copy in the archive keeps its own reason; a
+            // re-encode or export says what is true — the ORIGINAL of this
+            // footage is archived (QA v12 #6).
+            if c.hasArchivedDuplicate { return .duplicateArchived }
+            return c.archivedFootageOriginal ? .footageOriginalArchived : nil
         case .notPlayable:
             let playable = c.isPlayable.lowercased()
             return playable.hasPrefix("no") || playable.contains("unsupported") ? .notPlayable : nil

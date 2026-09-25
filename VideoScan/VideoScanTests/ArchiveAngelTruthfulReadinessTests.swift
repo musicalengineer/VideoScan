@@ -149,6 +149,15 @@ struct ArchiveAngelV12ClassRuleTests {
     func recentDigitizationSpares() {
         #expect(classify(digitized(codec: "prores", device: "iPhone 12")).kind == .ready, "a camera named it")
         #expect(classify(digitized(codec: "h264")).kind == .ready, "a delivery codec is not a digitizer's")
+        // QA v12 #5: a make-only stamp names a camera too (the resolver trusts it at 0.95).
+        let sony = ArchiveAngelCandidate(filename: "Tape.mov", fullPath: "/Volumes/Projects/Tape.mov",
+                                         sizeBytes: 20_000_000_000, durationSeconds: 3000,
+                                         mediaDisposition: .important, videoCodec: "prores",
+                                         captureDate: utc(2026, 5, 19), originMake: "Sony")
+        #expect(classify(sony).kind == .ready, "a make-only camera stamp is a camera")
+        var ctx = AngelEvalContext(now: now)
+        #expect(ctx.flag(.hasCameraOrigin, sony) == true)
+        #expect(ctx.flag(.hasCameraOrigin, digitized()) == false)
         #expect(classify(digitized(name: "2024-07-05_13-15-36.mkv")).kind == .ready, "two years ago")
         #expect(classify(digitized(important: false), score: 30).kind == .notNow, "nothing vouched, grade C — not promoted into Needs a date")
         #expect(classify(digitized(user: "1994")).kind == .ready, "Rick's year outranks everything")
@@ -182,7 +191,8 @@ struct ArchiveAngelV12ClassRuleTests {
         let back = try JSONDecoder().decode(AngelClassRule.self, from: data)
         #expect(back == rule)
         #expect(back.reasonLine(year: 2026) == "Dated 2026 — check")
-        #expect(back.reasonLine(year: nil) == "Dated this year — check")
+        // QA v12 #8: no year is "undated", never a claim of this year.
+        #expect(back.reasonLine(year: nil) == "Dated undated — check")
         #expect(AngelClassRule(.ready).reasonLine(year: 2026) == nil)
         var rules = AngelRecommendRules.standard
         rules.classes.insert(AngelClassRule(.ready, line: String(repeating: "x", count: 301)), at: 0)
@@ -253,8 +263,16 @@ struct ArchiveAngelArchivedFootageTests {
                   ArchiveAngelCandidate(filename: "lone.mov")]
         ArchiveAngelScorer.markArchivedFootage(&cs, archivedGroups: [g])
         #expect(cs.map(\.archivedFootageOriginal) == [false, true, true, false, false, false])
-        #expect(ArchiveAngelScorer.hardFloor(cs[1], now: now) == .duplicateArchived, "the same reason a byte copy reads")
-        #expect(ArchiveAngelScorer.safetyHit(cs[1], now: now) == .duplicateArchived, "…and it is a safety floor")
+        // QA v12 #6: its OWN reason — no byte copy of it is in the archive.
+        #expect(ArchiveAngelScorer.hardFloor(cs[1], now: now) == .footageOriginalArchived)
+        #expect(ArchiveAngelScorer.safetyHit(cs[1], now: now) == .footageOriginalArchived, "…and it is a safety floor")
+        #expect(ArchiveAngelRejection.safetyReasons.contains(.footageOriginalArchived))
+        // A real byte copy in the archive keeps the byte-copy reason, even in an archived group.
+        var both = cs[1]; both.hasArchivedDuplicate = true
+        #expect(ArchiveAngelScorer.hardFloor(both, now: now) == .duplicateArchived)
+        // The Readiness sheet says it in words.
+        #expect(ArchiveAngelReadinessExplanation.sentence(forReason: ArchiveAngelRejection.footageOriginalArchived.rawValue)?
+                    .contains("Find Similar Footage") == true)
         #expect(ArchiveAngelScorer.hardFloor(cs[0], now: now) == nil, "the original answers for itself")
         var none = [member(group: g, rank: 1), member(group: other, rank: 2)]
         ArchiveAngelScorer.markArchivedFootage(&none, archivedGroups: [])
@@ -298,7 +316,7 @@ struct ArchiveAngelArchivedFootageTests {
         let out = model.archiveAngelSweepCandidates()
         func by(_ r: VideoRecord) -> ArchiveAngelCandidate? { out.first { $0.id == r.id } }
         #expect(by(a1)?.archivedFootageOriginal == true)
-        #expect(by(a1).map { ArchiveAngelScorer.hardFloor($0) } == .duplicateArchived)
+        #expect(by(a1).map { ArchiveAngelScorer.hardFloor($0) } == .footageOriginalArchived)
         #expect(by(b1)?.archivedFootageOriginal == false && by(b0)?.archivedFootageOriginal == false)
         #expect(by(b1).map { ArchiveAngelScorer.hardFloor($0) } == .some(nil))
         #expect(by(c1)?.archivedFootageOriginal == false)

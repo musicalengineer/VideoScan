@@ -16,8 +16,10 @@ extension VideoScanModel {
         let active = pfActiveRecords(records)
         var out: [ArchiveAngelCandidate] = []
         out.reserveCapacity(active.count)
+        // Rules v12: the buffer root is standardized ONCE per pass (QA v12 #4).
+        let bufferPrefix = ArchiveAngelCandidate.bufferPrefix(archiveAngel.environment.bufferRoot)
         for r in active {
-            out.append(ArchiveAngelCandidate.project(r, model: self, policy: policy))
+            out.append(ArchiveAngelCandidate.project(r, model: self, policy: policy, bufferPrefix: .some(bufferPrefix)))
         }
         let rules = archiveAngel.policy   // the recommendation policy (S3b: floors, signals, tables as data)
         ArchiveAngelScorer.markDerivatives(&out, policy: rules)   // T10 H3: needs the whole set (one O(n) pass)

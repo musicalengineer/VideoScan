@@ -183,9 +183,9 @@
             "value" : 1
           },
           {
-            "field" : "deviceModel",
+            "field" : "hasCameraOrigin",
             "op" : "==",
-            "value" : ""
+            "value" : false
           },
           {
             "field" : "videoCodec",

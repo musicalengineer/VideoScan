@@ -584,6 +584,8 @@ struct ArchiveAngelVocabularyTests {
             "Not in a class the Angel prepares now (Not now, Needs a date, Another copy)",
             // Rules v12 (2026-09-25): ADDED — the Angel's own buffer companions.
             "Archive Angel's own working copy (a prepared companion in the buffer), not material",
+            // QA v12 #6: ADDED — a footage group whose original is archived.
+            "The original of this footage is already in the archive",
         ])
     }
 

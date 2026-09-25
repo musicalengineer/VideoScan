@@ -89,6 +89,9 @@ enum AngelField: String, CaseIterable, Sendable {
     case isPhoneClip, isLivePhotoMotion, isHumanMarked, hasUserNotes, formatAtRisk, isOnlyCopy
     case isPairedHalf, volumeOnline, isOnMasterArchive, hasArchivedDuplicate, hasDuplicateGroup
     case hasUserDate, hasCaptions, hasOCRText
+    /// Rules v12 (QA v12 #5): a camera or phone is named in the tags —
+    /// a make OR a model, the same test RecordDateResolver trusts at 0.95.
+    case hasCameraOrigin
     // Classifier-only facts (the `recommend.classes` rules): the Angel's
     // grade, whether the record passed the floors, the vouch tally, the
     // date rule's answer.
@@ -113,7 +116,7 @@ enum AngelField: String, CaseIterable, Sendable {
         case .grade: return .choice(ArchiveAngelGrade.allCases.map(\.rawValue))
         case .isPhoneClip, .isLivePhotoMotion, .isHumanMarked, .hasUserNotes, .formatAtRisk, .isOnlyCopy,
              .isPairedHalf, .volumeOnline, .isOnMasterArchive, .hasArchivedDuplicate, .hasDuplicateGroup,
-             .hasUserDate, .hasCaptions, .hasOCRText, .eligible, .vouched, .dated:
+             .hasUserDate, .hasCaptions, .hasOCRText, .hasCameraOrigin, .eligible, .vouched, .dated:
             return .flag
         }
     }
@@ -588,6 +591,7 @@ struct AngelEvalContext {
         case .hasArchivedDuplicate: return c.hasArchivedDuplicate
         case .hasDuplicateGroup: return c.duplicateGroupID != nil
         case .hasUserDate: return !(c.userDate ?? "").isEmpty
+        case .hasCameraOrigin: return !c.deviceModel.isEmpty || !(c.originMake ?? "").isEmpty
         case .hasCaptions: return c.hasCaptions
         case .hasOCRText: return c.hasOCRText
         default: return false
@@ -846,6 +850,7 @@ extension ArchiveAngelRejection {
         case .extraCopy: return "extraCopy"
         case .notRecommendedNow: return "notRecommendedNow"
         case .angelWorkingCopy: return "angelWorkingCopy"
+        case .footageOriginalArchived: return "footageOriginalArchived"
         }
     }
 

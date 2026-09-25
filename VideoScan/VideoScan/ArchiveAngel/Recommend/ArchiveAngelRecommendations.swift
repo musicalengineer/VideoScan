@@ -123,10 +123,12 @@ struct AngelClassRule: Codable, Sendable, Equatable {
     }
 
     /// The reason line with `{year}` filled in (nil when the rule has none).
+    /// No year → "undated" (QA v12 #8: never claim "this year" for a
+    /// file with no date).
     func reasonLine(year: Int?) -> String? {
         guard !line.isEmpty else { return nil }
         guard line.contains("{year}") else { return line }
-        return line.replacingOccurrences(of: "{year}", with: year.map(String.init) ?? "this year")
+        return line.replacingOccurrences(of: "{year}", with: year.map(String.init) ?? "undated")
     }
 }
 

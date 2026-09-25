@@ -181,6 +181,8 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
         case "stage: Master": return "Its archive stage says Master."
         case "the copy to keep": return "You chose this copy as the one to keep."
         case "Not assessed yet": return "Archive Angel has not looked at it yet."
+        case ArchiveAngelRejection.footageOriginalArchived.rawValue:
+            return "Find Similar Footage matched it to footage whose original is already in the archive, so it is not new material."
         // Rules v12 class-rule lines (AngelPolicyDefaults).
         case AngelPolicyDefaults.absurdBitrateLine:
             return "The file is far larger than its length explains — probably a broken encode. Play it before archiving."
