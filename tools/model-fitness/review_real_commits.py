@@ -148,7 +148,39 @@ def diff_of(sha: str) -> str:
     return text
 
 
-def ask(endpoint: str, model: str, prompt: str, timeout: float) -> tuple[str, float, str | None]:
+# How long one review may take, and how long a reply may run (2026-09-25).
+#
+# qwen3.8 is a THINKING model: on a 40 KB diff (Angel Checks, 9d7df1e8) it
+# reasoned past the old 600 s ceiling and past a hand-passed 900 s, so the
+# commit came back as a transport error and was never reviewed. The wait
+# goes to 40 min, and the reply (thinking included) is capped at
+# NUM_PREDICT tokens so a runaway answer ends instead of holding the model.
+DEFAULT_TIMEOUT_SECONDS = 2400.0
+NUM_PREDICT = 8192
+
+
+def interpret(payload: dict) -> tuple[str, str | None]:
+    """(answer, error) from an /api/chat reply. Pure — table-tested.
+
+    A reply cut off by the NUM_PREDICT cap (done_reason "length") is an
+    ERROR, never a finding: half a thought is not a verdict, and an
+    unclosed <think> block would otherwise be read as a flagged review.
+    """
+    answer = (payload.get("message") or {}).get("content", "")
+    if payload.get("done_reason") == "length":
+        return "", (f"reply cut off at the {NUM_PREDICT}-token cap before an answer "
+                    f"(raise --num-predict): " + answer[-200:].replace("\n", " "))
+    answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S).strip()
+    if not answer:
+        # An empty reply is a transport/server failure, never a finding:
+        # keep the raw payload so the cause (memory, context, load) is
+        # readable in the verdict file.
+        return "", "empty reply: " + json.dumps(payload)[:600]
+    return answer, None
+
+
+def ask(endpoint: str, model: str, prompt: str, timeout: float,
+        num_predict: int = NUM_PREDICT) -> tuple[str, float, str | None]:
     body = json.dumps({
         "model": model,
         "messages": [{"role": "system", "content": SYSTEM},
@@ -158,7 +190,9 @@ def ask(endpoint: str, model: str, prompt: str, timeout: float) -> tuple[str, fl
         # (262K), and a 32B reviewer on a 48 GB Mac came back with empty
         # 200 replies that were counted as 25/25 FLAGGED (2026-09-01).
         # A diff plus the system prompt is a few thousand tokens.
-        "options": {"temperature": 0, "seed": 101, "num_ctx": 32768},
+        # num_predict: the reply cap (thinking included), see NUM_PREDICT.
+        "options": {"temperature": 0, "seed": 101, "num_ctx": 32768,
+                    "num_predict": num_predict},
     }).encode()
     request = urllib.request.Request(
         f"{endpoint.rstrip('/')}/api/chat", data=body,
@@ -169,14 +203,8 @@ def ask(endpoint: str, model: str, prompt: str, timeout: float) -> tuple[str, fl
             payload = json.loads(response.read())
     except Exception as exc:                      # noqa: BLE001 - report, never raise
         return "", time.monotonic() - started, str(exc)
-    answer = (payload.get("message") or {}).get("content", "")
-    answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S).strip()
-    if not answer:
-        # An empty reply is a transport/server failure, never a finding:
-        # keep the raw payload so the cause (memory, context, load) is
-        # readable in the verdict file.
-        return "", time.monotonic() - started, "empty reply: " + json.dumps(payload)[:600]
-    return answer, time.monotonic() - started, None
+    answer, error = interpret(payload)
+    return answer, time.monotonic() - started, error
 
 
 def clean(answer: str) -> bool:
@@ -202,7 +230,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="review what is staged, before you commit it")
     parser.add_argument("--working", action="store_true",
                         help="review the working tree, committed or not")
-    parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS,
+                        help=f"seconds to wait for one review (default {DEFAULT_TIMEOUT_SECONDS:.0f})")
+    parser.add_argument("--num-predict", type=int, default=NUM_PREDICT,
+                        help=f"reply cap in tokens, thinking included (default {NUM_PREDICT})")
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
     if not args.model:
@@ -221,13 +252,14 @@ def main(argv: list[str] | None = None) -> int:
         print("nothing to review")
         return 0
     print(f"model    {args.model}")
+    print(f"limits   wait {args.timeout:.0f} s per review, reply cap {args.num_predict} tokens")
     print(f"units    {len(rows)}")
     print(f"out      {out}\n", flush=True)
 
     flagged, quiet, broken = [], [], []
     for index, (short, subject, diff) in enumerate(rows, 1):
         prompt = ("Review this change.\n\n```diff\n" + diff + "\n```")
-        answer, seconds, error = ask(args.endpoint, args.model, prompt, args.timeout)
+        answer, seconds, error = ask(args.endpoint, args.model, prompt, args.timeout, args.num_predict)
 
         if error:
             broken.append((short, subject, error))
