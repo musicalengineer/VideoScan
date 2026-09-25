@@ -35,6 +35,22 @@ extension VideoScanModel: AngelCatalog, AngelNavigator, AngelArchive, AngelLedge
         appLog.write(line)
     }
 
+    /// The preview sweep's gate is the one every interactive catalog path
+    /// pings (`previewSweep.noteUserInteraction`); Angel Checks read it.
+    var lastUserInteractionAt: CFAbsoluteTime? { previewSweep.gate.lastInteraction }
+
+    /// Keep footage current (§5): ONE pass over the active records.
+    func footageCurrency() -> (grouped: Int, newestScan: Date?) {
+        var grouped = 0
+        var newest: Date?
+        for r in records where !r.isPurged {
+            guard let f = r.footage else { continue }
+            grouped += 1
+            if newest.map({ f.scannedAt > $0 }) ?? true { newest = f.scannedAt }
+        }
+        return (grouped, newest)
+    }
+
     /// Show Copies… (S4): the same active set the retired AssessCopiesJob
     /// walked (`pfActiveRecords(model.records)`).
     func activeRecordsForCopyFamily() -> [VideoRecord] {
@@ -101,5 +117,19 @@ extension MediaFileOperationsCenter: AngelJobRunner {
             $0.startArchiveAngel(count: count, makeLossless: makeLossless, model: model,
                                  bufferRoot: bufferRoot, policy: policy)
         }
+    }
+
+    /// Angel Checks: the app's own initiative — deliberately NOT inside
+    /// `startedByUser` (MediaFileOperationsWindowForwarderTests pins this
+    /// file's two user-origin scopes; a background verify must not raise
+    /// the window).
+    func startVerifyAudioForAngel(record: VideoRecord, model: VideoScanModel) -> (any MediaFileOperationJob)? {
+        startVerifyAudio(record: record, model: model)
+    }
+
+    /// Keep footage current: background origin, whole catalog.
+    func startFindSimilarFootageForAngel(model: VideoScanModel) -> (any MediaFileOperationJob)? {
+        let job = startFindSimilarFootage(scope: .catalog, model: model)
+        return job.wasRefused ? nil : job
     }
 }

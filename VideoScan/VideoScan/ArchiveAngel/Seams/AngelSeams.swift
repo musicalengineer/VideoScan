@@ -42,6 +42,15 @@ protocol AngelCatalog: AnyObject {
     func isRecommendableNow(_ rec: VideoRecord) -> Bool
     /// The keeper policy, built once per pass by the caller.
     func duplicateKeeperPolicy() -> DuplicateKeeperPolicy
+    /// When the person last touched the catalog UI (the preview sweep's
+    /// interaction gate — the one every keystroke already pings). Angel
+    /// Checks read bytes, so they wait for a longer quiet spell than the
+    /// scoring sweep. nil = never.
+    var lastUserInteractionAt: CFAbsoluteTime? { get }
+    /// Keep footage current (docs/archive_angel_wise_design.md §5): how
+    /// many active records carry a footage group, and the newest run
+    /// stamp among them. O(n), once per launch and rarely after.
+    func footageCurrency() -> (grouped: Int, newestScan: Date?)
     /// Console + videoscan.log — a user-visible line.
     func angelLog(_ line: String)
     /// Retire the catalogued companions of batches a settle reclaimed
@@ -99,6 +108,15 @@ protocol AngelJobRunner: AnyObject {
     func startArchiveAngelByUser(count: Int, recordIDs: [UUID]?, makeLossless: Bool,
                                  model: VideoScanModel, bufferRoot: URL,
                                  policy: AngelRecommendationPolicy) -> ArchiveAngelJob
+    /// Angel Checks (docs/archive_angel_wise_design.md §4): the ordinary
+    /// Verify Audio job for one record, started on the APP's initiative —
+    /// no user origin, so the MFO window stays where it is. nil = refused
+    /// (a verify job for this record is already running).
+    func startVerifyAudioForAngel(record: VideoRecord, model: VideoScanModel) -> (any MediaFileOperationJob)?
+    /// Keep footage current (§5): Find Similar Footage over the whole
+    /// catalog, background origin. The verb queues behind a run in
+    /// progress (never refused); nil only when the center could not add it.
+    func startFindSimilarFootageForAngel(model: VideoScanModel) -> (any MediaFileOperationJob)?
 }
 
 /// The Master Archive: where Promote puts things.

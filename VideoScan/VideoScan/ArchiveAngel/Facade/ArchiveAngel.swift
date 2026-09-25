@@ -57,6 +57,10 @@ final class ArchiveAngel: ObservableObject {
     let store: ArchiveAngelEvidenceStore
     /// The background scoring sweep over the evidence store.
     let sweep: ArchiveAngelSweep
+    /// Angel Checks (docs/archive_angel_wise_design.md §4): Verify Audio on
+    /// the top of the list, in the background, before a row is shown as
+    /// "Needs audio checked".
+    let checks: ArchiveAngelChecks
     /// Phase 1 attention memory — derived from the Media Ledger's
     /// angelProposed / angelSkipped / angelCleared lines.
     let attention: ArchiveAngelAttentionStore
@@ -79,7 +83,20 @@ final class ArchiveAngel: ObservableObject {
     /// + Spotlight, never media). A test host starts from the pristine ON
     /// default and never reads Rick's preference.
     @Published private(set) var sweepEnabled: Bool
+    /// "Check Sound in the Background" — ON by default (§4).
+    @Published private(set) var checksEnabled: Bool
+    /// "Keep footage groups current" — ON by default (§5).
+    @Published private(set) var footageAutoEnabled: Bool
     @Published private(set) var batches = Batches()
+    /// Keep footage current: the automatic run fires once after the first
+    /// COMPLETE sweep of a launch, and again after a catalog change once
+    /// `footageRearmSeconds` have passed since the last automatic run.
+    private(set) var lastFootageAutoRunAt: Date?
+    private var footageArmed = true
+    private var footageRearmTask: Task<Void, Never>?
+    /// The last stalled count logged (only a change is logged).
+    private var lastStalledLogged: Int?
+    private var checksForwarder: AnyCancellable?
     /// ONE set of numbers (S3b): the class counts every surface reads —
     /// the strip headline, the badge, the catalog filter.
     /// Rebuilt by `rebuildRecommendations()` (ArchiveAngel+Recommendations).
@@ -121,10 +138,17 @@ final class ArchiveAngel: ObservableObject {
                                               policyFingerprint: AngelRecommendationPolicy.defaultFingerprint)
         self.store = store
         self.sweep = ArchiveAngelSweep(store: store)
+        self.checks = ArchiveAngelChecks()
         self.attention = ArchiveAngelAttentionStore()
-        self.sweepEnabled = environment.isTestHost
-            ? ArchiveAngelSettings().sweepEnabled
-            : ArchiveAngelSettings.restored(from: environment.defaults).sweepEnabled
+        let settings = environment.isTestHost
+            ? ArchiveAngelSettings()
+            : ArchiveAngelSettings.restored(from: environment.defaults)
+        self.sweepEnabled = settings.sweepEnabled
+        self.checksEnabled = settings.checksEnabled
+        self.footageAutoEnabled = settings.footageAutoEnabled
+        // The strip observes the façade; the checks' own changes (status,
+        // the queued ids) are forwarded so rows re-render on them.
+        checksForwarder = checks.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         // After every evidence replace (the new file is in place): recount.
         store.didChange = { [weak self] in self?.rebuildRecommendations() }
         // Read + validate policy.json OFF the main actor (bounded: ≤ 1 MB,
@@ -164,6 +188,14 @@ final class ArchiveAngel: ObservableObject {
     /// extension file; `private(set)` stays in this one).
     func publishRecommendations(_ summary: ArchiveAngelRecommendationSummary) {
         recommendations = summary
+        // Angel Checks look again at the new top of the list.
+        checks.noteRecommendationsChanged()
+        logStalledIfChanged()
+        // Keep footage current: after the first COMPLETE assessment of a
+        // launch (never on a partial checkpoint or a hand-fed summary).
+        if footageArmed, store.file?.complete == true, !environment.isTestHost {
+            considerFootageRun(trigger: "first complete assessment")
+        }
     }
 
     // MARK: Lifecycle
@@ -198,6 +230,7 @@ final class ArchiveAngel: ObservableObject {
         // Every run first waits for the off-main policy load (codex #1643).
         configuration.policyReady = { [weak self] in await self?.policyLoaded() }
         sweep.configure(configuration, enabled: sweepEnabled)
+        checks.configure(checksConfiguration(), enabled: checksEnabled && !environment.isTestHost)
 
         guard !environment.isTestHost else {
             facadeLog.info("launch done — test host: no launch pass")
@@ -225,10 +258,12 @@ final class ArchiveAngel: ObservableObject {
     }
 
     /// The MFO center, once VideoScanApp has it: the sweep parks behind an
-    /// active Angel or Promote job (`AngelJobRunner.isBusy`).
+    /// active Angel or Promote job (`AngelJobRunner.isBusy`); the checks
+    /// and the footage run start through it.
     func attach(jobRunner: any AngelJobRunner) {
         self.jobRunner = jobRunner
         facadeLog.info("job runner attached")
+        checks.noteRecommendationsChanged()
     }
 
     /// Rescore once the catalog settles (the sweep debounces). Called on
@@ -237,7 +272,145 @@ final class ArchiveAngel: ObservableObject {
         sweep.noteCatalogChanged()
         // The classes follow the LIVE catalog now, the scores at the next sweep.
         scheduleRecommendationsRecount()
+        scheduleFootageRearm()
     }
+
+    // MARK: Angel Checks (§4)
+
+    /// The loop's closures, all through the seams. `facts` is O(1) per
+    /// record (one readiness assess, one mount-table lookup).
+    func checksConfiguration() -> ArchiveAngelChecks.Configuration {
+        var cfg = ArchiveAngelChecks.Configuration(
+            ranked: { [weak self] in self?.recommendations.ranked ?? [] },
+            facts: { [weak self] id in self?.checkFacts(for: id) },
+            start: { [weak self] id in
+                guard let self, let model = self.model, let runner = self.jobRunner,
+                      let rec = self.catalog?.record(forID: id) else { return nil }
+                return runner.startVerifyAudioForAngel(record: rec, model: model)
+            },
+            verdict: { [weak self] id in
+                guard let rec = self?.catalog?.record(forID: id) else { return nil }
+                return (rec.audioVerifyStatus, rec.audioVerifyNote)
+            },
+            isExternallyBusy: { [weak self] in
+                guard let self, let catalog = self.catalog else { return true }
+                if catalog.isCatalogBusyForAngel { return true }
+                return self.jobRunner?.isBusy ?? true   // no runner yet = nothing can start
+            })
+        cfg.lastInteraction = { [weak self] in self?.catalog?.lastUserInteractionAt }
+        cfg.isReadOnly = { [weak self] in self?.catalog?.isReadOnly ?? true }
+        cfg.log = { [weak self] line in self?.note(line) }
+        return cfg
+    }
+
+    /// One record as the checks see it (nil = gone from the catalog).
+    func checkFacts(for id: UUID) -> ArchiveAngelCheckFacts? {
+        guard let catalog, let rec = catalog.record(forID: id), catalog.isRecommendableNow(rec) else { return nil }
+        let readiness = ArchiveReadiness.assess(record: rec)
+        let root = archive?.masterArchiveRootPath
+        let onMaster = root.map { rec.fullPath.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") } ?? false
+        return ArchiveAngelCheckFacts(
+            id: rec.id, filename: rec.filename, fullPath: rec.fullPath,
+            audioNotVerified: readiness.audio == .notVerified,
+            hasAudioTrack: rec.streamType == .videoAndAudio || rec.streamType == .audioOnly,
+            volumeMounted: VolumeReachability.isVolumeReachable(path: rec.fullPath),
+            onMasterArchive: onMaster)
+    }
+
+    /// "Check Sound in the Background": persist, then start/stop the loop.
+    func setChecks(_ on: Bool) {
+        note("Archive Angel: Check Sound in the Background → \(on ? "on" : "off") — START")
+        checksEnabled = on
+        ArchiveAngelSettings.saveChecksEnabled(on, to: environment.defaults)
+        checks.setEnabled(on)
+        note("Archive Angel: Check Sound in the Background is \(on ? "on" : "off") — \(checks.status.line)")
+    }
+
+    /// The rows the checker is handling right now (queued or running).
+    var checkingIDs: Set<UUID> { checks.checkingIDs }
+
+    /// The stalled count over the first page of the list (O(page)),
+    /// logged only when it changes.
+    func logStalledIfChanged(pageSize: Int = ArchiveAngelAssessmentPanel.pageSize) {
+        guard let catalog else { return }
+        var facts: [ArchiveAngelRowFacts] = []
+        for id in recommendations.ranked.prefix(pageSize) {
+            guard let rec = catalog.record(forID: id) else { continue }
+            facts.append(ArchiveAngelRowFacts.make(record: rec, evidence: store.record(for: id),
+                                                   kind: recommendationClass(for: id) ?? .notNow,
+                                                   isBeingChecked: false))
+        }
+        let stalled = ArchiveAngelStalled.count(rows: ArchiveAngelListRowBuilder.rows(facts), checking: checks.checkingIDs)
+        guard stalled != lastStalledLogged else { return }
+        lastStalledLogged = stalled
+        let state = !checksEnabled ? "off" : (checks.status.isParked ? "parked" : "on")
+        note("Archive Angel: \(stalled) recommended row\(stalled == 1 ? "" : "s") waiting for a sound check (checks \(state))")
+    }
+
+    // MARK: Keep footage current (§5)
+
+    /// A run is stale when nothing is grouped or the newest run is older
+    /// than this.
+    static let footageStaleSeconds: TimeInterval = 24 * 3600
+    /// After an automatic run, a catalog change re-arms one only this much later.
+    static let footageRearmSeconds: TimeInterval = 6 * 3600
+    static let footageRearmDebounceSeconds: TimeInterval = 5 * 60
+
+    /// "Keep footage groups current": persist; on → consider a run now.
+    func setFootageAuto(_ on: Bool) {
+        note("Archive Angel: Keep footage groups current → \(on ? "on" : "off") — START")
+        footageAutoEnabled = on
+        ArchiveAngelSettings.saveFootageAutoEnabled(on, to: environment.defaults)
+        if on { footageArmed = true; considerFootageRun(trigger: "setting turned on") }
+        note("Archive Angel: Keep footage groups current is \(on ? "on" : "off")")
+    }
+
+    /// Start Find Similar Footage (whole catalog) when armed, enabled, not
+    /// read-only, nothing else busy, and the groups are stale. Returns
+    /// whether a run was started. Internal so tests can drive it without
+    /// a launch pass; the automatic callers add the test-host gate.
+    @discardableResult
+    func considerFootageRun(trigger: String, now: Date = Date()) -> Bool {
+        guard footageArmed, footageAutoEnabled, let model, let catalog, let runner = jobRunner else { return false }
+        guard !catalog.isReadOnly, !catalog.isCatalogBusyForAngel, !runner.isBusy else { return false }
+        let currency = catalog.footageCurrency()
+        let stale = currency.grouped == 0 || currency.newestScan.map { now.timeIntervalSince($0) > Self.footageStaleSeconds } ?? true
+        footageArmed = false
+        guard stale else {
+            facadeLog.info("keep footage current (\(trigger, privacy: .public)): current — \(currency.grouped) grouped, newest \(currency.newestScan.map { $0.description } ?? "none", privacy: .public)")
+            return false
+        }
+        note("Archive Angel: Keep footage groups current — START (\(trigger); \(currency.grouped) record(s) grouped, newest run \(currency.newestScan.map { Self.dayFormatter.string(from: $0) } ?? "never"))")
+        guard let job = runner.startFindSimilarFootageForAngel(model: model) else {
+            note("Archive Angel: Keep footage groups current — not started (the operations center refused it)")
+            return false
+        }
+        lastFootageAutoRunAt = now
+        note("Archive Angel: Keep footage groups current — started “\(job.title)”")
+        return true
+    }
+
+    /// A catalog change re-arms the automatic run once `footageRearmSeconds`
+    /// have passed since the last one, debounced 5 min so a scan's stream
+    /// of appends is one look.
+    private func scheduleFootageRearm() {
+        guard footageAutoEnabled, !environment.isTestHost else { return }
+        if let last = lastFootageAutoRunAt, Date().timeIntervalSince(last) < Self.footageRearmSeconds { return }
+        footageRearmTask?.cancel()
+        footageRearmTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.footageRearmDebounceSeconds * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            self.footageArmed = true
+            self.considerFootageRun(trigger: "catalog changed")
+        }
+    }
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = .gmt
+        return f
+    }()
 
     /// Attention events were just ledgered: fold them into the memory and
     /// let the grades catch up (debounced). O(events), never logged here —
