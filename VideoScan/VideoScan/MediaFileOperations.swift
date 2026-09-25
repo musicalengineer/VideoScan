@@ -709,8 +709,6 @@ final class MediaFileOperationsCenter: ObservableObject {
     private var verifyDiagnosisOrder: [UUID] = []
     static let verifyDiagnosisCap = 200
 
-    /// The most recent completed diagnosis for a record this session,
-    /// or nil (never verified this session / evicted by the cap).
     /// The START line's plan for a Verify Audio job. An Archive Angel
     /// check says so (QA 2026-09-25 MINOR-7: videoscan.log could not tell
     /// the app's own background check from Rick's until it ended).
@@ -729,6 +727,8 @@ final class MediaFileOperationsCenter: ObservableObject {
         return nil
     }
 
+    /// The most recent completed diagnosis for a record this session,
+    /// or nil (never verified this session / evicted by the cap).
     func verifyDiagnosis(forRecordID id: UUID) -> AudioVerifyDiagnosis? {
         verifyDiagnoses[id]
     }
