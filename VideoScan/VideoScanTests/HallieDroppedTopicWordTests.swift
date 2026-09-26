@@ -34,6 +34,9 @@ private let records: [ArchivistPresenceRecordSnapshot] = [
     .init(fullPath: "/isolated/2006/Untitled-video-only.mov",
           dateCreated: day(2006), confirmedPeople: [],
           resolvedDate: day(2006)),
+    .init(fullPath: "/isolated/1993/Cape-1993-archive.mkv",
+          dateCreated: day(1993), confirmedPeople: [ConfirmedTag(name: "Donna", confirmedAt: confirmedAt)],
+          resolvedDate: day(1993)),
     .init(fullPath: "/isolated/2007/Christmas2007.mov",
           dateCreated: day(2007, 12, 25), confirmedPeople: [],
           resolvedDate: day(2007, 12, 25)),
@@ -132,5 +135,38 @@ struct HallieDroppedTopicWordTests {
     @Test func aWordInsideANameIsNotATopic() {
         #expect(HallieDroppedTopicWord.missing(
             question: "videos of grace lake", people: ["grace lake"], terms: []).isEmpty)
+    }
+
+    /// Clean replay 2026-09-25 (ollama 0.34.4), five of Rick's cape asks:
+    /// "find donna down the cape in the 90s" → people=[Donna, cape] →
+    /// "I don't have any videos tagged with Donna and cape yet." A curated
+    /// place/occasion word in the PEOPLE slot is a topic, unless it is an
+    /// inner-circle name.
+    @Test func aPlaceWordInThePeopleSlotIsSearchedAsAPlace() async throws {
+        // The live tree has a Cape family, so "cape" passes for a known
+        // surname and the unknown-name demotion keeps it as a person.
+        let tree = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME John /Cape/
+        1 SEX M
+        0 TRLR
+        """)
+        let result = try await Exec.execute(
+            .init(intent: .init(originalQuestion: "find donna down the cape in the 90s",
+                                ast: .presence(.init(people: ["Donna", "cape"])))),
+            context: .init(presenceRecords: records, graph: tree),
+            dependencies: .production)
+        #expect(result.outcome == .answered, Comment(rawValue: result.prose))
+        #expect(paths(result) == ["/isolated/1993/Cape-1993-archive.mkv"], Comment(rawValue: "\(paths(result))"))
+        #expect(result.basisLine.contains("“cape”"), Comment(rawValue: result.basisLine))
+    }
+
+    @Test func topicPeopleAreOnlyCuratedWords() {
+        #expect(HallieDroppedTopicWord.isTopicWord("cape"))
+        #expect(HallieDroppedTopicWord.isTopicWord("Christmas"))
+        #expect(HallieDroppedTopicWord.isTopicWord("down the cape"))
+        #expect(!HallieDroppedTopicWord.isTopicWord("Donna"))
+        #expect(!HallieDroppedTopicWord.isTopicWord("Grace Lake"))
     }
 }

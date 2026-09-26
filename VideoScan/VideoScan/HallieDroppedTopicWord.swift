@@ -68,6 +68,16 @@ enum HallieDroppedTopicWord {
         return found.sorted { $0.position < $1.position }.map(\.phrase)
     }
 
+    /// True when `value` IS one curated place/occasion word or phrase
+    /// ("cape", "down the cape", "christmas") — for a translator that put
+    /// it in the people slot. Whole-value match only: "Grace Lake" is a
+    /// name, not the lake.
+    static func isTopicWord(_ value: String) -> Bool {
+        let tokens = ArchivistKeywordText.significantTokens(value)
+        guard !tokens.isEmpty else { return false }
+        return ArchivistKeywordAliases.tokenizedGroups.contains { $0.contains(tokens) }
+    }
+
     /// Index of `needle` as a contiguous run inside `haystack`, or nil.
     static func position(of needle: [String], in haystack: [String]) -> Int? {
         guard !needle.isEmpty, needle.count <= haystack.count else { return nil }
