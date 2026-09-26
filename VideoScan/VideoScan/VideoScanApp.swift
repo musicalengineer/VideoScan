@@ -690,6 +690,12 @@ struct VideoScanApp: App {
             // Close.
             CommandGroup(after: .newItem) {
                 Divider()
+                // ⌘O as a real key equivalent (2026-09-26): opens the
+                // focused catalog table's highlighted rows the way a
+                // double-click does — see CatalogOpenCommand.swift.
+                // (⇧⌘O stays the Analyze Dashboard.)
+                CatalogOpenMenuItem()
+                Divider()
                 // Documents are added deliberately, never swept up by a
                 // volume scan — the scan is video-only on purpose. See
                 // DocumentIngest for why.
