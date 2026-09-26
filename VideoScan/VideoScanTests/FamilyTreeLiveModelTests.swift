@@ -463,9 +463,13 @@ struct FamilyTreeModelBehaviourTests {
         #expect(model.selectedID == nil)
         #expect(sortedFirst != nil)
         #expect(model.selectedPerson == nil)
-        // The miss is visible: name in the filter, empty list, notice set.
+        // The miss is visible: name in the filter, notice set. Since the
+        // ranked search (2026-09-26) the list below the notice offers the
+        // close matches — the two Richards — under a "Close matches" caption
+        // rather than nothing at all.
         #expect(model.searchText == "Rick")
-        #expect(model.filteredPeople.isEmpty)
+        #expect(Set(model.filteredPeople.map(\.id)) == ["@I3@", "@I7@"])
+        #expect(model.searchCaption == "Close matches")
         #expect(model.focusMissName == "Rick")
         #expect(model.focusMissNotice == "No one named \u{201C}Rick\u{201D} in the tree")
         // Next search edit clears the notice.
