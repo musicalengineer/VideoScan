@@ -774,6 +774,12 @@ enum ArchiveIndexRename {
         try AtomicFilePublish.write(data, to: backupDir.appendingPathComponent(url.lastPathComponent),
                                     durability: .fullFsync, createIntermediates: false)
         try AtomicFilePublish.write(Data(result.bytes), to: url, durability: .fullFsync, createIntermediates: false)
+        // Same retention as the archive index's backups (publish path above).
+        // Each rename copies the WHOLE ledger; without this the folder grew
+        // by one full copy per rename, forever (night QA 2026-09-25, m2).
+        // Pruned only after the publish, so the backup for THIS rename is
+        // never at risk before the new ledger is on disk.
+        pruneBackups(in: backupDir.deletingLastPathComponent())
         return result.changedLines
     }
 }
