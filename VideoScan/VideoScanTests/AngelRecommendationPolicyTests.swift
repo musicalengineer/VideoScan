@@ -287,6 +287,64 @@ struct ArchiveAngelRecommendationPolicyTests {
         #expect(warn.first?.contains("comment") == true && warn.first?.contains("weights.threeStar") == true)
     }
 
+    // MARK: Rules v13 — the additive `coverage` section
+
+    @Test("v13: a policy.json written before v13 (no `coverage`) still loads, with today's coverage defaults; a partial `coverage` keeps the rest defaulted")
+    func olderPolicyLoadsWithCoverageDefaults() throws {
+        let dir = try tempDir("v12file")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("policy.json")
+        try Data(#"{"schemaVersion": 2, "name": "pre-v13", "weights": {"minimumDurationSeconds": 300}}"#.utf8).write(to: url)
+        let older = AngelRecommendationPolicy.load(overrideURL: url, bundledURL: bundledURL)
+        #expect(older.source == .userOverride)
+        #expect(older.policy.weights.minimumDurationSeconds == 300)
+        #expect(older.policy.coverage == .standard, "an older file gains today's coverage, unchanged elsewhere")
+        #expect(older.notices.count == 1, "\(older.notices)")
+        // A schema-1 (weights only) file, likewise.
+        try Data(#"{"schemaVersion": 1, "threeStars": 120}"#.utf8).write(to: url)
+        let one = AngelRecommendationPolicy.load(overrideURL: url, bundledURL: bundledURL)
+        #expect(one.source == .userOverride && one.policy.coverage == .standard)
+        // One coverage key: the other three keep their defaults.
+        try Data(#"{"schemaVersion": 2, "coverage": {"maxPerYearPerBatch": 3}}"#.utf8).write(to: url)
+        let partial = AngelRecommendationPolicy.load(overrideURL: url, bundledURL: bundledURL)
+        #expect(partial.source == .userOverride)
+        #expect(partial.policy.coverage == AngelCoverageRules(onePerEvent: true, maxPerYearPerBatch: 3,
+                                                               backlogBonusMax: 20, backlogMinimumUnarchived: 10))
+        // Coverage off, as a file would write it.
+        try Data(#"{"schemaVersion": 2, "coverage": {"onePerEvent": false, "maxPerYearPerBatch": 0, "backlogBonusMax": 0}}"#.utf8).write(to: url)
+        let off = AngelRecommendationPolicy.load(overrideURL: url, bundledURL: bundledURL)
+        #expect(!off.policy.coverage.onePerEvent && off.policy.coverage.maxPerYearPerBatch == 0
+                && off.policy.coverage.backlogBonusMax == 0)
+        // A directly decoded v12 encoding (no `coverage` object at all) decodes too.
+        var obj = try #require(try JSONSerialization.jsonObject(with: AngelRecommendationPolicy.builtIn.encodedJSON()) as? [String: Any])
+        obj.removeValue(forKey: "coverage")
+        let decoded = try JSONDecoder().decode(AngelRecommendationPolicy.self, from: JSONSerialization.data(withJSONObject: obj))
+        #expect(decoded == .builtIn)
+    }
+
+    @Test("v13: an unknown key inside `coverage` is named once and the file is still used (a typo never silently changes a rule); a coverage number out of range refuses the file")
+    func coverageUnknownKeyAndRange() throws {
+        let dir = try tempDir("coverage-keys")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("policy.json")
+        try Data(#"{"schemaVersion": 2, "coverage": {"maxPerYear": 3}}"#.utf8).write(to: url)
+        let typo = AngelRecommendationPolicy.load(overrideURL: url, bundledURL: bundledURL)
+        #expect(typo.source == .userOverride)
+        #expect(typo.policy.coverage == .standard, "the intended field kept its default")
+        let warn = typo.notices.filter { $0.contains("does not read") }
+        #expect(warn.count == 1 && warn.first?.contains("coverage.maxPerYear") == true, "\(typo.notices)")
+        for bad in [#"{"schemaVersion": 2, "coverage": {"maxPerYearPerBatch": 1001}}"#,
+                    #"{"schemaVersion": 2, "coverage": {"backlogBonusMax": -1}}"#,
+                    #"{"schemaVersion": 2, "coverage": {"backlogMinimumUnarchived": -5}}"#,
+                    #"{"schemaVersion": 2, "coverage": {"onePerEvent": "yes"}}"#] {
+            try Data(bad.utf8).write(to: url)
+            let refused = AngelRecommendationPolicy.load(overrideURL: url, bundledURL: bundledURL)
+            #expect(refused.source == .bundled, "\(bad)")
+            #expect(refused.notices.first?.contains("refused") == true, "\(refused.notices)")
+        }
+        #expect(AngelRecommendationPolicy.builtIn.validationProblems().isEmpty)
+    }
+
     @Test("fingerprint: stable, and different for any change")
     func fingerprint() {
         #expect(AngelRecommendationPolicy.builtIn.fingerprint == AngelRecommendationPolicy.defaultFingerprint)

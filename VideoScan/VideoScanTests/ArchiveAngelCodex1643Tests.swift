@@ -539,7 +539,8 @@ struct ArchiveAngelCodex1643ScaleTests {
         }
         store.replace(with: ArchiveAngelEvidenceFile(computedAt: now, complete: true, considered: 100_000, eligible: 100_000, records: records))
         let started = ContinuousClock.now
-        let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now) { live[$0] }
+        // Rules v13: a one-day fixture — the v12 pins hold with coverage off (ArchiveAngelA4DeterminismTests has the coverage-on sensor).
+        let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now, policy: .coverageOff) { live[$0] }
         let elapsed = ContinuousClock.now - started
         print("[angel-perf] a4LiveGroupPick100k \(PerformanceLane.configurationName) \(elapsed)")
         #expect(pick?.selection.picks.count == 25)

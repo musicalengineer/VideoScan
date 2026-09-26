@@ -317,6 +317,7 @@ extension AngelRecommendationPolicy {
     /// from v10 by exactly that rule (Rick 2026-09-22, decision 3).
     static var rulesV10: AngelRecommendationPolicy {
         var p = AngelRecommendationPolicy.builtIn
+        p.coverage = .off   // rules v13: v10 had no coverage rules
         let stage = AngelRule(
             id: "stageMeansArchived", kind: .match,
             when: [.init(field: .archiveStage, op: .in,
@@ -420,7 +421,8 @@ struct ArchiveAngelScaleCharacterizationTests {
         var cs = ArchiveAngelS0Catalog.candidates(100_000, terminalStages: true)
         ArchiveAngelScorer.markDerivatives(&cs)
         ArchiveAngelScorer.applyFamilyAttention(&cs, now: ArchiveAngelS0Catalog.now)
-        let sel = ArchiveAngelScorer.select(cs, count: 10, now: ArchiveAngelS0Catalog.now)
+        // Rules v13: these are the v12 pins — coverage off (the S0 catalog has thousands of same-day rows).
+        let sel = ArchiveAngelScorer.select(cs, count: 10, policy: .coverageOff, now: ArchiveAngelS0Catalog.now)
         let head = sel.picks.map { Self.index($0.id) }
         print("[angel-s0] selection head \(head) overflow \(sel.overflow)")
         print("[angel-s0] selection rejected " + ArchiveAngelRejection.allCases.map { "\($0):\(sel.rejected[$0] ?? 0)" }.joined(separator: " "))
@@ -586,6 +588,9 @@ struct ArchiveAngelVocabularyTests {
             "Archive Angel's own working copy (a prepared companion in the buffer), not material",
             // QA v12 #6: ADDED — a footage group whose original is archived.
             "The original of this footage is already in the archive",
+            // Rules v13 (2026-09-26): ADDED — coverage's two batch limits (held for a later batch, never excluded).
+            "Another pick from the same day is already in this batch — spreading picks across events",
+            "Held for a later batch — this batch already has its share of that year",
         ])
     }
 
@@ -603,7 +608,7 @@ struct ArchiveAngelVocabularyTests {
         #expect(ArchiveAngelPlan.planFilename == "plan.json")
         #expect(ArchiveAngelEvidenceStore.filename == "evidence.json")
         #expect(ArchiveAngelEvidenceFile.currentVersion == 1)
-        #expect(ArchiveAngelScorer.rulesVersion == 12, "v12 2026-09-25: truthful readiness — working-copy floor, archived footage, recentDigitization / absurdBitrate classes")
+        #expect(ArchiveAngelScorer.rulesVersion == 13, "v13 2026-09-26: coverage — one per day, the per-year share, the backlog bonus")
     }
 
     @Test("grade bands unchanged: A ≥ 100, B 60–99, C 25–59, D 1–24, else X")

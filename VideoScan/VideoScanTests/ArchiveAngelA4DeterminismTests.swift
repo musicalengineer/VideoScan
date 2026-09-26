@@ -76,7 +76,7 @@ struct ArchiveAngelA4DeterminismTests {
             let (store, live, dir) = Self.a4Fixture(seed: seed * 7_919, now: now)
             defer { try? FileManager.default.removeItem(at: dir) }
             let started = ContinuousClock.now
-            let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now) { live[$0] }
+            let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now, policy: .coverageOff) { live[$0] }
             let elapsed = ContinuousClock.now - started
             slowest = max(slowest, elapsed)
             let names = (pick?.selection.picks ?? []).map(\.candidate.filename)
@@ -91,6 +91,30 @@ struct ArchiveAngelA4DeterminismTests {
             #expect(elapsed < ceiling, "seed \(seed): \(elapsed) (\(PerformanceLane.loadDescription()))")
         }
         print("[angel-perf] a4Determinism16 \(PerformanceLane.configurationName) slowest \(slowest) projections \(referenceProjections ?? -1)")
+    }
+
+    /// Rules v13 (2026-09-26, codex acceptance gate "coverage disabled"):
+    /// the fixture above is 100k files shot on ONE day. With coverage ON
+    /// the cache cannot fill 25 slots without topping up from rows it
+    /// skipped, so it declines — deterministically — and the walk fills
+    /// the batch by the soft day rule, identically for every draw.
+    @Test("SENSOR (coverage ON): the one-day A4 fixture declines the cache under 8 id draws, and the walk fills 25 the same way every time")
+    func oneDayFixtureWithCoverageOn() {
+        let now = Date()
+        var reference: [String]?
+        for seed in UInt64(1)...8 {
+            let (store, live, dir) = Self.a4Fixture(seed: seed * 7_919, now: now)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now, policy: .builtIn) { live[$0] }
+            #expect(pick == nil, "seed \(seed): declined — the walk decides")
+            var cands = Array(live.values.sorted { $0.filename < $1.filename }.prefix(2_000))
+            ArchiveAngelEvent.applyCoverage(&cands, policy: .builtIn, now: now)
+            let walked = ArchiveAngelScorer.select(cands, count: 25, policy: .builtIn, now: now)
+            let names = walked.picks.map(\.candidate.filename)
+            #expect(names.count == 25, "seed \(seed): the day rule relaxes to fill the batch")
+            #expect(walked.rejected[.sameEventAsPick] != nil)
+            if let reference { #expect(names == reference, "seed \(seed)") } else { reference = names }
+        }
     }
 
     @Test("a Keep that outscores its late-arriving anchor is picked — for every id draw")
@@ -123,7 +147,7 @@ struct ArchiveAngelA4DeterminismTests {
             _ = add("third.mov", score: 90, kind: .anotherCopy, group: g)
             store.replace(with: ArchiveAngelEvidenceFile(computedAt: now, complete: true, considered: records.count,
                                                          eligible: records.count, records: records))
-            let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now) { live[$0] }
+            let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now, policy: .coverageOff) { live[$0] }
             let ids = pick?.selection.picks.map(\.id) ?? []
             #expect(ids.contains(keep), "seed \(seed): the 150-point Keep was missed (its anchor arrived at 100)")
             #expect(!(pick?.selection.picks.contains { $0.candidate.filename == "anchor.mov" } ?? true), "seed \(seed)")
@@ -169,7 +193,7 @@ struct ArchiveAngelA4DeterminismTests {
             let keep = add("keep.mov", score: 150, kind: .anotherCopy, stars: 3, group: g, keep: true)
             store.replace(with: ArchiveAngelEvidenceFile(computedAt: now, complete: true, considered: records.count,
                                                          eligible: records.count, records: records))
-            let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now) { live[$0] }
+            let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now, policy: .coverageOff) { live[$0] }
             guard let pick else { continue }       // declined → the catalog walk decides; acceptable
             #expect(pick.selection.picks.map(\.id).contains(keep),
                     "seed \(seed): the live-Ready 150-point Keep was cut by the band its Worth-a-look anchor arrived in")
