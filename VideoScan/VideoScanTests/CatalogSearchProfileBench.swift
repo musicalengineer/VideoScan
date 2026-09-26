@@ -37,8 +37,23 @@ import Testing
 import Foundation
 @testable import VideoScan
 
+// Not on the GitHub-hosted runner (fix/ci-red-5, run 36223041786). This is
+// a MEASUREMENT HARNESS (see header): its numbers are only meaningful in
+// Release on a real Mac, and CI runs Debug on a 3-vCPU virtual M1. There
+// it took 255 s, all of it on the main actor — the production path it
+// measures is main-actor work, so moving it off main would measure
+// something else. 255 s of main-actor time starves the test host's
+// heartbeat (the CI hang watchdog fired on it: "no TEST_HOST_HEARTBEAT for
+// 194s") and every other @MainActor test queued behind it. A smaller CI
+// corpus would fork the yardstick the header requires to stay unchanged.
+// Nothing CI needs is lost: the 100k index-vs-canonical AGREEMENT check
+// runs on CI in CatalogSearchBudgetSensors
+// .settledKeystrokeBudgetAndAgreementAt100k. The bench still runs on every
+// real Mac (fleet batteries, nightly).
 @MainActor
-@Suite("CatalogSearchProfileBench", .serialized)
+@Suite("CatalogSearchProfileBench", .serialized,
+       .enabled(if: ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] != "true",
+                "GitHub-hosted virtual M1: a Debug 100k profiling harness holds the main actor for minutes (runs on real Macs)"))
 struct CatalogSearchProfileBench {
 
     // MARK: - Deterministic PRNG
