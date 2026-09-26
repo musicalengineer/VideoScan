@@ -3,6 +3,7 @@ import Foundation
 import Vision
 import AVFoundation
 import CoreImage
+import os
 @testable import VideoScan
 
 // MARK: - Integration Stress Test
@@ -37,24 +38,68 @@ struct IntegrationStressTests {
     func concurrentSubsystemStorm() async throws {
         let memBefore = processResidentMemoryMB()
 
+        // Reaching the line after this means no subsystem crashed or deadlocked.
+        await Self.runAllStorms()
+
+        let memAfter = processResidentMemoryMB()
+        let growth = memAfter - memBefore
+        #expect(growth < 500,
+                "Memory grew \(Int(growth)) MB during stress — possible leak")
+    }
+
+    // MARK: - Pool-liveness sensor (CI red 2026-09-25, run 36202513830)
+    //
+    // The storm wedged the GH virt-M1 runner for 40 min: its 3-minute
+    // .timeLimit never even RECORDED an issue, because Swift Testing's
+    // time limit is a sibling child task that must wake from a sleep on
+    // the cooperative pool — and every pool thread (~3 on that VM) was
+    // pinned inside the Vision storm's synchronous decode+detect loop,
+    // which had no suspension point from first frame to last.
+    //
+    // This sensor stands in for that timer: a ticker task sleeps 20 ms
+    // and counts wake-ups while the storms run. If the storms pin the
+    // pool, the ticker can't wake and the count collapses to ~0.
+    // Deterministic red/green under a 1-thread pool:
+    //   TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1
+    // (On a wide pool it passes either way — 8 blocking tasks can't pin
+    // 18 threads — which is exactly why this never showed on the M4/M5.)
+    @Test(.timeLimit(.minutes(2)),
+          .enabled(if: FileManager.default.fileExists(atPath: faceVideoPath)))
+    func stormsLeaveTheCooperativePoolLive() async {
+        let ticks = OSAllocatedUnfairLock(initialState: 0)
+        let ticker = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(20))
+                ticks.withLock { $0 += 1 }
+            }
+        }
+        let clock = ContinuousClock()
+        let start = clock.now
+        await Self.runAllStorms()
+        let elapsed = start.duration(to: clock.now)
+        ticker.cancel()
+
+        let got = ticks.withLock { $0 }
+        let elapsedMs = Double(elapsed.components.seconds) * 1000
+            + Double(elapsed.components.attoseconds) / 1e15
+        let possible = Int(elapsedMs / 20)
+        // A live pool lets the ticker run most of its turns; a pinned one
+        // lets it run ~none. A quarter is far from both ends.
+        #expect(got >= max(3, possible / 4),
+                "Ticker woke \(got) of ~\(possible) times in \(Int(elapsedMs)) ms — the storms pinned the cooperative pool, so no time limit or other task could run")
+    }
+
+    /// All five storms concurrently — shared by the storm test and the
+    /// pool-liveness sensor so they exercise the same load.
+    private static func runAllStorms() async {
         await withTaskGroup(of: String.self) { group in
             group.addTask { await Self.catalogSearchStorm() }
             group.addTask { await Self.ffprobeStorm() }
             group.addTask { await Self.hashingStorm() }
             group.addTask { await Self.visionDetectionStorm() }
             group.addTask { await Self.arcfaceInferenceStorm() }
-
-            for await subsystem in group {
-                // Each subsystem returns its name on completion.
-                // Reaching here means it didn't crash or deadlock.
-                _ = subsystem
-            }
+            for await _ in group {}
         }
-
-        let memAfter = processResidentMemoryMB()
-        let growth = memAfter - memBefore
-        #expect(growth < 500,
-                "Memory grew \(Int(growth)) MB during stress — possible leak")
     }
 
     // MARK: - Individual subsystem storms (also runnable standalone)
