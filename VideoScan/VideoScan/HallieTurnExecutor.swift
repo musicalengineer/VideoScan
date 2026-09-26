@@ -1202,11 +1202,26 @@ enum HallieTurnExecutor {
                 payload.reference = .currentSelection
                 inventedYear = year
             }
+            // The mirror case (replay 2026-09-25): the question states a
+            // year and the translator dropped it — "how old was dad in
+            // 1985" arrived as currentSelection and Hallie asked for a
+            // dated video.
+            var restoredYear: Int?
+            if !isRefinement, hasQuestionText, inventedYear == nil,
+               case .currentSelection = rawPayload.reference,
+               let year = ArchivistTemporalExecutor.statedYear(in: question) {
+                payload.reference = .explicitYear(year)
+                restoredYear = year
+            }
             var result = try await executeTemporalCase(
                 payload, request: request, context: context, dependencies: dependencies)
             if let inventedYear {
                 result = result.prefixingBasis(
                     "the translator supplied year \(inventedYear), which the question never mentions, so it was ignored")
+            }
+            if let restoredYear {
+                result = result.prefixingBasis(
+                    "the question says \(restoredYear); the translator left it out, so I counted to \(restoredYear)")
             }
             // The mode gate KEEPS a tree-mode session on an age question
             // (HallieModeGate.reconcileTree); say so on the answer, or
