@@ -583,3 +583,167 @@ Cape asks 8 → 14 of 16 clean; var-age 42 → 50 of 72.
 - A People profile marked notInFamilyTree is still bound to a lone tree namesake by given name (seen in a fixture: "Ellen Ronan (Ellen in the People tab)").
 - lv260925-008 in the advisory run: the bound "thankful pratt's husband" was read as a name; strict-055 (same words) answered "Nathaniel Caleb Parker". Translator variance.
 - The advisory drift on 09-18's 399 (343 → 335) tracks the ollama 0.34.0 → 0.34.4 update; social/identity turns becoming catalog searches ("who made you" → 10,506 items) are the largest remaining group.
+
+## 2026-09-26 — "find videos of dad" → Dafydd ab Einion (b. ~1360), twice, and the tree opened on him after Rick said no
+
+Rick, 14:14–14:17 ET (session `627FCBEB`, app; the transcript's `Z` stamps are
+UTC). Corpus `lv260926-001…004`; strict `strict-056…059`; branch
+`fix/hallie-dad-dafydd`.
+
+| # | id | asked | what came back | status |
+|---|----|-------|----------------|--------|
+| 1 | `lv260926-001` | "find videos of dad" | *"Dafydd ab Einion "Y Giwn Llwyd" was born about 1360, more than five centuries before motion pictures begin in 1888 — no one lives that long, so there can’t be film of him."* route=graph, no search run | **FIXED** (A) |
+| 2 | `lv260926-002` | "dad breen not someone from 5 centuries ago" | Richard Harding Breen Sr's biography (right) — **and** a second bubble in the same second: *"Opening the Family Tree tab focused on Dafydd ab Einion."* | **FIXED** (C) |
+| 3 | `lv260926-003` | "sure" | Richard Sr's Marine Corps service; "I have 4 photos of him — want to see them all?" | fine |
+| 4 | `lv260926-004` | "sure, but I also want videos of dad" | Dafydd ab Einion, word for word, again | **FIXED** (A + B) |
+
+**Failure class.** The 9/07 shape once more — a confident, cited answer about
+the WRONG PERSON — and this time the wrong person was one Rick had just
+rejected in so many words. Row 2 is the worst of it: the app *acted* on the
+rejected person after the correction.
+
+### A. "dad" was never fuzzy-matched. The tree has a man named Dad.
+
+`docs/hallie_live_failures.md` and the 9/11 strict notes both say "fuzzy-
+matched 'dad' to Dafydd". It is not fuzzy. The merged FamilySearch tree's
+`@IB21341@` — Dafydd ab Einion "Y Giwn Llwyd", b. about 1360 — carries
+fifteen NAME records, and the seventh is
+
+```
+1 NAME Dad ab Giwn
+```
+
+`GedcomFamilyGraph.people(matching:)` (`GedcomFamilyGraph+Index.swift:702`,
+rung 1) is token-exact over EVERY NAME record of every person, so "Dad" is
+an exact, unique hit, and every rung that guards recovery (the ≤4-letter
+rule at `ArchivistGraphExecutor.swift:945`, the bare-given-name rule) is
+never reached.
+
+The road: "find videos of dad" matched the "videos of X" lineage shape
+(`HallieLineageQuestion.swift:382`, which runs before the mode gate and before
+the translator — the `[hallie-mode] … reason=conflict` line is logged after
+the answer was already made) → `HallieLineageAnswer.personVideos`
+(`+GedcomAwareness.swift:191`) → `resolveDetailed("Dad")`
+(`HallieLineageQuestion.swift:1505`) → CyberBrain (no "dad" token) →
+`ArchivistGraphExecutor.resolveSubject` → `people(matching:)` → Dafydd →
+`photographyFloorLine(.film)` → the 1888 sentence. `[hallie] film offer
+suppressed: Dafydd ab Einion … (b. about 1360 + 125 < film 1888)` is in
+`videoscan.log` at 14:14:45 and 14:17:07.
+
+GH #180 (9/11) fixed this for the person-fact lane (`HalliePersonFactQuestion
+.swift:70` rewrites a bare kin word to "my dad") and 9/21 for the temporal
+lane — each for its own road. Every lineage shape ("videos of X", "photo of
+X", "X's line", "center on X", "X's family tree") shares ONE resolver, and
+none of them asked whether X was a kin word first.
+
+**Fix.** `HallieLineageAnswer+KinTerm.swift` — `ownerRelative(_:context:graph:)`,
+called from `resolveDetailed` as step 0b, so every lineage shape gets it.
+The ladder, first rung that settles wins: (0) a bare kin word a CURATED name
+claims ("Ma" is Eileen's alias) keeps the alias road, as GH #180 ruled;
+(1) the People tab's own relationship rows (Rick: "child of Dad") → the
+relative's pinned tree record; (2) the owner's OWN tree record (FamilySearch
+ID, else `HallieOwnerResolver`) → `relatives(_:of:)` or the extended walk;
+(3) an honest decline naming the gap. Never a name lookup. Pinned by
+`HallieDadNotDafyddTests` — the fixture tree keeps `1 NAME Dad ab Giwn` on a
+1360 record, and `theTreeReallyHasAManNamedDad` proves the rung still fires
+so the other tests still mean something.
+
+### B. Two turns after the correction, "dad" was resolved from scratch
+
+Turn 2 settled that "dad breen" is Richard Harding Breen Sr; turn 3 was about
+him; turn 4's "videos of dad" ran the same lookup as turn 1 with no memory of
+either. **Fix.** `ConversationMemory.kinBindings` (`HallieTurnExecutor
++Conversation.swift`): an ANSWERED graph turn whose typed person term names a
+kin word ("dad breen", "my dad", "dad") writes relation → settled person
+(`father` → "Richard Harding Breen Sr"); graph answers only, because a catalog
+answer's person can be the contested given name "Richard". `lineageTurn`
+substitutes the bound person into a media ask before any lookup — the same
+road "photos of him" takes. Pinned by
+`afterTheCorrectionVideosOfDadKeepsRichardSr`, with a People tab that has NO
+relationship rows and a tree with NO parents for the owner, so only the
+conversation can bind it; `aDeclinedCorrectionBindsNothing` and
+`aFatherBindingNeverLeaksToMother` are the sensors.
+
+### C. The tree opened on the man Rick had just rejected
+
+Log, 14:15: `[hallie-mode] mode=tree reason=explicitCue(dad)` at 14:15:07 →
+`Hallie: phrased graph/answered by template (template: model timeout)` at
+14:15:28 → `Family Tree: selected Dafydd ab Einion … (@IB21341@)` and
+`[family-tree] focus kind=record-id result=applied` at 14:15:29. The only code
+that writes *"Opening the Family Tree tab focused on X."* is the window's own
+chip handler (`ArchivistChatWindow.swift:1036`, `announce: true`); the
+commit path's auto-focus sink announces nothing and writes `[family-tree]
+Hallie focus requested target=person-id`, which is absent. The web bridge
+turns tree offers into "tell me about X" asks. So turn 1's **superseded**
+"Open in Family Tree: Dafydd …" chip was tapped in the second the corrected
+answer landed. A chip tapped while Hallie thinks is dropped silently
+(`handle(chip:)` `guard !isThinking`) — during a 21 s timeout that invites
+repeat clicks, and the last one lands on the first frame after thinking ends.
+Whether Rick's hand or something else pressed it, the chip should not have
+been live: the conversation had moved from Dafydd to Richard Sr, and memory's
+`tree.lastOffers` (what "show me" acts on) already forgets an earlier
+answer's offers on every new tree answer. The transcript did not.
+
+**Fix.** `HallieSupersededOffers.swift` (pure) + a `retireSupersededOffers`
+sink on `HallieResponseCommit.Sinks`, called when the settled person changes,
+BEFORE the new answer's bubble is appended (so a which-one's own chips are
+untouched): earlier bubbles' `openFamilyTree` / `openFamilyTreePerson` chips
+for anyone else are removed; asks, folders, surnames and app-tab chips stay.
+`ArchivistChatWindow.handle(chip:)` now logs every tap — `[hallie] chip
+tapped: …` / `chip ignored while thinking: …` — so next time the trail exists.
+Pinned by `HallieSupersededOffersTests` (the pure function, the commit
+order, an answer about the same person retires nothing, and an immediate
+action only ever opens the result's own person).
+
+### For Rick's ruling
+
+- **Retiring old chips is a visible change.** After the conversation moves to
+  someone else, an earlier bubble's "Open in Family Tree: X" button is gone;
+  ask about X again and it is offered afresh (the same words
+  `HallieTreeFollowUp` uses for a stale offer). The gentler alternative is a
+  confirm-on-tap ("that was about Dafydd; still want the tree on him?") —
+  more UI, and it would still have needed the tap to be logged.
+- **A chip tapped while Hallie thinks is dropped without a word.** Disabling
+  chips visibly while thinking would need `isThinking` in every row's
+  equality (two re-renders per turn — cheap, but it is the row that the
+  2026-08-29 beachball fix made equatable on purpose). Not done here.
+- The unmerged `fix/hallie-kin-term-collision` (dfffe347, "a kin term names
+  WHO, it does not argue about the mode") is NOT needed for this fix and was
+  not cherry-picked: the Dafydd answer was made before the mode verdict, and
+  `mode=unknown reason=conflict` on turns 1 and 4 only means the translator
+  ran afterwards. That branch's ruling — whether "videos of my dad" should
+  route to the catalog outright — stands as it was.
+- `1 NAME Dad ab Giwn` is a legitimate FamilySearch alternate name; nothing
+  to fix in the data. The lesson is in the resolver, not the record.
+
+### Same matcher, one road over: the graph route (found by the sensor, fixed)
+
+Two probes written for the same fixture went red on the graph route:
+"show dad's family tree" (`.graph(people: ["dad"], operation: .familyTree)`)
+rendered Dafydd's tree with an "Open in Family Tree: Dafydd" offer, and "who
+is dad's mother" (`.kinship`, relation `.mother`) answered for Dafydd.
+`HallieTurnExecutor+GraphPreflight.swift` rebinds only a "my/our <kin>"
+PHRASE in the question (`SpeakerKinship.kinshipPhrase`); a bare "dad"
+subject went straight to `ArchivistGraphExecutor.resolveSubject` and the
+same `people(matching:)` rung. (`executeRelativeFact`, GH #180, runs first
+but claims only biography / birth / death.) **Fix**, same file: a bare kin
+word that is the ONE subject, not a curated alias, is read as "my <kin>" and
+sent down the existing `SpeakerKinship.rebind` ladder — People tab → owner's
+tree record → honest failure — for every remaining graph operation. Pinned
+by `showDadsFamilyTreeIsNeverDafydd` / `whoIsDadsMotherIsNeverDafydd`.
+Not covered (unchanged, reported): a bare kin word outside the rebind
+vocabulary ("grandma", "nana") on a family-tree / kinship op still reaches
+the name resolver; the biography ops already handle those through
+`executeRelativeFact`.
+
+**Runs (branch `fix/hallie-dad-dafydd`, worktree, Debug, M4, suite-filtered).**
+Red first: `HallieDadNotDafyddTests` 10 of 13 red on the unfixed code with the
+live symptom reproduced through the fixture (Dafydd for "dad", "my dad", the
+photo shape, the post-correction turn); the two graph-route probes red on the
+lineage fix alone. Green: every `Hallie*` / `Archivist*` / `People*` suite —
+**1,855 Swift Testing tests in 226 suites + 7 XCTest, 0 failures, 257 s**
+(`HallieDadNotDafyddTests` 15, `HallieSupersededOffersTests` 8 among them);
+pytest `test_hallie_question_testbed.py` + `test_hallie_harvest_queries.py`
+(+ `test_hallie_eval.py`) 66 passed, 17 subtests. Harvest: `lv260926-001`
+by `hallie_harvest_queries.py --since 2026-09-26 --append`; `002…004` by hand
+(the harvester skips a mid-sentence "not", a bare "sure" and "sure, but …").

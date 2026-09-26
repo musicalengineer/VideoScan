@@ -30,6 +30,13 @@ enum HallieResponseCommit {
         let openFamilyTreePerson: (_ personID: String, _ personName: String) -> Void
         let recompileFamilyTree: (String?) -> Void
         let acceptImmediateOffer: (HallieTurnExecutor.Result) -> Void
+        /// Earlier bubbles' "Open in Family Tree: X" chips are retired when
+        /// the conversation settles on someone else (HallieSupersededOffers,
+        /// live 2026-09-26: a stale chip opened the tree on the man Rick
+        /// had just rejected). Called BEFORE the new answer's bubble is
+        /// appended, with the person the answer settled on. Defaulted so a
+        /// client without a transcript need not supply one.
+        var retireSupersededOffers: (String) -> Void = { _ in }
     }
 
     @discardableResult
@@ -72,6 +79,7 @@ enum HallieResponseCommit {
         state.telling = response.telling
         state.drill = response.drill
         state.picker = response.picker
+        let previousSubject = state.memory.lastSubject
         state.memory.record(intent: response.executedIntent,
                             result: response.result,
                             question: question)
@@ -87,6 +95,14 @@ enum HallieResponseCommit {
             }
         }
         sinks.publishState(state)
+        // The conversation moved to someone else: the offers that named the
+        // previous person are superseded, exactly as memory's
+        // tree.lastOffers already are. Before this answer's own bubble, so
+        // its chips (a which-one's several people included) are untouched.
+        if let subject = state.memory.lastSubject,
+           PersonResolver.normalize(subject) != PersonResolver.normalize(previousSubject ?? "") {
+            sinks.retireSupersededOffers(subject)
+        }
         let clarificationChips = response.result.clarification?.candidates.map {
             ArchivistMessage.Chip(
                 label: $0.label,

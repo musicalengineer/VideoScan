@@ -94,6 +94,40 @@ extension HallieTurnExecutor {
         /// unresolved "my dad" decline the same route with no offer, and a
         /// "yes" after those must not silently rerun a stripped search.
         private(set) var pendingOffer: HallieOfferAcceptance.Offer?
+        /// Kin terms this conversation has SETTLED, keyed by the relation
+        /// word ("father") and valued by the person the answer was about
+        /// ("Richard Harding Breen Sr"). Live 2026-09-26: Rick corrected
+        /// "dad" to "dad breen", heard about Richard Sr twice, and "videos
+        /// of dad" two turns later re-resolved from scratch — to a 1360
+        /// Welshman whose alternate NAME is "Dad". A kin term the
+        /// conversation has resolved stays resolved until an answer
+        /// resolves it again; reset clears it. Written only by an ANSWERED
+        /// graph turn, whose subject is the tree's full name — never by a
+        /// catalog answer, whose person can be a contested given name.
+        private(set) var kinBindings: [String: String] = [:]
+
+        /// Who a kin term ("dad", "my dad") means in THIS conversation, if
+        /// a previous answer settled it; nil for a name or an unsettled
+        /// term. A term with a surname ("dad breen") resolves itself.
+        func boundRelative(for term: String) -> String? {
+            guard HallieTurnExecutor.RelativeFactSubject.parse(term) != nil,
+                  let relation = HallieTurnExecutor.RelativeFactSubject.kinRelation(inPersonTerm: term)
+            else { return nil }
+            return kinBindings[relation]
+        }
+
+        /// The relation words this turn's typed person terms name: the
+        /// intent's people ("dad breen", "my dad"), or — for a local answer
+        /// with no intent — the question's subject phrase.
+        private static func kinRelations(intent: Intent?, question: String?) -> [String] {
+            var terms: [String] = []
+            if let intent { terms = Self.context(of: intent.ast).0 }
+            if terms.isEmpty, let question,
+               let subject = HallieModeClassifier.subjectPhrase(question) {
+                terms = [subject]
+            }
+            return terms.compactMap { HallieTurnExecutor.RelativeFactSubject.kinRelation(inPersonTerm: $0) }
+        }
 
         // MARK: Two-mode session state (docs/hallie_two_mode_design.md §3.1-3.2)
 
@@ -274,6 +308,16 @@ extension HallieTurnExecutor {
                 // of Rick and Donna" → "photo of Nathaniel Parker Sr" would
                 // still see the stale pair (codex #716).
                 if intent == nil { lastPeople = [name] }
+            }
+            // A kin term the answer SETTLED (live 2026-09-26): "dad breen"
+            // answered about Richard Harding Breen Sr means "dad" is him for
+            // the rest of the conversation. Graph answers only — their
+            // subject is the tree's full name, never a contested given name.
+            if let name = result.catalogPersonName, result.outcome == .answered,
+               result.route == .graph {
+                for relation in Self.kinRelations(intent: intent, question: question) {
+                    kinBindings[relation] = name
+                }
             }
             // A non-list answer that names its list (a count, an age).
             if let refinable = result.refinableQuery, result.outcome == .answered {
@@ -1051,6 +1095,16 @@ extension HallieTurnExecutor {
             case .ask(let result):
                 return .answer(result)
             }
+        }
+        // "videos of dad" two turns after "dad breen" was answered about
+        // Richard Harding Breen Sr (live 2026-09-26): a kin term the
+        // conversation has settled is that person, before any lookup — the
+        // same road the pronoun above takes. An unsettled kin term goes on
+        // as typed; the resolver binds it through the People tab
+        // (HallieLineageAnswer+KinTerm), never through a tree name.
+        if let object = lineage.mediaAskPerson,
+           let bound = memory.boundRelative(for: object) {
+            lineage = lineage.replacingMediaAskPerson(with: bound)
         }
         // A multi-hop kinship phrase ("X's great great grandpa on his
         // paternal side") is not answered by the lineage code: it is a

@@ -54,12 +54,32 @@ extension HallieTurnExecutor {
                 citations: [], catalogPersonName: nil)
         }
         let phrase = SpeakerKinship.kinshipPhrase(in: request.intent.originalQuestion)
-        let alreadyTheRelation = phrase.map { $0.relation.rawValue == rawPayload.relation?.rawValue } ?? true
+        // A BARE kin word as the one subject — "show dad's family tree",
+        // "who is dad's mother" (live 2026-09-26) — is the owner's relative
+        // too, the GH #180 rule the person-fact lane already applies to
+        // "tell me about dad". Without this it went straight to the graph's
+        // name resolver, which is token-exact over every NAME record and
+        // finds "Dad ab Giwn" — a 1360 Welshman — for "dad". Read as "my
+        // dad" and sent down the same ladder as "videos of my dad" (People
+        // tab → owner's tree record → honest failure). A curated alias
+        // ("Ma" is Eileen) keeps its own road; a possessive never gets here
+        // because `kinshipPhrase` already saw it.
+        let bareKin: String? = {
+            guard phrase == nil, rawPayload.people.count == 1 else { return nil }
+            let typed = rawPayload.people[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard SpeakerKinship.isKinWord(typed),
+                  RelativeFactSubject.parse(typed) != nil,
+                  !RelativeFactSubject.hasPossessive(typed),
+                  !isCuratedPerson(typed, context: context) else { return nil }
+            return "my " + typed.lowercased()
+        }()
+        let alreadyTheRelation = bareKin == nil
+            && (phrase.map { $0.relation.rawValue == rawPayload.relation?.rawValue } ?? true)
         let kin = alreadyTheRelation
             ? SpeakerKinship.Rebinding(people: rawPayload.people)
             : SpeakerKinship.rebind(
-                people: rawPayload.people,
-                question: request.intent.originalQuestion,
+                people: bareKin.map { [$0] } ?? rawPayload.people,
+                question: bareKin ?? request.intent.originalQuestion,
                 speakers: context.speakers,
                 graph: context.graph,
                 cyberBrain: context.cyberBrain,

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 750 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected. Service-story items (mil260923-NNN, 2026-09-23) cover family military service: war asks by everyday name (Civil War, WW2, the Revolution, WWI), one person's service, the biography's offer and its 'yes' follow-up, and typo forms.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 754 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected. Service-story items (mil260923-NNN, 2026-09-23) cover family military service: war asks by everyday name (Civil War, WW2, the Revolution, WWI), one person's service, the biography's offer and its 'yes' follow-up, and typo forms.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -6091,6 +6091,77 @@
       "text": "who were my parents?",
       "expect": "kinship",
       "notes": "Rick 2026-09-24 22:09, live: declined 'The family tree is on disk but needs recompiling after the update' — tree state, not routing (recompiled 09-24 18:28). Expect Richard Harding Breen Sr and Eileen Latta."
+    },
+    {
+      "id": "lv260926-001",
+      "category": "live",
+      "text": "find videos of dad",
+      "expect": "catalog",
+      "notes": "Rick 2026-09-26 14:14 ET (session 627FCBEB, app), LIVE MISS: \"Dafydd ab Einion \\\"Y Giwn Llwyd\\\" was born about 1360, more than five centuries before motion pictures begin in 1888\" — route=graph, no search run. The 'videos of X' lineage shape resolved 'Dad' as a tree NAME: @IB21341@ carries the alternate NAME record 'Dad ab Giwn', and people(matching:) is token-exact over every NAME record. A kin term is the owner's relative (People tab → owner's tree record → honest decline), never a name lookup. Fixed fix/hallie-dad-dafydd (HallieLineageAnswer+KinTerm), pinned by HallieDadNotDafyddTests; strict-056. Expect the presence route for Dad Breen (Richard Harding Breen Sr; catalog tags 'Dad').",
+      "expectedRoutes": [
+        "presence",
+        "cross",
+        "event"
+      ],
+      "mustNotContain": [
+        "Dafydd",
+        "1360",
+        "motion pictures"
+      ]
+    },
+    {
+      "id": "lv260926-002",
+      "category": "live",
+      "text": "dad breen not someone from 5 centuries ago",
+      "followsPrevious": true,
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Richard Harding Breen Sr"
+      ],
+      "mustNotContain": [
+        "Dafydd",
+        "1360"
+      ],
+      "notes": "Rick 2026-09-26 14:15 ET, the correction. The answer itself was right (Richard Harding Breen Sr, template on a 21 s model timeout) — but in the same second a second bubble said 'Opening the Family Tree tab focused on Dafydd ab Einion': the SUPERSEDED answer's 'Open in Family Tree' chip was still live and was tapped the instant thinking ended (a tap during thinking is dropped silently). Fixed fix/hallie-dad-dafydd: HallieSupersededOffers retires earlier tree chips when the conversation settles on someone else; chip taps are now logged. Pinned by HallieSupersededOffersTests; strict-057. The harvester skips this turn ('not' is not leading), added by hand."
+    },
+    {
+      "id": "lv260926-003",
+      "category": "live",
+      "text": "sure",
+      "followsPrevious": true,
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Marine"
+      ],
+      "mustNotContain": [
+        "Dafydd"
+      ],
+      "notes": "Rick 2026-09-26 14:16 ET: 'yes' to 'Would you like to hear how Richard Harding Breen Sr served his country?' → the service story (HallieServiceStory). Not a miss; the set-up for lv260926-004. Added by hand (the harvester skips a bare affirmative)."
+    },
+    {
+      "id": "lv260926-004",
+      "category": "live",
+      "text": "sure, but I also want videos of dad",
+      "followsPrevious": true,
+      "expect": "catalog",
+      "expectedRoutes": [
+        "presence",
+        "cross",
+        "event",
+        "followUp"
+      ],
+      "mustNotContain": [
+        "Dafydd",
+        "1360",
+        "motion pictures"
+      ],
+      "notes": "Rick 2026-09-26 14:17 ET, LIVE MISS: Dafydd ab Einion again, word for word, two turns after the correction and one after Richard Sr's service story. Same lineage-shape resolution as lv260926-001, plus no memory of who 'dad' had just been settled to be. Fixed fix/hallie-dad-dafydd: ConversationMemory.kinBindings keeps a kin term an ANSWERED graph turn settled ('dad breen' → Richard Harding Breen Sr) and the media shapes use it before any lookup. Pinned by HallieDadNotDafyddTests; strict-059. Added by hand (the harvester skips 'sure, but …')."
     }
   ]
 }

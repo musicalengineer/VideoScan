@@ -963,6 +963,79 @@
     "Timothy"
    ],
    "notes": "Live 2026-09-23 22:26: 'her' was rewritten to the previous answer's Timmy ('…thankful pratt and Timmy's husband') → \"I wasn't sure which person you meant — thankful pratt or timmy?\". A known person earlier in the same sentence owns the pronoun. Pinned by HalliePronounInSentenceAntecedentTests (fix/hallie-night-0925)."
+  },
+  {
+   "id": "strict-056",
+   "category": "strict",
+   "text": "find videos of dad",
+   "expect": "catalog",
+   "expectedRoutes": [
+    "presence",
+    "cross",
+    "event"
+   ],
+   "mustNotContain": [
+    "Dafydd",
+    "1360",
+    "motion pictures",
+    "photography"
+   ],
+   "notes": "lv260926-001 (session 627FCBEB, Rick, app, 2026-09-26 14:14 ET). LIVE MISS: \"Dafydd ab Einion \\\"Y Giwn Llwyd\\\" was born about 1360 … there can’t be film of him\" — route=graph, responder local, no search run. Root cause: HallieLineageAnswer.personVideos resolved 'Dad' through resolveDetailed → ArchivistGraphExecutor.resolveSubject → GedcomFamilyGraph.people(matching:), which is token-exact over EVERY NAME record, and the merged tree's @IB21341@ (Dafydd ab Einion, b. ~1360) carries the alternate NAME 'Dad ab Giwn'. Not fuzzy; an exact hit. Fixed 2026-09-26 (fix/hallie-dad-dafydd): a kin term ('dad', 'my dad', 'our mother') binds through the People tab's relationship rows, then the owner's own pinned tree record, else declines by name — never a tree-name lookup (HallieLineageAnswer+KinTerm, called from resolveDetailed so every lineage shape gets it). Pinned by HallieDadNotDafyddTests (the fixture tree keeps 'Dad ab Giwn'). Dad Breen d. 2008 is after film, so the shape stays silent and the presence route searches the 'Dad' tags."
+  },
+  {
+   "id": "strict-057",
+   "category": "strict",
+   "text": "dad breen not someone from 5 centuries ago",
+   "followsPrevious": true,
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "mustContain": [
+    "Richard Harding Breen Sr"
+   ],
+   "mustNotContain": [
+    "Dafydd",
+    "1360"
+   ],
+   "notes": "lv260926-002. The correction resolved correctly (People-tab alias 'Dad Breen'). The defect was a SECOND bubble in the same second — 'Opening the Family Tree tab focused on Dafydd ab Einion' (log 14:15:29 'Family Tree: selected Dafydd … focus kind=record-id result=applied', no 'Hallie focus requested' line): turn 1's superseded 'Open in Family Tree' chip was tapped the instant the 21 s model timeout ended. Fixed 2026-09-26: HallieResponseCommit calls retireSupersededOffers when the settled person changes, before the new bubble is appended; HallieSupersededOffers removes earlier bubbles' openFamilyTree* chips for anyone else; ArchivistChatWindow logs every chip tap ('[hallie] chip tapped/ignored while thinking'). Pinned by HallieSupersededOffersTests. The replay cannot tap a chip; this row pins the answer and leaves Dafydd forbidden."
+  },
+  {
+   "id": "strict-058",
+   "category": "strict",
+   "text": "sure",
+   "followsPrevious": true,
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "mustContain": [
+    "Marine"
+   ],
+   "mustNotContain": [
+    "Dafydd"
+   ],
+   "notes": "lv260926-003. Set-up turn: 'yes' to the service-story offer keeps Richard Harding Breen Sr as the conversation's person (HallieServiceStory), so strict-059 tests the antecedent after a correction and a follow-up."
+  },
+  {
+   "id": "strict-059",
+   "category": "strict",
+   "text": "sure, but I also want videos of dad",
+   "followsPrevious": true,
+   "expect": "catalog",
+   "expectedRoutes": [
+    "presence",
+    "cross",
+    "event",
+    "followUp"
+   ],
+   "mustNotContain": [
+    "Dafydd",
+    "1360",
+    "motion pictures",
+    "photography"
+   ],
+   "notes": "lv260926-004 (2026-09-26 14:17 ET). LIVE MISS: Dafydd again, word for word, after the correction and the service story. Two causes: the same lineage-shape name lookup as strict-056, and no memory of who 'dad' had just been settled to be. Fixed 2026-09-26: ConversationMemory.kinBindings (relation word → the person an ANSWERED graph turn settled on, 'dad breen' → Richard Harding Breen Sr; graph answers only, never a catalog answer's contested given name) and lineageTurn substitutes the bound person into a media ask before any lookup. Pinned by HallieDadNotDafyddTests (afterTheCorrectionVideosOfDadKeepsRichardSr, with a People tab that has NO relationship rows and a tree with NO parents for the owner, so only the conversation can bind it). followUp is allowed: the model may read 'sure, but' as a continuation."
   }
  ]
 }
