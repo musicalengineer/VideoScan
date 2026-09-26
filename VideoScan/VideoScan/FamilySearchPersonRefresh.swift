@@ -231,10 +231,159 @@ extension FamilyGraphFileLoader.Outcome {
     }
 }
 
+// MARK: - Audit sink (GH #198)
+
+/// THE one place a "Refresh from FamilySearch" line leaves from. Rick,
+/// 2026-09-26, after the Ellen Ronan refresh: "I looked at the log and
+/// don't see the expected 'Refresh Ellen Ronan … from …'. This kind of
+/// change needs better logging if we were to go back and see what
+/// happened." The five `[fs-refresh]` lines had gone to videoscan.log
+/// only — never the in-app console he reads, never catalog.log.
+///
+/// The SAME sentence goes to every destination:
+///   • `videoscanLog` → videoscan.log, prefixed `[fs-refresh]` (kept for
+///     grep; the coordinator never writes the tag itself)
+///   • `console`      → the in-app console + catalog.log (DashboardState
+///     .log, reached through `PersonRefreshCenter.console`); nil under
+///     tests and before the app has wired it
+/// The journal (`PersonRefreshAudit.append`) is the third copy: the log
+/// lines for an Apply / Undo are DERIVED from the journal entry
+/// (`PersonRefreshAudit.lines`), so the two can never disagree.
+///
+/// `@MainActor` because every caller already is (the coordinator, the
+/// center, the review sheet) and the console sink is main-actor state;
+/// a C++ reader can think of it as "must be called on the UI thread".
+@MainActor
+struct PersonRefreshNoteSink {
+    static let tag = "[fs-refresh]"
+
+    let videoscanLog: (String) -> Void
+    let console: ((String) -> Void)?
+
+    init(videoscanLog: @escaping (String) -> Void, console: ((String) -> Void)? = nil) {
+        self.videoscanLog = videoscanLog
+        self.console = console
+    }
+
+    /// Production: `appLog` (videoscan.log) plus whatever console the app
+    /// has attached to the center.
+    static func production(console: ((String) -> Void)?) -> PersonRefreshNoteSink {
+        PersonRefreshNoteSink(videoscanLog: { appLog.write($0) }, console: console)
+    }
+
+    func note(_ line: String) {
+        videoscanLog("\(Self.tag) \(line)")
+        console?(line)
+    }
+}
+
+/// The wording, pure. Every line begins `Refresh from FamilySearch: <name>
+/// (<FSID>) — ` so one grep for the name or the id finds the whole run,
+/// and reads as plain English in the console. Outcomes are one of
+/// `done:` / `refused:` / `failed:` / `cancelled` — a run leaves exactly
+/// one of them (PersonRefreshAuditSensorTests pins it).
+enum PersonRefreshAuditLines {
+    static func subject(person: String, familySearchID: String) -> String {
+        "Refresh from FamilySearch: \(person) (\(familySearchID)) — "
+    }
+
+    /// "22 s" / "3 min 5 s" / "1 h 2 min".
+    static func elapsed(_ seconds: TimeInterval) -> String {
+        let s = max(0, Int(seconds.rounded()))
+        if s < 60 { return "\(s) s" }
+        if s < 3600 { return "\(s / 60) min \(s % 60) s" }
+        return "\(s / 3600) h \((s % 3600) / 60) min"
+    }
+
+    /// `/Users/rick/Library/…` → `~/Library/…` for the done line.
+    static func abbreviated(_ path: String, home: String = NSHomeDirectory()) -> String {
+        path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+    }
+
+    static func revertHint(person: String) -> String {
+        "right-click \(person) in the Family Tree ▸ Undo last refresh for this person"
+    }
+
+    /// The first line of every run, written before anything can refuse it.
+    static func started(answerFile: String) -> String {
+        "started; the answer will land in \(answerFile)"
+    }
+
+    static func couldNotStart(_ reason: String) -> String {
+        "failed: could not start — \(reason)"
+    }
+
+    static func received(people: Int, after seconds: TimeInterval, file: String) -> String {
+        "received \(people) \(people == 1 ? "person" : "people") from FamilySearch in \(elapsed(seconds)) (\(file))"
+    }
+
+    static func differences(fields: [String], relationshipNotes: Int) -> String {
+        "\(fields.count) \(plural(fields.count, "field")) differ: \(fields.joined(separator: ", ")); "
+            + "\(relationshipNotes) relationship \(plural(relationshipNotes, "note")) — waiting for review"
+    }
+
+    static func alreadyMatches(relationshipNotes: Int) -> String {
+        "done: already matches FamilySearch, nothing to apply; "
+            + "\(relationshipNotes) relationship \(plural(relationshipNotes, "note")); nothing was changed"
+    }
+
+    static func nothingTicked() -> String {
+        "done: 0 fields applied (nothing was ticked); nothing was changed"
+    }
+
+    static func refused(_ sentence: String) -> String { "refused: \(sentence)" }
+    static func failed(_ reason: String) -> String { "failed: \(reason)" }
+
+    static func cancelled(pendingFields: [String]?, stage: String) -> String {
+        var line = "cancelled \(stage); nothing was changed"
+        if let pendingFields, !pendingFields.isEmpty {
+            line += " (pending review: \(pendingFields.joined(separator: ", ")))"
+        }
+        return line
+    }
+
+    static func overlayUnreadable(action: String, reason: String, keptAs: String?, setAsideError: String?) -> String {
+        "\(action) failed: \(PersonFactOverlayStore.fileName) can't be read (\(reason)); nothing was changed; "
+            + (keptAs.map { "the file is set aside as \($0)" }
+               ?? "it could not be set aside (\(setAsideError ?? "unknown")) and is left in place")
+    }
+
+    static func overlayWriteFailed(_ message: String) -> String {
+        "failed: could not save the refreshed facts — \(message); nothing was changed"
+    }
+
+    static func journalNotWritten(_ error: String) -> String {
+        "note: the journal line was not written (\(error)); the lines above are the record"
+    }
+
+    static func plural(_ n: Int, _ word: String) -> String { n == 1 ? word : word + "s" }
+
+    static func quote(_ value: String?) -> String {
+        guard let value, !value.isEmpty else { return "—" }
+        return "'\(value)'"
+    }
+
+    /// `2026-09-26` — the date FamilySearch was asked, on every applied line.
+    static func dateStamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    /// `26 Sep 2026` — the person card's "Refreshed on" line.
+    static func cardDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "d MMM yyyy"
+        return formatter.string(from: date)
+    }
+}
+
 // MARK: - Audit journal
 
 /// One JSON line per Apply / Undo, beside the overlay (append-only), plus
-/// one app-log line — the POIProfileAudit shape. Before AND after values,
+/// the app-log lines — the POIProfileAudit shape. Before AND after values,
 /// so any change can be reversed by hand from the journal alone.
 enum PersonRefreshAudit {
     enum Action: String, Codable, Sendable { case applied, undone }
@@ -253,6 +402,38 @@ enum PersonRefreshAudit {
         let changes: [FieldChange]
         /// The staging folder the facts came from (applies only).
         let source: String?
+        /// Relationship differences FamilySearch showed that were NOT
+        /// applied (applies only; nil in journals written before GH #198 —
+        /// an optional `let` decodes a missing key as nil).
+        var relationshipNotes: Int? = nil
+    }
+
+    /// The log lines for one journal entry — the journal is the source,
+    /// the lines are its reading. An Apply: one `applied …` line per
+    /// field, then the `done:` line with the overlay path and the way
+    /// back. An Undo: one `undone:` line naming every restored field.
+    static func lines(_ entry: Entry, overlayPath: String, tail: String? = nil) -> [String] {
+        let subject = PersonRefreshAuditLines.subject(person: entry.person, familySearchID: entry.familySearchID)
+        let q = PersonRefreshAuditLines.quote
+        switch entry.action {
+        case .applied:
+            let stamp = PersonRefreshAuditLines.dateStamp(entry.at)
+            let fields = entry.changes.map {
+                subject + "applied \($0.field) \(q($0.before)) → \(q($0.after)) (from FamilySearch, \(stamp))"
+            }
+            let notes = entry.relationshipNotes ?? 0
+            let done = subject + "done: \(entry.changes.count) \(PersonRefreshAuditLines.plural(entry.changes.count, "field")) changed, "
+                + "\(notes) relationship \(PersonRefreshAuditLines.plural(notes, "note")). "
+                + "Overlay: \(PersonRefreshAuditLines.abbreviated(overlayPath)). "
+                + "Revert: \(PersonRefreshAuditLines.revertHint(person: entry.person))"
+            return fields + [done]
+        case .undone:
+            let pairs = entry.changes.map { "\($0.field) \(q($0.before)) → \(q($0.after))" }
+            var line = subject + "undone: \(entry.changes.count) \(PersonRefreshAuditLines.plural(entry.changes.count, "field")) restored"
+            if !pairs.isEmpty { line += ": " + pairs.joined(separator: "; ") }
+            if let tail { line += " — " + tail }
+            return [line]
+        }
     }
 
     /// An Apply: exactly the diff rows that were ticked — what the tree
@@ -271,13 +452,6 @@ enum PersonRefreshAudit {
             let back = restored?.facts[key].map { $0.value } ?? undone.facts[key]!.before
             return now == back ? nil : FieldChange(field: key, before: now, after: back)
         }
-    }
-
-    static func line(_ entry: Entry) -> String {
-        let fields = entry.changes.map { "\($0.field) \(quote($0.before)) → \(quote($0.after))" }
-        return "[fs-refresh] \(entry.action == .applied ? "applied" : "undid") \(entry.changes.count) field(s) for "
-            + "\(entry.person) (\(entry.familySearchID))"
-            + (fields.isEmpty ? "" : ": " + fields.joined(separator: "; "))
     }
 
     nonisolated static func append(_ entry: Entry, directory: URL) throws {
@@ -324,9 +498,48 @@ enum PersonRefreshAudit {
         }
         return entries
     }
+}
 
-    private static func quote(_ value: String?) -> String {
-        guard let value, !value.isEmpty else { return "—" }
-        return "'\(value)'"
+// MARK: - What the card shows (GH #198)
+
+/// "Refreshed from FamilySearch on 26 Sep 2026 — 2 fields", with the
+/// field diffs, for one person — read from the JOURNAL, never the log.
+struct PersonRefreshSummary: Equatable, Sendable {
+    let familySearchID: String
+    let person: String
+    let at: Date
+    let changes: [PersonRefreshAudit.FieldChange]
+
+    var headline: String {
+        "Refreshed from FamilySearch on \(PersonRefreshAuditLines.cardDate(at)) — "
+            + "\(changes.count) \(PersonRefreshAuditLines.plural(changes.count, "field"))"
+    }
+
+    /// One row per field: `birthDate: '1883' → '18 March 1882'`.
+    var diffLines: [String] {
+        changes.map { "\($0.field): \(PersonRefreshAuditLines.quote($0.before)) → \(PersonRefreshAuditLines.quote($0.after))" }
+    }
+
+    /// Headline plus diffs on their own lines — the card chip's tooltip.
+    var tooltip: String { ([headline] + diffLines).joined(separator: "\n") }
+}
+
+/// The journal replayed: an Apply pushes, an Undo pops — the same stack
+/// the overlay keeps (`PersonFactOverlay.undoLast`), so after "undo the
+/// latest of two" the card shows the earlier refresh, not nothing.
+enum PersonRefreshHistory {
+    nonisolated static func current(_ entries: [PersonRefreshAudit.Entry]) -> [String: PersonRefreshSummary] {
+        var stacks: [String: [PersonRefreshSummary]] = [:]
+        for entry in entries {
+            let fsid = entry.familySearchID.uppercased()
+            switch entry.action {
+            case .applied:
+                stacks[fsid, default: []].append(PersonRefreshSummary(
+                    familySearchID: fsid, person: entry.person, at: entry.at, changes: entry.changes))
+            case .undone:
+                _ = stacks[fsid]?.popLast()
+            }
+        }
+        return stacks.compactMapValues(\.last)
     }
 }

@@ -17,9 +17,14 @@
 // survives the tab). The review sheet appears only once the file has been
 // read — never a modal over long work.
 //
-// One app-log line per step, all prefixed `[fs-refresh]`: started,
-// received, diff, applied / refused / cancelled / undone. Each Apply and
-// Undo also appends a before/after line to person-refresh-journal.jsonl.
+// LOGGING (GH #198, Rick 2026-09-26): every step is ONE sentence through
+// ONE sink — `PersonRefreshNoteSink` — which writes the same line to
+// videoscan.log (tagged `[fs-refresh]`), the in-app console and
+// catalog.log. Each run leaves exactly one `started` line and exactly one
+// outcome (`done:` / `refused:` / `failed:` / `cancelled`), every line
+// carrying the person's name and FamilySearch ID. Each Apply and Undo also
+// appends a before/after entry to person-refresh-journal.jsonl, and the
+// applied/undone log lines are derived from that entry.
 
 import AppKit
 import Combine
@@ -72,7 +77,7 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     private let launcher: FamilySearchPullLauncher
     private let pollInterval: Duration
     private let timeout: Duration
-    private let log: (String) -> Void
+    private let sink: PersonRefreshNoteSink
     private let now: () -> Date
     private var watchTask: Task<Void, Never>?
     private var parseTask: Task<Void, Never>?
@@ -80,6 +85,10 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     /// finds itself stale and publishes nothing.
     private var generation = 0
     private var launchDate: Date = .distantPast
+    /// True once a `done:` / `refused:` / `failed:` line has gone out, so
+    /// a Cancel after the outcome (closing a no-changes banner) does not
+    /// log a second outcome.
+    private var outcomeNoted = false
 
     /// 30 s at the default 1 s poll.
     nonisolated static let pollsBeforeQuiet = 30
@@ -96,7 +105,7 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
          launcher: FamilySearchPullLauncher = WorkspaceLauncher(),
          pollInterval: Duration = .seconds(1),
          timeout: Duration = PersonRefreshCoordinator.defaultTimeout,
-         log: @escaping (String) -> Void = { appLog.write($0) },
+         sink: PersonRefreshNoteSink = .production(console: nil),
          now: @escaping () -> Date = Date.init) {
         self.target = target
         self.root = root
@@ -107,7 +116,7 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         self.launcher = launcher
         self.pollInterval = pollInterval
         self.timeout = timeout
-        self.log = log
+        self.sink = sink
         self.now = now
     }
 
@@ -118,30 +127,50 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         }
     }
 
+    // MARK: Logging
+
+    /// "Refresh from FamilySearch: Ellen Ronan (G9P1-3PZ) — " + `line`.
+    private var subject: String {
+        PersonRefreshAuditLines.subject(person: target.personName, familySearchID: target.familySearchID)
+    }
+
+    private func note(_ line: String) { sink.note(subject + line) }
+
+    /// An outcome line: at most one per run.
+    private func noteOutcome(_ line: String) {
+        outcomeNoted = true
+        note(line)
+    }
+
     // MARK: Launch
 
     /// Write the script into a fresh staging folder, open it in Terminal
     /// and start watching. Nothing runs until Return is pressed there.
     func launch() {
+        let started = now()
+        // Never reuse a folder: a leftover person.ged from a refresh in
+        // the same second would otherwise be read as this one's answer.
+        var folder = PersonRefreshPaths.stagingFolder(root: root, familySearchID: target.familySearchID, at: started)
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: folder.path) {
+            folder = folder.deletingLastPathComponent()
+                .appendingPathComponent(PersonRefreshPaths.stagingFolder(
+                    root: root, familySearchID: target.familySearchID, at: started).lastPathComponent + "-\(suffix)",
+                    isDirectory: true)
+            suffix += 1
+        }
+        let output = folder.appendingPathComponent(PersonRefreshPaths.outputFileName)
+        // The attempt is on record BEFORE anything can refuse it: a run that
+        // could not start still reads `started` … `failed: could not start`.
+        note(PersonRefreshAuditLines.started(answerFile: Self.relative(output)))
         if ViewerWriteGuard.refuse("PersonRefresh.launch") {
-            phase = .failed(message: "Refresh from FamilySearch runs on the master Mac, not on a viewer.")
+            let message = "Refresh from FamilySearch runs on the master Mac, not on a viewer."
+            phase = .failed(message: message)
+            noteOutcome(PersonRefreshAuditLines.couldNotStart(message))
             return
         }
         do {
             guard let toolURL = locator.locate() else { throw FamilySearchPullError.toolNotFound }
-            let started = now()
-            // Never reuse a folder: a leftover person.ged from a refresh in
-            // the same second would otherwise be read as this one's answer.
-            var folder = PersonRefreshPaths.stagingFolder(root: root, familySearchID: target.familySearchID, at: started)
-            var suffix = 2
-            while FileManager.default.fileExists(atPath: folder.path) {
-                folder = folder.deletingLastPathComponent()
-                    .appendingPathComponent(PersonRefreshPaths.stagingFolder(
-                        root: root, familySearchID: target.familySearchID, at: started).lastPathComponent + "-\(suffix)",
-                        isDirectory: true)
-                suffix += 1
-            }
-            let output = folder.appendingPathComponent(PersonRefreshPaths.outputFileName)
             let command = try FamilySearchPersonRefreshCommand(
                 toolURL: toolURL, familySearchID: target.familySearchID, outputURL: output)
             let script = FamilySearchPersonRefreshScript(
@@ -155,12 +184,11 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             quietSince = nil
             launcher.open(script.scriptURL)
             phase = .waiting(output: output)
-            log("[fs-refresh] started \(target.personName) (\(target.familySearchID)) → \(folder.lastPathComponent)/\(output.lastPathComponent)")
             startWatching(output: output)
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             phase = .failed(message: message)
-            log("[fs-refresh] could not start for \(target.familySearchID): \(message)")
+            noteOutcome(PersonRefreshAuditLines.couldNotStart(message))
         }
     }
 
@@ -171,10 +199,25 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         parseTask?.cancel(); parseTask = nil
         generation &+= 1
         quietSince = nil
-        if !isSettled {
-            log("[fs-refresh] cancelled \(target.personName) (\(target.familySearchID)); nothing was changed")
+        if !isSettled, !outcomeNoted {
+            let stage: String
+            var pending: [String]?
+            switch phase {
+            case .waiting: stage = "while waiting for Terminal"
+            case .parsing: stage = "while reading the answer"
+            case .ready(let diff):
+                stage = "at review"
+                pending = diff.changes.map(\.field.key)
+            case .idle, .applied, .refused, .failed: stage = ""
+            }
+            noteOutcome(PersonRefreshAuditLines.cancelled(pendingFields: pending, stage: stage))
         }
         phase = .idle
+    }
+
+    /// `<FSID>-<stamp>/person.ged` — the answer file, relative to the root.
+    private nonisolated static func relative(_ output: URL) -> String {
+        output.deletingLastPathComponent().lastPathComponent + "/" + output.lastPathComponent
     }
 
     // MARK: Watching
@@ -193,8 +236,9 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
                 guard let size = await FamilySearchPullCoordinator.fileSize(at: output, newerThan: since) else {
                     if lastSize >= 0 {
                         self.quietSince = nil
-                        self.phase = .failed(message: "\(output.lastPathComponent) was removed before it finished. Nothing was changed.")
-                        self.log("[fs-refresh] refused reason=file-removed for \(self.target.familySearchID)")
+                        let message = "\(output.lastPathComponent) was removed before it finished. Nothing was changed."
+                        self.phase = .failed(message: message)
+                        self.noteOutcome(PersonRefreshAuditLines.failed(message))
                         return
                     }
                     continue
@@ -215,8 +259,9 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             }
             guard !Task.isCancelled, let self else { return }
             self.quietSince = nil
-            self.phase = .failed(message: "Stopped waiting for FamilySearch after an hour. Nothing was changed — try Refresh again.")
-            self.log("[fs-refresh] refused reason=timeout for \(self.target.familySearchID)")
+            let message = "Stopped waiting for FamilySearch after an hour. Nothing was changed — try Refresh again."
+            self.phase = .failed(message: message)
+            self.noteOutcome(PersonRefreshAuditLines.failed(message))
         }
     }
 
@@ -244,22 +289,28 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             }.value
             guard let self, token == self.generation, !Task.isCancelled else { return }
             self.parseTask = nil
-            self.log("[fs-refresh] received \(output.deletingLastPathComponent().lastPathComponent)/"
-                     + "\(output.lastPathComponent) (\(people) people) for \(requested)")
+            let waited = self.now().timeIntervalSince(self.startedAt ?? self.now())
+            self.note(PersonRefreshAuditLines.received(people: people, after: waited, file: Self.relative(output)))
             switch result {
             case .failure(let refusal):
                 self.phase = .refused(message: refusal.sentence)
-                self.log("[fs-refresh] refused reason=\(refusal.logReason) for \(requested)")
+                self.noteOutcome(PersonRefreshAuditLines.refused(refusal.sentence))
             case .success(let incoming):
                 guard let installed = self.installedFacts() else {
-                    self.phase = .failed(message: "\(self.target.personName) (\(requested)) is no longer in the loaded tree, so there is nothing to compare. Nothing was changed.")
-                    self.log("[fs-refresh] refused reason=not-in-tree for \(requested)")
+                    let message = "\(self.target.personName) (\(requested)) is no longer in the loaded tree, so there is nothing to compare. Nothing was changed."
+                    self.phase = .failed(message: message)
+                    self.noteOutcome(PersonRefreshAuditLines.failed(message))
                     return
                 }
                 let diff = PersonRefreshDiff.compute(installed: installed, incoming: incoming)
-                self.log("[fs-refresh] diff \(diff.changes.count) field(s)"
-                         + (diff.changes.isEmpty ? "" : " [\(diff.changes.map(\.field.key).joined(separator: ", "))]")
-                         + ", \(diff.relationshipNotes.count) relationship note(s) for \(requested)")
+                if diff.changes.isEmpty {
+                    // Nothing to apply: this IS the outcome. The banner's
+                    // Cancel afterwards is a dismissal, not a cancellation.
+                    self.noteOutcome(PersonRefreshAuditLines.alreadyMatches(relationshipNotes: diff.relationshipNotes.count))
+                } else {
+                    self.note(PersonRefreshAuditLines.differences(
+                        fields: diff.changes.map(\.field.key), relationshipNotes: diff.relationshipNotes.count))
+                }
                 self.phase = .ready(diff)
             }
         }
@@ -316,15 +367,6 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             ?? "The refresh record can't be read, so nothing was changed — it's left in place as \(PersonFactOverlayStore.fileName)."
     }
 
-    /// One app-log line for the refusal (what, why, where the bytes are).
-    nonisolated static func unreadableLogLine(action: String, familySearchID: String, reason: String,
-                                              keptAs: String?, setAsideError: String?) -> String {
-        "[fs-refresh] refused reason=overlay-unreadable \(action) for \(familySearchID): "
-            + "\(PersonFactOverlayStore.fileName) can't be read (\(reason)); nothing was changed; "
-            + (keptAs.map { "set aside as \($0)" }
-               ?? "could not set it aside (\(setAsideError ?? "unknown")), left in place")
-    }
-
     /// True while an Apply's write is in flight — a second click is ignored.
     private(set) var isApplying = false
 
@@ -336,12 +378,14 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     func apply(selectedFieldKeys: Set<String>) async -> Bool {
         guard case .ready(let diff) = phase, !isApplying else { return false }
         if ViewerWriteGuard.refuse("PersonRefresh.apply") {
-            phase = .failed(message: "This Mac is a viewer; the tree is refreshed on the master.")
+            let message = "This Mac is a viewer; the tree is refreshed on the master."
+            phase = .failed(message: message)
+            noteOutcome(PersonRefreshAuditLines.failed(message))
             return false
         }
         let chosen = diff.changes.filter { selectedFieldKeys.contains($0.field.key) }
         guard !chosen.isEmpty else {
-            log("[fs-refresh] applied 0 fields for \(target.familySearchID) (nothing ticked)")
+            noteOutcome(PersonRefreshAuditLines.nothingTicked())
             phase = .applied(fields: 0)
             return true
         }
@@ -357,21 +401,26 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             break
         case .unreadable(let reason, let keptAs, let setAsideError):
             phase = .failed(message: Self.unreadableSentence(keptAs: keptAs))
-            log(Self.unreadableLogLine(action: "apply", familySearchID: fsid, reason: reason,
-                                       keptAs: keptAs, setAsideError: setAsideError))
+            noteOutcome(PersonRefreshAuditLines.overlayUnreadable(
+                action: "apply", reason: reason, keptAs: keptAs, setAsideError: setAsideError))
             return false
         case .failed(let message):
             phase = .failed(message: "Could not save the refreshed facts: \(message). Nothing was changed.")
-            log("[fs-refresh] refused reason=overlay-write-failed for \(fsid): \(message)")
+            noteOutcome(PersonRefreshAuditLines.overlayWriteFailed(message))
             return false
         }
         let entry = PersonRefreshAudit.Entry(
             at: now(), action: .applied, familySearchID: fsid, person: name,
             changes: PersonRefreshAudit.applyChanges(chosen),
-            source: stagingFolder.map { $0.lastPathComponent + "/" + PersonRefreshPaths.outputFileName })
-        log(PersonRefreshAudit.line(entry))
+            source: stagingFolder.map { $0.lastPathComponent + "/" + PersonRefreshPaths.outputFileName },
+            relationshipNotes: diff.relationshipNotes.count)
+        // The journal entry is the record; the lines are its reading.
+        // Lines first: if the journal cannot be written, the log still has
+        // every before/after value.
+        outcomeNoted = true
+        for line in PersonRefreshAudit.lines(entry, overlayPath: overlayStore.fileURL.path) { sink.note(line) }
         do { try PersonRefreshAudit.append(entry, directory: journalDirectory) } catch {
-            log("[fs-refresh] journal not written — \(error.localizedDescription) (the app-log line above has the before/after values)")
+            note(PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
         }
         phase = .applied(fields: chosen.count)
         return true
@@ -385,7 +434,8 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     @discardableResult
     static func undoLast(familySearchID: String, personName: String,
                          overlayStore: PersonFactOverlayStore, journalDirectory: URL,
-                         log: (String) -> Void = { appLog.write($0) }, now: Date = Date()) async -> String {
+                         sink: PersonRefreshNoteSink = .production(console: nil), now: Date = Date()) async -> String {
+        let subject = PersonRefreshAuditLines.subject(person: personName, familySearchID: familySearchID)
         if ViewerWriteGuard.refuse("PersonRefresh.undo") {
             return "This Mac is a viewer; the tree is refreshed on the master."
         }
@@ -400,22 +450,28 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         case .nothingToDo:
             return "There is no FamilySearch refresh to undo for \(personName)."
         case .unreadable(let reason, let keptAs, let setAsideError):
-            log(unreadableLogLine(action: "undo", familySearchID: familySearchID, reason: reason,
-                                  keptAs: keptAs, setAsideError: setAsideError))
+            sink.note(subject + PersonRefreshAuditLines.overlayUnreadable(
+                action: "undo", reason: reason, keptAs: keptAs, setAsideError: setAsideError))
             return unreadableSentence(keptAs: keptAs)
         case .failed(let message):
+            sink.note(subject + "undo failed: \(message); nothing was changed")
             return "Could not undo: \(message)"
         }
+        let sentence = restored == nil
+            ? "Undid the FamilySearch refresh for \(personName); the tree shows the pulled facts again."
+            : "Undid the latest FamilySearch refresh for \(personName); the earlier one still applies."
         let entry = PersonRefreshAudit.Entry(
             at: now, action: .undone, familySearchID: undone.familySearchID, person: personName,
             changes: PersonRefreshAudit.undoChanges(undone: undone, restored: restored), source: nil)
-        log(PersonRefreshAudit.line(entry))
-        do { try PersonRefreshAudit.append(entry, directory: journalDirectory) } catch {
-            log("[fs-refresh] journal not written — \(error.localizedDescription)")
+        for line in PersonRefreshAudit.lines(
+            entry, overlayPath: overlayStore.fileURL.path,
+            tail: restored == nil ? "the tree shows the pulled facts again" : "the earlier refresh still applies") {
+            sink.note(line)
         }
-        return restored == nil
-            ? "Undid the FamilySearch refresh for \(personName); the tree shows the pulled facts again."
-            : "Undid the latest FamilySearch refresh for \(personName); the earlier one still applies."
+        do { try PersonRefreshAudit.append(entry, directory: journalDirectory) } catch {
+            sink.note(subject + PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
+        }
+        return sentence
     }
 }
 
@@ -436,25 +492,40 @@ final class PersonRefreshCenter: ObservableObject {
     @Published private(set) var revision = 0
     /// FamilySearch IDs with an overlay entry (enables "Undo last refresh").
     @Published private(set) var refreshedFamilySearchIDs: Set<String> = []
+    /// The current refresh per FamilySearch ID, replayed from the journal
+    /// (GH #198) and limited to people the overlay still carries — what
+    /// the card and the inspector show. Rebuilt on launch and after every
+    /// Apply / Undo; a card reads it with one dictionary lookup.
+    @Published private(set) var summaries: [String: PersonRefreshSummary] = [:]
     /// The last Undo's sentence, shown in the banner until dismissed.
     @Published var notice: String?
+    /// The in-app console + catalog.log destination (VideoScanModel.log →
+    /// DashboardState.log). The app attaches it once at launch; nil under
+    /// tests, so nothing reaches the real console from a test host.
+    var console: ((String) -> Void)?
 
     let root: URL
     let overlayStore: PersonFactOverlayStore
-    private let makeCoordinator: @MainActor (PersonRefreshCoordinator.Target, @escaping @MainActor () -> PersonFacts?) -> PersonRefreshCoordinator
+    typealias CoordinatorFactory = @MainActor (PersonRefreshCoordinator.Target,
+                                               @escaping @MainActor () -> PersonFacts?,
+                                               PersonRefreshNoteSink) -> PersonRefreshCoordinator
+    private let makeCoordinator: CoordinatorFactory
     private var phaseSubscription: AnyCancellable?
 
     init(root: URL = PersonRefreshPaths.defaultRoot,
          overlayStore: PersonFactOverlayStore? = nil,
-         makeCoordinator: (@MainActor (PersonRefreshCoordinator.Target, @escaping @MainActor () -> PersonFacts?) -> PersonRefreshCoordinator)? = nil) {
+         makeCoordinator: CoordinatorFactory? = nil) {
         self.root = root
         let store = overlayStore ?? PersonFactOverlayStore(directory: root, log: { appLog.write($0) })
         self.overlayStore = store
-        self.makeCoordinator = makeCoordinator ?? { target, facts in
-            PersonRefreshCoordinator(target: target, root: root, overlayStore: store, installedFacts: facts)
+        self.makeCoordinator = makeCoordinator ?? { target, facts, sink in
+            PersonRefreshCoordinator(target: target, root: root, overlayStore: store, installedFacts: facts, sink: sink)
         }
         reloadRefreshedIDs()
     }
+
+    /// videoscan.log + whatever console is attached right now.
+    var sink: PersonRefreshNoteSink { .production(console: console) }
 
     /// Start a refresh (one at a time: a new one replaces an unfinished one,
     /// which is cancelled and logged).
@@ -463,7 +534,7 @@ final class PersonRefreshCenter: ObservableObject {
                installedFacts: @escaping @MainActor () -> PersonFacts?) -> PersonRefreshCoordinator {
         coordinator?.cancel()
         notice = nil
-        let fresh = makeCoordinator(target, installedFacts)
+        let fresh = makeCoordinator(target, installedFacts, sink)
         coordinator = fresh
         phaseSubscription = fresh.$phase.sink { [weak self] _ in
             // `$phase` fires on willSet; defer the bump to after the set.
@@ -490,7 +561,7 @@ final class PersonRefreshCenter: ObservableObject {
     func undoLast(familySearchID: String, personName: String) async -> String {
         let message = await PersonRefreshCoordinator.undoLast(
             familySearchID: familySearchID, personName: personName,
-            overlayStore: overlayStore, journalDirectory: root)
+            overlayStore: overlayStore, journalDirectory: root, sink: sink)
         reloadRefreshedIDs()
         notice = message
         return message
@@ -501,7 +572,17 @@ final class PersonRefreshCenter: ObservableObject {
         return refreshedFamilySearchIDs.contains(familySearchID.uppercased())
     }
 
+    /// O(1) per card. Nil when the person has no current refresh, or when
+    /// the journal could not be read (the log has said so).
+    func summary(for familySearchID: String?) -> PersonRefreshSummary? {
+        guard let familySearchID else { return nil }
+        return summaries[familySearchID.uppercased()]
+    }
+
     private func reloadRefreshedIDs() {
-        refreshedFamilySearchIDs = Set(overlayStore.load().entries.keys)
+        let ids = Set(overlayStore.load().entries.keys)
+        refreshedFamilySearchIDs = ids
+        let replayed = PersonRefreshHistory.current(PersonRefreshAudit.entries(directory: root, log: { appLog.write($0) }))
+        summaries = replayed.filter { ids.contains($0.key) }
     }
 }

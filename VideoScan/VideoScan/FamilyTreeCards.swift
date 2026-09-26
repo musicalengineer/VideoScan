@@ -102,6 +102,11 @@ struct FamilyTreePersonCard: View {
     /// A set lookup on PersonRefreshCenter, never a disk read per card.
     var hasFamilySearchRefresh: Bool = false
     var onUndoFamilySearchRefresh: () -> Void = {}
+    /// "Refreshed from FamilySearch on 26 Sep 2026 — 2 fields" (GH #198):
+    /// a small arrows glyph in the card's header whose tooltip carries the
+    /// field diffs. One dictionary lookup on PersonRefreshCenter per card;
+    /// drawn only when there is something to say.
+    var familySearchRefreshSummary: PersonRefreshSummary? = nil
 
     private var person: FamilyTreePersonSummary { card.person }
     private var accent: Color { person.sex.accent }
@@ -158,6 +163,14 @@ struct FamilyTreePersonCard: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(accent)
                     Spacer()
+                    if let summary = familySearchRefreshSummary {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .help(summary.tooltip)
+                            .accessibilityLabel(summary.headline)
+                            .accessibilityIdentifier("tree.person.refreshChip")
+                    }
                     if card.isRoot {
                         Image(systemName: "scope")
                             .foregroundStyle(.cyan)
