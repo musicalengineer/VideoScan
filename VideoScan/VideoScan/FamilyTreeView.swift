@@ -762,7 +762,7 @@ struct FamilyTreeView: View {
             .labelsHidden()
             .accessibilityIdentifier("ft.peopleScope")
 
-            TextField("Search name, surname, or GEDCOM ID", text: $model.searchText)
+            TextField("Search names — partial or approximate is fine", text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
                 .focused($searchFocused)
                 // Return picks the first match; ↑/↓ walk the list without
@@ -787,6 +787,15 @@ struct FamilyTreeView: View {
             }
 
             Divider()
+
+            // The search loosened up (fuzzy fallback): say so above the
+            // list so nobody takes a close match for an exact one.
+            if let caption = model.searchCaption {
+                Text(caption)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("ft.searchCaption")
+            }
 
             // `ScrollViewReader` ≈ a handle that lets code scroll to a row by
             // id; the ids are the ForEach ids (person.id).

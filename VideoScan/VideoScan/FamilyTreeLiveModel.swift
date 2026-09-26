@@ -177,6 +177,11 @@ final class FamilyTreeLiveModel: ObservableObject {
     @Published private(set) var filteredPeople: [FamilyTreePersonSummary] = [] {
         didSet { filteredIndexByIDCache = nil }
     }
+    /// One line above the list when the search had to loosen up
+    /// (2026-09-26): "Close matches" when nothing matched the typed tokens
+    /// exactly, "Includes close matches" when the exact rows were too few
+    /// and approximate ones were added below them. nil otherwise.
+    @Published private(set) var searchCaption: String?
     /// What the loader is doing while `loadState == .loading` ("Compiling
     /// family tree (16,383 people)…"); nil otherwise. A first import of a
     /// big pull compiles for a few seconds — the caption is the progress.
@@ -382,6 +387,13 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// (off the main thread when loaded from disk) so a filter maps row
     /// numbers to ready-made summaries.
     private var summariesInOrder: [FamilyTreePersonSummary] = []
+    /// Token / fuzzy name search over `summariesInOrder` (VideoScanCore),
+    /// built with the launch bundle — never per keystroke.
+    private var nameSearch: FamilyTreeNameSearch?
+    /// People-tab knowledge for the search (which rows have a profile,
+    /// their nicknames), memoized per (profiles snapshot, installed tree)
+    /// the same way `bridgeMemo` is.
+    private var searchOverlayMemo: (profiles: [POIProfile], sourceKey: String?, overlay: FamilyTreeNameSearch.Overlay)?
     /// Where compiled artifacts live; nil = parse every load (tests).
     private let compiledStore: FamilyGraphCompiledStore?
     /// "Refresh from FamilySearch…" fact overlay for a model that loads
@@ -1088,13 +1100,16 @@ final class FamilyTreeLiveModel: ObservableObject {
             anchors = ready.anchors
             anchorsCaption = ready.anchorsCaption
             anchorIndexes = ready.anchorIndexes
+            nameSearch = ready.search
         } else {
             summariesInOrder = []
             peopleCount = FamilyTreeDemoData.people.count
             anchors = []
             anchorsCaption = nil
             anchorIndexes = [:]
+            nameSearch = nil
         }
+        searchOverlayMemo = nil
         loadState = .loaded(live: newGraph != nil)
         lineCache.removeAll()
         lineChain = nil
@@ -2327,6 +2342,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             return
         }
         let needle = searchText.trimmingCharacters(in: .whitespaces)
+        searchCaption = nil
         guard !needle.isEmpty else {
             let all = showsBookmarkedPeopleOnly ? bookmarkedPeopleInOrder
                 : (isLive ? summariesInOrder : FamilyTreeDemoData.people)
@@ -2338,12 +2354,28 @@ final class FamilyTreeLiveModel: ObservableObject {
             return
         }
         if let graph, isLive {
-            // Case-insensitive substring over name, alternate names,
-            // surname(s), pointer and FamilySearch ID — one memmem sweep
-            // over the compiled sidebar haystack (GedcomFamilyGraph+Index),
-            // then rows → ready-made summaries. Same rows as the old
-            // per-person localizedCaseInsensitiveContains scan
-            // (GedcomIndexEquivalenceTests pins it on the real export).
+            // Ranked token / fuzzy search (FamilyTreeNameSearch, 2026-09-26):
+            // every typed token must prefix-match a name token (any order,
+            // apostrophes and case folded), with a bounded-edit-distance
+            // fallback when that finds fewer than five rows. Rows come back
+            // scored — exact > prefix > fuzzy, then a slight lean toward
+            // People-tab profiles and recent births — as positions into
+            // `summariesInOrder`. Suppression and the bookmark scope apply
+            // after ranking, as they did to the substring filter.
+            if let search = nameSearch {
+                let result = search.search(needle, overlay: searchOverlay(graph: graph, search: search))
+                filteredPeople = result.hits.compactMap { hit in
+                    let person = summariesInOrder[Int(hit.row)]
+                    guard !isSuppressedRecord(person.id) else { return nil }
+                    return !showsBookmarkedPeopleOnly || bookmarks.contains(person.id) ? person : nil
+                }
+                searchCaption = Self.searchCaption(for: result)
+                return
+            }
+            // No search table (never expected once the bundle carries it):
+            // the old case-insensitive substring over the compiled sidebar
+            // haystack (GedcomFamilyGraph+Index), same rows as the original
+            // per-person scan (GedcomIndexEquivalenceTests still pins it).
             let rows = graph.index.sidebarRows(containing: needle.lowercased())
             filteredPeople = rows.compactMap { row in
                 let person = summariesInOrder[Int(row)]
@@ -2358,6 +2390,48 @@ final class FamilyTreeLiveModel: ObservableObject {
                 || ($0.surname?.localizedCaseInsensitiveContains(needle) ?? false)
                 || $0.reference.localizedCaseInsensitiveContains(needle)
         }
+    }
+
+    /// The caption for a ranked result: nil while every row matched the
+    /// typed tokens; otherwise says that approximate rows are present.
+    nonisolated static func searchCaption(for result: FamilyTreeNameSearch.Result) -> String? {
+        guard result.includesCloseMatches else { return nil }
+        return result.exactCount == 0 ? "Close matches" : "Includes close matches"
+    }
+
+    /// People-tab rows and nicknames for the search, through the SAME
+    /// fail-closed bridge the cards use (`PersonPhotoBridge.Snapshot`: a
+    /// pin wins; otherwise the profile's spellings must reach exactly one
+    /// record). A profile that bridges nobody contributes nothing — the
+    /// bias is neutral, never a guess. Memoized per (profiles, tree);
+    /// comparing a dozen profile structs per keystroke is cheap.
+    private func searchOverlay(graph: GedcomFamilyGraph, search: FamilyTreeNameSearch) -> FamilyTreeNameSearch.Overlay {
+        let profiles = profilesProvider()
+        if let memo = searchOverlayMemo, memo.profiles == profiles, memo.sourceKey == installedSourceKey {
+            return memo.overlay
+        }
+        var overlay = FamilyTreeNameSearch.Overlay()
+        if !profiles.isEmpty {
+            let snapshot = PersonPhotoBridge.Snapshot(
+                profiles: profiles, graph: graph,
+                fingerprint: { [weak self] in self?.kinshipCenter?.graphFingerprint })
+            for profile in profiles {
+                guard let person = snapshot.treePerson(for: profile),
+                      let ordinal = graph.index.ordinal(of: person.id),
+                      Int(ordinal) < search.rowByOrdinal.count else { continue }
+                let row = search.rowByOrdinal[Int(ordinal)]
+                overlay.profileRows.insert(row)
+                var tokens = overlay.aliasTokens[row] ?? []
+                for spelling in [profile.name] + profile.aliases {
+                    for token in FamilyTreeNameSearch.queryTokens(spelling) where !tokens.contains(token) {
+                        tokens.append(token)
+                    }
+                }
+                if !tokens.isEmpty { overlay.aliasTokens[row] = tokens }
+            }
+        }
+        searchOverlayMemo = (profiles, installedSourceKey, overlay)
+        return overlay
     }
 
     private func rebuildSelection() {
