@@ -638,7 +638,7 @@ extension POIUUIDMigrationTests {
         // `try?` for a path that may have moved, and #require would record
         // an issue even when the caller discards the error.
         guard process.terminationStatus == 0 else {
-            let message = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let message = String(bytes: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             throw CocoaError(.fileWriteUnknown, userInfo: [
                 NSLocalizedDescriptionKey: "chmod \(arguments.joined(separator: " ")) failed: \(message)",
             ])
