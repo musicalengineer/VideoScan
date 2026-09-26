@@ -131,3 +131,10 @@ agent only ever produces *issues*, never edits the owner's branch. By
 - **Metric:** all three lanes merged with green suites and kept xcresults; codex's open findings on the delete job closed or explicitly disputed; Hallie replay clean count ≥ 343 or the regressions named.
 - **Stop rule:** no product edits to Hallie beyond the event-shape fix; no new features; if codex finds a new blocker on the delete path, fix only that and leave the sweep marked "not rock" in the morning brief.
 - **Morning brief leads with:** CI/nightly status; is the duplicate sweep "rock"; Hallie regressed or not, with numbers.
+
+## 2026-09-25 → 26 — Stability and quality; no new features
+- **Owner:** Claude (overnight lead / Manager). **Reviewer:** local qwen via the reviewer tool, every claim verified in-house (codex silent since #1726–#1729).
+- **Scope:** (1) CI green on main (three CI fixes landed 9/25: 2d409e75, 130a630b, 98e1016f); (2) full battery on ricksm5 — Debug CI plan, Release+testability, Core `swift test`; (3) qwen reviews of the 9/24–25 merges + audit of known follow-ups (cancellation-swallowing sleeps, timing flakes, silent Combine auto-pause, red Nightly Static Analysis); (4) Hallie harvest + strict/advisory replay vs the 09-18 baseline, strict regressions fixed with tests.
+- **Metric:** CI green; battery failures each classified (flake / environment / real); verified-defect list ranked; Hallie strict ≥ 41 clean and advisory named vs 343/399.
+- **Stop rule:** no features (Refile deferred by Rick); fixes only for verified defects, each red→green on its own branch; nothing on the Manager escalation list merges overnight; stop by 09:00 ET.
+- **Machines:** M4 free tonight per Rick (no UI automation); builds/tests on ricksm5.
