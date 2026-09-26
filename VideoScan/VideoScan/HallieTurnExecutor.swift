@@ -1939,6 +1939,34 @@ enum HallieTurnExecutor {
     /// nickname → profile → GEDCOM bridging, profile ambiguity/conflict
     /// handling, and `.profileStableID` / `.gedcomPersonID` continuations;
     /// CyberBrain must not shadow it with a weaker name-only GEDCOM lookup.
+    /// True when a CyberBrain person matched by `resolution` carries the
+    /// typed spelling as its whole canonical name or alias (not one word).
+    static func cyberBrainMatchesExactly(
+        _ typed: String, resolution: CyberBrainIdentityResolution
+    ) -> Bool {
+        let people: [CyberBrainPerson]
+        switch resolution {
+        case .resolved(let person): people = [person]
+        case .ambiguous(let many): people = many
+        case .notFound: return false
+        }
+        let key = FamilyIdentityText.normalized(typed)
+        return people.contains { person in
+            ([person.canonicalName] + person.aliases)
+                .contains { FamilyIdentityText.normalized($0) == key }
+        }
+    }
+
+    /// True when a People-tab profile owns the typed spelling exactly — by
+    /// name, alias or full-name form.
+    static func profileClaimsExactly(_ typed: String, context: Context) -> Bool {
+        (context.profiles ?? []).contains {
+            PersonNameClaim.strength(
+                of: typed, name: $0.canonicalName,
+                aliases: $0.aliases + $0.fullNameForms) != nil
+        }
+    }
+
     private static func executeCyberBrainBiography(
         payload: ArchivistQueryAST.Graph,
         request: Request,
@@ -1957,11 +1985,23 @@ enum HallieTurnExecutor {
         }
         let graph = context.graph
         let privacyCeiling = appPrivacyCeiling
+        let resolution = index.resolve(requestedName)
         let cyberBrainKnowsName: Bool
-        if case .notFound = index.resolve(requestedName) {
+        if case .notFound = resolution {
             cyberBrainKnowsName = false
         } else {
             cyberBrainKnowsName = true
+        }
+        // "tell me about ellen" (live 2026-09-21, still so 09-25): CyberBrain
+        // matched ONE WORD of two "Ellen Ronan" records and asked which,
+        // while the People tab's "Ellen" — Rick's sister — owns the exact
+        // spelling. A token-only CyberBrain match yields to an exact
+        // People-tab claim (the People tab is the source of truth for the
+        // inner circle; exact name wins, PersonNameClaim).
+        if request.selectedIdentity == nil,
+           !cyberBrainMatchesExactly(requestedName, resolution: resolution),
+           profileClaimsExactly(requestedName, context: context) {
+            return nil
         }
         let plan: CyberBrainAnswerPlan
         switch request.selectedIdentity {
