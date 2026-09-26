@@ -396,10 +396,11 @@ struct MissingAudioScaleTests {
             let name = i % 25_000 == 0 ? "reunion_1994_audio.wav" : "clip_\(i).wav"
             h.append(hidden(name, dir: "/Volumes/T/audio\(i % 1000)", duration: Double(i % 4000)))
         }
-        let t0 = Date()
+        let clock = ContinuousClock()
+        let t0 = clock.now
         let (cands, report) = MissingAudioFinder.hiddenCatalogCandidates(video: v, hidden: h, config: testConfig())
-        let elapsed = Date().timeIntervalSince(t0)
-        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 5.0), "tier a took \(elapsed)s over 100k records")
+        let elapsed = clock.now - t0
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(5)), "tier a took \(elapsed) over 100k records")
         #expect(report.examined == 100_000)
         // Every candidate must carry a real signal: the planted stem
         // matches (i = 0 has duration 0 → unknown → stem-only; the other
@@ -424,11 +425,12 @@ struct MissingAudioScaleTests {
         }
         let fs = FakeMissingAudioFS(files: files)
         let probe = FakeMissingAudioProbe(fallback: audio(300))
-        let t0 = Date()
+        let clock = ContinuousClock()
+        let t0 = clock.now
         let r = await MissingAudioFinder.search(video: v, hidden: [], roots: ["/Volumes/Big"],
                                                 config: testConfig(cap: 200), fileSystem: fs, probe: probe)
-        let elapsed = Date().timeIntervalSince(t0)
-        #expect(elapsed < 5.0, "tier c took \(elapsed)s")
+        let elapsed = clock.now - t0
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(5)), "tier c took \(elapsed)")
         #expect(probe.calls.count == 200, "probe cap is the bound, got \(probe.calls.count)")
         let c = r.reports.first { $0.tier == .allScanRoots }
         #expect(c?.truncated == true)

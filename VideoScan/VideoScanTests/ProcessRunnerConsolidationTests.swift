@@ -69,6 +69,29 @@ struct ProcessRunnerConsolidationTests {
         #expect(errBox.lines == ["err1", "err2"])
     }
 
+    // Lost-output race (CI run 36214064340: outBox.lines == [] with exit 0).
+    // A readabilityHandler that had already READ the child's output could
+    // still be delivering it when the terminationHandler drained (nothing
+    // left), finished and resumed the caller — so runProcess returned
+    // before every line callback ran. A slow consumer widens that window to
+    // "every time the handler wins the read": the contract is that
+    // runProcess returns only after every line has been delivered.
+    @Test(arguments: 0..<10)
+    func slowLineConsumerHasEveryLineBeforeRunProcessReturns(round: Int) async throws {
+        let outBox = LineBox()
+        let errBox = LineBox()
+        let result = await ProcessRunner.runProcess(
+            executable: shellPath,
+            arguments: ["-c", "echo out1; echo out2; echo err1 >&2"],
+            stdoutLine: { line in Thread.sleep(forTimeInterval: 0.05); outBox.append(line) },
+            stderrLine: { line in Thread.sleep(forTimeInterval: 0.05); errBox.append(line) }
+        )
+        #expect(result.exitCode == 0)
+        #expect(outBox.lines == ["out1", "out2"], "round \(round)")
+        #expect(errBox.lines == ["err1"], "round \(round)")
+        #expect(result.stdout == "out1\nout2\n", "round \(round)")
+    }
+
     // MARK: drain-at-exit
 
     // Data written immediately before exit (after a quiet period, so the

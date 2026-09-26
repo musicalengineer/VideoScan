@@ -1,4 +1,5 @@
 import Foundation
+import VideoScanCore
 
 /// When a wall-clock performance budget is allowed to be authoritative.
 ///
@@ -73,8 +74,11 @@ enum PerformanceLane {
     /// as far as running tests (GH #173). The ceiling is scaled there, and
     /// only there — GITHUB_ACTIONS is set by GitHub and nothing else (the
     /// CI test plan injects CI=1 locally too, so CI can't distinguish).
+    ///
+    /// The rule itself lives in VideoScanCore's `TimingBudget` (2026-09-26)
+    /// so VideoScanCoreTests use the SAME numbers; these forward to it.
     static func hostedRunnerFactor(environment: [String: String]) -> Int {
-        environment["GITHUB_ACTIONS"] == "true" ? 3 : 1
+        TimingBudget.hostedRunnerFactor(environment: environment)
     }
 
     /// A Debug ceiling, widened on GitHub-hosted runners. Never use this on
@@ -126,15 +130,13 @@ enum PerformanceLane {
     /// Pure form of the load rule, for tests of the rule itself.
     static func loadFactor(debugBuild: Bool, loadAverage: Double?, activeProcessors: Int,
                            loadedHeadroom: Double) -> Double {
-        guard debugBuild, let load = loadAverage, activeProcessors > 0,
-              load >= Double(activeProcessors) / 2 else { return 1 }
-        return max(1, loadedHeadroom)
+        TimingBudget.loadFactor(debugBuild: debugBuild, loadAverage: loadAverage,
+                                activeProcessors: activeProcessors, loadedHeadroom: loadedHeadroom)
     }
 
     /// The 1-minute load average, or nil when the kernel won't say.
     static func currentLoadAverage() -> Double? {
-        var samples = [Double](repeating: 0, count: 1)
-        return getloadavg(&samples, 1) == 1 ? samples[0] : nil
+        TimingBudget.currentLoadAverage()
     }
 
     /// "load 9.3 on 16 cores" — for a failure message that says whether the

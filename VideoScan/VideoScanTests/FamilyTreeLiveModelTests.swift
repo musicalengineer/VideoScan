@@ -892,7 +892,8 @@ struct FamilyTreeScaleTests {
             model.searchText = "Person49"
             #expect(!model.filteredPeople.isEmpty)
         }
-        #expect(elapsed < .milliseconds(500), "layout + install took \(elapsed)")
+        // 500 ms locally; ×3 on a GitHub-hosted runner only (881 ms there, run 36202513830).
+        #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(500)), "layout + install took \(elapsed)")
 
         // Deep in the chain every ancestor slot is filled on the paternal
         // side and the cap still holds.

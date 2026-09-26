@@ -85,8 +85,16 @@ struct PerformanceLaneTests {
         #expect(envSaysCoverageOn == !authoritative(env.merging([Self.key: "1"]) { $1 }),
                 "isAuthoritative must use the same coverage rule")
         print("[PerformanceLane] LLVM_PROFILE_FILE=\(env["LLVM_PROFILE_FILE"].map { "'\($0)'" } ?? "<unset>") instrumented=\(instrumented)")
+        // Red with env=on, instrumented=false is usually NOT a sensor bug:
+        // it is `test-without-building -enableCodeCoverage YES` over a
+        // build-for-testing made without coverage (CI run 36202513830) —
+        // xcodebuild names a profraw path the binary can never write, and
+        // "coverage" silently reports nothing.
+        let hint = envSaysCoverageOn && !instrumented
+            ? " — coverage requested at test time for a binary built without it (pass -enableCodeCoverage to the BUILD step too, or drop it from the test step)"
+            : ""
         #expect(envSaysCoverageOn == instrumented,
-                "LLVM_PROFILE_FILE=\(env["LLVM_PROFILE_FILE"] ?? "<unset>") but profile runtime present=\(instrumented)")
+                "LLVM_PROFILE_FILE=\(env["LLVM_PROFILE_FILE"] ?? "<unset>") but profile counters present=\(instrumented)\(hint)")
     }
 }
 

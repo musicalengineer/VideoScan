@@ -166,6 +166,15 @@ jobs:
             done
           ) &
           HANG_WATCHDOG_PID=$!
+          # Coverage is OFF, deliberately (2026-09-26, run 36202513830).
+          # It was never real: "Build (app + tests)" runs build-for-testing
+          # WITHOUT -enableCodeCoverage, so the binary has no profile
+          # counters, and -enableCodeCoverage YES here only made xcodebuild
+          # set LLVM_PROFILE_FILE to a real path. xccov reported "(no
+          # coverage data)" on every run, and PerformanceLaneTests' sensor
+          # ("env rule agrees with the live binary's instrumentation") went
+          # red on the contradiction. Real coverage needs the flag on BOTH
+          # steps and an instrumented (slower) Debug run — Rick's call.
           # TEST_RUNNER_ prefix: xcodebuild strips it and injects the var
           # into the test host process. CICanaryTests.mustFail is gated on
           # GITHUB_ACTIONS (CI-only since 2026-06-09 — it polluted local
@@ -179,7 +188,7 @@ jobs:
             -configuration Debug \
             -destination 'platform=macOS' \
             -derivedDataPath DerivedData \
-            -enableCodeCoverage YES \
+            -enableCodeCoverage NO \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
@@ -260,22 +269,8 @@ jobs:
           chmod +x scripts/ci_test_summary.sh
           scripts/ci_test_summary.sh TestResults.xcresult
 
-      - name: Coverage Summary
-        if: always()
-        run: |
-          if [ -d TestResults.xcresult ]; then
-            echo "## Coverage by File" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            xcrun xccov view --report --files-for-target VideoScan.app TestResults.xcresult \
-              | awk -F'  +' 'NR>2 && $3 != "" {printf "%-50s %s\n", $2, $3}' \
-              >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "(coverage data unavailable)" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo ""
-            echo "## Overall"
-            xcrun xccov view --report --only-targets TestResults.xcresult 2>/dev/null || echo "(no coverage data)"
-          else
-            echo "No TestResults.xcresult found" >> $GITHUB_STEP_SUMMARY
-          fi
+      # (Coverage Summary step removed 2026-09-26: coverage was never
+      # collected — see the comment on the unit-test step.)
 
       - name: Upload Test Results
         if: always()

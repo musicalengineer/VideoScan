@@ -305,6 +305,71 @@ struct PreviewDiskCacheTests {
                 "expected only the oldest payload reaped, got \(remaining)")
     }
 
+    /// Five 512 MB-logical sparse payloads (2.5 GB seen by the prune) with
+    /// the given mtimes, named sparse0…sparse4.
+    private func writeSparsePayloads(in root: URL, mtimes: [Date]) throws {
+        let fm = FileManager.default
+        for (i, mtime) in mtimes.enumerated() {
+            let url = root.appendingPathComponent("sparse\(i)-fast.jpg")
+            fm.createFile(atPath: url.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.seek(toOffset: 512 * 1024 * 1024 - 1)
+            try handle.write(contentsOf: Data([0x00]))
+            try handle.close()
+            try fm.setAttributes([.modificationDate: mtime], ofItemAtPath: url.path)
+        }
+    }
+
+    /// CI run 36202513830: `init` schedules a background prune and the
+    /// test called pruneNow too. Both enumerated the same 2.5 GB snapshot
+    /// (enumeration is outside the lock); the second found sparse0 already
+    /// gone, did NOT count its bytes, and reaped sparse1 as well — one
+    /// live payload lost per concurrent pruner. Same race across two app
+    /// processes sharing the cache. Several simultaneous pruners on one
+    /// directory must together reap exactly what one would.
+    @Test("concurrent pruners over one snapshot reap exactly what one pruner would",
+          arguments: 0..<8)
+    func concurrentPrunersDoNotOverReap(round: Int) throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let epoch = Date(timeIntervalSince1970: 1_700_000_000)
+        try writeSparsePayloads(in: root, mtimes: (0..<5).map { epoch.addingTimeInterval(Double($0) * 3600) })
+
+        // Four instances (each init schedules its own background prune)
+        // plus four explicit pruneNow calls released together.
+        let caches = (0..<4).map { _ in PreviewDiskCache(rootURL: root) }
+        DispatchQueue.concurrentPerform(iterations: 4) { caches[$0].pruneNow() }
+        // Let the init-scheduled background prunes finish too: each is a
+        // no-op once the directory is at the cap, so poll for stability.
+        let deadline = ContinuousClock.now + .seconds(5)
+        var previous: [String] = []
+        var stableFor = 0
+        while ContinuousClock.now < deadline, stableFor < 5 {
+            let now = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+            stableFor = now == previous ? stableFor + 1 : 0
+            previous = now
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        #expect(previous == ["sparse1-fast.jpg", "sparse2-fast.jpg",
+                             "sparse3-fast.jpg", "sparse4-fast.jpg"],
+                "round \(round): expected only the oldest payload reaped, got \(previous)")
+    }
+
+    /// Coarse-timestamp volumes (and bulk writes inside one second) give
+    /// payloads EQUAL mtimes. The reap order must still be deterministic:
+    /// oldest first, then by name — never directory-listing order.
+    @Test("equal mtimes reap in name order — deterministic tie-break")
+    func equalMtimesReapInNameOrder() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let same = Date(timeIntervalSince1970: 1_700_000_000)
+        try writeSparsePayloads(in: root, mtimes: Array(repeating: same, count: 5))
+        let cache = PreviewDiskCache(rootURL: root)
+        cache.pruneNow()
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+                    == ["sparse1-fast.jpg", "sparse2-fast.jpg", "sparse3-fast.jpg", "sparse4-fast.jpg"])
+    }
+
     // MARK: - Isolation (ISOLATION)
 
     @Test("injected root confines all writes — real App Support cache untouched")
