@@ -1036,11 +1036,33 @@ struct POIProfile: Codable, Identifiable, Equatable {
     }
 
     /// Ambiguous legacy anchors logged once per (row-owner, name) per process.
-    nonisolated(unsafe) private static var ambiguousAnchorsNoted = Set<String>()
+    ///
+    /// LOCKED (fix/ci-red-4, 2026-09-26). `listAll()` — and so
+    /// `upgradingKinshipAnchors` — runs on whatever thread calls it: the
+    /// main actor (People UI, ValidationLabelStore via PersonNameGuard),
+    /// the cooperative pool, catalog-tagging workers. CI run 36214064340's
+    /// log shows this path on three different threads in one process. This
+    /// used to be a `nonisolated(unsafe) static var Set` mutated with no
+    /// lock: concurrent insert/contains on a Swift Set is undefined
+    /// behaviour — the open-addressing table can be left with no free
+    /// bucket and a later `contains` probes forever (an uninterruptible
+    /// spin, on the main thread when the caller is the UI). C++ analogy:
+    /// an unguarded function-static `std::unordered_set` hit from several
+    /// threads. `OSAllocatedUnfairLock<State>` ≈ a mutex that owns the data
+    /// it guards, so the set cannot be touched without the lock.
+    private static let ambiguousAnchorsNoted = OSAllocatedUnfairLock(initialState: Set<String>())
+
+    /// True the first time `key` is seen in this process (and records it).
+    /// Internal for the concurrency regression test.
+    static func firstAmbiguousAnchorNote(_ key: String) -> Bool {
+        ambiguousAnchorsNoted.withLock { $0.insert(key).inserted }
+    }
+
     private static func noteAmbiguousAnchorOnce(name: String, on owner: String, count: Int) {
         let key = owner.lowercased() + "→" + PersonResolver.normalize(name)
-        guard !ambiguousAnchorsNoted.contains(key) else { return }
-        ambiguousAnchorsNoted.insert(key)
+        // Check-and-insert is ONE locked step; the log call stays outside the
+        // lock (never hold a lock across I/O).
+        guard firstAmbiguousAnchorNote(key) else { return }
         identityLog.notice("POIProfile listAll: relationship on '\(owner, privacy: .public)' names '\(name, privacy: .public)', which \(count) profiles share — kept name-keyed, not upgraded to a uuid.")
     }
 

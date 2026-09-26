@@ -75,4 +75,24 @@ struct AmbiguousAnchorNoteConcurrencyTests {
         #expect(keptNameKeyed == Self.workers * Self.roundsPerWorker,
                 "every ambiguous legacy anchor stays name-keyed under concurrent listing")
     }
+
+    @Test(.timeLimit(.minutes(1)))
+    func firstNoteIsExactlyOncePerKeyUnderContention() async {
+        let run = UUID().uuidString.prefix(8)
+        let keys = (0..<200).map { "exactly-once-\(run)-\($0)" }
+        let firsts = await withTaskGroup(of: Int.self) { group -> Int in
+            for _ in 0..<Self.workers {
+                group.addTask {
+                    keys.reduce(0) { $0 + (POIProfile.firstAmbiguousAnchorNote($1) ? 1 : 0) }
+                }
+            }
+            var total = 0
+            for await n in group { total += n }
+            return total
+        }
+        #expect(firsts == keys.count,
+                "each key is 'first' exactly once no matter how many threads race on it")
+        // And afterwards nobody is first any more.
+        #expect(keys.allSatisfy { !POIProfile.firstAmbiguousAnchorNote($0) })
+    }
 }
