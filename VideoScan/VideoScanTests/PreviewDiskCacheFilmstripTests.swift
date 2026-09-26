@@ -433,7 +433,8 @@ struct PreviewDiskCacheFilmstripTests {
             }
         }
         #expect(hits == 60, "the buried strip must hit every probe")
-        #expect(elapsed < .seconds(5),
+        // 5 s locally; ×3 on a GitHub-hosted runner only (5.06 s there, run 36214064340).
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(5)),
                 "120 filmstrip probes over 20k files took \(elapsed) — directory probe cost regressed")
     }
 
