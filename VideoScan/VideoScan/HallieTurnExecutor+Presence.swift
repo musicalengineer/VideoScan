@@ -16,6 +16,26 @@ extension HallieTurnExecutor {
         let source: String
     }
 
+    /// Puts back a curated topic word the translator dropped; returns the
+    /// basis note, or nil when nothing was restored.
+    static func restoreDroppedTopicWords(
+        _ effective: inout ArchivistQueryAST.Presence,
+        original payload: ArchivistQueryAST.Presence,
+        request: Request
+    ) -> String? {
+        let intent = request.intent
+        let isReRun = intent.refinementNote != nil || intent.refinementChain != nil
+            || intent.refinementChange != nil || intent.citationOffset > 0
+        guard !isReRun else { return nil }
+        let restored = HallieDroppedTopicWord.missing(
+            question: intent.originalQuestion,
+            people: (payload.people ?? []) + (effective.people ?? []),
+            terms: effective.keywords ?? [])
+        guard !restored.isEmpty else { return nil }
+        effective.keywords = (effective.keywords ?? []) + restored
+        return HallieDroppedTopicWord.note(restored)
+    }
+
     static func executePresenceLike(
         _ payload: ArchivistQueryAST.Presence,
         route: Route,
@@ -93,6 +113,15 @@ extension HallieTurnExecutor {
         let droppedPronouns = dropSpeakerPronouns(&effective)
         if !droppedPronouns.isEmpty {
             notes.append("“\(droppedPronouns.joined(separator: "”, “"))” means you or me, not a search word, so I left it out")
+        }
+
+        // "Christmas videos from 2006" arrived as year=2006 alone (live
+        // 09-22, 09-24, 09-25) and the answer counted every 2006 item. A
+        // holiday / family-event / family-place word the reader said is put
+        // back (+HallieDroppedTopicWord). Fresh translations only: a
+        // refinement or paging re-run carries the previous AST on purpose.
+        if let note = restoreDroppedTopicWords(&effective, original: payload, request: request) {
+            notes.append(note)
         }
 
         // "pull up anything from Franklin": the translator took a place for
