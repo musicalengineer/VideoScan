@@ -71,6 +71,12 @@ final class ArchiveAngel: ObservableObject {
     /// the built-in rule set and `policyIsLoaded` is false; the sweep waits
     /// for the load (`policyLoaded()`) and Prepare refuses until then.
     private(set) var policy: AngelRecommendationPolicy = .builtIn
+    /// Rules v13 coverage: bumped on every catalog change (`catalogChanged`)
+    /// and stamped into the evidence at each sweep's snapshot. The per-year
+    /// backlog the coverage rules read is a catalog fact, so a Prepare with
+    /// coverage on declines evidence stamped older than this. Within a
+    /// launch only; restarts at 0.
+    private(set) var catalogRevision = 0
     private(set) var policySource: AngelRecommendationPolicy.Source = .builtIn
     private(set) var policyIsLoaded = false
     private var policyLoad: Task<Void, Never>?
@@ -231,6 +237,7 @@ final class ArchiveAngel: ObservableObject {
                 guard let self else { return (0, nil) }
                 return (self.attention.revision, self.attention.lastEventAt)
             },
+            catalogState: { [weak self] in self?.catalogRevision ?? 0 },
             policy: policy,
             log: { [weak self] line in self?.catalog?.angelLog(line) }
         )
@@ -276,6 +283,7 @@ final class ArchiveAngel: ObservableObject {
     /// Rescore once the catalog settles (the sweep debounces). Called on
     /// every records change — O(1), never logged.
     func catalogChanged() {
+        catalogRevision &+= 1
         sweep.noteCatalogChanged()
         // The classes follow the LIVE catalog now, the scores at the next sweep.
         scheduleRecommendationsRecount()

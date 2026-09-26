@@ -174,11 +174,20 @@ struct ArchiveAngelEvidenceFile: Codable, Sendable, Equatable {
     /// file written before the stamp existed: accepted only while the
     /// DEFAULT policy is active (no forced re-score on upgrade).
     var policyFingerprint: String?
+    /// Rules v13 coverage: the façade's `catalogRevision` at the sweep's
+    /// snapshot — bumped on every catalog change within a launch. The
+    /// per-year backlog and the archived set are catalog facts; with a
+    /// coverage rule on, the pick declines evidence stamped older than the
+    /// catalog is now. nil = not stamped (a test-built file, or written
+    /// before v13): read as revision 0. Meaningless across launches (the
+    /// counter restarts at 0), where the launch sweep re-stamps within
+    /// minutes; the 24 h freshness rule covers the gap.
+    var catalogRevision: Int?
 
     init(computedAt: Date = Date(), complete: Bool = true, considered: Int = 0,
          eligible: Int = 0, records: [UUID: ArchiveAngelEvidenceRecord] = [:],
          attentionRevision: Int? = nil, attentionLastEventAt: Date? = nil,
-         policyFingerprint: String? = nil) {
+         policyFingerprint: String? = nil, catalogRevision: Int? = nil) {
         self.computedAt = computedAt
         self.complete = complete
         self.considered = considered
@@ -187,6 +196,7 @@ struct ArchiveAngelEvidenceFile: Codable, Sendable, Equatable {
         self.attentionRevision = attentionRevision
         self.attentionLastEventAt = attentionLastEventAt
         self.policyFingerprint = policyFingerprint
+        self.catalogRevision = catalogRevision
     }
 }
 
@@ -248,6 +258,8 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     /// The attention state the file was scored with (nil = not stamped).
     var attentionRevision: Int? { file?.attentionRevision }
     var attentionLastEventAt: Date? { file?.attentionLastEventAt }
+    /// Rules v13: the catalog revision the file was scored at (nil = not stamped).
+    var catalogRevision: Int? { file?.catalogRevision }
     var isLoaded: Bool { file != nil }
     /// Grades A + B (the default filter).
     var candidateCount: Int { candidateIDs.count }

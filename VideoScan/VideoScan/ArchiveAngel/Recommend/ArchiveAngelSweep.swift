@@ -81,6 +81,12 @@ final class ArchiveAngelSweep: ObservableObject {
         /// older state than the store holds now (codex 2026-09-20 #5).
         /// Default = "no attention store" (tests of the sweep alone).
         var attentionState: @MainActor () -> (revision: Int, lastEventAt: Date?) = { (0, nil) }
+        /// Rules v13 coverage: the façade's `catalogRevision`, read on the
+        /// main actor right before the candidate snapshot (with the
+        /// attention state) and stamped into the evidence file, so the
+        /// Angel's pick can refuse evidence older than the catalog.
+        /// Default = "no catalog" (tests of the sweep alone).
+        var catalogState: @MainActor () -> Int = { 0 }
         /// Spotlight reads for a slice, off-main. Injected so tests never
         /// touch the metadata server.
         var playHistory: @Sendable ([String]) async -> [String: ArchiveAngelPlayHistory.Reading]
@@ -282,6 +288,7 @@ final class ArchiveAngelSweep: ObservableObject {
         // is stamped with — never the state at the finish line.
         let snapshotStart = clock.now
         let attention = cfg.attentionState()
+        let catalogRevision = cfg.catalogState()
         var all = cfg.candidates()
         let policy = cfg.policy
         noteSlice(clock.now - snapshotStart)
@@ -400,7 +407,8 @@ final class ArchiveAngelSweep: ObservableObject {
                                                           considered: index, eligible: eligible, records: records,
                                                           attentionRevision: attention.revision,
                                                           attentionLastEventAt: attention.lastEventAt,
-                                                          policyFingerprint: store.policyFingerprint)
+                                                          policyFingerprint: store.policyFingerprint,
+                                                          catalogRevision: catalogRevision)
                 _ = await ArchiveAngelEvidenceStore.saveOffMain(checkpoint, to: store.fileURL)
             }
             await Task.yield()
@@ -439,7 +447,8 @@ final class ArchiveAngelSweep: ObservableObject {
                                             considered: total, eligible: eligible, records: records,
                                             attentionRevision: attention.revision,
                                             attentionLastEventAt: attention.lastEventAt,
-                                            policyFingerprint: store.policyFingerprint)
+                                            policyFingerprint: store.policyFingerprint,
+                                            catalogRevision: catalogRevision)
         store.replace(with: file)
         let saved = await store.save()
         lastRunSeconds = Double((clock.now - started).components.seconds)

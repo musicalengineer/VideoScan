@@ -377,6 +377,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             store: model.archiveAngel.store, count: requestedCount, now: Date(), policy: self.policy, excluding: inFlight,
             attentionChangedAt: model.archiveAngel.attention.lastEventAt,
             attentionRevision: model.archiveAngel.attention.revision,
+            catalogRevision: model.archiveAngel.catalogRevision,
             project: { id in live(id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
             selection = fromEvidence.selection
             consideredCount = model.archiveAngel.store.consideredCount
@@ -401,6 +402,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             if stopRequested { finishCancelled(); return }
             ArchiveAngelScorer.markDerivatives(&candidates, policy: self.policy)   // T10 H3: same rule as the sweep
             ArchiveAngelScorer.applyFamilyAttention(&candidates, weights: weights)   // Phase 1: same rule as the sweep
+            ArchiveAngelEvent.applyCoverage(&candidates, policy: self.policy)   // rules v13: same pre-pass as the sweep
 
             // Spotlight play history for the eligible ones only, off-main.
             let rules = self.policy
