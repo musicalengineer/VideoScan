@@ -872,21 +872,22 @@ struct GedcomMergeTests {
         let n = 100_000
         var a = Self.synthetic(offset: 0, count: n); a.sourceFileName = "a.ged"
         var b = Self.synthetic(offset: n / 2, count: n); b.sourceFileName = "b.ged"
-        let t0 = Date()
+        let clock = ContinuousClock()
+        let t0 = clock.now
         let outcome = a.merge(with: b)
-        let tMerge = Date().timeIntervalSince(t0)
+        let tMerge = TimingBudget.seconds(clock.now - t0)
         #expect(outcome.graph.people.count == n + n / 2)
         #expect(outcome.sharedPeopleCount == n / 2)
         #expect(outcome.fieldConflictCount == 0)
 
-        let t1 = Date()
+        let t1 = clock.now
         let text = outcome.graph.gedcomText(provenance: "scale pipeline")
-        let tWrite = Date().timeIntervalSince(t1)
-        let t2 = Date()
+        let tWrite = TimingBudget.seconds(clock.now - t1)
+        let t2 = clock.now
         let back = GedcomFamilyGraph(gedcomText: text)
-        let tParse = Date().timeIntervalSince(t2)
+        let tParse = TimingBudget.seconds(clock.now - t2)
 
-        let t3 = Date()
+        let t3 = clock.now
         #expect(back.people.count == outcome.graph.people.count)
         #expect(back.familyCount == outcome.graph.familyCount)
         #expect(back.rootPersonIDs == outcome.graph.rootPersonIDs)
@@ -907,11 +908,15 @@ struct GedcomMergeTests {
         #expect(!hits.isEmpty)
         #expect(back.person(familySearchID: b.people["@I0@"]!.familySearchID!)?.id == donnaSide)
         #expect(back.directRelation(between: "@I0@", and: "@I1@")?.kind == .parentChild)
-        let tVerify = Date().timeIntervalSince(t3)
-        let total = Date().timeIntervalSince(t0)
+        let tVerify = TimingBudget.seconds(clock.now - t3)
+        let total = TimingBudget.seconds(clock.now - t0)
         print("SCALE pipeline 2×\(n): merge \(String(format: "%.2f", tMerge))s write \(String(format: "%.2f", tWrite))s (\(text.utf8.count / 1_000_000) MB) parse \(String(format: "%.2f", tParse))s verify \(String(format: "%.2f", tVerify))s total \(String(format: "%.2f", total))s")
-        #expect(tMerge < 2, "merge budget")
-        #expect(total < 20, "pipeline budget (Debug)")
+        // 2 s / 20 s on a quiet machine; ×1.5 only for a busy Debug run
+        // (both failed under full-battery load on the M5), ×3 only on GitHub.
+        let mergeCeiling = TimingBudget.seconds(TimingBudget.loadAwareDebugCeiling(.seconds(2)))
+        let totalCeiling = TimingBudget.seconds(TimingBudget.loadAwareDebugCeiling(.seconds(20)))
+        #expect(tMerge < mergeCeiling, "merge took \(tMerge) s, ceiling \(mergeCeiling) s (\(TimingBudget.loadDescription()))")
+        #expect(total < totalCeiling, "pipeline took \(total) s, ceiling \(totalCeiling) s (\(TimingBudget.loadDescription()))")
     }
 
     // MARK: Provenance union is identity-aware (codex #810)

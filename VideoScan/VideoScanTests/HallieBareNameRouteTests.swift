@@ -210,13 +210,17 @@ struct HallieBareNameRouteTests {
         let context = HallieTurnExecutor.Context(profiles: profiles, graph: Self.tree)
         // O(profiles) per ask by design (the live tab holds ~13); the budget
         // pins that a 20k tab still answers a turn's worth of asks in time.
-        let start = Date()
         var hits = 0
-        for i in stride(from: 0, to: 20_000, by: 2_000) {
-            if HallieTurnExecutor.isExactPersonName("Person \(i)", context: context) { hits += 1 }
-            if HallieTurnExecutor.isExactPersonName("Nobody \(i)", context: context) { hits += 1 }
+        let elapsed = ContinuousClock().measure {
+            for i in stride(from: 0, to: 20_000, by: 2_000) {
+                if HallieTurnExecutor.isExactPersonName("Person \(i)", context: context) { hits += 1 }
+                if HallieTurnExecutor.isExactPersonName("Nobody \(i)", context: context) { hits += 1 }
+            }
         }
         #expect(hits == 10)
-        #expect(Date().timeIntervalSince(start) < 2.0)
+        // 2 s on a quiet machine; ×1.5 only when a Debug battery has the
+        // machine busy (failed under full-battery load on the M5), ×3 on GitHub.
+        let ceiling = PerformanceLane.loadAwareDebugCeiling(.seconds(2))
+        #expect(elapsed < ceiling, "20 asks over 20k profiles took \(elapsed) (ceiling \(ceiling), \(PerformanceLane.loadDescription()))")
     }
 }
