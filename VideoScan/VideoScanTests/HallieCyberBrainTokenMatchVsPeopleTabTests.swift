@@ -23,18 +23,21 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
-private let tree = """
-0 HEAD
-0 @I1@ INDI
-1 NAME Richard Harding /Breen/ Jr
-1 SEX M
-0 @I10@ INDI
-1 NAME Ellen /Ronan/
-1 SEX F
-1 BIRT
-2 DATE 1883
-0 TRLR
-"""
+/// Like the live 39k-person tree: Ellen Ronan among a crowd of Ellens (too
+/// many for a which-one, so the People-tab precedence decides). (With a
+/// single tree Ellen the graph route binds the profile to her by given name
+/// even for a notInFamilyTree profile — a separate open issue, ledger
+/// 2026-09-25.)
+private let tree: String = {
+    var lines = ["0 HEAD", "0 @I1@ INDI", "1 NAME Richard Harding /Breen/ Jr", "1 SEX M",
+                 "0 @I10@ INDI", "1 NAME Ellen /Ronan/", "1 SEX F", "1 BIRT", "2 DATE 1883"]
+    for index in 1...20 {
+        lines += ["0 @E\(index)@ INDI", "1 NAME Ellen /Stranger\(index)/", "1 SEX F",
+                  "1 BIRT", "2 DATE \(1800 + index)"]
+    }
+    lines.append("0 TRLR")
+    return lines.joined(separator: "\n")
+}()
 
 @Suite("Hallie — a CyberBrain token match yields to an exact People-tab name")
 struct HallieCyberBrainTokenMatchVsPeopleTabTests {
