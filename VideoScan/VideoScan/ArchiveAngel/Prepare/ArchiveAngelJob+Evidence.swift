@@ -79,11 +79,9 @@ extension ArchiveAngelJob {
                                    project: (UUID) -> ArchiveAngelCandidate?) -> EvidencePick? {
         guard count > 0, store.isFresh(within: freshness, now: now),
               store.eligibleCount >= count else { return nil }
-        guard attentionIsCurrent(store: store, changedAt: attentionChangedAt, revision: attentionRevision) else { return nil }
+        guard attentionIsCurrent(store: store, changedAt: attentionChangedAt, revision: attentionRevision),
+              coverageIsCurrent(stamped: store.catalogRevision, current: catalogRevision, coverage: policy.coverage) else { return nil }
         let coverage = policy.coverage
-        let cap = coverage.maxPerYearPerBatch
-        let coverageOn = cap > 0 || coverage.onePerEvent || coverage.backlogBonusMax > 0
-        if coverageOn, let current = catalogRevision, (store.catalogRevision ?? 0) < current { return nil }
         let weights = policy.weights
         var collected: [ArchiveAngelPick] = []
         var tiers: [UUID: Int] = [:]
@@ -127,44 +125,14 @@ extension ArchiveAngelJob {
         // codex #1643 A4: copy key → members (built on first use; O(records)).
         var groupIndex: [String: [UUID]]?
         var settledGroups: Set<String> = []
-        // Rules v13 — the COVERAGE ARM (codex acceptance gate "coverage
-        // beyond the cutoff"): the band is read whole as before; past it,
-        // while the rows collected would not fill the batch under the day
-        // and year rules, rows whose year still has room (or whose year
-        // the evidence does not know) are read too — cheaply skipping a
-        // year at its share by the evidence's own year — and, once the
-        // batch would fill, the arrival band being read is finished so the
-        // rows read never depend on the order of equal keys (A4).
-        // `within` counts collected rows that pass both rules (an upper
-        // bound on the batch: the group and family passes can only remove).
-        var within = 0
-        var perYearAll: [Int: Int] = [:]        // live years of collected rows, every band read
-        var perYearThisBand: [Int: Int] = [:]   // …of those, the arrival band being read now
-        var thisBandKey: (tier: Int, score: Int)? = nil
-        var seenDays: Set<String> = []
-        var coverageLooks = 0
-        var coverageProjections = 0
-        var coverageSkipped = 0                 // rows skipped by the evidence year alone (never read)
-        var coverageIncomplete = false          // a budget ran out while the batch was short
-        var stoppedEarly = false                // the fresh arm broke out; rows remain unread
-        var lastCoverageKey: (tier: Int, score: Int)? = nil
-        func noteCollected(_ c: ArchiveAngelCandidate) {
-            let (day, year) = c.resolvedEvent(now: now)
-            if coverage.onePerEvent, !day.isEmpty, !seenDays.insert(day).inserted { return }
-            guard let year, cap > 0 else { within += 1; return }
-            perYearAll[year, default: 0] += 1
-            perYearThisBand[year, default: 0] += 1
-            if perYearAll[year, default: 0] <= cap { within += 1 }
-        }
+        // Rules v13 — the COVERAGE ARM (CoverageArm below): past the band,
+        // rows whose year still has room are read too.
+        var arm = CoverageArm(coverage: coverage, count: count, now: now)
+        var stoppedEarly = false                // the loop broke out; rows remain unread
         for (id, rowTier, arrivalScore) in ranked.ids {
             guard let evidence = store.record(for: id) else { continue }
             if let band = bandKey, rowTier > band.tier || (rowTier == band.tier && arrivalScore < band.score) { pastBand = true }
-            // Band bookkeeping for the coverage arm: a new arrival key
-            // folds the band just read into "every band read".
-            if thisBandKey == nil || thisBandKey!.tier != rowTier || thisBandKey!.score != arrivalScore {
-                thisBandKey = (rowTier, arrivalScore)
-                perYearThisBand = [:]
-            }
+            arm.noteArrival(tier: rowTier, score: arrivalScore)
             if pastBand {
                 let freshDone = freshCollected >= freshWanted || extraLooks >= freshScanBudget
                 var freshWants = false
@@ -173,35 +141,9 @@ extension ArchiveAngelJob {
                     freshWants = arrivalScore >= weights.freshMinimumScore
                         && evidence.timesProposed == 0 && evidence.familySkips == 0
                 }
-                var coverageWants = false
-                var coverageDone = !coverageOn || cap == 0 && !coverage.onePerEvent
-                if !coverageDone {
-                    if within >= count {
-                        // Filled: finish the band the last coverage row came from, then stop.
-                        coverageDone = lastCoverageKey == nil
-                            || lastCoverageKey!.tier != rowTier || lastCoverageKey!.score != arrivalScore
-                    }
-                    if !coverageDone {
-                        if coverageLooks >= coverageLookBudget || coverageProjections >= coverageProjectionBudget {
-                            coverageIncomplete = within < count
-                            coverageDone = true
-                        } else {
-                            coverageLooks += 1
-                            // Could this row enter? Its year must have room among the
-                            // rows of HIGHER bands (a same-band row can still outrank
-                            // one of them by the tie-breaks); an unknown year is read.
-                            if cap > 0, let ey = evidence.year,
-                               perYearAll[ey, default: 0] - perYearThisBand[ey, default: 0] >= cap {
-                                coverageSkipped += 1
-                            } else {
-                                coverageWants = true
-                            }
-                        }
-                    }
-                }
-                if freshDone && coverageDone { stoppedEarly = true; break }
+                let coverageWants = arm.wants(tier: rowTier, score: arrivalScore, evidenceYear: evidence.year)
+                if freshDone && arm.done { stoppedEarly = true; break }
                 if !freshWants && !coverageWants { continue }
-                if coverageWants { lastCoverageKey = (rowTier, arrivalScore); coverageProjections += 1 }
             }
             // The copies of this recording, reclassified LIVE: the pick is
             // the group's live choice (the new Keep, not the cached one).
@@ -265,7 +207,7 @@ extension ArchiveAngelJob {
             }
             collected.append(.init(candidate: candidate, score: pickEvidence.score, evidence: pickEvidence.lines))
             tiers[pickID] = tier
-            if coverageOn { noteCollected(candidate) }
+            arm.noteCollected(candidate)
             let groupIsNew = candidate.duplicateGroupID.map { seenGroups.insert($0).inserted } ?? true
             let familyIsNew = seenFamilies.insert(candidate.resolvedFamilyKey).inserted
             if candidate.isFreshToPerson, groupIsNew, familyIsNew { freshCollected += 1 }
@@ -295,15 +237,119 @@ extension ArchiveAngelJob {
         // could rank above the ones it would put back — decline, the job
         // walks. The same when a coverage budget ran out short.
         let cut = ArchiveAngelScorer.coverageCut(kept, coverage: coverage, count: count, rejected: &rejected, now: now, by: order)
-        if coverageIncomplete { return nil }
-        if cut.toppedUp > 0, stoppedEarly || coverageSkipped > 0 { return nil }
+        let declined = arm.incomplete || (cut.toppedUp > 0 && (stoppedEarly || arm.skipped > 0))
         kept = cut.picks
         let picks = ArchiveAngelScorer.withFreshSlots(kept, count: count, weights: weights, by: order)
         // Evidence that no longer yields a full batch is not trusted — walk.
-        guard picks.count == count else { return nil }
+        guard !declined, picks.count == count else { return nil }
         let overflow = max(0, ranked.ids.count - projections) + (kept.count - picks.count)
         return EvidencePick(selection: .init(picks: picks, overflow: overflow, rejected: rejected),
                             computedAt: store.computedAt ?? now, projections: projections)
+    }
+
+    /// Rules v13: with any coverage rule on, evidence stamped older than
+    /// the catalog is now (`ArchiveAngel.catalogRevision`) is not current —
+    /// the per-year backlog and the archived set are catalog facts. An
+    /// unstamped file reads as revision 0; a caller with no revision (a
+    /// test of the pick alone) never declines on it; with every coverage
+    /// key off the stamp is ignored (rules v12). Pure.
+    static func coverageIsCurrent(stamped: Int?, current: Int?, coverage: AngelCoverageRules) -> Bool {
+        let coverageOn = coverage.maxPerYearPerBatch > 0 || coverage.onePerEvent || coverage.backlogBonusMax > 0
+        guard coverageOn, let current else { return true }
+        return (stamped ?? 0) >= current
+    }
+
+    /// Rules v13 — the coverage arm of `selectFromEvidence` (codex
+    /// acceptance gate "coverage beyond the cutoff"). The band is read
+    /// whole as before; past it, while the rows collected would not fill
+    /// the batch under the day and year rules, this arm asks for rows
+    /// whose year still has room (or whose year the evidence does not
+    /// know) — a year at its share is skipped by the evidence's own year,
+    /// never projected — and, once the batch would fill, finishes the
+    /// arrival band it is in, so the rows read never depend on the order
+    /// of equal keys (A4). `within` counts collected rows that pass both
+    /// rules: an upper bound on the batch (the group and family passes
+    /// can only remove). Bounded by `coverageLookBudget` rows examined
+    /// and `coverageProjectionBudget` rows read. Pure bookkeeping; the
+    /// loop it serves does the projecting. (≈ a small state machine
+    /// object owned by the loop.)
+    struct CoverageArm {
+        let cap: Int
+        let onePerEvent: Bool
+        let count: Int
+        let now: Date
+        /// Rows collected that pass the day and year rules so far.
+        private(set) var within = 0
+        /// Rows skipped on their evidence year alone (never read).
+        private(set) var skipped = 0
+        /// A budget ran out while the batch was still short.
+        private(set) var incomplete = false
+        private(set) var done: Bool
+        private var perYearAll: [Int: Int] = [:]        // live years of collected rows, every band read
+        private var perYearThisBand: [Int: Int] = [:]   // …of those, the arrival band being read now
+        private var thisBandKey: (tier: Int, score: Int)?
+        private var lastConsumedKey: (tier: Int, score: Int)?
+        private var seenDays: Set<String> = []
+        private var looks = 0
+        private var projections = 0
+
+        init(coverage: AngelCoverageRules, count: Int, now: Date) {
+            cap = coverage.maxPerYearPerBatch
+            onePerEvent = coverage.onePerEvent
+            self.count = count
+            self.now = now
+            done = cap <= 0 && !coverage.onePerEvent   // nothing to spread: never asks for a row
+        }
+
+        var active: Bool { cap > 0 || onePerEvent }
+
+        /// Every row's arrival key, in order: a new key folds the band just
+        /// read into "every band read".
+        mutating func noteArrival(tier: Int, score: Int) {
+            guard active else { return }
+            if thisBandKey == nil || thisBandKey!.tier != tier || thisBandKey!.score != score {
+                thisBandKey = (tier, score)
+                perYearThisBand = [:]
+            }
+        }
+
+        /// A row was collected (projected, past the floor): count it.
+        mutating func noteCollected(_ c: ArchiveAngelCandidate) {
+            guard active else { return }
+            let (day, year) = c.resolvedEvent(now: now)
+            if onePerEvent, !day.isEmpty, !seenDays.insert(day).inserted { return }
+            guard let year, cap > 0 else { within += 1; return }
+            perYearAll[year, default: 0] += 1
+            perYearThisBand[year, default: 0] += 1
+            if perYearAll[year, default: 0] <= cap { within += 1 }
+        }
+
+        /// Past the band: should this row be read for coverage? Sets `done`
+        /// when the arm has what it needs (or a budget is spent).
+        mutating func wants(tier: Int, score: Int, evidenceYear: Int?) -> Bool {
+            guard !done else { return false }
+            if within >= count {
+                // Filled: finish the band the last coverage row came from, then stop.
+                let sameBand = lastConsumedKey.map { $0.tier == tier && $0.score == score } ?? false
+                if !sameBand { done = true; return false }
+            }
+            if looks >= coverageLookBudget || projections >= coverageProjectionBudget {
+                incomplete = within < count
+                done = true
+                return false
+            }
+            looks += 1
+            // Could this row enter? Its year must have room among the rows
+            // of HIGHER bands (a same-band row can still outrank one of them
+            // by the tie-breaks); an unknown year is read.
+            if cap > 0, let ey = evidenceYear, perYearAll[ey, default: 0] - perYearThisBand[ey, default: 0] >= cap {
+                skipped += 1
+                return false
+            }
+            lastConsumedKey = (tier, score)
+            projections += 1
+            return true
+        }
     }
 
     /// The band cut's invariant (QA follow-up 2026-09-24): a row's arrival
