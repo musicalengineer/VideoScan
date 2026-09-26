@@ -136,16 +136,18 @@ extension ArchiveAngelJob {
             guard let evidence = store.record(for: id) else { continue }
             if let band = bandKey, rowTier > band.tier || (rowTier == band.tier && arrivalScore < band.score) { pastBand = true }
             if armActive { arm.noteArrival(tier: rowTier, score: arrivalScore) }
+            var forCoverage = false                  // this row is read for the coverage arm (its budget pays)
             if pastBand {
                 // Both arms' verdict on a row past the band (nil = neither
-                // arm wants anything more: stop; false = skip; true = read).
-                guard let read = Self.pastBandWants(evidence, tier: rowTier, arrivalScore: arrivalScore,
+                // arm wants anything more: stop; read = false: skip).
+                guard let want = Self.pastBandWants(evidence, tier: rowTier, arrivalScore: arrivalScore,
                                                     freshCollected: freshCollected, freshWanted: freshWanted,
                                                     extraLooks: &extraLooks, weights: weights, arm: &arm) else {
                     stoppedEarly = true
                     break
                 }
-                if !read { continue }
+                if !want.read { continue }
+                forCoverage = want.forCoverage
             }
             // The copies of this recording, reclassified LIVE: the pick is
             // the group's live choice (the new Keep, not the cached one).
@@ -154,33 +156,24 @@ extension ArchiveAngelJob {
             var tier = rowTier
             var groupCandidate: ArchiveAngelCandidate?
             var groupKind: ArchiveAngelRecommendationClass?
-            if let key = evidence.copyKey {
-                guard settledGroups.insert(key).inserted else { continue }   // this recording was decided
-                if groupIndex == nil { groupIndex = Self.copyGroups(store) }
-                let group = Self.liveGroupChoice(members: groupIndex?[key] ?? [id], anchor: id, store: store,
-                                                 policy: policy, now: now, excluding: excluding, project: project)
-                projections += group.projections
-                // codex #1650: a group too large to decide live is never
-                // judged from a prefix — the cached selection is declined
-                // and the job walks the whole catalog instead.
-                if group.oversized { return nil }
-                guard let choice = group.choice else {
-                    if group.inFlight { rejected[.inAnotherBatch, default: 0] += 1 }
-                    continue
-                }
-                if choice.id != id { rejected[.duplicateOfPick, default: 0] += 1 }
-                pickID = choice.id
-                pickEvidence = choice.evidence
-                groupCandidate = choice.candidate
-                groupKind = choice.kind
-                tier = prepare.isEmpty ? 0 : (prepare.firstIndex(of: choice.kind) ?? prepare.count)
-                // The arrival key must bound what this row adds (QA
-                // follow-up 2026-09-24): a live choice that outranks it
-                // means earlier cuts may have been wrong — walk instead.
-                if Self.liveChoiceExceedsArrival(liveTier: tier, liveScore: choice.evidence.score,
-                                                 arrivalTier: rowTier, arrivalScore: arrivalScore) {
-                    return nil
-                }
+            var rowProjections = 1                   // a singleton; a group's members below
+            switch Self.groupOutcome(id: id, evidence: evidence, rowTier: rowTier, arrivalScore: arrivalScore,
+                                     store: store, policy: policy, now: now, excluding: excluding, prepare: prepare,
+                                     forCoverage: forCoverage, arm: &arm, groupIndex: &groupIndex,
+                                     settledGroups: &settledGroups, rejected: &rejected, project: project) {
+            case .notGrouped:
+                break
+            case .skip(let spent):
+                projections += spent
+                if forCoverage { arm.charge(spent) }
+                continue
+            case .walk:
+                return nil
+            case .pick(let g):
+                pickID = g.id; pickEvidence = g.evidence; groupCandidate = g.candidate; groupKind = g.kind
+                tier = g.tier
+                rowProjections = g.projections
+                projections += g.projections
             }
             // THE effective class (codex #1643 A3): in a batch → skipped;
             // refused live (gone, purged, set aside, superseded, promoted)
@@ -197,6 +190,9 @@ extension ArchiveAngelJob {
                 })
             if effective?.kind == .prepared { rejected[.inAnotherBatch, default: 0] += 1; continue }
             if !askedLive { liveProjection = groupCandidate ?? project(pickID) }
+            // codex final F4: the coverage arm pays for what was ACTUALLY
+            // projected — the group's members, or this one file.
+            if forCoverage { arm.charge(rowProjections) }
             guard var candidate = liveProjection else { continue }
             if groupCandidate == nil { projections += 1 }
             // The projection is per record; the family pass ran in the
@@ -258,13 +254,68 @@ extension ArchiveAngelJob {
     /// answers for itself. Pure but for the two counters.
     static func pastBandWants(_ evidence: ArchiveAngelEvidenceRecord, tier: Int, arrivalScore: Int,
                               freshCollected: Int, freshWanted: Int, extraLooks: inout Int,
-                              weights: ArchiveAngelWeights, arm: inout CoverageArm) -> Bool? {
+                              weights: ArchiveAngelWeights, arm: inout CoverageArm) -> (read: Bool, forCoverage: Bool)? {
         let freshDone = freshCollected >= freshWanted || extraLooks >= freshScanBudget
         if !freshDone { extraLooks += 1 }
         let freshWants = !freshDone && freshArmWants(evidence, arrivalScore: arrivalScore, weights: weights, arm: arm)
         let coverageWants = arm.active && arm.wants(tier: tier, score: arrivalScore, evidenceYear: evidence.year)
         if freshDone && (!arm.active || arm.done) { return nil }
-        return freshWants || coverageWants
+        return (freshWants || coverageWants, coverageWants)
+    }
+
+    /// One arrival row's copy group, decided LIVE (codex #1643 A4) — or
+    /// not a group at all. `.walk` = the cache is declined (a group too
+    /// large to decide live, codex #1650; a live choice that outranks its
+    /// arrival key). `spent` = members projected, for the diagnostic
+    /// counter and the coverage arm's budget.
+    enum GroupOutcome {
+        case notGrouped
+        case skip(spent: Int)
+        case walk
+        case pick(id: UUID, evidence: ArchiveAngelEvidenceRecord, candidate: ArchiveAngelCandidate,
+                  kind: ArchiveAngelRecommendationClass, tier: Int, projections: Int)
+    }
+
+    @MainActor
+    static func groupOutcome(id: UUID, evidence: ArchiveAngelEvidenceRecord, rowTier: Int, arrivalScore: Int,
+                             store: ArchiveAngelEvidenceStore, policy: AngelRecommendationPolicy, now: Date,
+                             excluding: Set<UUID>, prepare: [ArchiveAngelRecommendationClass],
+                             forCoverage: Bool, arm: inout CoverageArm,
+                             groupIndex: inout [String: [UUID]]?, settledGroups: inout Set<String>,
+                             rejected: inout [ArchiveAngelRejection: Int],
+                             project: (UUID) -> ArchiveAngelCandidate?) -> GroupOutcome {
+        guard let key = evidence.copyKey else { return .notGrouped }
+        guard settledGroups.insert(key).inserted else { return .skip(spent: 0) }   // this recording was decided
+        if groupIndex == nil { groupIndex = Self.copyGroups(store) }
+        let members = groupIndex?[key] ?? [id]
+        // codex final F4: the members ARE the projections — budgeted BEFORE
+        // the group expands. A group the arm cannot afford ends its budget
+        // (mid-band → incomplete → the cache declines; never a prefix).
+        if forCoverage, !arm.canAfford(members.count) {
+            arm.exhaust(tier: rowTier, score: arrivalScore)
+            return .skip(spent: 0)
+        }
+        let group = Self.liveGroupChoice(members: members, anchor: id, store: store,
+                                         policy: policy, now: now, excluding: excluding, project: project)
+        // codex #1650: a group too large to decide live is never judged
+        // from a prefix — the cached selection is declined and the job
+        // walks the whole catalog instead.
+        if group.oversized { return .walk }
+        guard let choice = group.choice else {
+            if group.inFlight { rejected[.inAnotherBatch, default: 0] += 1 }
+            return .skip(spent: group.projections)
+        }
+        if choice.id != id { rejected[.duplicateOfPick, default: 0] += 1 }
+        let tier = prepare.isEmpty ? 0 : (prepare.firstIndex(of: choice.kind) ?? prepare.count)
+        // The arrival key must bound what this row adds (QA follow-up
+        // 2026-09-24): a live choice that outranks it means earlier cuts
+        // may have been wrong — walk instead.
+        if Self.liveChoiceExceedsArrival(liveTier: tier, liveScore: choice.evidence.score,
+                                         arrivalTier: rowTier, arrivalScore: arrivalScore) {
+            return .walk
+        }
+        return .pick(id: choice.id, evidence: choice.evidence, candidate: choice.candidate, kind: choice.kind,
+                     tier: tier, projections: group.projections)
     }
 
     /// codex F1, belt to the braces in `CoverageArm.noteCollected`: the
@@ -400,12 +451,7 @@ extension ArchiveAngelJob {
                 return false
             }
             if looks >= coverageLookBudget || projections >= coverageProjectionBudget {
-                // A budget ran out. Clean only if the batch is full AND the
-                // band the last consumed row came from was finished; ending
-                // MID-BAND means which of its equal-key rows were read was
-                // the order of ids (QA MAJOR-2, A4) — never accepted.
-                incomplete = within < count || sameBand
-                done = true
+                exhaust(tier: tier, score: score)
                 return false
             }
             looks += 1
@@ -414,8 +460,24 @@ extension ArchiveAngelJob {
                 return false
             }
             lastConsumedKey = (tier, score)
-            projections += 1
             return true
+        }
+
+        /// Can the projection budget pay for `n` more (a copy group's
+        /// members — codex final F4 — or one file) before they are read?
+        func canAfford(_ n: Int) -> Bool { projections + n <= coverageProjectionBudget }
+
+        /// Projections actually made for a row the arm asked for.
+        mutating func charge(_ n: Int) { projections += n }
+
+        /// A budget ran out at this row. Clean only if the batch is full
+        /// AND the band the last consumed row came from was finished;
+        /// ending MID-BAND means which of its equal-key rows were read was
+        /// the order of ids (QA MAJOR-2, A4) — never accepted.
+        mutating func exhaust(tier: Int, score: Int) {
+            let sameBand = lastConsumedKey.map { $0.tier == tier && $0.score == score } ?? false
+            incomplete = within < count || sameBand
+            done = true
         }
     }
 

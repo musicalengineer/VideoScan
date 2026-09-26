@@ -677,6 +677,72 @@ struct ArchiveAngelCoverageCutoffTests {
         }
     }
 
+    /// codex F4: two singleton 1994 rows at 200 (the band; the cap leaves
+    /// one covered slot), then `groups` copy groups of `members` each in
+    /// ONE arrival band at 100, years cycling over four other years; ids
+    /// from `seed`. Count 2, cap 1, fresh share 0.
+    private func f4Fixture(seed: UInt64, groups: Int, members: Int, now: Date)
+    -> (ArchiveAngelEvidenceStore, [UUID: ArchiveAngelCandidate]) {
+        var rng = SplitMix(seed: seed)
+        var records: [UUID: ArchiveAngelEvidenceRecord] = [:]
+        var live: [UUID: ArchiveAngelCandidate] = [:]
+        for i in 0..<2 {
+            var c = video("top-\(i).mov", year: 1994, month: 1, day: 1 + i, minutes: 60, stars: 3)
+            c.id = rng.uuid()
+            records[c.id] = evidence(200, year: 1994, now: now)
+            live[c.id] = c
+        }
+        let years = [1990, 1998, 2004, 2011]
+        for g in 0..<groups {
+            let group = rng.uuid()
+            let year = years[g % years.count]
+            for m in 0..<members {
+                var c = video("g\(g)-m\(m).mov", folder: "/Volumes/X\(m % 5)/g\(g)", year: year, month: 3, day: 1 + g % 28,
+                              minutes: Double(20 + m % 40), sizeBytes: 8_000_000_000 + Int64(m), group: group)
+                c.id = rng.uuid()
+                c.duplicateGroupCount = members
+                var r = ArchiveAngelEvidenceRecord(score: 100, lines: [.init(points: 100, line: "why")], rejection: nil,
+                                                   useCount: 0, lastUsed: nil, computedAt: now)
+                r.recommendation = m == 0 ? .ready : .anotherCopy
+                r.year = year
+                r.copyKey = "group:" + group.uuidString
+                records[c.id] = r
+                live[c.id] = c
+            }
+        }
+        return (evidenceStore(records, now: now), live)
+    }
+
+    @Test("codex F4: the 400-projection budget counts group MEMBERS — eight copy groups of 64 in one band (512 members) decline (never a prefix of the band) within the ceiling; four groups (256) are finished and picked; 8 id draws each")
+    func groupMembersAreChargedToTheBudget() {
+        let now = testNow
+        var p = AngelRecommendationPolicy.builtIn
+        p.coverage.maxPerYearPerBatch = 1
+        p.weights.freshShare = 0
+        let ceiling = 2 + ArchiveAngelJob.coverageProjectionBudget + ArchiveAngelJob.maxLiveGroupMembers
+        for seed in UInt64(1)...8 {
+            let (store, live) = f4Fixture(seed: seed * 99_991, groups: 8, members: ArchiveAngelJob.maxLiveGroupMembers, now: now)
+            var projected = 0
+            let cached = ArchiveAngelJob.selectFromEvidence(store: store, count: 2, now: now, policy: p) { id in
+                projected += 1
+                return live[id]
+            }
+            #expect(projected <= ceiling, "seed \(seed): the coverage tail projected \(projected) members (stated ceiling \(ceiling))")
+            #expect(cached == nil, "seed \(seed): 512 members cannot be finished under the budget — the cache must decline, not accept a prefix of the band")
+        }
+        for seed in UInt64(1)...8 {
+            let (store, live) = f4Fixture(seed: seed * 7_919, groups: 4, members: ArchiveAngelJob.maxLiveGroupMembers, now: now)
+            var projected = 0
+            let cached = ArchiveAngelJob.selectFromEvidence(store: store, count: 2, now: now, policy: p) { id in
+                projected += 1
+                return live[id]
+            }
+            #expect(cached?.selection.picks.count == 2, "seed \(seed)")
+            #expect(years(of: cached?.selection.picks ?? []) == [1994: 1, 1990: 1], "seed \(seed): the best other-year group's choice joins the 1994 tape: \(cached?.selection.picks.map(\.candidate.filename) ?? [])")
+            #expect(projected >= 2 + 4 * ArchiveAngelJob.maxLiveGroupMembers && projected <= ceiling, "seed \(seed): the whole band, every member (\(projected))")
+        }
+    }
+
     @Test("SCARCE YEAR from the cache: everything 1994 → the cache would have to top up from rows it skipped, so it declines and the walk fills the batch")
     func scarceYearDeclinesCache() {
         let now = testNow
