@@ -180,6 +180,15 @@ jobs:
           # GITHUB_ACTIONS (CI-only since 2026-06-09 — it polluted local
           # full-suite totals); without this the host never sees the var
           # and the canary check below would hard-fail as GHOST-PASS.
+          #
+          # EXIT CODE (fix/ci-red-5, run 36223041786): this step's shell is
+          # `bash -e` WITHOUT pipefail, so `xcodebuild … | tee … || X=$?`
+          # recorded TEE's status — always 0 — and the verdict reported
+          # "Unexpected xcodebuild exit 0" on the first run ever to reach it.
+          # PIPESTATUS[0] is xcodebuild's own status. `set +e` around the
+          # pipeline keeps -e (or a future pipefail) from aborting the step
+          # before the status is read.
+          set +e
           TEST_RUNNER_GITHUB_ACTIONS=true \
           xcodebuild test-without-building \
             -project VideoScan/VideoScan.xcodeproj \
@@ -192,7 +201,10 @@ jobs:
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
-            2>&1 | tee test-output.log || TEST_EXIT=$?
+            2>&1 | tee test-output.log
+          TEST_EXIT=${PIPESTATUS[0]}
+          set -e
+          echo "xcodebuild exit status: $TEST_EXIT"
           kill "$HANG_WATCHDOG_PID" 2>/dev/null || true
           END=$(date +%s)
           ELAPSED=$((END - START))
@@ -259,7 +271,7 @@ jobs:
 
           # Canaries alone do not prove completion. Reject interrupted runs,
           # unexpected exit codes, and failures missed by the display counters.
-          python3 scripts/ci_test_verdict.py test-output.log --exit-code "${TEST_EXIT:-0}"
+          python3 scripts/ci_test_verdict.py test-output.log --exit-code "$TEST_EXIT"
 
       # ── Reporting ───────────────────────────────────────────────────
 
