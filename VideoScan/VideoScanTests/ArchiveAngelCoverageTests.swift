@@ -345,6 +345,48 @@ struct ArchiveAngelCoverageTests {
         #expect(t.years[1998] == .init(unarchived: 1, archived: 0) && t.years[1994] == nil, "\(t.years)")
     }
 
+    @Test("codex F3: files the policy's junk-score floor rejects are not backlog — nine unstarred junkScore-100 videos in a year of one leave its actionable total and the clean file's bonus alone; the floor disabled counts them; its starExempt exemption keeps a starred one")
+    func junkScoreRejectsAreNotBacklog() {
+        func fixture(junkStars: Int = 0) -> [ArchiveAngelCandidate] {
+            var cands = [video("clean.mov", year: 1994, month: 1, day: 1)]
+            for d in 1...9 {
+                var j = video("junky-\(d).mov", year: 1994, month: 2, day: d, stars: junkStars)
+                j.junkScore = 100                       // the default floor is weights.junkFloor = 5
+                cands.append(j)
+            }
+            return cands
+        }
+        var cands = fixture()
+        let table = ArchiveAngelEvent.applyCoverage(&cands, policy: .builtIn, now: testNow)
+        #expect(table.years[1994] == .init(unarchived: 1, archived: 0), "\(table)")
+        let clean = cands.first { $0.filename == "clean.mov" }!
+        guard case .eligible(let score, let lines) = ArchiveAngelScorer.verdict(clean, policy: .builtIn, now: testNow) else { Issue.record("eligible"); return }
+        #expect(score == 50 && !lines.contains { $0.line.hasPrefix("Fills a gap") }, "below the threshold: no bonus manufactured by junk (\(lines.map(\.line)))")
+        #expect(ArchiveAngelScorer.hardFloor(cands[1], policy: .builtIn, now: testNow) == .suspectedJunk, "the fixture's premise")
+        // The floor switched off in policy.json: the nine are material again.
+        var noFloor = AngelRecommendationPolicy.builtIn
+        noFloor.floors = noFloor.floors.map { r in var r = r; if r.id == "junkScore" { r.enabled = false }; return r }
+        var relaxed = fixture()
+        #expect(ArchiveAngelEvent.applyCoverage(&relaxed, policy: noFloor, now: testNow).years[1994] == .init(unarchived: 10, archived: 0))
+        // The floor's exemption (starExempt): a person's star keeps a junk-scored file.
+        var starred = fixture(junkStars: 1)
+        #expect(ArchiveAngelEvent.applyCoverage(&starred, policy: .builtIn, now: testNow).years[1994] == .init(unarchived: 10, archived: 0))
+        // A narrowed floor (`when`): only files under a "Cache" folder are junk-scored out.
+        var narrowed = AngelRecommendationPolicy.builtIn
+        narrowed.floors = narrowed.floors.map { r in
+            var r = r
+            if r.id == "junkScore" { r.when = [.init(field: .path, op: .contains, value: .string("/cache/"))] }
+            return r
+        }
+        #expect(narrowed.validationProblems().isEmpty)
+        var elsewhere = fixture()
+        #expect(ArchiveAngelEvent.applyCoverage(&elsewhere, policy: narrowed, now: testNow).years[1994] == .init(unarchived: 10, archived: 0))
+        // Marked / suspected junk dispositions still follow their own floors.
+        var marked = fixture()
+        for i in marked.indices where i > 0 { marked[i].junkScore = 0; marked[i].mediaDisposition = i % 2 == 0 ? .confirmedJunk : .suspectedJunk }
+        #expect(ArchiveAngelEvent.applyCoverage(&marked, policy: .builtIn, now: testNow).years[1994] == .init(unarchived: 1, archived: 0))
+    }
+
     @Test("junk, the Angel's working copies, Live Photo halves, gone files and clips under the floor are not backlog; undated recordings have their own bucket and earn nothing")
     func backlogExcludesNoiseAndUndated() {
         var cands: [ArchiveAngelCandidate] = []

@@ -169,8 +169,8 @@ enum ArchiveAngelEvent {
     nonisolated static func applyCoverage(_ candidates: inout [ArchiveAngelCandidate],
                                           policy p: AngelRecommendationPolicy = .builtIn,
                                           now: Date = Date()) -> CoverageTable {
-        let minimum = p.weights.minimumDurationSeconds
         let collapseBy = p.recommend.copies.batchCollapseBy
+        let junkFloors = junkFloors(of: p)      // ONCE per pass, not per record (three rules, not nineteen)
         // 1. Dates, once per candidate.
         var years: [Int?] = []
         var claims: [DateClaim?] = []
@@ -199,7 +199,7 @@ enum ArchiveAngelEvent {
         for i in candidates.indices {
             let c = candidates[i]
             let archived = c.isOnMasterArchive || c.hasArchivedDuplicate || c.archivedFootageOriginal
-            let actionable = isActionable(c, minimumDuration: minimum)
+            let actionable = isActionable(c, policy: p, junkFloors: junkFloors, now: now)
             if let comp = comps[i] {
                 var r = recordings[comp.key, default: Recording()]
                 r.fold(claims[i])
@@ -243,20 +243,53 @@ enum ArchiveAngelEvent {
         return table
     }
 
-    /// Material a person would archive: a video, not junk, not the Angel's
-    /// buffer, not a Live Photo half, not gone, and at least the policy's
-    /// minimum length. Pure, O(1).
-    nonisolated static func isActionable(_ c: ArchiveAngelCandidate, minimumDuration: Double) -> Bool {
+    /// Material a person would archive: a video, not the Angel's buffer,
+    /// not a Live Photo half, not gone, at least the policy's minimum
+    /// length — and not junk BY THE POLICY'S OWN JUNK FLOORS (codex final
+    /// F3: the marked / suspected / junk-score floors as they stand in
+    /// policy.json — enabled, `starExempt`, `when` — run through the same
+    /// interpreter the scorer uses, so a file the Angel rejects as junk
+    /// never manufactures backlog, and a floor Rick switched off or
+    /// narrowed counts the way he asked). Pure, O(floors).
+    nonisolated static func isActionable(_ c: ArchiveAngelCandidate, policy p: AngelRecommendationPolicy,
+                                         junkFloors: [AngelRule]? = nil, now: Date) -> Bool {
         guard isVideo(c), !c.isAngelWorkingCopy, !c.isLivePhotoMotion else { return false }
-        switch c.mediaDisposition {
-        case .confirmedJunk, .suspectedJunk: return false
-        default: break
-        }
         switch c.archiveStage {
         case .manuallyDeleted, .salvageFailed: return false
         default: break
         }
-        return c.durationSeconds >= minimumDuration
+        guard c.durationSeconds >= p.weights.minimumDurationSeconds else { return false }
+        return !junkFloorFires(c, floors: junkFloors ?? Self.junkFloors(of: p), policy: p, now: now)
+    }
+
+    /// The junk floor kinds the backlog honours.
+    static let junkFloorKinds: Set<AngelRuleKind> = [.markedJunk, .suspectedJunk, .junkScore]
+
+    /// The policy's ENABLED junk floors, in policy order — computed once
+    /// per pass so the per-record test walks three rules, not nineteen.
+    nonisolated static func junkFloors(of p: AngelRecommendationPolicy) -> [AngelRule] {
+        p.floors.filter { $0.enabled && $0.resolvedKind.map(junkFloorKinds.contains) ?? false }
+    }
+
+    /// Does one of `floors` (the policy's junk floors, as configured:
+    /// `starExempt`, `when`) reject `c`? Read in place, like
+    /// `ArchiveAngelScorer.floorHit`; the context is made only for a
+    /// narrowed rule (the default rules have no `when`).
+    nonisolated static func junkFloorFires(_ c: ArchiveAngelCandidate, floors: [AngelRule],
+                                           policy p: AngelRecommendationPolicy, now: Date) -> Bool {
+        floors.withUnsafeBufferPointer { buffer -> Bool in
+            guard let rules = buffer.baseAddress else { return false }
+            for i in 0..<buffer.count {
+                guard let kind = rules[i].resolvedKind else { continue }
+                if rules[i].starExempt && c.starRating > 0 { continue }
+                if !rules[i].when.isEmpty {
+                    var ctx = AngelEvalContext(now: now)
+                    if !AngelCondition.all(rules[i].when, c, &ctx) { continue }
+                }
+                if ArchiveAngelScorer.floorFires(kind, c, policy: p, now: now) != nil { return true }
+            }
+            return false
+        }
     }
 
     nonisolated static func isVideo(_ c: ArchiveAngelCandidate) -> Bool {
