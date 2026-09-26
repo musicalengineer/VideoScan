@@ -9,7 +9,10 @@
 // husband" — although the sentence itself names her antecedent. Pinned: a
 // pronoun whose antecedent is a known person named EARLIER IN THE SAME
 // SENTENCE is left for the translator; with no in-sentence name the
-// last-answer rewrite still applies.
+// last-answer rewrite still applies. The pronoun is bound to the
+// in-sentence name (so the translator sees one clear person) — the
+// unrewritten sentence came back from the translator as a no-person event
+// in the clean replay the same night.
 
 import Foundation
 import Testing
@@ -25,10 +28,17 @@ struct HalliePronounInSentenceAntecedentTests {
 
     @Test func aNameEarlierInTheSentenceOwnsThePronoun() {
         #expect(P.rewrite("tell me about thankful pratt and her husband",
-                          lastPeople: ["Timmy"], isKnownPerson: isKnown) == nil)
+                          lastPeople: ["Timmy"], isKnownPerson: isKnown)?.question
+                == "tell me about thankful pratt and thankful pratt's husband")
         #expect(P.rewrite("when did martha lamson marry and who were her children",
-                          lastPeople: ["Donna"], isKnownPerson: isKnown) == nil)
+                          lastPeople: ["Donna"], isKnownPerson: isKnown)?.question
+                == "when did martha lamson marry and who were martha lamson's children")
+        // No conversation memory at all: the sentence still binds itself.
         #expect(P.rewrite("Thankful Pratt and her husband",
+                          lastPeople: [], isKnownPerson: isKnown)?.question
+                == "Thankful Pratt and Thankful Pratt's husband")
+        // A plural pronoun after a single named person is left as typed.
+        #expect(P.rewrite("tell me about thankful pratt and their children",
                           lastPeople: ["Timmy"], isKnownPerson: isKnown) == nil)
     }
 
@@ -72,6 +82,7 @@ struct HalliePronounInSentenceAntecedentTests {
             Issue.record("expected a translation, got \(turn)")
             return
         }
-        #expect(question == "tell me about thankful pratt and her husband")
+        #expect(question == "tell me about thankful pratt and thankful pratt's husband")
+        #expect(!question.lowercased().contains("timmy"))
     }
 }
