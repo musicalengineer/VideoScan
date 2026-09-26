@@ -285,14 +285,17 @@ struct UnifiedReviewSessionTests {
 
     // MARK: - 7. Isolation (poisoned state on BOTH surfaces at once)
 
-    // .timeLimit: CI run 36214064340 (macOS 15.7.9 runner) hung here with
-    // the main run loop blocked. A @MainActor spin cannot be interrupted, so
-    // this limit only catches cooperative stalls — the real fix was removing
-    // the unlocked Set race under record() → PersonNameGuard → listAll()
-    // (PersonFinderTypes.swift, AmbiguousAnchorNoteConcurrencyTests). The
-    // garbage CSV bytes themselves were cleared: on macOS 15 Foundation
-    // String(data:encoding:.utf8) returns nil for FF FE 00 01 02 9C, so the
-    // CSV parser never runs (probe on macOS 15.8 / Swift 6.2.4).
+    // .timeLimit: CI runs 36214064340 and 36214974480 (macos-15-arm64,
+    // macOS 15.7.9, Xcode 26.3) BOTH hung here with the main run loop
+    // blocked; it passes on the fleet (macOS 26/27). Root cause NOT yet
+    // proven — the CI hang watchdog (ci.yml) samples the host's stack on
+    // the next occurrence. Cleared so far: on macOS 15 Foundation
+    // String(data:encoding:.utf8) returns nil for FF FE 00 01 02 9C (the
+    // CSV parser never runs) and the truncated JSON decodes to nil at once
+    // (probe on macOS 15.8 / Swift 6.2.4). Hardened on this path: the
+    // unlocked Set under record() → PersonNameGuard → listAll()
+    // (AmbiguousAnchorNoteConcurrencyTests). A @MainActor block/spin cannot
+    // be interrupted, so this limit only catches cooperative stalls.
     @Test(.timeLimit(.minutes(1))) @MainActor
     func isolation_garbageCSVAndGarbageLabelsDegradeIndependently() throws {
         let root = try makeTempDir()
