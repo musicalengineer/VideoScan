@@ -528,6 +528,62 @@ struct ArchiveAngelCoverageCutoffTests {
         #expect(projected < 40, "\(projected)")
     }
 
+    // MARK: codex final review (docs/codex-review-angel-coverage-final-2026-09-26.md)
+
+    /// codex F1: A(1994, 100, proposed before) · B(1994, 99, fresh) ·
+    /// C(2010, 98, proposed before) · D(2020, 97, fresh); count 2, year
+    /// cap 1. `sameDay` puts B on A's day (the day rule, not the cap, holds
+    /// it); `mixed` gives C three proposals. ids from `seed`.
+    private func f1Fixture(seed: UInt64, sameDay: Bool, mixed: Bool, now: Date)
+    -> (ArchiveAngelEvidenceStore, [ArchiveAngelCandidate], [UUID: ArchiveAngelCandidate]) {
+        var rng = SplitMix(seed: seed)
+        var records: [UUID: ArchiveAngelEvidenceRecord] = [:]
+        var live: [UUID: ArchiveAngelCandidate] = [:]
+        var all: [ArchiveAngelCandidate] = []
+        func add(_ name: String, year: Int, month: Int, score: Int, proposed: Int) {
+            var c = video(name, year: year, month: month, day: 1, minutes: 20)
+            c.id = rng.uuid()
+            var attention = ArchiveAngelAttention.none
+            for i in 0..<proposed { attention.note(.angelProposed, at: now.addingTimeInterval(-86_400 * Double(i + 1))) }
+            c.attention = attention
+            var r = ArchiveAngelEvidenceRecord(score: score, lines: [.init(points: score, line: "why \(score)")], rejection: nil,
+                                               useCount: 0, lastUsed: nil, computedAt: now, timesProposed: proposed)
+            r.recommendation = .ready
+            r.year = year
+            records[c.id] = r
+            live[c.id] = c
+            all.append(c)
+        }
+        add("A-old-1994.mov", year: 1994, month: 6, score: 100, proposed: 1)
+        add("B-fresh-1994.mov", year: 1994, month: sameDay ? 6 : 7, score: 99, proposed: 0)
+        add("C-old-2010.mov", year: 2010, month: 6, score: 98, proposed: mixed ? 3 : 1)
+        add("D-fresh-2020.mov", year: 2020, month: 6, score: 97, proposed: 0)
+        return (evidenceStore(records, now: now), all, live)
+    }
+
+    @Test("codex F1: a fresh row the coverage rules hold back never satisfies the fresh arm — the cache's ids and freshness lines are the walk's (A, D), never a full-but-different batch; same year / same day / mixed attention / default share, 16 draws each")
+    func freshRowHeldByCoverageDoesNotSatisfyTheFreshArm() {
+        let now = testNow
+        let cases: [(sameDay: Bool, mixed: Bool, share: Double)] = [(false, false, 0.5), (true, false, 0.5), (false, true, 0.5), (false, false, 0.3)]
+        for c in cases {
+            var p = AngelRecommendationPolicy.builtIn
+            p.coverage.maxPerYearPerBatch = 1
+            p.weights.freshShare = c.share
+            for seed in UInt64(1)...16 {
+                let (store, all, live) = f1Fixture(seed: seed * 2_654_435_761, sameDay: c.sameDay, mixed: c.mixed, now: now)
+                let cached = ArchiveAngelJob.selectFromEvidence(store: store, count: 2, now: now, policy: p) { live[$0] }
+                let expected = storedWalk(all, store: store, count: 2, policy: p, now: now)
+                let label = "\(c) seed \(seed)"
+                #expect(expected.map(\.candidate.filename) == ["A-old-1994.mov", "D-fresh-2020.mov"], "\(label)")
+                guard let cached else { continue }   // declining is acceptable; a wrong batch is not
+                #expect(cached.selection.picks.map(\.candidate.id) == expected.map(\.candidate.id),
+                        "\(label): cache \(cached.selection.picks.map(\.candidate.filename)) vs walk \(expected.map(\.candidate.filename))")
+                #expect(cached.selection.picks.map { $0.evidence.contains { $0.line == ArchiveAngelScorer.freshLine } }
+                        == expected.map { $0.evidence.contains { $0.line == ArchiveAngelScorer.freshLine } }, "\(label): the freshness explanation")
+            }
+        }
+    }
+
     @Test("SCARCE YEAR from the cache: everything 1994 → the cache would have to top up from rows it skipped, so it declines and the walk fills the batch")
     func scarceYearDeclinesCache() {
         let now = testNow
