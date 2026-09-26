@@ -6048,7 +6048,7 @@
       "category": "live",
       "text": "tell me about thankful pratt and her husband",
       "expect": "kinship",
-      "notes": "Rick 2026-09-23 22:26, LIVE MISS right after 'show timmy playing guitar': \"I wasn't sure which person you meant — thankful pratt or timmy?\" — HalliePronounContinuity rewrote 'her' to the last answer's person although the sentence names her. Fixed 2026-09-25 (fix/hallie-night-0925, HalliePronounInSentenceAntecedentTests).",
+      "notes": "Rick 2026-09-23 22:26, LIVE MISS right after 'show timmy playing guitar': \"I wasn't sure which person you meant — thankful pratt or timmy?\" — HalliePronounContinuity rewrote 'her' to the last answer's person although the sentence names her. Fixed 2026-09-25 (fix/hallie-night-0925, HalliePronounInSentenceAntecedentTests). 2026-09-26 night replay: strict-055 (same words, same set-up) answered 'Nathaniel Caleb Parker was the husband of Thankful Pratt'; this advisory run read the bound \"thankful pratt's husband\" as a name — translator variance under ollama 0.34.4, still open.",
       "followsPrevious": true,
       "mustNotContain": [
         "timmy"
@@ -6058,8 +6058,8 @@
       "id": "lv260925-009",
       "category": "live",
       "text": "what relatives fought in the american war of independence?",
-      "expect": "biography",
-      "notes": "Rick 2026-09-23 22:29, LIVE MISS: answered with tree statistics (39250 people, most common surnames) — a different question. Asked before the service-stories merge (c01c054c, 09-24); the honest answer today is the service-record reply for the American Revolution (strict-052 twin).",
+      "expect": "graceful_decline",
+      "notes": "Rick 2026-09-23 22:29, LIVE MISS: answered with tree statistics (39250 people, most common surnames) — a different question. Asked before the service-stories merge (c01c054c, 09-24); the honest answer today is the service-record reply for the American Revolution (strict-052 twin). 2026-09-26 night replay: now the honest 'Nobody in the family has told me about service in the American Revolution…' — expect graceful_decline like strict-052 until the tree carries _MILT facts.",
       "expectedRoutes": [
         "graph"
       ],

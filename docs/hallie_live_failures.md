@@ -521,3 +521,65 @@ The 32 new ones fall into three clusters, each with a lane:
    "what do you know about the Breen family". Same lane.
 
 Correction to the wrong-person entry above: the Matthew Rice row was codex's replay turn interleaved in the shared transcript. Rick's own answer was "Richard was 64–65 years old during 1994" — right person, invented year. Fixed on the same branch (age-at-death from People-tab dates; the translator's invented year no longer trusted); strict-045.
+
+## 2026-09-25 → 26 night — regression check (branch `fix/hallie-night-0925`)
+
+**Brain:** `qwen3.8:27b-mlx` (digest `5642e97495e1`), M4 loopback ollama **0.34.4**,
+headless read-only shell (`scripts/hallie --no-actions`, no UI automation).
+**The 09-18 baseline ran on ollama 0.34.0.** Ollama auto-updated to 0.34.2
+(09-22) and 0.34.4 (09-24) with the same model weights; the translator now
+mis-slots facets it used to fill (a place in the people slot, a stated year
+left out, a media ask read as an age question). That is the drift behind most
+of the advisory losses below — not a code change. Run-to-run variance on the
+advisory lane is about ±30 flips each way.
+
+**Harvest:** 11 new live turns 2026-09-21…24 (`lv260925-001…011`), five of
+them live misses, annotated in the corpus.
+
+| run | strict | advisory (all) | advisory on 09-18's 399 |
+|-----|--------|----------------|-------------------------|
+| 09-18 nightly (baseline, 93b97f2f, ollama 0.34.0) | 41 / 44 | 343 / 399 | 343 |
+| 09-25 03:04 nightly (44708097) | 23 / 52 | 443 / 739 | — (no tree loaded, see below) |
+| tonight, main `0e021ea6` (clean) | 48 / 55 · **46 / 52** on the pre-existing entries | 598 / 750 | 332 |
+| tonight, branch `47bc3d3c` (clean) | **51 / 55** · 48 / 52 on the pre-existing entries | **608 / 750** | 335 |
+
+Not measurements: a first pass at 20:50 shared the M4's brain with a
+model-fitness review lane (`review_real_commits.py`, 8-minute generations);
+every Hallie `/api/chat` timed out at 6 s / 21 s ("I'm having trouble reaching
+my language helper"), 5 strict turns failed that way and the advisory lane
+finished 249 of 750. **Hallie replays and model reviews must not share the M4
+brain.**
+
+**Why the 09-23…25 nightlies read 16–23 strict:** the replay found no tree
+("I don't have an imported family tree") — the 09-24 codec bump and the
+recovery-floor bug fixed on main in 6160e837. Tonight's main binary loads it.
+
+### Fixed tonight (red test first, then the fix; ricksm5, Debug, suite-filtered)
+
+| # | live / replay | cause | fix | pinned by |
+|---|---------------|-------|-----|-----------|
+| 1 | "Christmas videos from 2006" (live 09-22, 09-24, **09-25 20:33**) → "There are 864 catalog items from 2006" | translator returned `year=2006`, Christmas dropped | `HallieDroppedTopicWord`: a curated `ArchivistKeywordAliases` word the question says and no AST term covers is put back; basis names it (`HallieTurnExecutor+Presence.swift` `restoreDroppedTopicWords`) | `HallieDroppedTopicWordTests`; strict-053 |
+| 2 | "tell me about thankful pratt and her husband" after a Timmy answer (live 09-23) → "thankful pratt or timmy?" | `HalliePronounContinuity.rewrite` bound "her" to the last answer's person | a known person named earlier in the sentence is the antecedent; the pronoun is bound to that name | `HalliePronounInSentenceAntecedentTests`; strict-054/055 |
+| 3 | "tell me about ellen" (live 09-21, still so on main) → "Which ellen do you mean: Ellen Ronan, Ellen Ronan?" | CyberBrain matched one WORD of two Ellen Ronan records and pre-empted the People tab's exact "Ellen" (his sister) | a token-only CyberBrain match yields to an exact People-tab claim (`HallieTurnExecutor.swift` `executeCyberBrainBiography`) | `HallieCyberBrainTokenMatchVsPeopleTabTests` |
+| 4 | strict-009 "…my materanl lines back to europe" (green 09-18/21) → catalog search | typo front door rewrote "lines" → "line's" (Line is a tree name), hiding the line noun from the materanl repair | a real English word is never a possessive of a tree-only name (`HallieTypoNormalizer.possessive`) | `HallieTypoPossessiveRealWordTests` |
+| 5 | "how old was dad in 1985" ×13 (var-age) → "give me a year" | translator dropped the year (`reference=currentSelection`) | the one stated four-digit year becomes the reference; basis says so (`ArchivistTemporalExecutor.statedYear`) | `HallieDadBreenAgeAtDeathTests` (+2) |
+| 6 | "find donna down the cape in the 90s" ×5 live asks → "no videos tagged with Donna and cape" | translator put `cape` in the people slot; the tree's Cape family kept it a person | a curated place/occasion word in the people slot is searched as a word unless inner circle (`demoteTopicPeople`) | `HallieDroppedTopicWordTests` |
+| 7 | "Christmas videos from 2006" as `shape=temporal` (live 09-24, branch replay) → "I need a dated video" | translator read a media ask as an age question | a fresh temporal turn with a media noun and no age word runs its presence search (`mediaAskMisreadAsAge`) | `HallieDroppedTopicWordTests` |
+
+Manifest: strict-052 `expect` biography → graceful_decline (its honest decline
+graded as a defect every night since 09-23; the note already said outcome
+unconstrained). Suites: 2,333 Swift Testing tests in 276 suites (every
+Hallie*/Archivist*/PeopleTab*/CyberBrain*/Person* suite) + 7 XCTest, green, 1
+known issue (#567); pytest 75 passed.
+
+Cape asks 8 → 14 of 16 clean; var-age 42 → 50 of 72.
+
+### Still open
+
+- **strict-036** "show me", **strict-042** "why do you ask me for a photo of Thankful Pratt…", **strict-044** "Beth Breen Beth McAuliffe" — red since the 09-18 baseline.
+- **strict-048** "tell me about John Robert Latta": the MODEL-composed answer drops Rick's Fort Wagner note (the template kept it on 09-25 03:04). The composition verifier does not require every planned claim to survive phrasing.
+- **"Ellen Ronan"** — two CyberBrain records for Rick's great-grandmother (`person.ellen-ronan.i342486919798`, pointer `@I342486919798@` not in the current tree, and `person.ellen-ronan.i10`); the which-one shows two identical names and a raw id. Data, needs Rick's ruling on merging them.
+- **"Did you mean Richard or Richard?"** (strict-026, graded clean) — two same-name candidates, no qualifier.
+- A People profile marked notInFamilyTree is still bound to a lone tree namesake by given name (seen in a fixture: "Ellen Ronan (Ellen in the People tab)").
+- lv260925-008 in the advisory run: the bound "thankful pratt's husband" was read as a name; strict-055 (same words) answered "Nathaniel Caleb Parker". Translator variance.
+- The advisory drift on 09-18's 399 (343 → 335) tracks the ollama 0.34.0 → 0.34.4 update; social/identity turns becoming catalog searches ("who made you" → 10,506 items) are the largest remaining group.
