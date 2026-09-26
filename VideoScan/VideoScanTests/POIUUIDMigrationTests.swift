@@ -284,7 +284,10 @@ struct POIUUIDMigrationTests {
               + "total \(String(format: "%.3f", report.elapsedSeconds)) s")
         #expect(report.mapping.count == 100)
         #expect(report.complete)
-        #expect(report.renameSeconds < 1.0, "rename phase took \(report.renameSeconds) s")
+        // ×3 only on a GitHub-hosted runner (1.104 s there, run 36202513830);
+        // locally still under one second.
+        #expect(report.renameSeconds < PerformanceLane.debugCeiling(seconds: 1.0),
+                "rename phase took \(report.renameSeconds) s")
         #expect(report.elapsedSeconds < 30, "whole migration took \(report.elapsedSeconds) s")
         for id in ids.prefix(5) + ids.suffix(5) {
             let moved = root.folder(POIStorage.folderName(for: id))
@@ -602,6 +605,71 @@ struct POIUUIDMigrationTests {
 
 extension POIUUIDMigrationTests {
 
+    /// Fault injection that blocks creating entries INSIDE `folder` but NOT
+    /// renaming the folder itself, on every macOS we run on: an extended
+    /// ACL denying `add_file` to the current user.
+    ///
+    /// Not `chmod 0555` (CI run 36202513830): macOS 15's kernel refuses to
+    /// rename a directory that lacks write permission on ITSELF (EACCES —
+    /// the ".." update needs `add_subdirectory` on the moved directory),
+    /// while macOS 26/27 allow a same-parent rename. So on the macos-15
+    /// runner a 0555 folder was never moved at all, and these tests failed
+    /// for a reason that had nothing to do with link rebasing. Probed on
+    /// macOS 15.8 and 27.0: `deny add_file` blocks symlink creation (EACCES)
+    /// and leaves the directory rename alone on both.
+    private func denyAddingEntries(in folder: URL) throws {
+        try Self.chmod(["+a", "user:\(NSUserName()) deny add_file", folder.path])
+    }
+
+    /// Remove every extended ACL entry from `folder` (the repair).
+    private func allowAddingEntries(in folder: URL) throws {
+        try Self.chmod(["-N", folder.path])
+    }
+
+    private static func chmod(_ arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        process.arguments = arguments
+        let stderr = Pipe()
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        // A plain thrown error, not #require: cleanup calls this under
+        // `try?` for a path that may have moved, and #require would record
+        // an issue even when the caller discards the error.
+        guard process.terminationStatus == 0 else {
+            let message = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            throw CocoaError(.fileWriteUnknown, userInfo: [
+                NSLocalizedDescriptionKey: "chmod \(arguments.joined(separator: " ")) failed: \(message)",
+            ])
+        }
+    }
+
+    /// Sensor on the fault injection's premise, on whatever macOS runs it:
+    /// entries cannot be added, the folder itself can still be renamed.
+    /// If a future macOS changes either half, this goes red instead of the
+    /// two tests below failing for a misleading reason (as 0555 did on
+    /// macOS 15).
+    @Test func faultInjectionBlocksNewEntriesButNotTheFolderRename() throws {
+        let root = try makeRoot()
+        defer { root.cleanup() }
+        let fm = FileManager.default
+        let folder = root.folder("probe")
+        let renamed = root.folder("probe-renamed")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try denyAddingEntries(in: folder)
+        defer {
+            try? allowAddingEntries(in: folder)
+            try? allowAddingEntries(in: renamed)
+        }
+        #expect(throws: (any Error).self, "adding an entry must be refused") {
+            try fm.createSymbolicLink(atPath: folder.appendingPathComponent("link").path,
+                                      withDestinationPath: "/nonexistent")
+        }
+        let rc = renamex_np(folder.path, renamed.path, UInt32(RENAME_EXCL))
+        #expect(rc == 0, "renaming the folder itself must still work: \(String(cString: strerror(errno)))")
+    }
+
     /// A legacy folder with one photo and one internal ABSOLUTE link to it.
     private func legacyWithLink(_ root: Root, uuid: UUID) throws -> (folder: URL, bytes: Data, legacyTarget: String) {
         let dad = try writeLegacy(root, folder: "dad", name: "Dad", uuid: uuid, photos: 1)
@@ -618,7 +686,8 @@ extension POIUUIDMigrationTests {
     /// remove-then-create), the error propagates so the folder is NOT
     /// recorded in `linksRebased`, the run is marked incomplete, and the
     /// next run finishes the job. The failure is injected for real: the
-    /// folder is read-only, so nothing in it can be created or removed.
+    /// folder denies adding entries (see `denyAddingEntries`), so no
+    /// replacement link can be created in it — but the folder can move.
     @Test func failedLinkRebaseKeepsTheOriginalLinkAndIsRetriedOnTheNextRun() throws {
         let root = try makeRoot()
         defer { root.cleanup() }
@@ -626,10 +695,10 @@ extension POIUUIDMigrationTests {
         let id = UUID()
         let legacy = try legacyWithLink(root, uuid: id)
         let moved = root.folder(POIStorage.folderName(for: id))
-        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: legacy.folder.path)
+        try denyAddingEntries(in: legacy.folder)
         defer {
-            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: moved.path)
-            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: legacy.folder.path)
+            try? allowAddingEntries(in: moved)
+            try? allowAddingEntries(in: legacy.folder)
         }
 
         guard case .ran(let report) = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) else {
@@ -645,7 +714,7 @@ extension POIUUIDMigrationTests {
         #expect(!entries.contains { $0.contains(".rebase") }, "no half-made replacement left beside it: \(entries)")
 
         // Repair the cause; the next run finishes the rebase and only then records it.
-        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: moved.path)
+        try allowAddingEntries(in: moved)
         guard case .ran(let rerun) = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) else {
             Issue.record("rerun should finish the rebase"); return
         }
@@ -698,10 +767,10 @@ extension POIUUIDMigrationTests {
         let moved = root.folder(POIStorage.folderName(for: id))
         let audit = root.url.appendingPathComponent(POIStorage.uuidMigrationFileName)
 
-        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: moved.path)
+        try denyAddingEntries(in: moved)
         defer {
-            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: moved.path)
-            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: legacy.folder.path)
+            try? allowAddingEntries(in: moved)
+            try? allowAddingEntries(in: legacy.folder)
         }
         #expect(try POIStorage.rollbackUUIDMigration(root: root.url) == 1, "the folder was renamed back")
         #expect(fm.fileExists(atPath: legacy.folder.path))
@@ -710,7 +779,7 @@ extension POIUUIDMigrationTests {
         #expect(try fm.destinationOfSymbolicLink(atPath: legacy.folder.appendingPathComponent("cover.jpg").path)
                 == moved.appendingPathComponent("original.jpg").path, "still names the uuid path")
 
-        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: legacy.folder.path)
+        try allowAddingEntries(in: legacy.folder)
         #expect(try POIStorage.rollbackUUIDMigration(root: root.url) == 0, "nothing left to rename")
         #expect(!fm.fileExists(atPath: audit.path), "audit moved aside once everything is back")
         #expect(try Data(contentsOf: legacy.folder.appendingPathComponent("cover.jpg")) == legacy.bytes, "dereferences again")
