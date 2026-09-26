@@ -120,6 +120,7 @@ extension ArchiveAngelJob {
         var seenFamilies: Set<String> = []
         var pastBand = false
         var extraLooks = 0
+        var freshSkips = 0                      // rules v13: rows the fresh arm skipped on their evidence year alone
         let prepare = policy.recommend.prepareClasses
         let ranked = store.rankedPrepareIDs(prepare)
         rejected[.notRecommendedNow, default: 0] += ranked.skipped
@@ -142,7 +143,8 @@ extension ArchiveAngelJob {
                 // arm wants anything more: stop; read = false: skip).
                 guard let want = Self.pastBandWants(evidence, tier: rowTier, arrivalScore: arrivalScore,
                                                     freshCollected: freshCollected, freshWanted: freshWanted,
-                                                    extraLooks: &extraLooks, weights: weights, arm: &arm) else {
+                                                    extraLooks: &extraLooks, freshSkips: &freshSkips,
+                                                    weights: weights, arm: &arm) else {
                     stoppedEarly = true
                     break
                 }
@@ -248,16 +250,22 @@ extension ArchiveAngelJob {
     }
 
     /// Past the band, one row, both arms: nil when neither arm wants any
-    /// more rows (the loop stops; rows remain unread), false when this row
-    /// is not read, true when it is. The fresh arm spends one look per row
-    /// until it has its share or its budget is gone; the coverage arm
-    /// answers for itself. Pure but for the two counters.
+    /// more rows (the loop stops; rows remain unread), read = false when
+    /// this row is not read. The fresh arm spends one LOOK per row it
+    /// considers, until it has its share or `freshScanBudget` looks are
+    /// gone — but (codex re-review R1) a row it rejects on the evidence
+    /// year alone costs no look, only a SKIP (bounded by
+    /// `coverageLookBudget`, like the coverage arm's): a year at its share
+    /// is no evidence about the rows below it, so 200 held rows must not
+    /// stand in for a search. The coverage arm answers for itself. Pure
+    /// but for the counters.
     static func pastBandWants(_ evidence: ArchiveAngelEvidenceRecord, tier: Int, arrivalScore: Int,
-                              freshCollected: Int, freshWanted: Int, extraLooks: inout Int,
+                              freshCollected: Int, freshWanted: Int, extraLooks: inout Int, freshSkips: inout Int,
                               weights: ArchiveAngelWeights, arm: inout CoverageArm) -> (read: Bool, forCoverage: Bool)? {
-        let freshDone = freshCollected >= freshWanted || extraLooks >= freshScanBudget
-        if !freshDone { extraLooks += 1 }
-        let freshWants = !freshDone && freshArmWants(evidence, arrivalScore: arrivalScore, weights: weights, arm: arm)
+        let freshDone = freshCollected >= freshWanted || extraLooks >= freshScanBudget || freshSkips >= coverageLookBudget
+        let yearBlocked = arm.active && !arm.hasRoom(evidenceYear: evidence.year)
+        if !freshDone { if yearBlocked { freshSkips += 1 } else { extraLooks += 1 } }
+        let freshWants = !freshDone && !yearBlocked && freshArmWants(evidence, arrivalScore: arrivalScore, weights: weights, arm: arm)
         let coverageWants = arm.active && arm.wants(tier: tier, score: arrivalScore, evidenceYear: evidence.year)
         if freshDone && (!arm.active || arm.done) { return nil }
         return (freshWants || coverageWants, coverageWants)
@@ -318,14 +326,17 @@ extension ArchiveAngelJob {
                      tier: tier, projections: group.projections)
     }
 
-    /// codex F1, belt to the braces in `CoverageArm.noteCollected`: the
-    /// fresh arm stopped because it believed it had `freshWanted`
-    /// survivors, yet the batch holds fewer fresh files — a same-band row
-    /// outranked one after it was counted — and rows remain unread. True =
-    /// decline; the walk decides. Never fires with coverage off (rules v12).
+    /// codex F1 / re-review R1: the loop stopped with rows UNREAD and the
+    /// batch holds fewer fresh files than the share asks for — whether the
+    /// fresh arm believed it had its share (a same-band row outranked a
+    /// counted survivor) or ran out of looks on rows the coverage rules
+    /// hold (a spent budget is no proof that no fresh survivor exists).
+    /// True = decline; the walk, which reads everything, decides. When the
+    /// loop read to the end nothing is unresolved, and the cache stands
+    /// with what it has. Never fires with coverage off (rules v12).
     static func freshShareShort(_ picks: [ArchiveAngelPick], coverage: AngelCoverageRules, stoppedEarly: Bool,
                                 freshCollected: Int, freshWanted: Int) -> Bool {
-        guard coverage.isActive, stoppedEarly, freshCollected >= freshWanted else { return false }
+        guard coverage.isActive, stoppedEarly else { return false }
         return picks.filter { $0.candidate.isFreshToPerson }.count < freshWanted
     }
 

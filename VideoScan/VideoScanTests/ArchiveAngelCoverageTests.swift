@@ -677,6 +677,84 @@ struct ArchiveAngelCoverageCutoffTests {
         }
     }
 
+    /// codex re-review R1: A-old-1994 (1000) · B-old-1994 (999) ·
+    /// C-old-2010 (998) · then MORE than `freshScanBudget` fresh rows the
+    /// coverage rules hold — `held` of them, scores 997 down — · then
+    /// D-fresh-2020 (796). `heldYears`: the held rows' years (1994 only, or
+    /// 1994 and 2010 — both at their share after A and C); `sameDay` puts
+    /// them all on A's DAY instead, with B left out and the cap at 2 so
+    /// 1994 still has room (the DAY rule holds them: they must be
+    /// projected to know, so they spend real looks). ids from `seed`.
+    private func r1Fixture(seed: UInt64, held: Int, heldYears: [Int], sameDay: Bool, now: Date)
+    -> (ArchiveAngelEvidenceStore, [ArchiveAngelCandidate], [UUID: ArchiveAngelCandidate]) {
+        var rng = SplitMix(seed: seed)
+        var records: [UUID: ArchiveAngelEvidenceRecord] = [:]
+        var live: [UUID: ArchiveAngelCandidate] = [:]
+        var all: [ArchiveAngelCandidate] = []
+        func add(_ name: String, year: Int, month: Int, day: Int, score: Int, proposed: Int) {
+            var c = video(name, year: year, month: month, day: day, minutes: 20)
+            c.id = rng.uuid()
+            var attention = ArchiveAngelAttention.none
+            for i in 0..<proposed { attention.note(.angelProposed, at: now.addingTimeInterval(-86_400 * Double(i + 1))) }
+            c.attention = attention
+            var r = ArchiveAngelEvidenceRecord(score: score, lines: [.init(points: score, line: "why \(score)")], rejection: nil,
+                                               useCount: 0, lastUsed: nil, computedAt: now, timesProposed: proposed)
+            r.recommendation = .ready
+            r.year = year
+            records[c.id] = r
+            live[c.id] = c
+            all.append(c)
+        }
+        add("A-old-1994.mov", year: 1994, month: 6, day: 1, score: 1000, proposed: 1)
+        if !sameDay { add("B-old-1994.mov", year: 1994, month: 7, day: 1, score: 999, proposed: 1) }
+        add("C-old-2010.mov", year: 2010, month: 6, day: 1, score: 998, proposed: 1)
+        for i in 0..<held {
+            let year = heldYears[i % heldYears.count]
+            add("held-\(i).mov", year: sameDay ? 1994 : year, month: sameDay ? 6 : 1 + i % 12, day: sameDay ? 1 : 1 + i % 28,
+                score: 997 - i, proposed: 0)
+        }
+        add("D-fresh-2020.mov", year: 2020, month: 6, day: 1, score: 796, proposed: 0)
+        return (evidenceStore(records, now: now), all, live)
+    }
+
+    @Test("codex R1: a fresh-search budget spent on coverage-held rows never accepts an old-only batch — 250 held fresh rows between C and D (one capped year / two capped years / all on A's day), shares 0.5 and 0.3, 16 draws: the cache is A/D or nil, never A/C, and a decline costs bounded work")
+    func freshBudgetSpentOnHeldRowsNeverAcceptsAnOldBatch() {
+        let now = testNow
+        let held = ArchiveAngelJob.freshScanBudget + 50
+        let cases: [(years: [Int], sameDay: Bool, share: Double)] = [([1994], false, 0.5), ([1994, 2010], false, 0.5),
+                                                                       ([1994], true, 0.5), ([1994], false, 0.3)]
+        for c in cases {
+            var p = AngelRecommendationPolicy.builtIn
+            p.coverage.maxPerYearPerBatch = c.sameDay ? 2 : 1
+            p.weights.freshShare = c.share
+            var picked = 0, declined = 0
+            for seed in UInt64(1)...16 {
+                let (store, all, live) = r1Fixture(seed: seed * 40_503, held: held, heldYears: c.years, sameDay: c.sameDay, now: now)
+                var projected = 0
+                let cached = ArchiveAngelJob.selectFromEvidence(store: store, count: 2, now: now, policy: p) { id in
+                    projected += 1
+                    return live[id]
+                }
+                let expected = storedWalk(all, store: store, count: 2, policy: p, now: now)
+                let label = "\(c) seed \(seed)"
+                #expect(expected.map(\.candidate.filename) == ["A-old-1994.mov", "D-fresh-2020.mov"], "\(label)")
+                #expect(projected <= 3 + ArchiveAngelJob.freshScanBudget + 2, "\(label): bounded work (\(projected))")
+                if let cached {
+                    picked += 1
+                    #expect(cached.selection.picks.map(\.candidate.id) == expected.map(\.candidate.id),
+                            "\(label): cache \(cached.selection.picks.map(\.candidate.filename)) vs walk A/D")
+                } else {
+                    declined += 1
+                }
+            }
+            if c.sameDay {
+                #expect(declined == 16, "\(c): held on the DAY (1994 has room under cap 2), the rows must be read to know — the budget goes, the cache declines")
+            } else {
+                #expect(picked == 16, "\(c): held on the YEAR, the rows are skipped by the evidence year and D is reached")
+            }
+        }
+    }
+
     /// codex F4: two singleton 1994 rows at 200 (the band; the cap leaves
     /// one covered slot), then `groups` copy groups of `members` each in
     /// ONE arrival band at 100, years cycling over four other years; ids
