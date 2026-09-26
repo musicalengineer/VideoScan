@@ -289,6 +289,7 @@ struct FamilyTreeView: View {
         if case .ready(let diff) = refresh.phase {
             PersonRefreshReviewSheet(
                 coordinator: refresh, diff: diff,
+                previousRefresh: refreshCenter.summary(for: refresh.target.familySearchID),
                 onApplied: {
                     refreshReview = nil
                     refreshCenter.noteApplied()
@@ -1113,7 +1114,8 @@ struct FamilyTreeView: View {
                 hasFamilySearchRefresh: refreshCenter.hasRefresh(for: card.person.familySearchID),
                 onUndoFamilySearchRefresh: {
                     if let target = model.personRefreshTarget(for: card.person.id) { undoPersonRefresh(target) }
-                }
+                },
+                familySearchRefreshSummary: refreshCenter.summary(for: card.person.familySearchID)
             )
     }
 
@@ -1300,6 +1302,11 @@ struct FamilyTreeView: View {
                             if let fsID = model.selectedFamilySearchID {
                                 copyableID("FS", fsID)
                             }
+                        }
+                        // GH #198: when the facts above came from a
+                        // FamilySearch refresh, say so, with the diffs.
+                        if let summary = refreshCenter.summary(for: model.selectedFamilySearchID) {
+                            PersonRefreshSummaryView(summary: summary)
                         }
                         if let adjustError {
                             Text(adjustError)

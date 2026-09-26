@@ -556,6 +556,12 @@ struct VideoScanApp: App {
                         // Hallie on the home network (iPad / MBP) — starts
                         // only if enabled in Hallie's settings.
                         HallieWebAccess.shared.attach(model: catalogModel)
+                        // Refresh from FamilySearch lines reach the in-app
+                        // console + catalog.log through the model's log
+                        // (GH #198); videoscan.log is wired in the sink.
+                        PersonRefreshCenter.shared.console = { [weak catalogModel] line in
+                            catalogModel?.log(line)
+                        }
                         // Quit path drains in-flight VLM inference —
                         // see AppDelegate.applicationShouldTerminate.
                         appDelegate.captionOrchestrator = captionOrchestrator
