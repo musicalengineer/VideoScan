@@ -57,6 +57,12 @@ final class NotificationObserverBag: @unchecked Sendable {
         return registrations.count
     }
 
+    var isEmpty: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return registrations.isEmpty
+    }
+
     /// Unregister everything now. Idempotent; the bag stays usable.
     func removeAll() {
         lock.lock()

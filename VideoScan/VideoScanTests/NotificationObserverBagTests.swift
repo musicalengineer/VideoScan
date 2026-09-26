@@ -53,7 +53,7 @@ struct NotificationObserverBagTests {
         let bag = makeBag(on: center, count: 2, hits: hits)
         bag.removeAll()
         bag.removeAll()
-        #expect(bag.count == 0)
+        #expect(bag.isEmpty)
         center.post(name: Self.ping, object: nil)
         #expect(hits.value == 0)
 
