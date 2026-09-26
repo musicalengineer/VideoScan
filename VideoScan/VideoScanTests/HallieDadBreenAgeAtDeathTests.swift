@@ -316,6 +316,29 @@ struct HallieDadBreenAgeAtDeathTests {
         #expect(r.prose.contains("65"), Comment(rawValue: r.prose))
     }
 
+    /// Replay 2026-09-25 (ollama 0.34.4): "how old was dad in 1985" came back
+    /// with reference=currentSelection — the year dropped — and Hallie asked
+    /// for "a dated video … or give me a year". The year the question states
+    /// is the reference (var-age-024…036, 13 advisory rows).
+    @Test func aYearTheQuestionSaidButTheTranslatorDroppedIsRestored() async throws {
+        let r = try await temporal("how old was dad breen in 1994?", subject: "dad breen")
+        #expect(r.outcome == .answered, Comment(rawValue: r.prose))
+        #expect(r.prose.contains("64") && r.prose.contains("65"), Comment(rawValue: r.prose))
+        #expect(r.basisLine.contains("1994"), Comment(rawValue: r.basisLine))
+    }
+
+    /// Two years, a video pointer, or no year: nothing is guessed.
+    @Test func onlyOneStatedYearWithNoVideoPointerIsRestored() {
+        typealias T = ArchivistTemporalExecutor
+        #expect(T.statedYear(in: "how old was dad in 1985") == 1985)
+        #expect(T.statedYear(in: "how old was Ma in '85") == nil)
+        #expect(T.statedYear(in: "how old was dad between 1985 and 1990") == nil)
+        #expect(T.statedYear(in: "how old was dad in this 1985 video") == nil)
+        #expect(T.statedYear(in: "how old was dad in this") == nil)
+        #expect(T.statedYear(in: "how old is dad") == nil)
+        #expect(T.statedYear(in: "how old was dad in 1985 and 1985") == 1985)
+    }
+
     // MARK: - "would be today"
 
     @Test func howOldWouldDadBreenBeTodayCountsToTodayAndSaysHePassed() async throws {
