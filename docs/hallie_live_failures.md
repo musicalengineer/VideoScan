@@ -747,3 +747,128 @@ pytest `test_hallie_question_testbed.py` + `test_hallie_harvest_queries.py`
 (+ `test_hallie_eval.py`) 66 passed, 17 subtests. Harvest: `lv260926-001`
 by `hallie_harvest_queries.py --since 2026-09-26 --append`; `002…004` by hand
 (the harvester skips a mid-sentence "not", a bare "sure" and "sure, but …").
+
+## 2026-09-26 — "find the earliest birth year for richard's tree" → Gruffudd ap Einion b. 780 (Donna's line), and the corrections drew biographies
+
+Rick, 16:46–16:49 ET (session `E1832598`, app; the transcript's `Z` stamps are
+UTC). Rick's words: *"Example query that worked well: 'Find earliest birth
+year in...' but I noticed it did not go to me, so I added 'for Rick' and got
+that same answer, this person is not an ancestor of Rick."* Corpus
+`lv260926-006…012`; strict `strict-060…064`; branch
+`fix/hallie-superlative-scope`.
+
+| # | id | asked | what came back | status |
+|---|----|-------|----------------|--------|
+| 1 | `lv260926-006` | "who is the earliest ancestor in my family tree" | the model's tree SUMMARY ("39249 people, birth years from 780 to 1959 … tell me whose tree you want") | open, follow-up candidate (see below) |
+| 2 | `lv260926-007` | "find the person in the family tree with the earliest birth date" | *"The earliest birth year in the family tree is born 780: Gruffudd ap Einion …"* — `superlative: earliestBorn scope=wholeTree` | fine — **sensor**, must not change |
+| 3 | `lv260926-008` | "… with the earliest birth date **who is a direct ancestor to rick**" | the SAME answer, `scope=wholeTree` | **FIXED** (A) |
+| 4 | `lv260926-011` | "that person b. 780 is donna's ancestor, not mine. I want mine" | Rick's own biography (`operation=familyTree person=Rick Breen`) | **FIXED** (B) |
+| 5 | `lv260926-009` | "find the earliest birth year **for richard's tree**" | the SAME answer, `scope=wholeTree` | **FIXED** (A) |
+| 6 | `lv260926-012` | "that is donna's line" | Donna's biography (`operation=familyTree person=donna`) | **FIXED** (B) |
+
+**Failure class.** The 9/07 shape yet again — a true, cited answer to a
+different question, twice — and then the corrections were answered as if
+they were new questions. Row 6 is the sharpest: Rick told Hallie whose line
+the answer was from, and she described that person.
+
+### A. The scope reader knew "of X's ancestors" and nothing else
+
+`HallieLineageQuestion.superlativeKindAndScope` (the scope block, formerly
+`HallieLineageQuestion.swift:1100–1116`) accepted exactly two person forms:
+`of|among|in|from X's ancestors|ancestry|forebears|line|lineage|pedigree` and
+`ancestor(s) of X` at the end of the sentence. Not "for", not "tree" /
+"family tree" / "side", not "ancestor **to** rick", not a relative clause,
+not a trailing "for rick". Every scoped ask fell to `.wholeTree`, the log
+said so (`scope=wholeTree`), and the whole-tree winner is on Donna's side.
+
+**Fix.** `HallieLineageQuestion.personScope(in:)` — one reader, first match
+wins: (1) a trailing relative clause "who|that is a (direct) ancestor|
+descendant of|to X"; (2) a trailing "for X" / "for X's tree" (never "for
+example"); (3) a possessive after a preposition, `of|among|in|from|for|on|
+within|across X's ancestors|line|side|tree|family tree|family|descendants…`
+— "my/our family tree" stays the WHOLE tree, as pinned 2026-08-26;
+(4) "ancestor(s)|descendant(s) of|to X" at the end. A name is a run of name
+TOKENS, never a grammar word, so "born in ireland among rick's ancestors" is
+read from "among" (the first cut of this read "ireland among rick" as the
+name, and the birthplace kind read "Ireland Among Rick's Ancestors" as a
+place — both caught RED by the new suite). The reader also returns its
+RANGE so the birthplace kind stops its place capture where the scope starts.
+`SuperlativeScope` gains `.descendantsOf(String?)` ("X's descendants") and
+`.otherSideOf(String?)` (only ever produced by a correction, see B).
+
+The answer (`HallieLineageAnswer+Superlatives`) walks the person's ancestors
+with the biography's own enumeration (`GedcomFamilyGraph.ancestorLine`,
+de-duplicated by the walk's `seen` bitmap — the same count the family-tree
+card reports as "N recorded ancestors across G generations") or descendants
+(`descendants(of:depth:)`), and SAYS what it ranked: *"The earliest birth
+year among Richard Harding Breen Jr’s 6 recorded ancestors is born 1860:
+Patrick Breen …"*; basis *"Ranked 6 of Richard Harding Breen Jr’s 6 recorded
+ancestors across 3 generations that record the fact."* The whole-tree and
+surname wording is byte-identical to before (sensor C:
+`theUnscopedSuperlativeStillRanksTheWholeTreeWordForWord` pins prose, basis,
+query description and chips on the fixture; strict-060 pins it on the real
+tree). "richard" resolves the way every lineage shape resolves a name — the
+owner's FamilySearch pin settled it in the fixture and the People-tab bridge
+did live ("Richard Harding Breen Jr (Richard in the People tab)"); a genuine
+tie asks which one, as elsewhere.
+
+### B. Nothing remembered the ranking, so the correction became a question
+
+"that is donna's line" reached the translator, which read it as a family-tree
+card for Donna; "not mine. I want mine" became Rick's card. `HallieRepairTurn`
+did not fire either — neither sentence carries a complaint cue.
+
+**Fix.** Three small parts, in the `kinBindings` style of the morning's fix:
+- `Result.superlative` — a typed payload (kind + the scope as RUN) set only
+  by `HallieLineageAnswer.superlative`, on answers, declines and which-ones
+  alike; carried by every copy helper (`HallieResultCopyRoundTripTests`
+  walks them). Typed, never parsed back out of prose or the query
+  description (codex #1352's ruling for `retryOffer`).
+- `ConversationMemory.lastSuperlative` — taken from that payload; replaced by
+  the next ranking, cleared by any other lane answer (a correction two
+  questions later is not misread), kept across follow-ups / help / small
+  talk; reset clears it.
+- `HallieSuperlativeCorrection.scope(in:)` (pure) — "I want mine" / "not
+  mine" / "that's not my side" / "I meant rick" / "no, I meant for rick" /
+  "for rick" / "what about donna's side" / "donna's side" → that person's
+  ancestors; "that is donna's line" / "those are donna's ancestors" → the
+  OTHER side (`.otherSideOf`: the owner's ancestors when X is not the owner,
+  the spouse's when X is — "that is my line"). Runs in `preTranslationSingle`
+  BEFORE the repair turn, only while a ranking is remembered, and abstains on
+  anything `HallieLineageQuestion.detect` claims, so a fresh "who is the
+  oldest person on donna's side" is its own ranking, never a correction.
+  The corrected answer carries the payload too, so a second correction
+  works ("that is rick's line" → Donna's).
+
+### Not fixed here, reported
+
+- **Row 1, "who is the earliest ancestor in my family tree".** No born/birth
+  word, so the superlative reader stays silent and the translator's tree
+  summary answers (true, cited, not the person). "earliest / first ancestor"
+  → earliest-born over the owner's ancestors is a one-regex addition to the
+  kind reader, but it is a second bug and this dispatch is one bug.
+- **Same gap, one road over:** `HallieTreeStatisticsQuestion.ancestorScope`
+  knows only "my/our ancestors" / "my line", so "how many of **rick's**
+  ancestors were born in ireland" counts the whole tree. That route's engine
+  scope is owner-only (`TreeStatistics.Scope.ancestors(of:)` resolves the
+  owner); naming a person there is a small feature, not this fix.
+- **Precedence, pre-existing:** "who was born first among my ancestors" is
+  claimed by the birthplace-trail shape, which runs before the superlatives;
+  "who is the oldest person among my ancestors" is a superlative. Left as is.
+- **A name with a grammar word in it** ("john of gaunt's ancestors") is cut
+  at the grammar word by the scope reader ("Gaunt"). Superlatives scoped to a
+  medieval name are rare; the resolver's which-one / not-found is the
+  fallback.
+
+**Runs (branch `fix/hallie-superlative-scope`, worktree, Debug, M4, suite-filtered).**
+Red first: `HallieSuperlativeScopeTests` 14 issues on the unfixed code with the
+live symptom reproduced through the fixture (the scoped asks and the
+corrections), then the two reader bugs above caught by the same suite. Green:
+every `Hallie*` / `Archivist*` / `People*` suite — **2,145 Swift Testing tests
+in 260 suites + 7 XCTest, 0 failures, 1 pre-existing known issue, 286 s**
+(`HallieSuperlativeScopeTests` 11, `HallieSuperlativeTests` 7 and
+`HallieResultCopyRoundTripTests` 2 among them); pytest
+`test_hallie_question_testbed.py` + `test_hallie_harvest_queries.py` +
+`test_hallie_eval.py` 66 passed, 17 subtests. Harvest: `lv260926-005…010` by
+`hallie_harvest_queries.py --since 2026-09-26 --append`; `011` and `012` by
+hand (a mid-sentence "not" and a bare statement), placed in conversation order.

@@ -105,6 +105,15 @@ extension HallieTurnExecutor {
         /// graph turn, whose subject is the tree's full name — never by a
         /// catalog answer, whose person can be a contested given name.
         private(set) var kinBindings: [String: String] = [:]
+        /// The ranking the last superlative answer RAN — kind and scope —
+        /// so "that is donna's line" / "I meant Rick" right after re-runs
+        /// the same kind over the corrected scope (live 2026-09-26: both
+        /// became biographies). Taken from the answer's own typed payload
+        /// (`Result.superlative`), never inferred from prose. Replaced by
+        /// the next superlative; cleared by any other lane answer, so a
+        /// correction two questions later is not misread; kept across
+        /// follow-ups, help and small talk; reset clears it.
+        private(set) var lastSuperlative: HallieLineageQuestion.SuperlativeAsk?
 
         /// Who a kin term ("dad", "my dad") means in THIS conversation, if
         /// a previous answer settled it; nil for a name or an unsettled
@@ -280,6 +289,9 @@ extension HallieTurnExecutor {
             switch result.route {
             case .presence, .cross, .event, .aggregate, .temporal, .graph, .telling, .record:
                 lastProvenance = HallieProvenanceFollowUp.Provenance(result: result)
+                // A ranking replaces the last one; any other lane answer
+                // ends the window for correcting its scope.
+                lastSuperlative = result.superlative
             default:
                 break
             }
@@ -1209,6 +1221,18 @@ extension HallieTurnExecutor {
         modeVerdict: LazyModeVerdict,
         isTreePersonID: ((String) -> Bool)? = nil
     ) -> PreTranslation {
+        // "that is donna's line" / "not mine, I want mine" / "I meant rick"
+        // right after a ranking (live 2026-09-26: both became biographies):
+        // the SAME superlative, re-run over the corrected scope. Only while
+        // a ranking is remembered, and never for a question in its own
+        // right (HallieSuperlativeCorrection abstains on one). Before the
+        // repair turn: a scope correction is more specific than "that's
+        // wrong", and neither of the live phrasings was caught there.
+        if let last = memory.lastSuperlative, let lineageAnswer,
+           let scope = HallieSuperlativeCorrection.scope(in: question),
+           let answer = lineageAnswer(.superlative(kind: last.kind, scope: scope, media: nil)) {
+            return .answer(answer)
+        }
         // A turn ABOUT the previous answer ("that's wrong", "you presented
         // me a list of people born hundreds of years ago") is repaired from
         // memory — never translated into a search (live miss #4, 2026-08-28).
@@ -2025,7 +2049,8 @@ extension HallieTurnExecutor.Result {
             refinableQuery: refinableQuery,
             retryOffer: retryOffer,
             mode: mode,
-            modeForce: modeForce)
+            modeForce: modeForce,
+            superlative: superlative)
     }
 
     func prefixingBasis(_ note: String) -> HallieTurnExecutor.Result {
@@ -2064,6 +2089,7 @@ extension HallieTurnExecutor.Result {
             refinableQuery: refinableQuery,
             retryOffer: retryOffer,
             mode: mode,
-            modeForce: modeForce)
+            modeForce: modeForce,
+            superlative: superlative)
     }
 }

@@ -105,6 +105,22 @@ enum HallieLineageQuestion: Equatable, Sendable {
         case surname(String)
         /// nil = the owner.
         case ancestorsOf(String?)
+        /// "X's descendants" / "the youngest descendant of X" (2026-09-26).
+        /// nil = the owner.
+        case descendantsOf(String?)
+        /// The OTHER side of the family from X's — produced only by a scope
+        /// correction after a ranking ("that is donna's line" → Rick's
+        /// ancestors; "that is my line" → the spouse's). nil = the owner.
+        /// The answer resolves it to `.ancestorsOf` before ranking.
+        case otherSideOf(String?)
+    }
+    /// The ranking an answer RAN — kind and scope — carried on the result
+    /// so the next turn can correct the scope ("that is donna's line",
+    /// live 2026-09-26) and re-run the same kind. A typed payload, never
+    /// parsed back out of the prose or the query description.
+    struct SuperlativeAsk: Equatable, Sendable {
+        let kind: SuperlativeKind
+        let scope: SuperlativeScope
     }
     case superlative(kind: SuperlativeKind, scope: SuperlativeScope, media: String? = nil)
     /// "how are Rick and Donna related" / "common ancestor of X and Y" /
@@ -1067,9 +1083,25 @@ enum HallieLineageQuestion: Equatable, Sendable {
         if text.firstMatch(of: /\b(?:oldest|eldest|youngest|first|last)\s+(?:born\s+)?(?:son|daughter|child|kid|brother|sister|sibling|grand\w+|boy|girl|cousin|uncle|aunt|nephew|niece|wife|husband|marriage)\b/) != nil {
             return nil
         }
+        // The PERSON scope — "for richard's tree", "… who is a direct
+        // ancestor to rick", "on donna's side", "among my descendants" —
+        // is read first, with its range, so the birthplace kind below can
+        // stop its place capture where the scope phrase starts ("born in
+        // ireland among rick's ancestors" is Ireland, not a place called
+        // "Ireland Among Rick's Ancestors"). Live 2026-09-26: both of
+        // Rick's scoped asks ranked the WHOLE tree because the reader
+        // knew only "of|among|in|from X's ancestors|line|…" and "ancestor
+        // of X" — not "for", not "tree", not "ancestor TO", not a trailing
+        // "for rick".
+        let personScope = personScope(in: text)
         let kind: SuperlativeKind
         if let m = text.firstMatch(of: /\b(?:first|earliest|oldest)\b.*\bborn\s+in\s+(?:the\s+)?([a-z][a-z .'-]+?)\s*$/) {
-            kind = .firstBornIn(place: capitalizedName(String(m.1).trimmingCharacters(in: .whitespaces)))
+            var place = m.1
+            if let personScope, place.startIndex < personScope.range.lowerBound,
+               place.endIndex > personScope.range.lowerBound {
+                place = text[place.startIndex..<personScope.range.lowerBound]
+            }
+            kind = .firstBornIn(place: capitalizedName(String(place).trimmingCharacters(in: .whitespaces)))
         } else if text.firstMatch(of: /\b(?:deepest|farthest|furthest|most distant|remotest)\b[a-z' ]*\bancestors?\b/) != nil
                     || text.firstMatch(of: /\bancestors?\b.*\b(?:farthest|furthest|deepest|most distant)\s+back\b/) != nil
                     || text.firstMatch(of: /\bhow far back\b.*\b(?:go|goes|reach|reaches)\b/) != nil {
@@ -1096,12 +1128,8 @@ enum HallieLineageQuestion: Equatable, Sendable {
 
         // Scope. Deepest-ancestor is always "of somebody" (default: owner).
         var scope: SuperlativeScope = .wholeTree
-        // "my/our family tree" is the whole tree, not an ancestor scope.
-        if let m = text.firstMatch(of: /\b(?:of|among|in|from)\s+(?:(my|our)|([a-z][a-z .'-]*?)'s?)\s+(?:ancestors|ancestry|forebears|line|lineage|pedigree)\b/) {
-            scope = .ancestorsOf(m.1 != nil ? nil : possessor(in: String(m.2 ?? "") + "'s"))
-            if case .ancestorsOf(nil) = scope, m.2 != nil { scope = .wholeTree }
-        } else if let m = text.firstMatch(of: /\bancestors?\s+of\s+(?:(me|mine|myself|ours|us)|([a-z][a-z .'-]*?))\s*$/) {
-            scope = .ancestorsOf(m.1 != nil ? nil : capitalizedName(String(m.2 ?? "")))
+        if let personScope {
+            scope = personScope.scope
         } else if let m = text.firstMatch(of: /\b(?:my|our)\s+(?:oldest|earliest|deepest|farthest|furthest|most distant|remotest)\s+ancestor/) {
             _ = m; scope = .ancestorsOf(nil)
         } else if let m = text.firstMatch(of: /\b(?:named|surnamed|called|with the (?:last name|surname|family name))\s+([a-z]+)\b/) {
@@ -1116,6 +1144,100 @@ enum HallieLineageQuestion: Equatable, Sendable {
         }
         if kind == .deepestAncestor, case .wholeTree = scope { scope = .ancestorsOf(nil) }
         return (kind, scope)
+    }
+
+    /// A superlative's PERSON scope and where in the sentence it sits.
+    /// Nil = no person scope (the whole tree, or a surname read later).
+    struct PersonScope: Equatable {
+        let scope: SuperlativeScope
+        let range: Range<String.Index>
+    }
+
+    /// The forms, first match wins:
+    ///   1. a trailing relative clause — "… who is a direct ancestor to
+    ///      rick", "… that are descendants of patrick breen";
+    ///   2. a trailing "for X" — "… for rick", "for richard's tree",
+    ///      "for me" (never "for example" / "for instance");
+    ///   3. a possessive after a preposition — "of|among|in|from|for|on
+    ///      X's ancestors|line|side|tree|family tree|descendants…";
+    ///      "my/our family tree" stays the WHOLE tree (pinned 2026-08-26),
+    ///      "my ancestors" / "my side" are the owner's;
+    ///   4. "ancestor(s)|descendant(s) of|to X" at the end.
+    /// X = "me" / "mine" / "us" is the owner (nil); a named X is the last
+    /// run of name tokens after any grammar word, so "in the tree on
+    /// donna's side" is Donna, never "The Tree On Donna".
+    static func personScope(in text: String) -> PersonScope? {
+        let ownerWords = /^(?:me|mine|myself|us|ours|ourselves|my\s+(?:own|side|line|family|tree|ancestors|people)|our\s+(?:side|line|family|tree|ancestors|people))$/
+        let descendantNoun = /^(?:descendants?|descendents?|offspring|posterity|issue|children'?s?\s+children)$/
+        let wholeTreeNoun = /^(?:family\s+tree|tree|family)$/
+        func who(_ raw: Substring?, owner: Substring?, down: Bool) -> SuperlativeScope? {
+            if let owner, owner.firstMatch(of: ownerWords) != nil { return down ? .descendantsOf(nil) : .ancestorsOf(nil) }
+            guard let raw, let name = scopeName(String(raw)) else { return nil }
+            return down ? .descendantsOf(name) : .ancestorsOf(name)
+        }
+        // 1. Trailing relative clause.
+        if let m = text.firstMatch(of: /\s+(?:who|that|which)\s+(?:is|was|are|were)\s+(?:an?\s+|the\s+)?(?:direct\s+|blood\s+|lineal\s+)?(ancestor|forebear|forefather|progenitor|descendant|descendent)s?\s+(?:of|to)\s+(?:(me|mine|myself|us|ours|ourselves)|([a-z][a-z .'-]*?))\s*$/) {
+            let down = String(m.1).hasPrefix("desc")
+            if let scope = who(m.3, owner: m.2, down: down) { return PersonScope(scope: scope, range: m.range) }
+        }
+        // 2. Trailing "for X".
+        if let m = text.firstMatch(of: /\s+for\s+(?:(me|mine|myself|us|ours|ourselves|my\s+(?:own|side|line|family|tree|ancestors|people)|our\s+(?:side|line|family|tree|ancestors|people))|([a-z][a-z .'-]*?))(?:'s?)?(?:\s+(family\s+tree|tree|line|side|ancestors|ancestry|family|lineage|pedigree|branch|descendants|descendents|offspring|posterity))?\s*$/) {
+            let down = m.3.map { $0.firstMatch(of: descendantNoun) != nil } ?? false
+            let named = m.2.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+            if !forStopWords.contains(named), let scope = who(m.2, owner: m.1, down: down) {
+                return PersonScope(scope: scope, range: m.range)
+            }
+        }
+        // 3. Possessive after a preposition.
+        // The name is a run of name TOKENS — never a grammar word — so
+        // "born in ireland among rick's ancestors" is read from "among",
+        // not from "in" with "ireland among rick" as the name.
+        if let m = text.firstMatch(of: /\b(?:of|among|in|from|for|on|within|across)\s+(?:(my|our)|((?:(?!(?:of|among|in|from|for|on|within|across|the|a|an|with|and|tree|family|person|people|who|that|which|is|was|are|were)\b)[a-z][a-z'.-]*)(?:\s+(?:(?!(?:of|among|in|from|for|on|within|across|the|a|an|with|and|tree|family|person|people|who|that|which|is|was|are|were)\b)[a-z][a-z'.-]*)){0,4}?)'s?)\s+(ancestors|ancestry|forebears|line|lineage|pedigree|side|branch|family\s+tree|tree|family|descendants|descendents|offspring|posterity|issue)\b/) {
+            let noun = m.3
+            let down = noun.firstMatch(of: descendantNoun) != nil
+            if m.1 != nil {
+                // "in our family tree" is the whole tree, as it always was.
+                if !down, noun.firstMatch(of: wholeTreeNoun) != nil { return PersonScope(scope: .wholeTree, range: m.range) }
+                return PersonScope(scope: down ? .descendantsOf(nil) : .ancestorsOf(nil), range: m.range)
+            }
+            // "the family's line" names nobody: the whole tree.
+            guard let name = scopeName(String(m.2 ?? "")) else { return PersonScope(scope: .wholeTree, range: m.range) }
+            return PersonScope(scope: down ? .descendantsOf(name) : .ancestorsOf(name), range: m.range)
+        }
+        // 4. "ancestor(s) of X" / "descendant of X" at the end.
+        if let m = text.firstMatch(of: /\b(ancestor|forebear|descendant|descendent)s?\s+(?:of|to)\s+(?:(me|mine|myself|ours|ourselves|us)|([a-z][a-z .'-]*?))\s*$/) {
+            let down = String(m.1).hasPrefix("desc")
+            if let scope = who(m.3, owner: m.2, down: down) { return PersonScope(scope: scope, range: m.range) }
+        }
+        return nil
+    }
+
+    /// "for example" / "for instance" / "for now" name nobody.
+    private static let forStopWords: Set<String> = [
+        "example", "instance", "now", "sure", "real", "fun", "reference", "starters", "comparison",
+        "context", "once", "good", "a while", "awhile", "that matter", "the record", "a start",
+        "a change", "a laugh", "ever", "certain", "one", "sure thing", "all i know", "all i care",
+    ]
+
+    /// The name in a scope capture: the last run of tokens after any
+    /// grammar or question word, capitalised; nil when nothing is left.
+    private static let scopeGrammar: Set<String> = [
+        "the", "a", "an", "in", "of", "on", "for", "among", "from", "within", "across", "to",
+        "tree", "family", "person", "people", "who", "that", "which", "is", "was", "are", "were",
+        "with", "and", "find", "show", "tell", "me", "about", "earliest", "oldest", "youngest",
+        "born", "birth", "year", "date", "first", "last", "latest", "longest", "most", "deepest",
+        "ancestor", "ancestors", "descendant", "descendants", "line", "side", "lineage",
+    ]
+
+    static func scopeName(_ raw: String) -> String? {
+        var tokens = raw.replacingOccurrences(of: "’", with: "'")
+            .replacing(/'s?$/, with: "")
+            .split(separator: " ").map(String.init)
+        if let cut = tokens.lastIndex(where: { scopeGrammar.contains($0) }) {
+            tokens = Array(tokens[(cut + 1)...])
+        }
+        guard !tokens.isEmpty, tokens.count <= 5 else { return nil }
+        return capitalizedName(tokens.joined(separator: " "))
     }
 
     /// Words that follow "oldest" without naming a surname.

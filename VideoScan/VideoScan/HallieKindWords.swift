@@ -569,7 +569,8 @@ extension HallieTurnExecutor.Result {
             refinableQuery: refinableQuery,
             retryOffer: retryOffer,
             mode: mode,
-            modeForce: modeForce)
+            modeForce: modeForce,
+            superlative: superlative)
     }
 }
 

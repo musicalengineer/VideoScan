@@ -218,7 +218,8 @@ extension HallieTurnExecutor {
                 refinableQuery: result.refinableQuery,
                 retryOffer: result.retryOffer,
                 mode: result.mode,
-                modeForce: result.modeForce)
+                modeForce: result.modeForce,
+                superlative: result.superlative)
         }
     }
 }
