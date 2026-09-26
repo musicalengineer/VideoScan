@@ -222,15 +222,10 @@ extension CatalogContent {
         .contextMenu(forSelectionType: UUID.self) { ids in
             rowContextMenu(ids: ids)
         } primaryAction: { ids in
-            // Double-click / Return on row(s) → smart open (QuickTime when
-            // the cataloged codecs guarantee picture+sound, else VLC).
-            let recs = ids.compactMap { id in records.first { $0.id == id } }
-            // "Looks moved" (Update Catalog, 2026-08-17): a file missing
-            // while its volume is mounted → non-blocking banner offering
-            // Update Catalog (once per volume per session). Never blocks
-            // the open of the files that ARE there.
-            for r in recs { model.noteMissingFileForUserAction(r) }
-            MediaOpener.open(recs)
+            // Double-click / Return on row(s) → the ONE open path (smart
+            // player choice + looks-moved check), shared with File ▸ Open
+            // ⌘O — see CatalogOpenCommand.swift.
+            openRows(ids: ids, gesture: "double-click")
         }
     }
 
@@ -247,6 +242,11 @@ extension CatalogContent {
             // never reached by a Command-key gesture.
             .focusedValue(\.catalogTrashSelection,
                           CatalogTrashSelection(count: selectedIDs.count, perform: trashSelectedRows))
+            // File ▸ Open ⌘O (2026-09-26): same focused-value shape, same
+            // reason — a Command key is a key equivalent the menu bar
+            // claims first. See CatalogOpenCommand.swift.
+            .focusedValue(\.catalogOpenSelection,
+                          CatalogOpenSelection(count: selectedIDs.count, perform: openSelectedRows))
             .onKeyPress(phases: .down) { press in
                 // CONTAINS, not ==. Exact equality meant any stray flag
                 // macOS happened to report alongside Command made this
@@ -1565,6 +1565,21 @@ extension CatalogContent {
             let result = await model.trashSelectedRecords(targets)
             reportDeleteResult(result, mode: .toTrash)
         }
+    }
+
+    /// ⌘O route (File ▸ Open): the highlighted rows, through `openRows`.
+    private func openSelectedRows() {
+        openRows(ids: selectedIDs, gesture: "\u{2318}O")
+    }
+
+    /// The ONE open path for the table. Double-click / Return
+    /// (`primaryAction`) and File ▸ Open ⌘O both land here; the work —
+    /// looks-moved check per record, console line naming the player,
+    /// MediaOpener's smart launch — is `CatalogOpenAction.open`
+    /// (CatalogOpenCommand.swift). `tableData`, not `records`: the ids
+    /// came from the rows on screen, and one filter pass is O(n).
+    private func openRows(ids: Set<UUID>, gesture: String) {
+        CatalogOpenAction.open(ids: ids, rows: tableData, gesture: gesture, model: model)
     }
 
     private func reportDeleteResult(
