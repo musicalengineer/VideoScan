@@ -153,7 +153,7 @@ struct ArchiveAngelEvidenceStoreTests {
                                   considered: 1, eligible: 1, records: [id: rec(110)]))
         #expect(await store.save())
         var json = try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as! [String: Any]
-        #expect(json["rulesVersion"] as? Int == 12, "this sensor pins the bump; re-pin it on the next rules change")
+        #expect(json["rulesVersion"] as? Int == 13, "this sensor pins the bump; re-pin it on the next rules change")
 
         json["rulesVersion"] = 8
         try JSONSerialization.data(withJSONObject: json).write(to: store.fileURL)

@@ -663,6 +663,12 @@ enum AngelRuleKind: String, CaseIterable, Sendable {
     // Signals (built-in evidence lines; points come from `weights`).
     case confirmedPeople, machinePeople, playHistory, richness, date, duration, formatAtRisk, onlyCopy
     case unassignedVolume, audioProblem, downloadCap, fatigue
+    /// Rules v13 coverage: a year with a deep unarchived backlog and few
+    /// archived files earns points (`coverage.backlogBonusMax`, scaled by
+    /// the share of the year still to archive; `backlogMinimumUnarchived`
+    /// gates it). Reads the per-year table the sweep's pre-pass wrote onto
+    /// the candidate; says nothing when that pass has not run.
+    case backlogBonus
 }
 
 enum AngelRuleSection: String, Sendable {
@@ -676,7 +682,7 @@ enum AngelRuleSection: String, Sendable {
                     .suspectedJunk, .junkScore, .volumeOffline, .resting, .angelWorkingCopy]
         case .signals:
             return [.match, .stars, .confirmedPeople, .machinePeople, .playHistory, .richness, .date, .duration,
-                    .formatAtRisk, .onlyCopy, .unassignedVolume, .audioProblem, .downloadCap, .fatigue]
+                    .formatAtRisk, .onlyCopy, .unassignedVolume, .audioProblem, .backlogBonus, .downloadCap, .fatigue]
         case .vouch:
             return [.match, .stars]
         case .exclude:
@@ -851,6 +857,8 @@ extension ArchiveAngelRejection {
         case .notRecommendedNow: return "notRecommendedNow"
         case .angelWorkingCopy: return "angelWorkingCopy"
         case .footageOriginalArchived: return "footageOriginalArchived"
+        case .sameEventAsPick: return "sameEventAsPick"
+        case .yearCoverage: return "yearCoverage"
         }
     }
 

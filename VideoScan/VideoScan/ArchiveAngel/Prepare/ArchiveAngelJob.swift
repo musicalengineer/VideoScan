@@ -377,6 +377,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             store: model.archiveAngel.store, count: requestedCount, now: Date(), policy: self.policy, excluding: inFlight,
             attentionChangedAt: model.archiveAngel.attention.lastEventAt,
             attentionRevision: model.archiveAngel.attention.revision,
+            catalogRevision: model.archiveAngel.catalogRevision, launchToken: model.archiveAngel.launchToken,
             project: { id in live(id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
             selection = fromEvidence.selection
             consideredCount = model.archiveAngel.store.consideredCount
@@ -400,7 +401,17 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             }
             if stopRequested { finishCancelled(); return }
             ArchiveAngelScorer.markDerivatives(&candidates, policy: self.policy)   // T10 H3: same rule as the sweep
+            // Rules v12 pass the walk never ran (codex C1 / QA MAJOR-3,
+            // 2026-09-26): a Likely footage sibling of an archived original
+            // is covered here exactly as in the sweep — and the coverage
+            // pre-pass below counts it as archived backlog, so the
+            // "Fills a gap" line agrees between the two paths.
+            ArchiveAngelScorer.markArchivedFootage(&candidates, archivedGroups: model.archivedFootageGroupIDs(active))
             ArchiveAngelScorer.applyFamilyAttention(&candidates, weights: weights)   // Phase 1: same rule as the sweep
+            if self.policy.coverage.isActive {   // rules v13: the same pre-pass as the sweep; off = rules v12, no cost
+                let backlog = ArchiveAngelEvent.applyCoverage(&candidates, policy: self.policy)
+                note("Archive Angel: " + ArchiveAngelEvent.summaryLine(backlog))
+            }
 
             // Spotlight play history for the eligible ones only, off-main.
             let rules = self.policy

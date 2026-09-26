@@ -195,6 +195,8 @@ extension ArchiveAngelScorer {
         case .audioProblem:
             guard let problem = c.audioProblem, !problem.isEmpty else { return nil }
             return .init(points: 0, line: "Audio: \(problem) — will balance")
+        case .backlogBonus:
+            return backlogBonusLine(c, coverage: p.coverage)
         case .downloadCap:
             return downloadCapLine(c, lines: lines, policy: p)
         case .fatigue:
@@ -219,6 +221,25 @@ extension ArchiveAngelScorer {
             if now.timeIntervalSince(last) < w.playedRecentlyDays * 86_400 { pts = Self.sum(pts, w.playedRecentlyBonus) }
         }
         return .init(points: pts, line: line)
+    }
+
+    /// Rules v13 coverage: `backlogBonusMax × (unarchived ÷ (unarchived +
+    /// archived))` for the file's year, when the year holds at least
+    /// `backlogMinimumUnarchived` videos still to archive. The 9/25 live
+    /// table — 2010: 156 to archive / 27 archived → 17 points; 2011: 77 / 7
+    /// → 18; 2023: 70 / 2 → 19; a year with 40 of each → 10. The numbers
+    /// come from the sweep's ONE pre-pass (ArchiveAngelEvent.applyCoverage,
+    /// written onto the candidate); a candidate projected without it
+    /// (0 / 0) earns nothing — never a lookup here. Pure.
+    static func backlogBonusLine(_ c: ArchiveAngelCandidate, coverage: AngelCoverageRules) -> ArchiveAngelEvidence? {
+        guard coverage.backlogBonusMax > 0, c.yearUnarchived > 0,
+              c.yearUnarchived >= coverage.backlogMinimumUnarchived, let year = c.eventYear else { return nil }
+        let total = Double(c.yearUnarchived + c.yearArchived)
+        let share = Double(c.yearUnarchived) / total
+        let points = Self.clampedInt((Double(coverage.backlogBonusMax) * share).rounded())
+        guard points > 0 else { return nil }
+        return .init(points: points, line: "Fills a gap — \(year) has \(c.yearUnarchived) videos still to archive and "
+                     + (c.yearArchived == 1 ? "1 archived" : "\(c.yearArchived) archived"))
     }
 
     static func dateLine(_ c: ArchiveAngelCandidate, weights w: ArchiveAngelWeights) -> ArchiveAngelEvidence? {

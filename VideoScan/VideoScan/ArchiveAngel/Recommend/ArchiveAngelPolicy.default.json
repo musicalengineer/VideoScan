@@ -1,4 +1,10 @@
 {
+  "coverage" : {
+    "backlogBonusMax" : 20,
+    "backlogMinimumUnarchived" : 10,
+    "maxPerYearPerBatch" : 2,
+    "onePerEvent" : true
+  },
   "floors" : [
     {
       "id" : "notVideo",
@@ -396,6 +402,11 @@
     {
       "id" : "audioProblem",
       "kind" : "audioProblem"
+    },
+    {
+      "id" : "backlogBonus",
+      "kind" : "backlogBonus",
+      "note" : "A year with a deep backlog and few archived files earns up to coverage.backlogBonusMax"
     },
     {
       "id" : "downloadCap",
