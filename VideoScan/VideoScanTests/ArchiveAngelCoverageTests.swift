@@ -294,6 +294,57 @@ struct ArchiveAngelCoverageTests {
         #expect(arch.years[2010] == .init(unarchived: 12, archived: 3))
     }
 
+    @Test("codex F2: a recording's year is decided by evidence precedence (a person's date > a camera's stamp > the dossier > a name), never by how many copies carry a weaker date — duplicating a member with a conflicting encoder stamp moves nothing, archived or not")
+    func copyMultiplicityNeverMovesARecording() {
+        // Nine independent 1994 recordings + one duplicate group: A carries
+        // Rick's "1994", B an encoder-only 2026 stamp (no camera named).
+        var cands: [ArchiveAngelCandidate] = []
+        for d in 1...9 { cands.append(video("solo-\(d).mov", year: 1994, month: 2, day: d)) }
+        let g = UUID()
+        cands.append(ArchiveAngelCandidate(filename: "A.dv", fullPath: "/Volumes/L/A.dv", sizeBytes: 10_000_000_000, durationSeconds: 1200,
+                                           userDate: "1994", duplicateGroupID: g))
+        func weakCopy(_ n: Int) -> ArchiveAngelCandidate {
+            ArchiveAngelCandidate(filename: "B\(n).mov", fullPath: "/Volumes/X\(n)/B\(n).mov", sizeBytes: 10_000_000_000, durationSeconds: 1200,
+                                  duplicateGroupID: g, captureDate: utc(2026, 4, 3), originEncoder: "Apple ProRes 422")
+        }
+        cands.append(weakCopy(1))
+        let before = ArchiveAngelEvent.applyCoverage(&cands, policy: .builtIn, now: testNow)
+        #expect(before.years[1994] == .init(unarchived: 10, archived: 0), "\(before)")
+        #expect(before.years[2026] == nil, "Rick's year wins the recording, whatever the copy's stamp")
+        let soloBefore = cands.first { $0.filename == "solo-1.mov" }!
+        guard case .eligible(let scoreBefore, let linesBefore) = ArchiveAngelScorer.verdict(soloBefore, policy: .builtIn, now: testNow) else { Issue.record("eligible"); return }
+        #expect(linesBefore.contains { $0.line == "Fills a gap — 1994 has 10 videos still to archive and 0 archived" && $0.points == 20 })
+        // Import two more copies of B: the same weak evidence, three times over.
+        var flooded = cands
+        flooded.append(weakCopy(2)); flooded.append(weakCopy(3))
+        let after = ArchiveAngelEvent.applyCoverage(&flooded, policy: .builtIn, now: testNow)
+        #expect(after.years == before.years, "no new footage → the same per-year totals: \(after.years)")
+        #expect(after.recordings == before.recordings)
+        let soloAfter = flooded.first { $0.filename == "solo-1.mov" }!
+        guard case .eligible(let scoreAfter, _) = ArchiveAngelScorer.verdict(soloAfter, policy: .builtIn, now: testNow) else { Issue.record("eligible"); return }
+        #expect(scoreAfter == scoreBefore, "every existing candidate's score is unchanged (\(scoreBefore) → \(scoreAfter))")
+        // The archived flavour: A is archived; three weak copies must not move the recording out of 1994's archived count.
+        var archived = cands
+        for i in archived.indices where archived[i].filename == "A.dv" { archived[i].hasArchivedDuplicate = true }
+        let arch1 = ArchiveAngelEvent.applyCoverage(&archived, policy: .builtIn, now: testNow)
+        #expect(arch1.years[1994] == .init(unarchived: 9, archived: 1), "\(arch1)")
+        archived.append(weakCopy(2)); archived.append(weakCopy(3))
+        let arch3 = ArchiveAngelEvent.applyCoverage(&archived, policy: .builtIn, now: testNow)
+        #expect(arch3.years == arch1.years, "\(arch3.years)")
+        // Precedence, not counting: a camera's stamp beats five copies of a name-only year; the dossier beats a name; ties by the earliest year.
+        let h = UUID()
+        var mixed: [ArchiveAngelCandidate] = [
+            ArchiveAngelCandidate(filename: "cam.mov", fullPath: "/Volumes/L/cam.mov", sizeBytes: 10_000_000_000, durationSeconds: 1200,
+                                  duplicateGroupID: h, deviceModel: "Sony DCR", captureDate: utc(1998, 5, 5)),
+        ]
+        for n in 0..<5 {
+            mixed.append(ArchiveAngelCandidate(filename: "Westford_1994 copy \(n).mkv", fullPath: "/Volumes/X/Westford_1994 copy \(n).mkv",
+                                               sizeBytes: 10_000_000_000, durationSeconds: 1200, duplicateGroupID: h))
+        }
+        let t = ArchiveAngelEvent.applyCoverage(&mixed, policy: .builtIn, now: testNow)
+        #expect(t.years[1998] == .init(unarchived: 1, archived: 0) && t.years[1994] == nil, "\(t.years)")
+    }
+
     @Test("junk, the Angel's working copies, Live Photo halves, gone files and clips under the floor are not backlog; undated recordings have their own bucket and earn nothing")
     func backlogExcludesNoiseAndUndated() {
         var cands: [ArchiveAngelCandidate] = []

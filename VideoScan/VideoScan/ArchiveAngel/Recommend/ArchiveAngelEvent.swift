@@ -48,6 +48,49 @@ enum ArchiveAngelEvent {
     /// for one candidate. Pure over the candidate's date facts; `now` only
     /// bounds the resolver's filename-year search.
     nonisolated static func resolve(_ c: ArchiveAngelCandidate, now: Date) -> (key: String, year: Int?) {
+        let d = resolveDetailed(c, now: now)
+        return (d.key, d.year)
+    }
+
+    /// One file's date CLAIM for its recording (codex final review F2): the
+    /// evidence's precedence — a person's date, then a camera's stamp, then
+    /// the dossier, then a year in the name — with confidence and precision
+    /// behind it. A recording's year is its STRONGEST claim, never a vote:
+    /// importing a thousand copies of a weak stamp adds nothing, and no
+    /// number of transcoder stamps outvotes what Rick typed. `<` = "the
+    /// stronger claim first", so `min` over a recording's members is its
+    /// date; ties fall to the earliest year (deterministic). (≈ a POD with
+    /// operator< for std::min_element.)
+    struct DateClaim: Comparable, Sendable, Equatable {
+        var sourceRank: Int        // 0 user · 1 camera/container stamp · 2 dossier · 3 filename
+        var confidenceMilli: Int   // higher = stronger
+        var precisionRank: Int     // 0 day … 3 decade (finer = stronger)
+        var year: Int
+
+        init?(_ r: RecordDateResolution) {
+            guard let year = r.year else { return nil }
+            switch r.source {
+            case .userDate: sourceRank = 0
+            case .embedded: sourceRank = 1
+            case .inferred: sourceRank = 2
+            case .filename: sourceRank = 3
+            case .none: return nil
+            }
+            confidenceMilli = Int((r.confidence * 1000).rounded())
+            precisionRank = r.precision.rawValue
+            self.year = year
+        }
+
+        static func < (a: DateClaim, b: DateClaim) -> Bool {
+            if a.sourceRank != b.sourceRank { return a.sourceRank < b.sourceRank }
+            if a.confidenceMilli != b.confidenceMilli { return a.confidenceMilli > b.confidenceMilli }
+            if a.precisionRank != b.precisionRank { return a.precisionRank < b.precisionRank }
+            return a.year < b.year
+        }
+    }
+
+    /// `resolve` plus the file's date claim, from ONE resolver call.
+    nonisolated static func resolveDetailed(_ c: ArchiveAngelCandidate, now: Date) -> (key: String, year: Int?, claim: DateClaim?) {
         let r = RecordDateResolver.resolve(
             userDate: c.userDate,
             userDateConfidence: c.userDateConfidence,
@@ -59,11 +102,12 @@ enum ArchiveAngelEvent {
             inferredDateConfidence: c.inferredDateConfidence,
             filename: c.filename.isEmpty ? nil : c.filename,
             now: now)
-        guard let year = r.year else { return ("", nil) }
+        guard let year = r.year else { return ("", nil, nil) }
+        let claim = DateClaim(r)
         guard r.precision == .day, r.source != .embedded || r.confidence >= dayKeyMinimumConfidence else {
-            return ("", year)
+            return ("", year, claim)
         }
-        return ("d:" + r.isoString, year)
+        return ("d:" + r.isoString, year, claim)
     }
 
     // MARK: The coverage pre-pass
@@ -112,9 +156,12 @@ enum ArchiveAngelEvent {
     ///               3,159 of 9,404 catalog videos were Live Photo halves —
     ///               they would have handed the 2020s a bonus for a
     ///               backlog nobody wants archived)
-    ///   year        the members' most common resolved year (tie: the
-    ///               earliest); members with no year do not vote; a
-    ///               recording nobody can date goes to `unknownDate`
+    ///   year        the members' STRONGEST date claim (`DateClaim`:
+    ///               a person's date > a camera's stamp > the dossier > a
+    ///               name; then confidence, precision, the earliest year)
+    ///               — never a vote over files (codex F2); members with
+    ///               no date make no claim; a recording nobody can date
+    ///               goes to `unknownDate`
     ///
     /// Memory: O(recordings) for the table plus two Ints and one short
     /// string per candidate — at 100k candidates well under 20 MB.
@@ -126,19 +173,26 @@ enum ArchiveAngelEvent {
         let collapseBy = p.recommend.copies.batchCollapseBy
         // 1. Dates, once per candidate.
         var years: [Int?] = []
+        var claims: [DateClaim?] = []
         years.reserveCapacity(candidates.count)
+        claims.reserveCapacity(candidates.count)
         for i in candidates.indices {
-            let (key, year) = resolve(candidates[i], now: now)
-            candidates[i].eventKey = key
-            candidates[i].eventYear = year
-            years.append(year)
+            let d = resolveDetailed(candidates[i], now: now)
+            candidates[i].eventKey = d.key
+            candidates[i].eventYear = d.year
+            years.append(d.year)
+            claims.append(d.claim)
         }
         // 2. Recordings: union-find over the copy keys (O(n·k), k ≤ 2).
         let comps = ArchiveAngelCopyChooser.components(candidates.map { ArchiveAngelCopyChooser.keys($0, collapseBy: collapseBy) })
         struct Recording {
-            var votes: [Int: Int] = [:]
+            var best: DateClaim?
             var archived = false
             var actionable = false
+            mutating func fold(_ claim: DateClaim?) {
+                guard let claim else { return }
+                if best.map({ claim < $0 }) ?? true { best = claim }
+            }
         }
         var recordings: [String: Recording] = [:]
         var solo: [Recording] = []              // candidates with no copy key: their own recording each
@@ -148,13 +202,13 @@ enum ArchiveAngelEvent {
             let actionable = isActionable(c, minimumDuration: minimum)
             if let comp = comps[i] {
                 var r = recordings[comp.key, default: Recording()]
-                if let y = years[i] { r.votes[y, default: 0] += 1 }
+                r.fold(claims[i])
                 r.archived = r.archived || archived
                 r.actionable = r.actionable || actionable
                 recordings[comp.key] = r
             } else {
                 var r = Recording()
-                if let y = years[i] { r.votes[y] = 1 }
+                r.fold(claims[i])
                 r.archived = archived
                 r.actionable = actionable
                 solo.append(r)
@@ -164,7 +218,7 @@ enum ArchiveAngelEvent {
         var table = CoverageTable()
         func count(_ r: Recording) {
             table.recordings += 1
-            let year = r.votes.max { a, b in a.value != b.value ? a.value < b.value : a.key > b.key }?.key
+            let year = r.best?.year
             if let year {
                 if r.archived { table.years[year, default: .init()].archived += 1 }
                 else if r.actionable { table.years[year, default: .init()].unarchived += 1 }
