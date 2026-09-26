@@ -176,4 +176,28 @@ struct HallieDroppedTopicWordTests {
         #expect(!HallieDroppedTopicWord.isTopicWord("Donna"))
         #expect(!HallieDroppedTopicWord.isTopicWord("Grace Lake"))
     }
+
+    /// Live 2026-09-24 and branch replay 2026-09-25: "Christmas videos from
+    /// 2006" came back as an AGE question (shape=temporal) and was declined
+    /// with "I need a dated video to count from". A question with a media
+    /// noun and no age word is a catalog search.
+    @Test func aMediaAskReadAsAnAgeQuestionIsSearched() async throws {
+        let result = try await run(.init(
+            originalQuestion: "Christmas videos from 2006",
+            ast: .temporal(.init(subject: "Timothy", operation: .age, reference: .currentSelection))))
+        #expect(result.outcome == .answered, Comment(rawValue: result.prose))
+        #expect(paths(result) == ["/isolated/2006/ChristmasDay2006-38mins.mov"], Comment(rawValue: "\(paths(result))"))
+        #expect(result.basisLine.contains("not an age question"), Comment(rawValue: result.basisLine))
+    }
+
+    @Test func anAgeQuestionAboutAVideoStaysAnAgeQuestion() {
+        #expect(HallieTurnExecutor.mediaAskMisreadAsAge(
+            "Christmas videos from 2006", subject: "Timothy") != nil)
+        #expect(HallieTurnExecutor.mediaAskMisreadAsAge(
+            "how old was donna in the christmas video", subject: "donna") == nil)
+        #expect(HallieTurnExecutor.mediaAskMisreadAsAge(
+            "when was donna born", subject: "donna") == nil)
+        // Nothing to search for: left alone.
+        #expect(HallieTurnExecutor.mediaAskMisreadAsAge("show me videos", subject: "me") == nil)
+    }
 }

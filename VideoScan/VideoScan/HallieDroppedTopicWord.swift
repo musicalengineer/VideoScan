@@ -95,3 +95,33 @@ enum HallieDroppedTopicWord {
         return "\(quoted) \(verb) in the question but the translator left \(words.count == 1 ? "it" : "them") out, so I searched for \(words.count == 1 ? "it" : "them") too"
     }
 }
+
+extension HallieTurnExecutor {
+    /// "Christmas videos from 2006" read as an AGE question (live
+    /// 2026-09-24; branch replay 2026-09-25). A question with a media noun
+    /// and no age word is a catalog search: the presence query it is — the
+    /// question's curated topic words, its one stated year, a subject only
+    /// if the question actually names it. Nil when it is an age question,
+    /// or when there would be nothing to search for.
+    static func mediaAskMisreadAsAge(_ question: String, subject: String) -> ArchivistQueryAST.Presence? {
+        let lowered = question.lowercased()
+        guard HallieMediaVocabulary.containsMediaWord(question),
+              lowered.range(of: #"\b(old|older|oldest|age|aged|ages|born|birthday|young|younger|youngest)\b"#,
+                            options: .regularExpression) == nil else { return nil }
+        let keywords = HallieDroppedTopicWord.missing(question: question, people: [], terms: [])
+        let year = ArchivistTemporalExecutor.statedYear(in: question)
+        let trimmed = subject.trimmingCharacters(in: .whitespacesAndNewlines)
+        let named = !trimmed.isEmpty && !HallieDroppedTopicWord.isTopicWord(trimmed)
+            && !HalliePronounContinuity.isThirdPersonPronoun(trimmed)
+            && lowered.range(of: #"\b"# + NSRegularExpression.escapedPattern(for: trimmed.lowercased()) + #"\b"#,
+                             options: .regularExpression) != nil
+        guard !keywords.isEmpty || year != nil || named else { return nil }
+        let wantsVideo = lowered.range(of: #"\b(video|videos|clip|clips|footage|movie|movies|tape|tapes)\b"#,
+                                       options: .regularExpression) != nil
+        return ArchivistQueryAST.Presence(
+            people: named ? [trimmed] : nil,
+            yearStart: year, yearEnd: year,
+            mediaKind: wantsVideo ? .video : nil,
+            keywords: keywords.isEmpty ? nil : keywords)
+    }
+}
