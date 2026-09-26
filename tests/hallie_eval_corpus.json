@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 739 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected. Service-story items (mil260923-NNN, 2026-09-23) cover family military service: war asks by everyday name (Civil War, WW2, the Revolution, WWI), one person's service, the biography's offer and its 'yes' follow-up, and typo forms.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 750 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected. Service-story items (mil260923-NNN, 2026-09-23) cover family military service: war asks by everyday name (Civil War, WW2, the Revolution, WWI), one person's service, the biography's offer and its 'yes' follow-up, and typo forms.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -5989,6 +5989,108 @@
         "Confederate"
       ],
       "notes": "Service stories (Rick 2026-09-23). One-person service shape."
+    },
+    {
+      "id": "lv260925-001",
+      "category": "live",
+      "text": "who was rick breen's dad?",
+      "expect": "kinship",
+      "notes": "Rick 2026-09-21 18:30, live: answered with Richard Harding Breen Sr's birth and death (right person). Expectation unconfirmed."
+    },
+    {
+      "id": "lv260925-002",
+      "category": "live",
+      "text": "Hi Hallie how are you?",
+      "expect": "social",
+      "notes": "harvested 2026-09-25 from the app transcript (2026-09-21); expectation unconfirmed"
+    },
+    {
+      "id": "lv260925-003",
+      "category": "live",
+      "text": "tell me about my grandparents",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-25 from the app transcript (2026-09-21); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260925-004",
+      "category": "live",
+      "text": "tell me about ellen",
+      "expect": "clarify",
+      "notes": "Rick 2026-09-21 22:56, LIVE MISS: 'Which ellen do you mean: Ellen Ronan, Ellen Ronan?' — two identical labels, and Rick's sister Ellen (People tab) not offered; his reply 'ellen engelhardt my sister' then declined 'couldn't tell who it is about'. The clarify must offer the People-tab sister and never show two identical labels. Open (ledger 2026-09-25).",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260925-005",
+      "category": "live",
+      "text": "tell me about john of gaunt",
+      "expect": "biography",
+      "notes": "Rick 2026-09-22 19:51, live: answered from the tree (John of Gaunt, b. 1340). Expectation unconfirmed.",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260925-006",
+      "category": "live",
+      "text": "find rick playing guitar",
+      "expect": "catalog",
+      "notes": "Rick 2026-09-23 22:25, live: 'I found 5 catalog items matching that.' Expectation unconfirmed."
+    },
+    {
+      "id": "lv260925-007",
+      "category": "live",
+      "text": "show timmy playing guitar",
+      "expect": "catalog",
+      "notes": "Rick 2026-09-23 22:26, live: 'I found 2 catalog items matching that.' Expectation unconfirmed.",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260925-008",
+      "category": "live",
+      "text": "tell me about thankful pratt and her husband",
+      "expect": "kinship",
+      "notes": "Rick 2026-09-23 22:26, LIVE MISS right after 'show timmy playing guitar': \"I wasn't sure which person you meant — thankful pratt or timmy?\" — HalliePronounContinuity rewrote 'her' to the last answer's person although the sentence names her. Fixed 2026-09-25 (fix/hallie-night-0925, HalliePronounInSentenceAntecedentTests). 2026-09-26 night replay: strict-055 (same words, same set-up) answered 'Nathaniel Caleb Parker was the husband of Thankful Pratt'; this advisory run read the bound \"thankful pratt's husband\" as a name — translator variance under ollama 0.34.4, still open.",
+      "followsPrevious": true,
+      "mustNotContain": [
+        "timmy"
+      ]
+    },
+    {
+      "id": "lv260925-009",
+      "category": "live",
+      "text": "what relatives fought in the american war of independence?",
+      "expect": "graceful_decline",
+      "notes": "Rick 2026-09-23 22:29, LIVE MISS: answered with tree statistics (39250 people, most common surnames) — a different question. Asked before the service-stories merge (c01c054c, 09-24); the honest answer today is the service-record reply for the American Revolution (strict-052 twin). 2026-09-26 night replay: now the honest 'Nobody in the family has told me about service in the American Revolution…' — expect graceful_decline like strict-052 until the tree carries _MILT facts.",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustNotContain": [
+        "39250",
+        "most common surnames"
+      ]
+    },
+    {
+      "id": "lv260925-010",
+      "category": "live",
+      "text": "what family members fought in the american civil war",
+      "expect": "biography",
+      "notes": "Rick 2026-09-23 22:30, LIVE MISS: answered with Rick's own biography. Asked before the service-stories merge (c01c054c, 09-24); strict-046 is the same ask ('who in our family served in the civil war').",
+      "followsPrevious": true,
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "John Robert Latta"
+      ],
+      "mustNotContain": [
+        "retired software engineer"
+      ]
+    },
+    {
+      "id": "lv260925-011",
+      "category": "live",
+      "text": "who were my parents?",
+      "expect": "kinship",
+      "notes": "Rick 2026-09-24 22:09, live: declined 'The family tree is on disk but needs recompiling after the update' — tree state, not routing (recompiled 09-24 18:28). Expect Richard Harding Breen Sr and Eileen Latta."
     }
   ]
 }

@@ -894,6 +894,20 @@ extension ArchivistTemporalExecutor {
     /// passed?" arrived as explicitYear(1994)); a year the user never
     /// spoke is not a reference. "1994", "'94" and a spelled-out year
     /// ("nineteen ninety-four") all count as supplied.
+    /// The one four-digit year (1800–2099) the question states, when it
+    /// states exactly one and does not point at a video ("this", "that
+    /// video", "here"). The reference a translator dropped (replay
+    /// 2026-09-25: "how old was dad in 1985" → currentSelection). Two-digit
+    /// forms ("'85") are left to the translator — too easy to misread.
+    static func statedYear(in question: String) -> Int? {
+        let lowered = question.lowercased()
+        if lowered.range(of: #"\b(this|that|these|those|here)\b"#, options: .regularExpression) != nil {
+            return nil
+        }
+        let years = Set(lowered.matches(of: /\b(1[89]\d\d|20\d\d)\b/).compactMap { Int($0.1) })
+        return years.count == 1 ? years.first : nil
+    }
+
     static func questionSuppliesYear(_ year: Int, in question: String) -> Bool {
         let lowered = question.lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
         if lowered.contains(String(year)) { return true }

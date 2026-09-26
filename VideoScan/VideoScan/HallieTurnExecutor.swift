@@ -1195,6 +1195,15 @@ enum HallieTurnExecutor {
             // shell's fixture translator) there is nothing to judge against:
             // the year stands.
             let hasQuestionText = !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            // "Christmas videos from 2006" read as an age question (live
+            // 2026-09-24): a media ask with no age word is searched.
+            if !isRefinement, hasQuestionText, request.selectedIdentity == nil,
+               let presence = mediaAskMisreadAsAge(question, subject: rawPayload.subject) {
+                return try await executePresenceLike(
+                    presence, route: .presence, request: request,
+                    context: context, dependencies: dependencies)
+                .prefixingBasis("the question has a media word and no age word, so it is not an age question; I searched the catalog")
+            }
             var payload = rawPayload
             var inventedYear: Int?
             if !isRefinement, hasQuestionText, case .explicitYear(let year) = rawPayload.reference,
@@ -1202,11 +1211,26 @@ enum HallieTurnExecutor {
                 payload.reference = .currentSelection
                 inventedYear = year
             }
+            // The mirror case (replay 2026-09-25): the question states a
+            // year and the translator dropped it — "how old was dad in
+            // 1985" arrived as currentSelection and Hallie asked for a
+            // dated video.
+            var restoredYear: Int?
+            if !isRefinement, hasQuestionText, inventedYear == nil,
+               case .currentSelection = rawPayload.reference,
+               let year = ArchivistTemporalExecutor.statedYear(in: question) {
+                payload.reference = .explicitYear(year)
+                restoredYear = year
+            }
             var result = try await executeTemporalCase(
                 payload, request: request, context: context, dependencies: dependencies)
             if let inventedYear {
                 result = result.prefixingBasis(
                     "the translator supplied year \(inventedYear), which the question never mentions, so it was ignored")
+            }
+            if let restoredYear {
+                result = result.prefixingBasis(
+                    "the question says \(restoredYear); the translator left it out, so I counted to \(restoredYear)")
             }
             // The mode gate KEEPS a tree-mode session on an age question
             // (HallieModeGate.reconcileTree); say so on the answer, or
@@ -1939,6 +1963,34 @@ enum HallieTurnExecutor {
     /// nickname → profile → GEDCOM bridging, profile ambiguity/conflict
     /// handling, and `.profileStableID` / `.gedcomPersonID` continuations;
     /// CyberBrain must not shadow it with a weaker name-only GEDCOM lookup.
+    /// True when a CyberBrain person matched by `resolution` carries the
+    /// typed spelling as its whole canonical name or alias (not one word).
+    static func cyberBrainMatchesExactly(
+        _ typed: String, resolution: CyberBrainIdentityResolution
+    ) -> Bool {
+        let people: [CyberBrainPerson]
+        switch resolution {
+        case .resolved(let person): people = [person]
+        case .ambiguous(let many): people = many
+        case .notFound: return false
+        }
+        let key = FamilyIdentityText.normalized(typed)
+        return people.contains { person in
+            ([person.canonicalName] + person.aliases)
+                .contains { FamilyIdentityText.normalized($0) == key }
+        }
+    }
+
+    /// True when a People-tab profile owns the typed spelling exactly — by
+    /// name, alias or full-name form.
+    static func profileClaimsExactly(_ typed: String, context: Context) -> Bool {
+        (context.profiles ?? []).contains {
+            PersonNameClaim.strength(
+                of: typed, name: $0.canonicalName,
+                aliases: $0.aliases + $0.fullNameForms) != nil
+        }
+    }
+
     private static func executeCyberBrainBiography(
         payload: ArchivistQueryAST.Graph,
         request: Request,
@@ -1957,11 +2009,23 @@ enum HallieTurnExecutor {
         }
         let graph = context.graph
         let privacyCeiling = appPrivacyCeiling
+        let resolution = index.resolve(requestedName)
         let cyberBrainKnowsName: Bool
-        if case .notFound = index.resolve(requestedName) {
+        if case .notFound = resolution {
             cyberBrainKnowsName = false
         } else {
             cyberBrainKnowsName = true
+        }
+        // "tell me about ellen" (live 2026-09-21, still so 09-25): CyberBrain
+        // matched ONE WORD of two "Ellen Ronan" records and asked which,
+        // while the People tab's "Ellen" — Rick's sister — owns the exact
+        // spelling. A token-only CyberBrain match yields to an exact
+        // People-tab claim (the People tab is the source of truth for the
+        // inner circle; exact name wins, PersonNameClaim).
+        if request.selectedIdentity == nil,
+           !cyberBrainMatchesExactly(requestedName, resolution: resolution),
+           profileClaimsExactly(requestedName, context: context) {
+            return nil
         }
         let plan: CyberBrainAnswerPlan
         switch request.selectedIdentity {

@@ -905,7 +905,7 @@
    "id": "strict-052",
    "category": "strict",
    "text": "anyone in the American Revolution",
-   "expect": "biography",
+   "expect": "graceful_decline",
    "expectedRoutes": [
     "graph"
    ],
@@ -919,7 +919,50 @@
     "topic=military-service",
     "war=the American Revolution"
    ],
-   "notes": "No family story for the Revolution: an honest 'Nobody in the family has told me…' plus an invitation — OR, once the tree is re-merged with its _MILT facts, tree people quoted verbatim with the tree citation. Outcome deliberately unconstrained; never another war's people. Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories)."
+   "notes": "No family story for the Revolution: an honest 'Nobody in the family has told me…' plus an invitation — OR, once the tree is re-merged with its _MILT facts, tree people quoted verbatim with the tree citation. Outcome deliberately unconstrained; never another war's people. Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories). 2026-09-25 night: expect was 'biography', which grades an honest decline as declined_expected_answer — contradicting 'outcome deliberately unconstrained' and the advisory twin mil260923-008 (graceful_decline); red every night since it was added. Now graceful_decline, like strict-038: flip it back to biography when the tree carries _MILT facts and the answer names tree people."
+  },
+  {
+   "id": "strict-053",
+   "category": "strict",
+   "text": "Christmas videos from 2006",
+   "expect": "catalog",
+   "expectedRoutes": [
+    "presence",
+    "cross",
+    "event"
+   ],
+   "expectedOutcome": "answered",
+   "mustNotContain": [
+    "864"
+   ],
+   "notes": "Live 2026-09-22, 09-24, 09-25 20:33: the translator returned shape=presence year=2006 with 'Christmas' dropped and Hallie counted every 2006 item ('There are 864 catalog items from 2006'). The executor now puts back a curated holiday/event/place word the question contains (HallieDroppedTopicWord). 864 is the live catalog's all-of-2006 count on 2026-09-25 — the signature of the drop. Pinned by HallieDroppedTopicWordTests (fix/hallie-night-0925)."
+  },
+  {
+   "id": "strict-054",
+   "category": "strict",
+   "text": "show timmy playing guitar",
+   "expect": "catalog",
+   "expectedRoutes": [
+    "presence",
+    "cross",
+    "event"
+   ],
+   "notes": "Set-up turn for strict-055 (live 2026-09-23 22:26): leaves Timmy as the last answer's person."
+  },
+  {
+   "id": "strict-055",
+   "category": "strict",
+   "text": "tell me about thankful pratt and her husband",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "mustNotContain": [
+    "timmy",
+    "Timothy"
+   ],
+   "notes": "Live 2026-09-23 22:26: 'her' was rewritten to the previous answer's Timmy ('…thankful pratt and Timmy's husband') → \"I wasn't sure which person you meant — thankful pratt or timmy?\". A known person earlier in the same sentence owns the pronoun. Pinned by HalliePronounInSentenceAntecedentTests (fix/hallie-night-0925)."
   }
  ]
 }
