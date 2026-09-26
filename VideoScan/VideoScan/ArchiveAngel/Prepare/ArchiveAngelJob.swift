@@ -401,8 +401,15 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             }
             if stopRequested { finishCancelled(); return }
             ArchiveAngelScorer.markDerivatives(&candidates, policy: self.policy)   // T10 H3: same rule as the sweep
+            // Rules v12 pass the walk never ran (codex C1 / QA MAJOR-3,
+            // 2026-09-26): a Likely footage sibling of an archived original
+            // is covered here exactly as in the sweep — and the coverage
+            // pre-pass below counts it as archived backlog, so the
+            // "Fills a gap" line agrees between the two paths.
+            ArchiveAngelScorer.markArchivedFootage(&candidates, archivedGroups: model.archivedFootageGroupIDs(active))
             ArchiveAngelScorer.applyFamilyAttention(&candidates, weights: weights)   // Phase 1: same rule as the sweep
-            ArchiveAngelEvent.applyCoverage(&candidates, policy: self.policy)   // rules v13: same pre-pass as the sweep
+            let backlog = ArchiveAngelEvent.applyCoverage(&candidates, policy: self.policy)   // rules v13: same pre-pass as the sweep
+            note("Archive Angel: " + ArchiveAngelEvent.summaryLine(backlog))
 
             // Spotlight play history for the eligible ones only, off-main.
             let rules = self.policy
