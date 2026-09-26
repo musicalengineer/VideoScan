@@ -1,4 +1,4 @@
-Credits spent: unavailable (not exposed by this session) | Finding count: 4 | Closed: 4 (feat/angel-coverage, 2026-09-26 — this copy of the review lives in the feature worktree; main's copy is untouched)
+Credits spent: unavailable (not exposed by this session) | Finding count: 4 | Closed: 4 + R1 (feat/angel-coverage, 2026-09-26 — this copy of the review lives in the feature worktree; main's copy is untouched)
 
 # Review #1731 — Archive Angel coverage, rules v13
 
@@ -175,3 +175,79 @@ and record IDs. The current singleton-only projection sensor cannot expose this.
 No production code changed. Final merge approval should follow fixes and
 regression tests for F1–F4, with the focused Angel battery rerun on an authorized
 machine.
+
+## Re-review ad5cc4ce
+
+Credits spent: unavailable (not exposed) | Remaining findings: 1
+
+**Verdict: hold.** Fixes-only review of `8a86a2eb..ad5cc4ce`, requested in
+Claude message #1735. F2 and F3 are closed by source review and inspection of
+their added regression cases. F4's group-expansion budget is now checked before
+expansion and charged afterward; the original over-budget case is addressed.
+F1's original four-row example passes the exact-method harness, but a related
+fresh-search-budget case still returns a nonnil, different batch.
+
+### R1 — P1: Fresh-search budget exhaustion still accepts a coverage-short fresh share
+
+**Location at ad5cc4ce:**
+`VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift:258`–`:262`
+and `:326`–`:329` (especially the `freshCollected >= freshWanted` guard).
+
+**Reproduced.** `freshArmWants` correctly skips years already at their share,
+but those rejected arrivals still spend `extraLooks`. When 200 looks are spent,
+`pastBandWants` treats the fresh arm as done. `freshShareShort` only declines if
+the counter had reached the requested fresh share; when the counter is still
+short because the budget expired, it returns false. A full old-only batch can
+therefore still be accepted despite a surviving fresh candidate farther down.
+
+Counterexample: count 2, year cap 1, fresh share 0.5, no copy/family collisions,
+fresh/current evidence; all candidates are Ready and all scores exceed the
+fresh minimum:
+
+1. A: 1994, old, score 1000.
+2. B: 1994, old, score 999.
+3. C: 2010, old, score 998.
+4. 200 distinct fresh 1994 candidates, scores 997 down to 798.
+5. D: 2020, fresh, score 796.
+
+A/B establish the arrival cutoff; C fills the coverage count. The 1994 fresh
+rows are held by the year cap but exhaust the search budget. The selector stops
+before D and accepts A/C. Full post-ranking selection keeps A/C/D through the
+coverage pass, then replaces C with D to satisfy the fresh share.
+
+Observed output:
+
+```text
+CACHE ["A-old-1994", "D-fresh-2020"] projections 4
+WALK ["A-old-1994", "D-fresh-2020"]
+FRESH-BUDGET CACHE ["A-old1994", "C-old2010"] projections 3
+FRESH-BUDGET WALK ["A-old1994", "D-fresh2020"]
+```
+
+The first pair verifies the original F1 fix; the second proves the remaining
+failure. A search budget being spent must not be treated as proof that no fresh
+survivor exists. With coverage on, continue within a justified bound or decline
+the cache when unread rows remain and the surviving fresh share is unresolved.
+Preserve the coverage-off contract.
+
+**Closed by b404a381** — test `ArchiveAngelCoverageCutoffTests.freshBudgetSpentOnHeldRowsNeverAcceptsAnOldBatch` (250 held fresh rows between C and D: one capped year / two capped years → A/D in 4 projections; all on A's day under cap 2 → declined within 3 + 200 + 2 projections; shares 0.5 and 0.3; 16 draws each; 65 issues before). Fix: a row the fresh arm rejects on the evidence year alone costs a skip (bounded by `coverageLookBudget`), not a look; `freshShareShort` declines whenever the loop stopped early with fewer fresh picks than the share, whether or not the counter had reached it. codex's harness with the two functions spliced in prints `FRESH-BUDGET CACHE ["A-old1994", "D-fresh2020"] projections 4` = WALK (its own "expected reproduced remaining bug" assertion now trips, as it must).
+
+**Pinning test:** Extend `freshRowHeldByCoverageDoesNotSatisfyTheFreshArm` with
+more than `freshScanBudget` coverage-held arrivals between C and D. Require the
+cache to return A/D or nil, never A/C. Include the default fresh share, cap/day
+variants, and shuffled IDs; require bounded work on the decline path.
+
+**Validation:** The manager reran
+`swift -module-cache-path /private/tmp/angel_coverage_swift_cache /private/tmp/angel_coverage_fixed_repro.swift`
+successfully. As before, this is an exact-method headless harness with explicit
+minimal model/store stubs, not an app test or the complete scorer. The old
+failing-head harness remains intact. Claude's reported 534 passing tests are
+not an independently rerun suite. No production edits or app/test-host launches
+were made; Rick's return from lunch was communicated to Claude as ending the
+M4 quiet window.
+
+**F4 bounded check:** Also reran `/private/tmp/angel_coverage_f4_repro.swift`,
+using exact selector/group-outcome/budget methods and a stubbed chooser that
+projects every group member. Four groups of 64 used 258 projections and returned
+a batch; eight groups used 386 projections and declined. This confirms the
+reported group-expansion defect is closed without reading a partial group.
