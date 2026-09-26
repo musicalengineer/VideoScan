@@ -86,7 +86,7 @@ final class ArchiveAngelSweep: ObservableObject {
         /// attention state) and stamped into the evidence file, so the
         /// Angel's pick can refuse evidence older than the catalog.
         /// Default = "no catalog" (tests of the sweep alone).
-        var catalogState: @MainActor () -> Int = { 0 }
+        var catalogState: @MainActor () -> (token: String?, revision: Int) = { (nil, 0) }
         /// Spotlight reads for a slice, off-main. Injected so tests never
         /// touch the metadata server.
         var playHistory: @Sendable ([String]) async -> [String: ArchiveAngelPlayHistory.Reading]
@@ -288,7 +288,7 @@ final class ArchiveAngelSweep: ObservableObject {
         // is stamped with — never the state at the finish line.
         let snapshotStart = clock.now
         let attention = cfg.attentionState()
-        let catalogRevision = cfg.catalogState()
+        let catalog = cfg.catalogState()
         var all = cfg.candidates()
         let policy = cfg.policy
         noteSlice(clock.now - snapshotStart)
@@ -408,7 +408,7 @@ final class ArchiveAngelSweep: ObservableObject {
                                                           attentionRevision: attention.revision,
                                                           attentionLastEventAt: attention.lastEventAt,
                                                           policyFingerprint: store.policyFingerprint,
-                                                          catalogRevision: catalogRevision)
+                                                          catalogRevision: catalog.revision, catalogLaunchToken: catalog.token)
                 _ = await ArchiveAngelEvidenceStore.saveOffMain(checkpoint, to: store.fileURL)
             }
             await Task.yield()
@@ -448,7 +448,7 @@ final class ArchiveAngelSweep: ObservableObject {
                                             attentionRevision: attention.revision,
                                             attentionLastEventAt: attention.lastEventAt,
                                             policyFingerprint: store.policyFingerprint,
-                                            catalogRevision: catalogRevision)
+                                            catalogRevision: catalog.revision, catalogLaunchToken: catalog.token)
         store.replace(with: file)
         let saved = await store.save()
         lastRunSeconds = Double((clock.now - started).components.seconds)

@@ -377,7 +377,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             store: model.archiveAngel.store, count: requestedCount, now: Date(), policy: self.policy, excluding: inFlight,
             attentionChangedAt: model.archiveAngel.attention.lastEventAt,
             attentionRevision: model.archiveAngel.attention.revision,
-            catalogRevision: model.archiveAngel.catalogRevision,
+            catalogRevision: model.archiveAngel.catalogRevision, launchToken: model.archiveAngel.launchToken,
             project: { id in live(id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
             selection = fromEvidence.selection
             consideredCount = model.archiveAngel.store.consideredCount

@@ -76,11 +76,13 @@ extension ArchiveAngelJob {
                                    attentionChangedAt: Date? = nil,
                                    attentionRevision: Int? = nil,
                                    catalogRevision: Int? = nil,
+                                   launchToken: String? = nil,
                                    project: (UUID) -> ArchiveAngelCandidate?) -> EvidencePick? {
         guard count > 0, store.isFresh(within: freshness, now: now),
               store.eligibleCount >= count else { return nil }
         guard attentionIsCurrent(store: store, changedAt: attentionChangedAt, revision: attentionRevision),
-              coverageIsCurrent(stamped: store.catalogRevision, current: catalogRevision, coverage: policy.coverage) else { return nil }
+              coverageIsCurrent(stampedToken: store.catalogLaunchToken, stampedRevision: store.catalogRevision,
+                                currentToken: launchToken, currentRevision: catalogRevision, coverage: policy.coverage) else { return nil }
         let coverage = policy.coverage
         let weights = policy.weights
         var collected: [ArchiveAngelPick] = []
@@ -249,14 +251,20 @@ extension ArchiveAngelJob {
 
     /// Rules v13: with any coverage rule on, evidence stamped older than
     /// the catalog is now (`ArchiveAngel.catalogRevision`) is not current —
-    /// the per-year backlog and the archived set are catalog facts. An
-    /// unstamped file reads as revision 0; a caller with no revision (a
-    /// test of the pick alone) never declines on it; with every coverage
-    /// key off the stamp is ignored (rules v12). Pure.
-    static func coverageIsCurrent(stamped: Int?, current: Int?, coverage: AngelCoverageRules) -> Bool {
+    /// the per-year backlog and the archived set are catalog facts. The
+    /// revision counts within ONE launch (QA MAJOR-4): when the caller
+    /// names its launch token, the stamp must carry the same token — a
+    /// file from another launch, or one with no token, is never current,
+    /// whatever its number. An unstamped revision reads as 0. A caller
+    /// with no revision (a test of the pick alone) never declines on it;
+    /// with every coverage key off both stamps are ignored (rules v12).
+    /// Pure.
+    static func coverageIsCurrent(stampedToken: String?, stampedRevision: Int?,
+                                  currentToken: String?, currentRevision: Int?, coverage: AngelCoverageRules) -> Bool {
         let coverageOn = coverage.maxPerYearPerBatch > 0 || coverage.onePerEvent || coverage.backlogBonusMax > 0
-        guard coverageOn, let current else { return true }
-        return (stamped ?? 0) >= current
+        guard coverageOn, let currentRevision else { return true }
+        if let currentToken, stampedToken != currentToken { return false }
+        return (stampedRevision ?? 0) >= currentRevision
     }
 
     /// Rules v13 — the coverage arm of `selectFromEvidence` (codex

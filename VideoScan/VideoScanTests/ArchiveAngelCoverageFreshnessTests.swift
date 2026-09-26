@@ -89,4 +89,57 @@ struct ArchiveAngelCoverageFreshnessTests {
         let expectedLine = ArchiveAngelEvent.summaryLine(sweepTable)
         #expect(job.plan.log.contains { $0.hasSuffix(expectedLine) }, "the walk's backlog line must be the sweep's: \(job.plan.log)")
     }
+
+    @Test("MAJOR-4: a stamp from another LAUNCH is never current — yesterday's revision 57 under a foreign token loses to today's 3; the same token wins; no token at all loses; coverage off ignores both")
+    func foreignLaunchTokenDeclines() {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let ids = (0..<4).map { _ in UUID() }
+        var records: [UUID: ArchiveAngelEvidenceRecord] = [:]
+        var live: [UUID: ArchiveAngelCandidate] = [:]
+        for (i, id) in ids.enumerated() {
+            var r = ArchiveAngelEvidenceRecord(score: 100 - i, lines: [], rejection: nil, useCount: 0, lastUsed: nil, computedAt: now)
+            r.recommendation = .ready
+            r.year = 1990 + i
+            records[id] = r
+            live[id] = ArchiveAngelCandidate(id: id, filename: "\(i).mov", durationSeconds: 1200, starRating: 2,
+                                             userDate: "\(1990 + i)-06-0\(i + 1)")
+        }
+        func store(token: String?, revision: Int?) -> ArchiveAngelEvidenceStore {
+            let s = ArchiveAngelEvidenceStore(directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("test_angel_launch_\(UUID().uuidString.prefix(8))"))
+            s.replace(with: .init(computedAt: now.addingTimeInterval(-600), complete: true, considered: 4, eligible: 4,
+                                  records: records, catalogRevision: revision, catalogLaunchToken: token))
+            return s
+        }
+        let yesterday = store(token: "launch-yesterday", revision: 57)
+        #expect(ArchiveAngelJob.selectFromEvidence(store: yesterday, count: 2, now: now, policy: .builtIn,
+                                                   catalogRevision: 3, launchToken: "launch-today") { live[$0] } == nil,
+                "57 from another launch is not newer than today's 3")
+        let today = store(token: "launch-today", revision: 3)
+        #expect(ArchiveAngelJob.selectFromEvidence(store: today, count: 2, now: now, policy: .builtIn,
+                                                   catalogRevision: 3, launchToken: "launch-today") { live[$0] } != nil)
+        #expect(ArchiveAngelJob.selectFromEvidence(store: today, count: 2, now: now, policy: .builtIn,
+                                                   catalogRevision: 4, launchToken: "launch-today") { live[$0] } == nil,
+                "same launch, the catalog moved on")
+        let untokened = store(token: nil, revision: 57)
+        #expect(ArchiveAngelJob.selectFromEvidence(store: untokened, count: 2, now: now, policy: .builtIn,
+                                                   catalogRevision: 0, launchToken: "launch-today") { live[$0] } == nil,
+                "no token = another launch (or a pre-v13 file)")
+        #expect(ArchiveAngelJob.selectFromEvidence(store: yesterday, count: 2, now: now, policy: .coverageOff,
+                                                   catalogRevision: 3, launchToken: "launch-today") { live[$0] } != nil,
+                "coverage off: rules v12, the stamps are ignored")
+        #expect(ArchiveAngelJob.coverageIsCurrent(stampedToken: "a", stampedRevision: 9, currentToken: "b", currentRevision: 1, coverage: .standard) == false)
+        #expect(ArchiveAngelJob.coverageIsCurrent(stampedToken: "a", stampedRevision: 9, currentToken: "a", currentRevision: 9, coverage: .standard))
+        #expect(ArchiveAngelJob.coverageIsCurrent(stampedToken: nil, stampedRevision: nil, currentToken: nil, currentRevision: nil, coverage: .standard),
+                "a caller with no launch state (a test of the pick alone) never declines on it")
+        // The sweep stamps the façade's token: a second façade is another launch.
+        let sb = try? MasterArchiveTestSupport.makeSandbox("angel_launch_token")
+        defer { sb?.cleanup() }
+        if let sb {
+            let model = MasterArchiveTestSupport.makeModel(sb)
+            let other = ArchiveAngel(model: model, environment: model.archiveAngel.environment)
+            #expect(model.archiveAngel.launchToken != other.launchToken)
+            #expect(model.archiveAngel.launchToken.count == 36)
+        }
+    }
 }

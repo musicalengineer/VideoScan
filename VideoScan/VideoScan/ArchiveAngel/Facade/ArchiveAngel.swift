@@ -77,6 +77,10 @@ final class ArchiveAngel: ObservableObject {
     /// coverage on declines evidence stamped older than this. Within a
     /// launch only; restarts at 0.
     private(set) var catalogRevision = 0
+    /// QA MAJOR-4: the launch this façade's `catalogRevision` counts within
+    /// — stamped beside the revision; a stamp from another launch is never
+    /// current (the counter restarts at 0).
+    let launchToken = UUID().uuidString
     private(set) var policySource: AngelRecommendationPolicy.Source = .builtIn
     private(set) var policyIsLoaded = false
     private var policyLoad: Task<Void, Never>?
@@ -237,7 +241,7 @@ final class ArchiveAngel: ObservableObject {
                 guard let self else { return (0, nil) }
                 return (self.attention.revision, self.attention.lastEventAt)
             },
-            catalogState: { [weak self] in self?.catalogRevision ?? 0 },
+            catalogState: { [weak self] in (self?.launchToken, self?.catalogRevision ?? 0) },
             policy: policy,
             log: { [weak self] line in self?.catalog?.angelLog(line) }
         )
