@@ -53,51 +53,71 @@ extension HallieLineageAnswer {
            Exec.isCuratedPerson(term, context: context) {
             return nil
         }
-        let word = relative.relation.rawValue.replacingOccurrences(of: "-", with: " ")
-        let sideWord = relative.side.map { $0.rawValue + " " } ?? ""
-        let them = objectPronoun(for: relative.relation)
+        let ask = KinAsk(term: term, relative: relative)
+        guard let ownerName = context.speakers.ownerName, !ownerName.isEmpty else {
+            return ask.decline(
+                "I can't tell whose \(ask.sideWord)\(ask.word) “\(term)” means — set your name in Hallie's settings and I'll look \(ask.them) up.",
+                basis: "Basis: a kin term names the owner's relative, and no owner is signed in; the family tree's names were not searched.")
+        }
+        if let fromPeopleTab = peopleTabRelative(ask, ownerName: ownerName, context: context, graph: graph) {
+            return fromPeopleTab
+        }
+        return treeRelative(ask, ownerName: ownerName, context: context, graph: graph)
+    }
+
+    /// The parsed term and the words its prose uses.
+    private struct KinAsk {
+        let term: String
+        let relative: HallieTurnExecutor.RelativeFactSubject
+        var word: String { relative.relation.rawValue.replacingOccurrences(of: "-", with: " ") }
+        var sideWord: String { relative.side.map { $0.rawValue + " " } ?? "" }
+        var them: String { HallieLineageAnswer.objectPronoun(for: relative.relation) }
+
         func decline(_ prose: String, basis: String) -> Detailed {
             .failure(Result(
                 route: .graph, outcome: .declined, prose: prose, basisLine: basis,
                 queryDescription: "lineage: resolve \(term) (kin term, unbound)",
                 citations: [], catalogPersonName: nil))
         }
-        guard let ownerName = context.speakers.ownerName, !ownerName.isEmpty else {
-            return decline(
-                "I can't tell whose \(sideWord)\(word) “\(term)” means — set your name in Hallie's settings and I'll look \(them) up.",
-                basis: "Basis: a kin term names the owner's relative, and no owner is signed in; the family tree's names were not searched.")
-        }
+    }
 
-        // Rung 1: the People tab's own relationship rows.
-        if relative.side == nil,
-           let overlay = Exec.kinshipOverlay(context: context), !overlay.isEmpty,
-           let wanted = KinshipRelation.parse(term: relative.relation.rawValue) {
-            let owners = overlay.nodes(claiming: ownerName, ownerName: ownerName)
-            if owners.count == 1 {
-                let hits = overlay.relatives(of: owners[0], relation: wanted.relation, sex: wanted.sex)
-                if hits.count > 1 {
-                    let linked = hits.compactMap { $0.member.gedcomID.flatMap { graph.people[$0] } }
-                    if linked.count == hits.count { return .ambiguous(linked) }
-                    return decline(
-                        "The People tab lists more than one \(word) for \(ownerName): "
-                            + hits.map(\.member.displayName).joined(separator: ", ")
-                            + ". Which one do you mean?",
-                        basis: "Basis: People tab relationships; the family tree's names were not searched.")
-                }
-                if let hit = hits.first {
-                    if let id = hit.member.gedcomID, let person = graph.people[id] {
-                        return .success(
-                            person,
-                            note: "“\(term)” taken as \(person.name), \(word) of \(ownerName) on the People tab.")
-                    }
-                    return decline(
-                        "“\(term)” is \(hit.member.displayName) on the People tab, but that profile isn't linked to a family-tree record yet, so I can't look \(them) up in the tree.",
-                        basis: "Basis: People tab relationships; the profile carries no family-tree pin; the tree's names were not searched.")
-                }
-            }
+    /// Rung 1: the People tab's own relationship rows. Nil when the tab
+    /// cannot say (no rows, no unique owner, a relation the overlay cannot
+    /// express, a side-qualified ask) — the tree gets its turn.
+    private static func peopleTabRelative(_ ask: KinAsk, ownerName: String,
+                                          context: HallieTurnExecutor.Context,
+                                          graph: GedcomFamilyGraph) -> Detailed? {
+        guard ask.relative.side == nil,
+              let overlay = HallieTurnExecutor.kinshipOverlay(context: context), !overlay.isEmpty,
+              let wanted = KinshipRelation.parse(term: ask.relative.relation.rawValue) else { return nil }
+        let owners = overlay.nodes(claiming: ownerName, ownerName: ownerName)
+        guard owners.count == 1 else { return nil }
+        let hits = overlay.relatives(of: owners[0], relation: wanted.relation, sex: wanted.sex)
+        guard let hit = hits.first else { return nil }
+        if hits.count > 1 {
+            let linked = hits.compactMap { $0.member.gedcomID.flatMap { graph.people[$0] } }
+            if linked.count == hits.count { return .ambiguous(linked) }
+            return ask.decline(
+                "The People tab lists more than one \(ask.word) for \(ownerName): "
+                    + hits.map(\.member.displayName).joined(separator: ", ")
+                    + ". Which one do you mean?",
+                basis: "Basis: People tab relationships; the family tree's names were not searched.")
         }
+        if let id = hit.member.gedcomID, let person = graph.people[id] {
+            return .success(
+                person,
+                note: "“\(ask.term)” taken as \(person.name), \(ask.word) of \(ownerName) on the People tab.")
+        }
+        return ask.decline(
+            "“\(ask.term)” is \(hit.member.displayName) on the People tab, but that profile isn't linked to a family-tree record yet, so I can't look \(ask.them) up in the tree.",
+            basis: "Basis: People tab relationships; the profile carries no family-tree pin; the tree's names were not searched.")
+    }
 
-        // Rung 2: the owner's own tree record, then a walk — never a name.
+    /// Rungs 2 and 3: the owner's own tree record, then a walk — never a
+    /// name — and the honest decline when the walk finds nobody.
+    private static func treeRelative(_ ask: KinAsk, ownerName: String,
+                                     context: HallieTurnExecutor.Context,
+                                     graph: GedcomFamilyGraph) -> Detailed {
         let owner: GedcomFamilyGraph.Person
         let ownerNote: String
         switch HallieOwnerResolver.resolve(
@@ -106,38 +126,45 @@ extension HallieLineageAnswer {
             owner = person
             ownerNote = note
         case .many:
-            return decline(
-                "More than one person in the family tree matches your name (\(ownerName)), so I can't tell who “\(term)” is. Set your FamilySearch ID in Hallie's settings and I will.",
+            return ask.decline(
+                "More than one person in the family tree matches your name (\(ownerName)), so I can't tell who “\(ask.term)” is. Set your FamilySearch ID in Hallie's settings and I will.",
                 basis: "Basis: the owner's name matches several tree records; the tree's names were not searched for the kin term.")
         case .none(let reason):
-            return decline(
-                reason ?? "I don't find you (\(ownerName)) in the family tree, so I can't tell who “\(term)” is.",
+            return ask.decline(
+                reason ?? "I don't find you (\(ownerName)) in the family tree, so I can't tell who “\(ask.term)” is.",
                 basis: "Basis: the owner is not in the family tree; the tree's names were not searched for the kin term.")
         }
-        var people: [GedcomFamilyGraph.Person] = []
-        if let relation = GedcomFamilyGraph.Relation(rawValue: relative.relation.rawValue) {
-            people = graph.relatives(relation, of: owner)
-        } else if let extended = GedcomFamilyGraph.ExtendedRelation(rawValue: relative.relation.rawValue),
-                  case .found(let paths) = graph.relatives(
-                    extended,
-                    side: relative.side.flatMap { GedcomFamilyGraph.KinshipSide(rawValue: $0.rawValue) },
-                    of: owner) {
-            var seen = Set<String>()
-            people = paths.map(\.relative).filter { seen.insert($0.id).inserted }
-        }
+        let people = relatives(of: owner, ask: ask, graph: graph)
         switch people.count {
         case 1:
             return .success(
                 people[0],
-                note: "“\(term)” taken as \(people[0].name), \(sideWord)\(word) of \(owner.name) in the family tree.")
+                note: "“\(ask.term)” taken as \(people[0].name), \(ask.sideWord)\(ask.word) of \(owner.name) in the family tree.")
         case 0:
             // Rung 3: the honest decline. The tree's 39k names stay unread.
-            return decline(
-                "The family tree doesn't record a \(sideWord)\(word) for \(owner.name), so I can't tell who “\(term)” is. Add \(them) on the People tab, or tell me — “let me tell you about \(term)” — and I'll remember.",
-                basis: ownerNote + " The tree records no \(sideWord)\(word) for that person; its names were not searched for the kin term.")
+            return ask.decline(
+                "The family tree doesn't record a \(ask.sideWord)\(ask.word) for \(owner.name), so I can't tell who “\(ask.term)” is. Add \(ask.them) on the People tab, or tell me — “let me tell you about \(ask.term)” — and I'll remember.",
+                basis: ownerNote + " The tree records no \(ask.sideWord)\(ask.word) for that person; its names were not searched for the kin term.")
         default:
             return .ambiguous(people)
         }
+    }
+
+    /// One hop (father, sister …) or the extended walk (grandmother,
+    /// great-great-grandfather, aunt …) from the owner's own record.
+    private static func relatives(of owner: GedcomFamilyGraph.Person, ask: KinAsk,
+                                  graph: GedcomFamilyGraph) -> [GedcomFamilyGraph.Person] {
+        let raw = ask.relative.relation.rawValue
+        if let relation = GedcomFamilyGraph.Relation(rawValue: raw) {
+            return graph.relatives(relation, of: owner)
+        }
+        guard let extended = GedcomFamilyGraph.ExtendedRelation(rawValue: raw),
+              case .found(let paths) = graph.relatives(
+                extended,
+                side: ask.relative.side.flatMap { GedcomFamilyGraph.KinshipSide(rawValue: $0.rawValue) },
+                of: owner) else { return [] }
+        var seen = Set<String>()
+        return paths.map(\.relative).filter { seen.insert($0.id).inserted }
     }
 
     /// "him" / "her" / "them" for the relation word, for the prose above.
