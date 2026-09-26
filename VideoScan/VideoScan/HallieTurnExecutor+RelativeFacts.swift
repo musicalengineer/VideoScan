@@ -146,6 +146,22 @@ extension HallieTurnExecutor {
             return first == "my" || first == "our"
         }
 
+        /// The relation word a typed PERSON TERM names, for conversation
+        /// memory (live 2026-09-26): "dad", "my dad", "Dad Breen", "gramma
+        /// breen" → "father" / "grandmother". Nil for a name, and for
+        /// anything longer than a kin word plus one surname — "dad's
+        /// brother" is a path, not a term.
+        static func kinRelation(inPersonTerm text: String) -> String? {
+            var words = text.lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
+                .split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "-" })
+                .map(String.init)
+            if words.first == "my" || words.first == "our" { words.removeFirst() }
+            guard let first = words.first, let relation = bareKinWords[first],
+                  words.count <= 2 else { return nil }
+            if words.count == 2, bareKinWords[words[1]] != nil { return nil }
+            return relation
+        }
+
         static func parse(_ text: String) -> Self? {
             var words = text.lowercased().replacingOccurrences(of: "-", with: " ")
                 .split(whereSeparator: \.isWhitespace).map(String.init)

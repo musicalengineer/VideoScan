@@ -1525,6 +1525,17 @@ enum HallieLineageAnswer {
            graph.person(familySearchID: context.speakers.ownerFamilySearchID) != nil {
             return .success(pinned, note: note)
         }
+        // Step 0b (live 2026-09-26): a kin term — "dad", "my dad", "our
+        // mother" — is the OWNER's relative and is never looked up as a
+        // tree NAME. The merged tree has a 1360 Welshman whose seventh NAME
+        // record is "Dad ab Giwn", and people(matching:) is token-exact
+        // over every NAME record, so "find videos of dad" was answered for
+        // him. People tab, then the owner's own record, then an honest
+        // decline — see HallieLineageAnswer+KinTerm. A curated alias ("Ma")
+        // returns nil here and keeps the CyberBrain / profile road below.
+        if let kin = ownerRelative(name, context: context, graph: graph) {
+            return kin
+        }
         // Same bridge the kinship routes use: the family CyberBrain knows
         // that "Rick" is a particular GEDCOM record even when the tree
         // spells him "Richard Harding Breen Jr".
