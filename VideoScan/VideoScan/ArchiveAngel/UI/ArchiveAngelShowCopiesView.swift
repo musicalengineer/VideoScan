@@ -157,7 +157,29 @@ struct ArchiveAngelShowCopiesView: View {
     // nightly run 36121118356). Same views, same order, same labels.
     private func representationCard(_ rep: CopyRepresentation) -> some View {
         let isRecommended: Bool = rep.id == a.recommendedRepresentationID
-        let recInstance: CopyInstance? = rep.instances.first { $0.id == rep.recommendedInstanceID }
+        let fill: Color = isRecommended ? Color.indigo.opacity(0.08) : Color.primary.opacity(0.03)
+        let stroke: Color = isRecommended ? Color.indigo.opacity(0.5) : Color.clear
+        return representationContent(rep, isRecommended: isRecommended)
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(fill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(stroke, lineWidth: 1)
+            )
+    }
+
+    /// The instance a representation recommends, if it names one.
+    static func recommendedInstance(of rep: CopyRepresentation) -> CopyInstance? {
+        guard let wanted: UUID = rep.recommendedInstanceID else { return nil }
+        return rep.instances.first { (inst: CopyInstance) -> Bool in inst.id == wanted }
+    }
+
+    /// Title row, reason, recommended copy, and (expanded) every location.
+    private func representationContent(_ rep: CopyRepresentation, isRecommended: Bool) -> some View {
+        let recInstance: CopyInstance? = Self.recommendedInstance(of: rep)
         return VStack(alignment: .leading, spacing: 6) {
             representationTitle(rep)
             Text(rep.reason)
@@ -171,15 +193,6 @@ struct ArchiveAngelShowCopiesView: View {
                 instanceList(rep)
             }
         }
-        .padding(8)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isRecommended ? Color.indigo.opacity(0.08) : Color.primary.opacity(0.03))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(isRecommended ? Color.indigo.opacity(0.5) : Color.clear, lineWidth: 1)
-        )
     }
 
     /// "3 locations · 1.2 GB" — the count and the representation's size.
