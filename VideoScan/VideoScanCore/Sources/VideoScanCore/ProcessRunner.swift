@@ -250,25 +250,33 @@ public enum ProcessRunner {
         // read fd (finishAfterChildExit / abandon). On a closed FileHandle,
         // a bare `handle.availableData` raises NSFileHandleOperationException
         // — an uncaught ObjC exception on a dispatch thread, i.e. a hard
-        // crash of the whole app. `lifecycle.readAvailableData(from:)` makes
+        // crash of the whole app. `lifecycle.readAndDeliver(from:_:)` makes
         // the read and the close MUTUALLY EXCLUSIVE (shared lock + state
         // check), so the race cannot occur at all. Do NOT "simplify" these
         // closures to a direct `handle.availableData` — the lifecycle gate
         // is load-bearing. (The throwing `read(upToCount:)` API is NOT a
         // usable alternative: on Darwin it blocks until count-or-EOF, which
         // stalls live progress streaming — verified empirically 2026-07-02.)
+        //
+        // LOST-OUTPUT GUARD (CI run 36214064340, 2026-09-26): the read AND
+        // its delivery (collector + line callbacks) happen inside ONE
+        // `readAndDeliver` critical section, and the terminationHandler's
+        // drain takes the same lock. Before, only the read was guarded: a
+        // handler could read "out1\nout2\n", the child's exit could run the
+        // drain (finding nothing — already read), finish() and resume the
+        // caller, and only THEN would the handler append — so the Result
+        // and the line callbacks were missing output the child wrote. A
+        // concurrent read by both could also reorder lines.
         stdoutHandle.readabilityHandler = { handle in
-            let data = lifecycle.readAvailableData(from: handle)
-            if !data.isEmpty {
+            lifecycle.readAndDeliver(from: handle) { data in
                 stdoutCollector.append(data)
                 stdoutStreamer.append(data)
             }
         }
         stderrHandle.readabilityHandler = { handle in
-            // Same crash-race guard as stdout above: reads must go through
-            // the lifecycle gate, never a direct `availableData`.
-            let data = lifecycle.readAvailableData(from: handle)
-            if !data.isEmpty {
+            // Same guards as stdout above: reads must go through the
+            // lifecycle gate, never a direct `availableData`.
+            lifecycle.readAndDeliver(from: handle) { data in
                 stderrCollector.append(data)
                 stderrStreamer.append(data)
             }
@@ -346,19 +354,25 @@ public enum ProcessRunner {
             // resumed with the timed-out Result.
             guard lifecycle.beginDraining() else { return }
 
-            let remainingOut = stdoutHandle.readDataToEndOfFile()
-            if !remainingOut.isEmpty {
-                stdoutCollector.append(remainingOut)
-                stdoutStreamer.append(remainingOut)
-            }
-            stdoutStreamer.finish()
+            // Exclusive with every readabilityHandler read+deliver: waits
+            // out one already in flight, so its data is appended BEFORE the
+            // tail below and before the caller is resumed (lost-output
+            // guard, see runProcess).
+            lifecycle.withReadsExcluded {
+                let remainingOut = stdoutHandle.readDataToEndOfFile()
+                if !remainingOut.isEmpty {
+                    stdoutCollector.append(remainingOut)
+                    stdoutStreamer.append(remainingOut)
+                }
+                stdoutStreamer.finish()
 
-            let remainingErr = stderrHandle.readDataToEndOfFile()
-            if !remainingErr.isEmpty {
-                stderrCollector.append(remainingErr)
-                stderrStreamer.append(remainingErr)
+                let remainingErr = stderrHandle.readDataToEndOfFile()
+                if !remainingErr.isEmpty {
+                    stderrCollector.append(remainingErr)
+                    stderrStreamer.append(remainingErr)
+                }
+                stderrStreamer.finish()
             }
-            stderrStreamer.finish()
 
             // Child exited: cancel any pending deadline/escalation work
             // items and close the parent-side READ fds NOW — not 300 s from
@@ -629,9 +643,31 @@ public enum ProcessRunner {
         /// empty instead of touching a dead handle. `availableData` cannot
         /// stall the lock: dispatch only invokes the handler when the fd is
         /// readable (data or EOF), so the read returns immediately.
-        func readAvailableData(from handle: FileHandle) -> Data {
+        ///
+        /// Lost-output guard (2026-09-26): read AND hand the bytes to `deliver` inside one `readLock`
+        /// critical section, so the terminationHandler's drain (which runs
+        /// under `withReadsExcluded`) can never finish and resume the caller
+        /// between a handler's read and its delivery. `deliver` is not
+        /// called for an empty read (EOF, or the run already closed).
+        func readAndDeliver(from handle: FileHandle, _ deliver: (Data) -> Void) {
             readLock.lock()
             defer { readLock.unlock() }
+            let data = readLocked(from: handle)
+            if !data.isEmpty { deliver(data) }
+        }
+
+        /// Run `body` (the terminationHandler's drain) with no readability
+        /// read/delivery in progress. Must not be nested inside `close` —
+        /// `close` takes `readLock` too; the drain calls
+        /// `finishAfterChildExit()` only after this returns.
+        func withReadsExcluded(_ body: () -> Void) {
+            readLock.lock()
+            defer { readLock.unlock() }
+            body()
+        }
+
+        /// Caller holds `readLock`.
+        private func readLocked(from handle: FileHandle) -> Data {
             lock.lock()
             let isClosed = state == .closed
             lock.unlock()
@@ -700,7 +736,7 @@ public enum ProcessRunner {
             workItems = []
             lock.unlock()
             for item in items { item.cancel() }
-            // readLock pairs with readAvailableData(from:): wait out any
+            // readLock pairs with readAndDeliver(from:_:): wait out any
             // in-flight readabilityHandler read before closing its fd, and
             // any handler arriving after this sees state == .closed and
             // never touches the handle. (`lock` is NOT held here, so the
