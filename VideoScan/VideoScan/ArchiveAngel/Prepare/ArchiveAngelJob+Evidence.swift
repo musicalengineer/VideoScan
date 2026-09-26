@@ -328,13 +328,18 @@ extension ArchiveAngelJob {
         /// when the arm has what it needs (or a budget is spent).
         mutating func wants(tier: Int, score: Int, evidenceYear: Int?) -> Bool {
             guard !done else { return false }
-            if within >= count {
-                // Filled: finish the band the last coverage row came from, then stop.
-                let sameBand = lastConsumedKey.map { $0.tier == tier && $0.score == score } ?? false
-                if !sameBand { done = true; return false }
+            let sameBand = lastConsumedKey.map { $0.tier == tier && $0.score == score } ?? false
+            if within >= count, !sameBand {
+                // Filled, and the band the last coverage row came from is finished: stop clean.
+                done = true
+                return false
             }
             if looks >= coverageLookBudget || projections >= coverageProjectionBudget {
-                incomplete = within < count
+                // A budget ran out. Clean only if the batch is full AND the
+                // band the last consumed row came from was finished; ending
+                // MID-BAND means which of its equal-key rows were read was
+                // the order of ids (QA MAJOR-2, A4) — never accepted.
+                incomplete = within < count || sameBand
                 done = true
                 return false
             }

@@ -433,6 +433,101 @@ struct ArchiveAngelCoverageCutoffTests {
         }
     }
 
+    /// QA MAJOR-2 (A4): 10 band rows of 1994 at score 200, then ONE arrival
+    /// band of `bandSize` equal-score (100) rows over five years, ranked
+    /// only by duration; ids from `seed`. Skippable 1994 rows (`skippable`,
+    /// all at score 150 — every one of them in the evidence's year, so the
+    /// arm skips them by that year without a projection) sit between when
+    /// asked for, with `tail` rows of other years at score 50 under them.
+    private func bandFixture(seed: UInt64, bandSize: Int, skippable: Int = 0, tail: Int = 0, now: Date)
+    -> (ArchiveAngelEvidenceStore, [ArchiveAngelCandidate], [UUID: ArchiveAngelCandidate]) {
+        var rng = SplitMix(seed: seed)
+        var records: [UUID: ArchiveAngelEvidenceRecord] = [:]
+        var live: [UUID: ArchiveAngelCandidate] = [:]
+        var all: [ArchiveAngelCandidate] = []
+        func add(_ c: ArchiveAngelCandidate, score: Int, year: Int) {
+            var c = c
+            c.id = rng.uuid()
+            records[c.id] = evidence(score, year: year, now: now)
+            live[c.id] = c
+            all.append(c)
+        }
+        for i in 0..<10 {
+            add(video("top-\(i).mov", year: 1994, month: 1, day: 1 + i, minutes: 60, stars: 3), score: 200, year: 1994)
+        }
+        for i in 0..<skippable {
+            add(video("skip-\(i).mov", year: 1994, month: 1 + i % 12, day: 1 + i % 28, minutes: 30), score: 150, year: 1994)
+        }
+        let years = [1990, 1998, 2004, 2011, 2015]
+        for i in 0..<bandSize {
+            let y = years[i % years.count]
+            add(video("band-\(i).mov", folder: "/Volumes/X/\(i % 7)", year: y, month: 1 + (i / 5) % 12, day: 1 + (i / 60) % 28,
+                      minutes: Double(10 + (i * 7) % 50), sizeBytes: 8_000_000_000 + Int64(i)), score: 100, year: y)
+        }
+        for i in 0..<tail {
+            add(video("tail-\(i).mov", year: years[i % years.count], month: 3, day: 1 + i % 28, minutes: 20), score: 50, year: years[i % years.count])
+        }
+        return (evidenceStore(records, now: now), all, live)
+    }
+
+    @Test("MAJOR-2 (A4): a projection budget that runs out MID-BAND never yields a pick — 450 equal-score rows over five years under a 400 budget → declined for every id draw (which 400 were read was UUID order)")
+    func budgetEndingMidBandDeclines() {
+        let now = testNow
+        for seed in UInt64(1)...16 {
+            let (store, all, live) = bandFixture(seed: seed * 104_729, bandSize: 450, now: now)
+            var projected = 0
+            let cached = ArchiveAngelJob.selectFromEvidence(store: store, count: 10, now: now, policy: .builtIn) { id in
+                projected += 1
+                return live[id]
+            }
+            #expect(projected <= 10 + ArchiveAngelJob.coverageProjectionBudget + 3, "seed \(seed): the budget holds (\(projected))")
+            let expected = storedWalk(all, store: store, count: 10, policy: .builtIn, now: now).map(\.candidate.id)
+            if let cached {
+                #expect(cached.selection.picks.map(\.candidate.id) == expected, "seed \(seed): a pick that was made must be the walk's")
+            }
+            #expect(cached == nil, "seed \(seed): 450 > the 400 budget — the band cannot be finished, so the cache must decline")
+        }
+    }
+
+    @Test("MAJOR-2 (A4): a band that fits the projection budget is finished and the pick is the walk's, for every id draw")
+    func bandWithinBudgetIsFinished() {
+        let now = testNow
+        for seed in UInt64(1)...16 {
+            let (store, all, live) = bandFixture(seed: seed * 7_919, bandSize: 300, now: now)
+            var projected = 0
+            let cached = ArchiveAngelJob.selectFromEvidence(store: store, count: 10, now: now, policy: .builtIn) { id in
+                projected += 1
+                return live[id]
+            }
+            let expected = storedWalk(all, store: store, count: 10, policy: .builtIn, now: now).map(\.candidate.id)
+            #expect(cached?.selection.picks.map(\.candidate.id) == expected, "seed \(seed)")
+            #expect(projected >= 310 && projected <= 313, "seed \(seed): the whole band was read, and nothing past it (\(projected))")
+        }
+    }
+
+    @Test("MAJOR-2: the LOOK budget — 25,000 skippable 1994 rows cost lookups, not projections; past the budget the cache declines short; 5,000 fit and the pick is the walk's")
+    func lookBudget() {
+        let now = testNow
+        let (big, _, bigLive) = bandFixture(seed: 11, bandSize: 0, skippable: 25_000, tail: 8, now: now)
+        var projected = 0
+        let declined = ArchiveAngelJob.selectFromEvidence(store: big, count: 10, now: now, policy: .builtIn) { id in
+            projected += 1
+            return bigLive[id]
+        }
+        #expect(declined == nil, "the eight other-year rows sit beyond 20,000 looks — the batch cannot be filled from what was read")
+        #expect(projected < 30, "skipping is by the evidence year: \(projected) projections, never 25,000")
+        let (small, all, smallLive) = bandFixture(seed: 12, bandSize: 0, skippable: 5_000, tail: 8, now: now)
+        projected = 0
+        let cached = ArchiveAngelJob.selectFromEvidence(store: small, count: 10, now: now, policy: .builtIn) { id in
+            projected += 1
+            return smallLive[id]
+        }
+        let expected = storedWalk(all, store: small, count: 10, policy: .builtIn, now: now).map(\.candidate.id)
+        #expect(cached?.selection.picks.map(\.candidate.id) == expected)
+        #expect(years(of: cached?.selection.picks ?? []) == [1994: 2, 1990: 2, 1998: 2, 2004: 2, 2011: 1, 2015: 1])
+        #expect(projected < 40, "\(projected)")
+    }
+
     @Test("SCARCE YEAR from the cache: everything 1994 → the cache would have to top up from rows it skipped, so it declines and the walk fills the batch")
     func scarceYearDeclinesCache() {
         let now = testNow
