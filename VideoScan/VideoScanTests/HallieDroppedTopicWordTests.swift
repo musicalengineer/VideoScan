@@ -143,11 +143,18 @@ struct HallieDroppedTopicWordTests {
     /// place/occasion word in the PEOPLE slot is a topic, unless it is an
     /// inner-circle name.
     @Test func aPlaceWordInThePeopleSlotIsSearchedAsAPlace() async throws {
-        // The live tree has a Cape family, so "cape" passes for a known
-        // surname and the unknown-name demotion keeps it as a person.
+        // The live tree has a (distant, unrelated) Cape family, so "cape"
+        // passes for a known surname and the unknown-name demotion keeps it
+        // as a person. Rick is the root, as in the live tree.
         let tree = GedcomFamilyGraph(gedcomText: """
         0 HEAD
         0 @I1@ INDI
+        1 NAME Richard Harding /Breen/ Jr
+        1 SEX M
+        0 @I2@ INDI
+        1 NAME Jacob /Morse/
+        1 SEX M
+        0 @I9@ INDI
         1 NAME John /Cape/
         1 SEX M
         0 TRLR
