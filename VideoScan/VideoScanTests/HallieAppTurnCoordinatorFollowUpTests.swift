@@ -19,8 +19,12 @@ struct HallieAppTurnCoordinatorFollowUpTests {
     private func records() -> [VideoRecord] {
         (0..<3).map { index in
             let record = VideoRecord()
-            record.fullPath = "/isolated/199\(index)/donna_\(index).mov"
-            record.filename = "donna_\(index).mov"
+            // Index 2 is at the Cape: "play donna at the cape" must find a
+            // cape video, now that a place word the translator dropped is put
+            // back (HallieDroppedTopicWord, 2026-09-25).
+            let name = index == 2 ? "donna_cape_\(index).mov" : "donna_\(index).mov"
+            record.fullPath = "/isolated/199\(index)/\(name)"
+            record.filename = name
             record.confirmedByUserPeople = [
                 ConfirmedTag(name: "Donna", confirmedAt: Date(timeIntervalSince1970: 0)),
             ]
@@ -170,6 +174,8 @@ struct HallieAppTurnCoordinatorFollowUpTests {
         #expect(response.playAfterAnswer == true)
         #expect(response.executedIntent?.playAfterAnswer == true)
         #expect(response.executedIntent?.originalQuestion == "play donna at the cape")
+        // The fixture translator drops "cape"; the executor puts it back.
+        #expect(response.result.citations.map(\.filename) == ["donna_cape_2.mov"])
     }
 
     @Test func capabilityAndFamilyTreeShapesNeverReachTheModel() async throws {
