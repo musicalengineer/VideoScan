@@ -8,6 +8,11 @@
 // so a network scan the user had paused resumed by itself after a share
 // blip while its row still said Paused. A user Pause is the `.user` reason
 // and survives the volume coming back.
+//
+// Each keepalive holds the volume reason under its OWN owner id
+// (adversarial QA on 2f6bce1c): after Stop → Start on the same target, an
+// old keepalive's late exit-time release must not open a gate a newer
+// keepalive still holds while the volume is still down.
 
 import Foundation
 
@@ -18,6 +23,8 @@ actor VolumeKeepalive {
     private var keepaliveTask: Task<Void, Never>?
     private var isVolumeDown = false
     private let log: @Sendable (String) -> Void
+    /// This keepalive's identity as a holder of the gate's volume reason.
+    private let ownerID = UUID()
 
     init(volumePath: String,
          pollInterval: TimeInterval = 30,
@@ -31,7 +38,7 @@ actor VolumeKeepalive {
 
     func start(pauseGate: PauseGate) {
         keepaliveTask?.cancel()
-        keepaliveTask = Task { [volumePath, pollInterval, recoveryPollInterval, log] in
+        keepaliveTask = Task { [volumePath, pollInterval, recoveryPollInterval, log, ownerID] in
             // Whether THIS task currently holds the gate's volume reason.
             // Tracked locally (not via isVolumeDown) so the release below
             // happens in the same task as the pause — sequential, so it can
@@ -48,7 +55,7 @@ actor VolumeKeepalive {
                         log("  ⚠ Volume \(volumePath) unreachable — pausing scan, will retry every \(Int(recoveryPollInterval))s")
                     }
                     if !holdsVolumePause {
-                        await pauseGate.pause(.volume)
+                        await pauseGate.pause(.volume, owner: ownerID)
                         holdsVolumePause = true
                     }
                     try? await Task.sleep(for: .seconds(recoveryPollInterval))
@@ -58,7 +65,7 @@ actor VolumeKeepalive {
                         log("  ✓ Volume \(volumePath) is back — resuming scan")
                     }
                     if holdsVolumePause {
-                        await pauseGate.resume(.volume)
+                        await pauseGate.resume(.volume, owner: ownerID)
                         holdsVolumePause = false
                     }
                     try? await Task.sleep(for: .seconds(pollInterval))
@@ -69,7 +76,7 @@ actor VolumeKeepalive {
             // cannot park the next scan on this target's gate forever. The
             // stopped scan's own waiters already returned on cancellation.
             if holdsVolumePause {
-                await pauseGate.resume(.volume)
+                await pauseGate.resume(.volume, owner: ownerID)
             }
         }
     }

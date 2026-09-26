@@ -315,6 +315,9 @@ extension PersonFinderModel {
 
     func removeJob(_ job: ScanJob) {
         job.scanTask?.cancel()
+        // Same as stopJob (GH #191): release a user-paused job's parked
+        // workers so they see the cancellation and free their slots.
+        Task { await job.pauseGate.resume() }
         job.timerTask?.cancel()
         jobs.removeAll { $0.id == job.id }
         // Also drop the on-disk descriptor so the search doesn't reappear
@@ -655,6 +658,13 @@ extension PersonFinderModel {
     func stopJob(_ job: ScanJob) {
         let prev = job.status
         job.scanTask?.cancel()
+        // GH #191: a user pause holds even a CANCELLED waiter (by design —
+        // PauseGate.waitIfPaused), so Stop must also resume the gate. Without
+        // this, a paused job's workers stayed parked at their checkpoint
+        // while holding MemoryPressureMonitor worker slots: activeWorkers
+        // leaked and runScan never returned. Reached by Stop, Stop All and
+        // delete-person (deletePOI). Same pattern as stopCombine/stopTarget.
+        Task { await job.pauseGate.resume() }
         job.stopElapsedTimer()
         if prev.isActive {
             job.status = .cancelled

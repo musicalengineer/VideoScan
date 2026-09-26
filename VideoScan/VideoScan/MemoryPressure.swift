@@ -134,14 +134,14 @@ actor MemoryPressureMonitor {
     /// Returns `true` when a slot was taken — the caller then owes exactly
     /// one `decrementWorkers()`. Returns `false` when the calling task was
     /// cancelled before a slot came free (or on entry); nothing was taken
-    /// and nothing must be decremented.
+    /// and nothing must be decremented. Deliberately NOT
+    /// @discardableResult: the compiler makes every caller look at it.
     ///
     /// Cancellation (night QA 2026-09-25): a waiter used to park on a plain
     /// continuation that only `decrementWorkers()` released, so a Person
     /// Finder job the user Stopped sat until ANOTHER job's worker finished a
     /// video — then took a slot anyway. C++ analogy: a condition-variable
     /// wait whose predicate now includes a stop_token.
-    @discardableResult
     func acquireWorkerSlot(requested: Int, engine: RecognitionEngine) async -> Bool {
         while true {
             if Task.isCancelled { return false }
@@ -278,7 +278,23 @@ enum PauseReason: String, Sendable, Hashable, CaseIterable {
 /// Tasks call `waitIfPaused()` at safe checkpoints. When paused,
 /// they suspend until resumed — no teardown, no resource leaks.
 actor PauseGate {
-    private var reasons: Set<PauseReason> = []
+    /// Who holds each reason. A reason is held while its owner set is
+    /// non-empty; a reason with no holders has no key. Owner-less callers
+    /// (the user buttons, the memory loop) share one anonymous token, so for
+    /// them this behaves exactly like a plain set of reasons.
+    ///
+    /// Why owners (adversarial QA on 2f6bce1c): Stop → Start on the same
+    /// scan target before scan #1 drains leaves TWO keepalives on one target
+    /// gate. With a plain set, scan #1's late exit-time resume(.volume)
+    /// opened a gate that scan #2's keepalive still held with the volume
+    /// still down. Each keepalive now pauses under its own id.
+    /// C++ analogy: std::map<Reason, std::set<OwnerId>> — a per-reason
+    /// multi-owner hold, released when the last owner lets go.
+    private var holders: [PauseReason: Set<UUID>] = [:]
+    private static let anonymousOwner = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+
+    /// The reasons currently held (by any owner).
+    private var reasons: Set<PauseReason> { Set(holders.keys) }
     /// Parked waiters, keyed by a per-wait id so a cancelled waiter can
     /// remove and resume exactly its own continuation.
     private var waiters: [UInt64: CheckedContinuation<Void, Never>] = [:]
@@ -356,16 +372,21 @@ actor PauseGate {
     /// Stop path: cancel, then resume()) re-checks and returns.
     func resume() { resume(.user) }
 
-    /// Add one owner's reason. Idempotent.
-    func pause(_ reason: PauseReason) {
-        reasons.insert(reason)
+    /// Add `owner`'s hold on `reason` (nil = the shared anonymous owner).
+    /// Idempotent per owner.
+    func pause(_ reason: PauseReason, owner: UUID? = nil) {
+        holders[reason, default: []].insert(owner ?? Self.anonymousOwner)
     }
 
-    /// Remove one owner's reason and wake parked waiters to re-evaluate —
-    /// they return if the gate is now open (or they were cancelled and no
-    /// user pause holds them), else they park again.
-    func resume(_ reason: PauseReason) {
-        reasons.remove(reason)
+    /// Remove `owner`'s hold on `reason` (nil = the anonymous owner) — the
+    /// reason stays while any other owner still holds it — and wake parked
+    /// waiters to re-evaluate: they return if the gate is now open (or they
+    /// were cancelled and no user pause holds them), else they park again.
+    func resume(_ reason: PauseReason, owner: UUID? = nil) {
+        if var owners = holders[reason] {
+            owners.remove(owner ?? Self.anonymousOwner)
+            holders[reason] = owners.isEmpty ? nil : owners
+        }
         wakeAllWaiters()
     }
 
@@ -405,7 +426,7 @@ actor PauseGate {
         if autoPauseEnabled && reasons.isEmpty {
             let pressureHigh = await pressureCheck()
             if pressureHigh {
-                reasons.insert(.memory)
+                pause(.memory)
                 // Notify on main actor that we auto-paused
                 await MainActor.run {
                     NotificationCenter.default.post(

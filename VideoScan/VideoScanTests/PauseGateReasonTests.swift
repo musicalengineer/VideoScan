@@ -141,3 +141,101 @@ import os
         _ = await probe.value
     }
 }
+
+// MARK: - Volume-reason ownership across keepalives (adversarial QA on 2f6bce1c)
+//
+// Stop → Start on the same scan target before scan #1 drains leaves two
+// keepalives on ONE target gate. With a plain reason set, scan #1's late
+// exit-time resume(.volume) opened a gate scan #2's keepalive still held
+// while the volume was still down. Each keepalive now holds the volume
+// reason under its own owner id; the reason stays while any owner remains.
+
+private func waitUntil(_ seconds: Double = 2, _ cond: @escaping () async -> Bool) async -> Bool {
+    let by = ContinuousClock.now + .milliseconds(Int(seconds * 1000))
+    while ContinuousClock.now < by {
+        if await cond() { return true }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return await cond()
+}
+
+@Suite struct KeepaliveVolumeReasonOwnershipTests {
+    @Test("an OLD keepalive stopping late must not release a NEWER keepalive's volume pause", .timeLimit(.minutes(1)))
+    func oldKeepaliveExit_doesNotOpenGateHeldByNewKeepalive() async {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ka-owner-gone-\(UUID().uuidString)", isDirectory: true)
+        let gate = PauseGate(autoPause: false)
+        // Scan #1 on this target (network root down).
+        let old = VolumeKeepalive(volumePath: missing.path, pollInterval: 0.05,
+                                  recoveryPollInterval: 0.05, log: { _ in })
+        await old.start(pauseGate: gate)
+        #expect(await waitUntil { await gate.isPaused }, "precondition: outage paused the gate")
+        // Stop, then Start again before scan #1's task finished draining:
+        // scan #2 starts its own keepalive on the SAME target gate.
+        let new = VolumeKeepalive(volumePath: missing.path, pollInterval: 0.05,
+                                  recoveryPollInterval: 0.05, log: { _ in })
+        await new.start(pauseGate: gate)
+        #expect(await waitUntil { await new.volumeIsDown })
+        try? await Task.sleep(for: .milliseconds(100))   // new has now paused the gate
+        // Scan #1's scanTask finally reaches `await ka.stop()`.
+        await old.stop()
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(await gate.isPaused,
+                "volume is STILL down and scan #2's keepalive holds the pause — the gate must stay closed")
+        await new.stop()
+        #expect(await waitUntil { !(await gate.isPaused) }, "once the last owner stops, the gate opens")
+    }
+
+    @Test("two volume owners: the reason stays until BOTH release; anonymous release does not free an owned hold")
+    func volumeReason_isHeldPerOwner() async {
+        let gate = PauseGate(autoPause: false)
+        let a = UUID(), b = UUID()
+        await gate.pause(.volume, owner: a)
+        await gate.pause(.volume, owner: b)
+        await gate.resume(.volume, owner: a)
+        #expect(await gate.isPaused, "b still holds the volume reason")
+        await gate.resume(.volume)                      // no owner: not b's hold
+        #expect(await gate.isPaused)
+        await gate.resume(.volume, owner: b)
+        #expect(await gate.isPaused == false)
+        #expect(await gate.pauseReasons.isEmpty)
+    }
+}
+
+// MARK: - Gate edge probes (adversarial QA on 2f6bce1c; green by design)
+
+@Suite struct PauseGateEdgeProbeTests {
+    @Test("{user, memory}: a cancelled waiter returns after Stop's resume() even though memory is still high", .timeLimit(.minutes(1)))
+    func stopDuringUserPlusMemory() async {
+        let gate = PauseGate(pressureCheck: { true }, recheckInterval: .milliseconds(20), autoPause: true)
+        let done = OSAllocatedUnfairLock(initialState: false)
+        let t = Task { await gate.waitIfPaused(); done.withLock { $0 = true } }
+        #expect(await waitUntil { await gate.pauseReasons.contains(.memory) })
+        await gate.pause()
+        try? await Task.sleep(for: .milliseconds(60))
+        t.cancel()
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(!done.withLock { $0 }, "user pause holds a cancelled waiter until resume()")
+        await gate.resume()
+        #expect(await waitUntil { done.withLock { $0 } })
+        #expect(await gate.pauseReasons == [.memory], "memory reason remains (self-heals on the next waiter's poll)")
+    }
+
+    @Test("stress: 300 waiters, random cancels, interleaved reasons — all finish, no hang", .timeLimit(.minutes(1)))
+    func stress() async {
+        let gate = PauseGate(autoPause: false)
+        await gate.pause(); await gate.pause(.volume)
+        let finished = OSAllocatedUnfairLock(initialState: 0)
+        var tasks: [Task<Void, Never>] = []
+        for _ in 0..<300 {
+            tasks.append(Task { await gate.waitIfPaused(); finished.withLock { $0 += 1 } })
+        }
+        for (i, t) in tasks.enumerated() where i % 3 == 0 { t.cancel() }
+        for i in 0..<50 {
+            if i % 2 == 0 { await gate.resume(.volume) } else { await gate.pause(.volume) }
+            await Task.yield()
+        }
+        await gate.resume(.volume); await gate.resume()
+        #expect(await waitUntil(5) { finished.withLock { $0 } == 300 })
+    }
+}

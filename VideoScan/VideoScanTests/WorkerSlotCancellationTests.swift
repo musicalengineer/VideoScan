@@ -18,7 +18,7 @@ import os
         await monitor.incrementWorkers()               // another job's worker holds the only slot (requested 1)
         let returned = OSAllocatedUnfairLock(initialState: false)
         let waiter = Task {
-            await monitor.acquireWorkerSlot(requested: 1, engine: .vision)
+            _ = await monitor.acquireWorkerSlot(requested: 1, engine: .vision)
             returned.withLock { $0 = true }
         }
         try? await Task.sleep(for: .milliseconds(200))  // let it park
@@ -38,7 +38,7 @@ import os
         await monitor.incrementWorkers()               // the holder
         let returned = OSAllocatedUnfairLock(initialState: false)
         let waiter = Task {
-            await monitor.acquireWorkerSlot(requested: 1, engine: .vision)
+            _ = await monitor.acquireWorkerSlot(requested: 1, engine: .vision)
             returned.withLock { $0 = true }
         }
         try? await Task.sleep(for: .milliseconds(200))
@@ -76,5 +76,26 @@ import os
         #expect(await waiter.value, "an uncancelled waiter acquires the freed slot")
         #expect(await monitor.currentWorkers() == 1)
         await monitor.decrementWorkers()
+    }
+    @Test("stress: 200 waiters, half cancelled, the worker count returns to exactly 0", .timeLimit(.minutes(1)))
+    func slotStress() async {
+        let monitor = MemoryPressureMonitor()
+        await monitor.incrementWorkers()
+        let tasks: [Task<Bool, Never>] = (0..<200).map { _ in
+            Task {
+                let got = await monitor.acquireWorkerSlot(requested: 1, engine: .vision)
+                if got { await monitor.decrementWorkers() }   // finish "the video", free the slot
+                return got
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+        for (i, t) in tasks.enumerated() where i % 2 == 0 { t.cancel() }
+        await monitor.decrementWorkers()
+        var acquired = 0
+        for t in tasks {
+            if await t.value { acquired += 1 }
+        }
+        #expect(await monitor.currentWorkers() == 0)
+        #expect(acquired <= 100)
     }
 }
