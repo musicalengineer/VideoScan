@@ -137,12 +137,15 @@ extension ArchiveAngelJob {
             if let band = bandKey, rowTier > band.tier || (rowTier == band.tier && arrivalScore < band.score) { pastBand = true }
             if armActive { arm.noteArrival(tier: rowTier, score: arrivalScore) }
             if pastBand {
-                let freshDone = freshCollected >= freshWanted || extraLooks >= freshScanBudget
-                if !freshDone { extraLooks += 1 }
-                let freshWants = !freshDone && Self.freshArmWants(evidence, arrivalScore: arrivalScore, weights: weights, arm: arm)
-                let coverageWants = armActive && arm.wants(tier: rowTier, score: arrivalScore, evidenceYear: evidence.year)
-                if freshDone && (!armActive || arm.done) { stoppedEarly = true; break }
-                if !freshWants && !coverageWants { continue }
+                // Both arms' verdict on a row past the band (nil = neither
+                // arm wants anything more: stop; false = skip; true = read).
+                guard let read = Self.pastBandWants(evidence, tier: rowTier, arrivalScore: arrivalScore,
+                                                    freshCollected: freshCollected, freshWanted: freshWanted,
+                                                    extraLooks: &extraLooks, weights: weights, arm: &arm) else {
+                    stoppedEarly = true
+                    break
+                }
+                if !read { continue }
             }
             // The copies of this recording, reclassified LIVE: the pick is
             // the group's live choice (the new Keep, not the cached one).
@@ -206,7 +209,7 @@ extension ArchiveAngelJob {
             }
             collected.append(.init(candidate: candidate, score: pickEvidence.score, evidence: pickEvidence.lines))
             tiers[pickID] = tier
-            let survivesCoverage = !armActive || arm.noteCollected(candidate)
+            let survivesCoverage = arm.noteCollected(candidate)
             let groupIsNew = candidate.duplicateGroupID.map { seenGroups.insert($0).inserted } ?? true
             let familyIsNew = seenFamilies.insert(candidate.resolvedFamilyKey).inserted
             if candidate.isFreshToPerson, groupIsNew, familyIsNew, survivesCoverage { freshCollected += 1 }
@@ -236,22 +239,43 @@ extension ArchiveAngelJob {
         // could rank above the ones it would put back — decline, the job
         // walks. The same when a coverage budget ran out short.
         let cut = ArchiveAngelScorer.coverageCut(kept, coverage: coverage, count: count, rejected: &rejected, now: now, by: order)
-        var declined = arm.incomplete || (cut.toppedUp > 0 && (stoppedEarly || arm.skipped > 0))
         kept = cut.picks
         let picks = ArchiveAngelScorer.withFreshSlots(kept, count: count, weights: weights, by: order)
-        // codex F1, belt to the braces above: the fresh arm stopped
-        // because it believed it had `freshWanted` survivors, yet the batch
-        // holds fewer fresh files — a same-band row outranked one after it
-        // was counted. Rows remain unread; the walk decides.
-        if coverage.isActive, stoppedEarly, freshCollected >= freshWanted,
-           picks.filter({ $0.candidate.isFreshToPerson }).count < freshWanted {
-            declined = true
-        }
+        let declined = arm.incomplete || (cut.toppedUp > 0 && (stoppedEarly || arm.skipped > 0))
+            || Self.freshShareShort(picks, coverage: coverage, stoppedEarly: stoppedEarly,
+                                    freshCollected: freshCollected, freshWanted: freshWanted)
         // Evidence that no longer yields a full batch is not trusted — walk.
         guard !declined, picks.count == count else { return nil }
         let overflow = max(0, ranked.ids.count - projections) + (kept.count - picks.count)
         return EvidencePick(selection: .init(picks: picks, overflow: overflow, rejected: rejected),
                             computedAt: store.computedAt ?? now, projections: projections)
+    }
+
+    /// Past the band, one row, both arms: nil when neither arm wants any
+    /// more rows (the loop stops; rows remain unread), false when this row
+    /// is not read, true when it is. The fresh arm spends one look per row
+    /// until it has its share or its budget is gone; the coverage arm
+    /// answers for itself. Pure but for the two counters.
+    static func pastBandWants(_ evidence: ArchiveAngelEvidenceRecord, tier: Int, arrivalScore: Int,
+                              freshCollected: Int, freshWanted: Int, extraLooks: inout Int,
+                              weights: ArchiveAngelWeights, arm: inout CoverageArm) -> Bool? {
+        let freshDone = freshCollected >= freshWanted || extraLooks >= freshScanBudget
+        if !freshDone { extraLooks += 1 }
+        let freshWants = !freshDone && freshArmWants(evidence, arrivalScore: arrivalScore, weights: weights, arm: arm)
+        let coverageWants = arm.active && arm.wants(tier: tier, score: arrivalScore, evidenceYear: evidence.year)
+        if freshDone && (!arm.active || arm.done) { return nil }
+        return freshWants || coverageWants
+    }
+
+    /// codex F1, belt to the braces in `CoverageArm.noteCollected`: the
+    /// fresh arm stopped because it believed it had `freshWanted`
+    /// survivors, yet the batch holds fewer fresh files — a same-band row
+    /// outranked one after it was counted — and rows remain unread. True =
+    /// decline; the walk decides. Never fires with coverage off (rules v12).
+    static func freshShareShort(_ picks: [ArchiveAngelPick], coverage: AngelCoverageRules, stoppedEarly: Bool,
+                                freshCollected: Int, freshWanted: Int) -> Bool {
+        guard coverage.isActive, stoppedEarly, freshCollected >= freshWanted else { return false }
+        return picks.filter { $0.candidate.isFreshToPerson }.count < freshWanted
     }
 
     /// The fresh arm's test for one row past the band (Phase 1): never
