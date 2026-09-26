@@ -156,6 +156,10 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
         if line.hasPrefix("Runs ") {
             return "It runs \(line.dropFirst("Runs ".count))."
         }
+        if line.hasPrefix("Fills a gap — ") {
+            // Rules v13: "Fills a gap — 2010 has 156 videos still to archive and 27 archived"
+            return "It helps fill a gap in the archive: \(line.dropFirst("Fills a gap — ".count))."
+        }
         if line.hasPrefix("Lives on "), line.hasSuffix(" (no role assigned)") {
             let volume = line.dropFirst("Lives on ".count).dropLast(" (no role assigned)".count)
             return "It lives on \(volume), a drive that has not been given a role yet."
@@ -183,6 +187,11 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
         case "Not assessed yet": return "Archive Angel has not looked at it yet."
         case ArchiveAngelRejection.footageOriginalArchived.rawValue:
             return "Find Similar Footage matched it to footage whose original is already in the archive, so it is not new material."
+        // Rules v13 coverage: batch limits, never exclusions.
+        case ArchiveAngelRejection.sameEventAsPick.rawValue:
+            return "Another file from the same day is already in this batch, so this one waits for a later batch."
+        case ArchiveAngelRejection.yearCoverage.rawValue:
+            return "This batch already has its share of that year; Archive Angel spreads each batch across the years still to archive, so this one waits for a later batch."
         // Rules v12 class-rule lines (AngelPolicyDefaults).
         case AngelPolicyDefaults.absurdBitrateLine:
             return "The file is far larger than its length explains — probably a broken encode. Play it before archiving."

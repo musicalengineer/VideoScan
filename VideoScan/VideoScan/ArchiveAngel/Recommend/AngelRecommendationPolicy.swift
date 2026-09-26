@@ -22,6 +22,8 @@
 //   recommend  classes, vouches, date, copies   ┘ language (AngelRuleLanguage)
 //   grades     the A/B/C/D bands
 //   tables     originality, delivery codecs, app-cache names, family folders
+//   coverage   (rules v13) one per event, the per-year share of a batch,
+//              the backlog bonus's numbers — additive, every key defaulted
 // See docs/archive_angel_policy.md for the reference and worked examples.
 //
 // An override is MERGED over the built-in rules, so a file may hold only
@@ -67,9 +69,37 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
     var tables: AngelPolicyTables = .standard
     /// Ready / Needs a date / Worth a look.
     var recommend: AngelRecommendRules = .standard
+    /// Rules v13: how a batch spreads across events and years, and the
+    /// backlog bonus's numbers. Additive — an older file reads with these
+    /// defaults.
+    var coverage: AngelCoverageRules = .standard
 
     /// The rules compiled into the app — today's behaviour.
     static let builtIn = AngelRecommendationPolicy()
+
+    init() {}
+
+    /// Every section optional on a DIRECT decode (the loader merges a file
+    /// over the built-in rules first, so it never needs this; the sweep's
+    /// and the tests' direct decodes of an older encoding do). Rules v13:
+    /// an encoding written before `coverage` existed decodes to today's
+    /// coverage. (≈ a C++ aggregate with default member initializers.)
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? Self.currentSchemaVersion
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "default"
+        weights = try c.decodeIfPresent(ArchiveAngelWeights.self, forKey: .weights) ?? .standard
+        floors = try c.decodeIfPresent([AngelRule].self, forKey: .floors) ?? AngelPolicyDefaults.floors
+        signals = try c.decodeIfPresent([AngelRule].self, forKey: .signals) ?? AngelPolicyDefaults.signals
+        grades = try c.decodeIfPresent(AngelGradeBands.self, forKey: .grades) ?? .standard
+        tables = try c.decodeIfPresent(AngelPolicyTables.self, forKey: .tables) ?? .standard
+        recommend = try c.decodeIfPresent(AngelRecommendRules.self, forKey: .recommend) ?? .standard
+        coverage = try c.decodeIfPresent(AngelCoverageRules.self, forKey: .coverage) ?? .standard
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, name, weights, floors, signals, grades, tables, recommend, coverage
+    }
     /// The built-in rules' fingerprint — what an unstamped evidence.json
     /// is assumed to have been scored under.
     static let defaultFingerprint = builtIn.fingerprint
@@ -115,6 +145,7 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
         problems += grades.problems
         problems += tables.problems
         problems += recommend.problems
+        problems += coverage.problems
         return problems
     }
 
@@ -428,7 +459,7 @@ struct AngelRecommendationPolicy: Codable, Sendable, Equatable {
             guard let object, let reference else { return }
             out += object.keys.filter { reference[$0] == nil }.map { section + "." + $0 }
         }
-        for section in ["weights", "grades", "tables"] {
+        for section in ["weights", "grades", "tables", "coverage"] {
             objectKeys(section, in: given[section] as? [String: Any], against: known[section] as? [String: Any])
         }
         let recommend = given["recommend"] as? [String: Any]

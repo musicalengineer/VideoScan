@@ -5,6 +5,9 @@
 // the sweep, its configuration, the launch trigger and the setting.
 
 import Foundation
+import os
+
+private let coverageLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "archiveAngel")
 
 extension VideoScanModel {
 
@@ -25,6 +28,12 @@ extension VideoScanModel {
         ArchiveAngelScorer.markDerivatives(&out, policy: rules)   // T10 H3: needs the whole set (one O(n) pass)
         ArchiveAngelScorer.markArchivedFootage(&out, archivedGroups: archivedFootageGroupIDs(active))   // rules v12
         ArchiveAngelScorer.applyFamilyAttention(&out, weights: rules.weights)   // Phase 1: a variant of a skipped file is not new
+        // Rules v13 coverage: event keys and the per-year backlog table, ONE
+        // O(n) pass, here beside the others — never in `select`'s loop.
+        // Runs after markArchivedFootage so an archived footage group's
+        // members count as archived backlog, not as work to do.
+        let backlog = ArchiveAngelEvent.applyCoverage(&out, policy: rules)
+        coverageLog.info("\(ArchiveAngelEvent.summaryLine(backlog), privacy: .public)")
         return out
     }
 

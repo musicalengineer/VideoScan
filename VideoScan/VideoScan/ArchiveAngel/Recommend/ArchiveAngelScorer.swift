@@ -122,6 +122,25 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     /// tape is never proposed as new material. Set by the sweep's candidate
     /// builder in one O(n) pre-pass; nowhere else.
     var archivedFootageOriginal: Bool
+    /// Rules v13 coverage (2026-09-26, ArchiveAngelEvent): the DAY this
+    /// file records ("d:1994-11-24") and its year at any precision. nil =
+    /// the pre-pass has not run (computed on demand by `resolvedEvent`);
+    /// "" = no day-precise date (never collapses).
+    var eventKey: String?
+    var eventYear: Int?
+    /// Rules v13: the catalog's backlog for this file's year — recordings
+    /// still to archive and recordings already archived — written by the
+    /// same pre-pass (`ArchiveAngelEvent.applyCoverage`). 0 / 0 when it
+    /// has not run; the `backlogBonus` signal then says nothing.
+    var yearUnarchived: Int
+    var yearArchived: Int
+
+    /// The event key and year: the pre-pass's answer when it ran, else
+    /// resolved now (the evidence path's few per-record projections).
+    func resolvedEvent(now: Date) -> (key: String, year: Int?) {
+        if let key = eventKey { return (key, eventYear) }
+        return ArchiveAngelEvent.resolve(self, now: now)
+    }
 
     /// Rick 2026-09-21: a Live Photo's motion half
     /// (`jpegvideocomplement_*.mov`, ~3 s) is part of a photo, not a video.
@@ -189,7 +208,8 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
          duplicateGroupCount: Int = 0, duplicateDisposition: DuplicateDisposition = .none,
          userDateConfidence: String? = nil, originMake: String? = nil, originEncoder: String? = nil,
          footageGroupID: UUID? = nil, footageRank: Int? = nil, footageConfidence: FootageConfidence? = nil,
-         isAngelWorkingCopy: Bool = false, archivedFootageOriginal: Bool = false) {
+         isAngelWorkingCopy: Bool = false, archivedFootageOriginal: Bool = false,
+         eventKey: String? = nil, eventYear: Int? = nil, yearUnarchived: Int = 0, yearArchived: Int = 0) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds; self.streamTypeRaw = streamTypeRaw; self.isPlayable = isPlayable
         self.starRating = starRating; self.mediaDisposition = mediaDisposition; self.archiveStage = archiveStage
@@ -214,6 +234,8 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         self.footageConfidence = footageConfidence
         self.isAngelWorkingCopy = isAngelWorkingCopy
         self.archivedFootageOriginal = archivedFootageOriginal
+        self.eventKey = eventKey; self.eventYear = eventYear
+        self.yearUnarchived = yearUnarchived; self.yearArchived = yearArchived
     }
 }
 
@@ -292,6 +314,17 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     /// "a copy is in the archive" — this file's bytes may be nowhere in
     /// it; the footage is. A SAFETY reason (the `archivedCopy` floor).
     case footageOriginalArchived = "The original of this footage is already in the archive"
+    /// Rules v13 coverage (2026-09-26): one pick per DAY per batch, whatever
+    /// the name or folder. Rick: five versions of Thanksgiving 1994 are one
+    /// pick; the rest wait for a later batch. A diversity choice (codex
+    /// D2), never "a copy" and never an exclusion — the batch is topped up
+    /// from these when no other day can fill it.
+    case sameEventAsPick = "Another pick from the same day is already in this batch — spreading picks across events"
+    /// Rules v13 coverage: a batch holds at most `coverage.maxPerYearPerBatch`
+    /// files of one year, so the picks spread across the years still to
+    /// archive. Held for a later batch, never excluded; only counted when
+    /// the batch could be filled from other years.
+    case yearCoverage = "Held for a later batch — this batch already has its share of that year"
 }
 
 extension ArchiveAngelRejection {
@@ -369,6 +402,13 @@ struct ArchiveAngelWeights: Sendable, Equatable, Codable {
     var halfTapeSeconds = 1800.0
     var longSceneSeconds = 900.0
     var sceneSeconds = 300.0
+    // Rules v13 (2026-09-26, codex review, acceptance gate "Duration
+    // policy"): the duration band is UNCHANGED. Under 2 min is the
+    // `tooShort` floor (60 s for an explicit pick), 2–5 min earns nothing,
+    // 5 min–1 h the tiers above, and a three-hour capture keeps its +60 —
+    // "no ceiling — a two-tape capture is still the whole thing"
+    // (ArchiveAngelScorerTests). The band's edges are already these policy
+    // keys; ArchiveAngelDurationBandTests pins every edge as a sensor.
     /// Hard floor for EVERY automatically proposed clip, marked or not.
     /// Rick 2026-09-10: "exclude short videos under 1 minute for now …
     /// we'll keep these short videos in the catalog". (Earlier: 60 s
@@ -469,8 +509,13 @@ enum ArchiveAngelScorer {
     /// members (`archivedFootageOriginal`), the `recentDigitization` and
     /// `absurdBitrate` class rules, Person Finder compilations as app
     /// output, and RecordDateResolver's filename-year-beats-conversion-
-    /// stamp rule — every v11 sidecar must rescore.
-    static let rulesVersion = 12
+    /// stamp rule — every v11 sidecar must rescore; 13 = coverage
+    /// (2026-09-26, docs/footage_groups_gap_plan_2026-09-26.md Stage 2):
+    /// one pick per DAY per batch and a per-year share (both soft, both
+    /// post-band), the `backlogBonus` signal over unique recordings, and
+    /// the evidence file's `catalogRevision` stamp — every v12 sidecar
+    /// must rescore.
+    static let rulesVersion = 13
 
     /// The verdict for one record under the built-in rules with these
     /// weights. Pure.
@@ -635,8 +680,122 @@ enum ArchiveAngelScorer {
                              tier: byClass && !p.recommend.prepareClasses.isEmpty ? { tier[$0.id] ?? .max } : { _ in 0 })
         picks = onePerDuplicateGroup(picks, rejected: &rejected, collapseBy: p.recommend.copies.batchCollapseBy)
         picks = onePerFamily(picks, rejected: &rejected)
+        // Rules v13 coverage: POST-band filters only (codex #1643 A4 — the
+        // ranked order above is never mutated): one per event, then the
+        // per-year share, both SOFT (a batch is never left short for
+        // them), both counted, never silently dropped.
+        picks = coverageCut(picks, coverage: p.coverage, count: max(0, count), rejected: &rejected, now: now, by: order).picks
         let kept = withFreshSlots(picks, count: max(0, count), weights: w, by: order)
         return .init(picks: kept, overflow: max(0, picks.count - kept.count), rejected: rejected)
+    }
+
+    /// What a soft coverage pass did: the rows it kept (in `order`), how
+    /// many it held back for another batch (before any top-up), and how
+    /// many of those it put back to fill the batch. Rows still held are
+    /// the ones counted as rejected.
+    struct CoverageCut {
+        var picks: [ArchiveAngelPick]
+        var heldBack: Int
+        var toppedUp: Int
+        var stillHeld: Int { heldBack - toppedUp }
+    }
+
+    /// Both coverage passes in order: one per event (when the policy says
+    /// so), then the per-year share. Pure.
+    static func coverageCut(_ picks: [ArchiveAngelPick], coverage: AngelCoverageRules, count: Int,
+                            rejected: inout [ArchiveAngelRejection: Int], now: Date = Date(),
+                            by order: (ArchiveAngelPick, ArchiveAngelPick) -> Bool = rank) -> CoverageCut {
+        guard coverage.onePerEvent || coverage.maxPerYearPerBatch > 0 else {
+            return CoverageCut(picks: picks, heldBack: 0, toppedUp: 0)
+        }
+        // A pick that missed the pre-pass (a set scored without it) is
+        // resolved ONCE here, not once per pass: RecordDateResolver is the
+        // costly read (0.8 s per 100k in Debug).
+        var picks = picks
+        for i in picks.indices where picks[i].candidate.eventKey == nil {
+            let r = ArchiveAngelEvent.resolve(picks[i].candidate, now: now)
+            picks[i].candidate.eventKey = r.key
+            picks[i].candidate.eventYear = r.year
+        }
+        var out = CoverageCut(picks: picks, heldBack: 0, toppedUp: 0)
+        if coverage.onePerEvent {
+            let events = onePerEvent(picks, count: count, rejected: &rejected, now: now, by: order)
+            out = CoverageCut(picks: events.picks, heldBack: events.heldBack, toppedUp: events.toppedUp)
+        }
+        let years = capPerYear(out.picks, cap: coverage.maxPerYearPerBatch, count: count, rejected: &rejected, now: now, by: order)
+        return CoverageCut(picks: years.picks, heldBack: out.heldBack + years.heldBack, toppedUp: out.toppedUp + years.toppedUp)
+    }
+
+    /// Rules v13 coverage: one pick per EVENT (ArchiveAngelEvent: the same
+    /// DAY) ahead of the batch cut — a diversity choice, never identity.
+    /// `picks` must be in `order`; the best member of a day stays, the rest
+    /// are HELD BACK — but a batch is never left short for it: when the
+    /// rows kept are fewer than `count`, the best held-back rows top the
+    /// list up (Manager ruling 2026-09-26: a partial batch reads as
+    /// "nothing to do"). Only rows still held are counted under
+    /// `.sameEventAsPick`. Rows with no day never collapse. The result is
+    /// in `order` (a top-up re-sorts: everything kept is in the batch, so
+    /// its order is the rank order again). Pure.
+    static func onePerEvent(_ picks: [ArchiveAngelPick], count: Int,
+                            rejected: inout [ArchiveAngelRejection: Int],
+                            now: Date = Date(),
+                            by order: (ArchiveAngelPick, ArchiveAngelPick) -> Bool = rank) -> CoverageCut {
+        var seen: Set<String> = []
+        var within: [ArchiveAngelPick] = []
+        var held: [ArchiveAngelPick] = []
+        within.reserveCapacity(picks.count)
+        for pick in picks {
+            let key = pick.candidate.resolvedEvent(now: now).key
+            if key.isEmpty || seen.insert(key).inserted { within.append(pick) } else { held.append(pick) }
+        }
+        return softCut(within: within, held: held, count: count, reason: .sameEventAsPick, rejected: &rejected, by: order)
+    }
+
+    /// Rules v13 coverage: at most `cap` picks per YEAR ahead of the batch
+    /// cut (`cap` ≤ 0 = no cap). Same soft rule as `onePerEvent`: rows a
+    /// year has no room for are held back, the batch is topped up from
+    /// them when other years cannot fill it, and only rows still held are
+    /// counted under `.yearCoverage`. Rows with NO year are never capped:
+    /// there is no year to spread them over (rules v12 behaviour for every
+    /// undated row; the backlog table reports them in their own bucket and
+    /// never rewards them — codex D3). Pure.
+    static func capPerYear(_ picks: [ArchiveAngelPick], cap: Int, count: Int,
+                           rejected: inout [ArchiveAngelRejection: Int],
+                           now: Date = Date(),
+                           by order: (ArchiveAngelPick, ArchiveAngelPick) -> Bool = rank) -> CoverageCut {
+        guard cap > 0 else { return CoverageCut(picks: picks, heldBack: 0, toppedUp: 0) }
+        var perYear: [Int: Int] = [:]
+        var within: [ArchiveAngelPick] = []
+        var held: [ArchiveAngelPick] = []
+        within.reserveCapacity(picks.count)
+        for pick in picks {
+            guard let year = pick.candidate.resolvedEvent(now: now).year else { within.append(pick); continue }
+            let n = perYear[year, default: 0]
+            if n < cap {
+                perYear[year] = n + 1
+                within.append(pick)
+            } else {
+                held.append(pick)
+            }
+        }
+        return softCut(within: within, held: held, count: count, reason: .yearCoverage, rejected: &rejected, by: order)
+    }
+
+    /// The soft rule shared by the coverage passes: `held` tops `within`
+    /// up to `count` (in `order`), the rest are counted under `reason`.
+    static func softCut(within: [ArchiveAngelPick], held: [ArchiveAngelPick], count: Int,
+                        reason: ArchiveAngelRejection, rejected: inout [ArchiveAngelRejection: Int],
+                        by order: (ArchiveAngelPick, ArchiveAngelPick) -> Bool) -> CoverageCut {
+        guard !held.isEmpty else { return CoverageCut(picks: within, heldBack: 0, toppedUp: 0) }
+        var kept = within
+        let topUp = max(0, min(held.count, count - within.count))
+        if topUp > 0 {
+            kept.append(contentsOf: held.prefix(topUp))
+            kept.sort(by: order)
+        }
+        let stillHeld = held.count - topUp
+        if stillHeld > 0 { rejected[reason, default: 0] += stillHeld }
+        return CoverageCut(picks: kept, heldBack: held.count, toppedUp: topUp)
     }
 
     /// Phase 1: one member per EVENT FAMILY per batch (the generalised
