@@ -298,9 +298,23 @@ struct HallieTranscriptFileStore: Sendable {
     }
 
     private func dayString(for event: HallieTranscriptEvent) -> String {
+        Self.utcDayString(event.timestamp)
+    }
+
+    /// Gregorian/UTC, built once. Was rebuilt for EVERY event (QA,
+    /// 2026-09-26) — a Calendar init per logged line. `Calendar` is a
+    /// Sendable value type; dateComponents on a shared instance is safe.
+    private static let utcCalendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .gmt
-        let parts = calendar.dateComponents([.year, .month, .day], from: event.timestamp)
+        return calendar
+    }()
+
+    /// "yyyy-MM-dd" of `date` in UTC — the log file's day key. Output is
+    /// pinned by HallieConversationLogTests against an independent
+    /// formatter; it names files already on disk, so it must never change.
+    static func utcDayString(_ date: Date) -> String {
+        let parts = utcCalendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d",
                       parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
