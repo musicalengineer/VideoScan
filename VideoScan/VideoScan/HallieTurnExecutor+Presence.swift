@@ -16,6 +16,25 @@ extension HallieTurnExecutor {
         let source: String
     }
 
+    /// "find donna down the cape in the 90s" → people=[Donna, cape]
+    /// (clean replay 2026-09-25): a curated place/occasion word in the
+    /// people slot is a topic keyword — the tree's Cape family must not
+    /// make it a person. Inner-circle names (People tab, CyberBrain) stay.
+    static func demoteTopicPeople(
+        _ effective: inout ArchivistQueryAST.Presence, context: Context
+    ) -> String? {
+        guard let people = effective.people, !people.isEmpty else { return nil }
+        let topics = people.filter {
+            HallieDroppedTopicWord.isTopicWord($0) && !isInnerCircleName($0, context: context)
+        }
+        guard !topics.isEmpty else { return nil }
+        let kept = people.filter { !topics.contains($0) }
+        effective.people = kept.isEmpty ? nil : kept
+        effective.keywords = (effective.keywords ?? []) + topics
+        let quoted = topics.map { "“\($0)”" }.joined(separator: ", ")
+        return "\(quoted) is a place or occasion, not a person, so I searched it as a word"
+    }
+
     /// Puts back a curated topic word the translator dropped; returns the
     /// basis note, or nil when nothing was restored.
     static func restoreDroppedTopicWords(
@@ -46,6 +65,8 @@ extension HallieTurnExecutor {
         var effective = payload
         var notes: [String] = []
         var correctionAnnouncements: [String] = []
+
+        if let note = demoteTopicPeople(&effective, context: context) { notes.append(note) }
 
         if let people = effective.people, !people.isEmpty {
             let recovery = recoverPresencePeople(people, context: context)
