@@ -1018,10 +1018,13 @@ extension PersonFinderModel {
         // Cache miss — wait for disk feeder to warm this file before proceeding
         await feeder?.waitForWarm(idx)
 
-        await MemoryPressureMonitor.shared.acquireWorkerSlot(
+        // A cancelled wait (Stop) returns false and took no slot — so the
+        // decrement is registered only after a real acquire, never twice.
+        let gotSlot = await MemoryPressureMonitor.shared.acquireWorkerSlot(
             requested: settings.concurrency,
             engine: settings.recognitionEngine
         )
+        guard gotSlot else { return (idx, nil) }
         defer { Task { await MemoryPressureMonitor.shared.decrementWorkers() } }
 
         let logFn: @Sendable (String) async -> Void = { line in await job.appendLog(line) }
