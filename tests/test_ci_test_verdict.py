@@ -122,6 +122,24 @@ class CIVerdictTests(unittest.TestCase):
         # xcodebuild really exits 65 here; only the masked 0 was wrong.
         self.assertFalse(any(e.startswith("Unexpected xcodebuild exit") for e in errors), errors)
 
+    def test_known_issues_in_the_summary_total_are_accepted(self):
+        # Verbatim from the first COMPLETE run of the whole CI plan through
+        # this gate (ricksm5, fix/ci-red-5): canary + 3 withKnownIssue tests.
+        line = ("✘ Test run with 9065 tests in 1311 suites failed after 1054.691 seconds "
+                "with 4 issues (including 3 known issues).")
+        log = CLEAN.replace(CLEAN.splitlines()[-1], line)
+        self.assertEqual(verdict.problems(log, 65), [])
+        self.assertTrue(verdict.canary_only_summary(
+            "✘ Test run with 5 tests in 1 suite failed after 1.0 seconds with 2 issues (including 1 known issue)."))
+
+    def test_an_unknown_issue_hiding_among_known_ones_is_rejected(self):
+        for line in ("✘ Test run with 9065 tests in 1311 suites failed after 1.0 seconds with 5 issues (including 3 known issues).",
+                     "✘ Test run with 9065 tests in 1311 suites failed after 1.0 seconds with 3 issues (including 3 known issues).",
+                     "✘ Test run with 9065 tests in 1311 suites failed after 1.0 seconds with 2 issues."):
+            with self.subTest(line=line):
+                self.assertFalse(verdict.canary_only_summary(line))
+                self.assertTrue(verdict.problems(CLEAN.replace(CLEAN.splitlines()[-1], line), 65))
+
     def test_two_summaries_are_rejected_even_if_one_looks_right(self):
         second = "✔ Test run with 10 tests in 2 suites passed after 1.0 seconds.\n"
         errors = verdict.problems(CLEAN + second, 65)

@@ -10,7 +10,8 @@ A run is accepted only when ALL of these hold:
   * the test host was never restarted by xcodebuild (a restart means a test
     crashed, hung or exceeded its time limit, and Swift Testing's final
     summary then covers only the LAST launch);
-  * exactly one Swift Testing run summary, failed with only the canary issue;
+  * exactly one Swift Testing run summary, failed with the canary as its only
+    issue that is not a known issue (withKnownIssue records count in the total);
   * xcodebuild's own exit code is 65 (tests failed — the canary).
 """
 import argparse
@@ -19,6 +20,26 @@ from pathlib import Path
 
 RESTART = "Restarting after unexpected exit, crash, or test timeout"
 CANARY_NAME = r"mustFail\(\)"
+
+
+SUMMARY = re.compile(
+    r"^✘ Test run with \d+ tests? .*failed after .* with (\d+) issues?"
+    r"(?: \(including (\d+) known issues?\))?\.$")
+
+
+def canary_only_summary(line):
+    """True for a failed run summary whose only UNKNOWN issue is the canary.
+
+    withKnownIssue records count in Swift Testing's total, so a complete
+    run with the canary and three known issues prints
+    "… with 4 issues (including 3 known issues)." (ricksm5, fix/ci-red-5,
+    the first complete run of the whole plan ever fed to this gate).
+    """
+    match = SUMMARY.match(line)
+    if not match:
+        return False
+    issues, known = int(match.group(1)), int(match.group(2) or 0)
+    return issues - known == 1
 
 
 def problems(text, exit_code):
@@ -51,7 +72,7 @@ def problems(text, exit_code):
     if issues:
         errors.append(f"{len(issues)} test issue record(s) outside the canary: " + " | ".join(issues))
     summaries = [s for s in lines if re.match(r"^[✔✘] Test run with \d+ tests? ", s)]
-    if not any(re.match(r"^✘ Test run with \d+ tests? .*failed after .* with 1 issue\.$", s) for s in summaries):
+    if not any(canary_only_summary(s) for s in summaries):
         seen = " | ".join(summaries) if summaries else "none"
         errors.append("Missing completed Swift Testing summary with only the canary issue "
                       f"(summaries seen: {seen})")
