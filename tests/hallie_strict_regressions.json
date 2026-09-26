@@ -1036,6 +1036,120 @@
     "photography"
    ],
    "notes": "lv260926-004 (2026-09-26 14:17 ET). LIVE MISS: Dafydd again, word for word, after the correction and the service story. Two causes: the same lineage-shape name lookup as strict-056, and no memory of who 'dad' had just been settled to be. Fixed 2026-09-26: ConversationMemory.kinBindings (relation word → the person an ANSWERED graph turn settled on, 'dad breen' → Richard Harding Breen Sr; graph answers only, never a catalog answer's contested given name) and lineageTurn substitutes the bound person into a media ask before any lookup. Pinned by HallieDadNotDafyddTests (afterTheCorrectionVideosOfDadKeepsRichardSr, with a People tab that has NO relationship rows and a tree with NO parents for the owner, so only the conversation can bind it). followUp is allowed: the model may read 'sure, but' as a continuation."
+  },
+  {
+   "id": "strict-060",
+   "category": "strict",
+   "text": "find the person in the family tree with the earliest birth date",
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "Gruffudd ap Einion",
+    "780"
+   ],
+   "mustMatchQueryDescription": [
+    "superlative: earliestBorn scope=wholeTree"
+   ],
+   "mustNotContain": [
+    "recorded ancestors"
+   ],
+   "notes": "lv260926-007 (session E1832598, Rick, app, 2026-09-26 16:47 ET). Worked live and MUST NOT CHANGE: the unscoped superlative ranks the whole tree word for word as before (sensor C of fix/hallie-superlative-scope; HallieSuperlativeScopeTests.theUnscopedSuperlativeStillRanksTheWholeTreeWordForWord pins the byte-identical prose, basis and chips on the fixture). Set-up for strict-061."
+  },
+  {
+   "id": "strict-061",
+   "category": "strict",
+   "text": "find the person in the family tree with the earliest birth date who is a direct ancestor to rick",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "recorded ancestors"
+   ],
+   "mustMatchQueryDescription": [
+    "superlative: earliestBorn scope=ancestorsOf"
+   ],
+   "mustNotContain": [
+    "Gruffudd",
+    "780",
+    "scope=wholeTree"
+   ],
+   "notes": "lv260926-008 (2026-09-26 16:48 ET). LIVE MISS: 'superlative: earliestBorn scope=wholeTree → Gruffudd ap Einion' again — the 'who is a direct ancestor to rick' clause was dropped. Root cause: HallieLineageQuestion.superlativeKindAndScope (HallieLineageQuestion.swift, the scope reader) knew only 'of|among|in|from X's ancestors|line|…' and 'ancestor of X' — not 'for', not 'tree', not 'ancestor TO rick', not a trailing 'for rick' — so every scoped ask ranked the WHOLE tree (scope=wholeTree in the log) and answered Gruffudd ap Einion b. 780, Donna's line. Fixed 2026-09-26 (fix/hallie-superlative-scope): HallieLineageQuestion.personScope reads a trailing relative clause ('who is a direct ancestor to X'), a trailing 'for X', 'of|among|in|from|for|on X's ancestors|line|side|tree|family tree|descendants' and 'ancestor(s)|descendant(s) of|to X'; 'my/our family tree' stays the whole tree (pinned 2026-08-26). The answer walks X's ancestors (the biography's own enumeration, GedcomFamilyGraph.ancestorLine, de-duplicated) and says so: 'The earliest birth year among Richard Harding Breen Jr’s N recorded ancestors is …', basis 'Ranked n of X’s N recorded ancestors across G generations'. Pinned by HallieSuperlativeScopeTests."
+  },
+  {
+   "id": "strict-062",
+   "category": "strict",
+   "text": "that person b. 780 is donna's ancestor, not mine. I want mine",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "recorded ancestors"
+   ],
+   "mustMatchQueryDescription": [
+    "superlative: earliestBorn scope=ancestorsOf"
+   ],
+   "mustNotContain": [
+    "Gruffudd",
+    "operation=familyTree",
+    "Richard Harding Breen Jr (Richard in the People tab) was born"
+   ],
+   "notes": "lv260926-011 (2026-09-26 16:48 ET). LIVE MISS: read by the translator as 'shape=graph operation=familyTree person=Rick Breen' — Rick's own biography ('was born 4 March 1959 in Boston …'). A correction of the previous ranking's SCOPE, not a new question. Fixed 2026-09-26: Result.superlative (typed payload: the kind and scope a ranking ran) → ConversationMemory.lastSuperlative (kinBindings style: replaced by the next ranking, cleared by any other lane answer) → HallieSuperlativeCorrection.scope(in:) in preTranslation, before the repair turn, re-runs the SAME kind over the corrected scope ('not mine' / 'I want mine' → the owner's ancestors). Never claims a question in its own right. Pinned by HallieSuperlativeScopeTests.everyCorrectionPhraseRerunsTheSameKind."
+  },
+  {
+   "id": "strict-063",
+   "category": "strict",
+   "text": "find the earliest birth year for richard's tree",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "recorded ancestors"
+   ],
+   "mustMatchQueryDescription": [
+    "superlative: earliestBorn scope=ancestorsOf"
+   ],
+   "mustNotContain": [
+    "Gruffudd",
+    "780",
+    "scope=wholeTree"
+   ],
+   "notes": "lv260926-009 (2026-09-26 16:49 ET). LIVE MISS, Rick's own words in the report: 'I added for Rick and got that same answer'. 'for richard's tree' was dropped (no 'for', no 'tree' in the scope reader) → scope=wholeTree → Gruffudd. Fixed with strict-061 (a trailing 'for X' / 'for X's tree'). 'richard' resolves the way every lineage shape resolves a name — the owner's FamilySearch pin / People-tab bridge settled it live ('Richard Harding Breen Jr (Richard in the People tab)'); a genuine namesake tie asks which one, as elsewhere."
+  },
+  {
+   "id": "strict-064",
+   "category": "strict",
+   "text": "that is donna's line",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "recorded ancestors"
+   ],
+   "mustMatchQueryDescription": [
+    "superlative: earliestBorn scope=ancestorsOf"
+   ],
+   "mustNotContain": [
+    "Gruffudd",
+    "Brockton",
+    "operation=familyTree",
+    "Donna Hudson was born"
+   ],
+   "notes": "lv260926-012 (2026-09-26 16:49 ET). LIVE MISS: 'shape=graph operation=familyTree person=donna' — Donna's biography ('born 4 August 1959 in Brockton …'). 'that is X's line' after a ranking = the OTHER side of the family from X's: SuperlativeScope.otherSideOf(X) → the owner's ancestors when X is not the owner, the spouse's when X is ('that is my line'). Fixed with strict-062; pinned by HallieSuperlativeScopeTests.thatIsDonnasLineRerunsTheRankingOverRicksAncestors."
   }
  ]
 }
