@@ -132,6 +132,40 @@ jobs:
         run: |
           echo "## Unit Tests — Pure-Logic Suites" >> $GITHUB_STEP_SUMMARY
           START=$(date +%s)
+          # ── Hang watchdog (fix/ci-red-4, run 36214064340) ──
+          # The test host prints TEST_HOST_HEARTBEAT every 10 s from its main
+          # run loop (VideoScan/main.swift). No heartbeat for 180 s means the
+          # main thread is blocked or spinning: `sample` the host so the log
+          # names the stack, then once more 5 min later (identical stack =
+          # blocked, moving = spinning). Diagnostic only: never kills, writes
+          # to the step log (not test-output.log), cannot change the verdict.
+          # sudo -n fallback: an unsigned host may refuse task_for_pid.
+          (
+            set +e
+            # `sleep & wait` so the TERM below lands at once and takes the
+            # sleeper with it (no orphan holding the step's stdout open).
+            trap 'kill "$NAP" 2>/dev/null; exit 0' TERM
+            nap() { sleep "$1" & NAP=$!; wait "$NAP"; }
+            n=0
+            while [ "$n" -lt 2 ]; do
+              nap 30
+              last=$(grep -a -o 'TEST_HOST_HEARTBEAT epoch=[0-9]*' test-output.log 2>/dev/null | tail -1 | sed 's/.*epoch=//')
+              case "$last" in ''|*[!0-9]*) continue ;; esac
+              stale=$(( $(date +%s) - last ))
+              [ "$stale" -gt 180 ] || continue
+              pid=$(pgrep -f 'Debug/VideoScan.app/Contents/MacOS/VideoScan' | head -1)
+              [ -n "$pid" ] || continue
+              echo "::warning::HANG WATCHDOG: no TEST_HOST_HEARTBEAT for ${stale}s; sampling test host pid $pid"
+              sample "$pid" 10 -file "hang-sample-$n.txt" >/dev/null 2>&1 \
+                || sudo -n sample "$pid" 10 -file "hang-sample-$n.txt" >/dev/null 2>&1
+              echo "::group::HANG WATCHDOG sample $n (pid $pid, heartbeat stale ${stale}s)"
+              cat "hang-sample-$n.txt" 2>/dev/null || echo "(sample failed)"
+              echo "::endgroup::"
+              n=$((n + 1))
+              nap 300
+            done
+          ) &
+          HANG_WATCHDOG_PID=$!
           # TEST_RUNNER_ prefix: xcodebuild strips it and injects the var
           # into the test host process. CICanaryTests.mustFail is gated on
           # GITHUB_ACTIONS (CI-only since 2026-06-09 — it polluted local
@@ -150,6 +184,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             2>&1 | tee test-output.log || TEST_EXIT=$?
+          kill "$HANG_WATCHDOG_PID" 2>/dev/null || true
           END=$(date +%s)
           ELAPSED=$((END - START))
           # Swift Testing emits ✔/✘/◇ markers; legacy XCTest emits "Test Case ..."
