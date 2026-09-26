@@ -1194,7 +1194,8 @@ final class VideoScanModel: ObservableObject {
         // (and any other downstream view that mutates a VideoRecord's
         // class-typed fields, which can't fire @Published didSet on
         // the records array). Triggers the debounced save path.
-        NotificationCenter.default.addObserver(
+        let center = NotificationCenter.default
+        let catalogMutated = center.addObserver(
             forName: .videoScanCatalogMutated,
             object: nil,
             queue: .main
@@ -1225,7 +1226,7 @@ final class VideoScanModel: ObservableObject {
         // entries on its own eventually; this makes it immediate. Also
         // stop any in-flight prewarm so it doesn't refill what we just
         // freed.
-        NotificationCenter.default.addObserver(
+        let memoryPause = center.addObserver(
             forName: .memoryPressureAutoPause,
             object: nil,
             queue: .main
@@ -1236,12 +1237,20 @@ final class VideoScanModel: ObservableObject {
                 self.thumbnailPrecacher.cancel(reason: "memory pressure")
             }
         }
+        // Both tokens used to be discarded — registered forever, one pair
+        // per model ever built. The bag unregisters them with the model.
+        notificationObservers.add(catalogMutated, to: center)
+        notificationObservers.add(memoryPause, to: center)
     }
 
-    // Internal (not private) so VideoScanModel+VolumeLifecycle can mutate it.
-    // mountObservers stays in the main class because extensions can't add
-    // stored properties.
-    var mountObservers: [any NSObjectProtocol] = []
+    /// EVERY block-based NotificationCenter registration this model makes
+    /// (lifecycle, volume mount/unmount/probe-change, archive-snapshot).
+    /// Released with the model, and releasing it unregisters them all —
+    /// see NotificationObserverBag for the CI run 36223041786 leak that
+    /// made this necessary. Lives in the main class because extensions
+    /// can't add stored properties; internal so the +VolumeLifecycle and
+    /// +ArchiveVolumeSnapshot extensions can add to it.
+    let notificationObservers = NotificationObserverBag()
 
 
 
@@ -1444,8 +1453,6 @@ final class VideoScanModel: ObservableObject {
     var archiveVolumeSnapshotCache = ArchiveVolumeSnapshotCache()
     /// The in-flight off-main rebuild, if any.
     var archiveVolumeSnapshotTask: Task<Void, Never>?
-    /// NSWorkspace mount / unmount / rename observers for the snapshot.
-    var archiveVolumeSnapshotObservers: [NSObjectProtocol] = []
 
     /// Reverse index source-id → promoted-copy record (and copy-id →
     /// source-id), memoized on `RecordsVersion` like the CatalogHelpers

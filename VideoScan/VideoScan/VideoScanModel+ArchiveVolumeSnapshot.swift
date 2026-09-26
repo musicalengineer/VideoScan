@@ -187,11 +187,13 @@ extension VideoScanModel {
         let names: [Notification.Name] = [NSWorkspace.didMountNotification,
                                           NSWorkspace.didUnmountNotification,
                                           NSWorkspace.didRenameVolumeNotification]
-        archiveVolumeSnapshotObservers = names.map { name in
-            nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+        // Unregistered when the model is released (NotificationObserverBag).
+        for name in names {
+            let token = nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
                 let what = note.name.rawValue
                 Task { @MainActor in self?.noteArchiveVolumeSnapshotStale(reason: what) }
             }
+            notificationObservers.add(token, to: nc)
         }
     }
 }

@@ -95,12 +95,21 @@ extension VideoScanModel {
             object: nil,
             queue: .main
         ) { [weak self] _ in
+            // A released model's observer is unregistered by the bag, but a
+            // delivery already in flight can still arrive: spawn no Task
+            // for a model that is gone (CI run 36223041786 — one Task per
+            // dead model per post was the 43 GB).
+            guard self != nil else { return }
             Task { @MainActor in
                 self?.refreshTargetReachability()
                 self?.objectWillChange.send()
             }
         }
-        mountObservers = [mount, unmount, probeChange]
+        // Unregistered when the model is released (NotificationObserverBag).
+        // mount/unmount live on NSWorkspace's center, probeChange on .default.
+        notificationObservers.add(mount, to: nc)
+        notificationObservers.add(unmount, to: nc)
+        notificationObservers.add(probeChange, to: NotificationCenter.default)
     }
 
     /// Re-check whether each scan target's path is currently mounted.

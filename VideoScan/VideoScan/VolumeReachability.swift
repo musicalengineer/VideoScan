@@ -179,8 +179,39 @@ enum VolumeReachability {
     static let reachabilityDidChange =
         Notification.Name("VideoScanVolumeReachabilityDidChange")
 
+    /// How long a burst of probe changes is gathered into ONE repaint post.
+    /// Well under a human-visible delay; the probe that caused the change
+    /// already took longer than this.
+    static let repaintCoalescingDelay: DispatchTimeInterval = .milliseconds(100)
+
+    /// True while a repaint post is scheduled and has not yet been sent.
+    private static let repaintPending = OSAllocatedUnfairLock(initialState: false)
+
+    /// COALESCED (fix/ci-red-5, CI run 36223041786). This used to post once
+    /// per changed key. `isReachable` keys internal paths by FULL path, so a
+    /// pass over 100k catalog records (pfConfirmRound's control pool) meant
+    /// ~100k first-fill "changes" → ~100k main-queue posts → ~100k
+    /// `Task { @MainActor … objectWillChange.send() }` per live model: a
+    /// main-thread storm in the app, and — multiplied by leaked observers —
+    /// the 43 GB that froze the CI test host. The notification carries no
+    /// key and its only observer re-reads EVERYTHING (refreshTargetReachability
+    /// + objectWillChange), so one post per burst loses nothing.
+    ///
+    /// Trailing-edge: the first change of a burst schedules one post
+    /// `repaintCoalescingDelay` later; changes landing before it fires ride
+    /// on it. The flag is cleared BEFORE posting, so a change that lands
+    /// while observers are running schedules a fresh post — the last change
+    /// is never left unpainted. (C++ analogy: an atomic "dirty" bit plus a
+    /// single deferred flush.)
     private static func postReachabilityDidChange() {
-        DispatchQueue.main.async {
+        let alreadyScheduled = repaintPending.withLock { pending -> Bool in
+            if pending { return true }
+            pending = true
+            return false
+        }
+        guard !alreadyScheduled else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + repaintCoalescingDelay) {
+            repaintPending.withLock { $0 = false }
             NotificationCenter.default.post(name: reachabilityDidChange, object: nil)
         }
     }

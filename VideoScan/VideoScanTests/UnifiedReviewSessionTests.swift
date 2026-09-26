@@ -285,17 +285,19 @@ struct UnifiedReviewSessionTests {
 
     // MARK: - 7. Isolation (poisoned state on BOTH surfaces at once)
 
-    // .timeLimit: CI runs 36214064340 and 36214974480 (macos-15-arm64,
-    // macOS 15.7.9, Xcode 26.3) BOTH hung here with the main run loop
-    // blocked; it passes on the fleet (macOS 26/27). Root cause NOT yet
-    // proven — the CI hang watchdog (ci.yml) samples the host's stack on
-    // the next occurrence. Cleared so far: on macOS 15 Foundation
-    // String(data:encoding:.utf8) returns nil for FF FE 00 01 02 9C (the
-    // CSV parser never runs) and the truncated JSON decodes to nil at once
-    // (probe on macOS 15.8 / Swift 6.2.4). Hardened on this path: the
-    // unlocked Set under record() → PersonNameGuard → listAll()
-    // (AmbiguousAnchorNoteConcurrencyTests). A @MainActor block/spin cannot
-    // be interrupted, so this limit only catches cooperative stalls.
+    // .timeLimit: CI runs 36214064340, 36221025080 and 36223041786
+    // (macos-15-arm64, 7 GB VM) all stalled HERE — but this test was the
+    // VICTIM, not the cause (ROOT CAUSE PROVEN, fix/ci-red-5). The test plan
+    // runs alphabetically, so this is always the first @MainActor test
+    // after scale_confirmRoundOver100kRecordsWithinBudget, whose 99k
+    // reachability probes each posted reachabilityDidChange; every post fanned
+    // out to the leaked probe-change observer of every VideoScanModel the
+    // run had built, one main-actor Task each. XCTest's spindump (result
+    // bundle of 36223041786): host footprint 42.98 GB, process suspended,
+    // main thread inside Task.init from the probe-change observer, not in
+    // this test's code. Fixed by NotificationObserverBag (observers
+    // die with their model) + coalesced repaint posts; pinned by
+    // NotificationObserverLeakTests. The limit stays as a cheap guard.
     @Test(.timeLimit(.minutes(1))) @MainActor
     func isolation_garbageCSVAndGarbageLabelsDegradeIndependently() throws {
         let root = try makeTempDir()
