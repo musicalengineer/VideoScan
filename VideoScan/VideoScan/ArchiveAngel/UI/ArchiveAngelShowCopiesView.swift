@@ -152,76 +152,23 @@ struct ArchiveAngelShowCopiesView: View {
         }
     }
 
+    // One card, built from named pieces: the inline form timed out CI's
+    // type-checker budget (ArchiveAngelShowCopiesView.swift:155, 1927 ms,
+    // nightly run 36121118356). Same views, same order, same labels.
     private func representationCard(_ rep: CopyRepresentation) -> some View {
-        let isRecommended = rep.id == a.recommendedRepresentationID
-        let recInstance = rep.instances.first { $0.id == rep.recommendedInstanceID }
+        let isRecommended: Bool = rep.id == a.recommendedRepresentationID
+        let recInstance: CopyInstance? = rep.instances.first { $0.id == rep.recommendedInstanceID }
         return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(rep.role.rawValue.uppercased())
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Self.roleColor(rep.role), in: Capsule())
-                Text(rep.signature)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer()
-                Text("\(rep.instances.count) location\(rep.instances.count == 1 ? "" : "s") · \(CatalogStorageTotals.displaySize(rep.sizeBytes))")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                Button {
-                    if expandedReps.contains(rep.id) { expandedReps.remove(rep.id) } else { expandedReps.insert(rep.id) }
-                } label: {
-                    Image(systemName: expandedReps.contains(rep.id) ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-                .help("Show every location of this representation")
-            }
+            representationTitle(rep)
             Text(rep.reason)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let inst = recInstance {
-                HStack(spacing: 6) {
-                    Image(systemName: isRecommended ? "checkmark.seal.fill" : "arrow.turn.down.right")
-                        .foregroundStyle(isRecommended ? Color.green : Color.secondary)
-                        .font(.system(size: 11))
-                    Text(isRecommended ? "Recommended copy:" : "Best copy:")
-                        .font(.system(size: 11, weight: .medium))
-                    Text(inst.fullPath)
-                        .font(.system(size: 11, design: .monospaced))
-                        .lineLimit(1).truncationMode(.middle)
-                        .textSelection(.enabled)
-                        .help(inst.fullPath)
-                    if !inst.isReachable {
-                        Text("offline").font(.system(size: 10)).foregroundStyle(.orange)
-                    }
-                }
+                recommendedLine(inst, isRecommended: isRecommended)
             }
             if expandedReps.contains(rep.id) {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(rep.instances) { inst in
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(inst.isReachable ? Color.green : Color.orange)
-                                .frame(width: 6, height: 6)
-                            Text(inst.fullPath)
-                                .font(.system(size: 11, design: .monospaced))
-                                .lineLimit(1).truncationMode(.middle)
-                                .textSelection(.enabled)
-                            Spacer()
-                            if inst.isArchiveCopy {
-                                Text("archive copy").font(.system(size: 10)).foregroundStyle(.indigo)
-                            }
-                            if inst.byteCluster == nil {
-                                Text("no signature").font(.system(size: 10)).foregroundStyle(.secondary)
-                            }
-                            Text(CatalogStorageTotals.displaySize(inst.sizeBytes))
-                                .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding(.leading, 8)
+                instanceList(rep)
             }
         }
         .padding(8)
@@ -233,5 +180,89 @@ struct ArchiveAngelShowCopiesView: View {
             RoundedRectangle(cornerRadius: 6)
                 .stroke(isRecommended ? Color.indigo.opacity(0.5) : Color.clear, lineWidth: 1)
         )
+    }
+
+    /// "3 locations · 1.2 GB" — the count and the representation's size.
+    static func locationSummary(_ rep: CopyRepresentation) -> String {
+        let count: Int = rep.instances.count
+        let plural: String = count == 1 ? "" : "s"
+        let size: String = CatalogStorageTotals.displaySize(rep.sizeBytes)
+        return "\(count) location\(plural) · \(size)"
+    }
+
+    /// Role chip · signature · location summary · expand chevron.
+    private func representationTitle(_ rep: CopyRepresentation) -> some View {
+        let isExpanded: Bool = expandedReps.contains(rep.id)
+        return HStack(spacing: 8) {
+            Text(rep.role.rawValue.uppercased())
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Self.roleColor(rep.role), in: Capsule())
+            Text(rep.signature)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .lineLimit(1).truncationMode(.middle)
+            Spacer()
+            Text(Self.locationSummary(rep))
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            Button {
+                if expandedReps.contains(rep.id) { expandedReps.remove(rep.id) } else { expandedReps.insert(rep.id) }
+            } label: {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .help("Show every location of this representation")
+        }
+    }
+
+    /// "Recommended copy:" (or "Best copy:") and its path.
+    private func recommendedLine(_ inst: CopyInstance, isRecommended: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: isRecommended ? "checkmark.seal.fill" : "arrow.turn.down.right")
+                .foregroundStyle(isRecommended ? Color.green : Color.secondary)
+                .font(.system(size: 11))
+            Text(isRecommended ? "Recommended copy:" : "Best copy:")
+                .font(.system(size: 11, weight: .medium))
+            Text(inst.fullPath)
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1).truncationMode(.middle)
+                .textSelection(.enabled)
+                .help(inst.fullPath)
+            if !inst.isReachable {
+                Text("offline").font(.system(size: 10)).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    /// Every location of the representation (shown when expanded).
+    private func instanceList(_ rep: CopyRepresentation) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(rep.instances) { inst in
+                instanceRow(inst)
+            }
+        }
+        .padding(.leading, 8)
+    }
+
+    private func instanceRow(_ inst: CopyInstance) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(inst.isReachable ? Color.green : Color.orange)
+                .frame(width: 6, height: 6)
+            Text(inst.fullPath)
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1).truncationMode(.middle)
+                .textSelection(.enabled)
+            Spacer()
+            if inst.isArchiveCopy {
+                Text("archive copy").font(.system(size: 10)).foregroundStyle(.indigo)
+            }
+            if inst.byteCluster == nil {
+                Text("no signature").font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            Text(CatalogStorageTotals.displaySize(inst.sizeBytes))
+                .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+        }
     }
 }
