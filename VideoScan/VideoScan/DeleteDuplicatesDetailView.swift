@@ -23,7 +23,7 @@ struct DeleteDuplicatesDetailView: View {
             if let plan = job.plan, !plan.entries.isEmpty {
                 entriesTable(plan)
             } else {
-                Text(job.state.isActive ? "Choosing what to delete…" : "Nothing was deleted.")
+                Text(Self.emptyMessageText(isActive: job.state.isActive))
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
             }
@@ -32,6 +32,12 @@ struct DeleteDuplicatesDetailView: View {
         .background(RoundedRectangle(cornerRadius: 10)
             .fill(Color(NSColor.textBackgroundColor).opacity(0.5)))
         .accessibilityIdentifier("mfo.deleteDuplicates.detail")
+    }
+
+    /// Shown before the plan has any rows. String-typed on purpose: a
+    /// ternary of literals inside Text(...) is slow to type-check.
+    static func emptyMessageText(isActive: Bool) -> String {
+        isActive ? "Choosing what to delete…" : "Nothing was deleted."
     }
 
     /// The capped, scrolling table of the plan's files (pinned column titles).

@@ -28,7 +28,7 @@ struct ArchiveAngelDetailView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             if job.plan.entries.isEmpty {
-                Text(job.state.isActive ? "Walking the catalog…" : "No candidates in this batch.")
+                Text(Self.emptyMessageText(isActive: job.state.isActive))
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
             } else {
@@ -43,6 +43,12 @@ struct ArchiveAngelDetailView: View {
                 .environmentObject(model)
                 .environmentObject(fileOpsCenter)
         }
+    }
+
+    /// Shown before the batch has any entries. String-typed on purpose: a
+    /// ternary of literals inside Text(...) is slow to type-check.
+    static func emptyMessageText(isActive: Bool) -> String {
+        isActive ? "Walking the catalog…" : "No candidates in this batch."
     }
 
     private var entriesTable: some View {
