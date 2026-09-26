@@ -253,7 +253,8 @@ struct HallieSuperlativeTests {
         #expect(try answer(.mostChildren).prose.hasPrefix("The most recorded children in the family tree is 3 children: Agnes McGill"))
         let deepest = try answer(.deepestAncestor, .ancestorsOf(nil))
         // Patrick, Hannah and Agnes all sit three generations above Rick.
-        #expect(deepest.prose.hasPrefix("3 people share the deepest recorded ancestor in Rick Breen’s ancestors (3 generations back): Agnes McGill"), Comment(rawValue: deepest.prose))
+        // The scope says what it ranked and how big it was (2026-09-26).
+        #expect(deepest.prose.hasPrefix("3 people share the deepest recorded ancestor among Rick Breen’s 9 recorded ancestors (3 generations back): Agnes McGill"), Comment(rawValue: deepest.prose))
         #expect(deepest.offeredActions.count == 3)
         // "oldest ancestor" is the earliest-born ancestor, not the deepest.
         #expect(Q.detect("who is my oldest ancestor") == .superlative(kind: .earliestBorn, scope: .ancestorsOf(nil)))
@@ -267,7 +268,8 @@ struct HallieSuperlativeTests {
         #expect(breen.prose.hasPrefix("The earliest birth year in the Breen family is born 1860: Patrick Breen"))
         #expect(breen.basisLine.contains("Ranked 5 of 5 people in the Breen family"))
         let youngestAncestor = try answer(.latestBorn, .ancestorsOf("Rick"))
-        #expect(youngestAncestor.prose.hasPrefix("The latest birth year in Rick Breen’s ancestors is born 1930: Eileen Latta"))
+        #expect(youngestAncestor.prose.hasPrefix("The latest birth year among Rick Breen’s 9 recorded ancestors is born 1930: Eileen Latta"), Comment(rawValue: youngestAncestor.prose))
+        #expect(youngestAncestor.basisLine.contains("Ranked 9 of Rick Breen’s 9 recorded ancestors across 3 generations that record the fact."), Comment(rawValue: youngestAncestor.basisLine))
         // Honest declines: unknown surname; a person with no ancestors; a
         // fact nobody records.
         #expect(try answer(.earliestBorn, .surname("nobody")).outcome == .declined)

@@ -65,7 +65,8 @@ struct HallieResultCopyRoundTripTests {
             refinableQuery: .wholeCatalog,
             retryOffer: offer,
             mode: .tree,
-            modeForce: .force(.tree))
+            modeForce: .force(.tree),
+            superlative: .init(kind: .earliestBorn, scope: .ancestorsOf("Rick")))
         return (result, offer)
     }
 
@@ -100,6 +101,8 @@ struct HallieResultCopyRoundTripTests {
             #expect(copied.refinableQuery == .wholeCatalog, Comment(rawValue: "\(name) dropped refinableQuery"))
             #expect(copied.mode == .tree, Comment(rawValue: "\(name) dropped mode"))
             #expect(copied.modeForce == .force(.tree), Comment(rawValue: "\(name) dropped modeForce"))
+            #expect(copied.superlative == .init(kind: .earliestBorn, scope: .ancestorsOf("Rick")),
+                    Comment(rawValue: "\(name) dropped superlative"))
             #expect(copied.performsFirstOfferedAction, Comment(rawValue: "\(name) dropped performsFirstOfferedAction"))
             #expect(copied.immediateOfferedAction == original.immediateOfferedAction,
                     Comment(rawValue: "\(name) changed immediateOfferedAction"))

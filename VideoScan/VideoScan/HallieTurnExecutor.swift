@@ -714,6 +714,12 @@ enum HallieTurnExecutor {
         /// memory applies it when the answer is recorded. Nil otherwise.
         /// Copied by every copy helper.
         let modeForce: HallieModeForce?
+        /// The ranking a superlative answer RAN (live 2026-09-26): kind and
+        /// scope, so "that is donna's line" right after re-runs the same
+        /// kind over the corrected scope (ConversationMemory.lastSuperlative).
+        /// Set only by HallieLineageAnswer.superlative; nil everywhere else.
+        /// Copied by every copy helper.
+        let superlative: HallieLineageQuestion.SuperlativeAsk?
 
         init(
             route: Route,
@@ -738,7 +744,8 @@ enum HallieTurnExecutor {
             refinableQuery: RefinableQuery? = nil,
             retryOffer: HallieOfferAcceptance.Offer? = nil,
             mode: HallieMode? = nil,
-            modeForce: HallieModeForce? = nil
+            modeForce: HallieModeForce? = nil,
+            superlative: HallieLineageQuestion.SuperlativeAsk? = nil
         ) {
             self.route = route
             self.outcome = outcome
@@ -765,6 +772,7 @@ enum HallieTurnExecutor {
             self.retryOffer = retryOffer
             self.mode = mode
             self.modeForce = modeForce
+            self.superlative = superlative
         }
 
         /// The same answer with extra things to look at. Facts untouched.
@@ -783,7 +791,8 @@ enum HallieTurnExecutor {
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
                 mode: mode,
-                modeForce: modeForce)
+                modeForce: modeForce,
+                superlative: superlative)
         }
 
         /// The same answer with an OFFER appended (2026-09-10, the gallery
@@ -821,7 +830,8 @@ enum HallieTurnExecutor {
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
                 mode: mode,
-                modeForce: modeForce)
+                modeForce: modeForce,
+                superlative: superlative)
         }
 
         /// The same answer carrying a PROVENANCE note — how Hallie read the
@@ -865,7 +875,8 @@ enum HallieTurnExecutor {
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
                 mode: mode,
-                modeForce: modeForce)
+                modeForce: modeForce,
+                superlative: superlative)
         }
 
         /// The same answer with its prose replaced by a verified composition.
@@ -896,7 +907,8 @@ enum HallieTurnExecutor {
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
                 mode: mode,
-                modeForce: modeForce)
+                modeForce: modeForce,
+                superlative: superlative)
         }
 
         /// The same answer carrying a mode force (a spoken correction's
