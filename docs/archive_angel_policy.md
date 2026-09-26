@@ -55,6 +55,8 @@ So the smallest useful file is:
 | **Another copy** | The same recording as a recommended copy (same footage group from Find Similar Footage, same duplicate group, or same name + length). The copy you marked Keep wins; then, in a footage group, its likely original; otherwise the best-ranked copy does. |
 | **Prepared** | Sitting in a prepared batch, waiting for your review |
 
+5. **Coverage** (`coverage`, rules v13) shapes each *batch* Prepare builds, after the ranking: one pick per **day**, at most `maxPerYearPerBatch` picks per **year**. Neither is an exclusion — a row held back this way waits for a later batch, and a batch is never left short for it (see below).
+
 archiveStage Ready/Master is a **vote** to archive. Only a real Master Archive copy (`onMasterArchive`, `archivedCopy`) means "already archived".
 
 ## Safety floors — these cannot be turned off, by design
@@ -102,7 +104,7 @@ A rule is an object. Only `id` and `kind` are required.
 
 ### Signal kinds (`signals`)
 
-`match`, `stars`, `confirmedPeople`, `machinePeople`, `playHistory` (`playHistoryPerDoubling` × log2(1+plays), capped, plus the recent-play bonus inside `playedRecentlyDays`), `richness`, `date`, `duration` (the tape tiers), `formatAtRisk`, `onlyCopy`, `unassignedVolume`, `audioProblem`, `downloadCap`, `fatigue`.
+`match`, `stars`, `confirmedPeople`, `machinePeople`, `playHistory` (`playHistoryPerDoubling` × log2(1+plays), capped, plus the recent-play bonus inside `playedRecentlyDays`), `richness`, `date`, `duration` (the tape tiers), `formatAtRisk`, `onlyCopy`, `unassignedVolume`, `audioProblem`, `backlogBonus` (rules v13 — see `coverage`), `downloadCap`, `fatigue`.
 
 `downloadCap` and `fatigue` act on the total of the lines above them, so keep them last.
 
@@ -156,6 +158,30 @@ When **Find Similar Footage** has run, every file it grouped carries its footage
 ```
 
 The groups are metadata guesses (Identical / You confirmed / Likely / Possible). Nothing about them lets the Angel archive, delete or date anything; they only decide which copy is *recommended*.
+
+## `coverage` (rules v13, 2026-09-26)
+
+Rick: *"If AA recommends 5 different versions of the same Thanksgiving 1994, rather than misc birthdays, trips, christmas from other years not yet archived, then AA is not working that well."* Everything here is additive: a `policy.json` written before v13 reads exactly as it did, with these defaults.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `onePerEvent` | `true` | One pick per **day** per batch. The day is the ONE date rule's answer at day precision — your date, a camera's or phone's stamp, or the dossier's inferred date. A month, a year, a transcoder's stamp (the day a *copy* was made) or no date at all is **not** a day: such rows never collapse. Whatever the name or folder, two files shot on the same day are one event for this rule — a *diversity* choice, never "a copy" and never "already archived". |
+| `maxPerYearPerBatch` | `2` | At most this many picks of one year per batch, so a batch spreads across the years still to archive. `0` = no cap. Rows with no year are not capped (there is no year to spread them over). |
+| `backlogBonusMax` | `20` | The `backlogBonus` signal: a year with a deep backlog and few archived files earns up to this many points, scaled by the share of the year's recordings still to archive (2010 with 156 to archive and 27 archived → 17 points; a year half archived → 10). `0` switches it off. |
+| `backlogMinimumUnarchived` | `10` | A year earns the bonus only with at least this many recordings still to archive. |
+
+**Recordings, not files.** The backlog counts unique recordings — one per duplicate group, and per footage group when the policy collapses by it (never by name + length). Importing a thousand copies of one 1994 tape adds one recording to 1994, not a thousand. A recording counts as *archived* when any copy, its content or its footage's original is in the Master Archive; as *to archive* when it is not and some copy is real material: a video, not junk (marked or suspected), not Archive Angel's own working copy, not a Live Photo motion half, not a file Relocate reports gone, and at least `weights.minimumDurationSeconds` long. Recordings nobody can date have their own bucket — reported in the log, never rewarded.
+
+**Soft, never short.** Both batch rules hold rows back for a *later* batch; they never exclude. When the rows within the rules are fewer than the batch asks for, the best held-back rows fill it (a partial batch reads as "nothing to do"). Only rows still held back are counted, under "Another pick from the same day is already in this batch — spreading picks across events" and "Held for a later batch — this batch already has its share of that year". The ranked order is never changed by these rules (codex #1643 A4): they run after it.
+
+**The cache and the walk agree.** Prepare's cached pick reads past its score band for rows of years that still have room (rows of a year at its share cost a lookup, never a projection), and finishes the band it stops in so equal scores never decide which rows were read. When it would have to fill a batch from rows it never read — or when the catalog changed since the sweep's snapshot (the evidence file's `catalogRevision`) — it declines and the job walks the catalog, which applies the same rules over everything. With every coverage key off, the pick behaves exactly as in rules v12.
+
+Off, as a file would write it:
+
+```json
+{ "schemaVersion": 2, "name": "no coverage",
+  "coverage": { "onePerEvent": false, "maxPerYearPerBatch": 0, "backlogBonusMax": 0 } }
+```
 
 ## `grades` and `tables`
 
@@ -267,9 +293,13 @@ A phone clip with no camera date has no `captureYear`, so this rule doesn't fire
 ## Checking what you changed
 
 - At launch, the console says `Archive Angel: using your recommendation rules "<name>" from …`, or `refused … — <every problem>`.
-- After each sweep, it logs `Archive Angel Assessment: done: A … · ready N · needs a date M · worth a look K · …`.
+- After each sweep, it logs `Archive Angel Assessment: done: A … · ready N · needs a date M · worth a look K · …`, and (rules v13, unified log, category `archiveAngel`) `coverage: 23 years · 4,812 recordings · deepest backlog 2010 (156 to archive, 27 archived), … · undated 412 to archive`.
 - On the first run after a rules-version change, it logs once: `recommendation rules v11 → v12 — before: … now: …`.
 
 ## Rules v12 (2026-09-25) — truthful readiness
 
 Measured on the live catalog that morning and fixed as data (docs/archive_angel_wise_design.md §3): the `angelWorkingCopy` safety floor; a footage group's archived original excludes its other members (`archivedCopy`); the `absurdBitrate` and `recentDigitization` class rules and the `yearsAgo` field; `personsearchresults` and `*_compilation_*` in the app-cache tables. Outside the policy, in the ONE date rule (`RecordDateResolver`): a container stamp with no camera behind it (a transcoder's, or of unknown origin) loses to a filename year that disagrees by more than two years — `DickyDonnaDancing1992.mov` stamped 2026-04-03 by Apple ProRes 422 is filed under 1992 (low confidence), not 2026. An inferred date (on-screen dates, speech) still ranks above the filename: one that agrees with the stamp keeps the stamp, one that disagrees wins. Dimensions and rates in a name (`1920x1080`, `2000k`, `2000fps`, `1920p`) are never read as years. The Catalog's Date column shows the same date, and its tooltip says where it came from. A re-encode or export whose footage group's original is archived is excluded with its own reason, "The original of this footage is already in the archive" (the `archivedCopy` safety floor). Every v11 evidence file re-scores.
+
+## Rules v13 (2026-09-26) — coverage across days and years
+
+docs/footage_groups_gap_plan_2026-09-26.md Stage 2, bounded by docs/codex-review-angel-coverage-2026-09-26.md. The `coverage` section above (one pick per day, `maxPerYearPerBatch`, the `backlogBonus` signal over unique recordings), the evidence file's `catalogRevision` stamp, and two batch-limit reasons. The duration band is unchanged: under 2 min is the `tooShort` floor (60 s for an explicit pick), 2–5 min earns nothing, 5 min–1 h the tiers, and a three-hour capture keeps its +60 — every edge is pinned by `ArchiveAngelDurationBandTests`. Every v12 evidence file re-scores.
