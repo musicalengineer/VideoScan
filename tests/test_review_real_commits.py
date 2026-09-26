@@ -114,3 +114,90 @@ def test_an_errored_commit_keeps_the_findings_of_the_parts_that_answered():
     state, text, _, error = rrc.review_unit(lambda _p: next(replies), d, limit=7000)
     assert state == "ERROR" and error == "[part 1/2] cut off"
     assert "[part 2/2] Finding 1: bug in b" in text
+
+# RED 2026-09-25 (night QA): nightly_review.sh reviews with qwen2.5-coder:32b,
+# which ollama refuses with HTTP 400 'does not support thinking' when the
+# request carries "think": true. Every unit ERRORed 9/23-9/25.
+def test_a_model_without_thinking_is_still_reviewed():
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if body.get("think") is True:          # what ollama does for a non-thinking model
+                reply = json.dumps({"error": '"qwen2.5-coder:32b" does not support thinking'}).encode()
+                self.send_response(400)
+            else:
+                reply = json.dumps({"done_reason": "stop", "message": {"content": "NO FINDINGS"}}).encode()
+                self.send_response(200)
+            self.send_header("Content-Length", str(len(reply)))
+            self.end_headers()
+            self.wfile.write(reply)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        answer, _, error = rrc.ask(f"http://127.0.0.1:{server.server_port}",
+                                   "qwen2.5-coder:32b", "Review this change.", 10)
+    finally:
+        server.shutdown()
+    assert error is None, error
+    assert answer == "NO FINDINGS"
+
+
+def _chat_server(handler_body):
+    """Tiny /api/chat stub; `handler_body(body) -> (status, payload)`. Records every request."""
+    seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append(body)
+            status, payload = handler_body(body)
+            reply = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(reply)))
+            self.end_headers()
+            self.wfile.write(reply)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, seen
+
+
+def test_think_is_not_sent_unless_asked_for():
+    server, seen = _chat_server(lambda b: (200, {"done_reason": "stop", "message": {"content": "NO FINDINGS"}}))
+    try:
+        rrc.ask(f"http://127.0.0.1:{server.server_port}", "m", "p", 10)
+    finally:
+        server.shutdown()
+    assert "think" not in seen[0]
+
+
+def test_an_explicit_think_refused_with_that_400_is_retried_once_without_it():
+    def reply(body):
+        if "think" in body:
+            return 400, {"error": '"qwen2.5-coder:32b" does not support thinking'}
+        return 200, {"done_reason": "stop", "message": {"content": "NO FINDINGS"}}
+    server, seen = _chat_server(reply)
+    try:
+        answer, _, error = rrc.ask(f"http://127.0.0.1:{server.server_port}",
+                                   "qwen2.5-coder:32b", "p", 10, think=True)
+    finally:
+        server.shutdown()
+    assert error is None and answer == "NO FINDINGS"
+    assert [("think" in b) for b in seen] == [True, False]
+
+
+def test_any_other_400_is_an_error_naming_ollamas_reason_and_is_not_retried():
+    server, seen = _chat_server(lambda b: (400, {"error": "model 'x' not found"}))
+    try:
+        answer, _, error = rrc.ask(f"http://127.0.0.1:{server.server_port}", "x", "p", 10, think=True)
+    finally:
+        server.shutdown()
+    assert answer == "" and "400" in error and "model 'x' not found" in error
+    assert len(seen) == 1

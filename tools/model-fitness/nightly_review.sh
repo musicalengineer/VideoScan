@@ -47,7 +47,38 @@ ENDPOINT=${ENDPOINT:-http://ricksm5.local:11434}
 # Seconds to wait before the one preflight retry. Long enough for a host
 # that is merely slow to answer /api/tags; the tests set it to 1.
 REVIEW_PREFLIGHT_RETRY_SECONDS=${REVIEW_PREFLIGHT_RETRY_SECONDS:-90}
+# ONE INTERPRETER FOR THE PREFLIGHT AND THE REVIEWS (2026-09-25).
+# Under launchd, PATH resolves python3 to Homebrew's ad-hoc-signed python.
+# After the macOS 26.7 update (9/22) that binary got "[Errno 65] No route to
+# host" to every LAN address (Local Network privacy) while curl, Apple-signed
+# and exempt, did not. The curl preflight passed and all 152 commits ERRORed.
+# The preflight now asks with this interpreter and urllib, exactly as
+# review_real_commits.py will. Overridable for a one-off run.
+PYTHON=${REVIEW_PYTHON:-python3}
+PYTHON_BIN=$(command -v "$PYTHON" 2>/dev/null || print -r -- "$PYTHON")
+# tools/team-channel.py refuses a post over these (MAX_SUBJECT / MAX_BODY).
+# On 2026-09-25 a subject naming 46 abandoned SHAs was refused, so the digest
+# never arrived. test_nightly_review.sh reads the real values from the channel's
+# source and checks every post against them, so these cannot drift silently.
+CHANNEL_MAX_SUBJECT=160
+CHANNEL_MAX_BODY=20000
 mkdir -p "$STATE"
+
+# Post to the team channel, never over its limits. The subject is clipped (a
+# refused post is worse than a clipped one); the body is cut with a pointer
+# to the file that holds the whole of it.
+#   post_channel <subject> <body-file> [<full-text-path-for-the-note>]
+post_channel() {
+  local subject=$1 body_file=$2 full=${3:-$2} body note
+  (( ${#subject} > CHANNEL_MAX_SUBJECT )) && subject="${subject[1,$((CHANNEL_MAX_SUBJECT - 1))]}…"
+  body=$(<"$body_file")
+  if (( ${#body} > CHANNEL_MAX_BODY )); then
+    note=$'\n\n[truncated for the channel — the full text is '"$full"']'
+    body="${body[1,$((CHANNEL_MAX_BODY - ${#note} - 1))]}$note"
+  fi
+  print -r -- "$body" | "$PYTHON" tools/team-channel.py post --from reviewer --to claude \
+    --subject "$subject" --body - >> "$STATE/nightly.log" 2>&1
+}
 cd "$REPO" || exit 1
 
 # THE REVIEWER FOLLOWS LOCAL `main`, NOT `origin/main` (2026-09-07).
@@ -93,7 +124,7 @@ if [[ $count -eq 0 && -z $retry ]]; then
   echo "$stamp nothing new ($range) — $noop consecutive" >> "$STATE/nightly.log"
   echo "$head" > "$STATE/last_sha"
   if [[ $noop -ge 2 ]]; then
-    python3 tools/team-channel.py post --from reviewer --to claude \
+    "$PYTHON" tools/team-channel.py post --from reviewer --to claude \
       --subject "nightly review: $noop quiet nights — is main moving?" \
       --body "The nightly reviewer has found nothing to review for $noop consecutive nights (range $range, head $head).
 
@@ -122,32 +153,62 @@ echo 0 > "$quiet_file"
 # ricksm5, and adding one would be a new network dependency in a 04:30 job.
 # If the M5 keeps sleeping through 04:30, that is a pmset/schedule question
 # for Rick, not a retry loop here.
+#
+# THE PREFLIGHT ASKS THE WAY THE REVIEWS WILL (2026-09-25): same $PYTHON,
+# same urllib, same $ENDPOINT. It used to be curl, which macOS exempts from
+# Local Network privacy, so a python that could not reach ricksm5 passed the
+# preflight and every commit ERRORed. On success it prints the model names
+# (exit 0; an empty list is a reachable host with no models); on failure it
+# prints the error (exit 1).
 tags_of() {
-  curl -s --max-time 15 "$ENDPOINT/api/tags" 2>/dev/null \
-    | python3 -c 'import json,sys
-try: print("\n".join(m["name"] for m in json.load(sys.stdin).get("models",[])))
-except Exception: pass' 2>/dev/null
+  "$PYTHON" - "$ENDPOINT" 2>&1 <<'PY'
+import json, sys, urllib.request
+try:
+    with urllib.request.urlopen(sys.argv[1].rstrip("/") + "/api/tags", timeout=15) as r:
+        print("\n".join(m["name"] for m in json.load(r).get("models", [])))
+except Exception as exc:  # noqa: BLE001 - the reason is the output
+    print(str(exc) or type(exc).__name__)
+    sys.exit(1)
+PY
 }
-tags=$(tags_of)
-if [[ -z $tags ]]; then
+tags=$(tags_of); tags_rc=$?
+if [[ $tags_rc -ne 0 ]]; then
   sleep "$REVIEW_PREFLIGHT_RETRY_SECONDS"
-  tags=$(tags_of)
+  tags=$(tags_of); tags_rc=$?
 fi
-skip_reason=""
-if [[ -z $tags ]]; then
-  skip_reason="host $ENDPOINT asleep or unreachable: /api/tags did not answer twice (retry after ${REVIEW_PREFLIGHT_RETRY_SECONDS}s)"
+skip_reason=""; skip_short=""; skip_advice=""
+if [[ $tags_rc -ne 0 ]]; then
+  py_err=$(print -r -- "$tags" | tail -1)
+  # Is it the host or the interpreter? curl is Apple-signed and exempt from
+  # Local Network privacy, so "curl can, python can't" means the host is up
+  # and this python is blocked. Diagnosis only — curl never stands in for
+  # the reviewer's own path again.
+  if curl -sf -o /dev/null --max-time 15 "$ENDPOINT/api/tags" 2>/dev/null; then
+    skip_short="python cannot reach $ENDPOINT (curl can)"
+    skip_reason="python ($PYTHON_BIN) cannot reach $ENDPOINT: $py_err — but curl CAN reach it, so the host is up and this interpreter is blocked"
+    skip_advice="The host answers curl but not $PYTHON_BIN, which is what reviews with. On macOS this is Local Network privacy: a launchd-run Homebrew/venv python loses LAN access (typically after an OS update or a brew upgrade of python) while Apple-signed curl is exempt. Only Rick can grant it, in the GUI on this Mac: System Settings > Privacy & Security > Local Network, turn on the entry for this python (it may be listed as 'Python' or 'python3.x'). If there is no entry, macOS never asked and there is nothing to toggle; the alternative is REVIEW_PYTHON=/usr/bin/python3 (Apple-signed, exempt, like curl), which is Rick's call. Until then every run skips here, loudly, with the baseline kept."
+  else
+    skip_short="host $ENDPOINT asleep or unreachable"
+    skip_reason="host $ENDPOINT asleep or unreachable: /api/tags did not answer twice (retry after ${REVIEW_PREFLIGHT_RETRY_SECONDS}s); python: $py_err"
+    skip_advice="If ricksm5 keeps sleeping through 04:30 the fix is its sleep schedule, not this script."
+  fi
 elif ! print -r -- "$tags" | grep -qx "$REVIEW_MODEL"; then
+  skip_short="host $ENDPOINT lacks $REVIEW_MODEL"
   skip_reason="host $ENDPOINT is up but does not list $REVIEW_MODEL (has: $(print -r -- "$tags" | tr '\n' ' '))"
+  skip_advice="Pull $REVIEW_MODEL on that host, or set REVIEW_MODEL to one it has."
 fi
 if [[ -n $skip_reason ]]; then
   pending=$(( count + $(print -r -- "$retry" | tr ',' '\n' | grep -c .) ))
   echo "$stamp SKIPPED — $skip_reason; $pending commit(s) ($range${retry:+ + retry queue}) not reviewed, baseline kept" >> "$STATE/nightly.log"
-  python3 tools/team-channel.py post --from reviewer --to claude \
-    --subject "nightly review: SKIPPED — $skip_reason" \
-    --body "Nothing was reviewed tonight. $pending commit(s) in $range${retry:+ plus the retry queue} are still pending; the baseline was not advanced, so the next run reviews them.
-
-If ricksm5 keeps sleeping through 04:30 the fix is its sleep schedule, not this script." \
-    >> "$STATE/nightly.log" 2>&1
+  skip_body="$STATE/$stamp.skipped.md"
+  {
+    echo "Nothing was reviewed tonight. $pending commit(s) in $range${retry:+ plus the retry queue} are still pending; the baseline was not advanced, so the next run reviews them."
+    echo
+    echo "Reason: $skip_reason"
+    echo
+    echo "$skip_advice"
+  } > "$skip_body"
+  post_channel "nightly review: SKIPPED — $skip_short" "$skip_body"
   exit 1
 fi
 
@@ -167,7 +228,7 @@ out="$STATE/$stamp"
 # over. Caught by test_nightly_review.sh case 3.
 retry_args=()
 [[ -n $retry ]] && retry_args=(--also-commits "$retry")
-python3 tools/model-fitness/review_real_commits.py \
+"$PYTHON" tools/model-fitness/review_real_commits.py \
   --range "$range" --endpoint "$ENDPOINT" --model "$REVIEW_MODEL" --out "$out" \
   "${retry_args[@]}" \
   > "$out.summary.txt" 2>&1
@@ -249,9 +310,12 @@ fi
 } > "$out.digest.md"
 echo "$stamp reviewed $reviewed ($range): flagged $flagged errors $errors${abandoned:+ abandoned$abandoned}" >> "$STATE/nightly.log"
 
+# COUNTS IN THE SUBJECT, SHAS IN THE BODY (2026-09-25). The subject used to
+# end ", abandoned <every sha>"; the 09/25 run abandoned 46 and the channel
+# refused the post (MAX_SUBJECT 160), so no digest arrived. The digest body
+# already lists every abandoned SHA under "ABANDONED after N attempts".
 subject="nightly review: $reviewed commits, $flagged flagged"
 [[ $errors -gt 0 ]] && subject="$subject, $errors UNREVIEWED"
-[[ -n ${abandoned// /} ]] && subject="$subject, abandoned$abandoned"
-python3 tools/team-channel.py post --from reviewer --to claude \
-  --subject "$subject" \
-  --body - < "$out.digest.md" >> "$STATE/nightly.log" 2>&1
+abandoned_n=${#${(z)abandoned}}
+[[ $abandoned_n -gt 0 ]] && subject="$subject, $abandoned_n abandoned"
+post_channel "$subject" "$out.digest.md"
