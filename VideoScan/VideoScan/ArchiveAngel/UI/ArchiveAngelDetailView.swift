@@ -22,6 +22,8 @@ struct ArchiveAngelDetailView: View {
     /// dates, untick before anything reaches the archive); it opens here.
     @State private var reviewRequest: ArchiveAngelReviewRequest?
 
+    // Split into named pieces: one inline body crossed CI's type-checker
+    // budget (ArchiveAngelDetailView.swift:25, 563 ms, nightly run 36121118356).
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
@@ -30,39 +32,7 @@ struct ArchiveAngelDetailView: View {
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
             } else {
-                ScrollView {
-                    // Pinned column titles: the stage columns stay labelled
-                    // however far down the batch Rick scrolls.
-                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        Section(header: ArchiveAngelTableHeader()) {
-                            ForEach(job.plan.entries) { entry in
-                                // A row waiting for buffer space stays skippable
-                                // after the job is over (codex review 2026-09-20
-                                // #11): the job routes it to the plan on disk.
-                                ArchiveAngelEntryRow(entry: entry,
-                                                     canSkip: Self.offersSkip(isActive: job.state.isActive, entry: entry)) {
-                                    // Recheck at the click: preparation may have finished
-                                    // since SwiftUI rendered this row.
-                                    // isSkippable, NOT isUnsettled: `.ready` is
-                                    // precisely when Rick is watching a prepared
-                                    // file about to be promoted and says "skip
-                                    // that one". isUnsettled is the preparation
-                                    // loop's predicate and excludes .ready.
-                                    guard let current = job.plan.entries.first(where: { $0.id == entry.id }),
-                                          Self.offersSkip(isActive: job.state.isActive, entry: current) else { return }
-                                    job.skip(entryID: entry.id)
-                                }
-                                Divider()
-                            }
-                        }
-                    }
-                }
-                .frame(maxHeight: 560)
-                .background(RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(NSColor.controlBackgroundColor)))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.primary.opacity(0.14)))
+                entriesTable
             }
         }
         .padding(14)
@@ -72,6 +42,46 @@ struct ArchiveAngelDetailView: View {
             ArchiveAngelReviewSheet(plan: req.plan)
                 .environmentObject(model)
                 .environmentObject(fileOpsCenter)
+        }
+    }
+
+    private var entriesTable: some View {
+        ScrollView {
+            // Pinned column titles: the stage columns stay labelled
+            // however far down the batch Rick scrolls.
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                Section(header: ArchiveAngelTableHeader()) {
+                    ForEach(job.plan.entries) { entry in
+                        entryRow(entry)
+                        Divider()
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: 560)
+        .background(RoundedRectangle(cornerRadius: 10)
+            .fill(Color(NSColor.controlBackgroundColor)))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(Color.primary.opacity(0.14)))
+    }
+
+    private func entryRow(_ entry: ArchiveAngelPlan.Entry) -> ArchiveAngelEntryRow {
+        // A row waiting for buffer space stays skippable
+        // after the job is over (codex review 2026-09-20
+        // #11): the job routes it to the plan on disk.
+        let canSkip: Bool = Self.offersSkip(isActive: job.state.isActive, entry: entry)
+        return ArchiveAngelEntryRow(entry: entry, canSkip: canSkip) {
+            // Recheck at the click: preparation may have finished
+            // since SwiftUI rendered this row.
+            // isSkippable, NOT isUnsettled: `.ready` is
+            // precisely when Rick is watching a prepared
+            // file about to be promoted and says "skip
+            // that one". isUnsettled is the preparation
+            // loop's predicate and excludes .ready.
+            guard let current = job.plan.entries.first(where: { $0.id == entry.id }),
+                  Self.offersSkip(isActive: job.state.isActive, entry: current) else { return }
+            job.skip(entryID: entry.id)
         }
     }
 
