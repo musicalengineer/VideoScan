@@ -59,6 +59,31 @@ struct TypecheckSplitTextTests {
         }
     }
 
+    @Test("recommended instance — the named one, or none when the representation names none")
+    func recommendedInstance() {
+        var r = rep(instanceCount: 3, sizeBytes: 1)
+        r.recommendedInstanceID = r.instances[1].id
+        // The pre-split inline lookup, verbatim.
+        #expect(ArchiveAngelShowCopiesView.recommendedInstance(of: r)?.id
+                == r.instances.first { $0.id == r.recommendedInstanceID }?.id)
+        #expect(ArchiveAngelShowCopiesView.recommendedInstance(of: r)?.id == r.instances[1].id)
+        r.recommendedInstanceID = nil
+        #expect(ArchiveAngelShowCopiesView.recommendedInstance(of: r) == nil)
+        #expect(!r.instances.contains { $0.id == r.recommendedInstanceID }, "the old lookup agreed")
+    }
+
+    // MARK: Empty states (MFO detail rows)
+
+    @Test("Delete Duplicates and Archive Angel detail empty-state text")
+    func deleteAndAngelEmptyMessages() {
+        for isActive in [false, true] {
+            #expect(DeleteDuplicatesDetailView.emptyMessageText(isActive: isActive)
+                    == (isActive ? "Choosing what to delete…" : "Nothing was deleted."))
+            #expect(ArchiveAngelDetailView.emptyMessageText(isActive: isActive)
+                    == (isActive ? "Walking the catalog…" : "No candidates in this batch."))
+        }
+    }
+
     // MARK: Move-to-Trash empty state
 
     @Test("prune detail empty-state text — queued wins, then active, then done")
