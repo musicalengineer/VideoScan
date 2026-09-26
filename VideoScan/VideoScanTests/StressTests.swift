@@ -13,8 +13,16 @@ import os
 // running concurrently. If the app survives without crashing, leaking
 // memory, or deadlocking, it passes.
 //
-// Lives in the Stress group in TestDriver (opt-in). Not run on CI
-// (timing-sensitive, needs real hardware).
+// Lives in the Stress group in TestDriver (opt-in). ALSO runs on CI: the
+// VideoScan-CI plan runs the whole VideoScanTests target. The ArcFace
+// storm self-skips there (no model, and rick_reference.jpg is not in the
+// repo); the others run for real on the ~3-thread virt-M1 pool.
+//
+// Pool rule for every storm (CI red 2026-09-25): no storm may hold a
+// cooperative-pool thread across a long synchronous loop. Blocking decode
+// goes through FramePrefetcher's own queue, and long per-item loops
+// `await Task.yield()` each iteration. stormsLeaveTheCooperativePoolLive
+// enforces it.
 
 @Suite("Integration Stress")
 struct IntegrationStressTests {
@@ -257,9 +265,14 @@ struct IntegrationStressTests {
                     guard let model else { return 0 }
                     var count = 0
                     for _ in 0..<50 {
+                        if Task.isCancelled { break }
                         if arcfaceEmbedding(from: faceImage, model: model).embedding != nil {
                             count += 1
                         }
+                        // Same hazard as detectFacesInVideo: 50 synchronous
+                        // predictions with no suspension point pin a pool
+                        // thread; yield so the time limit can still fire.
+                        await Task.yield()
                     }
                     return count
                 }
@@ -271,6 +284,19 @@ struct IntegrationStressTests {
 
     // MARK: - Helpers
 
+    /// Decode every frame and run face detection on it — the same shape as
+    /// production (pfProcessVideo): `FramePrefetcher` runs the blocking
+    /// `copyNextSampleBuffer()` loop on its own GCD queue and hands frames
+    /// over through an AsyncStream, so this task SUSPENDS between frames
+    /// instead of holding a cooperative-pool thread for the whole video.
+    ///
+    /// Before 2026-09-25 this helper ran `while let s = copyNextSampleBuffer()`
+    /// directly on the pool with no suspension point. Eight of them pinned
+    /// every thread of the ~3-thread GH virt-M1 pool; the storm's time limit
+    /// (itself a pool task) could never fire, and CI wedged until the
+    /// 75-minute step timeout. (C++ analogy: eight worker-pool jobs each
+    /// doing a blocking read loop — the pool's own watchdog job never gets
+    /// scheduled.)
     private static func detectFacesInVideo(_ path: String) async -> Int {
         let url = URL(fileURLWithPath: path)
         let asset = AVURLAsset(url: url)
@@ -284,15 +310,30 @@ struct IntegrationStressTests {
         reader.add(output)
         guard reader.startReading() else { return 0 }
 
+        // frameInterval 0 = every frame, as the old loop did.
+        let prefetcher = FramePrefetcher(reader: reader, trackOutput: output, frameInterval: 0)
         var totalFaces = 0
-        while let sample = output.copyNextSampleBuffer() {
-            guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
+        for await frame in prefetcher.frames() {
+            // Honor cancellation (the time limit cancels the test) the way
+            // production does. Deliberately NO reader.cancelReading() on this
+            // path — it races the prefetch queue's in-flight
+            // copyNextSampleBuffer (see pfProcessVideo); leaving the loop
+            // terminates the stream and the producer exits on its own.
+            if Task.isCancelled { break }
             autoreleasepool {
-                let faces = pfDetectFacesInBuffer(buffer, orientation: .up)
-                totalFaces += faces.count
+                totalFaces += pfDetectFacesInBuffer(frame.pixelBuffer, orientation: .up).count
             }
+            prefetcher.releaseSlot()
+            // LOAD-BEARING: `for await` on an AsyncStream that already holds
+            // a buffered element returns it WITHOUT suspending. The
+            // prefetcher keeps up to 16 frames ready, so when detection is
+            // slower than decode (always, on a VM) this loop would never
+            // give its thread back. Yield once per frame so the pool — and
+            // the time limit's timer — gets a turn. Measured: without this
+            // line the pool-liveness sensor stays red even with decode off
+            // the pool (ticker woke 2 of ~181).
+            await Task.yield()
         }
-        reader.cancelReading()
         return totalFaces
     }
 
