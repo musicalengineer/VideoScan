@@ -107,7 +107,14 @@ struct ArchiveAngelA4DeterminismTests {
             defer { try? FileManager.default.removeItem(at: dir) }
             let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now, policy: .builtIn) { live[$0] }
             #expect(pick == nil, "seed \(seed): declined — the walk decides")
+            // The same 2,000 files in a per-seed order (a Fisher–Yates over
+            // the draw's own generator): the walk's answer must not depend
+            // on input order either.
             var cands = Array(live.values.sorted { $0.filename < $1.filename }.prefix(2_000))
+            var rng = A4RNG(state: seed &* 6_364_136_223_846_793_005)
+            for i in stride(from: cands.count - 1, to: 0, by: -1) {
+                cands.swapAt(i, Int(rng.next() % UInt64(i + 1)))
+            }
             ArchiveAngelEvent.applyCoverage(&cands, policy: .builtIn, now: now)
             let walked = ArchiveAngelScorer.select(cands, count: 25, policy: .builtIn, now: now)
             let names = walked.picks.map(\.candidate.filename)

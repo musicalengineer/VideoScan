@@ -711,6 +711,36 @@ struct ArchiveAngelCoverageScaleTests {
     }
 }
 
+@Suite("Archive Angel coverage — scale, end to end")
+struct ArchiveAngelCoverageEndToEndScaleTests {
+
+    @Test("100k dated candidates over 30 years: pre-pass + select(10) with coverage ON — ten picks, never over the year share, under a load-aware 3 s Debug budget", .timeLimit(.minutes(1)))
+    func hundredThousandWithCoverageOn() {
+        var cands: [ArchiveAngelCandidate] = []
+        cands.reserveCapacity(100_000)
+        var group = UUID()
+        for i in 0..<100_000 {
+            if i % 3 == 0 { group = UUID() }
+            let y = 1990 + i % 30
+            cands.append(video("v\(i).mov", folder: "/Volumes/V\(i % 5)/\(y)/\(i % 200)", year: y, month: 1 + i % 12, day: 1 + i % 28,
+                               minutes: Double(3 + i % 90), stars: i % 4, archived: i % 9 == 0,
+                               sizeBytes: 1_000_000_000 + Int64(i) * 1000, group: i < 30_000 ? group : nil))
+        }
+        let clock = ContinuousClock()
+        let started = clock.now
+        let table = ArchiveAngelEvent.applyCoverage(&cands, policy: .builtIn, now: testNow)
+        let prePass = clock.now - started
+        let sel = ArchiveAngelScorer.select(cands, count: 10, policy: .builtIn, now: testNow)
+        let elapsed = clock.now - started
+        print("[angel-coverage] 100k end-to-end (pre-pass \(prePass) + select) in \(elapsed) · \(ArchiveAngelEvent.summaryLine(table))")
+        #expect(sel.picks.count == 10)
+        #expect(years(of: sel.picks).values.max() ?? 0 <= 2, "\(years(of: sel.picks))")
+        #expect(years(of: sel.picks).count == 5)
+        #expect(sel.rejected[.yearCoverage] ?? 0 > 0)
+        #expect(elapsed <= PerformanceLane.loadAwareDebugCeiling(.seconds(3)), "100k end to end took \(elapsed)")
+    }
+}
+
 // MARK: - The duration band, pinned unchanged (codex review, acceptance gate "Duration policy")
 
 @Suite("Archive Angel duration band — every edge pinned (rules v13 changes nothing here)")

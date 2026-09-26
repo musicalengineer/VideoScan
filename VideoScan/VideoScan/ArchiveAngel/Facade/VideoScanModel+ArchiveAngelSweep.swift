@@ -32,8 +32,12 @@ extension VideoScanModel {
         // O(n) pass, here beside the others — never in `select`'s loop.
         // Runs after markArchivedFootage so an archived footage group's
         // members count as archived backlog, not as work to do.
-        let backlog = ArchiveAngelEvent.applyCoverage(&out, policy: rules)
-        coverageLog.info("\(ArchiveAngelEvent.summaryLine(backlog), privacy: .public)")
+        // With every coverage key off (rules v12) the pass is skipped: the
+        // scorer then resolves nothing and the bonus never fires.
+        if rules.coverage.isActive {
+            let backlog = ArchiveAngelEvent.applyCoverage(&out, policy: rules)
+            coverageLog.info("\(ArchiveAngelEvent.summaryLine(backlog), privacy: .public)")
+        }
         return out
     }
 

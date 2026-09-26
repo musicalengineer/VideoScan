@@ -90,6 +90,41 @@ struct ArchiveAngelCoverageFreshnessTests {
         #expect(job.plan.log.contains { $0.hasSuffix(expectedLine) }, "the walk's backlog line must be the sweep's: \(job.plan.log)")
     }
 
+    @Test("MINOR: with every coverage key off the walk runs no pre-pass and logs no backlog line (rules v12 pays nothing)")
+    func coverageOffPaysNothingInTheWalk() async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("angel_cov_off_walk")
+        defer { sb.cleanup() }
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        model.scanTargets = []
+        model.previewSweep.stop()
+        model.archiveAngel.sweep.stop()
+        let path = sb.sources.appendingPathComponent("tape.dv").path
+        try MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: path), bytes: 4096, seed: 3)
+        let rec = MasterArchiveTestSupport.makeRecord(path: path, userDate: "1994-11-24", starRating: 3)
+        rec.durationSeconds = 1800; rec.sizeBytes = 9_000_000_000; rec.isPlayable = "Yes"; rec.videoCodec = "dvvideo"
+        model.records = [rec]
+        let buffer = sb.root.appendingPathComponent("Buffer", isDirectory: true)
+        try FileManager.default.createDirectory(at: buffer, withIntermediateDirectories: true)
+        let center = MediaFileOperationsCenter()
+        let off = ArchiveAngelJob(model: model, center: center, count: 1, makeLossless: false, bufferRoot: buffer,
+                                  policy: .coverageOff)
+        off.start()
+        await off.task?.value
+        #expect(!off.plan.log.contains { $0.contains("coverage:") }, "\(off.plan.log)")
+        let on = ArchiveAngelJob(model: model, center: center, count: 1, makeLossless: false, bufferRoot: buffer)
+        on.start()
+        await on.task?.value
+        _ = center
+        #expect(on.plan.log.contains { $0.contains("coverage: 1 years · 1 recordings") }, "\(on.plan.log)")
+        #expect(!AngelCoverageRules.off.isActive && AngelCoverageRules.standard.isActive)
+        #expect(AngelCoverageRules(onePerEvent: false, maxPerYearPerBatch: 0, backlogBonusMax: 5).isActive, "the bonus alone needs the pass")
+        // The pure side: `select` under coverage off resolves no date.
+        let sel = ArchiveAngelScorer.select([ArchiveAngelCandidate(id: rec.id, filename: "tape.dv", durationSeconds: 1800,
+                                                                   starRating: 3, userDate: "1994-11-24")],
+                                            count: 1, policy: .coverageOff, now: Date())
+        #expect(sel.picks.first?.candidate.eventKey == nil, "no pre-pass, no on-demand resolution")
+    }
+
     @Test("MAJOR-4: a stamp from another LAUNCH is never current — yesterday's revision 57 under a foreign token loses to today's 3; the same token wins; no token at all loses; coverage off ignores both")
     func foreignLaunchTokenDeclines() {
         let now = Date(timeIntervalSince1970: 1_790_000_000)

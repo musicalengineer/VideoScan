@@ -408,8 +408,10 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             // "Fills a gap" line agrees between the two paths.
             ArchiveAngelScorer.markArchivedFootage(&candidates, archivedGroups: model.archivedFootageGroupIDs(active))
             ArchiveAngelScorer.applyFamilyAttention(&candidates, weights: weights)   // Phase 1: same rule as the sweep
-            let backlog = ArchiveAngelEvent.applyCoverage(&candidates, policy: self.policy)   // rules v13: same pre-pass as the sweep
-            note("Archive Angel: " + ArchiveAngelEvent.summaryLine(backlog))
+            if self.policy.coverage.isActive {   // rules v13: the same pre-pass as the sweep; off = rules v12, no cost
+                let backlog = ArchiveAngelEvent.applyCoverage(&candidates, policy: self.policy)
+                note("Archive Angel: " + ArchiveAngelEvent.summaryLine(backlog))
+            }
 
             // Spotlight play history for the eligible ones only, off-main.
             let rules = self.policy

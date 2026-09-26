@@ -86,6 +86,12 @@ struct AngelCoverageRules: Codable, Sendable, Equatable {
     /// to archive (a year with three clips is not a backlog).
     var backlogMinimumUnarchived = 10
 
+    /// Any rule on: the sweep and the walk run the coverage pre-pass, and
+    /// the cached pick checks the catalog stamps. All off = rules v12 and
+    /// the pre-pass costs nothing (QA MINOR, 2026-09-26: ~0.8 s per 100k on
+    /// the main actor otherwise).
+    var isActive: Bool { onePerEvent || maxPerYearPerBatch > 0 || backlogBonusMax > 0 }
+
     static let standard = AngelCoverageRules()
     /// Rules v12 behaviour: no event pass, no cap, no bonus.
     static let off = AngelCoverageRules(onePerEvent: false, maxPerYearPerBatch: 0,

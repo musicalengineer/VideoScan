@@ -261,8 +261,7 @@ extension ArchiveAngelJob {
     /// Pure.
     static func coverageIsCurrent(stampedToken: String?, stampedRevision: Int?,
                                   currentToken: String?, currentRevision: Int?, coverage: AngelCoverageRules) -> Bool {
-        let coverageOn = coverage.maxPerYearPerBatch > 0 || coverage.onePerEvent || coverage.backlogBonusMax > 0
-        guard coverageOn, let currentRevision else { return true }
+        guard coverage.isActive, let currentRevision else { return true }
         if let currentToken, stampedToken != currentToken { return false }
         return (stampedRevision ?? 0) >= currentRevision
     }
