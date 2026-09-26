@@ -113,6 +113,7 @@ extension HallieTurnExecutor {
         let trimmed = subject.trimmingCharacters(in: .whitespacesAndNewlines)
         let named = !trimmed.isEmpty && !HallieDroppedTopicWord.isTopicWord(trimmed)
             && !HalliePronounContinuity.isThirdPersonPronoun(trimmed)
+            && !["i", "me", "my", "you", "your", "we", "us", "our", "this", "that"].contains(trimmed.lowercased())
             && lowered.range(of: #"\b"# + NSRegularExpression.escapedPattern(for: trimmed.lowercased()) + #"\b"#,
                              options: .regularExpression) != nil
         guard !keywords.isEmpty || year != nil || named else { return nil }

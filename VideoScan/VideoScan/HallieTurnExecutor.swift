@@ -1195,6 +1195,15 @@ enum HallieTurnExecutor {
             // shell's fixture translator) there is nothing to judge against:
             // the year stands.
             let hasQuestionText = !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            // "Christmas videos from 2006" read as an age question (live
+            // 2026-09-24): a media ask with no age word is searched.
+            if !isRefinement, hasQuestionText, request.selectedIdentity == nil,
+               let presence = mediaAskMisreadAsAge(question, subject: rawPayload.subject) {
+                return try await executePresenceLike(
+                    presence, route: .presence, request: request,
+                    context: context, dependencies: dependencies)
+                .prefixingBasis("the question has a media word and no age word, so it is not an age question; I searched the catalog")
+            }
             var payload = rawPayload
             var inventedYear: Int?
             if !isRefinement, hasQuestionText, case .explicitYear(let year) = rawPayload.reference,
