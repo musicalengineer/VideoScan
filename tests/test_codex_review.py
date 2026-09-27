@@ -70,6 +70,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("VIDEOSCAN_CODEX_BIN", str(fake))
     monkeypatch.setenv("VIDEOSCAN_TEAM_CHANNEL_DB", str(tmp_path / "channel.sqlite3"))
     monkeypatch.setenv("VIDEOSCAN_REVIEW_CYCLES", str(tmp_path / "state" / "review-cycles.json"))
+    monkeypatch.setenv("VIDEOSCAN_REVIEW_ANNOUNCE", "1")   # channel posts are opt-in; the posting tests opt in
     monkeypatch.setenv("FAKE_CODEX_ARGS", str(tmp_path / "args.json"))
     monkeypatch.setenv("FAKE_CODEX_MODE", "merge0")   # registered so teardown restores it
     return tmp_path
@@ -231,3 +232,12 @@ def test_hyphenated_verdict_is_kept_whole():
     out = fn("Credits spent: unavailable | Finding count: 5\nVerdict: merge-after-fixes\n", "tokens used\n97,983\n")
     assert out["verdict"] == "merge-after-fixes"
     assert out["findings"] == 5
+
+
+def test_channel_posts_are_off_by_default(env, monkeypatch):
+    """Rick 2026-09-27: 19 red 'unanswered from codex' rows — the wrapper must not post by default."""
+    monkeypatch.delenv("VIDEOSCAN_REVIEW_ANNOUNCE")
+    code, cycle = run(env, "merge0")
+    assert code == 0 and cycle["phase"] == "closed"
+    db = env / "channel.sqlite3"
+    assert not db.exists() or channel_rows(env) == []
