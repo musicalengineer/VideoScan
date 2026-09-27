@@ -157,16 +157,31 @@ final class FamilyTreeWalkCenter: ObservableObject {
 
     // MARK: Running (foreground)
 
+    /// The OUTCOME's closing phrase for a walk that is not saved.
+    static let displayOnlyNote = "(display only — decorations unchanged)"
+
+    /// Only a FULL walk (every generation) from the DEFAULT start people is
+    /// the canonical decorations.json (Manager 2026-09-27: a 3-generation
+    /// walk had overwritten it, so generation-5 ancestors lost their line).
+    func isCanonical(_ options: TreeWalk.Options, in graph: GedcomFamilyGraph) -> Bool {
+        options.maxGenerations == nil
+            && options.starts == Self.defaultStarts(in: graph, ownerFamilySearchID: ownerFamilySearchID())
+    }
+
     /// Run one walk. `onEvent` sees every event (the sheet drives its
-    /// progress from it). Logs, saves, installs the result.
+    /// progress from it). Logs; a canonical walk (see `isCanonical`) also
+    /// saves and installs the result, any other walk is DISPLAY ONLY.
     /// Returns the result, or nil when cancelled / failed.
     @discardableResult
     func run(graph: GedcomFamilyGraph, options: TreeWalk.Options, mode: TreeWalkLog.Mode,
              displayNames: [String], onEvent: @escaping (TreeWalk.Event) -> Void = { _ in }) async -> TreeWalk.Result? {
         isRunning = true
         defer { isRunning = false }
-        self.displayNames = displayNames
-        loadedGraphIdentity = Self.identity(of: graph)
+        let canonical = isCanonical(options, in: graph)
+        if canonical {
+            self.displayNames = displayNames
+            loadedGraphIdentity = Self.identity(of: graph)
+        }
         var sink = TreeWalkLog.Sink(TreeWalkLog(mode: mode, displayNames: displayNames))
         var result: TreeWalk.Result?
         var sawTerminal = false
@@ -176,7 +191,7 @@ final class FamilyTreeWalkCenter: ObservableObject {
             case .finished(let r):
                 result = r
                 sawTerminal = true
-                let saved = await save(r)
+                let saved = canonical ? await save(r) : Self.displayOnlyNote
                 for line in sink.lines(for: event, savedNote: saved) { write(line) }
             case .failed, .cancelled:
                 sawTerminal = true

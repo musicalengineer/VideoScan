@@ -101,6 +101,7 @@ private func scratchCenter() -> (FamilyTreeWalkCenter, URL) {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ftwalk-\(UUID().uuidString)")
     let center = FamilyTreeWalkCenter()
     center.storeURL = dir.appendingPathComponent(TreeWalkStore.fileName)
+    center.ownerFamilySearchID = { nil }      // never Rick's real pin
     return (center, dir)
 }
 
@@ -276,6 +277,40 @@ struct FamilyTreeWalkAppTests {
         #expect(other.displayNames == ["Richard", "Donna"], "no owner configured → first given names")
     }
 
+    // MARK: Display-only partial walks (Manager 2026-09-27)
+
+    /// Only a FULL walk from the default start people writes
+    /// decorations.json; a 3-generation (or other-start) walk is display
+    /// only — the file stays byte-identical and a generation-5 ancestor
+    /// keeps their line in the inspector's data.
+    @Test func aPartialForegroundWalkIsDisplayOnly() async throws {
+        let (center, dir) = scratchCenter()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let g = twoStartPedigree(depth: 6)
+        let url = try #require(center.storeURL)
+        _ = try #require(await center.run(graph: g, options: .init(starts: ["@R0@", "@D0@"]), mode: .foreground,
+                                          displayNames: ["Rick", "Donna"]))
+        let full = try Data(contentsOf: url)
+        #expect(center.decoration(for: "@R31@")?.line == .first, "generation 5 on Rick's line")
+        #expect(center.decoration(for: "@R31@")?.generationFromFirst == 5)
+
+        let partial = await center.run(graph: g, options: .init(starts: ["@R0@", "@D0@"], maxGenerations: 3),
+                                       mode: .foreground, displayNames: ["Rick", "Donna"])
+        #expect(partial?.summary.peopleWalked == 30, "the sheet still gets its summary and animation")
+        #expect(try Data(contentsOf: url) == full, "decorations.json byte-identical")
+        #expect(center.decoration(for: "@R31@")?.line == .first, "the inspector's data still has the line")
+        #expect(center.recentLines.last?.hasSuffix("(display only — decorations unchanged)") == true,
+                "\(center.recentLines.last ?? "")")
+
+        _ = await center.run(graph: g, options: .init(starts: ["@R1@"]), mode: .foreground, displayNames: ["Dad"])
+        #expect(try Data(contentsOf: url) == full, "another start person is display only too")
+        #expect(center.displayNames == ["Rick", "Donna"], "the inspector keeps naming Rick's and Donna's lines")
+        let (fresh, _) = scratchCenter()
+        fresh.storeURL = url
+        await fresh.ensureLoaded(for: g, speakers: .none)
+        #expect(fresh.decoration(for: "@R31@")?.line == .first)
+    }
+
     // MARK: Isolation
 
     @Test func absentPoisonedAndStaleFilesSayWhyAndRebuild() async throws {
@@ -297,14 +332,14 @@ struct FamilyTreeWalkAppTests {
 
         // A walk over a DIFFERENT tree leaves a stale file for this one.
         let other = GedcomFamilyGraph(gedcomText: twoRoots.replacingOccurrences(of: "21 FEB 1929", with: "22 FEB 1929"))
-        _ = await poisoned.run(graph: other, options: .init(starts: ["@I1@"]), mode: .background, displayNames: [])
+        _ = await poisoned.run(graph: other, options: .init(starts: ["@I1@", "@I2@"]), mode: .background, displayNames: [])
         let (stale, _) = scratchCenter()
         stale.storeURL = url
         await stale.ensureLoaded(for: g, speakers: .none)
         #expect(stale.stored == nil)
         #expect(stale.status?.contains("out of date") == true)
         // …and walking this tree rebuilds it.
-        _ = await stale.run(graph: g, options: .init(starts: ["@I1@"]), mode: .background, displayNames: [])
+        _ = await stale.run(graph: g, options: .init(starts: ["@I1@", "@I2@"]), mode: .background, displayNames: [])
         let (fresh, _) = scratchCenter()
         fresh.storeURL = url
         await fresh.ensureLoaded(for: g, speakers: .none)

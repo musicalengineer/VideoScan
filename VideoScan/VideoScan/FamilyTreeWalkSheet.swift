@@ -163,7 +163,7 @@ struct FamilyTreeWalkSheet: View {
                 .font(.system(size: 12)).foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
-            Text("Decorates everyone with their line, generations, age at death and birth region, and runs the consistency checks. Reads the tree only; the results are saved beside it (decorations.json), and are kept up to date automatically whenever the tree changes. The analysis itself takes moments; the fan then replays it at a pace you choose, so you can watch.")
+            Text("Decorates everyone with their line, generations, age at death and birth region, and runs the consistency checks. Reads the tree only. The decorations (decorations.json) are kept up to date automatically; only an All-generations walk from the home people replaces them — a shorter walk, or one from someone else, is for watching only. The analysis itself takes moments; the fan then replays it at a pace you choose, so you can watch.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
