@@ -486,7 +486,8 @@ extension VideoScanModel {
             guard rec.userDate != ud || rec.userDateConfidence != conf else { return }
             refileNote("Refile: \(label) — date on \(rec === copy ? "the archive copy" : "the original") \(rec.filename): \(rec.userDate ?? "none") (\(rec.userDateConfidence ?? "-")) → \(ud) (\(conf)); revert in the Inspector's date field")
             dateUpdates.append(.init(recordID: rec.id, userDate: ud, confidence: conf,
-                                     expectedUserDate: rec.userDate, expectedConfidence: rec.userDateConfidence))
+                                     expectedUserDate: rec.userDate, expectedConfidence: rec.userDateConfidence,
+                                     createdAtMillis: Int64((now.timeIntervalSince1970 * 1000).rounded(.down))))
             rec.userDate = ud
             rec.userDateConfidence = conf
         }
@@ -756,8 +757,27 @@ extension VideoScanModel {
             return
         }
         if !atTarget { moveRecord(rec, to: entry.newFullPath) }
+        // First guard: the ledger. Any date edit of that record after the
+        // update was made (a dateSet not carrying a refile key) wins.
+        var ledgerCache: [UUID: [MediaLedgerEvent]] = [:]
+        func editedSince(_ id: UUID, _ millis: Int64) -> MediaLedgerEvent? {
+            let events = ledgerCache[id] ?? mediaLedger.events(forRecordID: id)
+            ledgerCache[id] = events
+            return events.last { e in
+                e.event == .dateSet
+                    && Int64((e.at.timeIntervalSince1970 * 1000).rounded(.down)) > millis
+                    && !(e.detail[MediaLedgerEvent.Detail.idempotencyKey] ?? "").hasPrefix("refile:")
+            }
+        }
+        var fieldConflicts: [String] = []
         for u in entry.dateUpdates {
             guard let r = record(forID: u.recordID) else { continue }
+            if let edit = editedSince(u.recordID, u.createdAtMillis) {
+                let what = "the date on \(r.filename) was edited after this refile (\(edit.detail[MediaLedgerEvent.Detail.date] ?? "?") on \(edit.at), by \(edit.by.rawValue))"
+                if !fieldConflicts.contains(what) { fieldConflicts.append(what) }
+                continue
+            }
+            // Second guard: the value.
             if r.userDate == u.userDate && r.userDateConfidence == u.confidence { continue }
             guard r.userDate == u.expectedUserDate && r.userDateConfidence == u.expectedConfidence else {
                 refileNote("Refile: replay left the date on \(r.filename) alone — it says \(r.userDate ?? "none") (\(r.userDateConfidence ?? "-")), not the \(u.expectedUserDate ?? "none") this refile replaced; a newer edit wins")
@@ -768,6 +788,11 @@ extension VideoScanModel {
         }
         objectWillChange.send()
         entry.catalogDone = persistence.saveCatalog(self)
+        if !fieldConflicts.isEmpty {
+            let why = fieldConflicts.joined(separator: "; ")
+            entry.conflict = why
+            refileNote("Refile recovery conflict: record \(rec.id.uuidString.prefix(8)) (\(rec.filename)), pending refile \(entry.id.uuidString.prefix(8)) \(entry.fromRelPath) → \(entry.toRelPath): \(why). Those dates were NOT replayed — your edit wins; the entry is kept, marked conflict.")
+        }
     }
 
     /// Point a record at the file's new place (after the file moved).
@@ -816,6 +841,12 @@ struct ArchiveRefilePendingEntry: Codable, Equatable, Sendable {
         /// hand edit always wins over a replayed one.
         let expectedUserDate: String?
         let expectedConfidence: String?
+        /// When the refile that made this update ran (ms since 1970). A
+        /// date edit in the media ledger AFTER this — a dateSet not written
+        /// by the refile machinery — means someone changed the field since:
+        /// the update is a conflict even if the value looks expected (a
+        /// revert to the old value is indistinguishable by value — r6).
+        let createdAtMillis: Int64
     }
     /// What the archive copy's record said before a refile of the chain
     /// (its path and the fields that name its file). Replay repoints the

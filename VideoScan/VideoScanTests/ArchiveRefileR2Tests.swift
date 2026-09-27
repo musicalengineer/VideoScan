@@ -354,6 +354,54 @@ struct ArchiveRefileR2StepEPersistenceTests {
         #expect(a.model.dashboard.consoleLines.contains { $0.contains("Refile recovery conflict") })
     }
 
+    @Test("r6 (codex r5 #1): A→B types 1984, B→C types 1985, both saves fail; Rick sets the original BACK to 1984 (ledger dateSet, persisted) → replay leaves 1984, entry kept as conflict")
+    func userDateRevertSurvivesReplay() async throws {
+        let a = try await RefileFixture.make("r6revert", redate: nil)      // both records 1964
+        defer { a.sb.cleanup() }
+        let p1 = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        let h1984 = try #require(ArchiveRefile.hint(year: 1984, month: nil, day: nil))
+        _ = await a.model.refileArchiveCopy(p1, hint: h1984, name: p1.initialName, persistence: failSave)
+        let p2 = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        let h1985 = try #require(ArchiveRefile.hint(year: 1985, month: nil, day: nil))
+        _ = await a.model.refileArchiveCopy(p2, hint: h1985, name: p2.initialName, persistence: failSave)
+        #expect(a.source.userDate == "1985")
+
+        try await Task.sleep(for: .milliseconds(20))
+        // Rick's revert, through the real edit path (the Inspector writes the
+        // field, then noteUserDateEdited → a ledger dateSet by rick).
+        a.source.userDate = "1984"; a.source.userDateConfidence = "estimated"
+        a.model.noteUserDateEdited(a.source)
+        await a.model.mediaLedger.waitForPendingWrites()
+        let persisted = Persisted(a)                                         // …and a save put it on disk
+
+        persisted.restore(into: a)                                           // relaunch
+        _ = await a.model.replayPendingRefiles()
+        #expect(a.source.userDate == "1984", "Rick's revert survives (got \(a.source.userDate ?? "nil"))")
+        #expect(a.model.loadPendingRefiles().contains { $0.conflict != nil }, "the entry is kept, marked conflict")
+    }
+
+    @Test("r6 (codex r5 #2): catalog already at the target, archive OFFLINE at replay → still pending (no conflict); archive back → completes")
+    func offlineAlreadyAtTargetRemainsRetryable() async throws {
+        let a = try await RefileFixture.make("r6offline")
+        defer { a.sb.cleanup() }
+        let p = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        _ = await a.model.refileArchiveCopy(p, hint: p.initialHint, name: p.initialName, persistence: failSave)
+        let persisted = Persisted(a)          // a later debounced save persisted the record at B
+        persisted.restore(into: a)
+
+        let root = a.sb.archiveRoot
+        let away = root.deletingLastPathComponent().appendingPathComponent("test_offline_archive")
+        try FileManager.default.moveItem(at: root, to: away)   // the archive drive is unplugged
+        _ = await a.model.replayPendingRefiles()
+        let waiting = a.model.loadPendingRefiles()
+        #expect(waiting.count == 1 && waiting.first?.conflict == nil && waiting.first?.catalogDone == false,
+                "offline is not a conflict — it waits")
+        try FileManager.default.moveItem(at: away, to: root)   // plugged back in
+        let done = await a.model.replayPendingRefiles()
+        #expect(done == 1)
+        #expect(a.model.loadPendingRefiles().isEmpty)
+    }
+
     @Test("r3 #3: a ledger write that lands only its FIRST line, then throws → replay yields every intended event exactly once")
     func partialLedgerAppend() async throws {
         let a = try await RefileFixture.make("r3partial")

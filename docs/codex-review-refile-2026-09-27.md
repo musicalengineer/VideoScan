@@ -235,3 +235,62 @@ OUTPUT (stdout, Markdown, under 500 words):
 first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
 then a line `Verdict: merge / merge-after-fixes / hold`
 then findings, each with file:line, a concrete counterexample, and the test that would pin it.
+
+## Closed
+
+Closed by `bdb3d955` at 2026-09-27T18:58:49Z. #1 and #2 closed by bdb3d955 (replay never overrides a newer edit)
+
+---
+
+# Codex review — Refile r5
+
+- Range: `036c910f..bdb3d955`
+- Credits spent: unavailable
+- Tokens: 51592
+- Finding count: 2
+- Verdict: merge-after-fixes
+- Run: 2026-09-27T18:58:54Z (cycle #5, tools/codex_review.py)
+
+## Codex answer
+
+Credits spent: unavailable | Finding count: 2
+Verdict: merge-after-fixes
+
+1. **P1 — Reverting a date defeats the “newer edit wins” guard.** [VideoScanModel+ArchiveRefile.swift:762](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+ArchiveRefile.swift:762)  
+   Counterexample: A→B types 1984; B→C types 1985; both catalog saves fail. Rick then changes the original back to 1984 with the same confidence as the earlier 1984 value, and persists the catalog. Relaunch at C. Replay skips the first update as already satisfied, then applies the second update because its expected value is 1984—overwriting Rick’s newer correction with 1985. Value equality cannot distinguish an unapplied update from an intentional reversion.  
+   **Pin:** `userDateRevertSurvivesReplay` in `ArchiveRefileR2StepEPersistenceTests`: restore that persisted state; assert the original remains 1984 after replay.
+
+2. **P2 — An offline archive becomes a permanent conflict when the catalog already reached the target.** [VideoScanModel+ArchiveRefile.swift:745](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+ArchiveRefile.swift:745)  
+   Counterexample: A→B’s immediate save fails; a subsequent debounced save persists B, leaving the pending entry. Relaunch with the archive disconnected. `atTarget` is true, so the unavailable-file retry branch is bypassed; the identity guard marks a conflict. Reconnecting the unchanged archive cannot recover: line 697 skips the entry forever. No newer edit or replacement file occurred.  
+   **Pin:** `offlineAlreadyAtTargetRemainsRetryable`: restore the persisted B state, temporarily make the archive unavailable, replay, restore access, replay again; assert no permanent conflict and eventual completion.
+
+`ArchiveRefileR2Tests.swift`: read, no findings in the added tests themselves; neither counterexample is covered. Other replayed fields and the normal conflict-retention/inheritance paths yielded no additional findings.
+
+Static review only; no builds or tests run. r3 #4 remains declined.
+
+## Brief
+
+Re-review, SCOPED to ONE fix commit for your Refile r4 findings (docs/codex-review-refile-2026-09-27.md, section "Codex review — Refile r4", with its Disposition block): bdb3d955 on feat/archive-refile. Use `git show bdb3d955`. Do not explore outside the files it touches (VideoScanModel+ArchiveRefile.swift, VideoScanTests/ArchiveRefileR2Tests.swift); read-only; do not build or run. r3 #4 stays declined.
+
+THE ONE RULE (coordinator's ruling for r4 #1 and #2): replay never overrides a newer edit.
+- A pending entry records `priorCopyStates` — the archive copy record's state (fullPath, sizeBytes, partialMD5, contentHash) before EACH refile of its chain whose catalog save did not land (replaces `chainFromPaths`) — and every `DateUpdate` carries `expectedUserDate` / `expectedConfidence`, the value it replaced. The chain's date updates are kept in order, not merged.
+- `replayCatalogStep`: repoint the record only if it currently equals one of `priorCopyStates` (or already sits at the target) AND the lstat identity at the target is the refiled file; otherwise → `conflict` set on the entry, a "Refile recovery conflict" line (console + catalog.log + videoscan.log) naming the record, the entry and what differs; nothing applied; the entry is kept (never auto-removed) and re-announced on later replays. Each date update applies only while its field equals its expected value (already-at-target is fine); otherwise it is left alone and logged ("a newer edit wins").
+- Conflict entries are not inherited by, nor superseded by, a newer refile's chain.
+
+PINS (ArchiveRefileR2StepEPersistenceTests; debounced saves off; relaunch = the records reset to the persisted state):
+- inheritedDateNeverUndoesNewerEdit — A→B typed 1984 (save fails) → Rick sets the original to 1985 (persisted) → B→C with 1985 (save fails) → replay: both dates 1985, record at C. Red before (the original came back 1984).
+- userRepointWinsOverReplay — A→B→C both saves fail → relaunch, Rick repoints the record to a different file at A (persisted: size/md5 differ) → replay: record stays on Rick's file, entry kept as conflict, conflict line in the console. Red before (redirected to C).
+- chainedFailedSavesRecover (from r4) still lands C with the latest dates.
+
+ATTACK:
+1. A legitimate recovery wrongly flagged conflict (e.g. a rescan re-probing the copy between failure and relaunch changes sizeBytes / partialMD5 / contentHash).
+2. A newer edit that the fingerprint cannot see (a field outside path/size/md5/hash/dates) and that replay would still override.
+3. Order effects in the chain's sequential date updates (A→B→C→D; an intermediate state persisted by a successful debounced save).
+4. Conflict entries: never cleared automatically — is there any path that removes or re-applies one.
+
+EVIDENCE (M4, Debug): at bdb3d955 (docs 604e73e3 after), 371 tests in 66 suites passed, run by suite with `-only-testing` (the same 66 suites as r4; the two new pins are in ArchiveRefileR2StepEPersistenceTests). Both pins were run red before the fix.
+
+OUTPUT (stdout, Markdown, under 400 words):
+first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
+then a line `Verdict: merge / merge-after-fixes / hold`
+then findings, each with file:line, a concrete counterexample, and the test that would pin it.
