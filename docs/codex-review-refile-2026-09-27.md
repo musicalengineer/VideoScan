@@ -117,3 +117,58 @@ then findings, each with file:line, a concrete counterexample, and the test that
 ## Closed
 
 Closed by `8f8be568` at 2026-09-27T18:11:43Z. all 5 first-pass findings fixed red-first (797a810c 555f8ba1 41caa13d a06080c4 8f8be568); re-review continues as 'Refile r2'
+
+## Closed
+
+Closed by `f06a93e0` at 2026-09-27T18:30:27Z. 4 r2 findings fixed red-first (e68abbfb a4c056aa 0535d2b7 f06a93e0); re-review continues as 'Refile r3'
+
+---
+
+# Codex review — Refile r3
+
+- Range: `f1b4e025..f06a93e0`
+- Credits spent: unavailable
+- Tokens: 89944
+- Finding count: 4
+- Verdict: merge-after-fixes
+- Run: 2026-09-27T18:30:27Z (cycle #3, tools/codex_review.py)
+
+## Codex answer
+
+Credits spent: unavailable | Finding count: 4
+Verdict: merge-after-fixes
+
+1. **P1 — Superseding loses recovery across two failed saves.** `VideoScanModel+ArchiveRefile.swift:551`, `:643`: A→B completes with catalog-save failure; B→C also fails to save; both ledger appends succeed. Superseding deletes A→B. After relaunch, the persisted record still points at A, so B→C is declared STALE and removed despite the correct file identity at C. The catalog permanently retains A. **Pin:** extend `ArchiveRefileR2StepEPersistenceTests` with both saves failing, prevent debounced persistence, reload the original catalog, and require replay to persist C and the latest dates.
+
+2. **P1 — A successful move-back does not prove original-file recovery.** `ArchiveRefile.swift:903`, `:917`, `:942`: after A→B, another writer relocates the original from B and puts a stranger at B. The identity check correctly fails, but `putBack` renames that stranger to A, flushes the folders, and returns `.rolledBack`. Its new `backupIsSafeToDiscard` contract then causes `ArchiveIndexRename.swift:330` to delete the backup. Recovery never verifies the returned file’s identity. **Pin:** use the `directoryFsync` seam to substitute B before the identity check; require mixed-state reporting, preservation of the stranger, and retention of the incomplete backup.
+
+3. **P2 — Existing pending files silently become empty.** `VideoScanModel+ArchiveRefile.swift:603`, `:737`: entries written by `f1b4e025` lack the newly required sequence, FROM path, identity, and digest fields. Synthesized decoding fails for the entire array; `loadPendingRefiles` returns `[]`. A subsequent update overwrites the recovery file, losing owed catalog and ledger work. **Pin:** load a pending-file fixture encoded with the baseline schema, then add another entry; require preservation and explicit migration or unresolved-recovery handling.
+
+4. **P2 — Keyless events duplicate on replay.** `VideoScanModel+ArchiveRefile.swift:674`: a pending entry created by `a4c056aa` has the current entry schema but no `idem` keys. If its first ledger line landed before failure, replay under `f06a93e0` treats every keyless event as missing and appends that first line again. Rewriting pending status preserves the missing keys. **Pin:** adapt `partialLedgerAppend` with an `a4c056aa` pending fixture; replay repeatedly and require every intended event exactly once.
+
+Read, no additional findings in scoped changes to `ArchiveIndexRename.swift`, `ArchiveIndexLock.swift`, `VideoScanModel+Rename.swift`, both `PromoteToArchiveJob` files, `MediaLedgerEvent.swift`, the changed tests, and the review document. Conservative retention of unclassified clean failures is acceptable.
+
+Static review only; no builds, tests, or writes. Untouched attestation/decisions callers were excluded by the requested scope.
+
+## Brief
+
+Re-review, SCOPED to the four fix commits for your Refile r2 findings (docs/codex-review-refile-2026-09-27.md, section "Codex review — Refile r2"): range f1b4e025..f06a93e0 on feat/archive-refile (commits e68abbfb, a4c056aa, 0535d2b7, f06a93e0). Use `git diff f1b4e025..f06a93e0` and `git show <sha>`. Do not explore outside the files they touch; read-only; do not build or run.
+
+FIXES (each red first):
+- e68abbfb r2#1 — ArchiveIndexRename.swift, ArchiveRefile.swift, VideoScanModel+Rename.swift: after a failed media move, `apply` RETAINS the backup by default and discards it only when the error conforms to `BackupDisposition` and says `backupIsSafeToDiscard` (Refile: refusedBeforeMove, rolledBack-with-flushed-folders; Catalog rename: `.filesystem`). notRolledBack / incompleteRecovery keep it (incomplete marker). Pin: ArchiveRefileR2MoveBackIdentityTests.blockerAtOldPath now requires the backup + incomplete marker.
+- a4c056aa r2#2 — VideoScanModel+ArchiveRefile.swift, ArchiveRefile.swift: `Done` carries device/inode/size; a pending entry carries FROM path, identity, digest, sequence. Writing a new entry supersedes older entries' catalog step for the same record (their owed ledger step is kept). Replay applies only if the record points at FROM or TO AND lstat identity at TO matches; otherwise logged as STALE and dropped. Pin: ArchiveRefileR2StepEPersistenceTests.stalePendingNeverRedirects (A→B with failed save, B→C, stranger at B).
+- 0535d2b7 r2#3 — MediaLedgerEvent.swift (+`idem` detail key), VideoScanModel+ArchiveRefile.swift: each refile ledger line carries `refile:<pending id>:<index>`; replay appends exactly the keys absent from the ledger. Pin: partialLedgerAppend (writer lands only the first line, then throws).
+- f06a93e0 r2#4 — ArchiveIndexLock.swift, PromoteToArchiveJob(+Steps).swift: on the main thread the lock is tried ONCE (no sleep; busy = immediate refusal; the promote journal converges next run); `finalizeBatch` is async and appends its `done` entries off-main (@concurrent). Pin: ArchiveRefileR3MainActorLockTests (lock held by another writer, 8-entry finalization, main-actor heartbeat < 100 ms; was 2.2 s).
+
+ATTACK:
+1. Any path where a backup is still removed while the archive is not proven unchanged; any path that now LEAKS a backup on a proven-clean refusal (retention cost is acceptable, but say so).
+2. Replay: a legitimate pending entry wrongly judged stale (e.g. relaunch after a catalog-save failure — record back at FROM), a stale one applied, superseding dropping a ledger step that was owed.
+3. Idempotency: duplicate or missing lines when the pending entry itself was rewritten between attempts; events without a key.
+4. Main actor: any remaining index-lock acquisition that can wait on main (manifest / journal / attestation / decisions appends called from main), and whether a busy refusal on main is handled (not claimed as written) by every caller.
+
+EVIDENCE (M4, Debug): at f06a93e0, 366 tests in 64 suites passed, run by suite with `-only-testing` (the 63 suites of r2 plus ArchiveRefileR3MainActorLockTests; the r2 StepE and MoveBackIdentity suites carry the new pins); VideoScanCore MediaLedgerEventTests + LedgerNarratorTests 16 passed.
+
+OUTPUT (stdout, Markdown, under 500 words):
+first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
+then a line `Verdict: merge / merge-after-fixes / hold`
+then findings, each with file:line, a concrete counterexample, and the test that would pin it.

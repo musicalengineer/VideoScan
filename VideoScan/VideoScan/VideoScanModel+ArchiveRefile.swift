@@ -536,13 +536,28 @@ extension VideoScanModel {
         }
 
         // The durable retry, BEFORE the two steps it covers.
+        // A chain: older entries of this record whose catalog step is still
+        // owed hand over their FROM paths and their date updates (newer
+        // updates win per record), so a relaunch with NONE of the saves on
+        // disk still recognizes the record and lands the latest state.
+        let existing = loadPendingRefiles()
+        let owed = existing.filter { $0.copyID == copy.id && !$0.catalogDone }.sorted { $0.sequence < $1.sequence }
+        var chain: [String] = []
+        var mergedDates: [UUID: ArchiveRefilePendingEntry.DateUpdate] = [:]
+        for o in owed {
+            for p in o.chainFromPaths + [o.fromFullPath] where !chain.contains(p) { chain.append(p) }
+            for u in o.dateUpdates { mergedDates[u.recordID] = u }
+        }
+        for u in dateUpdates { mergedDates[u.recordID] = u }
+        let chainDates = mergedDates.values.sorted { $0.recordID.uuidString < $1.recordID.uuidString }
         var entry = ArchiveRefilePendingEntry(id: entryID, at: now,
-                                              sequence: (loadPendingRefiles().map(\.sequence).max() ?? 0) + 1,
-                                              copyID: copy.id, fromFullPath: oldPath, newFullPath: newPath,
+                                              sequence: (existing.map(\.sequence).max() ?? 0) + 1,
+                                              copyID: copy.id, fromFullPath: oldPath, chainFromPaths: chain,
+                                              newFullPath: newPath,
                                               fromRelPath: done.fromRelPath, toRelPath: done.toRelPath,
                                               device: done.device, inode: done.inode, size: done.size,
                                               sha256: done.sha256,
-                                              dateUpdates: dateUpdates, ledgerEvents: events,
+                                              dateUpdates: chainDates, ledgerEvents: events,
                                               catalogDone: false, ledgerDone: false)
         let pendingWritten = updatePendingRefiles { list in
             // This refile SUPERSEDES any older entry for the same record:
@@ -562,7 +577,7 @@ extension VideoScanModel {
         entry.catalogDone = persistence.saveCatalog(self)
         if !entry.catalogDone {
             refileNote("Refile: \(label) — the catalog could NOT be saved: the archive and its index are updated, the catalog record is not yet on disk. Pending retry: \(pendingWritten ? pendingRefilesURL.path : "NOT recorded")")
-            saveCatalogDebounced()
+            persistence.scheduleRetrySave(self)
         }
         entry.ledgerDone = await persistence.appendLedger(self, events)
         if !entry.ledgerDone {
@@ -641,6 +656,7 @@ extension VideoScanModel {
                     // the end is THIS file by identity. Anything else is
                     // stale: logged and dropped, never applied (r3 #2).
                     let pointsHere = rec.fullPath == entry.fromFullPath || rec.fullPath == entry.newFullPath
+                        || entry.chainFromPaths.contains(rec.fullPath)
                     let ident = Self.lstatIdentity(entry.newFullPath)
                     let isThisFile = ident.map { $0.device == entry.device && $0.inode == entry.inode && $0.size == entry.size } ?? false
                     if pointsHere && isThisFile {
@@ -717,6 +733,8 @@ extension VideoScanModel {
 struct ArchiveRefilePersistence: Sendable {
     var saveCatalog: @MainActor @Sendable (VideoScanModel) -> Bool
     var appendLedger: @MainActor @Sendable (VideoScanModel, [MediaLedgerEvent]) async -> Bool
+    /// The best-effort retry after a failed save (the debounced save).
+    var scheduleRetrySave: @MainActor @Sendable (VideoScanModel) -> Void = { $0.saveCatalogDebounced() }
 
     static let live = ArchiveRefilePersistence(
         saveCatalog: { $0.saveCatalogNow() },
@@ -739,6 +757,10 @@ struct ArchiveRefilePendingEntry: Codable, Equatable, Sendable {
     /// Where the record pointed BEFORE this refile — replay applies only
     /// while it still points there (or already at `newFullPath`).
     let fromFullPath: String
+    /// Earlier FROM paths of the same record's chain of refiles whose
+    /// catalog saves also did not land (r4 #1): after a relaunch the
+    /// record may still point at the FIRST of them. Replay accepts any.
+    let chainFromPaths: [String]
     let newFullPath: String
     let fromRelPath: String
     let toRelPath: String

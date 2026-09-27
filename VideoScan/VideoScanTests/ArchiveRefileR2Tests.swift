@@ -238,6 +238,39 @@ struct ArchiveRefileR2StepEPersistenceTests {
         #expect(a.model.loadPendingRefiles().isEmpty, "nothing stale left to replay")
     }
 
+    @Test("r4 #1: A→B and B→C both fail to save; relaunch with the ORIGINAL catalog (record at A) → replay follows the chain to C with the latest dates")
+    func chainedFailedSavesRecover() async throws {
+        let a = try await RefileFixture.make("r4chain")
+        defer { a.sb.cleanup() }
+        // What the catalog on disk says before either refile (the "relaunch" state).
+        let persisted = (path: a.copy.fullPath, copyDate: a.copy.userDate, copyConf: a.copy.userDateConfidence,
+                         srcDate: a.source.userDate, srcConf: a.source.userDateConfidence)
+        var failSave = ArchiveRefilePersistence.live
+        failSave.saveCatalog = { _ in false }
+        failSave.scheduleRetrySave = { _ in }            // no debounced persistence either
+
+        let p1 = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        let r1 = await a.model.refileArchiveCopy(p1, hint: p1.initialHint, name: p1.initialName, persistence: failSave)
+        #expect(r1.kind == .completedWithWarnings, "\(r1.message)")
+        let p2 = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        let hint2 = try #require(ArchiveRefile.hint(year: 1985, month: nil, day: nil))
+        let r2 = await a.model.refileArchiveCopy(p2, hint: hint2, name: p2.initialName, persistence: failSave)
+        #expect(r2.kind == .completedWithWarnings, "\(r2.message)")
+        let c = a.sb.archiveRoot.appendingPathComponent(p2.target(hint: hint2, name: p2.initialName)).path
+
+        // Relaunch: the records say what the catalog on disk says — neither save landed.
+        a.copy.fullPath = persisted.path
+        a.copy.filename = (persisted.path as NSString).lastPathComponent
+        a.copy.directory = (persisted.path as NSString).deletingLastPathComponent
+        a.copy.userDate = persisted.copyDate; a.copy.userDateConfidence = persisted.copyConf
+        a.source.userDate = persisted.srcDate; a.source.userDateConfidence = persisted.srcConf
+
+        _ = await a.model.replayPendingRefiles()
+        #expect(a.copy.fullPath == c, "replay follows A → B → C")
+        #expect(a.copy.userDate == "1985" && a.source.userDate == "1985", "the latest dates")
+        #expect(a.model.loadPendingRefiles().isEmpty)
+    }
+
     @Test("r3 #3: a ledger write that lands only its FIRST line, then throws → replay yields every intended event exactly once")
     func partialLedgerAppend() async throws {
         let a = try await RefileFixture.make("r3partial")
