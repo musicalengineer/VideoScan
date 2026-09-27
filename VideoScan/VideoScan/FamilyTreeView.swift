@@ -56,9 +56,10 @@ struct FamilyTreeView: View {
     /// inspector so its width goes to genealogy). `.photosPicker(isPresented:)`
     /// is the programmatic form of the `PhotosPicker` button.
     @State private var showApplePhotosPicker = false
-    @State private var showVerifyReport = false
-    /// "Walk Tree…" (2026-09-27): one sheet with its own stages.
-    @State private var showWalkSheet = false
+    /// The Verify report and the Walk Tree sheet share ONE `.sheet(item:)`
+    /// (2026-09-27): two `.sheet(isPresented:)` side by side race each
+    /// other's dismiss animation (project_chained_sheet_antipattern).
+    @State private var toolSheet: FamilyTreeToolSheet?
     /// The MFO center WITHOUT subscribing (see MediaFileOperationsCenterReference).
     @Environment(\.mediaFileOperationsCenterReference) private var fileOpsCenterReference
     /// The Get Family Tree coordinator is owned by the app-wide center, not
@@ -387,6 +388,23 @@ struct FamilyTreeView: View {
             }
     }
 
+    @ViewBuilder private func toolSheetView(_ sheet: FamilyTreeToolSheet) -> some View {
+        switch sheet {
+        case .verify:
+            if let report = model.verification {
+                FamilyTreeVerifyReportView(report: report) { personID in
+                    model.select(personID)
+                    toolSheet = nil
+                }
+            }
+        case .walk:
+            // "Walk Tree…" (2026-09-27): one sheet with its own stages.
+            FamilyTreeWalkSheet(model: model, operations: fileOpsCenterReference) {
+                toolSheet = nil
+            }
+        }
+    }
+
     /// Stage 2: window background, colour scheme, every sheet and alert.
     private func withSheets<V: View>(_ view: V) -> some View {
         view
@@ -395,19 +413,7 @@ struct FamilyTreeView: View {
             .onChange(of: selectedPhotoItem) { _, item in
                 importApplePhoto(item)
             }
-            .sheet(isPresented: $showVerifyReport) {
-                if let report = model.verification {
-                    FamilyTreeVerifyReportView(report: report) { personID in
-                        model.select(personID)
-                        showVerifyReport = false
-                    }
-                }
-            }
-            .sheet(isPresented: $showWalkSheet) {
-                FamilyTreeWalkSheet(model: model, operations: fileOpsCenterReference) {
-                    showWalkSheet = false
-                }
-            }
+            .sheet(item: $toolSheet) { sheet in toolSheetView(sheet) }
             .photosPicker(isPresented: $showApplePhotosPicker,
                           selection: $selectedPhotoItem, matching: .images)
             .sheet(item: $adjustSource) { source in
@@ -720,7 +726,7 @@ struct FamilyTreeView: View {
 
                 Button {
                     FamilyTreeWalkCenter.shared.consoleLog = { [weak catalogModel] line in catalogModel?.log(line) }
-                    showWalkSheet = true
+                    toolSheet = .walk
                 } label: {
                     Label("Walk Tree…", systemImage: "figure.walk.circle")
                 }
@@ -731,7 +737,7 @@ struct FamilyTreeView: View {
                 if let report = model.verification {
                     if report.needingReview > 0 {
                         Button {
-                            showVerifyReport = true
+                            toolSheet = .verify
                         } label: {
                             Text("\(report.needingReview)")
                                 .font(.system(size: 11, weight: .bold))
@@ -2028,4 +2034,13 @@ struct FamilyTreeView: View {
     private func removeDocument(_ row: PersonDocumentRow) {
         Task { documentsError = await model.removeDocument(row) }
     }
+}
+
+/// The Family Tree tab's tool sheets, presented through one `.sheet(item:)`.
+/// A single shared id: switching from one to the other replaces the sheet
+/// instead of racing a dismiss against a present.
+enum FamilyTreeToolSheet: Identifiable {
+    case verify
+    case walk
+    var id: String { "familyTree.toolSheet" }
 }
