@@ -46,7 +46,9 @@ struct InferredDatePropagationTests {
 
     /// A model whose saves land in scratch, never in ~/Library/Application Support.
     private func makeModel(_ dir: URL) -> VideoScanModel {
-        let model = VideoScanModel()
+        // Own catalog.log too (GH #211): the shared test-host file is
+        // truncated by any other suite's resetForScan().
+        let model = VideoScanModel(logDirectory: dir)
         model.catalogStore = CatalogStore(directory: dir)
         return model
     }
@@ -1275,7 +1277,9 @@ struct InferredDatePropagationPersistenceAndScaleTests {
     }
 
     private func makeModel(_ dir: URL) -> VideoScanModel {
-        let model = VideoScanModel()
+        // Own catalog.log too (GH #211): the shared test-host file is
+        // truncated by any other suite's resetForScan().
+        let model = VideoScanModel(logDirectory: dir)
         model.catalogStore = CatalogStore(directory: dir)
         return model
     }
