@@ -268,6 +268,11 @@ Verdict: merge-after-fixes
 
 Static review only; no builds or tests run. r3 #4 remains declined.
 
+## Disposition (coordinator ruling, 2026-09-27)
+
+- 1 (P1, a revert to the old value defeats the value guard) — Closed by: c1a4ae2d (the media ledger is checked first: a dateSet for that record after the update was made, not written by the refile machinery, makes that field a conflict; the value check remains the second guard)
+- 2 (P2, offline archive + catalog already at target → permanent conflict) — Closed by: 0dd2d1c4 (unreachable waits, never a conflict; only a positive mismatch is)
+
 ## Brief
 
 Re-review, SCOPED to ONE fix commit for your Refile r4 findings (docs/codex-review-refile-2026-09-27.md, section "Codex review — Refile r4", with its Disposition block): bdb3d955 on feat/archive-refile. Use `git show bdb3d955`. Do not explore outside the files it touches (VideoScanModel+ArchiveRefile.swift, VideoScanTests/ArchiveRefileR2Tests.swift); read-only; do not build or run. r3 #4 stays declined.
