@@ -291,19 +291,20 @@ extension VideoRecord {
     /// the Archive Angel and Hallie use. nil in every other case, and
     /// then the column reads exactly as before.
     ///
-    /// Cost: the resolver runs only for a stamp with no make/model
-    /// (~2,200 of 13,900 live records) and only once per record per input
-    /// change (`displacedStampMemo`); later reads compare a small key.
+    /// Cost: the resolver runs only for a stamp with no camera behind it
+    /// (no model, or a make with no model — GH #201: ~3,600 of 13,900
+    /// live records) and only once per record per input change
+    /// (`displacedStampMemo`); later reads compare a small key.
     /// The SCALE test pins 200k reads of the worst case under the
     /// column's 2 s budget (sort comparators read the key per compare).
     var displacedStampResolution: RecordDateResolution? {
         guard userDate == nil, let stamp = embeddedCreationDate,
-              originMake == nil, originModel == nil else { return nil }
+              !RecordDateResolver.namesDevice(originMake: originMake, originModel: originModel) else { return nil }
         let key = DisplacedStampMemo.Key(filename: filename, stamp: stamp, encoder: originEncoder,
                                          inferred: inferredRecordDate, inferredConfidence: inferredDateConfidence)
         if let memo = displacedStampMemo, memo.key == key { return memo.value }
         let r = RecordDateResolver.resolve(userDate: nil, embeddedCreationDate: stamp,
-                                           originMake: nil, originModel: nil, originEncoder: originEncoder,
+                                           originMake: originMake, originModel: nil, originEncoder: originEncoder,
                                            inferredRecordDate: inferredRecordDate,
                                            inferredDateConfidence: inferredDateConfidence,
                                            filename: filename)

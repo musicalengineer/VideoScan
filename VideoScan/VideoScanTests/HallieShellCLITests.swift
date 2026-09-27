@@ -1570,6 +1570,7 @@ struct HallieShellCLITests {
         utc.timeZone = TimeZone(secondsFromGMT: 0)!
         tape.embeddedCreationDate = utc.date(from: DateComponents(year: 1994, month: 12, day: 25, hour: 15))!
         tape.originMake = "Sony"
+        tape.originModel = "DCR-TRV900"   // GH #201: a make alone is an export stamp
         tape.dateCreatedRaw = Date(timeIntervalSince1970: 1_784_000_000) // 2026-07
         let harness = Harness(
             inputs: [":select xmas", "when was this filmed", "what season was this filmed in", ":quit"],

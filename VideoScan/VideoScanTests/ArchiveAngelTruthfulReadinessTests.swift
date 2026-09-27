@@ -149,15 +149,27 @@ struct ArchiveAngelV12ClassRuleTests {
     func recentDigitizationSpares() {
         #expect(classify(digitized(codec: "prores", device: "iPhone 12")).kind == .ready, "a camera named it")
         #expect(classify(digitized(codec: "h264")).kind == .ready, "a delivery codec is not a digitizer's")
-        // QA v12 #5: a make-only stamp names a camera too (the resolver trusts it at 0.95).
+        // GH #201 (supersedes QA v12 #5): a make with NO model is an EXPORT
+        // stamp (Final Cut / Vegas write the maker, not a camera), so a
+        // ProRes tape stamped this year by "Sony" alone still needs a date.
         let sony = ArchiveAngelCandidate(filename: "Tape.mov", fullPath: "/Volumes/Projects/Tape.mov",
                                          sizeBytes: 20_000_000_000, durationSeconds: 3000,
                                          mediaDisposition: .important, videoCodec: "prores",
                                          captureDate: utc(2026, 5, 19), originMake: "Sony")
-        #expect(classify(sony).kind == .ready, "a make-only camera stamp is a camera")
+        #expect(classify(sony).kind == .needsDate, "a make-only stamp is an export, not a camera")
         var ctx = AngelEvalContext(now: now)
-        #expect(ctx.flag(.hasCameraOrigin, sony) == true)
+        #expect(ctx.flag(.hasCameraOrigin, sony) == false)
         #expect(ctx.flag(.hasCameraOrigin, digitized()) == false)
+        // A named model, or an action-camera maker, IS a camera.
+        let handycam = ArchiveAngelCandidate(filename: "Tape.mov", fullPath: "/Volumes/Projects/Tape.mov",
+                                             sizeBytes: 20_000_000_000, durationSeconds: 3000,
+                                             mediaDisposition: .important, videoCodec: "prores",
+                                             deviceModel: "HDR-CX150", captureDate: utc(2026, 5, 19), originMake: "Sony")
+        #expect(classify(handycam).kind == .ready, "a camera named it")
+        #expect(ctx.flag(.hasCameraOrigin, handycam) == true)
+        let gopro = ArchiveAngelCandidate(filename: "GX010012.MP4", fullPath: "/Volumes/Projects/GX010012.MP4",
+                                          videoCodec: "hevc", captureDate: utc(2026, 5, 19), originMake: "GoPro")
+        #expect(ctx.flag(.hasCameraOrigin, gopro) == true, "GoPro names itself only in the stream handler")
         #expect(classify(digitized(name: "2024-07-05_13-15-36.mkv")).kind == .ready, "two years ago")
         #expect(classify(digitized(important: false), score: 30).kind == .notNow, "nothing vouched, grade C — not promoted into Needs a date")
         #expect(classify(digitized(user: "1994")).kind == .ready, "Rick's year outranks everything")

@@ -116,7 +116,7 @@ struct ArchiveAngelCoverageTests {
         let a = ArchiveAngelCandidate(filename: "Thanksgiving 94.mov", fullPath: "/Volumes/LaCie/Exports/Thanksgiving 94.mov",
                                       userDate: "1994-11-24")
         let b = ArchiveAngelCandidate(filename: "turkey_day_edit.mp4", fullPath: "/Volumes/X9/Restored/turkey_day_edit.mp4",
-                                      captureDate: utc(1994, 11, 24), originMake: "Sony")
+                                      deviceModel: "HDR-CX150", captureDate: utc(1994, 11, 24), originMake: "Sony")
         let c = ArchiveAngelCandidate(filename: "clip07.dv", fullPath: "/Users/rickb/Movies/clip07.dv",
                                       inferredRecordDate: utc(1994, 11, 24), inferredDateConfidence: 0.9)
         let ka = ArchiveAngelEvent.resolve(a, now: testNow), kb = ArchiveAngelEvent.resolve(b, now: testNow)
