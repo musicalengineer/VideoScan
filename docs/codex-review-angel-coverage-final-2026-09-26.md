@@ -251,3 +251,46 @@ using exact selector/group-outcome/budget methods and a stubbed chooser that
 projects every group member. Four groups of 64 used 258 projections and returned
 a batch; eight groups used 386 projections and declined. This confirms the
 reported group-expansion defect is closed without reading a partial group.
+
+## Re-review 41b8cfa2
+
+Credits spent: unavailable (not exposed) | Remaining findings in reviewed scope: 0
+
+**Verdict: merge.** The remaining R1 case is verified fixed by `b404a381` at
+head `41b8cfa2`. This was the narrow follow-up requested in message #1739,
+covering the production selector change and its added regression test. During
+review, main advanced to merge commit `b3f759b5`; the verdict records review
+approval, not a merge performed by this reviewer.
+
+Year-blocked arrivals now spend the separately bounded skip budget instead of
+the 200 fresh-search looks. More importantly, an early stop with an unresolved
+fresh share declines the cache regardless of whether the freshness counter
+previously reached its target. Coverage-off bypasses the new refusal and does
+not accrue year-blocked skips. The documented possibility of an extra full walk
+when low-score rows consume the fresh-search budget is a performance tradeoff,
+not an incorrect cached selection in this case.
+
+The manager independently reran the exact-method headless harness at
+`/private/tmp/angel_coverage_r1_repro.swift`; all assertions passed:
+
+| Case | Cache result | Full post-ranking selection | Projection calls |
+|---|---|---|---:|
+| Original F1 four rows | A, D | A, D | 4 |
+| R1: 200 fresh rows held by year coverage | A, D | A, D | 4 |
+| 20,001 held rows, all ranked above D and above the fresh score floor | Declined | A, D | 3 |
+
+The final case verifies genuine skip-budget exhaustion and safe refusal. Run:
+
+```sh
+swift -module-cache-path /private/tmp/angel_coverage_swift_cache /private/tmp/angel_coverage_r1_repro.swift
+```
+
+The added `freshBudgetSpentOnHeldRowsNeverAcceptsAnOldBatch` test covers capped
+years, same-day collisions, the default fresh share, and shuffled IDs. Claude
+reports the full Debug Angel battery at 535 tests / 94 suites / zero failures;
+this review did not rerun that app-hosted battery. Headless harness plumbing
+remains explicitly stubbed as in the preceding reviews. No production code was
+edited and no app or test host was launched on the active M4.
+
+F1/R1, F2, F3, and F4 are now closed within this review. The previously separated
+baseline C2/C3/C4 and future fingerprint-engine work remain outside this verdict.
