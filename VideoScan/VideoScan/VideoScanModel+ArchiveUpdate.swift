@@ -262,18 +262,20 @@ extension VideoScanModel {
             archiveUpdateNote("Update: \(label) — refused: \(why). Nothing was changed.")
             return ArchiveUpdateResult(kind: .refused, message: "Not updated — \(why). Nothing was changed.")
         case .rolledBack(let why):
-            ledgerUpdateRolledBack(copy: copy, from: p.fromRelPath, to: to, why: why, now: now)
+            ledgerUpdateRolledBack(copy: copy, from: p.fromRelPath, to: to, why: why, outcome: "rolledBack", location: p.fromRelPath, now: now)
             archiveUpdateNote("Update: \(label) — ROLLED BACK: \(why). The file is back at \(p.fromRelPath) and the archive index is as it was.")
             return ArchiveUpdateResult(kind: .rolledBack,
                                        message: "Update failed and was undone — \(why). The file is back where it was and the archive index is unchanged.")
         case .incompleteRecovery(let why):
             ledgerUpdateRolledBack(copy: copy, from: p.fromRelPath, to: to,
-                                   why: "INCOMPLETE RECOVERY (not confirmed durable) — \(why)", now: now)
+                                   why: "INCOMPLETE RECOVERY (not confirmed durable) — \(why)",
+                                   outcome: "incompleteRecovery", location: p.fromRelPath, now: now)
             archiveUpdateNote("Update: \(label) — FAILED; the file was put back at \(p.fromRelPath) but the recovery is NOT confirmed durable: \(why). The archive index backup is kept in 00_Index/\(ArchiveIndexRename.backupFolder); run Verify Copies after checking the drive.")
             return ArchiveUpdateResult(kind: .incompleteRecovery,
                                        message: "Update failed and was put back, but the drive did not confirm the move back was saved (recovery not confirmed durable). The index backup was kept. Check the drive, then run Verify Copies.\n\(why)")
         case .mixedState(let why, let originalAt):
-            ledgerUpdateRolledBack(copy: copy, from: p.fromRelPath, to: to, why: "ROLLBACK FAILED — \(why)", now: now)
+            ledgerUpdateRolledBack(copy: copy, from: p.fromRelPath, to: to, why: "ROLLBACK FAILED — \(why)",
+                                   outcome: "mixedState", location: originalAt ?? "", now: now)
             // The record says where the ARCHIVED ORIGINAL is — found by
             // identity in the engine, never "a file exists there".
             if let originalAt, originalAt != p.fromRelPath {
@@ -364,11 +366,14 @@ extension VideoScanModel {
         notifyVolumeAggregatesStale()
     }
 
-    private func ledgerUpdateRolledBack(copy: VideoRecord, from: String, to: String, why: String, now: Date) {
+    private func ledgerUpdateRolledBack(copy: VideoRecord, from: String, to: String, why: String,
+                                        outcome: String, location: String, now: Date) {
         ledgerAppend([ledgerEvent(.archiveUpdateRolledBack, for: copy, by: .rick, at: now, detail: [
             MediaLedgerEvent.Detail.from: from,
             MediaLedgerEvent.Detail.to: to,
             MediaLedgerEvent.Detail.reason: why,
+            MediaLedgerEvent.Detail.outcome: outcome,
+            MediaLedgerEvent.Detail.location: location,
         ])])
     }
 }

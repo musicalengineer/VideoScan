@@ -215,7 +215,19 @@ public enum LedgerNarrator {
         let to = detail[MediaLedgerEvent.Detail.to] ?? ""
         let why = detail[MediaLedgerEvent.Detail.reason] ?? ""
         if kind == .archiveUpdateRolledBack {
-            var s = "An archive update on \(d) was undone — the file stayed at \(from.isEmpty ? "its folder" : from)"
+            // Say what ACTUALLY happened (Archive Update review r2 #7).
+            let place = from.isEmpty ? "its folder" : from
+            var s: String
+            switch detail[MediaLedgerEvent.Detail.outcome] ?? "" {
+            case "rolledBack":
+                s = "An archive update on \(d) was undone — the file stayed at \(place)"
+            case "incompleteRecovery":
+                s = "An archive update on \(d) failed; the file was put back at \(place), but the drive did not confirm it was saved"
+            default:   // mixedState, or anything unknown: never claim an undo
+                let at = detail[MediaLedgerEvent.Detail.location] ?? ""
+                s = "An archive update on \(d) failed and could not be fully undone — "
+                    + (at.isEmpty ? "where the file is could not be confirmed; see the log" : "the file is at \(at)")
+            }
             if !why.isEmpty { s += " (\(why))" }
             return s + "."
         }

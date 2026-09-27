@@ -80,9 +80,10 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         /// …"), date + confidence (what it is filed under now), fixity.
         /// by: rick. Appended at the END — the vocabulary is append-only.
         case archiveUpdated
-        /// An Update that failed after it had started changing things and
-        /// was put back (or could not be — the reason says). detail: from,
-        /// to, reason. by: rick.
+        /// An Update that failed after it had started changing things.
+        /// detail: from, to, reason, outcome (rolledBack / incompleteRecovery
+        /// / mixedState), location (mixed state: where the original is).
+        /// by: rick.
         case archiveUpdateRolledBack
     }
 
@@ -140,6 +141,11 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         /// Update… (2026-09-27): archive-relative paths before / after.
         public static let from = "from"
         public static let to = "to"
+        /// A failed Update: what actually happened ("rolledBack" /
+        /// "incompleteRecovery" / "mixedState") and, for a mixed state,
+        /// where the archived original IS ("" = not found by identity).
+        public static let outcome = "outcome"
+        public static let location = "location"
     }
 
     public let at: Date

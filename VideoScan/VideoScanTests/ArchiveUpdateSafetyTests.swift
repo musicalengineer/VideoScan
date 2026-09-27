@@ -159,6 +159,11 @@ struct ArchiveUpdateSafetyTests {
         #expect(MasterArchiveTestSupport.sha256(ofFile: a.url(to).path) == a.sha)
         #expect(String(decoding: UpdateFixture.data(URL(fileURLWithPath: blocker)), as: UTF8.self) == "a different file")
         #expect(a.copy.fullPath == a.url(to).path, "the record points at the ORIGINAL, never at the foreign file")
+        // r2 #7: the file's journey says what actually happened.
+        await a.model.mediaLedger.waitForPendingWrites()
+        let lines = LedgerNarrator.sentences(for: a.model.mediaLedger.events(forRecordID: a.copy.id), timeZone: .current)
+        let story = try #require(lines.first { $0.contains("archive update") })
+        #expect(!story.contains("was undone") && story.contains("the file is at \(to)"), "\(story)")
         let added = Set((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).subtracting(before)
         #expect(added.count == 1)
         if let d = added.first { #expect(ArchiveIndexRename.readMarker(in: dir.appendingPathComponent(d))?.complete == false) }
