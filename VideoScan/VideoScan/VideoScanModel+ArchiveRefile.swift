@@ -743,11 +743,16 @@ extension VideoScanModel {
         let atTarget = rec.fullPath == entry.newFullPath
         let ident = Self.lstatIdentity(entry.newFullPath)
         let isThisFile = ident.map { $0.device == entry.device && $0.inode == entry.inode && $0.size == entry.size } ?? false
-        if ident == nil, !atTarget, entry.priorCopyStates.contains(now) {
-            refileNote("Refile: pending entry for \(entry.toRelPath) — the file is not reachable at \(entry.newFullPath) now; kept for the next launch")
+        let recordAsExpected = atTarget || entry.priorCopyStates.contains(now)
+        // Unreachable is NEVER a conflict (r6 #2): an offline archive (or a
+        // file not there right now) proves nothing changed — the entry
+        // waits. Only a record that says something else, or a POSITIVE
+        // identity mismatch at the target, is a conflict.
+        if ident == nil, recordAsExpected {
+            refileNote("Refile: archive offline — Refile recovery waits: \(entry.newFullPath) is not reachable now; \(entry.fromRelPath) → \(entry.toRelPath) stays pending for the next launch")
             return
         }
-        guard (atTarget || entry.priorCopyStates.contains(now)), isThisFile else {
+        guard recordAsExpected, isThisFile else {
             let expected = entry.priorCopyStates.map { "\($0.fullPath) (\($0.sizeBytes) bytes)" }.joined(separator: " or ")
             let why = !isThisFile
                 ? "the file at \(entry.toRelPath) is not the refiled file"
