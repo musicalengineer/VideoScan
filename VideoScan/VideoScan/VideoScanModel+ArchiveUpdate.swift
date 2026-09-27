@@ -37,14 +37,12 @@ struct ArchiveUpdatePreview: Identifiable, Sendable {
     let currentName: String
     let currentHint: ArchiveDateHint
     let currentKnown: Bool
+    /// The manifest row's raw `record_date` / `date_confidence` cells —
+    /// written back unchanged unless the date or known/estimated changed.
+    let currentRecordDate: String
+    let currentDateConfidence: String
 
     var streamType: StreamType { StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed }
-
-    /// Promote's rule for this date + name.
-    func target(hint: ArchiveDateHint, name: String) -> String {
-        ArchiveRefile.targetRelPath(streamType: streamType, filename: archiveFilename, ext: ext,
-                                    hint: hint, name: name)
-    }
 
     /// The filing-year guard for this date (nil = fine).
     func guardRefusal(hint: ArchiveDateHint, now: Date = Date()) -> String? {
@@ -53,23 +51,61 @@ struct ArchiveUpdatePreview: Identifiable, Sendable {
             now: now)
     }
 
-    /// The sheet's live list of exactly what will change — empty = nothing.
-    func changes(name: String, hint: ArchiveDateHint, known: Bool) -> [String] {
-        var out: [String] = []
-        let newName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let to = target(hint: hint, name: newName)
-        if ArchivePathResolver.slug(from: newName.isEmpty ? currentName : newName)
-            != ArchivePathResolver.slug(from: currentName) {
-            out.append("Name: \(currentName) → \(newName)")
-        }
-        if hint != currentHint || known != currentKnown {
+    /// What an Update with these fields would do — the ONE computation the
+    /// sheet's list and the execution both use.
+    struct Plan: Equatable, Sendable {
+        let toRelPath: String
+        let lines: [String]
+        let recordDate: String
+        let dateConfidence: String
+        /// Write the date onto the archived record (the user changed it).
+        let writesDate: Bool
+    }
+
+    func plan(name: String, hint: ArchiveDateHint, known: Bool) -> Plan {
+        let typed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nameChanged = !typed.isEmpty && typed != currentName && ArchivePathResolver.slug(from: typed) != currentName
+        let dateChanged = hint != currentHint
+        let dateTouched = dateChanged || known != currentKnown
+        let to = ArchiveRefile.updatedRelPath(fromRelPath: fromRelPath, streamType: streamType, currentName: currentName,
+                                              newName: nameChanged ? typed : nil, newHint: dateChanged ? hint : nil)
+        var lines: [String] = []
+        if nameChanged { lines.append("Name: \(currentName) → \(ArchivePathResolver.slug(from: typed))") }
+        if dateTouched {
             let conf = known ? "known" : "estimated"
             let old = ArchiveRefile.datedLabel(currentHint) + (known != currentKnown ? " (\(currentKnown ? "known" : "estimated"))" : "")
-            out.append("Date: \(old) → \(ArchiveRefile.datedLabel(hint)) (\(conf))")
+            lines.append("Date: \(old) → \(ArchiveRefile.datedLabel(hint)) (\(conf))")
         }
         let (fromFolder, toFolder) = (ArchiveRefile.folder(ofRelPath: fromRelPath), ArchiveRefile.folder(ofRelPath: to))
-        if fromFolder != toFolder { out.append("Folder: \(fromFolder) → \(toFolder)") }
-        return out
+        if fromFolder != toFolder { lines.append("Folder: \(fromFolder) → \(toFolder)") }
+        return Plan(toRelPath: to, lines: lines,
+                    recordDate: dateChanged ? hint.manifestDate : currentRecordDate,
+                    dateConfidence: dateTouched ? (known ? "user-known" : "user-estimated") : currentDateConfidence,
+                    writesDate: dateTouched)
+    }
+
+    /// The sheet's typed fields → the hint (or why not) and the plan.
+    func evaluate(name: String, year: String, month: String, day: String, known: Bool)
+        -> (hint: ArchiveDateHint?, refusal: String?, plan: Plan?) {
+        let y = year.trimmingCharacters(in: .whitespaces)
+        let m = month.trimmingCharacters(in: .whitespaces)
+        let d = day.trimmingCharacters(in: .whitespaces)
+        if y.isEmpty && m.isEmpty && d.isEmpty {
+            // Blank = keep the current date (undated / decade-only files can
+            // still be renamed without inventing a year — r2 #5).
+            return (currentHint, nil, plan(name: name, hint: currentHint, known: known))
+        }
+        guard let yy = Int(y), y.count == 4 else {
+            return (nil, y.isEmpty ? "Type the year (or leave the whole date blank to keep it)." : "The year must be four digits.", nil)
+        }
+        let mm = m.isEmpty ? nil : Int(m), dd = d.isEmpty ? nil : Int(d)
+        if (!m.isEmpty && mm == nil) || (!d.isEmpty && dd == nil) {
+            return (nil, "Month and day must be numbers (or left empty).", nil)
+        }
+        guard let hint = ArchiveRefile.hint(year: yy, month: mm, day: dd) else { return (nil, "That isn't a real date.", nil) }
+        let plan = plan(name: name, hint: hint, known: known)
+        if hint != currentHint, let g = guardRefusal(hint: hint) { return (hint, "Refused: this video \(g).", plan) }
+        return (hint, nil, plan)
     }
 }
 
@@ -147,7 +183,8 @@ extension VideoScanModel {
             streamTypeRaw: copy.streamTypeRaw, ext: copy.ext,
             currentName: ArchiveRefile.currentName(ofFilename: copy.filename),
             currentHint: ArchiveRefile.hint(fromManifestDate: mine.recordDate),
-            currentKnown: mine.dateConfidence == "user-known")
+            currentKnown: mine.dateConfidence == "user-known",
+            currentRecordDate: mine.recordDate, currentDateConfidence: mine.dateConfidence)
         archiveUpdateNote("Update: sheet opened for \(copy.filename) at \(rel) — the archive says \(ArchiveRefile.datedLabel(preview.currentHint))")
         return .success(preview)
     }
@@ -171,7 +208,8 @@ extension VideoScanModel {
                             persistence: ArchiveRefilePersistence = .live,
                             now: Date = Date()) async -> ArchiveUpdateResult {
         let label = p.archiveFilename
-        let changes = p.changes(name: name, hint: hint, known: known)
+        let plan = p.plan(name: name, hint: hint, known: known)
+        let changes = plan.lines
         func refused(_ why: String) -> ArchiveUpdateResult {
             archiveUpdateNote("Update: \(label) — refused: \(why). Nothing was changed.")
             return ArchiveUpdateResult(kind: .refused, message: "Not updated — \(why). Nothing was changed.")
@@ -192,8 +230,8 @@ extension VideoScanModel {
               VerifyArchiveCopiesJob.relPath(of: copy.fullPath, underRoot: root) == p.fromRelPath else {
             return refused("the archive copy is no longer at \(p.fromRelPath) in the catalog — reopen Update")
         }
-        if let g = p.guardRefusal(hint: hint, now: now) { return refused("\(label) \(g)") }
-        let to = p.target(hint: hint, name: name)
+        if hint != p.currentHint, let g = p.guardRefusal(hint: hint, now: now) { return refused("\(label) \(g)") }
+        let to = plan.toRelPath
         let reason = changes.joined(separator: "; ")
 
         // ---- The ONE audited exception to the archive's read-only rule.
@@ -204,8 +242,8 @@ extension VideoScanModel {
         case .failure(let d): return refused(d.description)
         }
         let req = ArchiveRefileEngine.Request(rootPath: root, fromRelPath: p.fromRelPath, toRelPath: to,
-                                              filename: label, recordDate: hint.manifestDate,
-                                              dateConfidence: known ? "user-known" : "user-estimated")
+                                              filename: label, recordDate: plan.recordDate,
+                                              dateConfidence: plan.dateConfidence)
         archiveUpdateNote("Update: \(label) — BEGIN \(p.fromRelPath) → \(to) (by rick): \(reason)")
         let outcome = await Self.runRefileOffMain(req, authorization: auth, seams: seams, now: now,
                                                   audit: archiveUpdateAuditSink())
@@ -213,7 +251,12 @@ extension VideoScanModel {
 
         switch outcome {
         case .refiled(let done):
+            // The record's own date: the new one when the date changed; when
+            // only known/estimated moved, the date it already has.
+            let newUserDate = !plan.writesDate ? nil
+                : (hint != p.currentHint ? ArchiveRefile.userDate(for: hint) : (copy.userDate ?? ArchiveRefile.userDate(for: hint)))
             return await applyUpdated(copy: copy, done: done, root: root, hint: hint, known: known,
+                                      writesDate: plan.writesDate, newUserDate: newUserDate,
                                       reason: reason, now: now, persistence: persistence)
         case .refused(let why):
             archiveUpdateNote("Update: \(label) — refused: \(why). Nothing was changed.")
@@ -260,12 +303,16 @@ extension VideoScanModel {
     /// date — the Inspector's fields), a catalog save, one ledger line. A
     /// failure here is reported, never retried: the archive is the truth.
     private func applyUpdated(copy: VideoRecord, done: ArchiveRefileEngine.Done, root: String,
-                              hint: ArchiveDateHint, known: Bool, reason: String, now: Date,
+                              hint: ArchiveDateHint, known: Bool, writesDate: Bool, newUserDate: String?,
+                              reason: String, now: Date,
                               persistence: ArchiveRefilePersistence) async -> ArchiveUpdateResult {
         let label = copy.filename
         let oldDate = "\(copy.userDate ?? "none") (\(copy.userDateConfidence ?? "-"))"
         moveRecord(copy, to: (root as NSString).appendingPathComponent(done.toRelPath))
-        if let ud = ArchiveRefile.userDate(for: hint) {
+        // Only when the user changed the date or the known/estimated switch
+        // (r2 #6): a name-only update leaves the record's date provenance
+        // (and whether it has a user date at all) exactly as it was.
+        if let ud = newUserDate {
             copy.userDate = ud
             copy.userDateConfidence = (known ? UserDateConfidence.known : .estimated).rawValue
         }
@@ -285,8 +332,8 @@ extension VideoScanModel {
             MediaLedgerEvent.Detail.from: done.fromRelPath,
             MediaLedgerEvent.Detail.to: done.toRelPath,
             MediaLedgerEvent.Detail.reason: reason,
-            MediaLedgerEvent.Detail.date: hint.manifestDate,
-            MediaLedgerEvent.Detail.confidence: known ? "known" : "estimated",
+            MediaLedgerEvent.Detail.date: writesDate ? hint.manifestDate : "",
+            MediaLedgerEvent.Detail.confidence: writesDate ? (known ? "known" : "estimated") : "",
             MediaLedgerEvent.Detail.fixity: done.sha256,
             MediaLedgerEvent.Detail.archive: MasterArchiveLayout.displayName(forRootPath: root),
         ])])

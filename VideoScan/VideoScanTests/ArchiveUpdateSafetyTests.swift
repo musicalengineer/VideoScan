@@ -71,7 +71,7 @@ struct ArchiveUpdateSafetyTests {
         defer { a.sb.cleanup() }
         let p = try await UpdateFixture.preview(a)
         let h = try UpdateFixture.hint(1984)
-        let src = URL(fileURLWithPath: a.absPath), target = a.url(p.target(hint: h, name: p.currentName))
+        let src = URL(fileURLWithPath: a.absPath), target = a.url(p.plan(name: p.currentName, hint: h, known: true).toRelPath)
         let aside = a.sb.root.appendingPathComponent("test_original_aside.mov")
         let manifest = UpdateFixture.data(a.sb.manifestURL)
         final class Once: @unchecked Sendable { var done = false; let lock = NSLock() }
@@ -146,7 +146,7 @@ struct ArchiveUpdateSafetyTests {
         defer { a.sb.cleanup() }
         let p = try await UpdateFixture.preview(a)
         let h = try UpdateFixture.hint(1984)
-        let from = a.relPath, to = p.target(hint: h, name: p.currentName), blocker = a.absPath
+        let from = a.relPath, to = p.plan(name: p.currentName, hint: h, known: true).toRelPath, blocker = a.absPath
         let (dir, before) = backups(a)
         var seams = ArchiveRefileEngine.Seams.live
         seams.hashFile = { root, rel in
@@ -170,7 +170,7 @@ struct ArchiveUpdateSafetyTests {
         defer { a.sb.cleanup() }
         let p = try await UpdateFixture.preview(a)
         let h = try UpdateFixture.hint(1984)
-        let target = a.url(p.target(hint: h, name: p.currentName))
+        let target = a.url(p.plan(name: p.currentName, hint: h, known: true).toRelPath)
         let aside = a.sb.root.appendingPathComponent("test_relocated_original.mov")
         let (dir, before) = backups(a)
         final class Once: @unchecked Sendable { var done = false; let lock = NSLock() }

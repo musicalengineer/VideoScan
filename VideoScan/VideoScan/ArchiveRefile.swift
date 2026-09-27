@@ -9,8 +9,8 @@
 // VideoScanModel+ArchiveUpdate.swift and the sheet ArchiveUpdateSheet.swift.
 // (Internal names keep "Refile" — the engine that moves the file.)
 //
-//   ArchiveRefile        — placement (ArchivePathResolver.baseRelativePath —
-//                          Promote's function), the sheet's labels, the
+//   ArchiveRefile        — placement (`updatedRelPath`, from Promote's own
+//                          folder / filename-prefix / slug rules), the sheet's labels, the
 //                          manifest reads, the row-targeted manifest rewrite.
 //   ArchiveRefileEngine  — the change, in order:
 //     (a) refuse BEFORE any mutation: the grant does not cover it, archive
@@ -64,17 +64,30 @@ enum ArchiveRefile {
         return String(decoding: c[11...], as: UTF8.self)
     }
 
-    /// Where Promote would put this file with THIS date and THIS name —
-    /// `ArchivePathResolver.baseRelativePath`, the function Promote's
-    /// destination chooser starts from. No `_NN` suffix: a Refile whose
-    /// target is taken is REFUSED (Rick's rule), never silently renamed.
-    static func targetRelPath(streamType: StreamType, filename: String, ext: String,
-                              hint: ArchiveDateHint, name: String) -> String {
-        let facts = ArchivePathResolver.RecordFacts(streamType: streamType, filename: filename, ext: ext,
-                                                    dateHint: hint, dateIsLowConfidence: false)
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let title = trimmed.isEmpty ? currentName(ofFilename: filename) : trimmed
-        return ArchivePathResolver.baseRelativePath(facts: facts, title: title)
+    /// Where an Update puts the file — and it changes ONLY what was changed
+    /// (Archive Update review r2 #4–#6):
+    ///   • nothing about name or date changed → the EXACT current path;
+    ///   • name only → same folder, same date prefix, the new name's slug;
+    ///   • date changed → Promote's folder for that date
+    ///     (`ArchivePathResolver.folder`) and its filename prefix
+    ///     (`filenamePrefix`), with the new name's slug or the current name
+    ///     kept VERBATIM (never re-slugged, so a collision suffix survives).
+    /// The extension is always kept exactly. `newName` / `newHint` nil = keep.
+    static func updatedRelPath(fromRelPath: String, streamType: StreamType, currentName: String,
+                               newName: String?, newHint: ArchiveDateHint?) -> String {
+        guard newName != nil || newHint != nil else { return fromRelPath }
+        let filename = (fromRelPath as NSString).lastPathComponent
+        let ext = (filename as NSString).pathExtension
+        let dot = ext.isEmpty ? "" : "." + ext
+        let stem = newName.map { ArchivePathResolver.slug(from: $0) } ?? currentName
+        guard let hint = newHint else {
+            let oldStem = (filename as NSString).deletingPathExtension
+            let prefix = String(oldStem.dropLast(currentName.count))            // "1884-xx-xx_" or ""
+            return (fromRelPath as NSString).deletingLastPathComponent + "/" + prefix + stem + dot
+        }
+        let f = facts(streamType: streamType, filename: filename, ext: ext, hint: hint)
+        let folder = ArchivePathResolver.folder(for: f.streamType, hint: hint, medium: f.medium)
+        return folder + "/" + hint.filenamePrefix + "_" + stem + dot
     }
 
     /// The facts the filing-year guard reads for a refile target.

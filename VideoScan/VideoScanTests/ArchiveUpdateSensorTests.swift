@@ -71,12 +71,16 @@ struct ArchiveUpdateSensorTests {
         #expect(renames.allSatisfy { $0.contains("UInt32(RENAME_EXCL)") }, "no-clobber, same volume (EXDEV refuses)")
     }
 
-    @Test("the refile target comes from Promote's placement function, not a copy of it")
+    @Test("the Update target comes from Promote's placement pieces, not a copy of them")
     func onePlacementFunction() throws {
         let engine = Self.code(try Self.source("ArchiveRefile.swift"))
-        let body = try #require(engine.range(of: "static func targetRelPath(")).upperBound
+        // A new place is built from Promote's own pieces — its folder rule,
+        // its filename prefix and its slug — never a copy of them.
+        let body = try #require(engine.range(of: "static func updatedRelPath(")).upperBound
         let next = engine[body...].range(of: "static func ")?.lowerBound ?? engine.endIndex
-        #expect(engine[body..<next].contains("ArchivePathResolver.baseRelativePath(facts: facts, title: title)"))
+        for piece in ["ArchivePathResolver.folder(for:", "hint.filenamePrefix", "ArchivePathResolver.slug(from:"] {
+            #expect(engine[body..<next].contains(piece), "updatedRelPath must use \(piece)")
+        }
         let promote = Self.code(try Self.source("PromoteToArchiveJob+Steps.swift"))
         #expect(promote.contains("ArchivePathResolver.baseRelativePath(facts: facts, title: title)"),
                 "Promote's destination chooser starts from the same function")

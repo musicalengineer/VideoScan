@@ -32,7 +32,8 @@ enum UpdateFixture {
     /// guard now refuses) can be the starting point. Nothing uses Promote.
     static func make(_ label: String,
                      relPath: String = "30_Video/1880-1889/1884/1884-xx-xx_DadThanksgiving1984-1.mov",
-                     recordDate: String = "1884-xx-xx", dateConfidence: String = "user-known") throws -> Archived {
+                     recordDate: String = "1884-xx-xx", dateConfidence: String = "user-known",
+                     copyUserDate: String? = "1884", copyConf: String? = "known") throws -> Archived {
         let sb = try MasterArchiveTestSupport.makeSandbox("upd_\(label)")
         let model = MasterArchiveTestSupport.makeModel(sb)
         model.mediaLedger = MediaLedger(directory: sb.root.appendingPathComponent("ledger", isDirectory: true))
@@ -45,8 +46,8 @@ enum UpdateFixture {
         let srcPath = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent("test_DadThanksgiving1984-1.mov"),
                                                              bytes: 40_000, seed: 11).path
         let source = MasterArchiveTestSupport.makeRecord(path: srcPath, userDate: "1884")
-        let copy = MasterArchiveTestSupport.makeRecord(path: fileURL.path, userDate: "1884")
-        copy.userDateConfidence = "known"
+        let copy = MasterArchiveTestSupport.makeRecord(path: fileURL.path, userDate: copyUserDate)
+        copy.userDateConfidence = copyConf
         copy.derivationKind = ArchivePromotion.derivationKind
         copy.derivedFrom = source.id
         copy.archiveFixity = ArchiveFixity(digest: sha, verifiedAt: Date(), sizeBytes: copy.sizeBytes)
@@ -82,7 +83,7 @@ struct ArchiveUpdateLogicTests {
         let p = try await UpdateFixture.preview(a)
         #expect(p.currentHint == .year(1884) && p.currentKnown && p.currentName == "DadThanksgiving1984-1")
         let h = try UpdateFixture.hint(1984)
-        #expect(p.changes(name: p.currentName, hint: h, known: true)
+        #expect(p.plan(name: p.currentName, hint: h, known: true).lines
                 == ["Date: 1884 → 1984 (known)", "Folder: 1880-1889/1884 → 1980-1989/1984"])
         let inode = try FileManager.default.attributesOfItem(atPath: a.absPath)[.systemFileNumber] as? Int
 
@@ -111,7 +112,7 @@ struct ArchiveUpdateLogicTests {
                                        recordDate: "1984-xx-xx")
         defer { a.sb.cleanup() }
         let p = try await UpdateFixture.preview(a)
-        #expect(p.changes(name: "Thanksgiving", hint: p.currentHint, known: p.currentKnown) == ["Name: Thanksgivng → Thanksgiving"])
+        #expect(p.plan(name: "Thanksgiving", hint: p.currentHint, known: p.currentKnown).lines == ["Name: Thanksgivng → Thanksgiving"])
         let r = await a.model.updateArchivedFile(p, name: "Thanksgiving", hint: p.currentHint, known: p.currentKnown)
         #expect(r.kind == .updated, "\(r.message)")
         let to = "30_Video/1980-1989/1984/1984-xx-xx_Thanksgiving.mov"
@@ -138,7 +139,7 @@ struct ArchiveUpdateLogicTests {
         defer { a.sb.cleanup() }
         let p = try await UpdateFixture.preview(a)
         let h = try UpdateFixture.hint(1984, 11, 22)
-        #expect(p.changes(name: "Thanksgiving at Ma's", hint: h, known: true).count == 3)
+        #expect(p.plan(name: "Thanksgiving at Ma's", hint: h, known: true).lines.count == 3)
         let r = await a.model.updateArchivedFile(p, name: "Thanksgiving at Ma's", hint: h, known: true)
         #expect(r.kind == .updated, "\(r.message)")
         #expect(MasterArchiveTestSupport.archivedFiles(a.sb) == ["30_Video/1980-1989/1984/1984-11-22_Thanksgiving-at-Ma-s.mov"])
@@ -173,7 +174,7 @@ struct ArchiveUpdateLogicTests {
         defer { a.sb.cleanup() }
         let p = try await UpdateFixture.preview(a)
         let h = try UpdateFixture.hint(1984)
-        let blocker = a.url(p.target(hint: h, name: p.currentName))
+        let blocker = a.url(p.plan(name: p.currentName, hint: h, known: true).toRelPath)
         try FileManager.default.createDirectory(at: blocker.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("not me".utf8).write(to: blocker)
         let manifest = UpdateFixture.data(a.sb.manifestURL)
@@ -255,6 +256,95 @@ struct ArchiveUpdateLogicTests {
         let r = await a.model.updateArchivedFile(p, name: p.currentName, hint: try UpdateFixture.hint(1984), known: true)
         #expect(r.kind == .updated, "\(r.message)")
         #expect(MasterArchiveTestSupport.archivedFiles(a.sb) == ["30_Video/1980-1989/1984/1984-xx-xx_test_clip.\(ext)"])
+    }
+}
+
+// MARK: - "Update changes ONLY what the sheet lists" (review r2 #4–#6)
+
+/// A file shape the invariant is checked on.
+struct UpdateShape: Sendable, CustomStringConvertible {
+    let label: String, relPath: String, recordDate: String, dateConfidence: String
+    let copyUserDate: String?, copyConf: String?
+    var description: String { label }
+}
+
+private let longStem = String(repeating: "a", count: 80) + "_02"
+private let updateShapes: [UpdateShape] = [
+    .init(label: "legacy 1884", relPath: "30_Video/1880-1889/1884/1884-xx-xx_DadThanksgiving1984-1.mov",
+          recordDate: "1884-xx-xx", dateConfidence: "user-known", copyUserDate: "1884", copyConf: "known"),
+    .init(label: "catalog-renamed, no prefix", relPath: "30_Video/1980-1989/1984/Clip.mov",
+          recordDate: "1984-xx-xx", dateConfidence: "user-known", copyUserDate: "1984", copyConf: "known"),
+    .init(label: "undated", relPath: "30_Video/Undated/xxxx-xx-xx_Clip.mov",
+          recordDate: "", dateConfidence: "", copyUserDate: nil, copyConf: nil),
+    .init(label: "decade only", relPath: "30_Video/1980-1989/xxxx-xx-xx_Clip.mov",
+          recordDate: "1980s", dateConfidence: "", copyUserDate: nil, copyConf: nil),
+    .init(label: "inferred confidence, no user date", relPath: "30_Video/1980-1989/1984/1984-xx-xx_Clip.mov",
+          recordDate: "1984-xx-xx", dateConfidence: "inferred 0.87", copyUserDate: nil, copyConf: nil),
+    .init(label: "80-char slug + collision suffix", relPath: "30_Video/1980-1989/1984/1984-xx-xx_\(longStem).mov",
+          recordDate: "1984-xx-xx", dateConfidence: "user-known", copyUserDate: "1984", copyConf: "known"),
+]
+
+@Suite("Archive Update — changes ONLY what the sheet lists", .serialized)
+@MainActor
+struct ArchiveUpdateOnlyWhatIsListedTests {
+
+    @Test("every combination of name / date / known-estimated: the sheet's list == what actually changed", arguments: updateShapes)
+    func listEqualsChanges(shape: UpdateShape) async throws {
+        for combo in 1..<8 {
+            let changeName = combo & 1 != 0, changeDate = combo & 2 != 0, changeConf = combo & 4 != 0
+            let a = try UpdateFixture.make("inv", relPath: shape.relPath, recordDate: shape.recordDate,
+                                           dateConfidence: shape.dateConfidence,
+                                           copyUserDate: shape.copyUserDate, copyConf: shape.copyConf)
+            defer { a.sb.cleanup() }
+            let p = try await UpdateFixture.preview(a)
+            let name = changeName ? "New Name" : p.currentName
+            let hint = changeDate ? try UpdateFixture.hint(1991) : p.currentHint
+            let known = changeConf ? !p.currentKnown : p.currentKnown
+            let plan = p.plan(name: name, hint: hint, known: known)
+            let what = "\(shape.label) name=\(changeName) date=\(changeDate) conf=\(changeConf)"
+            let rowBefore = try #require(MasterArchiveTestSupport.manifestRows(a.sb).first)
+            let (dateBefore, confBefore) = (a.copy.userDate, a.copy.userDateConfidence)
+            let inode = try FileManager.default.attributesOfItem(atPath: a.absPath)[.systemFileNumber] as? Int
+
+            let r = await a.model.updateArchivedFile(p, name: name, hint: hint, known: known)
+            #expect(r.kind == .updated, "\(what): \(r.message)")
+            let row = try #require(MasterArchiveTestSupport.manifestRows(a.sb).first)
+            let listed = { (k: String) in plan.lines.contains { $0.hasPrefix(k) } }
+            // Name listed ⇔ the name part changed.
+            #expect(listed("Name:") == (ArchiveRefile.currentName(ofFilename: (row[1] as NSString).lastPathComponent)
+                                        != ArchiveRefile.currentName(ofFilename: (a.relPath as NSString).lastPathComponent)), "\(what)")
+            // Folder listed ⇔ the folder changed.
+            #expect(listed("Folder:") == ((row[1] as NSString).deletingLastPathComponent
+                                          != (a.relPath as NSString).deletingLastPathComponent), "\(what)")
+            // Date listed ⇔ the date provenance changed — nowhere otherwise.
+            let dateMoved = row[8] != rowBefore[8] || row[9] != rowBefore[9]
+                || a.copy.userDate != dateBefore || a.copy.userDateConfidence != confBefore
+            #expect(listed("Date:") == dateMoved, "\(what): row \(rowBefore[8])/\(rowBefore[9]) → \(row[8])/\(row[9]), record \(dateBefore ?? "nil") → \(a.copy.userDate ?? "nil")")
+            // No Name and no Folder line → the EXACT path, zero renames.
+            if !listed("Name:") && !listed("Folder:") {
+                #expect(row[1] == a.relPath, "\(what): path must not change")
+                #expect(try FileManager.default.attributesOfItem(atPath: a.absPath)[.systemFileNumber] as? Int == inode)
+            }
+            #expect(row[1] == plan.toRelPath, "\(what): executed == shown")
+        }
+    }
+
+    @Test("undated and decade-only files: a blank year keeps the current date, and a name-only update is allowed")
+    func blankYearKeepsCurrentDate() async throws {
+        for (rel, date) in [("30_Video/Undated/xxxx-xx-xx_Clip.mov", ""), ("30_Video/1980-1989/xxxx-xx-xx_Clip.mov", "1980s")] {
+            let a = try UpdateFixture.make("blank", relPath: rel, recordDate: date, dateConfidence: "",
+                                           copyUserDate: nil, copyConf: nil)
+            defer { a.sb.cleanup() }
+            let p = try await UpdateFixture.preview(a)
+            let e = p.evaluate(name: "New Name", year: "", month: "", day: "", known: false)
+            #expect(e.refusal == nil && e.hint == p.currentHint, "\(rel): \(e.refusal ?? "")")
+            #expect(e.plan?.lines == ["Name: Clip → New-Name"], "\(rel): \(e.plan?.lines ?? [])")
+            let r = await a.model.updateArchivedFile(p, name: "New Name", hint: p.currentHint, known: false)
+            #expect(r.kind == .updated, "\(r.message)")
+            #expect(MasterArchiveTestSupport.manifestRows(a.sb).first?[1]
+                    == (rel as NSString).deletingLastPathComponent + "/xxxx-xx-xx_New-Name.mov")
+            #expect(MasterArchiveTestSupport.manifestRows(a.sb).first?[8] == date)
+        }
     }
 }
 

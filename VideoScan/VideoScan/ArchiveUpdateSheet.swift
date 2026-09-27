@@ -126,24 +126,10 @@ struct ArchiveUpdateSheet: View {
         }
     }
 
-    /// Typed fields → a hint (or why not), the guard, the change list.
+    /// Typed fields → the preview's ONE evaluation (hint, refusal, plan).
     private var evaluation: (hint: ArchiveDateHint?, refusal: String?, changes: [String]) {
-        let y = yearText.trimmingCharacters(in: .whitespaces)
-        let m = monthText.trimmingCharacters(in: .whitespaces)
-        let d = dayText.trimmingCharacters(in: .whitespaces)
-        guard let year = Int(y), y.count == 4 else {
-            return (nil, y.isEmpty ? "Type the year it was filmed." : "The year must be four digits.", [])
-        }
-        let month = m.isEmpty ? nil : Int(m), day = d.isEmpty ? nil : Int(d)
-        if (!m.isEmpty && month == nil) || (!d.isEmpty && day == nil) {
-            return (nil, "Month and day must be numbers (or left empty).", [])
-        }
-        guard let hint = ArchiveRefile.hint(year: year, month: month, day: day) else {
-            return (nil, "That isn't a real date.", [])
-        }
-        let changes = preview.changes(name: nameText, hint: hint, known: known)
-        if let g = preview.guardRefusal(hint: hint) { return (hint, "Refused: this video \(g).", changes) }
-        return (hint, nil, changes)
+        let e = preview.evaluate(name: nameText, year: yearText, month: monthText, day: dayText, known: known)
+        return (e.hint, e.refusal, e.plan?.lines ?? [])
     }
 
     private func run() {
