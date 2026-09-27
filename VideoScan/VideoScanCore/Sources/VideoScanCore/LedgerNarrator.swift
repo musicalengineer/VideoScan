@@ -109,15 +109,8 @@ public enum LedgerNarrator {
             if e.by == .angel { s += " (Archive Angel)" }
             return s
 
-        case .copyTrashed:
-            let vol = detail[MediaLedgerEvent.Detail.volume] ?? ""
-            let whereText = vol.isEmpty ? "" : " (the copy on \(vol))"
-            return "\(who) moved this copy to the Trash on \(d)\(whereText)."
-
-        case .copyDeleted:
-            let vol = detail[MediaLedgerEvent.Detail.volume] ?? ""
-            let whereText = vol.isEmpty ? "" : " (the copy on \(vol))"
-            return "\(who) deleted this copy permanently on \(d)\(whereText)."
+        case .copyTrashed, .copyDeleted:
+            return copyRemovedSentence(e.event, who: who, dateText: d, detail: detail)
 
         case .placeSet:
             let place = detail[MediaLedgerEvent.Detail.place] ?? ""
@@ -161,20 +154,8 @@ public enum LedgerNarrator {
             }
             return s + "."
 
-        case .angelProposed:
-            let score = detail[MediaLedgerEvent.Detail.score] ?? ""
-            let scoreText = score.isEmpty ? "" : " (score \(score))"
-            return "Archive Angel proposed it for the archive on \(d)\(scoreText)."
-
-        case .angelSkipped:
-            let reason = detail[MediaLedgerEvent.Detail.reason] ?? ""
-            if reason == "unchecked" {
-                return "\(who) left it unchecked when the batch was promoted on \(d)."
-            }
-            return "\(who) passed on it (Archive Angel skip) on \(d)."
-
-        case .angelCleared:
-            return "\(who) cleared the Archive Angel batch it was in on \(d), undecided."
+        case .angelProposed, .angelSkipped, .angelCleared:
+            return angelAttentionSentence(e.event, who: who, dateText: d, detail: detail)
 
         case .footageDecided:
             let other = detail[MediaLedgerEvent.Detail.label] ?? ""
@@ -194,6 +175,37 @@ public enum LedgerNarrator {
         case .refiled, .refileRolledBack:
             return refileSentence(e.event, who: who, dateText: d, detail: detail)
         }
+    }
+
+    /// Archive Angel attention memory — split out (2026-09-27) with the
+    /// copy-removed pair below, same text, to keep `sentence` under the
+    /// lint complexity ceiling.
+    static func angelAttentionSentence(_ kind: MediaLedgerEvent.Kind, who: String, dateText d: String,
+                                       detail: [String: String]) -> String {
+        switch kind {
+        case .angelProposed:
+            let score = detail[MediaLedgerEvent.Detail.score] ?? ""
+            let scoreText = score.isEmpty ? "" : " (score \(score))"
+            return "Archive Angel proposed it for the archive on \(d)\(scoreText)."
+        case .angelSkipped:
+            if (detail[MediaLedgerEvent.Detail.reason] ?? "") == "unchecked" {
+                return "\(who) left it unchecked when the batch was promoted on \(d)."
+            }
+            return "\(who) passed on it (Archive Angel skip) on \(d)."
+        default:
+            return "\(who) cleared the Archive Angel batch it was in on \(d), undecided."
+        }
+    }
+
+    /// A copy left the disk — split out (2026-09-27) to keep `sentence`
+    /// under the lint complexity ceiling when Refile's kinds arrived.
+    static func copyRemovedSentence(_ kind: MediaLedgerEvent.Kind, who: String, dateText d: String,
+                                    detail: [String: String]) -> String {
+        let vol = detail[MediaLedgerEvent.Detail.volume] ?? ""
+        let whereText = vol.isEmpty ? "" : " (the copy on \(vol))"
+        return kind == .copyTrashed
+            ? "\(who) moved this copy to the Trash on \(d)\(whereText)."
+            : "\(who) deleted this copy permanently on \(d)\(whereText)."
     }
 
     /// Refile (2026-09-27) — split out like Family Music.
