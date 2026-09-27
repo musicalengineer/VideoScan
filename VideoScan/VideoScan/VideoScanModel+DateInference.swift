@@ -752,10 +752,13 @@ extension VideoScanModel {
             let hadDate = rec.inferredRecordDate != nil
             let r = Self.triangulateStoredEvidence(rec, people: people, now: started)
             if r.date != nil {
-                // A legacy row re-derived from its OWN stored evidence keeps
-                // its provenance (nil = its dossier pass); a new date is a
-                // catch-up.
-                Self.applyTriangulation(r, to: rec, source: hadDate ? rec.inferredDateSource : InferredDateSource.catchUp)
+                // A legacy row re-derived from its OWN dossier pass keeps
+                // that provenance (nil); everything else — a new date, a
+                // catch-up, or a folder-year placeholder that just gained
+                // evidence (QA M1: it must SETTLE, not be re-examined every
+                // launch) — becomes a catch-up.
+                let keepOwnPass = hadDate && rec.inferredDateSource == nil
+                Self.applyTriangulation(r, to: rec, source: keepOwnPass ? nil : InferredDateSource.catchUp)
                 inferredDateNoDateEvidence[rec.id] = nil
                 if hadDate { result.retriangulated += 1 } else { result.inferredFromEvidence += 1 }
                 touched.append(rec)

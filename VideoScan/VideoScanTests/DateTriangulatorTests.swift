@@ -730,3 +730,44 @@ struct InspectorInferredDateLineTests {
         #expect(InspectorDateView.inferredSummary(VideoRecord()) == nil)
     }
 }
+
+// MARK: - In-house QA review of GH #201 (M1–M3 + the unwind minor)
+
+@MainActor
+@Suite("QA review — GH #201 date branch (M1–M3, unwind)")
+struct DateTriangulatorQAReviewTests {
+
+    private func model(_ label: String) -> VideoScanModel {
+        let m = VideoScanModel()
+        m.catalogStore = CatalogStore(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("DateQAReview-\(label)-\(UUID().uuidString)", isDirectory: true))
+        m.dateInferencePeople = []
+        return m
+    }
+
+    private func rec(_ path: String) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = path; r.filename = (path as NSString).lastPathComponent
+        r.directory = (path as NSString).deletingLastPathComponent
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        return r
+    }
+
+    /// M1: a folder-year placeholder that gains evidence must SETTLE as a
+    /// catch-up — not keep "folder-year" and be re-examined every launch.
+    @Test func folderYearPlaceholderGainingEvidenceSettles() {
+        let m = model("m1")
+        let r = rec("/Volumes/V/1991/NV12.mkv")
+        r.inferredRecordDate = pfJanuaryFirst(of: 1991)
+        r.inferredDateConfidence = 0.30
+        r.inferredDateSource = VideoScanModel.InferredDateSource.folderYear
+        r.ocrDateCandidates = [SceneCaption(timestamp: 193, text: "JUN.21 1991 PM11:29")]
+        m.records = [r]
+        m.catchUpInferredDates(trigger: "test")
+        #expect(r.inferredRecordDate == utc(1991, 6, 21))
+        #expect(r.inferredDateSource == VideoScanModel.InferredDateSource.catchUp, "\(r.inferredDateSource ?? "nil")")
+        #expect(VideoScanModel.hasSettledInferredDate(r))
+        let second = m.catchUpInferredDates(trigger: "test")
+        #expect(second.total == 0 && second.retriangulated == 0, "\(second)")
+    }
+}
