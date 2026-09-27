@@ -938,7 +938,8 @@ enum HallieTurnExecutor {
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
                 mode: mode,
-                modeForce: force)
+                modeForce: force,
+                superlative: superlative)
         }
     }
 
