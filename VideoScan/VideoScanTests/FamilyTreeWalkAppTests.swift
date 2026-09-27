@@ -2,7 +2,9 @@
 // The Family Tree Walk, app half (2026-09-27). Dimensions:
 //   Logic     — default start people (pinned owner first, Rick + Donna),
 //               display names, the fan layout (Rick left, Donna right),
-//               the MFO kind.
+//               the fan FITS its canvas at depth 3/5/10/all (2026-09-27),
+//               the sheet fits its window, every node settles at the end,
+//               the pace note, the summary's scope labels, the MFO kind.
 //   Scale     — the animation's per-tick frame is O(batch), never
 //               O(people): a 100k-person replay ticks as fast as a small one.
 //   Isolation — every center here writes to a scratch decorations.json;
@@ -11,6 +13,7 @@
 //   Sensor    — one START and one OUTCOME line per run through the sink;
 //               the background job ends Done with a summary.
 
+import CoreGraphics
 import Foundation
 import Testing
 import VideoScanCore
@@ -140,7 +143,7 @@ struct FamilyTreeWalkAppTests {
         let size = CGSize(width: 600, height: 600)
         let layout = TreeWalkFanLayout(result: r, size: size)
         #expect(layout.placed.count == r.visitedCount)
-        let halo: CGFloat = 3.2
+        let halo = TreeWalkFanLayout.haloFactor
         var minX = CGFloat.infinity, maxX = -CGFloat.infinity, minY = CGFloat.infinity, maxY = -CGFloat.infinity
         for p in layout.placed {
             let e = p.radius * halo
@@ -159,7 +162,7 @@ struct FamilyTreeWalkAppTests {
         let size = CGSize(width: 500, height: 500)
         let layout = TreeWalkFanLayout(result: r, size: size)
         for p in layout.placed {
-            let e = p.radius * 3.2
+            let e = p.radius * TreeWalkFanLayout.haloFactor
             #expect(p.point.x - e >= 0 && p.point.x + e <= size.width && p.point.y - e >= 0 && p.point.y + e <= size.height)
         }
         // The starts straddle the centre: the fan's origin is the canvas centre.
@@ -190,6 +193,56 @@ struct FamilyTreeWalkAppTests {
         again.tick()
         #expect(again.frame.finished)
         #expect(again.frame.recent.isEmpty)
+    }
+
+    /// The sheet sizes to the Family Tree window: inside it on a 13"
+    /// laptop, capped on a big display, never below the usable minimum.
+    @Test func theSheetFitsTheWindowItHangsFrom() {
+        let laptop13 = CGSize(width: 1_280, height: 740)          // full-screen window, 1280×800 display
+        let s = FamilyTreeWalkSheet.watchingSize(host: laptop13)
+        #expect(s.width <= laptop13.width && s.height <= laptop13.height)
+        #expect(s == CGSize(width: 1_100, height: 692))
+        let small = CGSize(width: 800, height: 600)
+        #expect(FamilyTreeWalkSheet.watchingSize(host: small) == CGSize(width: 752, height: 552))
+        let studio = CGSize(width: 3_000, height: 1_600)
+        #expect(FamilyTreeWalkSheet.watchingSize(host: studio) == FamilyTreeWalkSheet.maximumWatchingSize)
+        let tiny = CGSize(width: 500, height: 400)
+        #expect(FamilyTreeWalkSheet.watchingSize(host: tiny) == FamilyTreeWalkSheet.minimumWatchingSize)
+        #expect(FamilyTreeWalkSheet.watchingSize(host: .zero) == CGSize(width: 900, height: 700), "unknown host")
+        // The minimum still holds the side panel and a usable fan.
+        let inner = FamilyTreeWalkSheet.minimumWatchingSize.width - 40
+        #expect(inner - TreeWalkAnimationView.sidePanelWidth - 16 >= TreeWalkAnimationView.minimumFan)
+    }
+
+    /// Manager 2026-09-27: a 45 s replay of a 50 ms analysis must not look
+    /// like a slow algorithm.
+    @Test func thePaceNoteSeparatesTheAnalysisFromTheReplay() {
+        func note(_ ms: Double, visited: Int = 0, total: Int = 27_000, rate: Double = 600,
+                  instant: Bool = false, paused: Bool = false, finished: Bool = false) -> String {
+            TreeWalkAnimator.paceNote(analysisMilliseconds: ms, visited: visited, total: total, nodesPerSecond: rate,
+                                      instant: instant, paused: paused, finished: finished)
+        }
+        #expect(note(54) == "Analysis done in 54 ms — replaying the walk at 600 people/s (about 45 s left). Skip to end shows it all now.")
+        #expect(note(54, total: 90_000).contains("(about 3 min left)"))
+        #expect(note(1_340, visited: 29, total: 30).hasPrefix("Analysis done in 1.3 s — "))
+        #expect(note(1_340, visited: 29, total: 30).contains("under a second"))
+        #expect(note(54, instant: true) == "Analysis done in 54 ms — drawing the rest now.")
+        #expect(note(54, paused: true).contains("replay paused"))
+        #expect(note(214, finished: true) == "Analysis took 214 ms; the replay is only the animation.")
+    }
+
+    /// The summary's check title names the scope; the whole-tree figure is
+    /// labelled, and absent when the walk covered every check.
+    @Test func theSummaryLabelsItsScope() throws {
+        var s = TreeWalk.Summary()
+        s.peopleInTree = 39_249; s.peopleWalked = 30
+        s.warnCount = 9; s.infoCount = 3
+        s.treeWarnCount = 1_119; s.treeInfoCount = 297
+        #expect(TreeWalkSummaryView.checksTitle(s) == "Checks on these 30 people (9 warn, 3 info)")
+        #expect(TreeWalkSummaryView.wholeTreeLine(s)
+                == "Whole tree (39,249 people): 1,416 checks (1,119 warn) — in each person's inspector and decorations.json")
+        s.treeWarnCount = 9; s.treeInfoCount = 3
+        #expect(TreeWalkSummaryView.wholeTreeLine(s) == nil)
     }
 
     @Test func walkTreeIsAnMFOKindWithADetailView() {
@@ -288,6 +341,7 @@ struct FamilyTreeWalkAppTests {
         #expect(line.contains("decorations saved"))
         #expect(job.fraction == 1)
         #expect(job.summary?.peopleWalked == 5)
+        #expect(line.hasPrefix("5 people, \(job.summary?.checkCount ?? -1) checks ("), "the walk's checks, not the tree's")
         #expect(job.title == "Walk Tree — from Rick + Donna")
     }
 

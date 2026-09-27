@@ -82,7 +82,9 @@ final class WalkTreeJob: @MainActor MediaFileOperationJob {
             summary = result.summary
             starts = result.starts
             let s = result.summary
-            let line = "\(s.peopleWalked.formatted()) people, \(result.checks.count.formatted()) checks "
+            // The walk's own checks (involving a walked person), not the
+            // whole tree's — the MFO log line reads this (2026-09-27).
+            let line = "\(s.peopleWalked.formatted()) people, \(s.checkCount.formatted()) checks "
                 + "(\(s.warnCount.formatted()) warn) — decorations saved"
             state = .finished(summary: line)
             subtitleText = line

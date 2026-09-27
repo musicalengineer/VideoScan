@@ -60,6 +60,9 @@ struct FamilyTreeView: View {
     /// (2026-09-27): two `.sheet(isPresented:)` side by side race each
     /// other's dismiss animation (project_chained_sheet_antipattern).
     @State private var toolSheet: FamilyTreeToolSheet?
+    /// This view's size, so the Walk Tree sheet can size itself to the
+    /// window instead of running off it (Rick 2026-09-27).
+    @State private var toolSheetHostSize: CGSize = .zero
     /// The MFO center WITHOUT subscribing (see MediaFileOperationsCenterReference).
     @Environment(\.mediaFileOperationsCenterReference) private var fileOpsCenterReference
     /// The Get Family Tree coordinator is owned by the app-wide center, not
@@ -399,7 +402,7 @@ struct FamilyTreeView: View {
             }
         case .walk:
             // "Walk Tree…" (2026-09-27): one sheet with its own stages.
-            FamilyTreeWalkSheet(model: model, operations: fileOpsCenterReference) {
+            FamilyTreeWalkSheet(model: model, operations: fileOpsCenterReference, hostSize: toolSheetHostSize) {
                 toolSheet = nil
             }
         }
@@ -413,6 +416,7 @@ struct FamilyTreeView: View {
             .onChange(of: selectedPhotoItem) { _, item in
                 importApplePhoto(item)
             }
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { toolSheetHostSize = $0 }
             .sheet(item: $toolSheet) { sheet in toolSheetView(sheet) }
             .photosPicker(isPresented: $showApplePhotosPicker,
                           selection: $selectedPhotoItem, matching: .images)

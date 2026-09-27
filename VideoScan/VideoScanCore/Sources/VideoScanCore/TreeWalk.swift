@@ -299,6 +299,8 @@ public enum TreeWalk {
         /// Sets bigger than the sketch size — counted by estimate.
         public var estimatedAncestorCounts = 0
 
+        public init() {}
+
         public var checkCount: Int { warnCount + infoCount }
         public var treeCheckCount: Int { treeWarnCount + treeInfoCount }
 
