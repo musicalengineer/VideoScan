@@ -15,7 +15,8 @@
 //   - `VideoRecord.resolvedDateSortKey` / `.resolvedDateDisplay` — the
 //     "best date" resolution: Rick's date (either confidence) OUTRANKS
 //     any machine date (the 2026-on-a-VHS-conversion case proves the
-//     ordering), then the container's embedded creation date, then the
+//     ordering), then — for a Master Archive copy only — the date it is
+//     FILED under (2026-09-27), then the container's embedded creation date, then the
 //     dossier's inferred date, then the file's creation date. O(1) per record — these back a catalog table
 //     column, so no allocation-heavy work here (NO DateFormatter on
 //     the sort path; see the Julian-day math below).
@@ -248,13 +249,70 @@ extension VideoRecord {
         return userDateConfidenceValue == .known ? .known : .estimated
     }
 
+    // MARK: Archive copies show their FILED date (Rick 2026-09-27)
+
+    /// The `derivationKind` Promote stamps on every Master Archive copy
+    /// (`ArchivePromotion.derivationKind` in the app reads this one).
+    public static let archivePromotionDerivationKind = "archivePromotion"
+
+    /// The date an ARCHIVE COPY is filed under, as canonical reduced ISO
+    /// ("1992-07-15" / "1992-07" / "1992") — read from the archive
+    /// filename's date prefix, which Promote writes from the very date it
+    /// files by (the resolver's answer, or the date typed on the promote
+    /// sheet / in Archive Angel Review) and Archive Update rewrites when
+    /// Rick changes the date. nil for any record that is not a promoted
+    /// copy, and for a copy whose name carries no date ("xxxx-xx-xx_…",
+    /// a decade-only filing, or a name Rick changed by hand).
+    ///
+    /// Rick's rule: once a file is in the archive only HE changes its
+    /// date, so for an archive copy the Date column shows this over any
+    /// machine date (inferred, embedded, a displaced stamp). His own
+    /// `userDate` still comes first — Update writes it too.
+    ///
+    /// O(1): a string compare, then at most 11 bytes of the filename read
+    /// through the UTF-8 view (no allocation beyond the result) — safe
+    /// in the sort comparator.
+    public var archiveFiledDate: String? {
+        guard derivationKind == Self.archivePromotionDerivationKind else { return nil }
+        return Self.filedDatePrefix(of: filename)
+    }
+
+    /// "1992-07-15_Slug.mov" → "1992-07-15"; "1992-07-xx_…" → "1992-07";
+    /// "1992-xx-xx_…" → "1992"; anything else (incl. "xxxx-xx-xx_…") → nil.
+    /// Pure; `MasterArchive.swift`'s `ArchiveDateHint.filenamePrefix` is
+    /// the writer of this shape.
+    public static func filedDatePrefix(of filename: String) -> String? {
+        let u = Array(filename.utf8.prefix(11))
+        guard u.count == 11, u[4] == UInt8(ascii: "-"), u[7] == UInt8(ascii: "-"),
+              u[10] == UInt8(ascii: "_") else { return nil }
+        func digits(_ r: Range<Int>) -> Bool { r.allSatisfy { u[$0] >= 0x30 && u[$0] <= 0x39 } }
+        func unknown(_ r: Range<Int>) -> Bool { r.allSatisfy { u[$0] == UInt8(ascii: "x") } }
+        guard digits(0..<4) else { return nil }
+        let y = String(decoding: u[0..<4], as: UTF8.self)
+        let candidate: String
+        if digits(5..<7), digits(8..<10) {
+            candidate = String(decoding: u[0..<10], as: UTF8.self)
+        } else if digits(5..<7), unknown(8..<10) {
+            candidate = String(decoding: u[0..<7], as: UTF8.self)
+        } else if unknown(5..<7), unknown(8..<10) {
+            candidate = y
+        } else {
+            return nil
+        }
+        // Validates the calendar (no month 13, no Feb 30) and returns the
+        // same canonical spelling a hand-entered date has.
+        return UserDateEntry.canonicalize(candidate)
+    }
+
     /// Best-date SORT key for the catalog table's Date column.
-    /// Ranking: user date (either confidence) > inferred date (OCR /
-    /// transcript consensus) > file creation date > distant past.
+    /// Ranking: user date (either confidence) > an archive copy's filed
+    /// date > inferred date (OCR / transcript consensus) > file creation
+    /// date > distant past.
     /// O(1) per record, pure integer math on the user-date path — safe
     /// for sort comparators over a 100k-row catalog.
     public var resolvedDateSortKey: Date {
         if let ud = userDate, let d = UserDateEntry.date(from: ud) { return d }
+        if let filed = archiveFiledDate, let d = UserDateEntry.date(from: filed) { return d }
         // The container's own creation stamp (2026-08-16) outranks the
         // dossier's inference and the filesystem date — same order the
         // Master Archive resolver uses (RecordDateResolver).
@@ -274,6 +332,7 @@ extension VideoRecord {
         if let ud = userDate {
             return userDateStatus == .known ? ud : ud + " (est.)"
         }
+        if let filed = archiveFiledDate { return filed }
         if let moved = displacedStampResolution {
             // Codex F4: a displaced stamp must not hide the inference's span —
             // "2003–2004" reads the same with or without the stamp.
@@ -332,6 +391,9 @@ extension VideoRecord {
         case .estimated:
             return "Your date — best guess. It outranks any machine date; refine it any time."
         case .unconfirmed:
+            if archiveFiledDate != nil {
+                return "The date this file is filed under in the Master Archive (the start of its name). Archived files keep their date — only you change it."
+            }
             if let moved = displacedStampResolution {
                 let from = moved.source == .filename
                     ? "the year in the filename (a low-confidence guess)"

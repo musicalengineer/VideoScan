@@ -55,8 +55,9 @@ extension VideoScanModel {
             master.detectedPeople = extra.detectedPeople
             carried.append("detected people")
         }
-        // Inferred date (+ confidence).
-        if master.inferredRecordDate == nil, extra.inferredRecordDate != nil {
+        // Inferred date (+ confidence). Never onto a Master Archive file
+        // (Rick 2026-09-27): its date is the one it is filed under.
+        if master.inferredRecordDate == nil, extra.inferredRecordDate != nil, !isArchiveElement(master) {
             master.inferredRecordDate = extra.inferredRecordDate
             master.inferredDateConfidence = extra.inferredDateConfidence
             master.inferredDateSource = extra.inferredDateSource
