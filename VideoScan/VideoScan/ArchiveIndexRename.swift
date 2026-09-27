@@ -274,7 +274,7 @@ enum ArchiveIndexRename {
         // 3. Recheck: still the file we read? (A promote appending between
         //    prepare and here would otherwise be lost by the replace.)
         for f in plan.files where !isUnchanged(f, root: plan.root) {
-            removeBackup(backupDir)
+            removeRefusedBackup(backupDir)
             throw Failure.changedDuringRename(file: f.name)
         }
 
@@ -284,7 +284,7 @@ enum ArchiveIndexRename {
         do {
             try moveMedia()
         } catch {
-            removeBackup(backupDir)
+            removeRefusedBackup(backupDir)
             throw error
         }
 
@@ -340,7 +340,7 @@ enum ArchiveIndexRename {
         }
         if problems.isEmpty {
             // Everything is back as it was — the backups are redundant.
-            removeBackup(backupDir)
+            removeRefusedBackup(backupDir)
             appLog.write("Catalog: rename refused — archive index \(failed.name) not updated (\(reason)); \(published.count) index file(s) restored, media file moved back.")
             renameIndexLog.error("rename rolled back: \(failed.name, privacy: .public) — \(reason, privacy: .public)")
             return cause
@@ -354,15 +354,24 @@ enum ArchiveIndexRename {
         return .publishFailedNotRolledBack(file: failed.name, reason: reason, detail: detail)
     }
 
-    /// Remove a refused rename's own backup folder (and `.rename_backups/`
-    /// itself when that leaves it empty). Only ever this rename's folder.
-    private static func removeBackup(_ dir: URL) {
-        let fm = FileManager.default
-        try? fm.removeItem(at: dir)
+    /// Remove a refused rename's own backup folder — only that folder,
+    /// under the backups lock. `.rename_backups/` itself is PERMANENT
+    /// (codex re-review #1, 2026-09-27): it is the lock inode, and removing
+    /// it when "empty" raced a concurrent claim — another process could
+    /// claim and fill a folder between the empty check and the removal and
+    /// lose it. `afterOwnRemoval` runs after the lock is released (the
+    /// test seam for that gap; nothing in production).
+    static func removeRefusedBackup(_ dir: URL, afterOwnRemoval: () -> Void = {}) {
         let parent = dir.deletingLastPathComponent()
-        if (try? fm.contentsOfDirectory(atPath: parent.path))?.isEmpty == true {
-            try? fm.removeItem(at: parent)
+        do {
+            try withBackupsLock(parent) {
+                try FileManager.default.removeItem(at: dir)
+            }
+        } catch {
+            appLog.write("Catalog: refused rename's backup \(dir.path) could not be removed (\(ArchiveAttestationJournal.describe(error))) — left in place; its marker is incomplete, so it is never pruned.")
+            renameIndexLog.error("refused-rename backup not removed: \(dir.path, privacy: .public)")
         }
+        afterOwnRemoval()
     }
 
     // MARK: Backup provenance (GH #204 + codex review 2026-09-27)
