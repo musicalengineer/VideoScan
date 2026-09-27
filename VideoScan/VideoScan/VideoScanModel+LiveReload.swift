@@ -203,6 +203,10 @@ extension VideoScanModel {
             mem.inferredRecordDate     = fresh.inferredRecordDate
             mem.inferredDateConfidence = fresh.inferredDateConfidence
             mem.inferredDateSource     = fresh.inferredDateSource
+            // GH #201 (QA M2): the span and the written reason travel with
+            // the date, or a stale "2003–2004" shows over a fresh day.
+            mem.inferredDateRange      = fresh.inferredDateRange
+            mem.inferredDateReason     = fresh.inferredDateReason
 
             // Provenance
             mem.dossierProcessedAt = fresh.dossierProcessedAt

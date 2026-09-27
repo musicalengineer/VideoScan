@@ -770,4 +770,25 @@ struct DateTriangulatorQAReviewTests {
         let second = m.catchUpInferredDates(trigger: "test")
         #expect(second.total == 0 && second.retriangulated == 0, "\(second)")
     }
+
+    /// M2: a live reload carries the span and the reason with the date.
+    @Test func liveReloadCarriesRangeAndReason() {
+        let m = model("m2")
+        let mem = rec("/Volumes/V/a.mov")
+        mem.inferredRecordDate = pfJanuaryFirst(of: 2003)
+        mem.inferredDateConfidence = 0.7
+        mem.inferredDateRange = InferredDateRange(startYear: 2003, endYear: 2004)
+        mem.inferredDateReason = "old"
+        mem.dossierProcessedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        m.records = [mem]
+        let fresh = rec("/Volumes/V/a.mov")   // matched by path
+        fresh.inferredRecordDate = utc(1991, 6, 21)
+        fresh.inferredDateConfidence = 0.95
+        fresh.inferredDateReason = "on-screen date 1991-06-21 ×3"
+        fresh.dossierProcessedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(m.mergeDossierFields(from: [fresh]) == 1)
+        #expect(mem.inferredDateRange == nil)
+        #expect(mem.inferredDateReason == "on-screen date 1991-06-21 ×3")
+        #expect(mem.resolvedDateDisplay == "1991-06-21", "got \(mem.resolvedDateDisplay)")
+    }
 }
