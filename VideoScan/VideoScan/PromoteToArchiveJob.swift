@@ -104,6 +104,9 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
     var fileLock: ArchiveFileLock.Seams = .live
     /// source record id → why its archive copy could not be locked (this run).
     var lockWarnings: [UUID: String] = [:]
+    /// source record id → why this run's date was refused: an earlier,
+    /// interrupted run had already placed the file elsewhere (codex r1 #3).
+    var placementConflicts: [UUID: String] = [:]
 
     /// Destination paths claimed by THIS batch — resolved but possibly not
     /// on disk yet when the next file resolves. Folded into the collision

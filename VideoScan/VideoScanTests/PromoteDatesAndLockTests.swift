@@ -307,6 +307,33 @@ struct PromoteDatesAndLockEndToEndTests {
         #expect(MasterArchiveTestSupport.manifestRows(sb).count == 1)
     }
 
+    @Test("codex r1 #3: an interrupted placement under Undated / another decade WINS on retry; a different retry date is refused, pointing at Update…",
+          arguments: [("30_Video/Undated/xxxx-xx-xx_test_tape.mov", ""), ("30_Video/1940-1949/xxxx-xx-xx_test_tape.mov", "1940s")])
+    func reconcileUndatedPlacementWins(placed: String, manifestDate: String) async throws {
+        let (sb, model, rec) = try setup("reconc")
+        defer { sb.cleanup() }
+        // An earlier run copied + renamed the file into place, then stopped
+        // before the manifest row (journal says `renamed`).
+        let dest = sb.archiveRoot.appendingPathComponent(placed)
+        try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(atPath: rec.fullPath, toPath: dest.path)
+        let sha = try #require(MasterArchiveTestSupport.sha256(ofFile: dest.path))
+        try ArchivePromoteJournal.append(.init(sourceRecordID: rec.id, sourcePath: rec.fullPath, destRelPath: placed,
+                                               state: .renamed, sha256: sha, copyRecordID: nil, at: Date()),
+                                         rootPath: sb.archiveRoot.path)
+        // The retry carries a DIFFERENT date.
+        let job = try await run(model, ids: [rec.id]) {
+            $0.archiveDateOverrides[rec.id] = .year(1984); $0.archiveDateSources[rec.id] = .typed
+        }
+        #expect(MasterArchiveTestSupport.archivedFiles(sb) == [placed], "the placement on disk stands")
+        let row = try #require(MasterArchiveTestSupport.manifestRows(sb).first)
+        #expect(row[1] == placed && row[8] == manifestDate, "manifest \(row[8]) must follow the placement")
+        let copy = try #require(model.masterArchiveCopy(of: rec))
+        #expect(copy.userDate == nil, "1984 is not written on a file filed elsewhere")
+        let o = try #require(job.outcomes.first)
+        #expect(o.kind == .failed && o.detail.contains("Update…"), "\(o.kind): \(o.detail)")
+    }
+
     @Test("a machine override (no source) places the file but writes no user date")
     func machineOverrideNotWritten() async throws {
         let (sb, model, rec) = try setup("machine", inferred: false)

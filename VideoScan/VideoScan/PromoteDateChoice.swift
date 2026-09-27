@@ -238,6 +238,28 @@ extension PromoteToArchiveJob {
         return (ud, (f[9] == "user-known" ? UserDateConfidence.known : .estimated).rawValue)
     }
 
+    /// The date a file's PLACE says: the filename prefix when it carries a
+    /// year; else the folder ("Undated" → unknown, "1940-1949" → the
+    /// decade, ".../1984" → the year). nil = not a Promote-shaped path (no
+    /// opinion). Pure.
+    nonisolated static func placementHint(relPath: String) -> ArchiveDateHint? {
+        let comps = relPath.split(separator: "/").map(String.init)
+        guard comps.count >= 3 else { return nil }
+        let stem = (comps[comps.count - 1] as NSString).deletingPathExtension
+        let prefixed = ArchiveRefile.hint(fromManifestDate: String(stem.prefix(10)))
+        if prefixed.year != nil { return prefixed }
+        let folders = comps[1..<(comps.count - 1)]
+        if folders.first == MasterArchiveLayout.undatedFolder { return .unknown }
+        if folders.count >= 2, let y = Int(folders[folders.startIndex + 1]), folders[folders.startIndex + 1].count == 4 {
+            return .year(y)
+        }
+        if let decade = folders.first, decade.count == 9, decade.dropFirst(4).first == "-",
+           let start = Int(decade.prefix(4)), Int(decade.suffix(4)) == start + 9, start % 10 == 0 {
+            return .decade(startYear: start)
+        }
+        return nil
+    }
+
     /// ONE date for placement, manifest and record (GH #219). Pure.
     /// - `sourceFacts` / `sourceLabel`: the source's own resolved date and
     ///   its manifest confidence label (`dateConfidenceLabel`).
@@ -260,10 +282,10 @@ extension PromoteToArchiveJob {
         }
         var write = source != nil && override != nil
         var followed = false
-        let stem = ((relPath as NSString).lastPathComponent as NSString).deletingPathExtension
-        let fileHint = ArchiveRefile.hint(fromManifestDate: String(stem.prefix(10)))
-        if fileHint.year != nil, fileHint != hint {
-            hint = fileHint
+        // The placement ON DISK decides (codex r1 #3) — dated, decade-only
+        // or Undated alike.
+        if let placed = placementHint(relPath: relPath), placed != hint {
+            hint = placed
             label = ""
             write = false
             followed = true

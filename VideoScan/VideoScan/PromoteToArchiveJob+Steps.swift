@@ -192,6 +192,7 @@ extension PromoteToArchiveJob {
         }
         // ---- Idempotency by SOURCE IDENTITY (catalog leg).
         if model.masterArchiveCopy(of: source) != nil {
+            if let conflict = placementConflicts[source.id] { return .failed(conflict) }
             return .skipped("already in the Master Archive")
         }
         if model.isArchiveCopy(source) || ArchivePathResolver.isInside(path: source.fullPath, root: ctx.root) {
@@ -449,7 +450,11 @@ extension PromoteToArchiveJob {
                                           source: plan.archiveDateSources[sourceID],
                                           relPath: relPath)
                 if d.followedFilename {
-                    appLog.write("promote: \(relPath) — the chosen date differs from the date in the file's name (an earlier run placed it); the manifest follows the filename so the two agree")
+                    appLog.write("promote: \(relPath) — the chosen date differs from where an earlier run placed the file; the manifest follows the placement so the two agree")
+                    if let wanted = plan.archiveDateOverrides[sourceID] {
+                        // Refused, clearly (codex r1 #3): never re-dated behind Rick's back.
+                        placementConflicts[sourceID] = "an earlier, interrupted promote already filed this under \(ArchiveRefile.datedLabel(d.hint)) (\(relPath)); the date \(ArchiveRefile.datedLabel(wanted)) was NOT applied — use Update… on the archived file to change it"
+                    }
                 }
                 decision = d
                 recordDate = d.hint.manifestDate
