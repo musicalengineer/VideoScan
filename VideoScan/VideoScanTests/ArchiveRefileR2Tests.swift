@@ -375,3 +375,46 @@ struct ArchiveRefileR3MainActorLockTests {
         #expect(beat.worst < .milliseconds(100), "main actor stalled for \(beat.worst) while the index lock was contended")
     }
 }
+
+// MARK: - r4 #2: a move back must put back the ORIGINAL
+
+@Suite("Archive Refile r4 — move back verifies identity", .serialized)
+@MainActor
+struct ArchiveRefileR4MoveBackVerifiesIdentityTests {
+
+    @Test("after the move another writer relocates the original and puts a stranger at the target → never 'rolled back'; the stranger stays, nothing is renamed onto the old path, the incomplete backup is kept")
+    func strangerIsNeverPutBack() async throws {
+        let a = try await RefileFixture.make("r4swap")
+        defer { a.sb.cleanup() }
+        let p = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        let to = p.target(hint: p.initialHint, name: p.initialName)
+        let target = a.sb.archiveRoot.appendingPathComponent(to)
+        let aside = a.sb.root.appendingPathComponent("test_relocated_original.mov")
+        let backups = a.sb.archiveRoot.appendingPathComponent("00_Index/\(ArchiveIndexRename.backupFolder)")
+        let before = Set((try? FileManager.default.contentsOfDirectory(atPath: backups.path)) ?? [])
+        final class Once: @unchecked Sendable { var done = false; let lock = NSLock() }
+        let once = Once()
+        var seams = ArchiveRefileEngine.Seams.live
+        seams.directoryFsync = { fd, phase in
+            let first: Bool = once.lock.withLock { let f = phase == .afterMove && !once.done; if f { once.done = true }; return f }
+            if first {
+                // Between the rename and the identity check, another writer
+                // takes the original away and leaves a stranger in its place.
+                try? FileManager.default.moveItem(at: target, to: aside)
+                try? Data("stranger".utf8).write(to: target)
+            }
+            return ArchivePromoteEngine.barriers.fsync(fd)
+        }
+        let r = await a.model.refileArchiveCopy(p, hint: p.initialHint, name: p.initialName, seams: seams)
+        #expect(r.kind == .mixedState, "\(r.kind): \(r.message)")
+        #expect(r.message.contains(a.relPath) && r.message.contains(to), "both paths named")
+        #expect(String(decoding: RefileFixture.data(target), as: UTF8.self) == "stranger", "the stranger is preserved where it was")
+        #expect(!FileManager.default.fileExists(atPath: a.absPath), "the stranger was NOT renamed onto the old path")
+        #expect(MasterArchiveTestSupport.sha256(ofFile: aside.path) == a.sha, "the relocated original is untouched")
+        let added = Set((try? FileManager.default.contentsOfDirectory(atPath: backups.path)) ?? []).subtracting(before)
+        #expect(added.count == 1, "backup kept")
+        if let dir = added.first {
+            #expect(ArchiveIndexRename.readMarker(in: backups.appendingPathComponent(dir))?.complete == false)
+        }
+    }
+}

@@ -764,7 +764,7 @@ enum ArchiveRefileEngine {
                 undoMoveMedia: {
                     audit(subject + "putting the file back: \(to) → \(from)…")
                     do {
-                        try moveBack(root: root, from: from, to: to, seams: seams)
+                        try moveBack(root: root, from: from, to: to, seams: seams, identity: prep.sourceIdentity)
                     } catch let e as RecoveryNotDurable {
                         recoveryNotDurable = e.description
                         throw e
@@ -898,12 +898,15 @@ enum ArchiveRefileEngine {
 
         func putBack(_ why: String) -> any Error {
             do {
-                try moveBack(root: root, from: from, to: to, seams: seams)
+                try moveBack(root: root, from: from, to: to, seams: seams, identity: sourceIdentity)
                 audit("the file is back at \(from)")
                 return StepError.rolledBack(why)
             } catch let e as RecoveryNotDurable {
                 audit("the file is back at \(from), but \(e) — recovery NOT confirmed durable")
                 return IncompleteRecovery(why: "\(why); the file was moved back to \(from) but \(e)")
+            } catch let e as NotTheOriginal {
+                audit("NOT moving it back: \(e)")
+                return StepError.notRolledBack("\(why) — AND \(e)")
             } catch {
                 return StepError.notRolledBack("\(why) — AND the file could not be moved back: it is at \(to), the index still says \(from). \(ArchiveAttestationJournal.describe(error))")
             }
@@ -934,14 +937,35 @@ enum ArchiveRefileEngine {
     }
 
     /// Rename `to` back to `from` (no-clobber) and flush both folders.
-    private static func moveBack(root: String, from: String, to: String, seams: Seams) throws {
+    /// The file at the place a move back would take it from (or has put it)
+    /// is NOT the archived original: nothing is renamed onto the old path
+    /// (r4 #2), or — if a swap raced the rename — it is reported.
+    struct NotTheOriginal: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    private static func moveBack(root: String, from: String, to: String, seams: Seams,
+                                 identity: ArchivePromoteEngine.FileIdentity) throws {
         let srcDir = try ArchivePromoteEngine.openDestinationDirectory(root: root, relativePath: from, create: false)
         defer { Darwin.close(srcDir) }
         let dstDir = try ArchivePromoteEngine.openDestinationDirectory(root: root, relativePath: to, create: false)
         defer { Darwin.close(dstDir) }
-        guard renameatx_np(dstDir, (to as NSString).lastPathComponent, srcDir, (from as NSString).lastPathComponent, UInt32(RENAME_EXCL)) == 0 else {
+        let toName = (to as NSString).lastPathComponent, fromName = (from as NSString).lastPathComponent
+        func isOriginal(_ dirfd: Int32, _ name: String) -> Bool {
+            guard let (id, mode) = ArchivePromoteEngine.FileIdentity.at(dirfd: dirfd, name: name), mode == S_IFREG else { return false }
+            return id.device == identity.device && id.inode == identity.inode && id.size == identity.size
+        }
+        // Put back ONLY the archived original (device + inode + size). A
+        // stranger at `to` is left exactly where it is.
+        guard isOriginal(dstDir, toName) else {
+            throw NotTheOriginal(description: "the file now at \(to) is NOT the archived original (another writer replaced it) — it was left in place and nothing was moved back to \(from)")
+        }
+        guard renameatx_np(dstDir, toName, srcDir, fromName, UInt32(RENAME_EXCL)) == 0 else {
             let e = errno
             throw ArchivePromoteEngine.Failure.renameFailed(to + " → " + from, errno: e)
+        }
+        guard isOriginal(srcDir, fromName) else {
+            throw NotTheOriginal(description: "the file moved back to \(from) is NOT the archived original (a swap raced the move back) — both paths need checking by hand")
         }
         // Checked (codex review #4): a move back whose folders cannot be
         // flushed is not a confirmed recovery.
