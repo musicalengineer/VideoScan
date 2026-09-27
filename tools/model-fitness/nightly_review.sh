@@ -42,8 +42,17 @@ STATE=${REVIEW_STATE:-$HOME/Library/Logs/VideoScan/model-review}
 # qwen3.6:35b-a3b-nvfp4 — no code model — so the reviewer STAYS on ricksm5.
 # What changed is what happens when ricksm5 is asleep (see the preflight
 # below): one line, not forty urlopen errors.
-REVIEW_MODEL=${REVIEW_MODEL:-qwen2.5-coder:32b}
-ENDPOINT=${ENDPOINT:-http://ricksm5.local:11434}
+#
+# MOVED TO THE M4 (Rick, 2026-09-27): "the m4 is the 2am machine … we can't
+# rely on the macbooks … they can be unplugged and/or asleep or offsite."
+# ricksm5 slept through 04:30 again that night and nothing was reviewed. The
+# M4's nightly window starts at 02:00 (tests + Hallie replay finish ~03:30,
+# and ollama unloads idle models after 5 min), so by 04:30 the M4's own
+# ollama is free. qwen3.8:27b-mlx is installed there and produced the good
+# 9/02–9/05 findings (see feedback memory "codex-is-the-reviewer"); no new
+# download, no network hop, no sleeping host.
+REVIEW_MODEL=${REVIEW_MODEL:-qwen3.8:27b-mlx}
+ENDPOINT=${ENDPOINT:-http://127.0.0.1:11434}
 # Seconds to wait before the one preflight retry. Long enough for a host
 # that is merely slow to answer /api/tags; the tests set it to 1.
 REVIEW_PREFLIGHT_RETRY_SECONDS=${REVIEW_PREFLIGHT_RETRY_SECONDS:-90}
@@ -190,7 +199,7 @@ if [[ $tags_rc -ne 0 ]]; then
   else
     skip_short="host $ENDPOINT asleep or unreachable"
     skip_reason="host $ENDPOINT asleep or unreachable: /api/tags did not answer twice (retry after ${REVIEW_PREFLIGHT_RETRY_SECONDS}s); python: $py_err"
-    skip_advice="If ricksm5 keeps sleeping through 04:30 the fix is its sleep schedule, not this script."
+    skip_advice="The reviewer now uses the M4's own ollama at $ENDPOINT (2026-09-27). If it is down, check that the ollama app/service is running on this Mac."
   fi
 elif ! print -r -- "$tags" | grep -qx "$REVIEW_MODEL"; then
   skip_short="host $ENDPOINT lacks $REVIEW_MODEL"
