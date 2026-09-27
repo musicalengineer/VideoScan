@@ -179,3 +179,59 @@ OUTPUT (stdout, Markdown, under 500 words):
 first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
 then a line `Verdict: merge / merge-after-fixes / hold`
 then findings, each with file:line, a concrete counterexample, and the test that would pin it.
+
+## Closed
+
+Closed by `c9bdaf6a` at 2026-09-27T18:47:39Z. #1 ccd31101, #2 f6ba060d, #3 c9bdaf6a (generalized), #4 declined (schema never shipped)
+
+---
+
+# Codex review — Refile r4
+
+- Range: `8dac4acf..c9bdaf6a`
+- Credits spent: unavailable
+- Tokens: 50971
+- Finding count: 2
+- Verdict: merge-after-fixes
+- Run: 2026-09-27T18:47:39Z (cycle #4, tools/codex_review.py)
+
+## Codex answer
+
+Credits spent: unavailable | Finding count: 2
+Verdict: merge-after-fixes
+
+1. **P1 — Inherited dates can undo a newer hand edit.** `VideoScanModel+ArchiveRefile.swift:549`, `:551`, `:713`: A→B sets both dates to 1984 but fails catalog persistence. Rick edits the source date to 1985, then refiles B→C using that source date. The second operation updates only the copy; the source already has the selected date. Consequently, merging retains the older pending **source=1984** update. If the second save also fails, replay persists copy=1985 but source=1984, undoing Rick’s correction. **Pin:** extend `ArchiveRefileR2StepEPersistenceTests` with this sequence, disable debounced saves, restore the original persisted catalog, and require both dates to recover as 1985.
+
+2. **P2 — A chain FROM does not establish that the record is still awaiting recovery.** `VideoScanModel+ArchiveRefile.swift:705–709`: after A→B→C with failed saves, Rick deliberately repoints the same record elsewhere and subsequently to a different file at A, saving that change. The pending entry still contains A; the archived original remains at C. Replay accepts both predicates, redirects the deliberately changed record to C, and saves it. Checking C’s identity proves which file is there, but cannot distinguish an old persisted catalog from a later user edit. **Pin:** extend `ArchiveRefileR2StepEPersistenceTests` with the saved repointing sequence; require replay to preserve the newer record assignment and flag the recovery conflict.
+
+Read, no additional findings in `ArchiveRefile.swift`, the changed tests in `ArchiveRefileR2Tests.swift`, `ArchiveVolumeProtectionTests.swift`, or the review document. The move-back check/rename window remains, but the post-rename mismatch is reported as mixed state rather than confirmed rollback.
+
+Pending-file preservation has no additional finding: a failed subsequent write leaves the set-aside bytes intact. Its warning reaches the console/logs; a successful current refile does not include that warning in its sheet result.
+
+Static review only; no builds or tests run. r3 #4 remains declined.
+
+## Disposition (coordinator ruling, 2026-09-27)
+
+- 1 (P1, inherited dates undo a newer hand edit) — Closed by: bdb3d955 (one rule with #2: every replayed write is conditional on the prior value it replaces)
+- 2 (P2, chain FROM does not prove the record is still awaiting recovery) — Closed by: bdb3d955 (the copy record's prior state — path + size + partial MD5 + content hash — must match; otherwise a logged "Refile recovery conflict", entry kept, nothing applied)
+
+## Brief
+
+Re-review, SCOPED to the three fix commits for your Refile r3 findings (docs/codex-review-refile-2026-09-27.md, section "Codex review — Refile r3", with its Disposition block): range 8dac4acf..c9bdaf6a on feat/archive-refile (commits ccd31101, f6ba060d, c9bdaf6a). Use `git diff 8dac4acf..c9bdaf6a` and `git show <sha>`. Do not explore outside the files they touch; read-only; do not build or run. r3 #4 was DECLINED by the coordinator (no pending file with that schema ever existed outside this branch; covered by the new version field) — do not re-raise it.
+
+FIXES (each red first):
+- ccd31101 r3#1 — VideoScanModel+ArchiveRefile.swift: pending entries form a CHAIN. A new entry for a record inherits `chainFromPaths` (every FROM of older entries whose catalog step is still owed) and their date updates (newer wins per record); replay accepts the record at FROM, TO or any chain FROM, still requiring the lstat identity at TO. New seam `ArchiveRefilePersistence.scheduleRetrySave` (the debounced retry). Pin: ArchiveRefileR2StepEPersistenceTests.chainedFailedSavesRecover (A→B and B→C both fail to save, no debounced save, records reset to the on-disk state → replay lands C with the latest dates).
+- f6ba060d r3#2 — ArchiveRefile.swift: `moveBack` checks the identity (device+inode+size) of the file at the target BEFORE renaming it back, and at the old path AFTER; not the original → `NotTheOriginal` → notRolledBack → mixedState (backup kept, both paths named); the stranger is never moved. Pin: ArchiveRefileR4MoveBackVerifiesIdentityTests (directoryFsync seam swaps the original out and a stranger in between the rename and the identity check).
+- c9bdaf6a r3#3 (generalized) — VideoScanModel+ArchiveRefile.swift: pending-refiles.json is `{version: 1, entries}`; a file that fails to decode or carries another version is never overwritten — set aside by a no-clobber `renamex_np(RENAME_EXCL)` to `pending-refiles.json.unreadable-<UTC>`, logged to console + catalog.log + videoscan.log; if it cannot be moved aside, no new list is written over it. Inventoried in ArchiveVolumeProtectionSourceSensor.reviewedNoClobberRenames. Pin: ArchiveRefileR4PendingFilePreservedTests (corrupt / version 99).
+
+ATTACK:
+1. Chain: an entry wrongly accepted (the record moved elsewhere by the user between refiles and back to a chain FROM), merged dates overriding a later hand edit made after the refile, a chain that never terminates or grows without bound.
+2. Move back: the residual window between the identity check and renameatx_np; the post-rename check's failure path (a stranger now at the old path) — is it reported and the backup kept.
+3. Pending file: any path that still writes over an unreadable file; losing entries when the set-aside succeeds but the next write fails; the sheet/console surfacing.
+
+EVIDENCE (M4, Debug): at c9bdaf6a (docs 50cdfb90 after), 369 tests in 66 suites passed, run by suite with `-only-testing` (the 64 r3 suites plus ArchiveRefileR4MoveBackVerifiesIdentityTests and ArchiveRefileR4PendingFilePreservedTests; the chain pin is in ArchiveRefileR2StepEPersistenceTests). Each pin was run red before its fix.
+
+OUTPUT (stdout, Markdown, under 500 words):
+first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
+then a line `Verdict: merge / merge-after-fixes / hold`
+then findings, each with file:line, a concrete counterexample, and the test that would pin it.
