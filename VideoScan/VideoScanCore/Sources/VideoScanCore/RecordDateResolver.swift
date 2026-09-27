@@ -170,6 +170,7 @@ public enum RecordDateResolver {
                                originEncoder: String? = nil,
                                inferredRecordDate: Date?,
                                inferredDateConfidence: Float?,
+                               inferredDateRange: InferredDateRange? = nil,
                                filename: String?,
                                now: Date = Date()) -> RecordDateResolution {
 
@@ -191,6 +192,12 @@ public enum RecordDateResolver {
             guard conf >= inferredConfidenceFloor else { rejectedInferred = true; return nil }
             let dc = utcGregorian.dateComponents([.year, .month, .day], from: d)
             guard let y = dc.year, let m = dc.month, let dd = dc.day else { return nil }
+            // GH #201: a triangulated date that only knows the YEAR carries
+            // its span; file it as "2004", never as a fabricated Jan 1.
+            if inferredDateRange != nil {
+                return RecordDateResolution(year: y, month: nil, day: nil, precision: .year,
+                                            confidence: conf, source: .inferred)
+            }
             return RecordDateResolution(year: y, month: m, day: dd, precision: .day,
                                         confidence: conf, source: .inferred)
         }

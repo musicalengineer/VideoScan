@@ -75,7 +75,8 @@ extension ArchiveAngelCandidate {
             originEncoder: r.originEncoder,
             footageGroupID: r.footage?.groupID,
             footageRank: r.footage?.rank,
-            footageConfidence: r.footage?.confidence)
+            footageConfidence: r.footage?.confidence,
+            inferredDateRange: r.inferredDateRange)
     }
 
     /// The slice of a record the recommendation classifier reads — no
@@ -111,7 +112,8 @@ extension ArchiveAngelCandidate {
             originEncoder: r.originEncoder,
             footageGroupID: r.footage?.groupID,
             footageRank: r.footage?.rank,
-            footageConfidence: r.footage?.confidence)
+            footageConfidence: r.footage?.confidence,
+            inferredDateRange: r.inferredDateRange)
     }
 
     /// The projection the job uses: keeper policy built ONCE by the

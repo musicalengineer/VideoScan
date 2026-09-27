@@ -67,11 +67,18 @@ enum ArchiveAngelEvent {
         var precisionRank: Int     // 0 day … 3 decade (finer = stronger)
         var year: Int
 
-        init?(_ r: RecordDateResolution) {
+        /// `demoteSoftwareStamps` (GH #201, footage-group date sharing): a
+        /// stamp with no camera behind it (≤ 0.85 — an export's or a
+        /// transcoder's) ranks with the filename, BELOW the dossier: a
+        /// copy date must not out-claim what the footage itself says. The
+        /// Angel's coverage pass keeps the default (unchanged behaviour).
+        init?(_ r: RecordDateResolution, demoteSoftwareStamps: Bool = false) {
             guard let year = r.year else { return nil }
             switch r.source {
             case .userDate: sourceRank = 0
-            case .embedded: sourceRank = 1
+            case .embedded:
+                sourceRank = demoteSoftwareStamps
+                    && r.confidence <= RecordDateResolver.embeddedConfidenceUnknownOrigin ? 3 : 1
             case .inferred: sourceRank = 2
             case .filename: sourceRank = 3
             case .none: return nil
@@ -100,6 +107,7 @@ enum ArchiveAngelEvent {
             originEncoder: c.originEncoder,
             inferredRecordDate: c.inferredRecordDate,
             inferredDateConfidence: c.inferredDateConfidence,
+            inferredDateRange: c.inferredDateRange,
             filename: c.filename.isEmpty ? nil : c.filename,
             now: now)
         guard let year = r.year else { return ("", nil, nil) }

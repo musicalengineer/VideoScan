@@ -505,6 +505,7 @@ struct AngelEvalContext {
             originEncoder: c.originEncoder,
             inferredRecordDate: c.inferredRecordDate,
             inferredDateConfidence: c.inferredDateConfidence,
+            inferredDateRange: c.inferredDateRange,
             filename: c.filename.isEmpty ? nil : c.filename,
             now: now)
         resolution = r

@@ -205,6 +205,7 @@ enum ArchivistTemporalSelectionDateSnapshot: Sendable, Equatable {
             originEncoder: record.originEncoder,
             inferredRecordDate: record.inferredRecordDate,
             inferredDateConfidence: record.inferredDateConfidence,
+            inferredDateRange: record.inferredDateRange,
             filename: record.filename.isEmpty ? nil : record.filename)
         guard resolution.precision <= .year, let start = resolution.date else { return nil }
         // Noon, not midnight: the executor canonicalises to UTC noon and

@@ -114,6 +114,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let inferredRecordDate: Date?
     public let inferredDateConfidence: Float?
     public let inferredDateSource: String?
+    public let inferredDateRange: InferredDateRange?
+    public let inferredDateReason: String?
     public let dossierProcessedAt: Date?
     public let dossierProcessedBy: String?
     public let audioTranscript: String?
@@ -244,6 +246,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
         inferredRecordDate          = r.inferredRecordDate
         inferredDateConfidence      = r.inferredDateConfidence
         inferredDateSource          = r.inferredDateSource
+        inferredDateRange           = r.inferredDateRange
+        inferredDateReason          = r.inferredDateReason
         dossierProcessedAt          = r.dossierProcessedAt
         dossierProcessedBy          = r.dossierProcessedBy
         audioTranscript             = r.audioTranscript
@@ -416,6 +420,10 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // when present — every record dated by its own dossier pass
         // round-trips byte-identical.
         try c.encodeIfPresent(inferredDateSource, forKey: .inferredDateSource)
+        // GH #201 (2026-09-26): the year span and the written reason —
+        // present only on rows a triangulation pass has examined.
+        try c.encodeIfPresent(inferredDateRange, forKey: .inferredDateRange)
+        try c.encodeIfPresent(inferredDateReason, forKey: .inferredDateReason)
         try c.encodeIfPresent(dossierProcessedAt, forKey: .dossierProcessedAt)
         try c.encodeIfPresent(dossierProcessedBy, forKey: .dossierProcessedBy)
         // Audio transcript: only write when something to write. Matches the

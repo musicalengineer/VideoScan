@@ -51,7 +51,7 @@ extension VideoScanModel {
         propagateDossierToMD5Duplicates(of: record)
         // Captions can name the year (2026-09-12): same rule as the
         // transcript road — derive when undated, share with the group.
-        catchUpInferredDates(scope: [record], trigger: "captions")
+        catchUpInferredDates(scope: [record], trigger: "captions", refreshScope: true)
         objectWillChange.send()
         saveCatalogDebounced()
         // Narrative log: one line per file captioned. Empty captions

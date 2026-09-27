@@ -942,6 +942,14 @@ final class VideoScanModel: ObservableObject {
     /// memo table, `std::unordered_map<uuid, size_t>`, keyed by row.)
     var inferredDateNoDateEvidence: [UUID: Int] = [:]
 
+    /// GH #201: the People tab's birth years the date triangulator reads
+    /// for "how old are you? eight". nil = not loaded yet (loaded on first
+    /// use from the POI profiles, cached for `dateInferencePeopleTTL`);
+    /// tests inject `[]` or a fixture so the real People store is never
+    /// read (isolation). See VideoScanModel+DateInference.
+    var dateInferencePeople: [DateTriangulationPerson]?
+    var dateInferencePeopleLoadedAt: Date?
+
     /// Per-volume snapshot of dossier + user-edit fields, captured by
     /// `snapshotPreservedFieldsForRescan` before the scan's removeAll
     /// destroys them, applied by `applyPreservedFieldsAfterRescan`

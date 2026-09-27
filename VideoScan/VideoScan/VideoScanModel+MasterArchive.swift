@@ -1019,6 +1019,8 @@ extension VideoScanModel {
         copy.inferredRecordDate = source.inferredRecordDate
         copy.inferredDateConfidence = source.inferredDateConfidence
         copy.inferredDateSource = source.inferredDateSource
+        copy.inferredDateRange = source.inferredDateRange
+        copy.inferredDateReason = source.inferredDateReason
         copy.userNotes = source.userNotes
         copy.tags = source.tags
         copy.sceneCaptions = source.sceneCaptions

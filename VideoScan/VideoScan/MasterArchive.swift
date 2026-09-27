@@ -532,7 +532,8 @@ enum ArchivePathResolver {
                          originModel: String? = nil,
                          originEncoder: String? = nil,
                          filename: String? = nil,
-                         userDateConfidence: String? = nil) -> (hint: ArchiveDateHint, lowConfidence: Bool) {
+                         userDateConfidence: String? = nil,
+                         inferredDateRange: InferredDateRange? = nil) -> (hint: ArchiveDateHint, lowConfidence: Bool) {
         let r = RecordDateResolver.resolve(userDate: userDate,
                                            userDateConfidence: userDateConfidence,
                                            embeddedCreationDate: embeddedCreationDate,
@@ -541,6 +542,7 @@ enum ArchivePathResolver {
                                            originEncoder: originEncoder,
                                            inferredRecordDate: inferredRecordDate,
                                            inferredDateConfidence: inferredDateConfidence,
+                                           inferredDateRange: inferredDateRange,
                                            filename: filename)
         return (hint(from: r), isLowConfidence(r))
     }
@@ -585,7 +587,8 @@ extension ArchivePathResolver {
                                    originModel: record.originModel,
                                    originEncoder: record.originEncoder,
                                    filename: record.filename,
-                                   userDateConfidence: record.userDateConfidence)
+                                   userDateConfidence: record.userDateConfidence,
+                                   inferredDateRange: record.inferredDateRange)
         return RecordFacts(streamType: record.streamType,
                            filename: record.filename,
                            ext: record.ext,
