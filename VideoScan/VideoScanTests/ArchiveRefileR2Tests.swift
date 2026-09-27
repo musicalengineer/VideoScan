@@ -205,8 +205,7 @@ struct ArchiveRefileR2StepEPersistenceTests {
         let replayed = await a.model.replayPendingRefiles(persistence: replayPersistence)
         #expect(replayed == 1)
         #expect(saves == 1)
-        #expect(!FileManager.default.fileExists(atPath: pendingURL(a).path) || (try? Data(contentsOf: pendingURL(a)))?.count ?? 0 <= 2,
-                "entry cleared")
+        #expect(a.model.loadPendingRefiles().isEmpty, "entry cleared")
         #expect(a.model.mediaLedger.events(forRecordID: a.source.id).filter { $0.event == .refiled }.count == 1,
                 "the ledger line is not written twice")
     }
@@ -416,5 +415,43 @@ struct ArchiveRefileR4MoveBackVerifiesIdentityTests {
         if let dir = added.first {
             #expect(ArchiveIndexRename.readMarker(in: backups.appendingPathComponent(dir))?.complete == false)
         }
+    }
+}
+
+// MARK: - r4 #3: an unreadable pending-refiles file is never overwritten
+
+@Suite("Archive Refile r4 — unreadable pending file preserved", .serialized)
+@MainActor
+struct ArchiveRefileR4PendingFilePreservedTests {
+
+    @Test("a corrupt or unknown-schema pending file is moved aside, byte-for-byte, and a new entry does not clobber it",
+          arguments: ["corrupt", "futureSchema"])
+    func unreadablePendingPreserved(kind: String) async throws {
+        let a = try await RefileFixture.make("r4pend_\(kind)")
+        defer { a.sb.cleanup() }
+        let url = a.model.pendingRefilesURL
+        let alien = kind == "corrupt"
+            ? Data("{ this is not json \u{0}".utf8)
+            : Data(#"{"version":99,"entries":[{"somethingNew":true}]}"#.utf8)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try alien.write(to: url)
+
+        let p = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        var failSave = ArchiveRefilePersistence.live
+        failSave.saveCatalog = { _ in false }
+        failSave.scheduleRetrySave = { _ in }
+        let r = await a.model.refileArchiveCopy(p, hint: p.initialHint, name: p.initialName, persistence: failSave)
+        #expect(r.kind == .completedWithWarnings, "\(r.message)")
+
+        let dir = url.deletingLastPathComponent()
+        let aside = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasPrefix(VideoScanModel.pendingRefilesFilename + ".unreadable-") }
+        #expect(aside.count == 1, "set aside: \(aside)")
+        if let name = aside.first {
+            #expect(try Data(contentsOf: dir.appendingPathComponent(name)) == alien, "preserved byte-for-byte")
+        }
+        #expect(a.model.loadPendingRefiles().count == 1, "the new entry lives in a fresh file")
+        let fresh = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        #expect(fresh?["version"] as? Int == 1)
     }
 }

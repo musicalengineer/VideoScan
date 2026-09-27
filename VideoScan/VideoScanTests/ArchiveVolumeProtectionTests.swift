@@ -623,6 +623,8 @@ struct ArchiveVolumeProtectionSourceSensor {
             "Refile (Rick 2026-09-27): the ONE in-archive move — same volume, dirfd-relative, only while holding an ArchiveRefileAuthorization that covers exactly this move — and its rename BACK on any failure"),
         "VideoScan/PartialFileNaming.swift": Reviewed(count: 1, reason:
             "ExclusivePublish: a job's own `.vs-partial` → its final output name (Combine / Transcode / Reformat), outside the archive"),
+        "VideoScan/VideoScanModel+ArchiveRefile.swift": Reviewed(count: 1, reason:
+            "Refile r4 #3: sets an UNREADABLE pending-refiles.json (App Support app data, beside the ledger) aside under a fresh `.unreadable-<UTC>` name instead of overwriting it; never media, never over anything"),
         "VideoScan/POIStorage.swift": Reviewed(count: 2, reason:
             "POI folder moves under App Support (never media)"),
         "VideoScan/RescueFileCopier.swift": Reviewed(count: 1, reason:

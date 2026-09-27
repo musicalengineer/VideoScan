@@ -611,24 +611,71 @@ extension VideoScanModel {
         return (UInt64(sb.st_dev), UInt64(sb.st_ino), Int64(sb.st_size))
     }
 
+    /// On-disk shape of pending-refiles.json. `version` lets a future
+    /// schema change migrate instead of guess (r4 #3).
+    struct PendingRefilesFile: Codable {
+        static let currentVersion = 1
+        var version: Int
+        var entries: [ArchiveRefilePendingEntry]
+    }
+
+    /// The pending list. A file that exists but cannot be read — damaged,
+    /// or a schema this build does not know — is NEVER overwritten: it is
+    /// moved aside to `pending-refiles.json.unreadable-<UTC>` (logged to the
+    /// console, catalog.log and videoscan.log) and a fresh list starts.
     func loadPendingRefiles() -> [ArchiveRefilePendingEntry] {
-        guard let data = try? Data(contentsOf: pendingRefilesURL) else { return [] }
+        let url = pendingRefilesURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
-        return (try? dec.decode([ArchiveRefilePendingEntry].self, from: data)) ?? []
+        if let data = try? Data(contentsOf: url),
+           let file = try? dec.decode(PendingRefilesFile.self, from: data),
+           file.version == PendingRefilesFile.currentVersion {
+            return file.entries
+        }
+        setAsideUnreadablePendingFile(url)
+        return []
+    }
+
+    private func setAsideUnreadablePendingFile(_ url: URL) {
+        let stamp = ArchiveIndexRename.backupStamp(Date())
+        // One no-clobber rename (RENAME_EXCL) to a fresh name: the set-aside
+        // copy can never land on anything, and nothing is ever deleted.
+        var aside = url
+        var e: Int32 = EEXIST
+        for n in 1...1_000 where e == EEXIST {
+            aside = url.deletingLastPathComponent()
+                .appendingPathComponent("\(url.lastPathComponent).unreadable-\(stamp)\(n == 1 ? "" : "-\(n)")")
+            e = renamex_np(url.path, aside.path, UInt32(RENAME_EXCL)) == 0 ? 0 : errno
+        }
+        do {
+            if e != 0 { throw POSIXError(POSIXErrorCode(rawValue: e) ?? .EIO) }
+            refileNote("Refile: the pending-refile list \(url.path) could not be read (damaged, or written by a different VideoScan version) — it was NOT overwritten: moved aside to \(aside.path) for a person to look at. A new list starts now; refiles recorded only in the old file are NOT being retried.")
+        } catch {
+            refileNote("Refile: the pending-refile list \(url.path) could not be read AND could not be moved aside (\(error.localizedDescription)) — it is left untouched and no new retry will be written over it.")
+        }
     }
 
     /// Read-modify-publish the pending list (atomic, full fsync). Returns
-    /// false (logged) when it could not be made durable.
+    /// false (logged) when it could not be made durable — including when an
+    /// unreadable file could not be moved aside (never overwritten).
     @discardableResult
     func updatePendingRefiles(_ change: (inout [ArchiveRefilePendingEntry]) -> Void) -> Bool {
         var list = loadPendingRefiles()
+        if FileManager.default.fileExists(atPath: pendingRefilesURL.path),
+           (try? Data(contentsOf: pendingRefilesURL)).flatMap({ data -> PendingRefilesFile? in
+               let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+               return try? dec.decode(PendingRefilesFile.self, from: data)
+           })?.version != PendingRefilesFile.currentVersion {
+            return false   // still unreadable in place (could not be moved aside): never clobber it
+        }
         change(&list)
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         enc.outputFormatting = [.sortedKeys]
         do {
-            try AtomicFilePublish.write(try enc.encode(list), to: pendingRefilesURL,
+            let file = PendingRefilesFile(version: PendingRefilesFile.currentVersion, entries: list)
+            try AtomicFilePublish.write(try enc.encode(file), to: pendingRefilesURL,
                                         durability: .fullFsync, createIntermediates: true)
             return true
         } catch {
