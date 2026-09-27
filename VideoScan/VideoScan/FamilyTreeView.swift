@@ -57,6 +57,10 @@ struct FamilyTreeView: View {
     /// is the programmatic form of the `PhotosPicker` button.
     @State private var showApplePhotosPicker = false
     @State private var showVerifyReport = false
+    /// "Walk Tree…" (2026-09-27): one sheet with its own stages.
+    @State private var showWalkSheet = false
+    /// The MFO center WITHOUT subscribing (see MediaFileOperationsCenterReference).
+    @Environment(\.mediaFileOperationsCenterReference) private var fileOpsCenterReference
     /// The Get Family Tree coordinator is owned by the app-wide center, not
     /// this view, so closing the sheet no longer kills the file watcher
     /// (2026-08-25: a 2 h pull finished into a file nobody was watching).
@@ -399,6 +403,11 @@ struct FamilyTreeView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showWalkSheet) {
+                FamilyTreeWalkSheet(model: model, operations: fileOpsCenterReference) {
+                    showWalkSheet = false
+                }
+            }
             .photosPicker(isPresented: $showApplePhotosPicker,
                           selection: $selectedPhotoItem, matching: .images)
             .sheet(item: $adjustSource) { source in
@@ -708,6 +717,16 @@ struct FamilyTreeView: View {
                 }
                 .controlSize(.small)
                 .disabled(model.isVerifying)
+
+                Button {
+                    FamilyTreeWalkCenter.shared.consoleLog = { [weak catalogModel] line in catalogModel?.log(line) }
+                    showWalkSheet = true
+                } label: {
+                    Label("Walk Tree…", systemImage: "figure.walk.circle")
+                }
+                .controlSize(.small)
+                .help("Decorate everyone (line, generations, age at death, birth region) and run the consistency checks")
+                .accessibilityIdentifier("ft.walkTree")
 
                 if let report = model.verification {
                     if report.needingReview > 0 {
@@ -1356,6 +1375,18 @@ struct FamilyTreeView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(14)
                             .background(panelBackground)
+                    }
+
+                    if model.isLive {
+                        FamilyTreeWalkDecorationPanel(personID: person.id)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(panelBackground)
+                            // Reads decorations.json off the main actor once
+                            // per installed tree (O(1) lookups after).
+                            .task(id: model.peopleCount) {
+                                await FamilyTreeWalkCenter.shared.ensureLoaded(for: model.walkGraph)
+                            }
                     }
 
                     if !model.selectedRelatives.isEmpty {

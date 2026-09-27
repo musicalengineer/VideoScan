@@ -1871,6 +1871,15 @@ final class FamilyTreeLiveModel: ObservableObject {
             familySearchID: person.familySearchID)
     }
 
+    // MARK: - Walk Tree (2026-09-27)
+
+    /// The installed graph for the Family Tree Walk; nil for the demo tree.
+    /// Read-only — a value copy (copy-on-write, no records are copied).
+    var walkGraph: GedcomFamilyGraph? { isLive ? graph : nil }
+
+    /// Bookmarked people in sidebar order, for the Walk sheet's quick list.
+    var walkBookmarkedPeople: [FamilyTreePersonSummary] { bookmarkedPeopleInOrder }
+
     // MARK: - Verify Tree
 
     /// Last verification pass, nil until one is run. Rick, 2026-08-30:

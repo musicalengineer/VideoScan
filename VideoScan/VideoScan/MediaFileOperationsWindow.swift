@@ -566,6 +566,12 @@ struct MediaFileOperationRow: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
+
+            if isExpanded, let walk = job as? WalkTreeJob {
+                WalkTreeJobDetailView(job: walk)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
         }
         .background(rowBackground)
         .onReceive(job.objectWillChange) { _ in
@@ -894,7 +900,7 @@ extension MediaFileOperationKind {
     var hasDetailView: Bool {
         switch self {
         case .compare, .findPerson, .verifyArchive, .archiveAngel, .deleteDuplicates,
-             .pruneCopies, .verifyVideo:
+             .pruneCopies, .verifyVideo, .walkTree:
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
@@ -984,6 +990,11 @@ extension MediaFileOperationKind {
         // not a media verb. Δ ≥ 0.19 from every other fill (nearest:
         // Rebuild's brown), contrast vs white ≈ 8.5.
         case .findSimilarFootage: return Color(red: 0.30, green: 0.30, blue: 0.30)
+        // Walk Tree (2026-09-27) — deep spruce: the family tree's green
+        // family, darker and bluer than Combine's forest green (Δ ≈ 0.17),
+        // apart from Transcode's sea-green (Δ ≈ 0.18) and Clean Up's teal
+        // (Δ ≈ 0.19).
+        case .walkTree: return Color(red: 0.05, green: 0.36, blue: 0.30)
         }
     }
 }
