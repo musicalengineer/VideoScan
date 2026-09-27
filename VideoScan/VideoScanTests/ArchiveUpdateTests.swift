@@ -106,6 +106,45 @@ struct ArchiveUpdateLogicTests {
         #expect(ev.first?.detail["reason"]?.contains("Date: 1884 → 1984 (known)") == true)
     }
 
+    @Test("Rick 2026-09-27 17:23: index says 1984 (estimated), file sits in 1880-1889/1884 — the location FOLLOWS the date: listed and moved even with only known/estimated changed")
+    func misplacedFileFollowsItsDate() async throws {
+        let a = try UpdateFixture.make("misplaced", recordDate: "1984-xx-xx", dateConfidence: "user-estimated",
+                                       copyUserDate: "1984", copyConf: "estimated")
+        defer { a.sb.cleanup() }
+        let p = try await UpdateFixture.preview(a)
+        #expect(p.currentHint == .year(1984) && !p.currentKnown)
+        let to = "30_Video/1980-1989/1984/1984-xx-xx_DadThanksgiving1984-1.mov"
+        // Nothing typed at all: the misplacement alone is a listed change.
+        let untouched = p.plan(name: p.currentName, hint: p.currentHint, known: p.currentKnown)
+        #expect(untouched.toRelPath == to)
+        #expect(untouched.lines == ["Name: 1884-xx-xx_DadThanksgiving1984-1 → 1984-xx-xx_DadThanksgiving1984-1",
+                                    "Folder: 1880-1889/1884 → 1980-1989/1984"], "\(untouched.lines)")
+        // Rick's exact gesture: estimated → known.
+        let plan = p.plan(name: p.currentName, hint: p.currentHint, known: true)
+        #expect(plan.toRelPath == to)
+        #expect(plan.lines.contains("Folder: 1880-1889/1884 → 1980-1989/1984"), "\(plan.lines)")
+        let inode = try FileManager.default.attributesOfItem(atPath: a.absPath)[.systemFileNumber] as? Int
+        let r = await a.model.updateArchivedFile(p, name: p.currentName, hint: p.currentHint, known: true)
+        #expect(r.kind == .updated, "\(r.message)")
+        #expect(MasterArchiveTestSupport.archivedFiles(a.sb) == [to])
+        #expect(try FileManager.default.attributesOfItem(atPath: a.url(to).path)[.systemFileNumber] as? Int == inode,
+                "one rename — same inode")
+        let row = try #require(MasterArchiveTestSupport.manifestRows(a.sb).first)
+        #expect(row[1] == to && row[8] == "1984-xx-xx" && row[9] == "user-known")
+    }
+
+    @Test("a correctly filed file: known/estimated only is still ZERO renames (r1 #4)")
+    func correctlyFiledConfidenceOnlyDoesNotMove() async throws {
+        let a = try UpdateFixture.make("placed", relPath: "30_Video/1980-1989/1984/1984-xx-xx_Clip.mov",
+                                       recordDate: "1984-xx-xx", dateConfidence: "user-estimated",
+                                       copyUserDate: "1984", copyConf: "estimated")
+        defer { a.sb.cleanup() }
+        let p = try await UpdateFixture.preview(a)
+        #expect(p.plan(name: p.currentName, hint: p.currentHint, known: p.currentKnown).lines.isEmpty)
+        let plan = p.plan(name: p.currentName, hint: p.currentHint, known: true)
+        #expect(plan.toRelPath == a.relPath && plan.lines == ["Date: 1984 (estimated) → 1984 (known)"], "\(plan.lines)")
+    }
+
     @Test("name only: same folder, new name, record_date unchanged")
     func nameOnly() async throws {
         let a = try UpdateFixture.make("name", relPath: "30_Video/1980-1989/1984/1984-xx-xx_Thanksgivng.mov",
@@ -280,6 +319,8 @@ private let updateShapes: [UpdateShape] = [
           recordDate: "1980s", dateConfidence: "", copyUserDate: nil, copyConf: nil),
     .init(label: "inferred confidence, no user date", relPath: "30_Video/1980-1989/1984/1984-xx-xx_Clip.mov",
           recordDate: "1984-xx-xx", dateConfidence: "inferred 0.87", copyUserDate: nil, copyConf: nil),
+    .init(label: "misplaced: index 1984 (estimated), folder 1884", relPath: "30_Video/1880-1889/1884/1884-xx-xx_Clip.mov",
+          recordDate: "1984-xx-xx", dateConfidence: "user-estimated", copyUserDate: "1984", copyConf: "estimated"),
     .init(label: "80-char slug + collision suffix", relPath: "30_Video/1980-1989/1984/1984-xx-xx_\(longStem).mov",
           recordDate: "1984-xx-xx", dateConfidence: "user-known", copyUserDate: "1984", copyConf: "known"),
 ]
@@ -310,9 +351,14 @@ struct ArchiveUpdateOnlyWhatIsListedTests {
             #expect(r.kind == .updated, "\(what): \(r.message)")
             let row = try #require(MasterArchiveTestSupport.manifestRows(a.sb).first)
             let listed = { (k: String) in plan.lines.contains { $0.hasPrefix(k) } }
-            // Name listed ⇔ the name part changed.
-            #expect(listed("Name:") == (ArchiveRefile.currentName(ofFilename: (row[1] as NSString).lastPathComponent)
-                                        != ArchiveRefile.currentName(ofFilename: (a.relPath as NSString).lastPathComponent)), "\(what)")
+            // Name listed ⇔ the name part changed, or (the file following its
+            // date, Rick 2026-09-27) the date prefix changed with no Date line.
+            let namePartChanged = ArchiveRefile.currentName(ofFilename: (row[1] as NSString).lastPathComponent)
+                != ArchiveRefile.currentName(ofFilename: (a.relPath as NSString).lastPathComponent)
+            let filenameChanged = (row[1] as NSString).lastPathComponent != (a.relPath as NSString).lastPathComponent
+            // (A Date line for a known/estimated-only change does not rename;
+            // a changed date VALUE carries its prefix without a Name line.)
+            #expect(listed("Name:") == (namePartChanged || (filenameChanged && row[8] == rowBefore[8])), "\(what): \(plan.lines)")
             // Folder listed ⇔ the folder changed.
             #expect(listed("Folder:") == ((row[1] as NSString).deletingLastPathComponent
                                           != (a.relPath as NSString).deletingLastPathComponent), "\(what)")
