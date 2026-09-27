@@ -647,11 +647,25 @@ extension VideoScanModel {
     }
 
     /// `scope` plus every record whose footage-shared source names a record
-    /// in `scope` (codex re-review R1). Order kept, no duplicates.
+    /// in `scope` (codex re-review R1) OR a member of a scoped record's
+    /// footage / content group — every row this pass may WRITE (GH #207:
+    /// A-scoped, B in A's group becomes a share from A and so can no longer
+    /// donate; C, in another group, still said "shared from B" and was
+    /// never re-checked). Two O(records) scans, scoped passes only. Order
+    /// kept, no duplicates.
     @MainActor
     static func withFootageShareDependents(of scope: [VideoRecord], in all: [VideoRecord]) -> [VideoRecord] {
-        let donorIDs = Set(scope.map(\.id))
-        var seen = donorIDs
+        var donorIDs = Set(scope.map(\.id))
+        let scopeFootage = Set(scope.compactMap { $0.footage?.groupID })
+        let scopeKeys = Set(scope.compactMap { contentGroupKey($0) })
+        for rec in all {
+            if let g = rec.footage?.groupID, scopeFootage.contains(g) {
+                donorIDs.insert(rec.id)
+            } else if !scopeKeys.isEmpty, let key = contentGroupKey(rec), scopeKeys.contains(key) {
+                donorIDs.insert(rec.id)
+            }
+        }
+        var seen = Set(scope.map(\.id))
         var out = scope
         let prefix = InferredDateSource.footageSharedPrefix
         for rec in all {
@@ -708,7 +722,9 @@ extension VideoScanModel {
         // Codex re-review R1: a DONOR-scoped pass must also reach the donor's
         // former dependents — rows whose "footage-shared from <id>" names a
         // scoped record, even after the donor left their group (regrouped,
-        // downgraded). One O(records) prefix scan, only for scoped passes.
+        // downgraded) — and (GH #207) rows naming a scoped row's footage /
+        // content groupmate, which this pass may also rewrite. Two
+        // O(records) scans, only for scoped passes.
         let scope = scope.map { Self.withFootageShareDependents(of: $0, in: records) }
 
         // One pass: bucket every eligible row by VERIFIED content group,
