@@ -134,6 +134,8 @@ struct RescanPreservedFields: Sendable {
     let inferredRecordDate: Date?
     let inferredDateConfidence: Float?
     let inferredDateSource: String?
+    let inferredDateRange: InferredDateRange?     // GH #201
+    let inferredDateReason: String?               // GH #201
     let dossierProcessedAt: Date?
     let dossierProcessedBy: String?
 
@@ -314,6 +316,8 @@ struct RescanPreservedFields: Sendable {
         self.inferredRecordDate = rec.inferredRecordDate
         self.inferredDateConfidence = rec.inferredDateConfidence
         self.inferredDateSource = rec.inferredDateSource
+        self.inferredDateRange = rec.inferredDateRange
+        self.inferredDateReason = rec.inferredDateReason
         self.dossierProcessedAt = rec.dossierProcessedAt
         self.dossierProcessedBy = rec.dossierProcessedBy
         self.detectedPeople = rec.detectedPeople
@@ -412,6 +416,8 @@ struct RescanPreservedFields: Sendable {
         rec.inferredRecordDate = self.inferredRecordDate
         rec.inferredDateConfidence = self.inferredDateConfidence
         rec.inferredDateSource = self.inferredDateSource
+        rec.inferredDateRange = self.inferredDateRange
+        rec.inferredDateReason = self.inferredDateReason
         rec.dossierProcessedAt = self.dossierProcessedAt
         rec.dossierProcessedBy = self.dossierProcessedBy
         rec.detectedPeople = self.detectedPeople

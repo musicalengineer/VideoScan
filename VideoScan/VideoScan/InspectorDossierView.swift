@@ -31,12 +31,42 @@ struct InspectorDossierView: View {
                         Text("Inferred date")
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
-                        Text(InspectorDossierView.dateFormatter.string(from: date))
+                        // GH #201: a year-precise inference shows its span
+                        // ("2004", "2003–2004"), never a fabricated Jan 1.
+                        Text(record.inferredDateRange?.displayString
+                             ?? InspectorDossierView.dateFormatter.string(from: date))
                             .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .textSelection(.enabled)
                         if let conf = record.inferredDateConfidence {
                             ConfidenceBadge(value: conf)
                         }
+                        // GH #201: the written reason — every criterion
+                        // that agreed and what was set aside.
+                        if let reason = record.inferredDateReason, !reason.isEmpty {
+                            Text(reason)
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                                .accessibilityIdentifier("inspector.dossier.inferredReason")
+                        }
+                    }
+                }
+            } else if let reason = record.inferredDateReason, !reason.isEmpty {
+                // Examined, nothing found (GH #201): say so rather than
+                // leaving a silent gap.
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "calendar.badge.exclamationmark")
+                        .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Inferred date")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                        Text("none — \(reason)")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
                     }
                 }
             }

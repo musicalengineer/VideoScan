@@ -1791,6 +1791,7 @@ enum HallieShellCLI {
             originEncoder: record.originEncoder,
             inferredRecordDate: record.inferredRecordDate,
             inferredDateConfidence: record.inferredDateConfidence,
+            inferredDateRange: record.inferredDateRange,
             filename: record.filename.isEmpty ? nil : record.filename)
         guard resolution.precision <= .year else { return nil }
         return resolution.year

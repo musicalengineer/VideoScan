@@ -18,6 +18,12 @@ import SwiftUI
 // save call (the settings-persistence didSet trap doesn't bite here,
 // but the same "explicit save, always" discipline applies).
 //
+// GH #201 (2026-09-26): under the entry, the machine's GUESSTIMATE — the
+// inferred date (or its year span), how sure, and the WRITTEN reason
+// ("spoken now-cue 'what year it is… 2004' ×3; export stamp 2008-10-23
+// set aside as ingest"). Rick's rule: the machine shows its reasoning,
+// he confirms — the Save field above is the confirmation.
+//
 // The parent embeds this with `.id(record.id)` so @State (draft text,
 // confidence toggle) reseeds when the selection changes — otherwise
 // SwiftUI would keep the previous record's draft in the same view slot.
@@ -100,6 +106,10 @@ struct InspectorDateView: View {
 
             statusLine
 
+            // The machine's guesstimate (GH #201): what it thinks, how
+            // sure, and why — for Rick to confirm above or overrule.
+            inferredLine
+
             // Embedded creation date (2026-08-16): what the camera / phone /
             // app wrote INSIDE the file. Shown whenever present — it is what
             // the Master Archive files by when Rick has not entered a date.
@@ -129,11 +139,64 @@ struct InspectorDateView: View {
         return f
     }()
 
+    /// "yyyy-MM-dd" in UTC for a day-precise inference (a burn-in, a stamp).
+    static let inferredDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
     private func embeddedHelp(_ date: Date) -> String {
         var s = "Creation date written inside the file (UTC), from \(record.embeddedCreationSource ?? "the container"). "
         if let origin = record.originDescription { s += "Written by \(origin). " }
         s += "It survives copies, unlike the Finder's Created/Modified dates, and files the Master Archive when you haven't entered a date. Your own date always wins."
         return s
+    }
+
+    // MARK: Inferred line (GH #201)
+
+    /// "Guess: 2004 (83% sure) — spoken now-cue … ; export stamp … set
+    /// aside as ingest". A record a pass examined and found nothing on
+    /// says so ("No guess — no evidence"). Nothing when no pass has run.
+    @ViewBuilder
+    private var inferredLine: some View {
+        if let text = Self.inferredSummary(record) {
+            HStack(alignment: .top, spacing: 4) {
+                Image(systemName: record.inferredRecordDate == nil ? "questionmark.circle" : "sparkle.magnifyingglass")
+                    .font(.system(size: 9))
+                    .padding(.top, 1)
+                Text(text)
+                    .font(.system(size: 10))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            .foregroundColor(.secondary)
+            .help(Self.inferredHelp(record))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("inspector.date.inferred")
+        }
+    }
+
+    /// Pure text for the line (tested without a view host).
+    static func inferredSummary(_ record: VideoRecord) -> String? {
+        guard let reason = record.inferredDateReason, !reason.isEmpty else {
+            // Legacy inference (no written reason): still show the date.
+            guard let d = record.inferredRecordDate else { return nil }
+            let pct = record.inferredDateConfidence.map { " (\(Int(($0 * 100).rounded()))% sure)" } ?? ""
+            return "Guess: \(inferredDayFormatter.string(from: d))\(pct) — from an earlier pass, no written reason"
+        }
+        guard let d = record.inferredRecordDate else {
+            return "No guess — \(reason)"
+        }
+        let shown = record.inferredDateRange?.displayString ?? inferredDayFormatter.string(from: d)
+        let pct = record.inferredDateConfidence.map { " (\(Int(($0 * 100).rounded()))% sure)" } ?? ""
+        return "Guess: \(shown)\(pct) — \(reason)"
+    }
+
+    static func inferredHelp(_ record: VideoRecord) -> String {
+        "The machine's best guess from what the video itself shows and says — on-screen dates, spoken years, ages, the folder, the file's format — with the reason written out. It is a guess for you to confirm: type the date above (a year is plenty) to settle it; your date always wins."
     }
 
     // MARK: Status line

@@ -298,6 +298,7 @@ struct ArchivistTemporalExecutorTests {
         record.filename = "tape.mov"
         record.embeddedCreationDate = date(1994, 12, 25)
         record.originMake = "Sony"
+        record.originModel = "DCR-TRV900"   // GH #201: a make alone is an export stamp
         record.dateCreatedRaw = date(2026, 7, 14)
 
         let snapshot = try #require(

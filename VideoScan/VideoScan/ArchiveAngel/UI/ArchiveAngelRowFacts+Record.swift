@@ -61,6 +61,7 @@ extension ArchiveAngelRowFacts {
                                              originEncoder: r.originEncoder,
                                              inferredRecordDate: r.inferredRecordDate,
                                              inferredDateConfidence: r.inferredDateConfidence,
+                                             inferredDateRange: r.inferredDateRange,
                                              filename: r.filename)
         guard res.precision != .unknown else { return nil }
         return UserDateEntry.friendlyDisplay(res.isoString)

@@ -505,6 +505,7 @@ struct AngelEvalContext {
             originEncoder: c.originEncoder,
             inferredRecordDate: c.inferredRecordDate,
             inferredDateConfidence: c.inferredDateConfidence,
+            inferredDateRange: c.inferredDateRange,
             filename: c.filename.isEmpty ? nil : c.filename,
             now: now)
         resolution = r
@@ -591,7 +592,12 @@ struct AngelEvalContext {
         case .hasArchivedDuplicate: return c.hasArchivedDuplicate
         case .hasDuplicateGroup: return c.duplicateGroupID != nil
         case .hasUserDate: return !(c.userDate ?? "").isEmpty
-        case .hasCameraOrigin: return !c.deviceModel.isEmpty || !(c.originMake ?? "").isEmpty
+        // GH #201: a make with NO model ("Apple", no model — a Final Cut /
+        // QuickTime export) is not a camera; the ONE device rule lives in
+        // RecordDateResolver.namesDevice (GoPro / DJI stay cameras).
+        case .hasCameraOrigin:
+            return RecordDateResolver.namesDevice(originMake: c.originMake,
+                                                  originModel: c.deviceModel.isEmpty ? nil : c.deviceModel)
         case .hasCaptions: return c.hasCaptions
         case .hasOCRText: return c.hasOCRText
         default: return false

@@ -67,6 +67,41 @@ struct RecordDateResolverPrecedenceTests {
         #expect(resolve(embedded: utc(2025, 6, 16, 1, 30)).isoString == "2025-06-16")
     }
 
+    @Test("GH #201: a make with NO model is a software (export) stamp — 0.80, set aside like a transcoder's; action-camera makers stay device-grade")
+    func makeWithoutModelIsASoftwareStamp() {
+        // CapeCod_notsure_NTSC.mov: com.apple.quicktime.make=Apple, no
+        // model, encoder H.264 — Final Cut's export, not a camera.
+        let export = resolve(embedded: utc(2008, 10, 23), make: "Apple", encoder: "H.264")
+        #expect(export.confidence == 0.80); #expect(export.source == .embedded)
+        #expect(RecordDateResolver.embeddedConfidence(originMake: "Apple", originModel: nil, originEncoder: nil) == 0.80)
+        #expect(RecordDateResolver.embeddedConfidence(originMake: "Sony", originModel: nil, originEncoder: "Sony Vegas") == 0.80)
+        #expect(!RecordDateResolver.namesDevice(originMake: "Apple", originModel: nil))
+        #expect(RecordDateResolver.namesDevice(originMake: "Apple", originModel: "iPhone 12"))
+        // GoPro / DJI name the maker only in a stream handler — still a camera.
+        #expect(RecordDateResolver.embeddedConfidence(originMake: "GoPro", originModel: nil, originEncoder: nil) == 0.95)
+        #expect(RecordDateResolver.namesDevice(originMake: "DJI", originModel: nil))
+        // The export stamp is set aside by a trusted inferred date that
+        // disagrees by > 2 years (the transcript's "what year is it? 2004").
+        let content = resolve(embedded: utc(2008, 10, 23), make: "Apple", encoder: "H.264",
+                              inferred: utc(2004, 1, 1), inferredConf: 0.7)
+        #expect(content.isoString == "2004-01-01"); #expect(content.source == .inferred)
+        // …and by a filename year (rules v12), exactly like an encoder-only stamp.
+        let named = resolve(embedded: utc(2023, 12, 27), make: "Sony", filename: "Christmas1990.mov")
+        #expect(named.isoString == "1990"); #expect(named.source == .filename)
+        // A DEVICE stamp still needs the GH #166 content-agreement tier.
+        let device = resolve(embedded: utc(2008, 10, 23), make: "Apple", model: "iPhone 3G",
+                             inferred: utc(2004, 1, 1), inferredConf: 0.7)
+        #expect(device.isoString == "2008-10-23"); #expect(device.source == .embedded)
+        // No content evidence: the export stamp still shows (no regression
+        // for the 1,053 records without a conflict).
+        let alone = resolve(embedded: utc(2008, 10, 23), make: "Apple", encoder: "H.264")
+        #expect(alone.isoString == "2008-10-23"); #expect(alone.source == .embedded)
+        // An inferred date under the floor never sets a stamp aside.
+        let weak = resolve(embedded: utc(2008, 10, 23), make: "Apple", encoder: "H.264",
+                           inferred: utc(2004, 1, 1), inferredConf: 0.55)
+        #expect(weak.isoString == "2008-10-23"); #expect(weak.source == .embedded); #expect(weak.hadRejectedSignal == false)
+    }
+
     @Test("inferred ≥ 0.6 beats filename; < 0.6 falls through to filename (flagged) or unknown+rejected")
     func inferredFloor() {
         let ok = resolve(inferred: utc(2005, 3, 9), inferredConf: 0.6, filename: "Christmas1995Etc.mkv")
@@ -97,10 +132,16 @@ struct RecordDateResolverPrecedenceTests {
 
     @Test("GH #166 boundaries: < 0.85 never outvotes; ≤ 2 years of disagreement is camera-clock slop (stamp wins); user date stays on top")
     func contentOutvoteBoundaries() {
-        // 0.84 — just under the content-agreement tier → stamp wins.
-        let under = resolve(embedded: utc(2007, 12, 6), encoder: "Lavf57",
+        // 0.84 — just under the content-agreement tier → a DEVICE stamp
+        // wins (rules v13 / GH #201: a software stamp no longer does —
+        // see makeWithoutModelIsASoftwareStamp).
+        let under = resolve(embedded: utc(2007, 12, 6), make: "Apple", model: "Mac mini",
                             inferred: utc(1997, 6, 21), inferredConf: 0.84)
         #expect(under.source == .embedded); #expect(under.isoString == "2007-12-06")
+        // The same 0.84 against a transcoder's stamp: the content wins (v13).
+        let underSoftware = resolve(embedded: utc(2007, 12, 6), encoder: "Lavf57",
+                                    inferred: utc(1997, 6, 21), inferredConf: 0.84)
+        #expect(underSoftware.source == .inferred); #expect(underSoftware.isoString == "1997-06-21")
         // 2 years apart — within camera-clock tolerance → stamp wins.
         let close = resolve(embedded: utc(2007, 12, 6), encoder: "Lavf57",
                             inferred: utc(2005, 6, 21), inferredConf: 0.95)
@@ -148,10 +189,11 @@ struct RecordDateResolverPrecedenceTests {
     @Test("a year-only / month-only user date is REFINED by an agreeing finer machine date, never overruled by a disagreeing one")
     func userRefinement() {
         // Agreeing camera stamp sharpens "1992" to the day; confidence stays the user's.
-        let r1 = resolve(user: "1992", embedded: utc(1992, 6, 15), make: "Sony")
+        let r1 = resolve(user: "1992", embedded: utc(1992, 6, 15), make: "Sony", model: "HDR-CX150")
         #expect(r1.isoString == "1992-06-15"); #expect(r1.source == .embedded); #expect(r1.confidence == 0.95)
         // Disagreeing camera stamp (the VHS-transferred-in-2010 case): user wins.
-        let r2 = resolve(user: "1992", embedded: utc(2010, 5, 3), make: "Sony", inferred: utc(2010, 1, 1), inferredConf: 0.99)
+        let r2 = resolve(user: "1992", embedded: utc(2010, 5, 3), make: "Sony", model: "HDR-CX150",
+                         inferred: utc(2010, 1, 1), inferredConf: 0.99)
         #expect(r2.isoString == "1992"); #expect(r2.source == .userDate); #expect(r2.precision == .year)
         // Month-only user date + agreeing filename day → day.
         let r3 = resolve(user: "2005-11", filename: "Rick-and-Matt-Podcast-11-19-2005.m4v")
@@ -262,12 +304,14 @@ struct FilenameDatePatternTests {
 @Suite("Catalog Date column follows the one date rule (QA v12 #3)")
 struct CatalogDateColumnResolverTests {
 
-    private func tape(_ name: String, stamp: Date, encoder: String? = nil, make: String? = nil) -> VideoRecord {
+    private func tape(_ name: String, stamp: Date, encoder: String? = nil, make: String? = nil,
+                      model: String? = nil) -> VideoRecord {
         let rec = VideoRecord()
         rec.filename = name
         rec.embeddedCreationDate = stamp
         rec.originEncoder = encoder
         rec.originMake = make
+        rec.originModel = model
         return rec
     }
 
@@ -285,9 +329,13 @@ struct CatalogDateColumnResolverTests {
 
     @Test("a camera stamp, or a stamp the name agrees with, is shown exactly as before")
     func unchangedCases() {
-        let camera = tape("Christmas1990.mov", stamp: utc(2023, 12, 27), make: "Sony")
+        let camera = tape("Christmas1990.mov", stamp: utc(2023, 12, 27), make: "Sony", model: "HDR-CX150")
         #expect(camera.resolvedDateDisplay == "2023-12-27")
         #expect(camera.resolvedDateSortKey == utc(2023, 12, 27))
+        // GH #201: a make with NO model is an export stamp — the name's year wins now.
+        let export = tape("Christmas1990.mov", stamp: utc(2023, 12, 27), make: "Sony")
+        #expect(export.resolvedDateDisplay == "1990")
+        #expect(export.resolvedDateSortKey == utc(1990, 1, 1))
         let agrees = tape("RickGuitar2025.mov", stamp: utc(2025, 2, 2), encoder: "Lavf60")
         #expect(agrees.resolvedDateDisplay == "2025-02-02")
         let noYear = tape("avtest2.mov", stamp: utc(2026, 4, 3), encoder: "Apple ProRes 422")
@@ -348,8 +396,12 @@ struct EmbeddedDatePlacementTests {
         // Rick's own date still outranks the camera.
         rec.userDate = "2024"; rec.userDateConfidence = "known"
         #expect(ArchivePathResolver.facts(for: rec).dateHint == .year(2024))
-        // …unless it agrees, in which case the camera sharpens it.
+        // Codex F1 (GH #201): a stamp that names no camera (unknown origin)
+        // never sharpens Rick's year — it may be the copy day.
         rec.userDate = "2025"
+        #expect(ArchivePathResolver.facts(for: rec).dateHint == .year(2025))
+        // …a CAMERA's stamp that agrees does sharpen it.
+        rec.originMake = "Canon"; rec.originModel = "Canon EOS R6m2"
         #expect(ArchivePathResolver.facts(for: rec).dateHint == .day(year: 2025, month: 6, day: 15))
     }
 
@@ -410,6 +462,7 @@ struct RecordDateResolverScaleTests {
             let r = RecordDateResolver.resolve(userDate: i % 7 == 0 ? "1992" : nil,
                                                embeddedCreationDate: embedded[i % embedded.count],
                                                originMake: i % 3 == 0 ? "Apple" : nil,
+                                               originModel: i % 3 == 0 ? "iPhone 12" : nil,   // GH #201: a make alone is an export
                                                inferredRecordDate: i % 11 == 0 ? utc(2005, 3, 9) : nil,
                                                inferredDateConfidence: i % 22 == 0 ? 0.9 : 0.4,
                                                filename: names[i % names.count], now: testNow)

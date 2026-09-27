@@ -44,6 +44,9 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     var userDate: String?
     var inferredRecordDate: Date?
     var inferredDateConfidence: Float?
+    /// GH #201: present when the inferred date is year-precise — the
+    /// resolver then files at YEAR precision and no day key is made.
+    var inferredDateRange: InferredDateRange?
     var formatAtRisk: Bool
     var audioProblem: String?
     /// True when this record is one half of a correlated MXF pair — the
@@ -209,7 +212,8 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
          userDateConfidence: String? = nil, originMake: String? = nil, originEncoder: String? = nil,
          footageGroupID: UUID? = nil, footageRank: Int? = nil, footageConfidence: FootageConfidence? = nil,
          isAngelWorkingCopy: Bool = false, archivedFootageOriginal: Bool = false,
-         eventKey: String? = nil, eventYear: Int? = nil, yearUnarchived: Int = 0, yearArchived: Int = 0) {
+         eventKey: String? = nil, eventYear: Int? = nil, yearUnarchived: Int = 0, yearArchived: Int = 0,
+         inferredDateRange: InferredDateRange? = nil) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds; self.streamTypeRaw = streamTypeRaw; self.isPlayable = isPlayable
         self.starRating = starRating; self.mediaDisposition = mediaDisposition; self.archiveStage = archiveStage
@@ -236,6 +240,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         self.archivedFootageOriginal = archivedFootageOriginal
         self.eventKey = eventKey; self.eventYear = eventYear
         self.yearUnarchived = yearUnarchived; self.yearArchived = yearArchived
+        self.inferredDateRange = inferredDateRange
     }
 }
 

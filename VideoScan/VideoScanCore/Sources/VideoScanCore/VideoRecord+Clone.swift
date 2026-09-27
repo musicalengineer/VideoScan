@@ -118,6 +118,8 @@ extension VideoRecord {
         c.inferredRecordDate = inferredRecordDate
         c.inferredDateConfidence = inferredDateConfidence
         c.inferredDateSource = inferredDateSource
+        c.inferredDateRange = inferredDateRange
+        c.inferredDateReason = inferredDateReason
         c.dossierProcessedAt = dossierProcessedAt
         c.dossierProcessedBy = dossierProcessedBy
         c.sceneCaptionModel = sceneCaptionModel
