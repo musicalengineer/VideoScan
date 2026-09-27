@@ -498,6 +498,11 @@ enum ArchiveRefileEngine {
         var indexPublisher: @Sendable (Data, URL) throws -> Void
         /// Writes one backup file (same publish).
         var backupWriter: @Sendable (Data, URL) throws -> Void
+        /// fsync(2) of a folder after the move / after the move back
+        /// (0 = durable). Production = the engine's barrier.
+        var directoryFsync: @Sendable (_ dirfd: Int32, _ phase: FsyncPhase) -> Int32 = { fd, _ in
+            ArchivePromoteEngine.barriers.fsync(fd)
+        }
 
         static let live = Seams(
             hashFile: { root, rel in try ArchivePromoteEngine.sha256(root: root, relativePath: rel) },
@@ -505,6 +510,8 @@ enum ArchiveRefileEngine {
             indexPublisher: { data, url in try ArchiveIndexRename.livePublish(data, to: url) },
             backupWriter: { data, url in try ArchiveIndexRename.livePublish(data, to: url) })
     }
+
+    enum FsyncPhase: Sendable { case afterMove, afterMoveBack }
 
     nonisolated static func liveIsReadOnly(_ path: String) -> Bool {
         var fs = statfs()
@@ -533,6 +540,21 @@ enum ArchiveRefileEngine {
         case rolledBack(String)
         /// Putting it back ALSO failed — mixed state, every path in the text.
         case mixedState(String)
+        /// Put back (file at `from`, index files hold their old bytes) but
+        /// the folder flush after the move back FAILED: not confirmed
+        /// durable. The index backup is kept. Codex review #4.
+        case incompleteRecovery(String)
+    }
+
+    /// The move back renamed the file, but a folder fsync failed.
+    struct RecoveryNotDurable: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    /// (c) failed and the move back is not confirmed durable — apply keeps
+    /// the backup for this one.
+    private struct IncompleteRecovery: ArchiveIndexRename.RetainsBackupOnFailure {
+        let why: String
     }
 
     /// Errors the move step throws through ArchiveIndexRename.apply.
@@ -671,6 +693,7 @@ enum ArchiveRefileEngine {
         // ---- (b)–(d) under the #204 backup: backup → recheck → move +
         // verify → publish; any failure after the move rolls back.
         var moved = false
+        var recoveryNotDurable: String?
         let srcName = (from as NSString).lastPathComponent
         let dstName = (to as NSString).lastPathComponent
         let backupDir: URL?
@@ -689,7 +712,12 @@ enum ArchiveRefileEngine {
                 },
                 undoMoveMedia: {
                     audit(subject + "putting the file back: \(to) → \(from)…")
-                    try moveBack(root: root, from: from, to: to)
+                    do {
+                        try moveBack(root: root, from: from, to: to, seams: seams)
+                    } catch let e as RecoveryNotDurable {
+                        recoveryNotDurable = e.description
+                        throw e
+                    }
                     audit(subject + "the file is back at \(from)")
                 })
         } catch StepError.refusedBeforeMove(let why) {
@@ -697,6 +725,10 @@ enum ArchiveRefileEngine {
         } catch StepError.rolledBack(let why) {
             audit(subject + "FAILED and ROLLED BACK: \(why). The file is back at \(from); the index was not changed.")
             return .rolledBack(why)
+        } catch let e as IncompleteRecovery {
+            audit(subject + "FAILED, put back, but recovery NOT CONFIRMED DURABLE: \(e.why). The index backup is KEPT in 00_Index/\(ArchiveIndexRename.backupFolder).")
+            refileLog.fault("refile incomplete recovery: \(e.why, privacy: .public)")
+            return .incompleteRecovery(e.why)
         } catch StepError.notRolledBack(let why) {
             audit(subject + "FAILED and the ROLLBACK FAILED: \(why)")
             refileLog.fault("refile mixed state: \(why, privacy: .public)")
@@ -705,6 +737,17 @@ enum ArchiveRefileEngine {
             let text = f.errorDescription ?? "the archive index could not be updated"
             switch f {
             case .publishFailedNotRolledBack:
+                // The only undo problem a durability failure of the move
+                // back? Prove the rest by bytes and place: the file is at
+                // `from` and every index file holds its original bytes.
+                if let nd = recoveryNotDurable,
+                   plan.files.allSatisfy({ (try? Data(contentsOf: $0.url)) == $0.original }),
+                   (try? ArchivePromoteEngine.openContainedFile(root: root, relativePath: from)).flatMap({ $0 }).map({ fd -> Bool in Darwin.close(fd); return true }) == true {
+                    let why = "\(text) — the file was moved back to \(from) and the index restored, but \(nd)"
+                    audit(subject + "FAILED, put back, but recovery NOT CONFIRMED DURABLE: \(why). The index backup is KEPT in 00_Index/\(ArchiveIndexRename.backupFolder).")
+                    refileLog.fault("refile incomplete recovery: \(why, privacy: .public)")
+                    return .incompleteRecovery(why)
+                }
                 audit(subject + "FAILED and the ROLLBACK FAILED: \(text)")
                 refileLog.fault("refile index rollback failed: \(text, privacy: .public)")
                 return .mixedState(text)
@@ -763,18 +806,21 @@ enum ArchiveRefileEngine {
         moved = true
         audit("moved \(from) → \(to)")
 
-        func putBack(_ why: String) -> StepError {
+        func putBack(_ why: String) -> any Error {
             do {
-                try moveBack(root: root, from: from, to: to)
+                try moveBack(root: root, from: from, to: to, seams: seams)
                 audit("the file is back at \(from)")
-                return .rolledBack(why)
+                return StepError.rolledBack(why)
+            } catch let e as RecoveryNotDurable {
+                audit("the file is back at \(from), but \(e) — recovery NOT confirmed durable")
+                return IncompleteRecovery(why: "\(why); the file was moved back to \(from) but \(e)")
             } catch {
-                return .notRolledBack("\(why) — AND the file could not be moved back: it is at \(to), the index still says \(from). \(ArchiveAttestationJournal.describe(error))")
+                return StepError.notRolledBack("\(why) — AND the file could not be moved back: it is at \(to), the index still says \(from). \(ArchiveAttestationJournal.describe(error))")
             }
         }
 
         // The names are durable before anything else is claimed.
-        guard ArchivePromoteEngine.barriers.fsync(dstDir) == 0, ArchivePromoteEngine.barriers.fsync(srcDir) == 0 else {
+        guard seams.directoryFsync(dstDir, .afterMove) == 0, seams.directoryFsync(srcDir, .afterMove) == 0 else {
             throw putBack("the folders could not be flushed to disk after the move")
         }
         // (c) The file at the new name IS the file we verified…
@@ -798,7 +844,7 @@ enum ArchiveRefileEngine {
     }
 
     /// Rename `to` back to `from` (no-clobber) and flush both folders.
-    private static func moveBack(root: String, from: String, to: String) throws {
+    private static func moveBack(root: String, from: String, to: String, seams: Seams) throws {
         let srcDir = try ArchivePromoteEngine.openDestinationDirectory(root: root, relativePath: from, create: false)
         defer { Darwin.close(srcDir) }
         let dstDir = try ArchivePromoteEngine.openDestinationDirectory(root: root, relativePath: to, create: false)
@@ -807,7 +853,12 @@ enum ArchiveRefileEngine {
             let e = errno
             throw ArchivePromoteEngine.Failure.renameFailed(to + " → " + from, errno: e)
         }
-        _ = ArchivePromoteEngine.barriers.fsync(srcDir)
-        _ = ArchivePromoteEngine.barriers.fsync(dstDir)
+        // Checked (codex review #4): a move back whose folders cannot be
+        // flushed is not a confirmed recovery.
+        let a = seams.directoryFsync(srcDir, .afterMoveBack)
+        let b = seams.directoryFsync(dstDir, .afterMoveBack)
+        guard a == 0, b == 0 else {
+            throw RecoveryNotDurable(description: "the folder flush after moving it back failed (fsync \(a == 0 ? "ok" : "FAILED") on the original folder, \(b == 0 ? "ok" : "FAILED") on the target folder)")
+        }
     }
 }

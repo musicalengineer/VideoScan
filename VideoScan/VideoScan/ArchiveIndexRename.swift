@@ -142,6 +142,10 @@ enum ArchiveIndexRename {
         }
     }
 
+    /// An error from `moveMedia` that must NOT discard the backup (the
+    /// move was undone, but not provably durably).
+    protocol RetainsBackupOnFailure: Error {}
+
     /// The publish seam: production is an atomic full-fsync publish; a
     /// test injects a failure on the Nth file to exercise the rollback.
     typealias Publisher = (Data, URL) throws -> Void
@@ -288,7 +292,14 @@ enum ArchiveIndexRename {
         do {
             try moveMedia()
         } catch {
-            removeRefusedBackup(backupDir)
+            // A move that was put back without a confirmed-durable folder
+            // flush says so; its backup is then KEPT (incomplete marker —
+            // never counted, never pruned). Codex review of Refile, #4.
+            if error is RetainsBackupOnFailure {
+                appLog.write("Catalog: archive index backup \(backupDir.path) KEPT — the media move was undone but its durability is not confirmed.")
+            } else {
+                removeRefusedBackup(backupDir)
+            }
             throw error
         }
 

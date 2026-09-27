@@ -37,3 +37,42 @@ struct ArchiveRefileR2PublishThrowTests {
         #expect(a.copy.fullPath == a.absPath)
     }
 }
+
+// MARK: - Finding 4: the move back's folder flush must be checked
+
+@Suite("Archive Refile r2 — rollback durability", .serialized)
+@MainActor
+struct ArchiveRefileR2RollbackDurabilityTests {
+
+    /// The two ways into a rollback: the read-back at (c) and the index publish at (d).
+    enum Failure: String, CaseIterable, Sendable { case verify, index }
+
+    @Test("rollback folder flush fails → incompleteRecovery, backup RETAINED, file at the original path",
+          arguments: Failure.allCases)
+    func rollbackFlushFailure(at failure: Failure) async throws {
+        let a = try await RefileFixture.make("r2rb_\(failure.rawValue)")
+        defer { a.sb.cleanup() }
+        let p = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        let from = a.relPath
+        var seams = ArchiveRefileEngine.Seams.live
+        seams.directoryFsync = { fd, phase in phase == .afterMoveBack ? -1 : ArchivePromoteEngine.barriers.fsync(fd) }
+        switch failure {
+        case .verify:
+            seams.hashFile = { root, rel in
+                rel == from ? try ArchivePromoteEngine.sha256(root: root, relativePath: rel) : String(repeating: "0", count: 64)
+            }
+        case .index:
+            seams.indexPublisher = { _, _ in throw CocoaError(.fileWriteUnknown) }
+        }
+        let backups = a.sb.archiveRoot.appendingPathComponent("00_Index/.rename_backups")
+        let before = Set((try? FileManager.default.contentsOfDirectory(atPath: backups.path)) ?? [])
+
+        let r = await a.model.refileArchiveCopy(p, hint: p.initialHint, name: p.initialName, seams: seams)
+        #expect(r.kind == .incompleteRecovery, "\(r.kind): \(r.message)")
+        #expect(r.message.localizedCaseInsensitiveContains("not confirmed"), "\(r.message)")
+        #expect(FileManager.default.fileExists(atPath: a.absPath), "the rename back itself succeeded")
+        #expect(a.copy.fullPath == a.absPath)
+        let after = Set((try? FileManager.default.contentsOfDirectory(atPath: backups.path)) ?? [])
+        #expect(after.subtracting(before).count == 1, "the backup of this refile is kept, never removed")
+    }
+}

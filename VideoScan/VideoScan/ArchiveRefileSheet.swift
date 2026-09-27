@@ -140,7 +140,7 @@ struct ArchiveRefileSheet: View {
         case .refiled: return "checkmark.seal.fill"
         case .refused: return "hand.raised.fill"
         case .rolledBack: return "arrow.uturn.backward.circle.fill"
-        case .mixedState: return "exclamationmark.octagon.fill"
+        case .mixedState, .incompleteRecovery: return "exclamationmark.octagon.fill"
         }
     }
 
@@ -148,7 +148,7 @@ struct ArchiveRefileSheet: View {
         switch k {
         case .refiled: return .green
         case .refused, .rolledBack: return .orange
-        case .mixedState: return .red
+        case .mixedState, .incompleteRecovery: return .red
         }
     }
 

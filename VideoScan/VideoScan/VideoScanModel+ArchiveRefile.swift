@@ -83,7 +83,7 @@ struct ArchiveRefilePreview: Identifiable, Sendable {
 
 /// What the sheet says when Refile returns.
 struct ArchiveRefileResult: Equatable, Sendable {
-    enum Kind: Equatable, Sendable { case refiled, refused, rolledBack, mixedState }
+    enum Kind: Equatable, Sendable { case refiled, refused, rolledBack, mixedState, incompleteRecovery }
     let kind: Kind
     let message: String
 }
@@ -406,6 +406,13 @@ extension VideoScanModel {
             refreshArchiveMisfiled(reason: "refile rolled back", force: true)
             return ArchiveRefileResult(kind: .rolledBack,
                                        message: "Refile failed and was undone — \(why). The file is back where it was and the archive index is unchanged.")
+        case .incompleteRecovery(let why):
+            ledgerRefileRolledBack(copy: copy, from: p.fromRelPath, to: to,
+                                   why: "INCOMPLETE RECOVERY (not confirmed durable) — \(why)", now: now)
+            refileNote("Refile: \(label) — FAILED; the file was put back at \(p.fromRelPath) but the recovery is NOT confirmed durable: \(why). The archive index backup is kept in 00_Index/\(ArchiveIndexRename.backupFolder); run Verify Copies after checking the drive.")
+            refreshArchiveMisfiled(reason: "refile incomplete recovery", force: true)
+            return ArchiveRefileResult(kind: .incompleteRecovery,
+                                       message: "Refile failed and was put back, but the drive did not confirm the move back was saved (recovery not confirmed durable). The index backup was kept. Check the drive, then run Verify Copies.\n\(why)")
         case .mixedState(let why):
             ledgerRefileRolledBack(copy: copy, from: p.fromRelPath, to: to, why: "ROLLBACK FAILED — \(why)", now: now)
             // The record must say where the file IS.
