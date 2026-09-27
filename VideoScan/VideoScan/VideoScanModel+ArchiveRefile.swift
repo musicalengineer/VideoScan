@@ -524,8 +524,19 @@ extension VideoScanModel {
             ]))
         }
 
+        // Every line carries a stable idempotency key, so a retry after a
+        // partial append writes exactly the missing ones (r3 #3).
+        let entryID = UUID()
+        events = events.enumerated().map { i, e in
+            var detail = e.detail
+            detail[MediaLedgerEvent.Detail.idempotencyKey] = "refile:\(entryID.uuidString):\(i)"
+            return MediaLedgerEvent(at: e.at, event: e.event, recordID: e.recordID, contentKey: e.contentKey,
+                                    filename: e.filename, fullPath: e.fullPath, by: e.by,
+                                    batchID: e.batchID, detail: detail)
+        }
+
         // The durable retry, BEFORE the two steps it covers.
-        var entry = ArchiveRefilePendingEntry(id: UUID(), at: now,
+        var entry = ArchiveRefilePendingEntry(id: entryID, at: now,
                                               sequence: (loadPendingRefiles().map(\.sequence).max() ?? 0) + 1,
                                               copyID: copy.id, fromFullPath: oldPath, newFullPath: newPath,
                                               fromRelPath: done.fromRelPath, toRelPath: done.toRelPath,
@@ -654,13 +665,14 @@ extension VideoScanModel {
                 }
             }
             if !entry.ledgerDone {
-                // Matched on the saved event's own (millisecond) timestamp —
-                // the entry's `at` is second-precision after its JSON trip.
+                // Append exactly the lines whose idempotency key is not yet
+                // in the ledger — a partial earlier append (a prefix landed)
+                // is completed, never duplicated (r3 #3).
+                let key = MediaLedgerEvent.Detail.idempotencyKey
                 let ids = Set(entry.ledgerEvents.map(\.recordID))
-                let refiledAt = entry.ledgerEvents.first { $0.event == .refiled }?.at
-                let already = ids.flatMap { mediaLedger.events(forRecordID: $0) }
-                    .contains { e in e.event == .refiled && e.at == refiledAt && e.detail[MediaLedgerEvent.Detail.to] == entry.toRelPath }
-                entry.ledgerDone = already ? true : await persistence.appendLedger(self, entry.ledgerEvents)
+                let present = Set(ids.flatMap { mediaLedger.events(forRecordID: $0) }.compactMap { $0.detail[key] })
+                let missing = entry.ledgerEvents.filter { e in e.detail[key].map { !present.contains($0) } ?? true }
+                entry.ledgerDone = missing.isEmpty ? true : await persistence.appendLedger(self, missing)
             }
             let finished = entry
             if finished.catalogDone && finished.ledgerDone {

@@ -142,6 +142,9 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         public static let from = "from"
         public static let to = "to"
         public static let provenance = "provenance"
+        /// A stable per-line key ("refile:<pending id>:<index>") so a retry
+        /// appends exactly the lines that are missing (Refile r3 #3).
+        public static let idempotencyKey = "idem"
     }
 
     public let at: Date

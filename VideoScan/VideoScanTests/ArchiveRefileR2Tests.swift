@@ -238,6 +238,32 @@ struct ArchiveRefileR2StepEPersistenceTests {
         #expect(a.model.loadPendingRefiles().isEmpty, "nothing stale left to replay")
     }
 
+    @Test("r3 #3: a ledger write that lands only its FIRST line, then throws → replay yields every intended event exactly once")
+    func partialLedgerAppend() async throws {
+        let a = try await RefileFixture.make("r3partial")
+        defer { a.sb.cleanup() }
+        let dir = a.model.mediaLedger.directory
+        struct PartialFailure: Error {}
+        a.model.mediaLedger = MediaLedger(directory: dir, writer: { data, url in
+            if let nl = data.firstIndex(of: 0x0A) {
+                try MediaLedger.appendDurable(Data(data[data.startIndex...nl]), to: url)   // the prefix lands…
+            }
+            throw PartialFailure()                                                        // …then it fails
+        })
+        let p = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        let r = await a.model.refileArchiveCopy(p, hint: p.initialHint, name: p.initialName)
+        #expect(r.kind == .completedWithWarnings, "\(r.message)")
+
+        a.model.mediaLedger = MediaLedger(directory: dir)
+        _ = await a.model.replayPendingRefiles()
+        await a.model.mediaLedger.waitForPendingWrites()
+        let all = a.model.mediaLedger.allEvents()
+        #expect(all.filter { $0.event == .refiled && $0.recordID == a.source.id }.count == 1, "refiled exactly once")
+        #expect(all.filter { $0.event == .dateSet && $0.recordID == a.copy.id && $0.detail["date"] == "1984" }.count == 1,
+                "the copy's dateSet line — lost after the prefix — is written exactly once")
+        #expect(a.model.loadPendingRefiles().isEmpty)
+    }
+
     @Test("ledger append fails → completedWithWarnings, durable pending entry; replay writes the ledger line once")
     func ledgerAppendFails() async throws {
         let a = try await RefileFixture.make("r2led")
