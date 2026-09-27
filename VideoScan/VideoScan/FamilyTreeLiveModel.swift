@@ -1092,13 +1092,18 @@ final class FamilyTreeLiveModel: ObservableObject {
         loadWarning = nil
         let previousPerson = selectedID.flatMap { graph?.people[$0] }
         let sourceKey = newGraph.map(Self.sourceKey)
-        if sourceKey != installedSourceKey {
+        let treeChanged = sourceKey != installedSourceKey
+        let walkReason = installedSourceKey == nil ? "tree loaded" : "tree refreshed"
+        if treeChanged {
             photoOverrides.removeAll()
             photoOverrideSources.removeAll()
             installedSourceKey = sourceKey
             clearDocumentsCache()
         }
         graph = newGraph
+        // Walk Tree decorations follow the tree (Rick 2026-09-27): a silent,
+        // debounced re-walk when decorations.json is missing or stale.
+        if treeChanged, newGraph != nil { walkCenter?.treeDidChange(newGraph, reason: walkReason) }
         bookmarkSourceTransition = false
         kinshipCenter?.install(graph: newGraph)
         // Everything O(people) lives in the bundle (rows, identity
@@ -1873,6 +1878,12 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     // MARK: - Walk Tree (2026-09-27)
 
+    /// Who keeps the Walk Tree decorations current. nil in the test host
+    /// (a synthetic tree must never rewrite the real decorations.json —
+    /// the settings-pollution class); tests that want it inject a scratch
+    /// center.
+    var walkCenter: FamilyTreeWalkCenter? = TestEnvironment.isTestHost ? nil : .shared
+
     /// The installed graph for the Family Tree Walk; nil for the demo tree.
     /// Read-only — a value copy (copy-on-write, no records are copied).
     var walkGraph: GedcomFamilyGraph? { isLive ? graph : nil }
@@ -2031,6 +2042,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         // recomputed only the hidden set, leaving redirects stale).
         graph = graph?.applyingIdentityRulings(updated)
         kinshipCenter?.install(graph: graph)
+        walkCenter?.treeDidChange(walkGraph, reason: "identity ruling")
         // Hallie: FamilyGraphSharedCache keys on the rulings file's content
         // revision, so the save above makes its next turn re-rule the
         // cached tree (no decode). No explicit invalidation needed — and a

@@ -3,8 +3,7 @@
 //   • TreeWalkSummaryView — what was walked in plain words, counts by
 //     line, by birth region, checks by kind (all over the people WALKED;
 //     one labelled whole-tree line), coverage. Shown at the end of the
-//     foreground animation and in the MFO row's detail.
-//   • WalkTreeJobDetailView — the MFO row's expanded detail.
+//     foreground animation.
 //   • FamilyTreeWalkDecorationPanel — the inspector's block for the
 //     selected person (line, generations, age at death, region, counts,
 //     checks). One dictionary lookup per body evaluation; no O(people)
@@ -44,8 +43,7 @@ enum TreeWalkPalette {
 /// The walk's summary. Everything is about the people THIS walk visited
 /// (Rick 2026-09-27: a 3-generation walk showed the whole tree's 1,119
 /// warnings); the one whole-tree figure is labelled "whole tree".
-/// Columns when there is room (the MFO detail), stacked in the sheet's side
-/// panel. Labels wrap; nothing is truncated.
+/// Columns when there is room, stacked in the sheet's side panel. Labels wrap; nothing is truncated.
 struct TreeWalkSummaryView: View {
     let summary: TreeWalk.Summary
     let displayNames: [String]
@@ -145,20 +143,6 @@ struct TreeWalkSummaryView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             Text(n.formatted()).font(.system(size: 11).monospacedDigit()).fixedSize()
-        }
-    }
-}
-
-// MARK: - MFO row detail
-
-struct WalkTreeJobDetailView: View {
-    @ObservedObject var job: WalkTreeJob
-
-    var body: some View {
-        if let summary = job.summary {
-            TreeWalkSummaryView(summary: summary, displayNames: job.displayNames)
-        } else {
-            Text(job.subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
         }
     }
 }

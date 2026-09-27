@@ -4,14 +4,16 @@
 //               display names, the fan layout (Rick left, Donna right),
 //               the fan FITS its canvas at depth 3/5/10/all (2026-09-27),
 //               the sheet fits its window, every node settles at the end,
-//               the pace note, the summary's scope labels, the MFO kind.
+//               the pace note, the summary's scope labels.
 //   Scale     — the animation's per-tick frame is O(batch), never
 //               O(people): a 100k-person replay ticks as fast as a small one.
 //   Isolation — every center here writes to a scratch decorations.json;
 //               absent / poisoned / stale files → an honest status and a
 //               rebuild; no tree → no start people, said so.
 //   Sensor    — one START and one OUTCOME line per run through the sink;
-//               the background job ends Done with a summary.
+//               an automatic refresh writes exactly ONE line (stale → one
+//               walk, fresh → none, a burst → one, waits for a foreground
+//               walk); the model has no walk center in the test host.
 
 import CoreGraphics
 import Foundation
@@ -245,12 +247,6 @@ struct FamilyTreeWalkAppTests {
         #expect(TreeWalkSummaryView.wholeTreeLine(s) == nil)
     }
 
-    @Test func walkTreeIsAnMFOKindWithADetailView() {
-        #expect(MediaFileOperationKind.walkTree.badgeText == "Walk")
-        #expect(MediaFileOperationKind.walkTree.logVerb == "walk tree")
-        #expect(MediaFileOperationKind.walkTree.hasDetailView)
-    }
-
     // MARK: Sensor — one START, one OUTCOME; saved; loaded back O(1)
 
     @Test func aRunLogsOneStartOneOutcomeSavesAndServesDecorations() async throws {
@@ -327,22 +323,93 @@ struct FamilyTreeWalkAppTests {
         #expect(lines.first?.hasPrefix("Walk Tree: FAILED — No start person") == true)
     }
 
-    // MARK: Background job
+    // MARK: Automatic refresh (Rick 2026-09-27: no background walk — the
+    // decorations re-walk silently whenever they go stale)
 
-    @Test func theBackgroundJobEndsDoneWithASummary() async throws {
+    private func autoCenter(debounce: Duration = .milliseconds(10)) -> (FamilyTreeWalkCenter, URL) {
         let (center, dir) = scratchCenter()
+        center.refreshDebounce = debounce
+        center.ownerFamilySearchID = { nil }
+        center.speakers = { .none }
+        return (center, dir)
+    }
+
+    @Test func staleDecorationsGetOneSilentWalkWithTheReasonLogged() async throws {
+        let (center, dir) = autoCenter()
         defer { try? FileManager.default.removeItem(at: dir) }
         let g = GedcomFamilyGraph(gedcomText: twoRoots)
-        let job = WalkTreeJob(graph: g, options: .init(starts: ["@I1@", "@I2@"]), displayNames: ["Rick", "Donna"],
-                              center: center)
-        job.start()
-        await job.task?.value
-        guard case .finished(let line) = job.state else { Issue.record("state \(job.state)"); return }
-        #expect(line.contains("decorations saved"))
-        #expect(job.fraction == 1)
-        #expect(job.summary?.peopleWalked == 5)
-        #expect(line.hasPrefix("5 people, \(job.summary?.checkCount ?? -1) checks ("), "the walk's checks, not the tree's")
-        #expect(job.title == "Walk Tree — from Rick + Donna")
+        center.treeDidChange(g, reason: "tree refreshed")
+        await center.waitForRefresh()
+        #expect(center.automaticWalkCount == 1)
+        #expect(center.recentLines.count == 1, "ONE line, no START/PROGRESS/OUTCOME: \(center.recentLines)")
+        let line = try #require(center.recentLines.first)
+        #expect(line.hasPrefix("Walk Tree: decorations refreshed — 5 people, 0 checks, "))
+        #expect(line.hasSuffix(" ms (reason: tree refreshed)"))
+        #expect(center.decoration(for: "@I3@")?.line == .first, "installed for the inspector")
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent(TreeWalkStore.fileName).path))
+    }
+
+    @Test func freshDecorationsMeanNoWalkAndNoLine() async throws {
+        let (first, dir) = autoCenter()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let g = GedcomFamilyGraph(gedcomText: twoRoots)
+        first.treeDidChange(g, reason: "tree loaded")
+        await first.waitForRefresh()
+        #expect(first.automaticWalkCount == 1)
+        // Same tree again (in this center, and in a fresh one reading the file).
+        first.treeDidChange(g, reason: "tree loaded")
+        await first.waitForRefresh()
+        #expect(first.automaticWalkCount == 1)
+        let (second, _) = autoCenter()
+        second.storeURL = first.storeURL
+        second.treeDidChange(g, reason: "tree loaded")
+        await second.waitForRefresh()
+        #expect(second.automaticWalkCount == 0)
+        #expect(second.recentLines.isEmpty)
+        #expect(second.decoration(for: "@I3@")?.line == .first, "the current file is installed")
+    }
+
+    @Test func aBurstOfThreeChangesIsOneWalk() async throws {
+        let (center, dir) = autoCenter(debounce: .milliseconds(150))
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let g = GedcomFamilyGraph(gedcomText: twoRoots)
+        center.treeDidChange(g, reason: "tree loaded")
+        center.treeDidChange(g, reason: "identity ruling")
+        center.treeDidChange(g, reason: "tree refreshed")
+        await center.waitForRefresh()
+        #expect(center.automaticWalkCount == 1)
+        #expect(center.recentLines.count == 1)
+        #expect(center.recentLines.first?.hasSuffix("(reason: tree loaded, identity ruling, tree refreshed)") == true)
+    }
+
+    @Test func anAutomaticRefreshWaitsForARunningForegroundWalk() async throws {
+        let (center, dir) = autoCenter(debounce: .zero)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = GedcomFamilyGraph(gedcomText: twoRoots)
+        // A different tree, so the refresh really has to walk after the
+        // foreground walk saved tree A.
+        let b = GedcomFamilyGraph(gedcomText: twoRoots.replacingOccurrences(of: "21 FEB 1929", with: "22 FEB 1929"))
+        var sawRunningWhenAsked = false
+        _ = await center.run(graph: a, options: .init(starts: ["@I1@", "@I2@"]), mode: .foreground,
+                             displayNames: ["Rick", "Donna"]) { event in
+            if case .started = event {
+                sawRunningWhenAsked = center.isRunning
+                center.treeDidChange(b, reason: "tree refreshed")
+            }
+        }
+        await center.waitForRefresh()
+        #expect(sawRunningWhenAsked)
+        #expect(center.automaticWalkCount == 1)
+        let outcome = try #require(center.recentLines.firstIndex { $0.hasPrefix("Walk Tree: analysis complete") })
+        let refreshed = try #require(center.recentLines.firstIndex { $0.hasPrefix("Walk Tree: decorations refreshed") })
+        #expect(refreshed > outcome, "the refresh walked only after the foreground walk finished")
+        #expect(center.stored?.sourceKey == TreeWalkStore.sourceKey(of: b))
+    }
+
+    @Test func theModelHasNoWalkCenterInTheTestHost() {
+        // Isolation: a synthetic tree installed by any model test must never
+        // re-walk into the REAL decorations.json.
+        #expect(FamilyTreeLiveModel().walkCenter == nil)
     }
 
     // MARK: Scale — the frame is O(batch), not O(people)

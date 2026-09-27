@@ -111,6 +111,22 @@ public struct TreeWalkLog: Sendable {
 
     public static let individualWarningLimit = 25
 
+    /// The ONE line of a silent automatic re-walk (Rick 2026-09-27: the walk
+    /// takes ~50 ms, so decorations are refreshed whenever they go stale —
+    /// no sheet, no animation, no per-check lines).
+    public static func refreshedLine(_ r: TreeWalk.Result, reason: String, savedNote: String?) -> String {
+        let s = r.summary
+        var line = prefix + "decorations refreshed — \(s.peopleWalked.formatted()) people, "
+            + "\(s.checkCount.formatted()) checks, \(Int(s.totalMilliseconds.rounded()).formatted()) ms (reason: \(reason))"
+        if let savedNote, savedNote != "decorations saved" { line += "; " + savedNote }
+        return line
+    }
+
+    /// …and when it could not.
+    public static func notRefreshedLine(_ why: String, reason: String) -> String {
+        prefix + "decorations NOT refreshed — \(why) (reason: \(reason))"
+    }
+
     /// The line that stands in for the warnings past the limit.
     public static func moreWarningsLine(_ n: Int) -> String {
         prefix + "… and \(n.formatted()) more warning\(n == 1 ? "" : "s") — see the Walk Tree report / decorations.json"

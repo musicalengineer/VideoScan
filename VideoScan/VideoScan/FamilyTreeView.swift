@@ -63,8 +63,6 @@ struct FamilyTreeView: View {
     /// This view's size, so the Walk Tree sheet can size itself to the
     /// window instead of running off it (Rick 2026-09-27).
     @State private var toolSheetHostSize: CGSize = .zero
-    /// The MFO center WITHOUT subscribing (see MediaFileOperationsCenterReference).
-    @Environment(\.mediaFileOperationsCenterReference) private var fileOpsCenterReference
     /// The Get Family Tree coordinator is owned by the app-wide center, not
     /// this view, so closing the sheet no longer kills the file watcher
     /// (2026-08-25: a 2 h pull finished into a file nobody was watching).
@@ -402,7 +400,7 @@ struct FamilyTreeView: View {
             }
         case .walk:
             // "Walk Tree…" (2026-09-27): one sheet with its own stages.
-            FamilyTreeWalkSheet(model: model, operations: fileOpsCenterReference, hostSize: toolSheetHostSize) {
+            FamilyTreeWalkSheet(model: model, hostSize: toolSheetHostSize) {
                 toolSheet = nil
             }
         }

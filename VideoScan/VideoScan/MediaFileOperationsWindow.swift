@@ -566,12 +566,6 @@ struct MediaFileOperationRow: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
-
-            if isExpanded, let walk = job as? WalkTreeJob {
-                WalkTreeJobDetailView(job: walk)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
         }
         .background(rowBackground)
         .onReceive(job.objectWillChange) { _ in
@@ -900,7 +894,7 @@ extension MediaFileOperationKind {
     var hasDetailView: Bool {
         switch self {
         case .compare, .findPerson, .verifyArchive, .archiveAngel, .deleteDuplicates,
-             .pruneCopies, .verifyVideo, .walkTree:
+             .pruneCopies, .verifyVideo:
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
@@ -994,7 +988,6 @@ extension MediaFileOperationKind {
         // family, darker and bluer than Combine's forest green (Δ ≈ 0.17),
         // apart from Transcode's sea-green (Δ ≈ 0.18) and Clean Up's teal
         // (Δ ≈ 0.19).
-        case .walkTree: return Color(red: 0.05, green: 0.36, blue: 0.30)
         }
     }
 }

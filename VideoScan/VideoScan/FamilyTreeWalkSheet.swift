@@ -2,8 +2,11 @@
 // "Walk Tree…" (Rick 2026-09-27). One sheet, one state machine — never a
 // sheet that opens another (the chained-sheet antipattern):
 //
-//   setup ──Walk in foreground──▶ walking ──▶ watching (the fan) ──▶ Done
-//     └────Walk in background──▶ MFO row "Walk Tree", sheet closes
+//   setup ──Walk──▶ walking ──▶ watching (the fan) ──▶ Done
+//
+// No background walk (Rick 2026-09-27): the analysis takes ~50 ms, and
+// FamilyTreeWalkCenter re-walks silently whenever decorations go stale.
+// This sheet is for WATCHING a walk (Instant / Skip to end for impatience).
 //
 // Setup: start people (default Rick + Donna — the tree's home people, the
 // pinned owner first; or the selected person; or a bookmarked person) and
@@ -29,7 +32,6 @@ import VideoScanCore
 struct FamilyTreeWalkSheet: View {
     @ObservedObject var model: FamilyTreeLiveModel
     @ObservedObject var center: FamilyTreeWalkCenter = .shared
-    let operations: MediaFileOperationsCenter?
     /// The presenting window's content size (zero = unknown).
     var hostSize: CGSize = .zero
     let onClose: () -> Void
@@ -95,10 +97,7 @@ struct FamilyTreeWalkSheet: View {
                 Spacer()
                 if case .setup = stage {
                     Button("Cancel", role: .cancel) { onClose() }.keyboardShortcut(.cancelAction)
-                    Button("Walk in background") { walkInBackground() }
-                        .disabled(starts.isEmpty || operations == nil)
-                        .help(operations == nil ? "The Media File Operations window is not available here." : "Run as a row in the Media File Operations window.")
-                    Button("Walk in foreground") { walkInForeground() }
+                    Button("Walk") { walkInForeground() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(starts.isEmpty)
                 } else {
@@ -164,7 +163,7 @@ struct FamilyTreeWalkSheet: View {
                 .font(.system(size: 12)).foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
-            Text("Decorates everyone with their line, generations, age at death and birth region, and runs the consistency checks. Reads the tree only; the results are saved beside it (decorations.json). The analysis itself takes moments; in the foreground the fan then replays it at a pace you choose, so you can watch.")
+            Text("Decorates everyone with their line, generations, age at death and birth region, and runs the consistency checks. Reads the tree only; the results are saved beside it (decorations.json), and are kept up to date automatically whenever the tree changes. The analysis itself takes moments; the fan then replays it at a pace you choose, so you can watch.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -199,12 +198,6 @@ struct FamilyTreeWalkSheet: View {
             stage = .watching(animator)
             animator.start()
         }
-    }
-
-    private func walkInBackground() {
-        guard let graph, let operations else { return }
-        operations.startWalkTree(graph: graph, options: options, displayNames: displayNames)
-        onClose()
     }
 
     private func close() {
