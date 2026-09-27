@@ -92,6 +92,28 @@ struct ArchiveUpdateSafetyTests {
         #expect(UpdateFixture.data(a.sb.manifestURL) == manifest)
     }
 
+    @Test("r2 #3: an attestation line naming the OLD path lands after the index was prepared (before the lock) → refused, or included — never left stale")
+    func journalLineAfterPreparationIsNotLeftStale() async throws {
+        let a = try UpdateFixture.make("lateattest")
+        defer { a.sb.cleanup() }
+        let p = try await UpdateFixture.preview(a)
+        let root = a.root, old = a.absPath, copyID = a.copy.id, filename = a.copy.filename
+        var seams = ArchiveRefileEngine.Seams.live
+        seams.afterPreflight = {
+            let entry = ArchiveAttestationJournal.Entry(at: Date(), record: (copyID, filename, old),
+                                                        attestation: BackupAttestation(kind: .cloud, answer: .yes, attestedAt: Date()))
+            try? ArchiveAttestationJournal.append([entry], rootPath: root)
+        }
+        let r = await a.model.updateArchivedFile(p, name: p.currentName, hint: try UpdateFixture.hint(1984), known: true, seams: seams)
+        let journal = String(decoding: UpdateFixture.data(ArchiveAttestationJournal.url(rootPath: root)), as: UTF8.self)
+        if r.kind == .updated {
+            #expect(!journal.contains(old), "the late attestation line still names the old path")
+        } else {
+            #expect(r.kind == .refused, "\(r.kind): \(r.message)")
+            #expect(FileManager.default.fileExists(atPath: old), "refused → nothing moved")
+        }
+    }
+
     enum Failure: String, CaseIterable, Sendable { case verify, index }
 
     @Test("the move back's folder flush fails → incompleteRecovery, backup kept, file at the original path",

@@ -279,6 +279,9 @@ enum ArchiveRefileEngine {
         var directoryFsync: @Sendable (_ dirfd: Int32, _ phase: FsyncPhase) -> Int32 = { fd, _ in
             ArchivePromoteEngine.barriers.fsync(fd)
         }
+        /// Runs after every preflight check passed and before the index
+        /// lock is taken — a test's window for "another writer lands now".
+        var afterPreflight: @Sendable () -> Void = {}
 
         static let live = Seams(
             hashFile: { root, rel in try ArchivePromoteEngine.sha256(root: root, relativePath: rel) },
@@ -373,6 +376,7 @@ enum ArchiveRefileEngine {
             audit(subject + "refused: \(refusal.why). Nothing was changed.")
             return .refused(refusal.why)
         case .success(let prepared):
+            seams.afterPreflight()
             return commit(req, prepared, seams: seams, now: now, subject: subject, audit: audit)
         }
     }
@@ -502,9 +506,10 @@ enum ArchiveRefileEngine {
                          (root as NSString).appendingPathComponent(from): (root as NSString).appendingPathComponent(to)],
                 oldFilename: (from as NSString).lastPathComponent,
                 newFilename: (to as NSString).lastPathComponent)
-            let journals = try ArchiveIndexRename.prepare(root: root, replacements: replacements)
-                .files.filter { $0.name != MasterArchiveLayout.manifestFilename }
-            return .success(ArchiveIndexRename.Plan(root: root, files: [manifestRewrite] + journals))
+            let prepared = try ArchiveIndexRename.prepare(root: root, replacements: replacements)
+            let journals = prepared.files.filter { $0.name != MasterArchiveLayout.manifestFilename }
+            return .success(ArchiveIndexRename.Plan(root: root, files: [manifestRewrite] + journals,
+                                                    unchanged: prepared.unchanged.filter { $0.key != MasterArchiveLayout.manifestFilename }))
         } catch let f as ArchiveIndexRename.Failure {
             return .failure(Refusal(why: f.errorDescription ?? "the archive index could not be prepared"))
         } catch {

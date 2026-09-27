@@ -134,6 +134,12 @@ enum ArchiveIndexRename {
     struct Plan: Sendable {
         let root: String
         let files: [FileRewrite]
+        /// Index files `prepare` read and left OUT of the plan (no match),
+        /// or found absent (nil): name → identity at prepare time. `apply`
+        /// rechecks them under the lock too — a line naming the old path
+        /// that landed in between must refuse, never be left stale
+        /// (Archive Update review r2 #3).
+        var unchanged: [String: ArchivePromoteEngine.FileIdentity?] = [:]
         var isEmpty: Bool { files.isEmpty }
         var changedLines: Int { files.reduce(0) { $0 + $1.changedLines } }
         var indexURL: URL {
@@ -209,10 +215,11 @@ enum ArchiveIndexRename {
                                      reason: String(cString: strerror(errno)))
         }
         var files: [FileRewrite] = []
+        var unchanged: [String: ArchivePromoteEngine.FileIdentity?] = [:]
         for name in indexFilenames {
             let url = indexDir.appendingPathComponent(name)
             guard lstat(url.path, &sb) == 0 else {
-                if errno == ENOENT { continue }
+                if errno == ENOENT { unchanged[name] = .some(nil); continue }
                 throw Failure.unreadable(file: name, reason: String(cString: strerror(errno)))
             }
             let isManifest = name == MasterArchiveLayout.manifestFilename
@@ -222,12 +229,12 @@ enum ArchiveIndexRename {
             let result = isManifest
                 ? try rewriteCSV(bytes, replacements: replacements, file: name)
                 : try rewriteJSONL(bytes, replacements: replacements, file: name, lenient: false)
-            guard result.changedLines > 0 else { continue }
+            guard result.changedLines > 0 else { unchanged[name] = identity; continue }
             files.append(FileRewrite(name: name, url: url, original: data,
                                      updated: Data(result.bytes), changedLines: result.changedLines,
                                      identity: identity))
         }
-        return Plan(root: root, files: files)
+        return Plan(root: root, files: files, unchanged: unchanged)
     }
 
     /// Read one index file through the validated descriptor (O_NOFOLLOW,
@@ -313,6 +320,12 @@ enum ArchiveIndexRename {
         for f in plan.files where !isUnchanged(f, root: plan.root) {
             removeRefusedBackup(backupDir)
             throw Failure.changedDuringRename(file: f.name)
+        }
+        // …and every index file the plan left out: still as prepare saw it
+        // (or still absent)? A new line there could name the old path.
+        for (name, identity) in plan.unchanged where currentIdentity(root: plan.root, name: name) != identity {
+            removeRefusedBackup(backupDir)
+            throw Failure.changedDuringRename(file: name)
         }
 
         // 4. The trail a crash would leave, then 5. the media move. Its
