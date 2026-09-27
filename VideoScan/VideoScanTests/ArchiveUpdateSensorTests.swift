@@ -95,7 +95,10 @@ struct ArchiveUpdateSensorTests {
         let lockSites = try Self.sites(of: "ArchiveIndexLock.withExclusive(")
         #expect(lockSites == ["MasterArchive.swift": 1, "ArchivePromoteEngine.swift": 1,
                               "ArchivePromoteDecisions.swift": 1, "VideoScanModel+BackupAttestations.swift": 1,
-                              "ArchiveIndexRename.swift": 1], "\(lockSites)")
+                              "ArchiveIndexRename.swift": 1,
+                              // Not a writer: the one-time lock catch-up holds it per file so it
+                              // can never flag a file mid-Update (codex r1 #1 on promote-dates-and-lock).
+                              "ArchiveLockJob.swift": 1], "\(lockSites)")
         // An index append is `appendDurable(fd:` — exactly the four above.
         let appends = try Self.sites(of: "ArchivePromoteEngine.appendDurable(fd:")
         #expect(appends == ["MasterArchive.swift": 1, "ArchivePromoteEngine.swift": 1,
