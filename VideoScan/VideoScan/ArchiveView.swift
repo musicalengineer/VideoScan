@@ -58,6 +58,8 @@ struct ArchiveView: View {
     @AppStorage("selectedTab") var selectedTab: Int = 0
     /// Update… sheet driver (Rick 2026-09-27): set once the preview is built.
     @State var updatePreview: ArchiveUpdatePreview?
+    /// Why Update… did not open (e.g. already being edited in another sheet).
+    @State var updateRefusal: String?
 
     @Environment(\.openWindow) var openWindow
 
@@ -109,6 +111,13 @@ struct ArchiveView: View {
         }
         .sheet(item: $updatePreview) { preview in
             ArchiveUpdateSheet(preview: preview)
+                // Every close path releases the one-editor claim.
+                .onDisappear { model.closeArchiveUpdate(preview) }
+        }
+        .alert("Update…", isPresented: Binding(get: { updateRefusal != nil }, set: { if !$0 { updateRefusal = nil } })) {
+            Button("OK", role: .cancel) { updateRefusal = nil }
+        } message: {
+            Text(updateRefusal ?? "")
         }
         // Archive Angel batches are read from the buffer OUTSIDE body (disk
         // I/O) — refreshed on entry and when the MFO job list changes (the
@@ -139,8 +148,9 @@ struct ArchiveView: View {
     func openUpdateSheet(for rec: VideoRecord) {
         let id = rec.id
         Task {
-            if case .success(let p) = await model.makeArchiveUpdatePreview(recordID: id) {
-                updatePreview = p
+            switch await model.openArchiveUpdate(recordID: id) {
+            case .success(let p): updatePreview = p
+            case .failure(let r): updateRefusal = r.message
             }
         }
     }

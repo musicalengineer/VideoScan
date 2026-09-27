@@ -189,6 +189,32 @@ extension VideoScanModel {
         return .success(preview)
     }
 
+    // MARK: - One editor per archived file (Rick 2026-09-27)
+
+    static let alreadyBeingEdited = "This file is already being edited in another Update sheet."
+
+    /// Open Update… for a row: build the preview, then CLAIM the archived
+    /// file — only one Update sheet per file at a time. A second open is
+    /// refused with `alreadyBeingEdited` (logged). Pair with `closeArchiveUpdate`.
+    func openArchiveUpdate(recordID: UUID) async -> Result<ArchiveUpdatePreview, ArchiveUpdateRefusal> {
+        let result = await makeArchiveUpdatePreview(recordID: recordID)
+        guard case .success(let p) = result else { return result }
+        guard !archiveUpdatesOpen.contains(p.copyID) else {
+            archiveUpdateNote("Update: \(p.archiveFilename) — not opened: \(Self.alreadyBeingEdited)")
+            return .failure(ArchiveUpdateRefusal(message: Self.alreadyBeingEdited))
+        }
+        archiveUpdatesOpen.insert(p.copyID)
+        return result
+    }
+
+    /// Release the claim — every close path (Update done, Cancel, the sheet
+    /// or its window closing) ends here via the sheet's onDisappear.
+    func closeArchiveUpdate(_ p: ArchiveUpdatePreview) {
+        if archiveUpdatesOpen.remove(p.copyID) != nil {
+            refileLog.debug("update sheet closed for \(p.archiveFilename, privacy: .public)")
+        }
+    }
+
     #if compiler(>=6.2)
     @concurrent
     #endif

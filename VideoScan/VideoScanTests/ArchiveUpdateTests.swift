@@ -348,6 +348,63 @@ struct ArchiveUpdateOnlyWhatIsListedTests {
     }
 }
 
+// MARK: - One Update sheet per archived file (Rick 2026-09-27)
+
+@Suite("Archive Update — one editor per file", .serialized)
+@MainActor
+struct ArchiveUpdateSingleEditorTests {
+
+    /// A second archived file in the SAME sandbox + model.
+    private func addSecond(to a: UpdateFixture.Archived) throws -> VideoRecord {
+        let rel = "30_Video/1970-1979/1971/1971-xx-xx_Second.mov"
+        let url = a.url(rel)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try MasterArchiveTestSupport.writeBlob(at: url, bytes: 20_000, seed: 99)
+        let sha = try #require(MasterArchiveTestSupport.sha256(ofFile: url.path))
+        let copy = MasterArchiveTestSupport.makeRecord(path: url.path, userDate: "1971")
+        copy.derivationKind = ArchivePromotion.derivationKind
+        copy.archiveFixity = ArchiveFixity(digest: sha, verifiedAt: Date(), sizeBytes: copy.sizeBytes)
+        a.model.records.append(copy)
+        try ArchiveManifestCSV.append(.init(promotedAt: Date(), archiveRelPath: rel, sha256: sha, sizeBytes: copy.sizeBytes,
+                                            originalPath: "/Volumes/test_S/second.mov", originalVolume: "test",
+                                            recordID: copy.id, sourceRecordID: UUID(), recordDate: "1971-xx-xx",
+                                            dateConfidence: "user-known", people: [], starRating: 3), rootPath: a.root)
+        return copy
+    }
+
+    @Test("a second Update on the same file is refused ('already being edited'); a different file opens concurrently; closing releases it")
+    func oneEditorPerFile() async throws {
+        let a = try UpdateFixture.make("single")
+        defer { a.sb.cleanup() }
+        let second = try addSecond(to: a)
+        let first = try #require(try? await a.model.openArchiveUpdate(recordID: a.source.id).get())
+        // The same file again — from its original row or its archive-copy row.
+        for id in [a.source.id, a.copy.id] {
+            guard case .failure(let r) = await a.model.openArchiveUpdate(recordID: id) else {
+                Issue.record("a second Update sheet opened on the same file"); continue
+            }
+            #expect(r.message == VideoScanModel.alreadyBeingEdited)
+        }
+        // A different file: fine, concurrently.
+        let other = try #require(try? await a.model.openArchiveUpdate(recordID: second.id).get())
+        // Every close path goes through closeArchiveUpdate: after it, it opens again.
+        a.model.closeArchiveUpdate(first)
+        let again = try #require(try? await a.model.openArchiveUpdate(recordID: a.source.id).get())
+        a.model.closeArchiveUpdate(again)
+        a.model.closeArchiveUpdate(other)
+        #expect(a.model.archiveUpdatesOpen.isEmpty)
+    }
+
+    @Test("sensor: the sheet is only opened through the claim, and released on disappear (Update / Cancel / Done / window close)")
+    func everyClosePathReleases() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("VideoScan")
+        let view = try String(contentsOf: dir.appendingPathComponent("ArchiveView.swift"), encoding: .utf8)
+        #expect(view.contains("await model.openArchiveUpdate(recordID: id)"))
+        #expect(!view.contains("makeArchiveUpdatePreview("), "never open a sheet without the claim")
+        #expect(view.contains(".onDisappear { model.closeArchiveUpdate(preview) }"))
+    }
+}
+
 @Suite("Archive Update — pure rules")
 struct ArchiveUpdatePureTests {
 
