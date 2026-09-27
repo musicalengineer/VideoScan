@@ -116,8 +116,16 @@ So:
 - **Never** write `cd <path> && <command>`. Use the tool's own path flag:
   `git -C <path> ...` (explicitly allowed), `xcodebuild -project <abs path>
   -derivedDataPath <abs path>`, `swift test --package-path <abs path>`.
-- **Never** lead with shell control flow (`for … done`, `if [ … ]`). Put the
-  logic in one `python3 - <<'PY'` heredoc; `Bash(python3:*)` is allowed.
+- **Never** lead with shell control flow (`for … done`, `if [ … ]`, `until`,
+  `while`). Put the logic in one `python3 - <<'PY'` heredoc; `Bash(python3:*)`
+  is allowed. To wait on something, use the Monitor tool or `run_in_background`.
+- **Never** lead with a variable assignment (`R=/path; git -C $R …`,
+  `D=…; xcodebuild …`), a subshell `( … )`, `time …`, `sleep N; …` or
+  `date; …`. Measured 2026-09-26: of 1,155 Bash calls in one day, 151 matched
+  NO allow rule — 101 began `VAR=`, 23 `until`, 12 `date;`, 9 `sleep` — and
+  they only ran because auto mode was on. Three of the six overnight stalls
+  in the previous nine nights began `VAR=`; two began `cd`; one was `rm -rf`
+  (an `ask` rule). Write the path inline, or inside the python heredoc.
 - Prefer the Grep/Read/Glob tools over shell `grep`/`cat`/`find`.
 - If something still prompts, it is a genuine allowlist gap — add the rule to
   `.claude/settings.json`; don't route around it and don't ask Rick.
