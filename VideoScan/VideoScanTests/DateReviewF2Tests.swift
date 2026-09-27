@@ -56,4 +56,25 @@ struct DateReviewF2Tests {
         model.catchUpInferredDates(trigger: "test")
         #expect(b.inferredRecordDate == nil && b.inferredDateSource == nil)
     }
+
+    /// Codex re-review R1: a DONOR-scoped pass must reach the donor's former
+    /// dependents — A moved to another group, B still says "shared from A".
+    @Test("donor-scoped pass after A is regrouped clears B's share")
+    func donorScopedPassAfterRegroupClearsDependents() {
+        let (model, a, b) = shared()
+        #expect(F.resolve(b).year == 1992)
+        a.footage?.groupID = UUID()
+        model.catchUpInferredDates(scope: [a], trigger: "test")
+        #expect(F.InferredSnapshot(b) == F.InferredSnapshot(VideoRecord()), "\(b.inferredDateReason ?? "nil")")
+        #expect(ArchivePathResolver.facts(for: b).dateHint == .unknown)
+    }
+
+    @Test("donor-scoped pass after the donor's membership is downgraded clears B's share")
+    func donorScopedPassAfterDowngradeClearsDependents() {
+        let (model, a, b) = shared()
+        a.footage?.confidence = .possible
+        model.catchUpInferredDates(scope: [a], trigger: "test")
+        #expect(b.inferredRecordDate == nil && b.inferredDateSource == nil && b.inferredDateRange == nil
+                && b.inferredDateConfidence == nil, "\(b.inferredDateReason ?? "nil")")
+    }
 }

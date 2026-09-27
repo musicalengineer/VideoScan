@@ -628,6 +628,23 @@ extension VideoScanModel {
         return true
     }
 
+    /// `scope` plus every record whose footage-shared source names a record
+    /// in `scope` (codex re-review R1). Order kept, no duplicates.
+    @MainActor
+    static func withFootageShareDependents(of scope: [VideoRecord], in all: [VideoRecord]) -> [VideoRecord] {
+        let donorIDs = Set(scope.map(\.id))
+        var seen = donorIDs
+        var out = scope
+        let prefix = InferredDateSource.footageSharedPrefix
+        for rec in all {
+            guard let source = rec.inferredDateSource, source.hasPrefix(prefix),
+                  let donorID = UUID(uuidString: String(source.dropFirst(prefix.count))),
+                  donorIDs.contains(donorID), seen.insert(rec.id).inserted else { continue }
+            out.append(rec)
+        }
+        return out
+    }
+
     /// Codex F2: a footage-shared date is STALE unless all of these still
     /// hold — the donor exists in the same footage group; both memberships
     /// are ≥ `likely`; neither row carries Rick's "not the same" about the
@@ -670,6 +687,11 @@ extension VideoScanModel {
         let started = Date()
         var result = InferredDateCatchUpResult()
         let people = dateInferencePeopleResolved
+        // Codex re-review R1: a DONOR-scoped pass must also reach the donor's
+        // former dependents — rows whose "footage-shared from <id>" names a
+        // scoped record, even after the donor left their group (regrouped,
+        // downgraded). One O(records) prefix scan, only for scoped passes.
+        let scope = scope.map { Self.withFootageShareDependents(of: $0, in: records) }
 
         // One pass: bucket every eligible row by VERIFIED content group,
         // and (GH #201) by footage group. References only; the arrays
