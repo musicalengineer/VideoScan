@@ -116,8 +116,7 @@ enum TreeWalkChecks {
         }
         var out: [TreeWalk.Check] = []
         for key in groups.keys.sorted() {
-            let group = groups[key]!
-            guard group.count > 1 else { continue }
+            guard let group = groups[key], group.count > 1 else { continue }
             for i in group.indices {
                 for j in group.index(after: i)..<group.endIndex {
                     let a = group[i], b = group[j]

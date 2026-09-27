@@ -85,6 +85,9 @@ extension TreeWalk {
 
     // MARK: - The walk
 
+    /// The whole walk, synchronously, on the calling thread (tests; the
+    /// app goes through `events`). `emit` receives the events in order;
+    /// `isCancelled` is polled at phase and generation boundaries.
     public static func walk(_ graph: GedcomFamilyGraph,
                             options: Options,
                             now: Date = Date(),
@@ -92,130 +95,39 @@ extension TreeWalk {
                             emit: (Event) -> Void = { _ in }) throws -> Result {
         let clock = ContinuousClock()
         let t0 = clock.now
-        func ms(_ d: Duration) -> Double { Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000 }
         func checkpoint() throws { if isCancelled() { throw WalkError.cancelled } }
 
-        // ---- 0. Start people.
-        guard !options.starts.isEmpty else { throw WalkError.noStartPeople }
-        guard options.starts.count <= 2 else { throw WalkError.tooManyStarts(options.starts.count) }
-        var starts: [Start] = []
-        for id in options.starts where !starts.contains(where: { $0.id == id }) {
-            guard let p = graph.people[id], !graph.isHidden(id) else { throw WalkError.unknownStart(id) }
-            starts.append(Start(id: id, name: p.name))
-        }
+        let starts = try resolveStarts(graph, options)
         emit(.started(StartInfo(starts: starts, maxGenerations: options.maxGenerations,
                                 peopleInTree: graph.people.count - graph.suppressedPersonIDs.count,
                                 walkerVersion: walkerVersion)))
 
-        // ---- 1. Snapshot + local attributes.
         emit(.phase("Reading the tree"))
         let s = TreeWalkSnapshot(graph: graph)
-        let n = s.count
         let sourceKey = TreeWalkSnapshot.sourceKey(graph: graph)
-        let startOrdinals = starts.map { s.ordinal(of: $0.id)! }
-        let ages: [AgeAtDeath?] = TreeWalkParallel.map(count: n) { AgeAtDeath.between(birth: s.birth[$0], death: s.death[$0]) }
+        let startOrdinals = try starts.map { start -> Int in
+            guard let o = s.ordinal(of: start.id) else { throw WalkError.unknownStart(start.id) }
+            return o
+        }
+        let ages: [AgeAtDeath?] = TreeWalkParallel.map(count: s.count) {
+            AgeAtDeath.between(birth: s.birth[$0], death: s.death[$0])
+        }
         try checkpoint()
 
-        // ---- 2. Cycles.
         emit(.phase("Looking for cycles"))
-        let comps = TreeWalkGraph.stronglyConnected(count: n, include: { s.visible[$0] },
+        let comps = TreeWalkGraph.stronglyConnected(count: s.count, include: { s.visible[$0] },
                                                     successors: { s.parents(of: $0) })
         try checkpoint()
 
-        // ---- 3. Generations from each start.
-        let tWalk = clock.now
-        let genA = TreeWalkGraph.generations(from: startOrdinals[0], maxGenerations: options.maxGenerations, snapshot: s)
-        let genB: [Int32]? = startOrdinals.count > 1
-            ? TreeWalkGraph.generations(from: startOrdinals[1], maxGenerations: options.maxGenerations, snapshot: s)
-            : nil
-        @inline(__always) func bfsBits(_ o: Int) -> UInt8 {
-            (genA[o] >= 0 ? 1 : 0) | ((genB?[o] ?? -1) >= 0 ? 2 : 0)
-        }
-        var reachable = 0
-        for o in 0..<n where bfsBits(o) != 0 { reachable += 1 }
-
-        // ---- 4. The layered walk (the order the animation replays).
         emit(.phase("Walking"))
-        let cadence = options.progressEvery
-            ?? ((options.maxGenerations.map { $0 <= 5 } ?? false) || reachable < 5_000 ? 100 : 1_000)
-        func sample(_ o: Int) -> Sample {
-            Sample(id: s.ids[o], name: s.names[o], birthYear: s.birth[o]?.year,
-                   line: Line(bits: bfsBits(o)),
-                   generationFromFirst: genA[o] >= 0 ? Int(genA[o]) : nil,
-                   generationFromSecond: genB.flatMap { $0[o] >= 0 ? Int($0[o]) : nil },
-                   ageAtDeath: ages[o], birthRegion: s.region[o], childCount: Int(s.childCount[o]))
-        }
-        var layers: [[Visit]] = []
-        var seen = [Bool](repeating: false, count: n)
-        var frontier: [Visit] = []
-        for (i, o) in startOrdinals.enumerated() where !seen[o] {
-            seen[o] = true
-            frontier.append(Visit(ordinal: Int32(o), generation: 0, from: -1, slot: UInt8(i),
-                                  slots: UInt8(startOrdinals.count), line: Line(bits: bfsBits(o)), hasCheck: false))
-        }
-        var visited = frontier.count
-        var generation = 0
-        while !frontier.isEmpty {
-            try checkpoint()
-            layers.append(frontier)
-            if let limit = options.maxGenerations, generation >= limit { break }
-            var next: [Visit] = []
-            for v in frontier {
-                let ps = s.parents(of: Int(v.ordinal))
-                for (slot, p) in ps.enumerated() where !seen[Int(p)] {
-                    seen[Int(p)] = true
-                    next.append(Visit(ordinal: p, generation: Int32(generation + 1), from: v.ordinal,
-                                      slot: UInt8(min(slot, 255)), slots: UInt8(min(ps.count, 255)),
-                                      line: Line(bits: bfsBits(Int(p))), hasCheck: false))
-                    visited += 1
-                    if visited % cadence == 0 {
-                        emit(.progress(Progress(visited: visited, reachable: reachable, generation: generation + 1,
-                                                frontier: next.count, sample: sample(Int(p)))))
-                    }
-                }
-            }
-            frontier = next
-            generation += 1
-        }
-
-        // ---- 5. Inherited over the condensation, children first.
-        var lineBits = [UInt8](repeating: 0, count: n)
-        var pathsA = [Double](repeating: 0, count: n)
-        var pathsB = [Double](repeating: 0, count: n)
-        let walked: (Int) -> Bool = { bfsBits($0) != 0 }
-        for comp in comps.members.indices.reversed() {
-            let group = comps.members[comp]
-            guard group.contains(where: { walked(Int($0)) }) else { continue }
-            var bits: UInt8 = 0
-            var pa = 0.0, pb = 0.0
-            for m in group {
-                let mi = Int(m)
-                if mi == startOrdinals[0] { bits |= 1; pa += 1 }
-                if startOrdinals.count > 1, mi == startOrdinals[1] { bits |= 2; pb += 1 }
-                for c in s.kids(of: mi) where comps.component[Int(c)] != Int32(comp) && walked(Int(c)) {
-                    bits |= lineBits[Int(c)]
-                    pa += pathsA[Int(c)]
-                    pb += pathsB[Int(c)]
-                }
-            }
-            if comps.cyclic[comp] {
-                // A cycle has infinitely many paths: poison, and NaN carries
-                // the poison to every ancestor above it (NaN + x = NaN).
-                if bits & 1 != 0 { pa = .nan }
-                if bits & 2 != 0 { pb = .nan }
-            }
-            for m in group {
-                // The DP bits agree with BFS reachability on an unlimited
-                // walk; a depth limit is honoured by the AND.
-                lineBits[Int(m)] = bits & bfsBits(Int(m))
-                pathsA[Int(m)] = pa
-                pathsB[Int(m)] = pb
-            }
-        }
-        let walkMs = ms(clock.now - tWalk)
+        let tWalk = clock.now
+        let reach = Reach(snapshot: s, starts: startOrdinals, maxGenerations: options.maxGenerations)
+        let layers = try layeredWalk(s, reach: reach, starts: startOrdinals, options: options, ages: ages,
+                                     isCancelled: isCancelled, emit: emit)
+        let inherited = inheritedPass(s, components: comps, reach: reach, starts: startOrdinals)
+        let walkMs = milliseconds(clock.now - tWalk)
         try checkpoint()
 
-        // ---- 6. Synthesized: ancestor and descendant sets.
         emit(.phase("Counting ancestors and descendants"))
         let dated = s.birth.map { $0 != nil }
         let ancestorsFirst = Array(comps.members.indices)
@@ -228,38 +140,220 @@ extension TreeWalk {
                                                     neighbours: { s.kids(of: $0) })
         try checkpoint()
 
-        // ---- 7. Checks.
         emit(.phase("Checking"))
         let tChecks = clock.now
-        var checks = TreeWalkChecks.perPerson(snapshot: s, graph: graph, ages: ages)
-        checks += TreeWalkChecks.duplicates(snapshot: s)
-        let cycleChecks = TreeWalkChecks.cycles(snapshot: s, components: comps)
-        checks += cycleChecks
-        let kindOrder = Dictionary(uniqueKeysWithValues: CheckKind.allCases.enumerated().map { ($1, $0) })
-        checks.sort { a, b in
-            if a.kind != b.kind { return kindOrder[a.kind]! < kindOrder[b.kind]! }
-            return a.personIDs.lexicographicallyPrecedes(b.personIDs)
-        }
-        let checksMs = ms(clock.now - tChecks)
-        var checksOf = [[Int]](repeating: [], count: n)
-        for (i, check) in checks.enumerated() {
-            for id in check.personIDs {
-                if let o = s.ordinal(of: id), checksOf[o].last != i { checksOf[o].append(i) }
-            }
-        }
-        for check in cycleChecks { emit(.cycle(check)) }
-        for check in checks where check.severity == .warn && check.kind != .ancestorCycle { emit(.warnCheck(check)) }
+        let found = runChecks(s, graph: graph, ages: ages, components: comps)
+        let checksMs = milliseconds(clock.now - tChecks)
+        for check in found.cycles { emit(.cycle(check)) }
+        for check in found.all where check.severity == .warn && check.kind != .ancestorCycle { emit(.warnCheck(check)) }
         try checkpoint()
 
-        // ---- 8. Assemble.
-        let decorations: [Decoration] = TreeWalkParallel.map(count: n) { o in
+        var decorations = assemble(s, reach: reach, inherited: inherited, components: comps, ages: ages,
+                                   ancestors: anc, descendants: desc, checksOf: found.byPerson)
+        // The start people are the ones read most: EXACT counts for them
+        // (one unlimited BFS each) instead of the sketch estimate.
+        for o in startOrdinals {
+            let gen = TreeWalkGraph.generations(from: o, maxGenerations: nil, snapshot: s)
+            var count = 0, datedCount = 0
+            for x in 0..<s.count where x != o && gen[x] >= 0 {
+                count += 1
+                if dated[x] { datedCount += 1 }
+            }
+            decorations[o].ancestorCount = Count(value: count, isEstimate: false)
+            decorations[o].documentedAncestorFraction = count == 0 ? nil : Double(datedCount) / Double(count)
+        }
+        let finalLayers = layers.map { layer in
+            layer.map { v in
+                Visit(ordinal: v.ordinal, generation: v.generation, from: v.from, slot: v.slot, slots: v.slots,
+                      line: Line(bits: inherited.lineBits[Int(v.ordinal)]),
+                      hasCheck: !found.byPerson[Int(v.ordinal)].isEmpty)
+            }
+        }
+        var summary = summarize(s, layers: finalLayers, checks: found.all, cycles: found.cycles.count,
+                                reach: reach, ages: ages)
+        summary.walkMilliseconds = walkMs
+        summary.checksMilliseconds = checksMs
+        summary.estimatedAncestorCounts = anc.estimated
+        summary.totalMilliseconds = milliseconds(clock.now - t0)
+
+        return Result(walkerVersion: walkerVersion, sourceKey: sourceKey, generatedAt: now,
+                      starts: starts, maxGenerations: options.maxGenerations,
+                      ids: s.ids, names: s.names, decorations: decorations, visible: s.visible,
+                      checks: found.all, summary: summary, layers: finalLayers)
+    }
+
+    // MARK: - Phases
+
+    static func milliseconds(_ d: Duration) -> Double {
+        Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000
+    }
+
+    static func resolveStarts(_ graph: GedcomFamilyGraph, _ options: Options) throws -> [Start] {
+        guard !options.starts.isEmpty else { throw WalkError.noStartPeople }
+        guard options.starts.count <= 2 else { throw WalkError.tooManyStarts(options.starts.count) }
+        var starts: [Start] = []
+        for id in options.starts where !starts.contains(where: { $0.id == id }) {
+            guard let p = graph.people[id], !graph.isHidden(id) else { throw WalkError.unknownStart(id) }
+            starts.append(Start(id: id, name: p.name))
+        }
+        return starts
+    }
+
+    /// BFS generations from each start, and the bits they imply.
+    struct Reach {
+        let first: [Int32]
+        let second: [Int32]?
+        let reachable: Int
+
+        init(snapshot s: TreeWalkSnapshot, starts: [Int], maxGenerations: Int?) {
+            first = TreeWalkGraph.generations(from: starts[0], maxGenerations: maxGenerations, snapshot: s)
+            second = starts.count > 1
+                ? TreeWalkGraph.generations(from: starts[1], maxGenerations: maxGenerations, snapshot: s) : nil
+            var n = 0
+            for o in 0..<s.count where first[o] >= 0 || (second?[o] ?? -1) >= 0 { n += 1 }
+            reachable = n
+        }
+
+        @inline(__always) func bits(_ o: Int) -> UInt8 {
+            (first[o] >= 0 ? 1 : 0) | ((second?[o] ?? -1) >= 0 ? 2 : 0)
+        }
+        func generationFromFirst(_ o: Int) -> Int? { first[o] >= 0 ? Int(first[o]) : nil }
+        func generationFromSecond(_ o: Int) -> Int? { second.flatMap { $0[o] >= 0 ? Int($0[o]) : nil } }
+    }
+
+    /// Generation by generation from the starts — the animation's order —
+    /// with a progress event every `cadence` people.
+    static func layeredWalk(_ s: TreeWalkSnapshot, reach: Reach, starts: [Int], options: Options,
+                            ages: [AgeAtDeath?], isCancelled: () -> Bool,
+                            emit: (Event) -> Void) throws -> [[Visit]] {
+        let limitedToFive = options.maxGenerations.map { $0 <= 5 } ?? false
+        let cadence = max(1, options.progressEvery ?? (limitedToFive || reach.reachable < 5_000 ? 100 : 1_000))
+        func sample(_ o: Int) -> Sample {
+            Sample(id: s.ids[o], name: s.names[o], birthYear: s.birth[o]?.year, line: Line(bits: reach.bits(o)),
+                   generationFromFirst: reach.generationFromFirst(o), generationFromSecond: reach.generationFromSecond(o),
+                   ageAtDeath: ages[o], birthRegion: s.region[o], childCount: Int(s.childCount[o]))
+        }
+        var layers: [[Visit]] = []
+        var seen = [Bool](repeating: false, count: s.count)
+        var frontier: [Visit] = []
+        for (i, o) in starts.enumerated() where !seen[o] {
+            seen[o] = true
+            frontier.append(Visit(ordinal: Int32(o), generation: 0, from: -1, slot: UInt8(i),
+                                  slots: UInt8(starts.count), line: Line(bits: reach.bits(o)), hasCheck: false))
+        }
+        var visited = frontier.count
+        var generation = 0
+        while !frontier.isEmpty {
+            if isCancelled() { throw WalkError.cancelled }
+            layers.append(frontier)
+            if let limit = options.maxGenerations, generation >= limit { break }
+            var next: [Visit] = []
+            for v in frontier {
+                let ps = s.parents(of: Int(v.ordinal))
+                for (slot, p) in ps.enumerated() where !seen[Int(p)] {
+                    seen[Int(p)] = true
+                    next.append(Visit(ordinal: p, generation: Int32(generation + 1), from: v.ordinal,
+                                      slot: UInt8(min(slot, 255)), slots: UInt8(min(ps.count, 255)),
+                                      line: Line(bits: reach.bits(Int(p))), hasCheck: false))
+                    visited += 1
+                    if visited % cadence == 0 {
+                        emit(.progress(Progress(visited: visited, reachable: reach.reachable,
+                                                generation: generation + 1, frontier: next.count,
+                                                sample: sample(Int(p)))))
+                    }
+                }
+            }
+            frontier = next
+            generation += 1
+        }
+        return layers
+    }
+
+    struct Inherited {
+        var lineBits: [UInt8]
+        var pathsA: [Double]
+        var pathsB: [Double]
+    }
+
+    /// INHERITED attributes over the condensation, children first (reverse
+    /// Tarjan order): line bits (OR) and distinct path counts (Σ, NaN
+    /// through a cycle — NaN + x = NaN carries the poison upward).
+    static func inheritedPass(_ s: TreeWalkSnapshot, components comps: TreeWalkGraph.Components,
+                              reach: Reach, starts: [Int]) -> Inherited {
+        var out = Inherited(lineBits: [UInt8](repeating: 0, count: s.count),
+                            pathsA: [Double](repeating: 0, count: s.count),
+                            pathsB: [Double](repeating: 0, count: s.count))
+        let a = starts[0], b = starts.count > 1 ? starts[1] : -1
+        for comp in comps.members.indices.reversed() {
+            let group = comps.members[comp]
+            guard group.contains(where: { reach.bits(Int($0)) != 0 }) else { continue }
+            var bits: UInt8 = 0
+            var pa = 0.0, pb = 0.0
+            for m in group {
+                let mi = Int(m)
+                if mi == a { bits |= 1; pa += 1 }
+                if mi == b { bits |= 2; pb += 1 }
+                for c in s.kids(of: mi) where comps.component[Int(c)] != Int32(comp) && reach.bits(Int(c)) != 0 {
+                    bits |= out.lineBits[Int(c)]
+                    pa += out.pathsA[Int(c)]
+                    pb += out.pathsB[Int(c)]
+                }
+            }
+            if comps.cyclic[comp] {
+                if bits & 1 != 0 { pa = .nan }
+                if bits & 2 != 0 { pb = .nan }
+            }
+            for m in group {
+                // Equal to BFS reachability on an unlimited walk; the AND
+                // honours a depth limit.
+                out.lineBits[Int(m)] = bits & reach.bits(Int(m))
+                out.pathsA[Int(m)] = pa
+                out.pathsB[Int(m)] = pb
+            }
+        }
+        return out
+    }
+
+    struct FoundChecks {
+        let all: [Check]
+        let cycles: [Check]
+        /// ordinal → indexes into `all`.
+        let byPerson: [[Int]]
+    }
+
+    static func runChecks(_ s: TreeWalkSnapshot, graph: GedcomFamilyGraph, ages: [AgeAtDeath?],
+                          components comps: TreeWalkGraph.Components) -> FoundChecks {
+        var checks = TreeWalkChecks.perPerson(snapshot: s, graph: graph, ages: ages)
+        checks += TreeWalkChecks.duplicates(snapshot: s)
+        let cycles = TreeWalkChecks.cycles(snapshot: s, components: comps)
+        checks += cycles
+        let kindOrder = Dictionary(uniqueKeysWithValues: CheckKind.allCases.enumerated().map { ($1, $0) })
+        checks.sort { x, y in
+            let kx = kindOrder[x.kind] ?? 0, ky = kindOrder[y.kind] ?? 0
+            return kx != ky ? kx < ky : x.personIDs.lexicographicallyPrecedes(y.personIDs)
+        }
+        var byPerson = [[Int]](repeating: [], count: s.count)
+        for (i, check) in checks.enumerated() {
+            for id in check.personIDs {
+                if let o = s.ordinal(of: id), byPerson[o].last != i { byPerson[o].append(i) }
+            }
+        }
+        return FoundChecks(all: checks, cycles: cycles, byPerson: byPerson)
+    }
+
+    static func assemble(_ s: TreeWalkSnapshot, reach: Reach, inherited: Inherited,
+                         components comps: TreeWalkGraph.Components, ages: [AgeAtDeath?],
+                         ancestors anc: TreeWalkGraph.SetCounts, descendants desc: TreeWalkGraph.SetCounts,
+                         checksOf: [[Int]]) -> [Decoration] {
+        TreeWalkParallel.map(count: s.count) { o in
             var d = Decoration()
             guard s.visible[o] else { return d }
-            d.line = Line(bits: lineBits[o])
-            d.generationFromFirst = genA[o] >= 0 ? Int(genA[o]) : nil
-            d.generationFromSecond = genB.flatMap { $0[o] >= 0 ? Int($0[o]) : nil }
-            d.pathsFromFirst = lineBits[o] & 1 != 0 ? pathsA[o] : nil
-            d.pathsFromSecond = lineBits[o] & 2 != 0 ? pathsB[o] : nil
+            let bits = inherited.lineBits[o]
+            d.line = Line(bits: bits)
+            d.generationFromFirst = reach.generationFromFirst(o)
+            d.generationFromSecond = reach.generationFromSecond(o)
+            d.pathsFromFirst = bits & 1 != 0 ? inherited.pathsA[o] : nil
+            d.pathsFromSecond = bits & 2 != 0 ? inherited.pathsB[o] : nil
             d.inCycle = comps.component[o] >= 0 && comps.cyclic[Int(comps.component[o])]
             d.sex = s.sex[o]
             d.birthYear = s.birth[o]?.year
@@ -275,31 +369,14 @@ extension TreeWalk {
             d.checks = checksOf[o]
             return d
         }
-        // The start people are the ones read most: give them EXACT counts
-        // (an unlimited BFS each — O(their ancestors)) instead of the sketch
-        // estimate.
-        var decorated = decorations
-        for o in startOrdinals {
-            let gen = TreeWalkGraph.generations(from: o, maxGenerations: nil, snapshot: s)
-            var count = 0, datedCount = 0
-            for x in 0..<n where x != o && gen[x] >= 0 {
-                count += 1
-                if dated[x] { datedCount += 1 }
-            }
-            decorated[o].ancestorCount = Count(value: count, isEstimate: false)
-            decorated[o].documentedAncestorFraction = count == 0 ? nil : Double(datedCount) / Double(count)
-        }
-        let finalLayers = layers.map { layer in
-            layer.map { v in
-                Visit(ordinal: v.ordinal, generation: v.generation, from: v.from, slot: v.slot, slots: v.slots,
-                      line: Line(bits: lineBits[Int(v.ordinal)]), hasCheck: !checksOf[Int(v.ordinal)].isEmpty)
-            }
-        }
+    }
 
+    static func summarize(_ s: TreeWalkSnapshot, layers: [[Visit]], checks: [Check], cycles: Int,
+                          reach: Reach, ages: [AgeAtDeath?]) -> Summary {
         var summary = Summary()
         summary.peopleInTree = s.visible.filter { $0 }.count
-        summary.peopleWalked = visited
-        for layer in finalLayers {
+        for layer in layers {
+            summary.peopleWalked += layer.count
             for v in layer {
                 summary.byLine[v.line, default: 0] += 1
                 summary.byRegion[s.region[Int(v.ordinal)], default: 0] += 1
@@ -309,20 +386,12 @@ extension TreeWalk {
             summary.checksByKind[c.kind, default: 0] += 1
             if c.severity == .warn { summary.warnCount += 1 } else { summary.infoCount += 1 }
         }
-        summary.cycleCount = cycleChecks.count
-        summary.generationsFromFirst = Int(genA.max() ?? 0)
-        summary.generationsFromSecond = Int(genB?.max() ?? 0)
-        summary.coverageWalked = coverage(s, ages: ages) { walked($0) }
+        summary.cycleCount = cycles
+        summary.generationsFromFirst = Int(reach.first.max() ?? 0)
+        summary.generationsFromSecond = Int(reach.second?.max() ?? 0)
+        summary.coverageWalked = coverage(s, ages: ages) { reach.bits($0) != 0 }
         summary.coverageTree = coverage(s, ages: ages) { s.visible[$0] }
-        summary.walkMilliseconds = walkMs
-        summary.checksMilliseconds = checksMs
-        summary.estimatedAncestorCounts = anc.estimated
-        summary.totalMilliseconds = ms(clock.now - t0)
-
-        return Result(walkerVersion: walkerVersion, sourceKey: sourceKey, generatedAt: now,
-                      starts: starts, maxGenerations: options.maxGenerations,
-                      ids: s.ids, names: s.names, decorations: decorated, visible: s.visible,
-                      checks: checks, summary: summary, layers: finalLayers)
+        return summary
     }
 
     /// "N of M have <field>" over the people `include` admits.

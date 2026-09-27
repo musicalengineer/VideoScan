@@ -55,7 +55,7 @@ public struct TreeWalkDate: Sendable, Equatable {
         switch interval.qualifier {
         case .exact:
             let tokens = raw.uppercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
-            if let m = tokens.firstIndex(where: { monthNames.contains($0) }).map({ monthNames.firstIndex(of: tokens[$0])! }) {
+            if let m = tokens.lazy.compactMap({ monthNames.firstIndex(of: $0) }).first {
                 let month = year * 12 + m
                 let day = tokens.first(where: { $0.count <= 2 && (Int($0).map { (1...31).contains($0) } ?? false) }).flatMap { Int($0) }
                 return TreeWalkDate(lowerMonth: month, upperMonth: month,

@@ -197,7 +197,8 @@ enum TreeWalkParallel {
         return withoutActuallyEscaping(body) { escapable in
             nonisolated(unsafe) let work = escapable
             return [T](unsafeUninitializedCapacity: n) { buffer, initialized in
-                nonisolated(unsafe) let base = buffer.baseAddress!
+                guard let start = buffer.baseAddress else { initialized = 0; return }
+                nonisolated(unsafe) let base = start
                 let chunks = (n + chunk - 1) / chunk
                 DispatchQueue.concurrentPerform(iterations: chunks) { c in
                     let lo = c * chunk, hi = min(n, lo + chunk)
