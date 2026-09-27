@@ -157,7 +157,18 @@ def new_cycle(title: str, rng: str, doc: str) -> dict:
 # ---------------------------------------------------------------- channel
 
 def post(subject: str, body: str, reply_to: int | None = None) -> int | None:
-    """Post from claude to codex via the canonical CLI. A channel failure never fails the review."""
+    """Optionally post a review-cycle line to the team channel.
+
+    OFF by default (Rick, 2026-09-27). The first version posted every start /
+    verdict / closed line "to codex"; codex is run directly by `codex exec`
+    and never replies on the channel, so Rick's monitor showed 19 red
+    "unanswered from codex" rows. The record of a cycle is review-cycles.json
+    (the monitor's Review cycles section + the status line) and the review
+    doc. Set VIDEOSCAN_REVIEW_ANNOUNCE=1 to post anyway (e.g. when a human
+    should see it in the channel). A channel failure never fails the review.
+    """
+    if os.environ.get("VIDEOSCAN_REVIEW_ANNOUNCE") != "1":
+        return None
     args = [sys.executable, str(CHANNEL_SCRIPT), "post", "--from", "claude", "--to", "codex",
             "--subject", subject[:MAX_SUBJECT], "--body", body]
     if reply_to is not None:
