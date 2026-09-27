@@ -217,6 +217,9 @@ accumulated knowledge of this repo, and every pass costs real money. So:
   files/functions in scope, the invariant to attack (e.g. "prove the surviving
   copy exists before unlink"), the test evidence already run, and the artifact
   path for the verdict. Say explicitly "do not explore outside these files."
+  Run it with `tools/codex_review.py` (the brief also carries the first-line
+  contract `Credits spent: … | Finding count: N` + `Verdict:`); see
+  docs/team-channel/README.md.
 - **Close the loop:** each finding is closed against a pinning test or
   explicitly declined with a reason, in the review doc.
 - **Record spend:** put the credit cost of the pass and the finding count in
