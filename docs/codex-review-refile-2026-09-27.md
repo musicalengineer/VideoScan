@@ -299,3 +299,65 @@ OUTPUT (stdout, Markdown, under 400 words):
 first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
 then a line `Verdict: merge / merge-after-fixes / hold`
 then findings, each with file:line, a concrete counterexample, and the test that would pin it.
+
+## Closed
+
+Closed by `0dd2d1c4` at 2026-09-27T19:09:08Z. #1 c1a4ae2d (ledger-checked replay), #2 0dd2d1c4 (offline waits, not conflict)
+
+---
+
+# Codex review — Refile r6
+
+- Range: `1e931b3e..0dd2d1c4`
+- Credits spent: unavailable
+- Tokens: 51744
+- Finding count: 3
+- Verdict: merge-after-fixes
+- Run: 2026-09-27T19:09:08Z (cycle #6, tools/codex_review.py)
+
+## Codex answer
+
+Credits spent: unavailable | Finding count: 3
+Verdict: merge-after-fixes
+
+1. **P1 — Timestamp ordering still permits overwriting a newer correction.** [VideoScanModel+ArchiveRefile.swift:773](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+ArchiveRefile.swift:773)  
+   Counterexample: A→B sets 1984; B→C sets 1985; both saves fail. Rick persists a revert to 1984, but its ledger timestamp falls in the same millisecond as the second update—or earlier after a clock correction. Strict `>` misses the edit; the value guard accepts 1984 and overwrites it with 1985.  
+   **Pin:** `userDateRevertWithNonIncreasingTimestampSurvivesReplay`, parameterized for equal milliseconds and backward clock movement. Inject timestamps deterministically; assert 1984 survives.
+
+2. **P1 — A failed user ledger append defeats the protection entirely.** [VideoScanModel+ArchiveRefile.swift:769](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+ArchiveRefile.swift:769)  
+   Counterexample: use the same failed-save chain, then persist Rick’s 1984 revert while its fire-and-forget ledger append fails. Relaunch with a fresh ledger instance. No event identifies the correction; replay writes 1985 and can clear the pending entry. Absence of an audit event does not establish absence of an edit.  
+   **Pin:** `userDateRevertSurvivesFailedLedgerAppend`: inject a throwing ledger writer for the revert, persist the catalog, reopen the ledger, replay, and assert 1984 remains.
+
+3. **P2 — A subsequent Refile deletes the newly retained date conflict.** [VideoScanModel+ArchiveRefile.swift:795](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+ArchiveRefile.swift:795), interacting with line 569.  
+   Counterexample: `userDateRevertSurvivesReplay` produces a conflict with `catalogDone == true` after successful partial persistence and `ledgerDone == true`. Refile that copy again: the cleanup at line 569 removes all completed entries for the copy without checking `conflict`. The unresolved conflict disappears automatically.  
+   **Pin:** `dateConflictSurvivesSubsequentRefile`: extend the existing pin with another Refile; assert the original conflict ID remains.
+
+`ArchiveRefileR2Tests.swift`: read, no findings in the added tests themselves; these cases remain uncovered.
+
+Offline recovery handles both expected record states. Permanently missing targets remain pending **with logging**. Refile’s own events carry the excluded prefix. Partial application follows the stated field-level policy.
+
+Static review only; no builds or tests run. r3 #4 remains declined.
+
+## Brief
+
+Re-review, SCOPED to the two fix commits for your Refile r5 findings (docs/codex-review-refile-2026-09-27.md, section "Codex review — Refile r5", with its Disposition block): range 1e931b3e..0dd2d1c4 on feat/archive-refile (commits c1a4ae2d, 0dd2d1c4). Use `git diff 1e931b3e..0dd2d1c4` and `git show <sha>`. Do not explore outside the files they touch (VideoScanModel+ArchiveRefile.swift, VideoScanTests/ArchiveRefileR2Tests.swift); read-only; do not build or run. r3 #4 stays declined.
+
+FIXES (each red first):
+- c1a4ae2d r5#1 — `DateUpdate.createdAtMillis`; `replayCatalogStep` checks the media ledger FIRST: if the record has a `dateSet` later than the update was made that does NOT carry a `refile:` idempotency key (i.e. not written by the refile machinery — the Inspector, the Angel, any other path), that update is not replayed, the field is a "Refile recovery conflict" (logged), and the entry is kept marked conflict after the rest is applied and saved. The value check remains the second guard. The ledger has no repoint event kind, so repoints stay covered by the r5 copy fingerprint. Pin: userDateRevertSurvivesReplay (A→B 1984, B→C 1985, both saves fail; Rick reverts the original to 1984 through noteUserDateEdited; replay leaves 1984). This commit also adds the r5#2 pin, red until the next commit.
+- 0dd2d1c4 r5#2 — when the record is as expected (at the target or at a prior state) but the target file is unreachable (lstat nil), the entry WAITS ("archive offline — Refile recovery waits"), never a conflict; only a record that says something else, or a positive identity mismatch at the target, is a conflict. Pin: offlineAlreadyAtTargetRemainsRetryable (record persisted at B, archive folder moved away at replay → pending, no conflict; back → completes).
+
+ATTACK:
+1. The ledger guard: a same-millisecond edit; a user dateSet that failed to reach the ledger (fire-and-forget append) so the revert is invisible; clock skew between the refile's `now` and the ledger's `at`; the refile's own dateSet lines ever being counted as user edits.
+2. Partial application: dates applied and saved while another field is a conflict — can the saved state be one Rick never had?
+3. Offline: a target that is unreachable forever (file deleted, not offline) waiting silently forever; a record that is at a prior state while offline.
+
+EVIDENCE (M4, Debug): at 0dd2d1c4 (docs cb1746b7 after), 373 tests in 66 suites passed, run by suite with `-only-testing` (the same 66 suites as r5; both pins in ArchiveRefileR2StepEPersistenceTests). Both pins were run red before their fixes.
+
+OUTPUT (stdout, Markdown, under 400 words):
+first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
+then a line `Verdict: merge / merge-after-fixes / hold`
+then findings, each with file:line, a concrete counterexample, and the test that would pin it.
+
+## Closed
+
+Closed by `superseded` at 2026-09-27T20:10:06Z. Rick 2026-09-27: Refile cut down to right-click Update… {name, date}; the replay/date write-back paths these findings live in are removed
