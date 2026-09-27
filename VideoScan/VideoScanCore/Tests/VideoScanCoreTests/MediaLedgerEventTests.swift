@@ -24,7 +24,7 @@ final class MediaLedgerEventTests: XCTestCase {
                        ["cataloged", "setAside", "putBack", "archived", "copyTrashed", "copyDeleted",
                         "restored", "placeSet", "dateSet", "attestation", "approval",
                         "angelProposed", "angelSkipped", "angelCleared", "footageDecided",
-                        "familyMusic"])
+                        "familyMusic", "refiled", "refileRolledBack"])
         XCTAssertEqual(MediaLedgerEvent.Actor.allCases.map(\.rawValue), ["rick", "tidy", "promote", "angel", "app"])
     }
 
