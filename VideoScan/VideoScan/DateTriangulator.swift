@@ -26,7 +26,7 @@
 //   spoken year, no cue      0.45, +0.05 per repeat (cap 0.55)               (year)
 //   caption year (VLM)       0.45                                             (year)
 //   age + birth year         0.60 one named person · 0.30 any known person    (2-year window)
-//   folder year hint         0.55                                             (year)
+//   folder year hint         0.55 — beside other content; alone only in a dossier pass
 //   spoken REFERENCE year    0    — logged in the reason, never dates the tape
 //   export stamp             ceiling — a claim after the export is doubtful (×0.25)
 //   media-era floor          DV ≥ 1995 · HDV ≥ 2003 · AVCHD/phone ≥ 2006 — claims below are set aside
@@ -34,6 +34,8 @@
 //                            a lone soft claim outside 1984–2016 ×0.5
 // A camera stamp alone is NOT an inference (the resolver already ranks it);
 // the triangulator answers only when some CONTENT criterion spoke.
+// A softer claim (a folder year, a cue-less mention) never pulls a harder
+// one (a burn-in, a camera stamp) down — it is only written into the reason.
 //
 // PURE and nonisolated: values in, value out, no clock unless injected.
 // Cost: one regex pass per text channel plus a few short-window regexes
@@ -43,7 +45,10 @@
 // and documented thread-safe; ≈ a `static const std::regex`).
 //
 // (For Rick: `struct` claims + a free function ≈ PODs through a pure
-// C function; `[ClosedRange<Int>]` ≈ a vector of {lo, hi} pairs.)
+// C function; `[ClosedRange<Int>]` ≈ a vector of {lo, hi} pairs; the
+// private `DateTriangulation` builder below ≈ a stack-local context object
+// whose methods each add one criterion — split that way so no one
+// function is a 60-branch wall.)
 
 import Foundation
 import VideoScanCore
@@ -107,6 +112,17 @@ struct DateCriterionClaim: Equatable, Sendable {
     func contains(_ year: Int) -> Bool { spans.contains { $0.contains(year) } }
     var lowestYear: Int? { spans.map(\.lowerBound).min() }
     var highestYear: Int? { spans.map(\.upperBound).max() }
+
+    /// How HARD a claim is: a burn-in / camera stamp 3, a spoken now-cue or
+    /// a named person's age 2, everything else 1.
+    var hardness: Int {
+        switch kind {
+        case .ocrBurnIn, .cameraStamp: return 3
+        case .spokenNow: return 2
+        case .age: return weight >= DateTriangulationWeights.ageNamedPerson ? 2 : 1
+        default: return 1
+        }
+    }
 }
 
 /// The triangulator's answer.
@@ -299,8 +315,9 @@ nonisolated func pfClassifyYearMentions(in text: String, now: Date = Date()) -> 
     return out
 }
 
-/// NOW cues win over reference cues (a "what year is it?" question is
-/// explicit); neither ⇒ neutral. Pure over the two windows.
+/// Strong reference cues first ("class of", "born", "back in"), then NOW
+/// cues (a "what year is it?" question is explicit), then the softer
+/// reference cues; neither ⇒ neutral. Pure over the two windows.
 nonisolated func pfSpokenYearRole(before: String, after: String) -> SpokenYearRole {
     func hit(_ regexes: [NSRegularExpression], _ s: String) -> Bool {
         let r = NSRange(location: 0, length: (s as NSString).length)
@@ -340,7 +357,7 @@ nonisolated func pfAgeMentions(in text: String, names: [String]) -> [SpokenAgeMe
     guard DateTriangulationRegex.ageTriggers.contains(where: { lower.contains($0) }) else { return [] }
     let ns = lower as NSString
     let full = NSRange(location: 0, length: ns.length)
-    var seen = Set<Int>()   // match locations, so overlapping patterns count once
+    var seen = Set<Int>()   // the NUMBER's location, so overlapping patterns count once
     var out: [SpokenAgeMention] = []
     for regex in DateTriangulationRegex.ages {
         for m in regex.matches(in: lower, range: full) {
@@ -380,20 +397,19 @@ nonisolated func pfAgeNumber(_ token: String) -> Int? {
 }
 
 /// The name nearest the mention (closest before wins over after).
-/// Whole-word, case-insensitive; `names` are already lower-cased or not —
-/// compared lower-cased either way.
+/// Whole-word, case-insensitive.
 nonisolated func pfNearestName(_ names: [String], before: String, after: String) -> String? {
     var best: (name: String, distance: Int)?
     for name in names {
         let n = name.lowercased().trimmingCharacters(in: .whitespaces)
         guard n.count >= 2 else { continue }
+        var distance: Int?
         if let r = pfLastWholeWord(n, in: before) {
-            let d = before.count - r
-            if best == nil || d < best!.distance { best = (name, d) }   // swiftlint:disable:this force_unwrapping
+            distance = before.count - r
         } else if let r = pfFirstWholeWord(n, in: after) {
-            let d = before.count + r + 1_000   // after the mention counts as farther
-            if best == nil || d < best!.distance { best = (name, d) }   // swiftlint:disable:this force_unwrapping
+            distance = before.count + r + 1_000   // after the mention counts as farther
         }
+        if let distance, best.map({ distance < $0.distance }) ?? true { best = (name, distance) }
     }
     return best?.name
 }
@@ -426,22 +442,69 @@ nonisolated func pfFirstWholeWord(_ word: String, in text: String) -> Int? {
 // MARK: - The triangulator
 
 nonisolated func pfTriangulateRecordDate(_ input: DateTriangulationInput) -> DateTriangulationResult {
-    var utcCal = Calendar(identifier: .gregorian)
-    utcCal.timeZone = TimeZone(identifier: "UTC") ?? .current
-    let nowYear = utcCal.component(.year, from: input.now)
-    let W = DateTriangulationWeights.self
+    var t = DateTriangulation(input: input)
+    t.collectBurnIns()
+    t.collectSpokenYears()
+    t.collectCaptionYears()
+    t.collectAges()
+    t.collectFolderHint()
+    t.collectStamp()
+    guard t.hasContent else { return t.noEvidence() }
+    t.applyExportCeiling()
+    t.applyEraFloor()
+    t.applyWindowPrior()
+    return t.combine()
+}
 
+/// The working state of one triangulation: the claims collected so far,
+/// the notes for the reason, and the facts the constraint steps read.
+private struct DateTriangulation {
+    let input: DateTriangulationInput
+    let utcCal: Calendar
+    let nowYear: Int
     var claims: [DateCriterionClaim] = []
-    var notes: [String] = []          // reason lines for things that are not claims
+    /// Reason lines for things that are not claims.
+    var notes: [String] = []
+    var parsedOcr: [Date] = []
+    var mentions: [SpokenYearMention] = []
+    var captionYearCount = 0
+    var exportYear: Int?
+
+    typealias W = DateTriangulationWeights
+
+    init(input: DateTriangulationInput) {
+        self.input = input
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? .current
+        utcCal = cal
+        nowYear = cal.component(.year, from: input.now)
+    }
+
+    static let contentKinds: Set<DateCriterionClaim.Kind> = [
+        .ocrBurnIn, .spokenNow, .spokenNeutral, .captionYear, .age, .pathHint,
+    ]
+
+    /// A stamp alone is the resolver's business, not an inference.
+    var hasContent: Bool {
+        claims.contains { Self.contentKinds.contains($0.kind) && $0.weight > 0 }
+    }
+
+    var referenceLines: [String] { claims.filter { $0.kind == .spokenReference }.map(\.reason) }
+
+    func noEvidence(_ extra: [String] = []) -> DateTriangulationResult {
+        .noEvidence(extra + notes + referenceLines, claims: claims)
+    }
 
     // ---- 1. On-screen burn-ins (day precision). Majority day wins; a
     //         second, different day is a weaker claim of its own.
-    let parsedOcr = input.ocrDateCandidates.compactMap(pfParseOcrDate(_:))
-    if !parsedOcr.isEmpty {
+    mutating func collectBurnIns() {
+        parsedOcr = input.ocrDateCandidates.compactMap(pfParseOcrDate(_:))
+        guard !parsedOcr.isEmpty else { return }
+        let cal = utcCal
         let bucketed = Dictionary(grouping: parsedOcr) { d -> Date in
-            var dc = utcCal.dateComponents([.year, .month, .day], from: d)
+            var dc = cal.dateComponents([.year, .month, .day], from: d)
             dc.hour = 12; dc.timeZone = TimeZone(identifier: "UTC")
-            return utcCal.date(from: dc) ?? d
+            return cal.date(from: dc) ?? d
         }
         let ordered = bucketed.sorted { a, b in
             a.value.count != b.value.count ? a.value.count > b.value.count : a.key < b.key
@@ -460,70 +523,65 @@ nonisolated func pfTriangulateRecordDate(_ input: DateTriangulationInput) -> Dat
         }
     }
 
-    // ---- 2. Spoken years (transcript): NOW-cues date the tape, references
-    //         are logged, bare mentions count a little.
-    let mentions = pfClassifyYearMentions(in: input.audioTranscript ?? "", now: input.now)
-    var nowCounts: [Int: (count: Int, cue: String)] = [:]
-    var neutralCounts: [Int: Int] = [:]
-    var referenceYears: [Int] = []
-    for m in mentions {
-        switch m.role {
-        case .now:
-            var e = nowCounts[m.year] ?? (0, m.cue)
-            e.count += 1
-            nowCounts[m.year] = e
-        case .neutral:
-            neutralCounts[m.year, default: 0] += 1
-        case .reference:
-            if !referenceYears.contains(m.year) { referenceYears.append(m.year) }
+    // ---- 2. Spoken years: NOW-cues date the tape, references are logged,
+    //         bare mentions count a little.
+    mutating func collectSpokenYears() {
+        mentions = pfClassifyYearMentions(in: input.audioTranscript ?? "", now: input.now)
+        var nowCounts: [Int: (count: Int, cue: String)] = [:]
+        var neutralCounts: [Int: Int] = [:]
+        var referenceYears: [Int] = []
+        for m in mentions {
+            switch m.role {
+            case .now:
+                var e = nowCounts[m.year] ?? (0, m.cue)
+                e.count += 1
+                nowCounts[m.year] = e
+            case .neutral:
+                neutralCounts[m.year, default: 0] += 1
+            case .reference:
+                if !referenceYears.contains(m.year) { referenceYears.append(m.year) }
+            }
         }
-    }
-    for (year, e) in nowCounts.sorted(by: { $0.key < $1.key }) {
-        let weight = min(W.spokenNowCap, W.spokenNow + Float(e.count - 1) * W.repeatBonus)
-        claims.append(DateCriterionClaim(
-            kind: .spokenNow, spans: [year...year], day: nil, weight: weight,
-            reason: "spoken now-cue '\(e.cue)'" + (e.count > 1 ? " ×\(e.count)" : "")))
-    }
-    for (year, count) in neutralCounts.sorted(by: { $0.key < $1.key }) where nowCounts[year] == nil {
-        let weight = min(W.spokenNeutralCap, W.spokenNeutral + Float(count - 1) * W.repeatBonus)
-        claims.append(DateCriterionClaim(
-            kind: .spokenNeutral, spans: [year...year], day: nil, weight: weight,
-            reason: "\(year) mentioned in speech" + (count > 1 ? " ×\(count)" : "") + " (no cue)"))
-    }
-    for year in referenceYears where nowCounts[year] == nil {
-        claims.append(DateCriterionClaim(
-            kind: .spokenReference, spans: [year...year], day: nil, weight: 0,
-            reason: "\(year) mentioned as a reference (past), not the recording year"))
+        for (year, e) in nowCounts.sorted(by: { $0.key < $1.key }) {
+            let weight = min(W.spokenNowCap, W.spokenNow + Float(e.count - 1) * W.repeatBonus)
+            claims.append(DateCriterionClaim(
+                kind: .spokenNow, spans: [year...year], day: nil, weight: weight,
+                reason: "spoken now-cue '\(e.cue)'" + (e.count > 1 ? " ×\(e.count)" : "")))
+        }
+        for (year, count) in neutralCounts.sorted(by: { $0.key < $1.key }) where nowCounts[year] == nil {
+            let weight = min(W.spokenNeutralCap, W.spokenNeutral + Float(count - 1) * W.repeatBonus)
+            claims.append(DateCriterionClaim(
+                kind: .spokenNeutral, spans: [year...year], day: nil, weight: weight,
+                reason: "\(year) mentioned in speech" + (count > 1 ? " ×\(count)" : "") + " (no cue)"))
+        }
+        for year in referenceYears where nowCounts[year] == nil {
+            claims.append(DateCriterionClaim(
+                kind: .spokenReference, spans: [year...year], day: nil, weight: 0,
+                reason: "\(year) mentioned as a reference (past), not the recording year"))
+        }
     }
 
     // ---- 3. Caption years (the VLM read a calendar, a banner…).
-    var captionYears: [Int: Int] = [:]
-    for text in input.sceneCaptionTexts {
-        for y in pfYearMentions(in: text, now: input.now) { captionYears[y, default: 0] += 1 }
-    }
-    for (year, count) in captionYears.sorted(by: { $0.key < $1.key }) {
-        claims.append(DateCriterionClaim(
-            kind: .captionYear, spans: [year...year], day: nil, weight: W.captionYear,
-            reason: "caption mentions \(year)" + (count > 1 ? " ×\(count)" : "")))
+    mutating func collectCaptionYears() {
+        var captionYears: [Int: Int] = [:]
+        for text in input.sceneCaptionTexts {
+            for y in pfYearMentions(in: text, now: input.now) { captionYears[y, default: 0] += 1 }
+        }
+        captionYearCount = captionYears.count
+        for (year, count) in captionYears.sorted(by: { $0.key < $1.key }) {
+            claims.append(DateCriterionClaim(
+                kind: .captionYear, spans: [year...year], day: nil, weight: W.captionYear,
+                reason: "caption mentions \(year)" + (count > 1 ? " ×\(count)" : "")))
+        }
     }
 
     // ---- 4. Ages + People-tab birth years. Isolation: no people ⇒ neutral.
-    if !input.people.isEmpty {
+    mutating func collectAges() {
+        guard !input.people.isEmpty else { return }
         let names = input.people.flatMap { [$0.name] + $0.aliases }
         let onRecord = Set(input.peopleOnRecord.map { $0.lowercased() })
         for age in pfAgeMentions(in: input.audioTranscript ?? "", names: names) {
-            let candidates: [DateTriangulationPerson]
-            let named: Bool
-            if let subject = age.subject,
-               let person = input.people.first(where: { pfPersonMatches($0, subject) }) {
-                candidates = [person]; named = true
-            } else {
-                let tagged = input.people.filter { p in
-                    onRecord.contains(p.name.lowercased()) || p.aliases.contains { onRecord.contains($0.lowercased()) }
-                }
-                if tagged.count == 1 { candidates = tagged; named = true }
-                else { candidates = input.people; named = false }
-            }
+            let (candidates, named) = ageSubjects(for: age, onRecord: onRecord)
             let spans = candidates
                 .map { ($0.birthYear + age.age)...($0.birthYear + age.age + 1) }
                 .filter { $0.lowerBound <= nowYear }
@@ -544,12 +602,26 @@ nonisolated func pfTriangulateRecordDate(_ input: DateTriangulationInput) -> Dat
         }
     }
 
+    /// Whose age is it? The person named nearby; else the record's ONE
+    /// tagged person; else everyone the People tab knows a birth year for.
+    func ageSubjects(for age: SpokenAgeMention, onRecord: Set<String>) -> (people: [DateTriangulationPerson], named: Bool) {
+        if let subject = age.subject, let person = input.people.first(where: { pfPersonMatches($0, subject) }) {
+            return ([person], true)
+        }
+        let tagged = input.people.filter { p in
+            onRecord.contains(p.name.lowercased()) || p.aliases.contains { onRecord.contains($0.lowercased()) }
+        }
+        if tagged.count == 1 { return (tagged, true) }
+        return (input.people, false)
+    }
+
     // ---- 5. Folder year hint (deepest directory first; one claim) —
     //         beside other content, or alone only in a dossier pass.
-    let hasOtherContent = !parsedOcr.isEmpty || !mentions.isEmpty || !captionYears.isEmpty
-        || claims.contains { $0.kind == .age }
-    if let year = input.pathYearHints.first, year >= 1900, year <= nowYear + 1,
-       hasOtherContent || input.pathHintStandsAlone {
+    mutating func collectFolderHint() {
+        let hasOtherContent = !parsedOcr.isEmpty || !mentions.isEmpty || captionYearCount > 0
+            || claims.contains { $0.kind == .age }
+        guard let year = input.pathYearHints.first, year >= 1900, year <= nowYear + 1,
+              hasOtherContent || input.pathHintStandsAlone else { return }
         let folder = pfDirectoryComponent(naming: year, in: input.fullPath) ?? "folder"
         claims.append(DateCriterionClaim(
             kind: .pathHint, spans: [year...year], day: nil, weight: W.pathHint,
@@ -557,8 +629,8 @@ nonisolated func pfTriangulateRecordDate(_ input: DateTriangulationInput) -> Dat
     }
 
     // ---- 6. The container stamp: a camera's is a claim; an export's is a ceiling.
-    var exportYear: Int?
-    if let stamp = input.embeddedCreationDate {
+    mutating func collectStamp() {
+        guard let stamp = input.embeddedCreationDate else { return }
         let y = utcCal.component(.year, from: stamp)
         if RecordDateResolver.namesDevice(originMake: input.originMake, originModel: input.originModel) {
             let origin = EmbeddedOriginTags.description(EmbeddedOriginTags.Origin(
@@ -566,28 +638,21 @@ nonisolated func pfTriangulateRecordDate(_ input: DateTriangulationInput) -> Dat
             claims.append(DateCriterionClaim(
                 kind: .cameraStamp, spans: [y...y], day: stamp, weight: W.cameraStamp,
                 reason: "camera stamp \(pfIsoDay(stamp, utcCal)) (\(origin))"))
-        } else {
-            exportYear = y
-            let origin: String
-            if let make = input.originMake { origin = "\(make), no model" }
-            else if let enc = input.originEncoder { origin = EmbeddedOriginTags.encoderFamily(enc) }
-            else { origin = "no camera named" }
-            claims.append(DateCriterionClaim(
-                kind: .exportStamp, spans: [y...y], day: stamp, weight: 0,
-                reason: "export stamp \(pfIsoDay(stamp, utcCal)) set aside as ingest (\(origin))"))
+            return
         }
+        exportYear = y
+        let origin: String
+        if let make = input.originMake { origin = "\(make), no model" }
+        else if let enc = input.originEncoder { origin = EmbeddedOriginTags.encoderFamily(enc) }
+        else { origin = "no camera named" }
+        claims.append(DateCriterionClaim(
+            kind: .exportStamp, spans: [y...y], day: stamp, weight: 0,
+            reason: "export stamp \(pfIsoDay(stamp, utcCal)) set aside as ingest (\(origin))"))
     }
 
-    // ---- Content check: a stamp alone is the resolver's business, not an inference.
-    let contentKinds: Set<DateCriterionClaim.Kind> = [.ocrBurnIn, .spokenNow, .spokenNeutral, .captionYear, .age, .pathHint]
-    guard claims.contains(where: { contentKinds.contains($0.kind) && $0.weight > 0 }) else {
-        // References alone are worth telling Rick about.
-        let refs = claims.filter { $0.kind == .spokenReference }.map(\.reason)
-        return .noEvidence(refs, claims: claims)
-    }
-
-    // ---- 7. Constraints: the export ceiling, the media-era floor.
-    if let exportYear {
+    // ---- 7a. A claim that puts the footage AFTER its export is doubtful.
+    mutating func applyExportCeiling() {
+        guard let exportYear else { return }
         for i in claims.indices where claims[i].weight > 0 && claims[i].kind != .cameraStamp {
             if let lo = claims[i].lowestYear, lo > exportYear {
                 claims[i].weight *= W.afterExportFactor
@@ -595,10 +660,12 @@ nonisolated func pfTriangulateRecordDate(_ input: DateTriangulationInput) -> Dat
             }
         }
     }
-    let floor = pfMediaEraFloor(videoCodec: input.videoCodec, container: input.container,
-                                originMake: input.originMake, originModel: input.originModel,
-                                fullPath: input.fullPath)
-    if let floor {
+
+    // ---- 7b. The media-era floor: claims below it are set aside.
+    mutating func applyEraFloor() {
+        guard let floor = pfMediaEraFloor(videoCodec: input.videoCodec, container: input.container,
+                                          originMake: input.originMake, originModel: input.originModel,
+                                          fullPath: input.fullPath) else { return }
         var clipped = false
         for i in claims.indices where claims[i].weight > 0 {
             let kept = claims[i].spans.compactMap { span -> ClosedRange<Int>? in
@@ -617,135 +684,163 @@ nonisolated func pfTriangulateRecordDate(_ input: DateTriangulationInput) -> Dat
             kind: .eraFloor, spans: [floor.year...nowYear], day: nil, weight: 0,
             reason: clipped ? "\(floor.label) era floor \(floor.year) applied" : "\(floor.label) era floor \(floor.year) respected"))
     }
-    // A lone soft claim outside the family's video window is shaded.
-    for i in claims.indices where claims[i].weight > 0
-        && ![.cameraStamp, .ocrBurnIn].contains(claims[i].kind) {
-        if let lo = claims[i].lowestYear, let hi = claims[i].highestYear,
-           hi < DateCatalogPriors.videoWindow.lowerBound || lo > DateCatalogPriors.videoWindow.upperBound {
-            claims[i].weight *= W.outsideWindowFactor
+
+    // ---- 7c. A lone soft claim outside the family's video window is shaded.
+    mutating func applyWindowPrior() {
+        let window = DateCatalogPriors.videoWindow
+        for i in claims.indices where claims[i].weight > 0 && ![.cameraStamp, .ocrBurnIn].contains(claims[i].kind) {
+            if let lo = claims[i].lowestYear, let hi = claims[i].highestYear,
+               hi < window.lowerBound || lo > window.upperBound {
+                claims[i].weight *= W.outsideWindowFactor
+            }
         }
     }
 
-    // ---- 8. Score every candidate year; the strongest noisy-OR wins.
-    let voting = claims.filter { $0.weight > 0 }
-    guard !voting.isEmpty else {
-        return .noEvidence(notes + claims.filter { $0.kind == .spokenReference }.map(\.reason), claims: claims)
-    }
-    var candidateYears = Set<Int>()
-    for c in voting { for s in c.spans { for y in s { candidateYears.insert(y) } } }
-    var best: (year: Int, score: Float, supporters: Int)?
-    for y in candidateYears.sorted() {
-        var miss: Float = 1
-        var supporters = 0
-        for c in voting where c.contains(y) { miss *= (1 - c.weight); supporters += 1 }
-        let score = 1 - miss
-        if best == nil || score > best!.score + 0.0001                            // swiftlint:disable:this force_unwrapping
-            || (abs(score - best!.score) <= 0.0001 && supporters > best!.supporters) { // swiftlint:disable:this force_unwrapping
-            best = (y, score, supporters)
+    // ---- 8–11. Score, partition, priors, date + range, reason.
+    func combine() -> DateTriangulationResult {
+        let voting = claims.filter { $0.weight > 0 }
+        guard let best = bestYear(among: voting) else { return noEvidence() }
+        let parts = partition(voting, around: best.year)
+
+        // Cue-less years that disagree are AMBIGUOUS, not a date: "1962"
+        // and "1997" with nothing around either must not date the tape
+        // (the old ambiguity guard). Now-cues that disagree do produce a
+        // widened range.
+        let cueless: Set<DateCriterionClaim.Kind> = [.spokenNeutral, .captionYear]
+        if !parts.conflicting.isEmpty,
+           parts.agreeing.allSatisfy({ cueless.contains($0.kind) }),
+           parts.conflicting.allSatisfy({ cueless.contains($0.kind) }) {
+            let years = (parts.agreeing + parts.conflicting).compactMap(\.lowestYear).sorted()
+            return noEvidence(["years \(years.map(String.init).joined(separator: ", ")) mentioned without a cue — ambiguous"])
         }
-    }
-    guard let best else { return .noEvidence(notes, claims: claims) }
-    let bestYear = best.year
 
-    // Agreeing / adjacent (a tape spanning a New Year) / conflicting.
-    let agreeing = voting.filter { $0.contains(bestYear) }.sorted { $0.weight > $1.weight }
-    let adjacent = voting.filter { c in
-        !c.contains(bestYear) && [.spokenNow, .spokenNeutral, .captionYear].contains(c.kind)
-            && c.spans.contains { abs($0.lowerBound - bestYear) == 1 || abs($0.upperBound - bestYear) == 1 }
-    }
-    let conflicting = voting.filter { c in
-        !c.contains(bestYear) && !adjacent.contains(c)
-    }.sorted { $0.weight > $1.weight }
-    // How HARD a claim is: a burn-in / camera stamp 3, a spoken now-cue or
-    // a named person's age 2, everything else 1. A softer claim is listed
-    // in the reason but does not pull the confidence down or widen the
-    // range: a "Converted_VHS_Tapes_2026" folder must not discredit
-    // JUN 21 1991 burned into the frames.
-    func hardness(_ c: DateCriterionClaim) -> Int {
-        switch c.kind {
-        case .ocrBurnIn, .cameraStamp: return 3
-        case .spokenNow: return 2
-        case .age: return c.weight >= W.ageNamedPerson ? 2 : 1
-        default: return 1
+        var confidence = best.score
+        if let strongest = parts.penalizing.first {
+            confidence *= (1 - W.conflictFactor * strongest.weight)
         }
-    }
-    let topHardness = agreeing.map(hardness).max() ?? 1
-    let penalizing = conflicting.filter { hardness($0) >= topHardness - 1 }
+        var extraNotes: [String] = []
+        switch applyDecadePriors(year: best.year, agreeing: parts.agreeing, confidence: &confidence) {
+        case .rejected(let reason):
+            return DateTriangulationResult(date: nil, range: nil, confidence: 0, reason: reason,
+                                           claims: claims, precision: .unknown)
+        case .shaded(let note):
+            extraNotes.append(note)
+        case .clear:
+            break
+        }
+        confidence = min(W.cap, confidence)
 
-    // Cue-less years that disagree are AMBIGUOUS, not a date: "1962" and
-    // "1997" with nothing around either must not date the tape (the old
-    // ambiguity guard). Now-cues that disagree do produce a widened range.
-    let cueless: Set<DateCriterionClaim.Kind> = [.spokenNeutral, .captionYear]
-    if !conflicting.isEmpty,
-       agreeing.allSatisfy({ cueless.contains($0.kind) }),
-       conflicting.allSatisfy({ cueless.contains($0.kind) }) {
-        let years = (agreeing + conflicting).compactMap(\.lowestYear).sorted()
-        let note = "years \(years.map(String.init).joined(separator: ", ")) mentioned without a cue — ambiguous"
-        return .noEvidence([note] + notes + claims.filter { $0.kind == .spokenReference }.map(\.reason), claims: claims)
-    }
-
-    var confidence = best.score
-    if let strongest = penalizing.first {
-        confidence *= (1 - W.conflictFactor * strongest.weight)
-    }
-
-    // ---- 9. Catalog priors.
-    let decade = (bestYear / 10) * 10
-    let independentKinds = Set(agreeing.map(\.kind)).count
-    if DateCatalogPriors.emptyDecades.contains(decade),
-       independentKinds < DateCatalogPriors.emptyDecadeCriteria || confidence < DateCatalogPriors.emptyDecadeConfidence {
-        let had = agreeing.map(\.reason).joined(separator: "; ")
+        guard let placed = place(bestYear: best.year, parts: parts) else { return noEvidence() }
         return DateTriangulationResult(
-            date: nil, range: nil, confidence: 0,
-            reason: "\(DateTriangulationResult.noEvidenceReason) strong enough: \(bestYear) falls in the \(decade)s — this family has no \(decade)s video; needs two independent criteria agreeing at ≥ 0.90 (had: \(had))",
-            claims: claims, precision: .unknown)
+            date: placed.date, range: placed.range, confidence: confidence,
+            reason: reasonText(parts: parts, extraNotes: extraNotes),
+            claims: claims, precision: placed.precision)
     }
-    if DateCatalogPriors.sparseDecades.contains(decade) {
-        confidence *= W.sparseDecadeFactor
-        notes.append("\(decade)s is a sparse decade for this family — shaded")
-    }
-    confidence = min(W.cap, confidence)
 
-    // ---- 10. Precision, point date, range.
-    let dayAnchor = agreeing.first { $0.day != nil }
-    let date: Date
-    let precision: RecordDateResolution.Precision
-    var range: InferredDateRange?
-    if let anchor = dayAnchor, let day = anchor.day {
-        date = day
-        precision = .day
-    } else {
-        guard let jan1 = pfJanuaryFirst(of: bestYear) else { return .noEvidence(notes, claims: claims) }
-        date = jan1
-        precision = .year
+    /// Every candidate year scored by noisy-OR over the claims allowing it;
+    /// ties go to the year with more supporters, then the earlier year.
+    func bestYear(among voting: [DateCriterionClaim]) -> (year: Int, score: Float)? {
+        var candidateYears = Set<Int>()
+        for c in voting { for s in c.spans { for y in s { candidateYears.insert(y) } } }
+        var best: (year: Int, score: Float, supporters: Int)?
+        for y in candidateYears.sorted() {
+            var miss: Float = 1
+            var supporters = 0
+            for c in voting where c.contains(y) { miss *= (1 - c.weight); supporters += 1 }
+            let score = 1 - miss
+            let better: Bool
+            if let b = best {
+                better = score > b.score + 0.0001 || (abs(score - b.score) <= 0.0001 && supporters > b.supporters)
+            } else {
+                better = true
+            }
+            if better { best = (y, score, supporters) }
+        }
+        return best.map { ($0.year, $0.score) }
+    }
+
+    struct Partition {
+        var agreeing: [DateCriterionClaim]
+        /// A spoken / captioned year one off the best: the tape ran across a New Year.
+        var adjacent: [DateCriterionClaim]
+        var conflicting: [DateCriterionClaim]
+        /// Conflicts no softer than the best evidence — the only ones that
+        /// lower confidence or widen the range.
+        var penalizing: [DateCriterionClaim]
+    }
+
+    func partition(_ voting: [DateCriterionClaim], around bestYear: Int) -> Partition {
+        let agreeing = voting.filter { $0.contains(bestYear) }.sorted { $0.weight > $1.weight }
+        let adjacentKinds: Set<DateCriterionClaim.Kind> = [.spokenNow, .spokenNeutral, .captionYear]
+        let adjacent = voting.filter { c in
+            !c.contains(bestYear) && adjacentKinds.contains(c.kind)
+                && c.spans.contains { abs($0.lowerBound - bestYear) == 1 || abs($0.upperBound - bestYear) == 1 }
+        }
+        let conflicting = voting.filter { !$0.contains(bestYear) && !adjacent.contains($0) }
+            .sorted { $0.weight > $1.weight }
+        let topHardness = agreeing.map(\.hardness).max() ?? 1
+        let penalizing = conflicting.filter { $0.hardness >= topHardness - 1 }
+        return Partition(agreeing: agreeing, adjacent: adjacent, conflicting: conflicting, penalizing: penalizing)
+    }
+
+    enum PriorVerdict {
+        case clear
+        case shaded(String)
+        case rejected(String)
+    }
+
+    /// Rick's catalog priors: no 1950s / 1970s video without two
+    /// independent criteria at ≥ 0.90; 1940s / 1960s shaded.
+    func applyDecadePriors(year: Int, agreeing: [DateCriterionClaim], confidence: inout Float) -> PriorVerdict {
+        let decade = (year / 10) * 10
+        let independentKinds = Set(agreeing.map(\.kind)).count
+        if DateCatalogPriors.emptyDecades.contains(decade),
+           independentKinds < DateCatalogPriors.emptyDecadeCriteria || confidence < DateCatalogPriors.emptyDecadeConfidence {
+            let had = agreeing.map(\.reason).joined(separator: "; ")
+            return .rejected("\(DateTriangulationResult.noEvidenceReason) strong enough: \(year) falls in the \(decade)s — this family has no \(decade)s video; needs two independent criteria agreeing at ≥ 0.90 (had: \(had))")
+        }
+        if DateCatalogPriors.sparseDecades.contains(decade) {
+            confidence *= W.sparseDecadeFactor
+            return .shaded("\(decade)s is a sparse decade for this family — shaded")
+        }
+        return .clear
+    }
+
+    /// The point date: the strongest agreeing day (a burn-in, a camera
+    /// stamp) at day precision, else Jan 1 noon UTC of the year with the
+    /// span everything that agreed allows — widened by adjacent spoken
+    /// years and by penalizing disagreement.
+    func place(bestYear: Int, parts: Partition) -> (date: Date, range: InferredDateRange?, precision: RecordDateResolution.Precision)? {
+        if let anchor = parts.agreeing.first(where: { $0.day != nil }), let day = anchor.day {
+            return (day, nil, .day)
+        }
+        guard let jan1 = pfJanuaryFirst(of: bestYear) else { return nil }
         var lo = bestYear, hi = bestYear
-        // The span everything that agreed allows, intersected: an age
-        // window 2004–2005 and a now-cue 2004 know 2004.
-        for c in agreeing {
+        for c in parts.agreeing {
             if let s = c.spans.first(where: { $0.contains(bestYear) }) {
                 lo = max(lo, s.lowerBound); hi = min(hi, s.upperBound)
             }
         }
         if lo > hi { lo = bestYear; hi = bestYear }
-        // …widened by adjacent spoken years (the tape ran across New Year)
-        // and by disagreement (Rick sees the uncertainty as a span).
-        for c in adjacent + penalizing where c.weight >= 0.4 {
+        for c in parts.adjacent + parts.penalizing where c.weight >= 0.4 {
             if let l = c.lowestYear { lo = min(lo, l) }
             if let h = c.highestYear { hi = max(hi, h) }
         }
-        range = InferredDateRange(startYear: lo, endYear: hi)
+        return (jan1, InferredDateRange(startYear: lo, endYear: hi), .year)
     }
 
-    // ---- 11. The written reason.
-    var parts = agreeing.map(\.reason)
-    parts += adjacent.map { "\($0.reason) — adjacent year, tape may span both" }
-    parts += claims.filter { $0.kind == .exportStamp }.map(\.reason)
-    parts += claims.filter { $0.kind == .eraFloor }.map(\.reason)
-    parts += conflicting.map { "but \($0.reason) disagrees" }
-    parts += claims.filter { $0.kind == .spokenReference }.map(\.reason)
-    parts += notes
-    return DateTriangulationResult(date: date, range: range, confidence: confidence,
-                                   reason: parts.joined(separator: "; "), claims: claims, precision: precision)
+    /// Agreeing (strongest first); adjacent; the export set-aside; the era
+    /// floor; conflicts; references; notes.
+    func reasonText(parts: Partition, extraNotes: [String]) -> String {
+        var lines = parts.agreeing.map(\.reason)
+        lines += parts.adjacent.map { "\($0.reason) — adjacent year, tape may span both" }
+        lines += claims.filter { $0.kind == .exportStamp }.map(\.reason)
+        lines += claims.filter { $0.kind == .eraFloor }.map(\.reason)
+        lines += parts.conflicting.map { "but \($0.reason) disagrees" }
+        lines += referenceLines
+        lines += notes + extraNotes
+        return lines.joined(separator: "; ")
+    }
 }
 
 // MARK: - Small helpers

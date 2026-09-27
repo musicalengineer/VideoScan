@@ -693,3 +693,40 @@ struct DateInferenceGH201Tests {
         #expect(bare.inferredDateReason == "no evidence")
     }
 }
+
+// MARK: - Inspector: the inferred line (pure text)
+
+@Suite("Inspector — the machine's guess line (GH #201 #7)")
+struct InspectorInferredDateLineTests {
+
+    @Test("the line shows the span, how sure, and the reason; 'No guess' when examined and empty; nothing before any pass")
+    func inferredSummary() {
+        let cape = VideoRecord()
+        cape.inferredRecordDate = utc(2004, 1, 1)
+        cape.inferredDateConfidence = 0.83
+        cape.inferredDateRange = InferredDateRange(year: 2004)
+        cape.inferredDateReason = "spoken now-cue 'what year it is… 2004' ×3; export stamp 2008-10-23 set aside as ingest (Apple, no model)"
+        #expect(InspectorDateView.inferredSummary(cape) == "Guess: 2004 (83% sure) — spoken now-cue 'what year it is… 2004' ×3; export stamp 2008-10-23 set aside as ingest (Apple, no model)")
+
+        let span = VideoRecord()
+        span.inferredRecordDate = utc(2003, 1, 1); span.inferredDateConfidence = 0.7
+        span.inferredDateRange = InferredDateRange(startYear: 2003, endYear: 2004)
+        span.inferredDateReason = "r"
+        #expect(InspectorDateView.inferredSummary(span)?.hasPrefix("Guess: 2003–2004 (70% sure)") == true)
+
+        let day = VideoRecord()
+        day.inferredRecordDate = utc(1991, 6, 21); day.inferredDateConfidence = 0.95
+        day.inferredDateReason = "on-screen date 1991-06-21 ×3"
+        #expect(InspectorDateView.inferredSummary(day) == "Guess: 1991-06-21 (95% sure) — on-screen date 1991-06-21 ×3")
+
+        let none = VideoRecord()
+        none.inferredDateReason = "no evidence"
+        #expect(InspectorDateView.inferredSummary(none) == "No guess — no evidence")
+
+        let legacy = VideoRecord()
+        legacy.inferredRecordDate = utc(1991, 6, 21); legacy.inferredDateConfidence = 0.75
+        #expect(InspectorDateView.inferredSummary(legacy) == "Guess: 1991-06-21 (75% sure) — from an earlier pass, no written reason")
+
+        #expect(InspectorDateView.inferredSummary(VideoRecord()) == nil)
+    }
+}
