@@ -436,6 +436,27 @@ enum ArchiveIndexRename {
         return marker
     }
 
+    /// Does this folder still HOLD the backup its marker describes? Every
+    /// listed file must be a plain name inside the folder, a regular file
+    /// (lstat — a symlink is not), and exactly the listed size; an empty
+    /// list is not a backup. Codex re-review #2 (2026-09-27): a complete
+    /// marker with a missing or truncated file was counted, and evicted a
+    /// valid backup. A folder failing this is never counted AND never
+    /// deleted by pruning — it may be the only copy of something.
+    static func isVerifiedBackup(_ dir: URL, marker: BackupMarker) -> Bool {
+        guard !marker.files.isEmpty else { return false }
+        let fm = FileManager.default
+        for entry in marker.files {
+            let name = entry.name
+            guard !name.isEmpty, name != ".", name != "..", !name.contains("/"),
+                  name != backupMarkerName,
+                  let attrs = try? fm.attributesOfItem(atPath: dir.appendingPathComponent(name).path),
+                  attrs[.type] as? FileAttributeType == .typeRegular,
+                  (attrs[.size] as? NSNumber)?.intValue == entry.size else { return false }
+        }
+        return true
+    }
+
     /// Every entry directly inside `.rename_backups/`, classified.
     private static func scanBackups(_ parent: URL) -> (ours: [(name: String, marker: BackupMarker)], markerless: Int) {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: parent.path) else { return ([], 0) }
@@ -550,7 +571,14 @@ enum ArchiveIndexRename {
                 if scan.markerless > 0 {
                     renameIndexLog.notice("\(scan.markerless, privacy: .public) legacy backup folder(s) left in place — not pruned (no provenance): \(parent.path, privacy: .public)")
                 }
-                let complete = scan.ours.filter(\.marker.complete).sorted { $0.marker.sequence < $1.marker.sequence }
+                let finished = scan.ours.filter(\.marker.complete)
+                let complete = finished
+                    .filter { isVerifiedBackup(parent.appendingPathComponent($0.name, isDirectory: true), marker: $0.marker) }
+                    .sorted { $0.marker.sequence < $1.marker.sequence }
+                if complete.count < finished.count {
+                    let bad = finished.map(\.name).filter { name in !complete.contains { $0.name == name } }
+                    renameIndexLog.error("\(bad.count, privacy: .public) complete backup folder(s) whose files are missing or the wrong size — not counted, not pruned: \(bad.joined(separator: ", "), privacy: .public) in \(parent.path, privacy: .public)")
+                }
                 guard complete.count > backupRetention else { return }
                 for victim in complete.prefix(complete.count - backupRetention) {
                     do {

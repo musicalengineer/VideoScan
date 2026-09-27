@@ -77,6 +77,51 @@ private enum Fx {
     static var n: Int { ArchiveIndexRename.backupRetention }
 }
 
+// MARK: - codex #2: listed files are verified
+
+@Suite("Rename backups — a complete marker counts only if its files are there (codex re-review #2)", .serialized)
+struct BackupMarkerIntegrityTests {
+
+    private func twentyValidPlus(_ defect: (Fx.Fixture) throws -> URL) throws {
+        let f = try Fx.make("defect")
+        defer { f.cleanup() }
+        for i in 0..<Fx.n { try Fx.rename(f, step: i, at: Fx.start.addingTimeInterval(Double(i))) }
+        let bad = try defect(f)
+        ArchiveIndexRename.pruneBackups(in: f.backups)
+        #expect(try Fx.survivingSteps(f).isSuperset(of: Set(0..<Fx.n)),
+                "a defective backup was counted and evicted a valid one")
+        #expect(FileManager.default.fileExists(atPath: bad.path), "a defective folder is never deleted by pruning")
+    }
+
+    @Test("codex #2: a newer complete marker whose listed file is MISSING evicts nothing")
+    func missingFileIsNotCounted() throws {
+        try twentyValidPlus { f in
+            try Fx.seedFolder(f, name: "2099-01-01T000000.000Z", sequence: "1000", complete: true,
+                              listed: [("media-ledger.jsonl", 50)], present: [])
+        }
+    }
+
+    @Test("codex #2: a newer complete marker whose listed file is TRUNCATED evicts nothing")
+    func truncatedFileIsNotCounted() throws {
+        try twentyValidPlus { f in
+            try Fx.seedFolder(f, name: "2099-01-01T000000.001Z", sequence: "1001", complete: true,
+                              listed: [("media-ledger.jsonl", 50)], present: [("media-ledger.jsonl", Data("short".utf8))])
+        }
+    }
+
+    @Test("codex #2: a listed name that escapes the folder, or no files at all, is not a backup")
+    func hostileListingsAreNotCounted() throws {
+        try twentyValidPlus { f in
+            try Fx.seedFolder(f, name: "2099-01-01T000000.002Z", sequence: "1002", complete: true,
+                              listed: [("../media-ledger.jsonl", Fx.line(0).utf8.count)], present: [])
+        }
+        try twentyValidPlus { f in
+            try Fx.seedFolder(f, name: "2099-01-01T000000.003Z", sequence: "1003", complete: true,
+                              listed: [], present: [])
+        }
+    }
+}
+
 // MARK: - codex #1: the backups folder is permanent; cleanup is locked
 
 @Suite("Rename backups — cleanup never removes another writer's folder (codex re-review #1)", .serialized)

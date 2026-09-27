@@ -152,7 +152,8 @@ struct LedgerRenameBackupOrderingTests {
         #expect(source.components(separatedBy: "try makeBackupDirectory(").count - 1 == 1, "only inside the claim")
         #expect(source.components(separatedBy: "markBackupComplete(backup)").count - 1 == 2,
                 "complete only after each writer's publish")
-        #expect(source.contains(".filter(\\.marker.complete).sorted { $0.marker.sequence < $1.marker.sequence }"))
+        #expect(source.contains("let finished = scan.ours.filter(\\.marker.complete)"))
+        #expect(source.contains(".sorted { $0.marker.sequence < $1.marker.sequence }"))
         #expect(!source.contains("backupSortKey"), "no name parsing decides retention")
     }
 }
