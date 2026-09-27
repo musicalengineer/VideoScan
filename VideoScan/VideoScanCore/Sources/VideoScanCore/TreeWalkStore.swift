@@ -93,6 +93,13 @@ public enum TreeWalkStore {
         do { data = try Data(contentsOf: url) } catch { return .unreadable(error.localizedDescription) }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        // Version FIRST: a file from an older walker may not decode as
+        // today's shape (v1 summaries lack the v2 fields) — that is stale,
+        // not damaged.
+        struct VersionProbe: Decodable { let walkerVersion: Int }
+        if let probe = try? decoder.decode(VersionProbe.self, from: data), probe.walkerVersion != TreeWalk.walkerVersion {
+            return .stale(reason: "made by walker v\(probe.walkerVersion); this build is v\(TreeWalk.walkerVersion)")
+        }
         let stored: TreeWalkStored
         do { stored = try decoder.decode(TreeWalkStored.self, from: data) } catch {
             return .unreadable("decorations.json could not be read (\(String(describing: error).prefix(120)))")

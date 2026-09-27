@@ -11,7 +11,9 @@
 //      distinct path counts (NaN through a cycle)
 //   6. SYNTHESIZED over the condensation: ancestor / descendant sketches
 //   7. CHECKS, parallel per person, plus the grouped ones (duplicates,
-//      cycles)
+//      cycles) — over the WHOLE tree (every decoration carries its own);
+//      the events and the summary report only the checks ON THE WALK
+//      (involving a visited person), with whole-tree totals kept apart
 //   8. assemble decorations, coverage and the summary
 //
 // Deterministic: every loop runs in ordinal order or in chunk order, keys
@@ -144,8 +146,11 @@ extension TreeWalk {
         let tChecks = clock.now
         let found = runChecks(s, graph: graph, ages: ages, components: comps)
         let checksMs = milliseconds(clock.now - tChecks)
-        for check in found.cycles { emit(.cycle(check)) }
-        for check in found.all where check.severity == .warn && check.kind != .ancestorCycle { emit(.warnCheck(check)) }
+        let onWalk = onWalkPredicate(s, layers: layers)
+        for check in found.cycles where onWalk(check) { emit(.cycle(check)) }
+        for check in found.all where check.severity == .warn && check.kind != .ancestorCycle && onWalk(check) {
+            emit(.warnCheck(check))
+        }
         try checkpoint()
 
         var decorations = assemble(s, reach: reach, inherited: inherited, components: comps, ages: ages,
@@ -169,8 +174,8 @@ extension TreeWalk {
                       hasCheck: !found.byPerson[Int(v.ordinal)].isEmpty)
             }
         }
-        var summary = summarize(s, layers: finalLayers, checks: found.all, cycles: found.cycles.count,
-                                reach: reach, ages: ages)
+        var summary = summarize(s, layers: finalLayers, checks: found.all, onWalk: onWalk, reach: reach, ages: ages,
+                                starts: starts, maxGenerations: options.maxGenerations)
         summary.walkMilliseconds = walkMs
         summary.checksMilliseconds = checksMs
         summary.estimatedAncestorCounts = anc.estimated
@@ -314,6 +319,18 @@ extension TreeWalk {
         return out
     }
 
+    /// Scope: does a check involve a person this walk VISITED? A
+    /// depth-limited walk visits a sliver of the tree; its log and summary
+    /// must count only that sliver's checks. O(visited) to build, O(log n)
+    /// per person on the check.
+    static func onWalkPredicate(_ s: TreeWalkSnapshot, layers: [[Visit]]) -> (Check) -> Bool {
+        var walked = [Bool](repeating: false, count: s.count)
+        for layer in layers { for v in layer { walked[Int(v.ordinal)] = true } }
+        return { [walked] check in
+            check.personIDs.contains { id in s.ordinal(of: id).map { walked[$0] } ?? false }
+        }
+    }
+
     struct FoundChecks {
         let all: [Check]
         let cycles: [Check]
@@ -371,9 +388,14 @@ extension TreeWalk {
         }
     }
 
-    static func summarize(_ s: TreeWalkSnapshot, layers: [[Visit]], checks: [Check], cycles: Int,
-                          reach: Reach, ages: [AgeAtDeath?]) -> Summary {
+    /// `onWalk` says whether a check involves a visited person: those
+    /// are the summary's counts; every check lands in the `tree…` totals.
+    static func summarize(_ s: TreeWalkSnapshot, layers: [[Visit]], checks: [Check],
+                          onWalk: (Check) -> Bool, reach: Reach, ages: [AgeAtDeath?],
+                          starts: [Start], maxGenerations: Int?) -> Summary {
         var summary = Summary()
+        summary.maxGenerations = maxGenerations
+        summary.startNames = starts.map(\.shortName)
         summary.peopleInTree = s.visible.filter { $0 }.count
         for layer in layers {
             summary.peopleWalked += layer.count
@@ -383,10 +405,14 @@ extension TreeWalk {
             }
         }
         for c in checks {
+            summary.treeChecksByKind[c.kind, default: 0] += 1
+            if c.severity == .warn { summary.treeWarnCount += 1 } else { summary.treeInfoCount += 1 }
+            if c.kind == .ancestorCycle { summary.treeCycleCount += 1 }
+            guard onWalk(c) else { continue }
             summary.checksByKind[c.kind, default: 0] += 1
             if c.severity == .warn { summary.warnCount += 1 } else { summary.infoCount += 1 }
+            if c.kind == .ancestorCycle { summary.cycleCount += 1 }
         }
-        summary.cycleCount = cycles
         summary.generationsFromFirst = Int(reach.first.max() ?? 0)
         summary.generationsFromSecond = Int(reach.second?.max() ?? 0)
         summary.coverageWalked = coverage(s, ages: ages) { reach.bits($0) != 0 }

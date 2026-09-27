@@ -151,12 +151,6 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// exports). Pause/Stop between phases and apply slices.
     /// FindSimilarFootageJob.
     case findSimilarFootage
-    /// "Walk Tree" (Rick 2026-09-27): the Family Tree walk in the
-    /// background — decorates every person of the loaded tree (line,
-    /// generations, age at death, birth region, counts) and runs the
-    /// consistency checks; saves decorations.json. Reads the tree only.
-    /// WalkTreeJob.
-    case walkTree
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -190,7 +184,6 @@ enum MediaFileOperationKind: String, CaseIterable {
         // only reads.
         case .pruneCopies: return "TRASH"
         case .findSimilarFootage: return "Footage"
-        case .walkTree: return "Walk"
         }
     }
 
@@ -221,7 +214,6 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .deleteDuplicates: return "delete duplicates"
         case .pruneCopies: return "trash copies"
         case .findSimilarFootage: return "find similar footage"
-        case .walkTree: return "walk tree"
         }
     }
 }

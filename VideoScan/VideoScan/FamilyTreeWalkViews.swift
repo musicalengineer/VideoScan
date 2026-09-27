@@ -1,9 +1,9 @@
 // FamilyTreeWalkViews.swift
 // Small read-only views of the Family Tree Walk (Rick 2026-09-27):
-//   • TreeWalkSummaryView — counts by line, by birth region, checks by
-//     kind, coverage. Shown at the end of the foreground animation and in
-//     the MFO row's detail.
-//   • WalkTreeJobDetailView — the MFO row's expanded detail.
+//   • TreeWalkSummaryView — what was walked in plain words, counts by
+//     line, by birth region, checks by kind (all over the people WALKED;
+//     one labelled whole-tree line), coverage. Shown at the end of the
+//     foreground animation.
 //   • FamilyTreeWalkDecorationPanel — the inspector's block for the
 //     selected person (line, generations, age at death, region, counts,
 //     checks). One dictionary lookup per body evaluation; no O(people)
@@ -40,77 +40,109 @@ enum TreeWalkPalette {
 
 // MARK: - Summary
 
+/// The walk's summary. Everything is about the people THIS walk visited
+/// (Rick 2026-09-27: a 3-generation walk showed the whole tree's 1,119
+/// warnings); the one whole-tree figure is labelled "whole tree".
+/// Columns when there is room, stacked in the sheet's side panel. Labels wrap; nothing is truncated.
 struct TreeWalkSummaryView: View {
     let summary: TreeWalk.Summary
     let displayNames: [String]
 
+    /// "Checks on these 30 people (9 warn, 3 info)".
+    static func checksTitle(_ s: TreeWalk.Summary) -> String {
+        "Checks on these \(s.peopleWalked.formatted()) \(s.peopleWalked == 1 ? "person" : "people") "
+            + "(\(s.warnCount.formatted()) warn, \(s.infoCount.formatted()) info)"
+    }
+
+    /// The labelled whole-tree line, or nil when the walk covered every check.
+    static func wholeTreeLine(_ s: TreeWalk.Summary) -> String? {
+        guard s.treeCheckCount != s.checkCount else { return nil }
+        return "Whole tree (\(s.peopleInTree.formatted()) people): \(s.treeCheckCount.formatted()) checks "
+            + "(\(s.treeWarnCount.formatted()) warn) — in each person's inspector and decorations.json"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("\(summary.peopleWalked.formatted()) of \(summary.peopleInTree.formatted()) people walked · "
-                 + "\(summary.generationsFromFirst) generations"
-                 + (displayNames.count > 1 ? " / \(summary.generationsFromSecond)" : ""))
-                .font(.system(size: 12, weight: .semibold))
-            HStack(alignment: .top, spacing: 24) {
-                section("By line") {
-                    ForEach(TreeWalk.Line.allCases, id: \.self) { line in
-                        if let n = summary.byLine[line], n > 0 {
-                            row(TreeWalkPalette.lineName(line, names: displayNames), n, color: TreeWalkPalette.color(line))
-                        }
-                    }
+            Text(summary.walkedSentence(names: displayNames))
+                .font(.system(size: 12.5, weight: .semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 24) {
+                    byLine.frame(minWidth: 170)
+                    bornIn.frame(minWidth: 150)
+                    checks.frame(minWidth: 240)
                 }
-                section("Born in") {
-                    ForEach(BirthplaceClassifier.BirthRegion.allCases, id: \.self) { region in
-                        if let n = summary.byRegion[region], n > 0 { row(region.label, n) }
-                    }
-                }
-                section("Checks (\(summary.warnCount.formatted()) warn, \(summary.infoCount.formatted()) info)") {
-                    ForEach(TreeWalk.CheckKind.allCases, id: \.self) { kind in
-                        if let n = summary.checksByKind[kind], n > 0 {
-                            row(kind.label, n, color: kind.severity == .warn ? TreeWalkPalette.check : nil)
-                        }
-                    }
+                VStack(alignment: .leading, spacing: 10) {
+                    byLine
+                    bornIn
+                    checks
                 }
             }
             section("Coverage (people walked)") {
                 ForEach(summary.coverageWalked, id: \.field) { c in
-                    Text(c.line + " (\(c.percent))").font(.system(size: 11)).foregroundStyle(.secondary)
+                    wrapped(c.line + " (\(c.percent))").foregroundStyle(.secondary)
                 }
             }
-            Text(String(format: "Walk %.1f ms · checks %.1f ms · total %.0f ms",
-                        summary.walkMilliseconds, summary.checksMilliseconds, summary.totalMilliseconds))
+            Text(String(format: "Analysis %.0f ms (walk %.1f ms · checks %.1f ms)",
+                        summary.totalMilliseconds, summary.walkMilliseconds, summary.checksMilliseconds))
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
         }
         .textSelection(.enabled)
     }
 
+    private var byLine: some View {
+        section("By line") {
+            ForEach(TreeWalk.Line.allCases, id: \.self) { line in
+                if let n = summary.byLine[line], n > 0 {
+                    row(TreeWalkPalette.lineName(line, names: displayNames), n, color: TreeWalkPalette.color(line))
+                }
+            }
+        }
+    }
+
+    private var bornIn: some View {
+        section("Born in") {
+            ForEach(BirthplaceClassifier.BirthRegion.allCases, id: \.self) { region in
+                if let n = summary.byRegion[region], n > 0 { row(region.label, n) }
+            }
+        }
+    }
+
+    private var checks: some View {
+        section(Self.checksTitle(summary)) {
+            if summary.checkCount == 0 {
+                wrapped("None").foregroundStyle(.secondary)
+            }
+            ForEach(TreeWalk.CheckKind.allCases, id: \.self) { kind in
+                if let n = summary.checksByKind[kind], n > 0 {
+                    row(kind.label, n, color: kind.severity == .warn ? TreeWalkPalette.check : nil)
+                }
+            }
+            if let whole = Self.wholeTreeLine(summary) {
+                wrapped(whole).font(.system(size: 10.5)).foregroundStyle(.secondary).padding(.top, 2)
+            }
+        }
+    }
+
     private func section<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             content()
         }
     }
 
+    private func wrapped(_ text: String) -> some View {
+        Text(text).font(.system(size: 11)).fixedSize(horizontal: false, vertical: true)
+    }
+
     private func row(_ label: String, _ n: Int, color: Color? = nil) -> some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             if let color { Circle().fill(color).frame(width: 8, height: 8) }
             Text(label).font(.system(size: 11))
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            Text(n.formatted()).font(.system(size: 11).monospacedDigit())
-        }
-        .frame(minWidth: 150)
-    }
-}
-
-// MARK: - MFO row detail
-
-struct WalkTreeJobDetailView: View {
-    @ObservedObject var job: WalkTreeJob
-
-    var body: some View {
-        if let summary = job.summary {
-            TreeWalkSummaryView(summary: summary, displayNames: job.displayNames)
-        } else {
-            Text(job.subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
+            Text(n.formatted()).font(.system(size: 11).monospacedDigit()).fixedSize()
         }
     }
 }

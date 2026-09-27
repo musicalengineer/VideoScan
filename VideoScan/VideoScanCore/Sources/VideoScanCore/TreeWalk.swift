@@ -55,7 +55,9 @@ public enum TreeWalk {
 
     /// Bump when any decoration or check changes meaning — a stored
     /// decorations.json with an older version is stale and rebuilt.
-    public static let walkerVersion = 1
+    /// v2 (2026-09-27): the summary's check counts are scoped to the people
+    /// walked; the whole-tree counts moved to `tree…` fields.
+    public static let walkerVersion = 2
 
     // MARK: - Attribute values
 
@@ -259,19 +261,35 @@ public enum TreeWalk {
         }
     }
 
+    /// What one walk found. EVERY aggregate is over the people this walk
+    /// VISITED unless its name starts with `tree` (Rick 2026-09-27: a
+    /// 3-generation walk showed the whole tree's 1,119 warnings). A check is
+    /// "on" the walk when it involves at least one visited person — the
+    /// same rule that puts an amber mark on a dot in the fan.
     public struct Summary: Sendable, Codable, Equatable {
+        /// WHOLE tree: visible people.
         public var peopleInTree = 0
         public var peopleWalked = 0
         public var byLine: [Line: Int] = [:]
         /// Birth regions of the WALKED people.
         public var byRegion: [BirthplaceClassifier.BirthRegion: Int] = [:]
+        /// Checks involving a walked person.
         public var checksByKind: [CheckKind: Int] = [:]
         public var warnCount = 0
         public var infoCount = 0
         public var cycleCount = 0
+        /// The same over the WHOLE tree (decorations.json keeps them all).
+        public var treeChecksByKind: [CheckKind: Int] = [:]
+        public var treeWarnCount = 0
+        public var treeInfoCount = 0
+        public var treeCycleCount = 0
         /// Deepest generation reached above each start.
         public var generationsFromFirst = 0
         public var generationsFromSecond = 0
+        /// The depth asked for (nil = all).
+        public var maxGenerations: Int?
+        /// The starts' first given names, in order ("Richard", "Donna").
+        public var startNames: [String] = []
         /// Coverage over the walked people, then over the whole tree.
         public var coverageWalked: [CoverageRow] = []
         public var coverageTree: [CoverageRow] = []
@@ -280,6 +298,47 @@ public enum TreeWalk {
         public var totalMilliseconds = 0.0
         /// Sets bigger than the sketch size — counted by estimate.
         public var estimatedAncestorCounts = 0
+
+        public init() {}
+
+        public var checkCount: Int { warnCount + infoCount }
+        public var treeCheckCount: Int { treeWarnCount + treeInfoCount }
+
+        /// What was walked, in plain words, for the top of the summary:
+        /// "Walked 3 generations from Rick and Donna — 30 people (Rick's
+        /// line 15, Donna's line 15)". `names` overrides `startNames`
+        /// ("Rick" for the pinned owner).
+        public func walkedSentence(names: [String] = []) -> String {
+            let count = max(1, startNames.count, names.count)
+            func name(_ i: Int) -> String {
+                if names.indices.contains(i), !names[i].isEmpty { return names[i] }
+                if startNames.indices.contains(i), !startNames[i].isEmpty { return startNames[i] }
+                return i == 0 ? "the first person" : "the second person"
+            }
+            func gens(_ n: Int) -> String { "\(n.formatted()) generation\(n == 1 ? "" : "s")" }
+            let a = generationsFromFirst, b = generationsFromSecond
+            var head: String
+            if count == 1 {
+                head = maxGenerations == nil
+                    ? "Walked every generation from \(name(0)) (\(gens(a)))"
+                    : "Walked \(gens(a)) from \(name(0))"
+            } else if maxGenerations == nil {
+                head = "Walked every generation from \(name(0)) and \(name(1)) "
+                    + "(\(gens(a)) above \(name(0)), \(b.formatted()) above \(name(1)))"
+            } else if a == b {
+                head = "Walked \(gens(a)) from \(name(0)) and \(name(1))"
+            } else {
+                head = "Walked \(gens(a)) from \(name(0)) and \(b.formatted()) from \(name(1))"
+            }
+            head += " — \(peopleWalked.formatted()) \(peopleWalked == 1 ? "person" : "people")"
+            if count > 1 {
+                var parts = ["\(name(0))'s line \((byLine[.first] ?? 0).formatted())",
+                             "\(name(1))'s line \((byLine[.second] ?? 0).formatted())"]
+                if let both = byLine[.both], both > 0 { parts.append("on both lines \(both.formatted())") }
+                head += " (" + parts.joined(separator: ", ") + ")"
+            }
+            return head
+        }
     }
 
     /// One node as the walk reached it — the animation replays these.
