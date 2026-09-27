@@ -82,3 +82,30 @@ OUTPUT (stdout, Markdown, under 700 words): first line exactly `Credits spent: <
 - M3 — Closed by c18e4bbf — `DateTriangulatorQAReviewTests.reminiscencesAreReferences` (red: 8 issues).
 - Minor (unwind) — Closed by e6effe8b — `DateTriangulatorQAReviewTests.unwindClearsRangeAndReason` (red: 2 issues).
 - Minors (log sum, comment, scale test, open questions) — 695e70c1 — `logLineBreakdownSums` (added with the fix), `DateTriangulatorScaleTests.hundredThousand` (realistic 2–5 kB, 19.0 s measured, ceiling 25 s load-aware).
+
+## Re-review bb5f52bb (codex, same night)
+
+F1, F4, M1–M3 and the unwind: closed per codex. Two residuals:
+
+Credits spent: unavailable | Finding count: 2
+Verdict: merge-after-fixes
+
+**R1 (F2 residual) — P1: Scoped regrouping leaves the old recipient’s share active**
+
+[VideoScanModel+DateInference.swift:683](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+DateInference.swift:683), same file:712, 877.
+
+Counterexample: A shares `1992` to B in group G1. Move A to G2, then call `catchUpInferredDates(scope: [A])`, with no content-group link between A and B. Scope expansion includes only A’s current group; B never reaches `isStaleFootageShare`. B retains the unsupported `1992` share until a broader pass. The validation predicate is fixed, but invalidation misses former dependents.
+
+Pinning test: establish A→B, move A into another group, run the donor-scoped catch-up, and assert all B’s inferred fields clear. Also cover downgrading membership before the scoped pass.
+
+Closed by c62f09b4 — DateReviewF2Tests `donorScopedPassAfterRegroupClearsDependents` (red first: 2 issues); pin `donorScopedPassAfterDowngradeClearsDependents` (already green: B's own likely membership kept the old group bucketed). A scoped pass now adds every row whose "footage-shared from <id>" names a scoped record before bucketing.
+
+**R2 (F3 residual) — P2: Confidence-only refresh erases the retained disagreement**
+
+[VideoScanModel+DateInference.swift:718](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+DateInference.swift:718), same file:612.
+
+Counterexample: use the F3 fixture: A’s estimated user year `1992` overwrites B’s settled inference `2000`, retaining `own evidence said 2000`. Change only A’s confidence to `known`. F2 correctly detects the changed share value, but housekeeping clears B’s reason and source before re-sharing. F3’s preservation branch can no longer recover the disagreement. The stronger same-year claim re-shares successfully, but its historical explanation is lost.
+
+Pinning test: extend `secondPassWritesNothing` with that confidence transition. Assert B receives the updated confidence, retains `own evidence said 2000`, and the following unchanged pass writes nothing.
+
+Closed by 63e4b578 — DateReviewF3Tests `secondPassWritesNothing`, extended with the estimated → known transition (red first: 1 issue). Rule 0 keeps a stale share's disagreement tail with its year; a same-year re-share re-attaches it.
