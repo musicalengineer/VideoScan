@@ -56,6 +56,11 @@ design that does the job.
   outside these files". Each finding is closed by a pinning test or declined
   in the review doc with a reason. Stop the loop when findings drop to P2 or
   lower and the core path is covered; file what's left.
+- **Reviewer budget (Rick 2026-09-27).** Codex (independent model family) is
+  the data-risk reviewer. The in-house `qa` agent (same family as Claude,
+  fresh context, ~50–150k tokens a pass) is a first pass only when the change
+  is big, and the stand-in when codex is out of credits or unavailable — not
+  both by default. Routine work: tests + Rick's spot test, no review.
 - **Nothing deletes overnight** except scratch (see the rm allow/deny list in
   `.claude/settings.json`).
 
