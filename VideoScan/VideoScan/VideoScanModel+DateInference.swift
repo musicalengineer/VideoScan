@@ -498,7 +498,7 @@ extension VideoScanModel {
     /// footage-shared claims WITHOUT it (it is derived, and is re-derived
     /// here), so a stale share never props itself up.
     @MainActor
-    static func footageDateClaim(_ rec: VideoRecord, now: Date) -> (resolution: RecordDateResolution, claim: ArchiveAngelEvent.DateClaim)? {
+    static func footageDateClaim(_ rec: VideoRecord, now: Date) -> (resolution: RecordDateResolution, claim: RecordDateClaim)? {
         let derived = isFootageSharedInferredDate(rec)
         let r = RecordDateResolver.resolve(
             userDate: rec.userDate, userDateConfidence: rec.userDateConfidence,
@@ -508,7 +508,7 @@ extension VideoScanModel {
             inferredDateConfidence: derived ? nil : rec.inferredDateConfidence,
             inferredDateRange: derived ? nil : rec.inferredDateRange,
             filename: rec.filename.isEmpty ? nil : rec.filename, now: now)
-        guard let claim = ArchiveAngelEvent.DateClaim(r, demoteSoftwareStamps: true) else { return nil }
+        guard let claim = RecordDateClaim(r, demoteSoftwareStamps: true) else { return nil }
         return (r, claim)
     }
 
@@ -525,7 +525,7 @@ extension VideoScanModel {
         }
     }
 
-    /// The group's date = its strongest member claim (`DateClaim`
+    /// The group's date = its strongest member claim (`RecordDateClaim`
     /// ordering: a person's date > a camera's stamp > the dossier > a name
     /// / export stamp; then confidence, precision, earliest year). Every
     /// other member with no user date whose own claim is weaker inherits
@@ -536,8 +536,8 @@ extension VideoScanModel {
     static func shareDateAcrossFootageGroup(_ members: [VideoRecord], now: Date,
                                             retained: [UUID: (year: Int, tail: String)] = [:]) -> [VideoRecord] {
         guard members.count >= 2 else { return [] }
-        var claims: [UUID: (resolution: RecordDateResolution, claim: ArchiveAngelEvent.DateClaim)] = [:]
-        var best: (rec: VideoRecord, resolution: RecordDateResolution, claim: ArchiveAngelEvent.DateClaim)?
+        var claims: [UUID: (resolution: RecordDateResolution, claim: RecordDateClaim)] = [:]
+        var best: (rec: VideoRecord, resolution: RecordDateResolution, claim: RecordDateClaim)?
         for m in members {
             guard let c = footageDateClaim(m, now: now) else { continue }
             claims[m.id] = c
