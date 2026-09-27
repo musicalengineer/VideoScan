@@ -466,6 +466,7 @@ extension VideoScanModel {
                               reason: String, now: Date, persistence: ArchiveRefilePersistence) async -> RefileStepE {
         let label = copy.filename
         let newPath = (root as NSString).appendingPathComponent(done.toRelPath)
+        let oldPath = copy.fullPath
         moveRecord(copy, to: newPath)
         if let fx = copy.archiveFixity, fx.digest == done.sha256 {
             copy.archiveFixity = ArchiveFixity(algorithm: fx.algorithm, digest: fx.digest,
@@ -524,11 +525,25 @@ extension VideoScanModel {
         }
 
         // The durable retry, BEFORE the two steps it covers.
-        var entry = ArchiveRefilePendingEntry(id: UUID(), at: now, copyID: copy.id, newFullPath: newPath,
+        var entry = ArchiveRefilePendingEntry(id: UUID(), at: now,
+                                              sequence: (loadPendingRefiles().map(\.sequence).max() ?? 0) + 1,
+                                              copyID: copy.id, fromFullPath: oldPath, newFullPath: newPath,
                                               fromRelPath: done.fromRelPath, toRelPath: done.toRelPath,
+                                              device: done.device, inode: done.inode, size: done.size,
+                                              sha256: done.sha256,
                                               dateUpdates: dateUpdates, ledgerEvents: events,
                                               catalogDone: false, ledgerDone: false)
-        let pendingWritten = updatePendingRefiles { $0.append(entry) }
+        let pendingWritten = updatePendingRefiles { list in
+            // This refile SUPERSEDES any older entry for the same record:
+            // their catalog step is dropped (the record is here now); an
+            // older ledger step still owed is kept — that history happened.
+            for i in list.indices where list[i].copyID == entry.copyID && !list[i].catalogDone {
+                list[i].catalogDone = true
+                appLog.write("[refile] pending entry \(list[i].fromRelPath) → \(list[i].toRelPath) superseded by a newer refile of the same file; its catalog step is dropped")
+            }
+            list.removeAll { $0.copyID == entry.copyID && $0.catalogDone && $0.ledgerDone }
+            list.append(entry)
+        }
         if !pendingWritten {
             refileNote("Refile: \(label) — the pending-refile retry record could not be written (\(pendingRefilesURL.path)); continuing — the outcome will say so if anything below fails")
         }
@@ -562,6 +577,13 @@ extension VideoScanModel {
     /// `<ledger folder>/pending-refiles.json` — beside the media ledger
     /// (App Support; a sandbox under tests).
     var pendingRefilesURL: URL { mediaLedger.directory.appendingPathComponent(Self.pendingRefilesFilename) }
+
+    /// lstat identity of a path (a symlink is not the file); nil = absent.
+    nonisolated static func lstatIdentity(_ path: String) -> (device: UInt64, inode: UInt64, size: Int64)? {
+        var sb = stat()
+        guard lstat(path, &sb) == 0, (sb.st_mode & S_IFMT) == S_IFREG else { return nil }
+        return (UInt64(sb.st_dev), UInt64(sb.st_ino), Int64(sb.st_size))
+    }
 
     func loadPendingRefiles() -> [ArchiveRefilePendingEntry] {
         guard let data = try? Data(contentsOf: pendingRefilesURL) else { return [] }
@@ -603,20 +625,29 @@ extension VideoScanModel {
         for var entry in pending {
             if !entry.catalogDone {
                 if let rec = record(forID: entry.copyID) {
-                    if rec.fullPath != entry.newFullPath {
-                        guard FileManager.default.fileExists(atPath: entry.newFullPath) else {
-                            refileNote("Refile: pending entry for \(entry.toRelPath) — the file is not reachable at \(entry.newFullPath) now; kept for the next launch")
-                            continue
+                    // Apply ONLY while the record still points where this
+                    // refile started (or already at its end) AND the file at
+                    // the end is THIS file by identity. Anything else is
+                    // stale: logged and dropped, never applied (r3 #2).
+                    let pointsHere = rec.fullPath == entry.fromFullPath || rec.fullPath == entry.newFullPath
+                    let ident = Self.lstatIdentity(entry.newFullPath)
+                    let isThisFile = ident.map { $0.device == entry.device && $0.inode == entry.inode && $0.size == entry.size } ?? false
+                    if pointsHere && isThisFile {
+                        if rec.fullPath != entry.newFullPath { moveRecord(rec, to: entry.newFullPath) }
+                        for u in entry.dateUpdates {
+                            guard let r = record(forID: u.recordID) else { continue }
+                            r.userDate = u.userDate
+                            r.userDateConfidence = u.confidence
                         }
-                        moveRecord(rec, to: entry.newFullPath)
+                        objectWillChange.send()
+                        entry.catalogDone = persistence.saveCatalog(self)
+                    } else if pointsHere && ident == nil {
+                        refileNote("Refile: pending entry for \(entry.toRelPath) — the file is not reachable at \(entry.newFullPath) now; kept for the next launch")
+                        continue
+                    } else {
+                        refileNote("Refile: pending entry \(entry.fromRelPath) → \(entry.toRelPath) is STALE (record now at \(rec.fullPath); file at the target \(isThisFile ? "is" : "is NOT") the refiled file) — dropped, not applied")
+                        entry.catalogDone = true
                     }
-                    for u in entry.dateUpdates {
-                        guard let r = record(forID: u.recordID) else { continue }
-                        r.userDate = u.userDate
-                        r.userDateConfidence = u.confidence
-                    }
-                    objectWillChange.send()
-                    entry.catalogDone = persistence.saveCatalog(self)
                 } else {
                     refileNote("Refile: pending entry for \(entry.toRelPath) — its archive copy is no longer in the catalog; catalog step dropped")
                     entry.catalogDone = true
@@ -689,10 +720,22 @@ struct ArchiveRefilePendingEntry: Codable, Equatable, Sendable {
     }
     let id: UUID
     let at: Date
+    /// Order of writing (max + 1); a newer refile of the same record
+    /// supersedes older entries' catalog step (r3 #2).
+    let sequence: Int
     let copyID: UUID
+    /// Where the record pointed BEFORE this refile — replay applies only
+    /// while it still points there (or already at `newFullPath`).
+    let fromFullPath: String
     let newFullPath: String
     let fromRelPath: String
     let toRelPath: String
+    /// The moved file's identity + fingerprint: replay applies only when
+    /// THIS file is at `newFullPath`.
+    let device: UInt64
+    let inode: UInt64
+    let size: Int64
+    let sha256: String
     let dateUpdates: [DateUpdate]
     let ledgerEvents: [MediaLedgerEvent]
     var catalogDone: Bool

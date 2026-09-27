@@ -523,6 +523,11 @@ enum ArchiveRefileEngine {
         let fromRelPath: String
         let toRelPath: String
         let sha256: String
+        /// The moved file's identity (device + inode + size) — what a later
+        /// replay must find at `toRelPath` before trusting it (r3 #2).
+        let device: UInt64
+        let inode: UInt64
+        let size: Int64
         let backupDir: String?
         let indexFilesChanged: Int
         let linesChanged: Int
@@ -772,7 +777,9 @@ enum ArchiveRefileEngine {
         }
         let lines = prep.plan.changedLines, files = prep.plan.files.count
         audit(subject + "index updated — \(lines) line\(lines == 1 ? "" : "s") in \(files) index file\(files == 1 ? "" : "s")\(backupDir.map { "; backup \($0.path)" } ?? "")")
-        return .refiled(Done(fromRelPath: from, toRelPath: to, sha256: prep.digest, backupDir: backupDir?.path,
+        return .refiled(Done(fromRelPath: from, toRelPath: to, sha256: prep.digest,
+                             device: prep.sourceIdentity.device, inode: prep.sourceIdentity.inode,
+                             size: prep.sourceIdentity.size, backupDir: backupDir?.path,
                              indexFilesChanged: files, linesChanged: lines, promotedAt: prep.promotedAt))
     }
 

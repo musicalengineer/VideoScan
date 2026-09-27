@@ -211,6 +211,33 @@ struct ArchiveRefileR2StepEPersistenceTests {
                 "the ledger line is not written twice")
     }
 
+    @Test("r3 #2: A→B with a failed catalog save, then B→C succeeds, then a foreign file appears at B → replay never redirects the record; C and the newer dates kept")
+    func stalePendingNeverRedirects() async throws {
+        let a = try await RefileFixture.make("r3stale")
+        defer { a.sb.cleanup() }
+        let p1 = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        var failSave = ArchiveRefilePersistence.live
+        failSave.saveCatalog = { _ in false }
+        let r1 = await a.model.refileArchiveCopy(p1, hint: p1.initialHint, name: p1.initialName, persistence: failSave)
+        #expect(r1.kind == .completedWithWarnings, "\(r1.message)")
+        let b = a.sb.archiveRoot.appendingPathComponent(p1.target(hint: p1.initialHint, name: p1.initialName)).path
+
+        let p2 = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        let hint2 = try #require(ArchiveRefile.hint(year: 1985, month: nil, day: nil))
+        let r2 = await a.model.refileArchiveCopy(p2, hint: hint2, name: p2.initialName)
+        #expect(r2.kind == .refiled, "\(r2.message)")
+        let c = a.sb.archiveRoot.appendingPathComponent(p2.target(hint: hint2, name: p2.initialName)).path
+        #expect(a.copy.fullPath == c)
+
+        try Data("someone else's file".utf8).write(to: URL(fileURLWithPath: b))   // B is occupied by a stranger
+        _ = await a.model.replayPendingRefiles()
+        #expect(a.copy.fullPath == c, "the stale A→B entry must not move the record to the foreign file at B")
+        #expect(a.copy.userDate == "1985" && a.source.userDate == "1985", "the newer dates are kept")
+        #expect(MasterArchiveTestSupport.sha256(ofFile: c) == a.sha)
+        #expect(String(decoding: RefileFixture.data(URL(fileURLWithPath: b)), as: UTF8.self) == "someone else's file")
+        #expect(a.model.loadPendingRefiles().isEmpty, "nothing stale left to replay")
+    }
+
     @Test("ledger append fails → completedWithWarnings, durable pending entry; replay writes the ledger line once")
     func ledgerAppendFails() async throws {
         let a = try await RefileFixture.make("r2led")
