@@ -13,6 +13,8 @@ Counterexample: donor A has known user date `2004`, Apple make without model, an
 
 Pinning test: two eligible members in a likely footage group with those fields. Assert the user’s year precision survives resolution and dateHint, and the sibling never inherits the export’s month/day.
 
+Closed by 46442a1a — DateReviewF1Tests (`userYearSurvivesASoftwareStamp`, `siblingNeverInheritsTheExportDay`); red first: 7 issues. Only a camera's stamp refines a user year; a software stamp's day never travels.
+
 **F2 — P1: Retracted or downgraded donor claims leave active shared dates**
 
 [VideoScanModel+DateInference.swift:598](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+DateInference.swift:598), same file:543.
@@ -22,6 +24,8 @@ Counterexample: A’s user date `1992` is shared to B. Clear A’s user date, le
 Likewise, lowering both memberships to `.possible` leaves the existing share active: the group is excluded from new sharing but passes stale-share validation.
 
 Pinning test: exercise both transitions after an initial share; assert the unsupported inferred date is removed and dateHint becomes unknown.
+
+Closed by 6c2517d0 — DateReviewF2Tests (`retractedUserDate`, `downgradedGroup`, `notSameDecision`, pin `changedUserDate`); red first: 5 issues. A share is stale unless the donor still holds a shareable claim producing the same date/span/confidence, both memberships ≥ likely, no notSame either way; rule 2b also refuses notSame.
 
 **F3 — P2: Second catch-up erases the recipient’s recorded disagreement**
 
@@ -33,6 +37,8 @@ This violates second-pass idempotence and removes the retained explanation of th
 
 Pinning test: snapshot every inferred field after pass one; pass two must produce zero writes and preserve the original disagreement.
 
+Closed by d545800e — DateReviewF3Tests (`secondPassWritesNothing`); red first: 3 issues. The first share's "own evidence said <year>" is kept; pass two makes zero writes.
+
 **F4 — P2: Displaced stamps hide inferred year ranges**
 
 [VideoRecordUserDate.swift:277](/Users/rickb/dev/VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecordUserDate.swift:277)
@@ -40,6 +46,8 @@ Pinning test: snapshot every inferred field after pass one; pass two must produc
 Counterexample: software stamp `2008-06-01`, inferred point `2003-01-01 @0.8`, range `2003–2004`. The resolver displaces the stamp, and the Date column immediately returns `moved.isoString`, displaying only `2003`. The range-display branch is never reached. Removing the embedded stamp makes the same inference display `2003–2004`.
 
 Pinning test: assert identical range display with and without a displaced software stamp; retain deterministic year-only dateHint.
+
+Closed by d18ee9d3 — DateReviewF4Tests (`sameDisplayWithAndWithoutStamp`; pin `filesUnderThePointYear`); red first: 1 issue. The displaced-stamp branch shows the range; docs state a range files under the inferred POINT's UTC year (2003 or 2004), never an endpoint.
 
 All five requested per-file diffs were read. No builds or tests were run. `MasterArchive.swift` dateHint: read, no independent findings; it forwards the range and maps `.year` correctly. `InferredDateRange.swift`: read, no independent findings. Placement uses the inferred point’s UTC year—`2003` in F4—not a year selected from the range endpoints. Real-camera metadata behavior and external exclusion predicates remain unverified within this scope.
 
@@ -66,3 +74,11 @@ INVARIANTS TO ATTACK:
 EVIDENCE ALREADY RUN (Debug, M4): 410 tests / 52 suites green incl. RecordDateResolverTests make-only matrix, InferredDatePropagationTests, DateTriangulatorTests (CapeCod → 2004 @0.83, Clip 19 → 1996, 'OK Christmas 2002' + stamp → 2002-12-25 @0.95), DateInferenceSensorTests (user date wins; DV never <1995), resolver 100k 0.60 s.
 
 OUTPUT (stdout, Markdown, under 700 words): first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`; then `Verdict: merge / merge-after-fixes / hold`; then each finding `F<n> — P<1|2|3>: <title>`, file:line, concrete counterexample, pinning test you would accept. If nothing survives, list what you checked.
+
+## Follow-up: in-house QA review (same night)
+
+- M1 — Closed by fcd71063 — `DateTriangulatorQAReviewTests.folderYearPlaceholderGainingEvidenceSettles` (red: 3 issues).
+- M2 — Closed by e804a9b5 — `DateTriangulatorQAReviewTests.liveReloadCarriesRangeAndReason` (red: 3 issues).
+- M3 — Closed by c18e4bbf — `DateTriangulatorQAReviewTests.reminiscencesAreReferences` (red: 8 issues).
+- Minor (unwind) — Closed by e6effe8b — `DateTriangulatorQAReviewTests.unwindClearsRangeAndReason` (red: 2 issues).
+- Minors (log sum, comment, scale test, open questions) — 695e70c1 — `logLineBreakdownSums` (added with the fix), `DateTriangulatorScaleTests.hundredThousand` (realistic 2–5 kB, 19.0 s measured, ceiling 25 s load-aware).
