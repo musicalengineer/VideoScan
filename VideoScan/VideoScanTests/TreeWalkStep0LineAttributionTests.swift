@@ -182,5 +182,9 @@ struct TreeWalkStep0LineAttributionTests {
         #expect(index.generations(from: donna.id) == nil, "a spouse is not an ancestor")
         let stats = TreeStatistics.people(matching: .init(scope: .ancestors(of: rick.id, maxGenerations: 50)), in: g)
         #expect(Set(stats.map(\.id)) == rickOnly)
+        // The walker's own attribution agrees.
+        let walk = try TreeWalk.walk(g, options: .init(starts: [rick.id, donna.id]))
+        for id in rickOnly { #expect(walk.decoration(for: id)?.line == .first) }
+        for id in donnaOnly { #expect(walk.decoration(for: id)?.line == .second) }
     }
 }
