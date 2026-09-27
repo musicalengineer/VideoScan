@@ -885,10 +885,15 @@ extension VideoScanModel {
     }
 
     /// The one line a pass writes: "date inference: N records caught up (…)".
-    /// Format unchanged since 2026-09-12 (log formats are a Rick decision).
+    /// Format unchanged since 2026-09-12 (log formats are a Rick decision)
+    /// EXCEPT that the breakdown must sum to N (GH #201 QA minor): the two
+    /// new counts are listed only when non-zero, so every older line reads
+    /// byte-identical.
     static func dateInferenceLogLine(_ r: InferredDateCatchUpResult, limit: Int, trigger: String) -> String {
         "date inference: \(r.total) record\(r.total == 1 ? "" : "s") caught up "
             + "(\(r.inferredFromEvidence) from own evidence, \(r.propagated) propagated, "
+            + (r.footageShared > 0 ? "\(r.footageShared) footage-shared, " : "")
+            + (r.retriangulated > 0 ? "\(r.retriangulated) re-triangulated, " : "")
             + "\(r.folderYear) folder-year prior; \(r.examined) examined"
             + (r.truncated ? ", limit \(limit) hit — more next pass" : "")
             + String(format: ", %.0f ms, ", r.elapsed * 1000) + trigger + ")"

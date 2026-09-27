@@ -38,9 +38,14 @@
 // one (a burn-in, a camera stamp) down — it is only written into the reason.
 //
 // PURE and nonisolated: values in, value out, no clock unless injected.
-// Cost: one regex pass per text channel plus a few short-window regexes
-// per year mention — tens of microseconds per record; the SCALE test pins
-// 100k records inside a budget. Regexes are compiled once
+// Nonisolated means it CAN run off the main actor — but today both callers
+// (applyDossier, one record at a time, and catchUpInferredDates, the load /
+// writeback pass) call it SYNCHRONOUSLY ON THE MAIN ACTOR. Never from a view
+// body. Cost: one regex pass per text channel plus a few short-window
+// regexes per year mention — ~0.2 ms for a 3 kB transcript (Debug); the SCALE test
+// pins 100k realistic records inside a load-aware budget. If a load-time
+// re-triangulation of thousands of rows ever shows as a beachball, move
+// the pure calls to a detached task (the inputs are Sendable values). Regexes are compiled once
 // (`nonisolated(unsafe) static let` — NSRegularExpression is immutable
 // and documented thread-safe; ≈ a `static const std::regex`).
 //

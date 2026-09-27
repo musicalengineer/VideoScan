@@ -297,3 +297,19 @@ Waterfront" — a referenced year, and DV cannot predate 1995.
 - A legacy own-pass date at ≥ 0.50 with no stored evidence is left as it is
   (its evidence cannot be re-read); it shows "from an earlier pass, no written
   reason" in the inspector.
+
+### Open questions for Rick (from the 2026-09-26 night reviews — not built)
+
+- **Undo for the load-time migration.** The first launch on this branch clears
+  legacy mtime-tier "inferences" and re-triangulates ~2.2k legacy rows in place.
+  Both are machine data only (never a user date, stamp or evidence), but unlike
+  the #1413 unwind there is no sidecar to put the old values back. Should this
+  pass write one (same shape: `date-inference/retriangulated-<stamp>.json`)?
+- **A lone age claim.** "How old are you? Eight" with no year spoken and no
+  tagged person yields a claim spread over every known birth year (weight 0.30
+  each window). Is that worth keeping, or should an age only speak when its
+  subject is named / tagged?
+- **Cost.** 100k realistic records (2–5 kB transcripts) triangulate in ~19 s
+  Debug on the M4 (≈ 0.2 ms each). Both callers run on the main actor; the load
+  pass touches ~2.2k rows once (≈ 0.4 s). If that shows, move the pure calls to
+  a detached task.

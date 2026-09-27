@@ -14,7 +14,8 @@ import Foundation
 //              "Christmas 2002" + camera stamp, now vs reference table,
 //              age parsing, era floors, ranges, disagreement, priors
 //   scale      100k records through the pure triangulator in budget;
-//              off the main actor by construction (nonisolated, pure)
+//              pure + nonisolated (today's callers run it synchronously
+//              on the main actor, never in a view body)
 //   isolation  no People profiles ⇒ ages neutral; a model under test
 //              never reads the real People store
 //   sensors    user date always wins · a DV record never infers < 1995 ·
@@ -468,16 +469,26 @@ struct DateTriangulatorIsolationTests {
 @Suite("DateTriangulator — scale")
 struct DateTriangulatorScaleTests {
 
-    @Test("100k records through the pure triangulator inside budget (regexes compiled once; pure, off the main actor)",
-          .timeLimit(.minutes(2)))
+    /// Realistic transcripts: Whisper on a 10–20 minute home tape is 2–5 kB.
+    static func realisticTranscript(_ seed: String, bytes: Int) -> String {
+        let filler = " Okay come over here. Say hi to Grandma. Look at the camera. Are you ready? "
+            + "Let's go down to the water. Be careful on the rocks. Who wants ice cream? "
+        var t = seed
+        while t.utf8.count < bytes { t += filler }
+        return t
+    }
+
+    @Test("100k realistic records (2–5 kB transcripts) through the pure triangulator inside a load-aware budget",
+          .timeLimit(.minutes(5)))
     func hundredThousand() {
-        let transcripts = [
+        let seeds = [
             GH201Fixtures.capeCodTranscript,
             GH201Fixtures.clip19Transcript,
             "We went to the beach and had a picnic with the kids and grandma.",
             "OK Christmas 2002, everybody say hi. Ma is ninety-one years old today.",
-            "",
+            "Remember Christmas 1985? That was the year of the big snow.",
         ]
+        let transcripts = seeds.enumerated().map { i, s in Self.realisticTranscript(s, bytes: 2_000 + i * 750) }
         let codecs = ["dvvideo", "h264", "prores", "mpeg2video"]
         let people = [GH201Fixtures.timmy, GH201Fixtures.rick]
         var inputs: [DateTriangulationInput] = []
@@ -499,12 +510,12 @@ struct DateTriangulatorScaleTests {
         let elapsed = clock.measure {
             for input in inputs where pfTriangulateRecordDate(input).date != nil { dated += 1 }
         }
-        print("[date-triangulator] 100k in \(elapsed), \(dated) dated")
-        #expect(dated > 40_000)
-        // Measured 2026-09-26 (Debug, M4 Max): well under 10 s; 30 s trips
-        // only on a complexity regression (a regex compiled per call, a
-        // per-year scan over the whole transcript…).
-        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(30)), "100k triangulations took \(elapsed)")
+        print("[date-triangulator] 100k realistic in \(elapsed), \(dated) dated")
+        #expect(dated > 30_000)
+        // Measured 2026-09-26 (Debug, M4 Max, idle): 19.0 s for 100k at 2–5 kB
+        // ≈ 0.19 ms / record. 25 s is ~1.3× that, load-aware — it trips on a
+        // regex compiled per call or a per-year scan of the whole transcript.
+        #expect(elapsed < PerformanceLane.loadAwareDebugCeiling(.seconds(25)), "100k triangulations took \(elapsed)")
     }
 }
 
@@ -816,6 +827,18 @@ struct DateTriangulatorQAReviewTests {
         let r = pfTriangulateRecordDate(i)
         #expect(r.date == nil, "\(r.reason)")
         #expect(r.reason.contains("1985 mentioned as a reference"), "\(r.reason)")
+    }
+
+    /// Minor: the first log line's breakdown sums to its total; with no
+    /// footage shares or re-triangulations it reads exactly as before.
+    @Test func logLineBreakdownSums() {
+        var r = VideoScanModel.InferredDateCatchUpResult()
+        r.inferredFromEvidence = 1; r.propagated = 2; r.folderYear = 3; r.examined = 4
+        let old = VideoScanModel.dateInferenceLogLine(r, limit: 10, trigger: "load")
+        #expect(old.hasPrefix("date inference: 6 records caught up (1 from own evidence, 2 propagated, 3 folder-year prior; 4 examined"), "\(old)")
+        r.footageShared = 5; r.retriangulated = 7
+        let new = VideoScanModel.dateInferenceLogLine(r, limit: 10, trigger: "load")
+        #expect(new.hasPrefix("date inference: 18 records caught up (1 from own evidence, 2 propagated, 5 footage-shared, 7 re-triangulated, 3 folder-year prior;"), "\(new)")
     }
 
     /// Minor: the #1413 unwind clears the span and reason too, and its
