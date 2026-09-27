@@ -150,6 +150,13 @@ Read, no additional findings in scoped changes to `ArchiveIndexRename.swift`, `A
 
 Static review only; no builds, tests, or writes. Untouched attestation/decisions callers were excluded by the requested scope.
 
+## Disposition (coordinator ruling, 2026-09-27)
+
+- 1 (P1, chain across two failed saves) — Closed by: ccd31101
+- 2 (P1, move back not proven to be the original) — Closed by: f6ba060d
+- 3 (P2, pending file silently emptied) — Closed by: c9bdaf6a (generalized: any unreadable / unknown-schema pending file is set aside, never overwritten; `version: 1` added for future migrations)
+- 4 (P2, keyless events duplicate on replay) — Declined: no pending file with that schema was ever written outside the feature branch; covered going forward by #3's version field.
+
 ## Brief
 
 Re-review, SCOPED to the four fix commits for your Refile r2 findings (docs/codex-review-refile-2026-09-27.md, section "Codex review — Refile r2"): range f1b4e025..f06a93e0 on feat/archive-refile (commits e68abbfb, a4c056aa, 0535d2b7, f06a93e0). Use `git diff f1b4e025..f06a93e0` and `git show <sha>`. Do not explore outside the files they touch; read-only; do not build or run.
