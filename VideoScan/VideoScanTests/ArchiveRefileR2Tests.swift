@@ -91,6 +91,8 @@ struct ArchiveRefileR2MoveBackIdentityTests {
         let from = a.relPath
         let to = p.target(hint: p.initialHint, name: p.initialName)
         let blocker = a.absPath
+        let backups = a.sb.archiveRoot.appendingPathComponent("00_Index/\(ArchiveIndexRename.backupFolder)")
+        let before = Set((try? FileManager.default.contentsOfDirectory(atPath: backups.path)) ?? [])
         var seams = ArchiveRefileEngine.Seams.live
         seams.hashFile = { root, rel in
             if rel == from { return try ArchivePromoteEngine.sha256(root: root, relativePath: rel) }
@@ -107,6 +109,13 @@ struct ArchiveRefileR2MoveBackIdentityTests {
         #expect(String(decoding: RefileFixture.data(URL(fileURLWithPath: blocker)), as: UTF8.self) == "a different file",
                 "the foreign file is preserved")
         #expect(a.copy.fullPath == newAbs, "the record points at the ORIGINAL, never at the foreign file")
+        // r3 #1: an unconfirmed recovery KEEPS its index backup, marker incomplete.
+        let added = Set((try? FileManager.default.contentsOfDirectory(atPath: backups.path)) ?? []).subtracting(before)
+        #expect(added.count == 1, "the mixed-state backup survives: \(added)")
+        if let dir = added.first {
+            let marker = ArchiveIndexRename.readMarker(in: backups.appendingPathComponent(dir))
+            #expect(marker != nil && marker?.complete == false, "incomplete marker — never counted, never pruned")
+        }
     }
 }
 

@@ -555,15 +555,25 @@ enum ArchiveRefileEngine {
 
     /// (c) failed and the move back is not confirmed durable — apply keeps
     /// the backup for this one.
-    private struct IncompleteRecovery: ArchiveIndexRename.RetainsBackupOnFailure {
+    private struct IncompleteRecovery: ArchiveIndexRename.BackupDisposition {
         let why: String
+        var backupIsSafeToDiscard: Bool { false }
     }
 
     /// Errors the move step throws through ArchiveIndexRename.apply.
-    private enum StepError: Error {
+    private enum StepError: ArchiveIndexRename.BackupDisposition {
         case refusedBeforeMove(String)
         case rolledBack(String)
         case notRolledBack(String)
+
+        /// Refused before the rename, or renamed back with both folders
+        /// flushed: nothing changed. A failed move back is NOT.
+        var backupIsSafeToDiscard: Bool {
+            switch self {
+            case .refusedBeforeMove, .rolledBack: return true
+            case .notRolledBack: return false
+            }
+        }
     }
 
     /// Everything preflight proved, handed to the commit phase.

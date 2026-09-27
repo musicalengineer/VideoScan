@@ -142,9 +142,14 @@ enum ArchiveIndexRename {
         }
     }
 
-    /// An error from `moveMedia` that must NOT discard the backup (the
-    /// move was undone, but not provably durably).
-    protocol RetainsBackupOnFailure: Error {}
+    /// What a `moveMedia` error says about the backup taken for it. Any
+    /// error that does not conform — or says false — KEEPS the backup
+    /// (incomplete marker: never counted, never pruned).
+    protocol BackupDisposition: Error {
+        /// True only when nothing is left changed: the media never moved,
+        /// or it was moved back and that move back was flushed.
+        var backupIsSafeToDiscard: Bool { get }
+    }
 
     /// The publish seam: production is an atomic full-fsync publish; a
     /// test injects a failure on the Nth file to exercise the rollback.
@@ -319,10 +324,14 @@ enum ArchiveIndexRename {
             // A move that was put back without a confirmed-durable folder
             // flush says so; its backup is then KEPT (incomplete marker —
             // never counted, never pruned). Codex review of Refile, #4.
-            if error is RetainsBackupOnFailure {
-                appLog.write("Catalog: archive index backup \(backupDir.path) KEPT — the media move was undone but its durability is not confirmed.")
-            } else {
+            // RETAIN BY DEFAULT (codex review of Refile r2 #1): the backup
+            // goes only when the mover PROVES nothing is left changed
+            // (the move never happened, or was undone and flushed).
+            if (error as? BackupDisposition)?.backupIsSafeToDiscard == true {
                 removeRefusedBackup(backupDir)
+            } else {
+                appLog.write("Catalog: archive index backup \(backupDir.path) KEPT — the media move failed and its undo is not proven (\(ArchiveAttestationJournal.describe(error))).")
+                renameIndexLog.error("backup kept after an unproven media-move failure: \(backupDir.path, privacy: .public)")
             }
             throw error
         }
