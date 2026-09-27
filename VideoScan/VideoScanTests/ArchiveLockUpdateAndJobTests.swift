@@ -1,7 +1,7 @@
 // ArchiveLockUpdateAndJobTests.swift
 // Locked archive files (Rick 2026-09-27), the second half: Update… on a
 // LOCKED file (unlock → one rename → relock; every outcome named), the
-// Lock / Unlock archive files job (outcomes, poisoned manifest, 100k scale
+// one-time "Lock files already in the archive" job (outcomes, poisoned manifest, 100k scale
 // off the main actor), Verify Copies' report-only "not locked", the Catalog
 // rename refusal, and the SENSOR that inventories every flag change. Temp
 // sandboxes only; every flag is cleared in teardown (Sandbox.cleanup).
@@ -109,6 +109,29 @@ struct ArchiveUpdateLockTests {
         #expect(FileManager.default.fileExists(atPath: a.absPath))
     }
 
+    @Test("codex r1 #1: lock-all reaching the file MID-Update (after the move, before the index publish fails) cannot break the rollback")
+    func lockAllCannotInterruptUpdateRollback() async throws {
+        let a = try UpdateFixture.make("lk_race")
+        defer { a.sb.cleanup() }
+        lockFixture(a)
+        let root = a.root
+        let to = "30_Video/1980-1989/1984/1984-xx-xx_DadThanksgiving1984-1.mov"
+        var seams = ArchiveRefileEngine.Seams.live
+        // Inside Update's transaction: the file is moved and unlocked; a
+        // lock-all pass reaches it now, then the index publish fails.
+        seams.indexPublisher = { _, _ in
+            _ = ArchiveLockJob.lockOne(root: root, relPath: to, seams: .live)
+            throw CocoaError(.fileWriteUnknown)
+        }
+        let p = try await UpdateFixture.preview(a)
+        let r = await a.model.updateArchivedFile(p, name: p.currentName, hint: try UpdateFixture.hint(1984), known: true, seams: seams)
+        #expect(r.kind == .rolledBack, "\(r.kind): \(r.message)")
+        #expect(FileManager.default.fileExists(atPath: a.absPath), "the original is back")
+        #expect(!FileManager.default.fileExists(atPath: a.url(to).path))
+        #expect(MasterArchiveTestSupport.isLocked(a.absPath))
+        #expect(MasterArchiveTestSupport.manifestRows(a.sb).first?[1] == a.relPath, "file and index agree")
+    }
+
     @Test("index-only update (confidence) on a correctly filed locked file: no move, still locked")
     func indexOnlyKeepsLock() async throws {
         let a = try UpdateFixture.make("lk_idx", relPath: "30_Video/1980-1989/1984/1984-xx-xx_Clip.mov", recordDate: "1984-xx-xx")
@@ -133,7 +156,7 @@ struct ArchiveUpdateLockTests {
     }
 }
 
-// MARK: - Lock / Unlock archive files job
+// MARK: - The one-time lock catch-up job
 
 @Suite("Lock archive files… — the job", .serialized)
 @MainActor
@@ -157,9 +180,8 @@ struct ArchiveLockJobTests {
         return (a, rels)
     }
 
-    private func run(_ model: VideoScanModel, _ mode: ArchiveLockJob.Mode,
-                     seams: ArchiveFileLock.Seams = .live) async -> ArchiveLockJob {
-        let job = ArchiveLockJob(mode: mode, model: model)
+    private func run(_ model: VideoScanModel, seams: ArchiveFileLock.Seams = .live) async -> ArchiveLockJob {
+        let job = ArchiveLockJob(model: model)
         job.fileLock = seams
         job.start()
         await job.task?.value
@@ -175,7 +197,7 @@ struct ArchiveLockJobTests {
                                             sizeBytes: 1, originalPath: "/x", originalVolume: "t", recordID: UUID(),
                                             sourceRecordID: UUID(), recordDate: "", dateConfidence: "", people: [], starRating: 3),
                                       rootPath: a.root)
-        let job = await run(a.model, .lock)
+        let job = await run(a.model)
         #expect(job.totals.changed == 2 && job.totals.already == 1 && job.totals.failed == 1, "\(job.totals)")
         #expect(job.problems.map(\.relPath) == ["30_Video/Undated/xxxx-xx-xx_Gone.mov"])
         guard case .failed(let summary) = job.state else { Issue.record("\(job.state)"); return }
@@ -185,17 +207,25 @@ struct ArchiveLockJobTests {
         try Data("new".utf8).write(to: a.url("30_Video/1990-1999/1991/new.mov"))
     }
 
-    @Test("Unlock archive files… reverses it; a clean run finishes green with a one-line summary")
-    func unlockReverses() async throws {
-        let (a, rels) = try archive("job_unlock", files: 2)
+    @Test("one-time: a clean run finishes green with a one-line summary, writes the marker, and the menu item goes; a run with a failure does not")
+    func cleanRunHidesTheMenuItem() async throws {
+        let (a, rels) = try archive("job_once", files: 2)
         defer { a.sb.cleanup() }
-        let locked = await run(a.model, .lock)
-        guard case .finished(let s1) = locked.state else { Issue.record("\(locked.state)"); return }
-        #expect(s1 == "Locked 2 · already locked 0 · failed 0")
-        let unlocked = await run(a.model, .unlock)
-        guard case .finished(let s2) = unlocked.state else { Issue.record("\(unlocked.state)"); return }
-        #expect(s2 == "Unlocked 2 · already unlocked 0 · failed 0")
-        for rel in rels { #expect(!MasterArchiveTestSupport.isLocked(a.url(rel).path)) }
+        #expect(!a.model.archiveLockCatchUpDone)
+        #expect(a.model.archiveLockCatchUpMarkerURL.path.hasPrefix(a.sb.root.path), "the marker lives beside the sandbox catalog, never real App Support")
+        try ArchiveManifestCSV.append(.init(promotedAt: Date(), archiveRelPath: "30_Video/Undated/xxxx-xx-xx_Gone.mov", sha256: "00",
+                                            sizeBytes: 1, originalPath: "/x", originalVolume: "t", recordID: UUID(),
+                                            sourceRecordID: UUID(), recordDate: "", dateConfidence: "", people: [], starRating: 3),
+                                      rootPath: a.root)
+        _ = await run(a.model)
+        #expect(!a.model.archiveLockCatchUpDone, "a failed file means not complete — the item stays")
+        try FileManager.default.createDirectory(at: a.url("30_Video/Undated"), withIntermediateDirectories: true)
+        try MasterArchiveTestSupport.writeBlob(at: a.url("30_Video/Undated/xxxx-xx-xx_Gone.mov"), bytes: 10, seed: 3)
+        let job = await run(a.model)
+        guard case .finished(let summary) = job.state else { Issue.record("\(job.state)"); return }
+        #expect(summary == "Locked 1 · already locked 2 · failed 0")
+        #expect(a.model.archiveLockCatchUpDone)
+        for rel in rels { #expect(MasterArchiveTestSupport.isLocked(a.url(rel).path)) }
     }
 
     @Test("isolation: a poisoned manifest (an escaping row) → the job refuses and NOTHING is flagged")
@@ -206,10 +236,27 @@ struct ArchiveLockJobTests {
                                             sizeBytes: 1, originalPath: "/x", originalVolume: "t", recordID: UUID(),
                                             sourceRecordID: UUID(), recordDate: "", dateConfidence: "", people: [], starRating: 3),
                                       rootPath: a.root)
-        let job = await run(a.model, .lock)
+        let job = await run(a.model)
         guard case .failed(let why) = job.state else { Issue.record("\(job.state)"); return }
         #expect(job.wasRefused && why.contains("Refused"), "\(why)")
         for rel in rels { #expect(!MasterArchiveTestSupport.isLocked(a.url(rel).path), "\(rel) must not be flagged") }
+    }
+
+    @Test("codex r1 #5 (Rick's ruling): a SHORT / malformed row is skipped and REPORTED; valid rows still locked; its path is never touched")
+    func truncatedRowReportedValidRowsLocked() async throws {
+        let (a, rels) = try archive("job_trunc", files: 2)
+        defer { a.sb.cleanup() }
+        // A truncated row naming a file OUTSIDE the archive root.
+        let outside = a.sb.root.appendingPathComponent("outside.mov")
+        try Data("not archive".utf8).write(to: outside)
+        let fh = try FileHandle(forWritingTo: a.sb.manifestURL)
+        try fh.seekToEnd(); fh.write(Data("2026-09-27T00:00:00Z,../../outside.mov,00\n".utf8)); try fh.close()
+        let job = await run(a.model)
+        #expect(!job.wasRefused)
+        #expect(job.totals.skipped == 1 && job.totals.changed == 2, "\(job.totals)")
+        #expect(job.problems.contains { $0.kind == .skipped && $0.detail.contains("not a whole manifest row") })
+        for rel in rels { #expect(MasterArchiveTestSupport.isLocked(a.url(rel).path)) }
+        #expect(!MasterArchiveTestSupport.isLocked(outside.path), "the malformed row's path is never touched")
     }
 
     @Test("isolation: the manifest replaced by a symlink → refused, nothing flagged")
@@ -219,20 +266,26 @@ struct ArchiveLockJobTests {
         let real = a.sb.root.appendingPathComponent("elsewhere.csv")
         try FileManager.default.moveItem(at: a.sb.manifestURL, to: real)
         try FileManager.default.createSymbolicLink(at: a.sb.manifestURL, withDestinationURL: real)
-        let job = await run(a.model, .lock)
+        let job = await run(a.model)
         #expect(job.wasRefused)
         #expect(!MasterArchiveTestSupport.isLocked(a.url(rels[0]).path))
     }
 
-    @Test("rows outside the media buckets are skipped and listed, never flagged")
+    @Test("rows outside the media buckets are skipped and listed, never flagged; a WHOLE escaping row refuses the plan")
     func nonMediaSkipped() {
         let root = "/tmp/test_lock_root"
-        guard case .success(let plan) = ArchiveLockJob.plan(fromRelPaths: ["30_Video/a.mov", "40_Family_Tree/x.pdf",
-                                                                           "00_Index/manifest.csv", "30_Video/a.mov"], root: root) else {
+        func row(_ rel: String) -> String { "2026-09-27T00:00:00Z,\(rel),00,1,/x,t,\(UUID()),\(UUID()),,,,3" }
+        let header = MasterArchiveLayout.manifestHeaderLegacy
+        let text = ([header] + ["30_Video/a.mov", "40_Family_Tree/x.pdf", "00_Index/manifest.csv", "30_Video/a.mov"].map(row))
+            .joined(separator: "\n") + "\n"
+        guard case .success(let plan) = ArchiveLockJob.plan(manifestText: text, root: root) else {
             Issue.record("plan refused"); return
         }
         #expect(plan.relPaths == ["30_Video/a.mov"])
-        #expect(plan.skipped == ["40_Family_Tree/x.pdf", "00_Index/manifest.csv"])
+        #expect(plan.skipped.map(\.row) == ["40_Family_Tree/x.pdf", "00_Index/manifest.csv"])
+        guard case .failure = ArchiveLockJob.plan(manifestText: text + row("30_Video/../../../etc/passwd") + "\n", root: root) else {
+            Issue.record("an escaping whole row must refuse"); return
+        }
     }
 
     @Test("scale: 100k manifest rows, stub flag setter, OFF the main actor, within a load-aware budget")
@@ -254,7 +307,7 @@ struct ArchiveLockJobTests {
         }, isLocked: { _, _ in true })
         let clock = ContinuousClock()
         let started = clock.now
-        let job = await run(a.model, .lock, seams: stub)
+        let job = await run(a.model, seams: stub)
         let elapsed = clock.now - started
         #expect(job.totals.total == 100_000 && job.totals.changed == 100_000, "\(job.totals)")
         #expect(counter.calls == 100_000 && counter.onMain == 0, "flag changes must run off the main actor (\(counter.onMain) on main)")
@@ -356,19 +409,17 @@ struct ArchiveFileLockSensorTests {
                 && callers.contains("ArchiveLockJob.swift"))
     }
 
-    @Test("only Update… and Rick's Unlock job may clear the flag")
+    @Test("only Update… may clear the flag (no Unlock job — Rick 2026-09-27)")
     func unlockReasons() {
-        let allowed = ArchiveFileLock.Reason.allCases.filter(\.mayUnlock)
-        #expect(Set(allowed) == [.updateUnlock, .unlockAll])
+        #expect(ArchiveFileLock.Reason.allCases.filter(\.mayUnlock) == [.updateUnlock])
     }
 
-    @Test(".unlock is requested only by ArchiveRefile.swift (Update) and ArchiveLockJob.swift (Rick's Unlock)")
+    @Test(".unlock is requested only by ArchiveRefile.swift (Update)")
     func unlockCallSites() throws {
         for (name, text) in try Self.sources() {
             let c = Self.code(text)
-            if c.contains("set(.unlock") || c.contains("reason: .updateUnlock") || c.contains(".unlockAll") {
-                #expect(["ArchiveRefile.swift", "ArchiveLockJob.swift", "ArchiveFileLock.swift", "ArchiveView.swift"].contains(name),
-                        "\(name) asks to clear the lock")
+            if c.contains("set(.unlock") || c.contains(".updateUnlock") {
+                #expect(["ArchiveRefile.swift", "ArchiveFileLock.swift"].contains(name), "\(name) asks to clear the lock")
             }
         }
     }

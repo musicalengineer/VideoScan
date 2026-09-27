@@ -56,18 +56,18 @@ struct ArchiveFileLockPrimitiveTests {
         #expect(FileManager.default.fileExists(atPath: sibling.path))
         // Idempotent; only an allowed reason clears it.
         #expect(ArchiveFileLock.set(.lock, root: f.root.path, relPath: f.rel, reason: .lockAll, audit: { _ in }) == .alreadySo)
-        #expect(ArchiveFileLock.set(.unlock, root: f.root.path, relPath: f.rel, reason: .unlockAll, audit: { _ in }) == .changed)
+        #expect(ArchiveFileLock.set(.unlock, root: f.root.path, relPath: f.rel, reason: .updateUnlock, audit: { _ in }) == .changed)
         #expect(!MasterArchiveTestSupport.isLocked(f.file.path))
         #expect(unlink(f.file.path) == 0)
     }
 
-    @Test("only Update… and Rick's Unlock job may CLEAR the flag", arguments: ArchiveFileLock.Reason.allCases)
+    @Test("only Update… may CLEAR the flag", arguments: ArchiveFileLock.Reason.allCases)
     func onlyAllowedReasonsUnlock(reason: ArchiveFileLock.Reason) throws {
         let f = try fixture("reason")
         defer { teardown(f.root) }
         _ = ArchiveFileLock.set(.lock, root: f.root.path, relPath: f.rel, reason: .promote, audit: { _ in })
         let r = ArchiveFileLock.set(.unlock, root: f.root.path, relPath: f.rel, reason: reason, audit: { _ in })
-        if reason == .updateUnlock || reason == .unlockAll {
+        if reason == .updateUnlock {
             #expect(r == .changed)
             #expect(!MasterArchiveTestSupport.isLocked(f.file.path))
         } else {

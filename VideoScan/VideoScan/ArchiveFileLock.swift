@@ -19,7 +19,7 @@
 //   • Promote            — sets it after fixity verification;
 //   • Update… (Refile)   — clears it on the source, re-sets it on the target
 //                          (and at the original on a rollback);
-//   • Lock / Unlock archive files… — Rick's one-time jobs.
+//   • "Lock files already in the archive (one-time)…" — the catch-up job.
 // Clearing is refused for any other reason (`Reason.mayUnlock`).
 //
 // Every change goes through `set(_:…)`, which writes one audit line through
@@ -58,14 +58,12 @@ enum ArchiveFileLock {
         case updateRelock
         /// Update… rolled back: re-set at the original place.
         case updateRollbackRelock
-        /// "Lock archive files…" (Rick's one-time job).
+        /// The one-time catch-up job (files promoted before locking existed).
         case lockAll
-        /// "Unlock archive files…" (Rick's own use).
-        case unlockAll
 
-        /// Only Update (to move the file) and Rick's explicit Unlock job
-        /// may clear the flag. Nothing else, ever.
-        var mayUnlock: Bool { self == .updateUnlock || self == .unlockAll }
+        /// Only Update… (to move the file) may clear the flag. Nothing else,
+        /// ever (Rick 2026-09-27: no Unlock job — `chflags` in Terminal).
+        var mayUnlock: Bool { self == .updateUnlock }
     }
 
     /// What happened to one file.
@@ -102,7 +100,7 @@ enum ArchiveFileLock {
     static func set(_ change: Change, root: String, relPath: String, reason: Reason,
                     seams: Seams = .live, audit: (String) -> Void) -> Result {
         if change == .unlock, !reason.mayUnlock {
-            let why = "clearing the lock is not allowed for \(reason.rawValue) — only Update… and Unlock archive files… may"
+            let why = "clearing the lock is not allowed for \(reason.rawValue) — only Update… may"
             audit("Archive lock: REFUSED to unlock \(relPath) — \(why)")
             archiveLockLog.fault("unlock refused for \(reason.rawValue, privacy: .public): \(relPath, privacy: .public)")
             return .failed(why)

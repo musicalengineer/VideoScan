@@ -694,6 +694,6 @@ extension ArchiveVolumeProtection {
         ("ArchiveFileLock.swift", "the one primitive: fchflags(2) through the archive's dirfd O_NOFOLLOW chain"),
         ("PromoteToArchiveJob+Steps.swift", "Promote locks each copy after its fixity is verified (.promote)"),
         ("ArchiveRefile.swift", "Update… clears the lock on the file it moves, re-locks it at the target, and re-locks the original on any rollback (.updateUnlock / .updateRelock / .updateRollbackRelock)"),
-        ("ArchiveLockJob.swift", "Rick's one-time Lock Archive Files… and his own Unlock Archive Files… (.lockAll / .unlockAll)"),
+        ("ArchiveLockJob.swift", "the one-time catch-up, Lock files already in the archive… (.lockAll), under the 00_Index lock"),
     ]
 }

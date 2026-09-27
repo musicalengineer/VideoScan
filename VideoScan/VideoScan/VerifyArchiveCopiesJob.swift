@@ -826,7 +826,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         if tally.notLocked > 0 {
             let names = notLockedFiles.prefix(20).joined(separator: ", ")
             let more = notLockedFiles.count > 20 ? " … and \(notLockedFiles.count - 20) more" : ""
-            model.log("Verify Archive: \(tally.notLocked) archived file(s) are NOT locked (report only — run Lock Archive Files… to lock them): \(names)\(more)")
+            model.log("Verify Archive: \(tally.notLocked) archived file(s) are NOT locked (report only — Promote locks new files; files from before locking existed are locked by the one-time catch-up): \(names)\(more)")
             appLog.write("verify archive NOT LOCKED (\(tally.notLocked)): \(notLockedFiles.joined(separator: ", "))")
         }
         // ONE line per run for the race skips (never per-record spam).

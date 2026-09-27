@@ -614,7 +614,7 @@ enum ArchiveRefileEngine {
         if !relock.isOK {
             let why: String
             if case .failed(let w) = relock { why = w } else { why = "the file was not found at \(to) to lock" }
-            lockProblem = "the file is NOT locked at \(to) (\(why)) — run Lock archive files…"
+            lockProblem = "the file is NOT locked at \(to) (\(why)) — check the drive; Verify Copies lists every unlocked archive file"
             audit(subject + "WARNING: updated, but \(lockProblem ?? "")")
             refileLog.fault("refile relock failed: \(to, privacy: .public) — \(why, privacy: .public)")
         }
@@ -639,7 +639,7 @@ enum ArchiveRefileEngine {
                                 seams: seams.fileLock, audit: { audit(subject + $0) })
         } ?? .absent
         guard !result.isOK else { return outcome }
-        let note = " — AND the file could not be locked again\(at.map { " at \($0)" } ?? " (not found by identity)"): the file is not locked; run Lock archive files…"
+        let note = " — AND the file could not be locked again\(at.map { " at \($0)" } ?? " (not found by identity)"): the file is not locked (Verify Copies lists every unlocked archive file)"
         audit(subject + "WARNING\(note)")
         refileLog.fault("refile rollback relock failed at \(at ?? "?", privacy: .public)")
         switch outcome {

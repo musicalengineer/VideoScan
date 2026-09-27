@@ -1,5 +1,5 @@
 // ArchiveLockDetailView.swift
-// Expanded panel for a Lock / Unlock archive files row in Media File
+// Expanded panel for the one-time "Lock files already in the archive" row in Media File
 // Operations: the totals, every failed / skipped file with its reason, then
 // the first results (the job keeps at most ArchiveLockJob.sampleCap). Pure
 // presentation over the job's published arrays — no model access, no I/O,
@@ -26,7 +26,7 @@ struct ArchiveLockDetailView: View {
                         let shown = job.sample.count
                         let ok = job.totals.changed + job.totals.already
                         if ok > shown {
-                            Text("…and \(ok - shown) more \(job.mode == .lock ? "locked" : "unlocked") or already so")
+                            Text("…and \(ok - shown) more locked or already locked")
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
                         }
@@ -42,7 +42,7 @@ struct ArchiveLockDetailView: View {
 
     private var totalsLine: String {
         let t = job.totals
-        return "\(t.done) of \(t.total) · " + ArchiveLockJob.summaryLine(t, mode: job.mode)
+        return "\(t.done) of \(t.total) · " + ArchiveLockJob.summaryLine(t)
     }
 
     private func row(_ item: ArchiveLockJob.Item) -> some View {
@@ -71,6 +71,7 @@ struct ArchiveLockDetailView: View {
         case .already: return "lock"
         case .failed: return "xmark.octagon.fill"
         case .skipped: return "minus.circle"
+        case .busy: return "hourglass"
         }
     }
 
@@ -80,6 +81,7 @@ struct ArchiveLockDetailView: View {
         case .already: return .secondary
         case .failed: return Color(red: 0.80, green: 0.10, blue: 0.10)
         case .skipped: return .secondary
+        case .busy: return .orange
         }
     }
 }

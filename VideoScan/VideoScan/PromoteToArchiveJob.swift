@@ -94,7 +94,7 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         /// recorded without a record (none from the promote loop).
         var recordID: UUID? = nil
         /// Set when the file landed but could NOT be locked — why. The
-        /// copy is good and stays; "Lock archive files…" can lock it later.
+        /// copy is good and stays; Verify Copies keeps listing it as not locked.
         var notLocked: String? = nil
     }
     @Published private(set) var outcomes: [FileOutcome] = []
@@ -327,7 +327,7 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         parts.append("skipped \(tally.skipped)")
         parts.append("failed \(tally.failed)")
         if tally.notLocked > 0 {
-            parts.append("\(tally.notLocked) promoted — NOT locked (run Lock archive files…)")
+            parts.append("\(tally.notLocked) promoted — NOT locked (Verify Copies lists them)")
         }
         if !saved && (tally.promoted + tally.adopted) > 0 {
             parts.append("catalog save deferred (links re-established next run)")
@@ -384,7 +384,7 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
                                  model: VideoScanModel) -> String? {
         guard let why = lockWarnings[entry.recordID] else { return nil }
         tally.notLocked += 1
-        model.log("Promote: WARNING \(entry.filename) is promoted but NOT locked — \(why). The copy is good and stays; run Lock archive files… to lock it.")
+        model.log("Promote: WARNING \(entry.filename) is promoted but NOT locked — \(why). The copy is good and stays; Verify Copies will list it as not locked.")
         appLog.write("promote: WARNING \(entry.filename) promoted but NOT locked — \(why)")
         promoteLog.error("promote NOT LOCKED \(entry.filename, privacy: .public): \(why, privacy: .public)")
         return why

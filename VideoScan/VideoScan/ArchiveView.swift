@@ -422,22 +422,18 @@ struct ArchiveView: View {
                 MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // Media File Operations window (legacy id)
             }
             .disabled(model.isReadOnly)
-            Divider()
-            // Locked archive files (Rick 2026-09-27): the one-time pass that
-            // locks what the archive already holds (Promote locks new files
-            // itself), and its reverse for Rick's own use.
-            Button("Lock Archive Files…") {
-                _ = fileOpsCenter.startedByUser { $0.startArchiveLock(mode: .lock, model: model) }
-                MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+            // One-time catch-up (Rick 2026-09-27): Promote locks every new
+            // file; this locks the ones promoted before locking existed. Gone
+            // once it has completed cleanly (marker in App Support).
+            if !model.archiveLockCatchUpDone {
+                Divider()
+                Button("Lock files already in the archive (one-time)…") {
+                    _ = fileOpsCenter.startedByUser { $0.startArchiveLockCatchUp(model: model) }
+                    MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+                }
+                .disabled(model.isReadOnly)
+                .help("Lock every file already in the archive, so nothing but Update… can change or delete it. Folders stay unlocked. Needed once.")
             }
-            .disabled(model.isReadOnly)
-            .help("Lock every archived file the manifest lists, so nothing but Update… can change or delete it. Folders stay unlocked.")
-            Button("Unlock Archive Files…") {
-                _ = fileOpsCenter.startedByUser { $0.startArchiveLock(mode: .unlock, model: model) }
-                MediaFileOperationsWindowOpener.openBehindMain(openWindow)
-            }
-            .disabled(model.isReadOnly)
-            .help("Clear the lock on every archived file (your own maintenance). Update… and Promote keep working either way.")
         } label: {
             Image(systemName: "ellipsis.circle")
                 .font(.system(size: 17))

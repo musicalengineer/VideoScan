@@ -151,9 +151,9 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// exports). Pause/Stop between phases and apply slices.
     /// FindSimilarFootageJob.
     case findSimilarFootage
-    /// "Lock archive files…" / "Unlock archive files…" (Rick 2026-09-27):
-    /// walks the archive manifest's rows and sets (or, for Rick's own use,
-    /// clears) the macOS user-immutable flag on each archived file.
+    /// "Lock files already in the archive (one-time)…" (Rick 2026-09-27):
+    /// walks the archive manifest's rows and sets the macOS user-immutable
+    /// flag on each archived file promoted before locking existed.
     /// Metadata only — no media is read. ArchiveLockJob.
     case lockArchive
 

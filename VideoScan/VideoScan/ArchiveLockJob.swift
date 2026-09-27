@@ -1,34 +1,44 @@
 // ArchiveLockJob.swift
-// "Lock archive files…" / "Unlock archive files…" (Rick 2026-09-27): the
-// one-time pass that locks every file the archive already holds (Promote
-// locks new ones itself), and its reverse for Rick's own use. An MFO job of
-// the standard long-operation shape: collapsed row with the verb chip,
-// "N of M", the current file, time left, a progress bar, Pause / Stop;
-// expanding the row shows the per-file results (locked / already locked /
-// failed + reason) and the totals; the finished row keeps a one-line summary.
+// "Lock files already in the archive (one-time)…" (Rick 2026-09-27): Promote
+// locks every file it lands; this is the ONE-TIME catch-up for files
+// promoted before locking existed. Once it has completed cleanly a marker
+// in App Support hides the menu item for good. There is no Unlock job — only
+// Update… unlocks (to move a file) and relocks it; Rick can use `chflags` in
+// Terminal if he ever needs to.
+//
+// An MFO job of the standard long-operation shape: collapsed row with the
+// verb chip, "N of M", the current file, time left, a progress bar, Pause /
+// Stop; expanding the row shows the per-file results (locked / already
+// locked / failed / busy / skipped + reason) and the totals; the finished
+// row keeps a one-line summary.
 //
 // What it walks: the MANIFEST's rows (archive-relative paths), never a raw
-// directory walk — only files the index knows are touched. Before ANY flag
-// is changed every row is checked (refuse before mutating):
-//   • the manifest must open through the validated descriptor chain (not a
-//     symlink, a known header, readable) — else the job refuses;
-//   • every row's path must be a plain path inside the archive root — ONE
-//     escaping row (a poisoned manifest) refuses the whole job, nothing
-//     flagged.
-// Rows outside the media buckets (10_Photos / 20_Audio / 30_Video /
-// 50_Documents) are skipped and listed: 00_Index and the family tree are
-// written by other features and are never locked.
+// directory walk — only files the index knows are touched.
+//   • The manifest must open through the validated descriptor chain (not a
+//     symlink, a known header, readable) — else the job refuses.
+//   • A whole row whose path escapes the archive root (a poisoned manifest)
+//     refuses the whole job BEFORE any flag changes.
+//   • A short / malformed row is SKIPPED AND REPORTED (codex r1 #5, Rick's
+//     ruling): its text is never used as a path.
+//   • Rows outside the media buckets (00_Index, 40_Family_Tree) are skipped
+//     and listed — never locked.
+//
+// Update… coordination (codex r1 #1): each file's flag is set while holding
+// the SAME 00_Index lock Update holds for its whole transaction
+// (ArchiveIndexLock, try-lock, never a wait), through a path resolved afresh
+// under that lock. A file Update is moving right now is skipped and reported
+// "busy — being updated"; lock-all can never freeze a file between Update's
+// move and its rollback.
 //
 // Folders are never locked; the system flag (schg) is never used. Each file
-// goes through ArchiveFileLock.set — the one audited primitive — with reason
-// `.lockAll` / `.unlockAll`. Per-file success lines go to the unified log
-// only (100k lines would drown catalog.log); START, every failure, and the
+// goes through ArchiveFileLock.set — the one audited primitive — reason
+// `.lockAll`. Per-file success lines go to the unified log only (100k lines
+// would drown catalog.log); START, every failure / busy file, and the
 // OUTCOME counts go to the console + catalog.log + videoscan.log.
 //
 // Memory (worst case): the manifest's text once (≤ 256 MB cap, ~20 MB at
 // 100k rows) and its relpath list (~10 MB at 100k); results keep EVERY
-// problem row but only the first `sampleCap` successes — bounded no matter
-// how big the archive grows.
+// problem row but only the first `sampleCap` successes.
 //
 // (For Rick: the chunk hop is `@concurrent` — without it a `nonisolated
 // async` would run on the CALLER's actor, i.e. the UI thread.)
@@ -40,17 +50,10 @@ import os
 @MainActor
 final class ArchiveLockJob: @MainActor MediaFileOperationJob {
 
-    enum Mode: Sendable, Equatable {
-        case lock, unlock
-        var change: ArchiveFileLock.Change { self == .lock ? .lock : .unlock }
-        var reason: ArchiveFileLock.Reason { self == .lock ? .lockAll : .unlockAll }
-        var title: String { self == .lock ? "Lock archive files" : "Unlock archive files" }
-        var doneWord: String { self == .lock ? "Locked" : "Unlocked" }
-        var alreadyWord: String { self == .lock ? "already locked" : "already unlocked" }
-    }
+    static let title = "Lock files already in the archive"
 
     struct Item: Identifiable, Equatable, Sendable {
-        enum Kind: Equatable, Sendable { case changed, already, failed, skipped }
+        enum Kind: Equatable, Sendable { case changed, already, failed, skipped, busy }
         let id: Int
         let relPath: String
         let kind: Kind
@@ -60,12 +63,13 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
     struct Totals: Equatable, Sendable {
         var total = 0, done = 0
         var changed = 0, already = 0, failed = 0, skipped = 0
+        /// Being changed by Update… at that moment — skipped, run again.
+        var busy = 0
     }
 
     let id = UUID()
     let kind: MediaFileOperationKind = .lockArchive
     let startedAt = Date()
-    let mode: Mode
     weak var model: VideoScanModel?
 
     /// The flag primitives (tests stub them for the 100k scale test).
@@ -76,7 +80,7 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
     static let sampleCap = 500
 
     @Published private(set) var totals = Totals()
-    /// Every failed / skipped row, in manifest order.
+    /// Every failed / busy / skipped row, in manifest order.
     @Published private(set) var problems: [Item] = []
     /// The first `sampleCap` locked / already-locked rows.
     @Published private(set) var sample: [Item] = []
@@ -93,15 +97,14 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
     /// Internal so tests can `await job.task?.value`.
     private(set) var task: Task<Void, Never>?
 
-    var title: String { mode.title }
+    var title: String { Self.title }
     var subtitle: String { subtitleText }
     var fraction: Double { fractionValue }
     var isIndeterminate: Bool { isIndeterminateValue }
     var canPause: Bool { state == .running }
     var isPaused: Bool { pauseRequested }
 
-    init(mode: Mode, model: VideoScanModel) {
-        self.mode = mode
+    init(model: VideoScanModel) {
         self.model = model
     }
 
@@ -134,32 +137,21 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
 
     private func run() async {
         guard let model else { finish(failed: "The catalog went away before the job could start"); return }
-        if let refusal = Self.preflightRefusal(model: model) {
-            wasRefused = true
-            model.archiveLockNote("\(mode.title): refused — \(refusal). Nothing was changed.")
-            finish(failed: "Refused — \(refusal). Nothing was changed.")
-            return
-        }
+        if let refusal = Self.preflightRefusal(model: model) { refuse(refusal, model: model); return }
         guard let root = model.masterArchiveRootPath else { return }
         subtitleText = "Reading the archive manifest…"
-        let loaded = await Self.loadPlanOffMain(root: root)
         let plan: Plan
-        switch loaded {
-        case .failure(let refusal):
-            let why = refusal.reason
-            wasRefused = true
-            model.archiveLockNote("\(mode.title): refused — \(why). Nothing was changed.")
-            finish(failed: "Refused — \(why). Nothing was changed.")
-            return
+        switch await Self.loadPlanOffMain(root: root) {
+        case .failure(let r): refuse(r.reason, model: model); return
         case .success(let p): plan = p
         }
         totals.total = plan.relPaths.count
         isIndeterminateValue = false
-        model.archiveLockNote("\(mode.title): START — \(plan.relPaths.count) archived file(s) listed in the manifest at \(root) (\(plan.skipped.count) outside the media buckets, skipped)")
+        model.archiveLockNote("\(title): START — \(plan.relPaths.count) archived file(s) listed in the manifest at \(root) (\(plan.skipped.count) row(s) skipped)")
         var nextID = 0
-        for rel in plan.skipped {
-            appendProblem(Item(id: nextID, relPath: rel, kind: .skipped,
-                               detail: "not in a media bucket (10_Photos / 20_Audio / 30_Video / 50_Documents) — never locked"))
+        for s in plan.skipped {
+            problems.append(Item(id: nextID, relPath: s.row, kind: .skipped, detail: s.why))
+            totals.skipped += 1
             nextID += 1
         }
         let begin = Date()
@@ -172,9 +164,9 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
             if Task.isCancelled || state == .cancelling { break }
             let end = min(index + max(1, chunkSize), plan.relPaths.count)
             let chunk = Array(plan.relPaths[index..<end])
-            let results = await Self.applyChunkOffMain(root: root, relPaths: chunk, mode: mode, seams: fileLock)
-            for (rel, result) in zip(chunk, results) {
-                record(rel: rel, result: result, id: nextID, model: model)
+            let results = await Self.applyChunkOffMain(root: root, relPaths: chunk, seams: fileLock)
+            for (rel, outcome) in zip(chunk, results) {
+                record(rel: rel, outcome: outcome, id: nextID, model: model)
                 nextID += 1
             }
             index = end
@@ -183,40 +175,51 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
             subtitleText = Self.progressLine(done: index, total: plan.relPaths.count,
                                              current: chunk.last ?? "", elapsed: -begin.timeIntervalSinceNow)
         }
-        let summary = Self.summaryLine(totals, mode: mode)
+        let summary = Self.summaryLine(totals)
         if Task.isCancelled || state == .cancelling {
-            model.archiveLockNote("\(mode.title): OUTCOME stopped at \(totals.done) of \(totals.total) — \(summary)")
+            model.archiveLockNote("\(title): OUTCOME stopped at \(totals.done) of \(totals.total) — \(summary)")
             state = .cancelled
             subtitleText = "Stopped — \(summary)"
             isIndeterminateValue = false
             return
         }
-        model.archiveLockNote("\(mode.title): OUTCOME — \(summary)")
-        if totals.failed > 0 { finish(failed: summary) } else { finish(success: summary) }
-    }
-
-    private func record(rel: String, result: ArchiveFileLock.Result, id: Int, model: VideoScanModel) {
-        switch result {
-        case .changed:
-            totals.changed += 1
-            if sample.count < Self.sampleCap { sample.append(Item(id: id, relPath: rel, kind: .changed, detail: mode.doneWord.lowercased())) }
-        case .alreadySo:
-            totals.already += 1
-            if sample.count < Self.sampleCap { sample.append(Item(id: id, relPath: rel, kind: .already, detail: mode.alreadyWord)) }
-        case .absent:
-            totals.failed += 1
-            appendProblem(Item(id: id, relPath: rel, kind: .failed, detail: "listed in the manifest but not found in the archive"))
-            model.archiveLockNote("\(mode.title): FAILED \(rel) — listed in the manifest but not found in the archive")
-        case .failed(let why):
-            totals.failed += 1
-            appendProblem(Item(id: id, relPath: rel, kind: .failed, detail: why))
-            model.archiveLockNote("\(mode.title): FAILED \(rel) — \(why)")
+        model.archiveLockNote("\(title): OUTCOME — \(summary)")
+        if totals.failed > 0 || totals.busy > 0 {
+            finish(failed: summary)       // not complete: the menu item stays
+        } else {
+            finish(success: summary)
+            model.markArchiveLockCatchUpDone(summary: summary)
         }
     }
 
-    private func appendProblem(_ item: Item) {
-        problems.append(item)
-        if item.kind == .skipped { totals.skipped += 1 }
+    private func refuse(_ why: String, model: VideoScanModel) {
+        wasRefused = true
+        model.archiveLockNote("\(title): refused — \(why). Nothing was changed.")
+        finish(failed: "Refused — \(why). Nothing was changed.")
+    }
+
+    private func record(rel: String, outcome: LockOutcome, id: Int, model: VideoScanModel) {
+        switch outcome {
+        case .busy:
+            totals.busy += 1
+            problems.append(Item(id: id, relPath: rel, kind: .busy,
+                                 detail: "busy — being updated right now; skipped (run the job again)"))
+            model.archiveLockNote("\(title): SKIPPED \(rel) — busy, being updated right now")
+        case .result(.changed):
+            totals.changed += 1
+            if sample.count < Self.sampleCap { sample.append(Item(id: id, relPath: rel, kind: .changed, detail: "locked")) }
+        case .result(.alreadySo):
+            totals.already += 1
+            if sample.count < Self.sampleCap { sample.append(Item(id: id, relPath: rel, kind: .already, detail: "already locked")) }
+        case .result(.absent):
+            totals.failed += 1
+            problems.append(Item(id: id, relPath: rel, kind: .failed, detail: "listed in the manifest but not found in the archive"))
+            model.archiveLockNote("\(title): FAILED \(rel) — listed in the manifest but not found in the archive")
+        case .result(.failed(let why)):
+            totals.failed += 1
+            problems.append(Item(id: id, relPath: rel, kind: .failed, detail: why))
+            model.archiveLockNote("\(title): FAILED \(rel) — \(why)")
+        }
     }
 
     private func finish(success: String) {
@@ -240,14 +243,15 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
 
     // MARK: Pure pieces
 
-    /// "Locked 812 · already locked 4 · failed 1 · skipped 2".
-    nonisolated static func summaryLine(_ t: Totals, mode: Mode) -> String {
-        var parts = ["\(mode.doneWord) \(t.changed)", "\(mode.alreadyWord) \(t.already)", "failed \(t.failed)"]
+    /// "Locked 812 · already locked 4 · failed 1 · busy 1 · skipped 2".
+    nonisolated static func summaryLine(_ t: Totals) -> String {
+        var parts = ["Locked \(t.changed)", "already locked \(t.already)", "failed \(t.failed)"]
+        if t.busy > 0 { parts.append("busy \(t.busy) (being updated — run again)") }
         if t.skipped > 0 { parts.append("skipped \(t.skipped)") }
         return parts.joined(separator: " · ")
     }
 
-    /// "1,204 of 9,870 · 30_Video/…/x.mov · ~2 min left".
+    /// "1,204 of 9,870 · x.mov · ~2 min left".
     nonisolated static func progressLine(done: Int, total: Int, current: String, elapsed: TimeInterval) -> String {
         let f = NumberFormatter(); f.numberStyle = .decimal
         let d = f.string(from: NSNumber(value: done)) ?? "\(done)"
@@ -275,52 +279,101 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
     struct PlanRefusal: Error, Equatable, Sendable { let reason: String }
 
     struct Plan: Sendable, Equatable {
-        /// Media-bucket files to flag, manifest order, each once.
+        /// Media-bucket files to lock, manifest order, each once.
         let relPaths: [String]
-        /// Contained rows outside the media buckets (listed, never flagged).
-        let skipped: [String]
+        /// Rows skipped (malformed, or outside the media buckets) + why.
+        let skipped: [(row: String, why: String)]
+
+        static func == (a: Plan, b: Plan) -> Bool {
+            a.relPaths == b.relPaths && a.skipped.map(\.row) == b.skipped.map(\.row)
+        }
     }
 
-    /// Read + validate the WHOLE manifest before anything is flagged.
+    /// Read the manifest through the validated descriptor, then plan.
     #if compiler(>=6.2)
     @concurrent
     #endif
     nonisolated static func loadPlanOffMain(root: String) async -> Result<Plan, PlanRefusal> {
-        switch ArchiveRefile.manifestRows(rootPath: root) {
-        case .failure(let f): return .failure(PlanRefusal(reason: f.reason))
-        case .success(let rows): return plan(fromRelPaths: rows.map(\.relPath), root: root)
+        do {
+            let fd = try ArchivePromoteEngine.openIndexFile(root: root, name: MasterArchiveLayout.manifestFilename,
+                                                            mustExist: true,
+                                                            expectedHeaders: MasterArchiveLayout.acceptedManifestHeaders)
+            defer { Darwin.close(fd) }
+            let data = try ArchivePromoteEngine.readAll(fd: fd, limit: ArchiveIndexRename.readLimit + 1)
+            guard data.count <= ArchiveIndexRename.readLimit, let text = String(bytes: data, encoding: .utf8) else {
+                return .failure(PlanRefusal(reason: "the archive manifest is unreadable or larger than \(ArchiveIndexRename.readLimit >> 20) MB"))
+            }
+            return plan(manifestText: text, root: root)
+        } catch {
+            return .failure(PlanRefusal(reason: "the archive manifest could not be read (\(ArchiveAttestationJournal.describe(error)))"))
         }
     }
 
-    /// Pure: dedupe, validate containment (ANY escaping row refuses the
-    /// whole job), split media buckets from the rest.
-    nonisolated static func plan(fromRelPaths all: [String], root: String) -> Result<Plan, PlanRefusal> {
+    /// Pure. Every data row is looked at: a short / malformed row is skipped
+    /// and reported (its text is never used as a path); a whole row whose
+    /// path escapes the root refuses the whole job; non-media rows are
+    /// skipped and listed; duplicates are locked once.
+    nonisolated static func plan(manifestText text: String, root: String) -> Result<Plan, PlanRefusal> {
         var seen = Set<String>()
-        var media: [String] = [], other: [String] = []
-        for rel in all where seen.insert(rel).inserted {
+        var media: [String] = []
+        var skipped: [(row: String, why: String)] = []
+        for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated().dropFirst() {
+            let raw = line.hasSuffix("\r") ? String(line.dropLast()) : String(line)
+            if raw.isEmpty { continue }
+            let f = ArchiveManifestCSV.fields(ofLine: raw)
+            guard f.count >= ArchiveManifestCSV.columnCountLegacy, !f[ArchiveManifestCSV.relPathColumn].isEmpty else {
+                skipped.append(("manifest line \(i + 1)",
+                                "not a whole manifest row (\(f.count) field(s)) — skipped, nothing touched; check the manifest by hand"))
+                continue
+            }
+            let rel = f[ArchiveManifestCSV.relPathColumn]
+            guard seen.insert(rel).inserted else { continue }
             guard ArchivePromoteEngine.isContainedRelPath(rel, root: root) else {
                 return .failure(PlanRefusal(reason: "the archive manifest lists a path that is not a plain path inside the archive (\(rel)) — the manifest looks damaged; check it by hand"))
             }
             let bucket = (rel as NSString).pathComponents.first ?? ""
-            if ArchiveRefileAuthorization.movableBuckets.contains(bucket) { media.append(rel) } else { other.append(rel) }
+            if ArchiveRefileAuthorization.movableBuckets.contains(bucket) {
+                media.append(rel)
+            } else {
+                skipped.append((rel, "not in a media bucket (10_Photos / 20_Audio / 30_Video / 50_Documents) — never locked"))
+            }
         }
-        return .success(Plan(relPaths: media, skipped: other))
+        return .success(Plan(relPaths: media, skipped: skipped))
     }
 
     /// One chunk of flag changes, off the main actor.
     #if compiler(>=6.2)
     @concurrent
     #endif
-    nonisolated static func applyChunkOffMain(root: String, relPaths: [String], mode: Mode,
-                                              seams: ArchiveFileLock.Seams) async -> [ArchiveFileLock.Result] {
-        relPaths.map { rel in
-            ArchiveFileLock.set(mode.change, root: root, relPath: rel, reason: mode.reason, seams: seams,
-                                audit: { archiveLockLog.debug("\($0, privacy: .public)") })
+    nonisolated static func applyChunkOffMain(root: String, relPaths: [String],
+                                              seams: ArchiveFileLock.Seams) async -> [LockOutcome] {
+        relPaths.map { lockOne(root: root, relPath: $0, seams: seams) }
+    }
+
+    enum LockOutcome: Equatable, Sendable {
+        case result(ArchiveFileLock.Result)
+        /// Update… (or another index writer) holds the index lock right now.
+        case busy
+    }
+
+    /// ONE file, under the 00_Index lock (try-lock: busy → `.busy`, never a
+    /// wait), the flag set through a path resolved NOW — not a descriptor
+    /// opened before the lock. Synchronous, disk-bound — off the main actor.
+    nonisolated static func lockOne(root: String, relPath: String, seams: ArchiveFileLock.Seams) -> LockOutcome {
+        do {
+            return try ArchiveIndexLock.withExclusive(root: root, holder: title, wait: .zero) {
+                .result(ArchiveFileLock.set(.lock, root: root, relPath: relPath, reason: .lockAll, seams: seams,
+                                            audit: { archiveLockLog.debug("\($0, privacy: .public)") }))
+            }
+        } catch is ArchiveIndexLock.Busy {
+            return .busy
+        } catch {
+            return .result(.failed("the archive index could not be locked (\(ArchiveAttestationJournal.describe(error)))"))
         }
     }
 }
 
-// MARK: - Audit sink + start
+// MARK: - Audit sink, the one-time marker, start
 
 extension VideoScanModel {
     /// Console + catalog.log (`log`), videoscan.log, unified log — main actor.
@@ -329,24 +382,44 @@ extension VideoScanModel {
         appLog.write("[archive-lock] " + line)
         archiveLockLog.notice("\(line, privacy: .public)")
     }
+
+    /// The marker that hides the one-time menu item: beside the catalog
+    /// (App Support in production; the sandbox's catalog folder in tests).
+    var archiveLockCatchUpMarkerURL: URL {
+        URL(fileURLWithPath: (catalogStore.fileLocation as NSString).deletingLastPathComponent, isDirectory: true)
+            .appendingPathComponent("archive-lock-catchup.done")
+    }
+
+    /// True once the catch-up has completed cleanly (no failed, no busy file).
+    var archiveLockCatchUpDone: Bool {
+        FileManager.default.fileExists(atPath: archiveLockCatchUpMarkerURL.path)
+    }
+
+    func markArchiveLockCatchUpDone(summary: String) {
+        let text = "\(ISO8601DateFormatter().string(from: Date())) \(masterArchiveRootPath ?? "") — \(summary)\n"
+        do {
+            try Data(text.utf8).write(to: archiveLockCatchUpMarkerURL, options: .atomic)
+            objectWillChange.send()
+        } catch {
+            archiveLockNote("\(ArchiveLockJob.title): completed, but the completion marker could not be written (\(error.localizedDescription)) — the menu item stays")
+        }
+    }
 }
 
 extension MediaFileOperationsCenter {
-    /// Start ONE lock / unlock pass. Refused (parked, nothing started) while
-    /// another lock / unlock pass is active.
+    /// Start the ONE catch-up pass. Refused (parked, nothing started) while
+    /// another is active.
     @discardableResult
-    func startArchiveLock(mode: ArchiveLockJob.Mode, model: VideoScanModel) -> ArchiveLockJob {
-        let job = ArchiveLockJob(mode: mode, model: model)
+    func startArchiveLockCatchUp(model: VideoScanModel) -> ArchiveLockJob {
+        let job = ArchiveLockJob(model: model)
         add(job)
         if jobs.contains(where: { $0.id != job.id && $0.state.isActive && $0 is ArchiveLockJob }) {
-            job.refuseToStart(reason: "A lock / unlock pass is already running — wait for it to finish (or stop it). Nothing was started.")
+            job.refuseToStart(reason: "The lock pass is already running — wait for it to finish (or stop it). Nothing was started.")
             return job
         }
         job.start()
         appLog.write(Self.startSummaryLine(verb: job.kind.logVerb, title: job.title,
-                                           plan: mode == .lock
-                                               ? "set the user-immutable flag on every archived file the manifest lists"
-                                               : "clear the user-immutable flag on every archived file the manifest lists"))
+                                           plan: "set the user-immutable flag on every archived file the manifest lists (one-time catch-up)"))
         return job
     }
 }
