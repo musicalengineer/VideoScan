@@ -30,6 +30,11 @@ struct ReviewCycleLine: Equatable, Identifiable {
 enum ReviewCycles {
     static let yellowAfter: TimeInterval = 10 * 60
     static let redAfter: TimeInterval = 30 * 60
+    /// "fixing" is an agent's fix round (20–40 min is normal), not codex
+    /// thinking (2–5 min) — Rick 2026-09-27: give it its own limits so a
+    /// normal fix round doesn't turn red.
+    static let fixingYellowAfter: TimeInterval = 60 * 60
+    static let fixingRedAfter: TimeInterval = 2 * 60 * 60
     static let closedHiddenAfter: TimeInterval = 24 * 60 * 60
     static let shown = 3
 
@@ -62,6 +67,10 @@ enum ReviewCycles {
         case "closed": return .green
         case "failed": return .red
         case "running" where !pidAlive: return .red   // codex died without a verdict
+        case "fixing":
+            if age >= fixingRedAfter { return .red }
+            if age >= fixingYellowAfter { return .yellow }
+            return .green
         default:
             if age >= redAfter { return .red }
             if age >= yellowAfter { return .yellow }

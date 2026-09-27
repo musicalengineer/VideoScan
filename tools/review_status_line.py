@@ -69,8 +69,10 @@ def main():
         colour = GREEN
         if phase == "failed" or (phase == "running" and c.get("pid") and not alive(c["pid"])):
             colour = RED
+        elif phase == "fixing":   # an agent's fix round: 60 min / 2 h
+            colour = RED if secs >= 7200 else YELLOW if secs >= 3600 else GREEN
         elif phase != "closed":
-            colour = RED if secs > 1800 else YELLOW if secs >= 600 else GREEN
+            colour = RED if secs >= 1800 else YELLOW if secs >= 600 else GREEN
         words = {"briefed": "briefed", "running": "codex running", "verdict": "reading verdict",
                  "fixing": f"fixing {c.get('findings', '?')}", "closed": "closed", "failed": "FAILED"}.get(phase, phase)
         parts.append(f"{colour}● {c.get('title', '?')} — {words} {age_words(secs)}{RESET}")

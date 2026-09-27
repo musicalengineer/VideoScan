@@ -221,3 +221,13 @@ def test_status_prints_last_five(env, capsys):
     assert codex_review.main(["status"]) == 0
     lines = capsys.readouterr().out.strip().splitlines()
     assert len(lines) == 5 and lines[0].startswith("#7 t6 (a..b) — briefed")
+
+
+def test_hyphenated_verdict_is_kept_whole():
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location("codex_review", pathlib.Path(__file__).resolve().parents[1] / "tools" / "codex_review.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    fn = next(getattr(mod, n) for n in dir(mod) if n.startswith("parse") and callable(getattr(mod, n)))
+    out = fn("Credits spent: unavailable | Finding count: 5\nVerdict: merge-after-fixes\n", "tokens used\n97,983\n")
+    assert out["verdict"] == "merge-after-fixes"
+    assert out["findings"] == 5
