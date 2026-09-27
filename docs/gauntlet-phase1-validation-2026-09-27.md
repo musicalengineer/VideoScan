@@ -18,6 +18,8 @@ Branch: `feature/release-gauntlet`, based on `fcfb8ce7`. Claude review is requir
 
 Twenty new runner/publisher/dashboard tests passed, zero skipped. Thirteen existing dashboard/metrics tests passed. After the real build exposed account-cache lookup, the poisoned-cache regression test passed again (1 test, 5.589 seconds). Shell syntax and `git diff --check` passed.
 
+The commit hook then identified excessive complexity in the runner's main function. A behavior-preserving decomposition into helpers passed Swift typechecking, SwiftLint (zero errors; 13 force-unwrap/sorted-first warnings), and all 12 runner tests again in 53.983 seconds. Transcript: `/private/tmp/gauntlet-phase1-refactor-tests.txt`.
+
 All orchestration tests use fake xcodebuild/xcresulttool processes in scratch repositories. Their result fixture is simulated evidence, not an app-test pass. They exercise failure continuation, exit codes, count floors, unassigned/blocked inventory, symlink refusal, environment isolation, watchdog timeouts and surviving descendants, durable publication, and dashboard rendering.
 
 Two QA findings were fixed and pinned: an ordinary child exit could leave process-group descendants; deleting manifest blocked entries could falsely mark a subset passed. The dashboard sorting concern was declined after verifying that `allTdRows.sort(...)` precedes the Gauntlet filter.
