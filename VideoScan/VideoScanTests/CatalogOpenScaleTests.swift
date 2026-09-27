@@ -62,6 +62,7 @@ struct CatalogOpenScaleTests {
         let rows = Self.makeRows()
         let ids = Set(rows.map(\.id))
         var checks = 0
+        var asked: [Int] = []
         var launches: [[VideoRecord]] = []
         var lines: [String] = []
 
@@ -70,6 +71,7 @@ struct CatalogOpenScaleTests {
         let opened = CatalogOpenAction.open(
             ids: ids, rows: rows, gesture: "⌘O", hasVLC: true,
             log: { lines.append($0) },
+            confirm: { asked.append($0.count); return true },   // the user said Open (GH #203)
             noteMissing: { _ in checks += 1; return false },
             launch: { launches.append($0) })
         let elapsed = Self.seconds(clock.now - start)
@@ -78,6 +80,7 @@ struct CatalogOpenScaleTests {
         #expect(opened.first?.id == rows.first?.id && opened.last?.id == rows.last?.id,
                 "table order, not Set order")
         #expect(zip(opened, rows).allSatisfy { $0.id == $1.id }, "every row in table order")
+        #expect(asked == [Self.rowCount], "select-all asks once before opening 100k files (GH #203)")
         #expect(checks == Self.rowCount, "the looks-moved check runs exactly once per opened row")
         #expect(launches.count == 1, "one hand-off to the opener for the whole selection")
         #expect(lines == ["Open (⌘O): 100000 file(s) — by codec: 40000 for QuickTime Player, 60000 for VLC (offline files are skipped by the opener)"],
@@ -94,6 +97,27 @@ struct CatalogOpenScaleTests {
                 "⌘O on 100k selected rows took \(elapsed) s (\(PerformanceLane.loadDescription()))")
     }
 
+    /// GH #203 sensor at production scale: ⌘A ⌘O then Cancel on 100k rows
+    /// stats nothing and launches nothing.
+    @Test("scale: select-all on 100k rows then Cancel — no looks-moved check, no launch",
+          .timeLimit(.minutes(1)))
+    func selectAllThenCancelOnHundredThousandRows() throws {
+        let rows = Self.makeRows()
+        var asked = 0
+        var checks = 0
+        var launches = 0
+        let opened = CatalogOpenAction.open(
+            ids: Set(rows.map(\.id)), rows: rows, gesture: "⌘O", hasVLC: true,
+            log: { _ in },
+            confirm: { asked += 1; #expect($0.count == Self.rowCount); return false },
+            noteMissing: { _ in checks += 1; return false },
+            launch: { _ in launches += 1 })
+        #expect(opened.isEmpty)
+        #expect(asked == 1)
+        #expect(checks == 0, "Cancel is asked before the per-row stat pass")
+        #expect(launches == 0)
+    }
+
     @Test("scale: one highlighted row in a 100k table — ONE looks-moved check, one row launched",
           .timeLimit(.minutes(1)))
     func oneRowInHundredThousand() throws {
@@ -107,6 +131,7 @@ struct CatalogOpenScaleTests {
         let opened = CatalogOpenAction.open(
             ids: [target.id], rows: rows, gesture: "double-click", hasVLC: true,
             log: { _ in },
+            confirm: { _ in Issue.record("one row never asks"); return false },
             noteMissing: { checked.append($0.id); return false },
             launch: { launched = $0 })
         let elapsed = Self.seconds(clock.now - start)

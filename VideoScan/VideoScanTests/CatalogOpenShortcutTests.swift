@@ -48,11 +48,15 @@ struct CatalogOpenShortcutTests {
         var noted: [UUID] = []
         var launches: [[VideoRecord]] = []
         var missing: Set<UUID> = []
+        /// What the injected confirmation was asked (row counts), and its answer.
+        var asked: [Int] = []
+        var answer = true
 
         func open(ids: Set<UUID>, rows: [VideoRecord], gesture: String, hasVLC: Bool = true) -> [VideoRecord] {
             CatalogOpenAction.open(
                 ids: ids, rows: rows, gesture: gesture, hasVLC: hasVLC,
                 log: { self.lines.append($0) },
+                confirm: { self.asked.append($0.count); return self.answer },
                 noteMissing: { self.noted.append($0.id); return self.missing.contains($0.id) },
                 launch: { self.launches.append($0) })
         }
@@ -108,6 +112,7 @@ struct CatalogOpenShortcutTests {
         let opened = CatalogOpenAction.open(
             ids: [rec.id], rows: [rec], gesture: "⌘O", hasVLC: true,
             log: { lines.append($0) },
+            confirm: { _ in Issue.record("one row never asks"); return false },
             noteMissing: { model.noteMissingFileForUserAction($0) },
             launch: { launched = $0 })
 
@@ -161,6 +166,65 @@ struct CatalogOpenShortcutTests {
         let command = try productionSource("CatalogOpenCommand.swift")
         #expect(command.contains(".disabled((selection?.count ?? 0) == 0)"), "no focused catalog selection → disabled")
         #expect(command.contains("static func title(count: Int) -> String"), "the title is the pure rule the test above pins")
+    }
+
+    // MARK: GH #203 — a large selection asks first (Finder's rule)
+
+    private func rows(_ n: Int) -> [VideoRecord] {
+        (0..<n).map { record("/Volumes/X9/test_\($0).mov") }
+    }
+
+    @Test("#203: 21 rows ask; Open opens them all in table order")
+    func twentyOneRowsAsk() {
+        let table = rows(21)
+        let spy = Spy()
+        let opened = spy.open(ids: Set(table.map(\.id)), rows: table, gesture: "⌘O")
+        #expect(spy.asked == [21], "asked once, with the rows about to open")
+        #expect(opened.map(\.id) == table.map(\.id))
+        #expect(spy.launches.count == 1)
+        #expect(spy.noted.count == 21)
+    }
+
+    @Test("#203: exactly 20 rows do not ask")
+    func twentyRowsDoNotAsk() {
+        let table = rows(20)
+        let spy = Spy()
+        spy.answer = false                       // would block if asked
+        let opened = spy.open(ids: Set(table.map(\.id)), rows: table, gesture: "double-click")
+        #expect(spy.asked.isEmpty, "at the threshold nothing asks")
+        #expect(opened.count == 20)
+        #expect(spy.launches.count == 1)
+    }
+
+    @Test("#203: Cancel launches nothing, stats nothing, and the console says so")
+    func cancelLaunchesNothing() {
+        let table = rows(3_412)
+        let spy = Spy()
+        spy.answer = false
+        let opened = spy.open(ids: Set(table.map(\.id)), rows: table, gesture: "⌘O")
+        #expect(spy.asked == [3_412])
+        #expect(opened.isEmpty)
+        #expect(spy.launches.isEmpty, "Cancel opens nothing")
+        #expect(spy.noted.isEmpty, "Cancel is asked BEFORE any per-row looks-moved check")
+        #expect(spy.lines == ["Open (⌘O): cancelled — 3412 file(s) selected, nothing opened."], "\(spy.lines)")
+    }
+
+    @Test("#203: the threshold is 20 and the question reads like Finder's")
+    func confirmationRuleAndTitle() {
+        #expect(CatalogOpenAction.confirmThreshold == 20)
+        #expect(!CatalogOpenAction.needsConfirmation(count: 1))
+        #expect(!CatalogOpenAction.needsConfirmation(count: 20))
+        #expect(CatalogOpenAction.needsConfirmation(count: 21))
+        #expect(CatalogOpenAction.confirmationTitle(count: 3_412, locale: Locale(identifier: "en_US")) == "Open 3,412 files?")
+        #expect(CatalogOpenAction.confirmationTitle(count: 21, locale: Locale(identifier: "en_US")) == "Open 21 files?")
+    }
+
+    @Test("#203 sensor: the production wiring asks through the modal question, not a constant yes")
+    func productionWiringAsks() throws {
+        let command = try productionSource("CatalogOpenCommand.swift")
+        #expect(command.contains("confirm: { askToOpen($0) },"), "the production overload injects the real question")
+        #expect(command.contains("alert.runModal() == .alertFirstButtonReturn"), "only Open says yes")
+        #expect(command.contains("if needsConfirmation(count: targets.count), !confirm(targets) {"))
     }
 
     // MARK: (c) Source sensor — one open path

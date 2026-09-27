@@ -19,12 +19,31 @@
 // AND sound there, VLC otherwise (MediaOpener.preferredPlayer). There is
 // no second player policy in this file; it only says which one was used.
 //
+// A LARGE selection asks first (GH #203, night hardening 2026-09-27):
+// ⌘A ⌘O on a 100k catalog handed ~40k files to QuickTime and ~60k to VLC
+// with no question asked. Above `confirmThreshold` rows the action asks
+// Finder's question — "Open 3,412 files?" (Open / Cancel) — BEFORE any
+// looks-moved check or launch, so Cancel costs nothing and opens nothing.
+// The question is an injected closure like every other side effect; the
+// production wiring shows an NSAlert, tests answer it.
+//
+// Main-actor cost, documented rather than moved (GH #203 second half):
+// after the user says Open, each row still gets up to two stat-class
+// checks on the main actor — one in `noteMissingFileForUserAction` and one
+// in MediaOpener's reachability filter. Neither moves off-main cheaply:
+// the looks-moved check mutates model state (the per-volume debounce and
+// the banner) and MediaOpener's app launch wants the main thread. Under
+// the confirmation, that cost is only ever paid for a selection the user
+// explicitly asked to open, and the 100k scale test pins the pass itself
+// at well under a second with the checks stubbed.
+//
 // (For Rick: `FocusedValueKey` ≈ a typed slot the focused view fills and
 // the menu reads; nil when no catalog table has focus. The closure-taking
 // overload of `open` is the test seam — dependency injection by function
 // pointer, the way you'd pass callbacks into a C++ routine to keep the
 // unit under test free of the real player launcher.)
 
+import AppKit
 import SwiftUI
 
 /// What the focused catalog table offers the File menu: how many rows are
@@ -85,13 +104,44 @@ enum CatalogOpenAction {
                      model: VideoScanModel) -> [VideoRecord] {
         open(ids: ids, rows: rows, gesture: gesture, hasVLC: MediaOpener.hasVLC,
              log: { model.log($0) },
+             confirm: { askToOpen($0) },
              noteMissing: { model.noteMissingFileForUserAction($0) },
              launch: { MediaOpener.open($0) })
     }
 
-    /// The seam overload — every side effect injected. `noteMissing`
-    /// returns true when the file is missing on a mounted volume (the
-    /// signature `VideoScanModel.noteMissingFileForUserAction` has).
+    /// Finder's rule: opening this many files at once asks first. At or
+    /// below it (the ordinary double-click on a handful) nothing asks.
+    static let confirmThreshold = 20
+
+    /// Does opening `count` files need the user's yes?
+    static func needsConfirmation(count: Int) -> Bool {
+        count > confirmThreshold
+    }
+
+    /// "Open 3,412 files?" — grouped for the reader's locale.
+    static func confirmationTitle(count: Int, locale: Locale = .current) -> String {
+        "Open \(count.formatted(.number.locale(locale))) files?"
+    }
+
+    /// The production question: a modal alert, Open / Cancel, Cancel the
+    /// default for Escape. Returns true only for Open.
+    @MainActor
+    private static func askToOpen(_ targets: [VideoRecord]) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = confirmationTitle(count: targets.count)
+        alert.informativeText = "Each file opens in a player window — by codec: \(playerSummary(targets, hasVLC: MediaOpener.hasVLC))."
+        alert.addButton(withTitle: "Open")
+        let cancel = alert.addButton(withTitle: "Cancel")
+        cancel.keyEquivalent = "\u{1b}"
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// The seam overload — every side effect injected. `confirm` is asked
+    /// only when more than `confirmThreshold` rows would open, with the
+    /// rows in table order; false opens nothing. `noteMissing` returns
+    /// true when the file is missing on a mounted volume (the signature
+    /// `VideoScanModel.noteMissingFileForUserAction` has).
     /// Returns the records handed to `launch`, in table order.
     @MainActor
     @discardableResult
@@ -100,6 +150,7 @@ enum CatalogOpenAction {
                      gesture: String,
                      hasVLC: Bool,
                      log: (String) -> Void,
+                     confirm: ([VideoRecord]) -> Bool,
                      noteMissing: (VideoRecord) -> Bool,
                      launch: ([VideoRecord]) -> Void) -> [VideoRecord] {
         // BEGIN LINE discipline (same as ⌘⌫): an empty or stale selection
@@ -114,6 +165,11 @@ enum CatalogOpenAction {
         let targets = rows.filter { ids.contains($0.id) }
         guard !targets.isEmpty else {
             log("Open (\(gesture)): the \(ids.count) selected row(s) are no longer in the table — nothing to do.")
+            return []
+        }
+        // Ask BEFORE any per-row stat or launch: Cancel costs nothing.
+        if needsConfirmation(count: targets.count), !confirm(targets) {
+            log("Open (\(gesture)): cancelled — \(targets.count) file(s) selected, nothing opened.")
             return []
         }
         // "Looks moved" (Update Catalog, 2026-08-17): a file missing while
