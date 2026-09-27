@@ -777,7 +777,9 @@ enum ArchiveIndexRename {
     }
 
     /// Cell byte ranges (raw, including their quotes) of one CSV row.
-    private static func csvCells(_ b: ArraySlice<UInt8>, file: String, line: Int) throws -> [Range<Int>] {
+    /// Internal (not private) since 2026-09-27: Refile's row-targeted
+    /// manifest rewrite (ArchiveRefile.swift) uses the SAME parser.
+    static func csvCells(_ b: ArraySlice<UInt8>, file: String, line: Int) throws -> [Range<Int>] {
         var cells: [Range<Int>] = []
         var i = b.startIndex
         while true {
@@ -812,7 +814,7 @@ enum ArchiveIndexRename {
     }
 
     /// A raw cell's value: outer quotes removed, doubled quotes collapsed.
-    private static func csvDecode(_ raw: ArraySlice<UInt8>) -> String {
+    static func csvDecode(_ raw: ArraySlice<UInt8>) -> String {
         guard raw.count >= 2, raw.first == quote, raw.last == quote else {
             return String(decoding: raw, as: UTF8.self)
         }
@@ -1007,7 +1009,7 @@ enum ArchiveIndexRename {
     /// started at `base`) — applied back to front so earlier ranges hold.
     /// A range overlapping one already applied is skipped: one token, one
     /// edit, never two.
-    private static func splice(_ bytes: [UInt8], base: Int, edits: [(Range<Int>, [UInt8])]) -> [UInt8] {
+    static func splice(_ bytes: [UInt8], base: Int, edits: [(Range<Int>, [UInt8])]) -> [UInt8] {
         var out = bytes
         var floor = Int.max
         for (range, replacement) in edits.sorted(by: { $0.0.lowerBound > $1.0.lowerBound }) where range.upperBound <= floor {

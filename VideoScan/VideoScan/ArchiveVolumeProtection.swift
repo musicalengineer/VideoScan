@@ -584,3 +584,99 @@ struct ArchiveRemovalCheck: Sendable {
         refusal(forPath: path)?.note
     }
 }
+
+// MARK: - The ONE audited exception: Refile (Rick 2026-09-27)
+
+/// The Master Archive tree is near read-only: Promote ADDS files (copy →
+/// verify → publish, never over anything), a Catalog rename fixes a typo in
+/// a NAME in place, and nothing may remove a file there (the rule above).
+/// Refile is the one action that MOVES an archived file — to the folder its
+/// corrected date says, inside the same archive, same volume. It does not
+/// weaken the removal rule (a refile removes nothing: it is one no-clobber
+/// rename(2), and every failure renames back). Instead it is an explicit,
+/// narrow EXCEPTION that must be held to move anything:
+///
+///   • only `grant(...)` makes one, and it refuses anything that is not a
+///     move between two content buckets (10/20/30/50) of THIS archive root —
+///     never 00_Index, never 40_Family_Tree, never outside the root;
+///   • every grant is logged audit-grade (who, what, from → to, why) through
+///     the caller's sink BEFORE anything moves;
+///   • the engine (ArchiveRefileEngine.execute) re-checks that the grant
+///     covers exactly the move it is about to make.
+///
+/// The source sensor (ArchiveRefileSensorTests) pins that the ONLY caller of
+/// `grant` is VideoScanModel+ArchiveRefile.swift and that the only
+/// in-archive rename(2) outside Promote's publish lives in ArchiveRefile.swift.
+/// (C++ analogy: a capability token with a private constructor — you can only
+/// call the move if someone handed you one, and only one factory makes them.)
+struct ArchiveRefileAuthorization: Sendable, Equatable {
+    let rootPath: String
+    let fromRelPath: String
+    let toRelPath: String
+    let reason: String
+    let grantedAt: Date
+
+    /// Private: the only way to hold one is `grant`.
+    private init(rootPath: String, fromRelPath: String, toRelPath: String, reason: String, grantedAt: Date) {
+        self.rootPath = rootPath
+        self.fromRelPath = fromRelPath
+        self.toRelPath = toRelPath
+        self.reason = reason
+        self.grantedAt = grantedAt
+    }
+
+    /// Content buckets a refile may move between.
+    static let movableBuckets: Set<String> = Set(MasterArchiveLayout.buckets)
+
+    /// Why a grant was refused (the move is never made).
+    enum Denial: Error, Equatable, CustomStringConvertible {
+        case notContained(String)
+        case notAContentBucket(String)
+        case sameLocation
+        case noReason
+
+        var description: String {
+            switch self {
+            case .notContained(let p): return "\(p) is not a plain path inside the archive"
+            case .notAContentBucket(let p): return "\(p) is not in a media bucket (10_Photos / 20_Audio / 30_Video / 50_Documents) — only media files are refiled"
+            case .sameLocation: return "the file is already there"
+            case .noReason: return "no reason was given"
+            }
+        }
+    }
+
+    /// Make the exception for ONE move, or say why not. `audit` receives the
+    /// grant line (console + catalog.log + videoscan.log in production).
+    static func grant(rootPath: String, fromRelPath: String, toRelPath: String,
+                      reason: String, now: Date = Date(),
+                      audit: (String) -> Void) -> Result<ArchiveRefileAuthorization, Denial> {
+        for rel in [fromRelPath, toRelPath] {
+            guard ArchivePromoteEngine.isContainedRelPath(rel, root: rootPath) else {
+                audit("Refile: exception REFUSED — \(Denial.notContained(rel))")
+                return .failure(.notContained(rel))
+            }
+            let bucket = (rel as NSString).pathComponents.first ?? ""
+            guard movableBuckets.contains(bucket) else {
+                audit("Refile: exception REFUSED — \(Denial.notAContentBucket(rel))")
+                return .failure(.notAContentBucket(rel))
+            }
+        }
+        guard fromRelPath != toRelPath else {
+            audit("Refile: exception REFUSED — \(Denial.sameLocation) (\(fromRelPath))")
+            return .failure(.sameLocation)
+        }
+        let why = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !why.isEmpty else {
+            audit("Refile: exception REFUSED — \(Denial.noReason)")
+            return .failure(.noReason)
+        }
+        audit("Refile: archive write exception granted to Refile (by rick) for ONE move in \(rootPath): \(fromRelPath) → \(toRelPath) — \(why)")
+        return .success(ArchiveRefileAuthorization(rootPath: rootPath, fromRelPath: fromRelPath,
+                                                   toRelPath: toRelPath, reason: why, grantedAt: now))
+    }
+
+    /// True when this grant is for exactly this move.
+    func covers(rootPath: String, fromRelPath: String, toRelPath: String) -> Bool {
+        self.rootPath == rootPath && self.fromRelPath == fromRelPath && self.toRelPath == toRelPath
+    }
+}

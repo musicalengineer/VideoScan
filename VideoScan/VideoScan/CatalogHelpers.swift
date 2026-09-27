@@ -665,9 +665,14 @@ struct CatalogContent: View {
             },
             masterCopy: masterCopyOfSelected,
             promotionSource: promotionSourceOfSelected,
-            angelEvidence: selectedAngelEvidence
+            angelEvidence: selectedAngelEvidence,
+            misfiledBadge: selectedRecord.flatMap { model.misfiledBadgeText(for: $0) },
+            onShowInArchive: selectedRecord.map { rec in { onShowInArchive?(rec) } }
         )
         .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)
+        // Refile's Misfiled list feeds the badge above. The model skips the
+        // work when its list is already current (off-main when it runs).
+        .task(id: selectedRecord?.id) { model.refreshArchiveMisfiled(reason: "Catalog inspector") }
     }
 
     var body: some View {

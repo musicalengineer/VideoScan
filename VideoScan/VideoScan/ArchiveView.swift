@@ -56,6 +56,8 @@ struct ArchiveView: View {
     @State var timelineScrollTarget: UUID?
     /// Main-window tab index (1 = Catalog) — "Show in Catalog" writes it.
     @AppStorage("selectedTab") var selectedTab: Int = 0
+    /// Refile sheet driver (2026-09-27): set once the preview is built.
+    @State var refilePreview: ArchiveRefilePreview?
 
     @Environment(\.openWindow) var openWindow
 
@@ -105,6 +107,15 @@ struct ArchiveView: View {
         .sheet(item: $archiveDetailRecord) { rec in
             ArchiveDetailSheet(record: rec, allRecords: model.records)
         }
+        .sheet(item: $refilePreview) { preview in
+            ArchiveRefileSheet(preview: preview)
+        }
+        // Misfiled (Refile, 2026-09-27): recomputed OFF the main actor when
+        // the catalog changes while this tab is up — the id is two Ints, the
+        // model skips the work when its list is already for this version.
+        .task(id: RecordsVersion(count: model.records.count, revision: model.volumeAggregatesRevision)) {
+            model.refreshArchiveMisfiled(reason: "Archive tab")
+        }
         // Archive Angel batches are read from the buffer OUTSIDE body (disk
         // I/O) — refreshed on entry and when the MFO job list changes (the
         // strip refreshes after its own sheets and cards).
@@ -124,6 +135,19 @@ struct ArchiveView: View {
         .onChange(of: sortOrder) { old, new in
             let adjusted = ArchiveSortPolicy.adjusted(new: new, previous: old)
             if adjusted != new { sortOrder = adjusted }
+        }
+    }
+
+    // MARK: - Refile
+
+    /// Right-click ▸ Refile…: build the preview (reads the manifest row and
+    /// the ledger off-main), then show the sheet. Nothing is touched.
+    func openRefileSheet(for rec: VideoRecord) {
+        let id = rec.id
+        Task {
+            if case .success(let p) = await model.makeRefilePreview(recordID: id) {
+                refilePreview = p
+            }
         }
     }
 
@@ -254,6 +278,13 @@ struct ArchiveView: View {
                     // sidebar (Rick 2026-08-19): give them air.
                     VStack(alignment: .leading, spacing: 6) {
                         sidebarRow(.archived)
+                        // Refile (2026-09-27): archived files whose folder
+                        // year no longer matches their date.
+                        if model.masterArchive != nil {
+                            sidebarRow(.misfiled)
+                                .padding(.leading, 14)
+                                .accessibilityIdentifier("archive.sidebar.misfiled")
+                        }
                         sidebarRow(.notYetArchived)
                         sidebarRow(.needsDate)
                             .padding(.leading, 14)
@@ -420,7 +451,7 @@ struct ArchiveView: View {
     }
 
     private func sidebarRow(_ category: ArchiveCategory) -> some View {
-        let count = snapshot.count(for: category)
+        let count = category == .misfiled ? model.archiveMisfiled.count : snapshot.count(for: category)
         // Archived is the home row (Rick 2026-08-26: "a user has to figure
         // out what button to click on the left") — bold, archive glyph,
         // first. The lists below it read as secondary.
@@ -468,6 +499,8 @@ struct ArchiveView: View {
             return "Not-yet-archived assets with no resolvable date — Promote would file them under Undated/. Set a date in the Inspector first."
         case .music:
             return "Family Music — recordings of family members playing or singing that you marked in the Catalog (right-click → Mark as Family Music…). Archived or not."
+        case .misfiled:
+            return "Archived files whose folder year no longer matches their date — your date first, then a confident machine date. Right-click → Refile… moves one to the right folder."
         }
     }
 
@@ -568,7 +601,10 @@ struct ArchiveView: View {
     /// Category membership itself is memoized (snapshot); only the
     /// search filter runs per keystroke, over that category's rows.
     var filteredRecords: [VideoRecord] {
-        let byCategory = snapshot.records(for: selectedCategory)
+        // Misfiled rows come from the model's off-main list (O(misfiled)).
+        let byCategory = selectedCategory == .misfiled
+            ? model.archiveMisfiledRecords
+            : snapshot.records(for: selectedCategory)
         if searchText.isEmpty { return byCategory }
         let q = searchText.lowercased()
         return byCategory.filter {

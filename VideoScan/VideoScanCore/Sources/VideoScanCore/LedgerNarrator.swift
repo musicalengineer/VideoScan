@@ -190,7 +190,28 @@ public enum LedgerNarrator {
 
         case .familyMusic:
             return familyMusicSentence(who: who, dateText: d, detail: detail)
+
+        case .refiled, .refileRolledBack:
+            return refileSentence(e.event, who: who, dateText: d, detail: detail)
         }
+    }
+
+    /// Refile (2026-09-27) — split out like Family Music.
+    static func refileSentence(_ kind: MediaLedgerEvent.Kind, who: String, dateText d: String,
+                               detail: [String: String]) -> String {
+        let from = detail[MediaLedgerEvent.Detail.from] ?? ""
+        let to = detail[MediaLedgerEvent.Detail.to] ?? ""
+        if kind == .refileRolledBack {
+            let why = detail[MediaLedgerEvent.Detail.reason] ?? ""
+            var s = "A refile in the archive on \(d) was undone — the file stayed at \(from.isEmpty ? "its folder" : from)"
+            if !why.isEmpty { s += " (\(why))" }
+            return s + "."
+        }
+        let date = detail[MediaLedgerEvent.Detail.date] ?? ""
+        var s = "\(who) refiled it in the archive on \(d)"
+        if !date.isEmpty { s += " under \(date)" }
+        if !from.isEmpty && !to.isEmpty { s += ": \(from) → \(to)" }
+        return s + "."
     }
 
     /// Family Music (2026-09-23) — split out so the big switch above gains

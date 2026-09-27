@@ -73,6 +73,17 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         /// "unmarked"), performer, title (each only when set). by: rick.
         /// Appended at the END — the on-disk vocabulary is append-only.
         case familyMusic
+        /// Refile (Rick 2026-09-27): an ARCHIVE file was moved, inside the
+        /// Master Archive, to the folder its current date says. detail:
+        /// from / to (archive-relative paths), reason (the Why line), date
+        /// + confidence (what it is filed under now), provenance (where
+        /// that date came from), fixity. by: rick.
+        /// Appended at the END — the on-disk vocabulary is append-only.
+        case refiled
+        /// A Refile that failed after it had started changing things and
+        /// was put back: the file is at `from` again and the index was
+        /// restored. detail: from, to, reason (what failed). by: rick.
+        case refileRolledBack
     }
 
     /// Who did it. "rick" for a human gesture; the app's own verbs are
@@ -126,6 +137,11 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         /// Family Music: who is playing, and what (free text, optional).
         public static let performer = "performer"
         public static let title = "title"
+        /// Refile (2026-09-27): archive-relative paths before / after, and
+        /// where the date the file is now filed under came from.
+        public static let from = "from"
+        public static let to = "to"
+        public static let provenance = "provenance"
     }
 
     public let at: Date

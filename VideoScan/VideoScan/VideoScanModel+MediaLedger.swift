@@ -112,7 +112,10 @@ extension VideoScanModel {
     /// Inspector "When was this?" saved or cleared a date.
     @discardableResult
     func noteUserDateEdited(_ rec: VideoRecord, by: MediaLedgerEvent.Actor = .rick) -> Task<Void, Never>? {
-        ledgerAppend([ledgerEvent(.dateSet, for: rec, by: by, detail: [
+        // A changed date is what makes an archived file Misfiled (Refile,
+        // 2026-09-27): recompute that list (off-main, coalesced).
+        refreshArchiveMisfiled(reason: "date edited", force: true)
+        return ledgerAppend([ledgerEvent(.dateSet, for: rec, by: by, detail: [
             MediaLedgerEvent.Detail.date: rec.userDate ?? "",
             MediaLedgerEvent.Detail.confidence: rec.userDate == nil ? "" : (rec.userDateConfidence ?? UserDateConfidence.estimated.rawValue),
         ])])

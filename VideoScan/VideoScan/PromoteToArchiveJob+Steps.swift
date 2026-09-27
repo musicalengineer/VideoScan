@@ -269,6 +269,15 @@ extension PromoteToArchiveJob {
         if let typed = plan.archiveDateOverrides[source.id] {
             facts = facts.withDateHint(typed)
         }
+        // Filing-year guard (Rick 2026-09-27): no video under a year before
+        // 1900 or after next year — refused BEFORE the journal intent, so
+        // nothing is written for it. The same function guards Refile.
+        if let refusal = ArchivePathResolver.filingYearRefusal(facts: facts) {
+            model.log("Promote: \(entry.filename) refused — \(refusal).")
+            appLog.write("promote: \(entry.filename) refused by the filing-year guard — \(refusal)")
+            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): filing-year guard (\(facts.dateHint.manifestDate, privacy: .public))")
+            return .failed(refusal)
+        }
         let choice = try await Self.chooseDestinationOffMain(
             facts: facts, title: plan.archiveTitles[source.id],
             root: ctx.root, sourcePath: source.fullPath,

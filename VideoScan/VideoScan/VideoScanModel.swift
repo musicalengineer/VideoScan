@@ -1511,6 +1511,16 @@ final class VideoScanModel: ObservableObject {
     /// the UI thread.)
     var archiveIndexWriterActive: (@MainActor () -> Bool)?
 
+    /// Refile (2026-09-27): the Archive window's "Misfiled" list and the
+    /// Catalog's "filed under 1884 · dated 1984" badge read this. Computed
+    /// OFF the main actor (VideoScanModel+ArchiveRefile.swift) — views only
+    /// do O(1) dictionary reads on it.
+    @Published var archiveMisfiled = ArchiveMisfiledState()
+    /// The in-flight Misfiled computation, and "a refresh was asked for
+    /// while one ran" (run once more when it lands).
+    var archiveMisfiledTask: Task<Void, Never>?
+    var archiveMisfiledRefreshQueued = false
+
     /// Find Similar Footage: bumped by every "same footage" / "not the
     /// same" / "forget" answer (codex #1674 F4). A run records the value
     /// when it snapshots the catalog; an apply whose snapshot predates the
