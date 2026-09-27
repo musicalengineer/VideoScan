@@ -153,7 +153,7 @@ struct HallieSuperlativeScopeTests {
     typealias Exec = HallieTurnExecutor
     let graph = GedcomFamilyGraph(gedcomText: tree)
     var context: Exec.Context {
-        .init(profiles: [], graph: graph,
+        .init(profiles: [], graph: graph, assetConfiguration: { .emptyForTests },
               speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil,
                               ownerFamilySearchID: "GVQV-NW3"))
     }

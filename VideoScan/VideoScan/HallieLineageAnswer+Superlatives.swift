@@ -41,6 +41,14 @@ extension HallieLineageAnswer {
         }
     }
 
+    /// The Context's asset lookup when one is injected (tests pass an
+    /// empty or fixture one, GH #205); nil — production — is the published
+    /// archive snapshot, exactly as before. Same seam as the GedcomAwareness
+    /// photo answer.
+    static func assetStore(for context: HallieTurnExecutor.Context) -> FamilyAssetStore {
+        (context.assetConfiguration?() ?? FamilyAssetConfigurationCenter.shared.snapshot()).makeStore()
+    }
+
     /// Which way a person scope walks.
     private enum Walk { case up, down }
 
@@ -280,7 +288,7 @@ extension HallieLineageAnswer {
         if case .firstBornIn = kind, let place = shown[0].birthPlace {
             sentences.append("The record says \(place).")
         }
-        let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        let assets = assetStore(for: context)
         var attachments: [HallieAttachment] = []
         if let url = assets.photoURLs(for: shown[0]).first {
             attachments.append(.photo(HalliePhotoAttachment(personName: shown[0].name, fileURL: url)))

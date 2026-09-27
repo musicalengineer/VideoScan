@@ -30,7 +30,7 @@ import VideoScanCore
 private typealias Exec = HallieTurnExecutor
 
 private func context(_ graph: GedcomFamilyGraph, ownerName: String, ownerFSID: String?) -> Exec.Context {
-    .init(profiles: [], graph: graph,
+    .init(profiles: [], graph: graph, assetConfiguration: { .emptyForTests },
           speakers: .init(ownerName: ownerName, archivistName: nil, archivistPersonName: nil,
                           ownerFamilySearchID: ownerFSID))
 }

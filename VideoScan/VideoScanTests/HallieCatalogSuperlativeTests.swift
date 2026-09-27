@@ -53,7 +53,7 @@ struct HallieCatalogSuperlativeTests {
     }
 
     private func context(_ records: [ArchivistPresenceRecordSnapshot]) -> Exec.Context {
-        .init(presenceRecords: records, profiles: [], graph: graph,
+        .init(presenceRecords: records, profiles: [], graph: graph, assetConfiguration: { .emptyForTests },
               speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
     }
 
