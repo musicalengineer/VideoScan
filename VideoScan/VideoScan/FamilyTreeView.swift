@@ -56,7 +56,12 @@ struct FamilyTreeView: View {
     /// inspector so its width goes to genealogy). `.photosPicker(isPresented:)`
     /// is the programmatic form of the `PhotosPicker` button.
     @State private var showApplePhotosPicker = false
-    @State private var showVerifyReport = false
+    /// The Verify report and the Walk Tree sheet share ONE `.sheet(item:)`
+    /// (2026-09-27): two `.sheet(isPresented:)` side by side race each
+    /// other's dismiss animation (project_chained_sheet_antipattern).
+    @State private var toolSheet: FamilyTreeToolSheet?
+    /// The MFO center WITHOUT subscribing (see MediaFileOperationsCenterReference).
+    @Environment(\.mediaFileOperationsCenterReference) private var fileOpsCenterReference
     /// The Get Family Tree coordinator is owned by the app-wide center, not
     /// this view, so closing the sheet no longer kills the file watcher
     /// (2026-08-25: a 2 h pull finished into a file nobody was watching).
@@ -383,6 +388,23 @@ struct FamilyTreeView: View {
             }
     }
 
+    @ViewBuilder private func toolSheetView(_ sheet: FamilyTreeToolSheet) -> some View {
+        switch sheet {
+        case .verify:
+            if let report = model.verification {
+                FamilyTreeVerifyReportView(report: report) { personID in
+                    model.select(personID)
+                    toolSheet = nil
+                }
+            }
+        case .walk:
+            // "Walk Tree…" (2026-09-27): one sheet with its own stages.
+            FamilyTreeWalkSheet(model: model, operations: fileOpsCenterReference) {
+                toolSheet = nil
+            }
+        }
+    }
+
     /// Stage 2: window background, colour scheme, every sheet and alert.
     private func withSheets<V: View>(_ view: V) -> some View {
         view
@@ -391,14 +413,7 @@ struct FamilyTreeView: View {
             .onChange(of: selectedPhotoItem) { _, item in
                 importApplePhoto(item)
             }
-            .sheet(isPresented: $showVerifyReport) {
-                if let report = model.verification {
-                    FamilyTreeVerifyReportView(report: report) { personID in
-                        model.select(personID)
-                        showVerifyReport = false
-                    }
-                }
-            }
+            .sheet(item: $toolSheet) { sheet in toolSheetView(sheet) }
             .photosPicker(isPresented: $showApplePhotosPicker,
                           selection: $selectedPhotoItem, matching: .images)
             .sheet(item: $adjustSource) { source in
@@ -709,10 +724,20 @@ struct FamilyTreeView: View {
                 .controlSize(.small)
                 .disabled(model.isVerifying)
 
+                Button {
+                    FamilyTreeWalkCenter.shared.consoleLog = { [weak catalogModel] line in catalogModel?.log(line) }
+                    toolSheet = .walk
+                } label: {
+                    Label("Walk Tree…", systemImage: "figure.walk.circle")
+                }
+                .controlSize(.small)
+                .help("Decorate everyone (line, generations, age at death, birth region) and run the consistency checks")
+                .accessibilityIdentifier("ft.walkTree")
+
                 if let report = model.verification {
                     if report.needingReview > 0 {
                         Button {
-                            showVerifyReport = true
+                            toolSheet = .verify
                         } label: {
                             Text("\(report.needingReview)")
                                 .font(.system(size: 11, weight: .bold))
@@ -1358,6 +1383,18 @@ struct FamilyTreeView: View {
                             .background(panelBackground)
                     }
 
+                    if model.isLive {
+                        FamilyTreeWalkDecorationPanel(personID: person.id)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(panelBackground)
+                            // Reads decorations.json off the main actor once
+                            // per installed tree (O(1) lookups after).
+                            .task(id: model.peopleCount) {
+                                await FamilyTreeWalkCenter.shared.ensureLoaded(for: model.walkGraph)
+                            }
+                    }
+
                     if !model.selectedRelatives.isEmpty {
                         relativesPanel(model.selectedRelatives)
                     }
@@ -1997,4 +2034,13 @@ struct FamilyTreeView: View {
     private func removeDocument(_ row: PersonDocumentRow) {
         Task { documentsError = await model.removeDocument(row) }
     }
+}
+
+/// The Family Tree tab's tool sheets, presented through one `.sheet(item:)`.
+/// A single shared id: switching from one to the other replaces the sheet
+/// instead of racing a dismiss against a present.
+enum FamilyTreeToolSheet: Identifiable {
+    case verify
+    case walk
+    var id: String { "familyTree.toolSheet" }
 }
