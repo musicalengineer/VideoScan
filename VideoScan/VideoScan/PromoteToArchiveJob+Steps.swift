@@ -495,20 +495,37 @@ extension PromoteToArchiveJob {
     /// to `done`. A refused/failed save leaves them `published` — the next
     /// run's reconcile re-links from manifest/journal provenance, never
     /// trusting an in-memory link that may not have been persisted.
-    func finalizeBatch(model: VideoScanModel, ctx: RunContext) -> Bool {
+    ///
+    /// The `done` appends run OFF the main actor (codex review of Refile r2
+    /// #4): each takes the archive-index lock, and a contended lock must
+    /// never be waited for on the UI thread. An append refused as busy
+    /// leaves that entry `published` — reconcile converges it next run.
+    func finalizeBatch(model: VideoScanModel, ctx: RunContext) async -> Bool {
         guard !publishedThisBatch.isEmpty else { return true }
         let saved = model.saveCatalogNow()
         if saved {
-            for entry in publishedThisBatch {
-                try? ArchivePromoteJournal.append(entry.with(state: .done), rootPath: ctx.root)
+            let entries = publishedThisBatch.map { $0.with(state: .done) }
+            let marked = await Self.appendDoneOffMain(entries, root: ctx.root)
+            if marked < entries.count {
+                appLog.write("promote: \(entries.count - marked) of \(entries.count) journal entr(ies) could not be marked done (archive index busy or unwritable) — they stay 'published' and converge on the next run")
             }
-            promoteLog.info("promote: catalog saved durably — \(self.publishedThisBatch.count) journal entr(ies) marked done")
+            promoteLog.info("promote: catalog saved durably — \(marked) of \(self.publishedThisBatch.count) journal entr(ies) marked done")
         } else {
             promoteLog.error("promote: catalog save did not land — \(self.publishedThisBatch.count) entr(ies) stay 'published' for reconcile")
             appLog.write("promote: the catalog could not be saved right now — \(publishedThisBatch.count) promotion(s) are on disk and in the manifest; the catalog links will be re-established on the next promotion run")
         }
         publishedThisBatch.removeAll()
         return saved
+    }
+
+    /// Append the batch's `done` entries off-main; returns how many landed.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func appendDoneOffMain(_ entries: [ArchivePromoteJournal.Entry], root: String) async -> Int {
+        var n = 0
+        for e in entries where (try? ArchivePromoteJournal.append(e, rootPath: root)) != nil { n += 1 }
+        return n
     }
 
     // MARK: Off-main hops

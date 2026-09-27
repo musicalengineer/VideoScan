@@ -60,12 +60,16 @@ enum ArchiveIndexLock {
                                  _ body: () throws -> T) throws -> T {
         let fd = try ArchivePromoteEngine.openIndexDirectory(root: root)
         defer { Darwin.close(fd) }
-        let deadline = ContinuousClock.now + wait
+        // Never SLEEP on the main thread (codex review of Refile r2 #4):
+        // there the lock is tried once — busy is an immediate refusal, and
+        // the caller's convergence path (the promote journal) retries.
+        let onMain = Thread.isMainThread
+        let deadline = ContinuousClock.now + (onMain ? .zero : wait)
         while flock(fd, LOCK_EX | LOCK_NB) != 0 {
             let e = errno
             if e == EINTR { continue }
             guard e == EWOULDBLOCK else { throw POSIXError(POSIXErrorCode(rawValue: e) ?? .EIO) }
-            if ContinuousClock.now >= deadline {
+            if onMain || ContinuousClock.now >= deadline {
                 let other = registryLock.withLock { holders[root] }
                 let busy = Busy(wanted: holder, heldBy: other)
                 appLog.write("archive index: \(busy.description) (\(root))")

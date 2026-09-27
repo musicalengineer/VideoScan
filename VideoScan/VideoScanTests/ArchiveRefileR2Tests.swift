@@ -285,3 +285,60 @@ struct ArchiveRefileR2StepEPersistenceTests {
         #expect(await a.model.replayPendingRefiles() == 0, "nothing left to replay")
     }
 }
+
+// MARK: - r3 #4: no blocking lock wait on the main actor
+
+@Suite("Archive Refile r3 — index lock never stalls the main actor", .serialized)
+@MainActor
+struct ArchiveRefileR3MainActorLockTests {
+
+    @Test("contended index lock + an 8-entry Promote finalization: no main-actor gap over 100 ms", .timeLimit(.minutes(1)))
+    func finalizationDoesNotStallMain() async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("r3heartbeat")
+        defer { sb.cleanup() }
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let root = sb.archiveRoot.path
+        let plan = try #require(model.buildPromotePlan(recordIDs: []))
+        let job = PromoteToArchiveJob(plan: plan, model: model)
+        job.publishedThisBatch = (0..<8).map { i in
+            ArchivePromoteJournal.Entry(sourceRecordID: UUID(), sourcePath: "/Volumes/test_S/\(i).mov",
+                                        destRelPath: "30_Video/Undated/xxxx-xx-xx_\(i).mov",
+                                        state: .published, sha256: "00", copyRecordID: UUID(), at: Date())
+        }
+        let ctx = PromoteToArchiveJob.RunContext(root: root, manifestURL: sb.manifestURL, journalURL: sb.journalURL,
+                                                 manifestRows: [:], manifestFields: [:])
+
+        // Another writer holds the index lock for the whole finalization.
+        let held = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            try? ArchiveIndexLock.withExclusive(root: root, holder: "test holder", wait: .seconds(5)) {
+                held.signal(); release.wait()
+            }
+        }
+        held.wait()
+        defer { release.signal() }
+
+        // Main-actor heartbeat: the longest gap between ticks while finalizing.
+        final class Beat { var last = ContinuousClock.now; var worst = Duration.zero; var running = true }
+        let beat = Beat()
+        let ticker = Task { @MainActor in
+            while beat.running {
+                let now = ContinuousClock.now
+                beat.worst = max(beat.worst, now - beat.last)
+                beat.last = now
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+        }
+        await Task.yield()
+        beat.last = ContinuousClock.now
+        let saved = await job.finalizeBatch(model: model, ctx: ctx)
+        // The gap still open when finalization returns counts too (a
+        // synchronous stall never lets the ticker run at all).
+        beat.worst = max(beat.worst, ContinuousClock.now - beat.last)
+        beat.running = false
+        await ticker.value
+        #expect(saved, "the catalog save itself landed")
+        #expect(beat.worst < .milliseconds(100), "main actor stalled for \(beat.worst) while the index lock was contended")
+    }
+}
