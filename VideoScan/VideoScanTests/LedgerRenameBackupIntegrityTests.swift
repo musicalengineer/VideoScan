@@ -122,6 +122,61 @@ struct BackupMarkerIntegrityTests {
     }
 }
 
+// MARK: - codex #3: sequence bounds
+
+@Suite("Rename backups — a corrupt sequence never traps a claim (codex re-review #3)", .serialized)
+struct BackupSequenceBoundTests {
+
+    @Test("codex #3: a marker with sequence Int.max — the next claim does not trap; existing backups untouched")
+    func intMaxSequenceDoesNotTrap() throws {
+        let f = try Fx.make("intmax")
+        defer { f.cleanup() }
+        try Fx.rename(f, step: 0, at: Fx.start)
+        let corrupt = try Fx.seedFolder(f, name: "2099-01-01T000000.000Z", sequence: "9223372036854775807",
+                                        complete: false, listed: [], present: [])
+        var outcome = "none"
+        do {
+            let claim = try ArchiveIndexRename.claimBackupDirectory(in: f.backups, now: Fx.start.addingTimeInterval(1))
+            outcome = "claimed \(claim.marker.sequence)"
+            #expect(claim.marker.sequence == 2, "the foreign Int.max marker is not ours: next after 1")
+        } catch {
+            outcome = "threw \(error)"
+        }
+        #expect(outcome.hasPrefix("claimed"), Comment(rawValue: outcome))
+        #expect(try Fx.survivingSteps(f) == [0], "the existing backup is untouched")
+        #expect(FileManager.default.fileExists(atPath: corrupt.path), "the foreign folder is untouched")
+    }
+
+    @Test("codex #3: at the sequence limit a claim THROWS (logged), never traps, and leaves nothing behind")
+    func exhaustionThrows() throws {
+        let f = try Fx.make("exhaust")
+        defer { f.cleanup() }
+        let last = ArchiveIndexRename.backupSequenceLimit - 1
+        try Fx.seedFolder(f, name: "2099-01-01T000000.000Z", sequence: "\(last)", complete: false, listed: [], present: [])
+        let before = try FileManager.default.contentsOfDirectory(atPath: f.backups.path)
+        #expect(throws: ArchiveIndexRename.BackupSequenceExhausted.self) {
+            _ = try ArchiveIndexRename.claimBackupDirectory(in: f.backups, now: Fx.start)
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: f.backups.path) == before)
+        // A ledger rename refuses rather than proceeding without a backup.
+        let ledgerBefore = try Data(contentsOf: f.ledger)
+        #expect(throws: (any Error).self) { try Fx.rename(f, step: 0, at: Fx.start) }
+        #expect(try Data(contentsOf: f.ledger) == ledgerBefore)
+    }
+
+    @Test("codex #3: out-of-range sequences decode as foreign")
+    func outOfRangeIsForeign() throws {
+        let f = try Fx.make("range")
+        defer { f.cleanup() }
+        for (i, seq) in ["0", "-5", "\(ArchiveIndexRename.backupSequenceLimit)", "9223372036854775807"].enumerated() {
+            let d = try Fx.seedFolder(f, name: "x\(i)", sequence: seq, complete: false, listed: [], present: [])
+            #expect(ArchiveIndexRename.readMarker(in: d) == nil, "sequence \(seq)")
+        }
+        let ok = try Fx.seedFolder(f, name: "ok", sequence: "7", complete: false, listed: [], present: [])
+        #expect(ArchiveIndexRename.readMarker(in: ok)?.sequence == 7)
+    }
+}
+
 // MARK: - codex #1: the backups folder is permanent; cleanup is locked
 
 @Suite("Rename backups — cleanup never removes another writer's folder (codex re-review #1)", .serialized)

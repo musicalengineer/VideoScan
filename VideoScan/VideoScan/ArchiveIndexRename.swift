@@ -57,6 +57,10 @@
 //   (`.videoscan-backup.json`, monotonic sequence, complete=true written
 //   after publish) — codex review 2026-09-27. Legacy (markerless)
 //   folders are left in place and never pruned.
+//   UNVERIFIED: flock(2) on an SMB / exFAT / FAT volume may not exclude
+//   across clients (two Macs claiming at once); the design stays
+//   fail-closed there — a lock error refuses the rename, and nothing
+//   without a verified complete marker is ever pruned.
 //   Residual window: the recheck and the rename(2) that publishes are two
 //   syscalls — an append in the microseconds between them is still lost.
 //   The model also refuses while a Promote job runs (the main writer).
@@ -432,8 +436,24 @@ enum ArchiveIndexRename {
               (attrs[.size] as? Int ?? .max) <= 1 << 20,
               let data = FileManager.default.contents(atPath: url.path),
               let marker = try? JSONDecoder().decode(BackupMarker.self, from: data),
-              marker.version == 1 else { return nil }
+              marker.version == 1,
+              (1..<backupSequenceLimit).contains(marker.sequence) else { return nil }
         return marker
+    }
+
+    /// Sequences are 1 ..< this. Out of range = not ours (a damaged or
+    /// foreign marker): never counted, never pruned, and never the base of
+    /// the next claim — codex re-review #3: `Int.max + 1` trapped every
+    /// later claim. 2^40 claims is ~35,000 years at one rename a second.
+    static let backupSequenceLimit = 1 << 40
+
+    /// Every sequence up to the limit is taken; the claim refuses (and so
+    /// does the rename it would protect) instead of trapping.
+    struct BackupSequenceExhausted: LocalizedError {
+        let folder: String
+        var errorDescription: String? {
+            "The rename backups folder \(folder) has used every backup number — nothing was renamed. Move the old backups aside and try again."
+        }
     }
 
     /// Does this folder still HOLD the backup its marker describes? Every
@@ -499,7 +519,13 @@ enum ArchiveIndexRename {
     static func claimBackupDirectory(in parent: URL, now: Date) throws -> BackupClaim {
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
         return try withBackupsLock(parent) {
-            let next = (scanBackups(parent).ours.map(\.marker.sequence).max() ?? 0) + 1
+            let (next, overflow) = (scanBackups(parent).ours.map(\.marker.sequence).max() ?? 0)
+                .addingReportingOverflow(1)
+            guard !overflow, next < backupSequenceLimit else {
+                appLog.write("Catalog: rename backup claim refused — sequence exhausted in \(parent.path); nothing renamed.")
+                renameIndexLog.error("rename backup sequence exhausted: \(parent.path, privacy: .public)")
+                throw BackupSequenceExhausted(folder: parent.path)
+            }
             let dir = try makeBackupDirectory(in: parent, now: now)
             let marker = BackupMarker(sequence: next, createdAt: ISO8601DateFormatter().string(from: now),
                                       complete: false, files: [])
