@@ -836,9 +836,11 @@ enum ArchivePromoteJournal {
         encoder.dateEncodingStrategy = .iso8601
         var data = try encoder.encode(entry)
         data.append(0x0A)
-        let fd = try ArchivePromoteEngine.openIndexFile(root: rootPath, name: filename, mustExist: false)
-        defer { close(fd) }
-        try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: false, label: "journal append")
+        try ArchiveIndexLock.withExclusive(root: rootPath, holder: "Promote journal append") {
+            let fd = try ArchivePromoteEngine.openIndexFile(root: rootPath, name: filename, mustExist: false)
+            defer { close(fd) }
+            try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: false, label: "journal append")
+        }
     }
 
     /// Latest entry per source id (a source can be journaled several

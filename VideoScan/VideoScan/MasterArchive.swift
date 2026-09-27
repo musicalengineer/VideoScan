@@ -775,15 +775,19 @@ enum ArchiveManifestCSV {
     /// (`nonisolated` ≈ a free function: safe to call from the job's
     /// background work.)
     nonisolated static func append(_ row: Row, rootPath: String) throws {
-        let fd = try ArchivePromoteEngine.openIndexFile(
-            root: rootPath, name: MasterArchiveLayout.manifestFilename,
-            mustExist: true, expectedHeaders: MasterArchiveLayout.acceptedManifestHeaders)
-        defer { close(fd) }
-        // The full v3 row is appended whatever header the file carries
-        // (Rick's ruling 2026-09-12: trailing columns are additive, the
-        // header is never rewritten, old readers ignore the extra cells).
-        let data = Data(line(for: row).utf8)
-        try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: true, label: "manifest append")
+        // Held for the append (ArchiveIndexLock): a Refile / rename rewrite
+        // in progress refuses this row rather than dropping it later.
+        try ArchiveIndexLock.withExclusive(root: rootPath, holder: "Promote manifest append") {
+            let fd = try ArchivePromoteEngine.openIndexFile(
+                root: rootPath, name: MasterArchiveLayout.manifestFilename,
+                mustExist: true, expectedHeaders: MasterArchiveLayout.acceptedManifestHeaders)
+            defer { close(fd) }
+            // The full v3 row is appended whatever header the file carries
+            // (Rick's ruling 2026-09-12: trailing columns are additive, the
+            // header is never rewritten, old readers ignore the extra cells).
+            let data = Data(line(for: row).utf8)
+            try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: true, label: "manifest append")
+        }
     }
 
     /// Preflight: the manifest under `rootPath` is reachable descriptor-

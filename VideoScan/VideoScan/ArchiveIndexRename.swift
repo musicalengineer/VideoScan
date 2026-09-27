@@ -164,6 +164,9 @@ enum ArchiveIndexRename {
         /// Publish failed AND the rollback failed — mixed state, details
         /// (exact paths) in `detail` and in catalog.log.
         case publishFailedNotRolledBack(file: String, reason: String, detail: String)
+        /// Another writer holds the archive-index lock (ArchiveIndexLock).
+        /// Nothing was changed.
+        case indexBusy(detail: String)
 
         var errorDescription: String? {
             switch self {
@@ -179,6 +182,8 @@ enum ArchiveIndexRename {
                 return "Couldn't update the archive's index file “\(f)” (\(r)). The rename was undone; nothing changed."
             case .publishFailedNotRolledBack(let f, let r, let detail):
                 return "Couldn't update the archive's index file “\(f)” (\(r)), and undoing the rename also failed.\n\n\(detail)"
+            case .indexBusy(let detail):
+                return "The archive's index is being updated by something else right now — \(detail). Nothing was renamed; try again in a moment."
             }
         }
     }
@@ -262,9 +267,16 @@ enum ArchiveIndexRename {
     /// and throws its own error (propagated unchanged — nothing is
     /// published). `undoMoveMedia` moves it back during a rollback.
     /// Returns the backup folder (nil when the plan was empty).
+    ///
+    /// The whole of it — backups, rechecks, the media move, every publish
+    /// and any rollback — runs holding the ONE archive-index write lock
+    /// (ArchiveIndexLock, codex review of Refile #1), so no append can land
+    /// between a recheck and the replace that would drop it. Lock busy →
+    /// `.indexBusy`, nothing changed. `holder` names the writer in logs.
     @discardableResult
     static func apply(_ plan: Plan,
                       now: Date = Date(),
+                      holder: String = "Catalog rename",
                       publisher: Publisher = livePublish(_:to:),
                       backupWriter: Publisher = livePublish(_:to:),
                       announce: (URL) -> Void = { _ in },
@@ -274,7 +286,19 @@ enum ArchiveIndexRename {
             try moveMedia()
             return nil
         }
+        do {
+            return try ArchiveIndexLock.withExclusive(root: plan.root, holder: holder) {
+                try applyLocked(plan, now: now, publisher: publisher, backupWriter: backupWriter,
+                                announce: announce, moveMedia: moveMedia, undoMoveMedia: undoMoveMedia)
+            }
+        } catch let busy as ArchiveIndexLock.Busy {
+            throw Failure.indexBusy(detail: busy.description)
+        }
+    }
 
+    private static func applyLocked(_ plan: Plan, now: Date, publisher: Publisher, backupWriter: Publisher,
+                                    announce: (URL) -> Void, moveMedia: () throws -> Void,
+                                    undoMoveMedia: () throws -> Void) throws -> URL? {
         // 2. Backups — the exact bytes the plan was built from.
         let backup = try writeBackups(plan, now: now, write: backupWriter)
         let backupDir = backup.dir

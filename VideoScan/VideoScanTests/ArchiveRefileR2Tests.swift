@@ -109,3 +109,59 @@ struct ArchiveRefileR2MoveBackIdentityTests {
         #expect(a.copy.fullPath == newAbs, "the record points at the ORIGINAL, never at the foreign file")
     }
 }
+
+// MARK: - Finding 1: ONE archive-index write exclusion
+
+@Suite("Archive Refile r2 — one index-write lock", .serialized)
+@MainActor
+struct ArchiveRefileR2IndexLockTests {
+
+    @Test("a Promote-style manifest append landing inside the publish window is refused or preserved — never dropped")
+    func concurrentAppendNeverDropped() async throws {
+        let a = try await RefileFixture.make("r2lock")
+        defer { a.sb.cleanup() }
+        let p = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        let root = a.root
+        let intruder = ArchiveManifestCSV.Row(
+            promotedAt: Date(), archiveRelPath: "30_Video/1990-1999/1999/1999-xx-xx_test_intruder.mov",
+            sha256: "11", sizeBytes: 1, originalPath: "/Volumes/test_X/intruder.mov", originalVolume: "test_X",
+            recordID: UUID(), sourceRecordID: UUID(), recordDate: "1999-xx-xx", dateConfidence: "user-known",
+            people: [], starRating: 3)
+        final class Box: @unchecked Sendable { var appendError: Error?; var tried = false; let lock = NSLock() }
+        let box = Box()
+        var seams = ArchiveRefileEngine.Seams.live
+        seams.indexPublisher = { data, url in
+            let first: Bool = box.lock.withLock { let f = !box.tried; box.tried = true; return f }
+            if first {
+                // Another writer (Promote) appends right before our publish.
+                do { try ArchiveManifestCSV.append(intruder, rootPath: root) } catch {
+                    box.lock.withLock { box.appendError = error }
+                }
+            }
+            try ArchiveIndexRename.livePublish(data, to: url)
+        }
+        let r = await a.model.refileArchiveCopy(p, hint: p.initialHint, name: p.initialName, seams: seams)
+        let rows = MasterArchiveTestSupport.manifestRows(a.sb)
+        let preserved = rows.contains { $0[1] == intruder.archiveRelPath }
+        let refused = box.lock.withLock { box.appendError != nil }
+        #expect(preserved || refused, "the other writer's row was silently dropped (refile: \(r.kind))")
+        if refused {
+            #expect(box.lock.withLock { box.appendError } is ArchiveIndexLock.Busy)
+        }
+    }
+
+    @Test("the lock excludes a second holder in the same process; it is released after")
+    func lockExcludes() throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("r2lockunit")
+        defer { sb.cleanup() }
+        let index = sb.archiveRoot.appendingPathComponent("00_Index")
+        try FileManager.default.createDirectory(at: index, withIntermediateDirectories: true)
+        let root = sb.archiveRoot.path
+        try ArchiveIndexLock.withExclusive(root: root, holder: "test outer") {
+            #expect(throws: ArchiveIndexLock.Busy.self) {
+                try ArchiveIndexLock.withExclusive(root: root, holder: "test inner", wait: .milliseconds(50)) {}
+            }
+        }
+        try ArchiveIndexLock.withExclusive(root: root, holder: "test after") {}
+    }
+}

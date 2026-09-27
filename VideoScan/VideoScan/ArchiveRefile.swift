@@ -733,7 +733,7 @@ enum ArchiveRefileEngine {
         let backupDir: URL?
         do {
             backupDir = try ArchiveIndexRename.apply(
-                prep.plan, now: now,
+                prep.plan, now: now, holder: "Refile \(req.filename)",
                 publisher: seams.indexPublisher,
                 backupWriter: seams.backupWriter,
                 announce: { dir in

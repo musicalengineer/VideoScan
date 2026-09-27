@@ -86,6 +86,19 @@ struct ArchiveRefileSensorTests {
         #expect(preview.contains("ArchivePathResolver.filingYearRefusal("))
     }
 
+    @Test("ONE index-write lock: every 00_Index appender and the whole-file rewrite hold it (codex review #1)")
+    func everyIndexWriterHoldsTheLock() throws {
+        let lockSites = try Self.sites(of: "ArchiveIndexLock.withExclusive(")
+        #expect(lockSites == ["MasterArchive.swift": 1, "ArchivePromoteEngine.swift": 1,
+                              "ArchivePromoteDecisions.swift": 1, "VideoScanModel+BackupAttestations.swift": 1,
+                              "ArchiveIndexRename.swift": 1], "\(lockSites)")
+        // An index append is `appendDurable(fd:` — exactly the four above.
+        let appends = try Self.sites(of: "ArchivePromoteEngine.appendDurable(fd:")
+        #expect(appends == ["MasterArchive.swift": 1, "ArchivePromoteEngine.swift": 1,
+                            "ArchivePromoteDecisions.swift": 1, "VideoScanModel+BackupAttestations.swift": 1],
+                "a new 00_Index appender must take ArchiveIndexLock: \(appends)")
+    }
+
     @Test("every refile outcome writes an audit line through the one sink")
     func auditLines() throws {
         let model = Self.code(try Self.source("VideoScanModel+ArchiveRefile.swift"))
