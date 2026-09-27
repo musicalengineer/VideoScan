@@ -293,20 +293,24 @@ enum ArchiveIndexRename {
         }
 
         // 6. Publish, each after its own recheck; roll back on the first
-        //    refusal or failure.
-        var published: [FileRewrite] = []
+        //    refusal or failure. A file is TOUCHED the moment its publisher
+        //    is called — before it returns — so a publisher that wrote the
+        //    new bytes and then threw is restored too (codex review of
+        //    Refile, finding 2). A file refused by the recheck was never
+        //    touched by us and is left exactly as the other writer left it.
+        var touched: [FileRewrite] = []
         for f in plan.files {
             guard isUnchanged(f, root: plan.root) else {
-                throw rollback(published: published, failed: f,
+                throw rollback(published: touched, failed: f,
                                cause: .changedDuringRename(file: f.name), reason: "changed during the rename",
                                backupDir: backupDir, publisher: publisher, undoMoveMedia: undoMoveMedia)
             }
+            touched.append(f)
             do {
                 try publisher(f.updated, f.url)
-                published.append(f)
             } catch {
                 let reason = ArchiveAttestationJournal.describe(error)
-                throw rollback(published: published, failed: f,
+                throw rollback(published: touched, failed: f,
                                cause: .publishFailedRolledBack(file: f.name, reason: reason), reason: reason,
                                backupDir: backupDir, publisher: publisher, undoMoveMedia: undoMoveMedia)
             }
@@ -322,8 +326,9 @@ enum ArchiveIndexRename {
         currentIdentity(root: root, name: f.name) == f.identity
     }
 
-    /// Undo a half-published plan: restore every published file from its
-    /// in-memory original, then move the media back. Returns the error to
+    /// Undo a half-published plan: restore every TOUCHED file (published,
+    /// or handed to a publisher that then failed) from its in-memory
+    /// original, byte for byte, then move the media back. Returns the error to
     /// throw — rolled back, or (if any undo step failed) the loud one.
     private static func rollback(published: [FileRewrite], failed: FileRewrite,
                                  cause: Failure, reason: String,
@@ -331,9 +336,14 @@ enum ArchiveIndexRename {
                                  undoMoveMedia: () throws -> Void) -> Failure {
         var problems: [String] = []
         for f in published.reversed() {
+            // Already the original bytes (a publisher that threw before it
+            // wrote)? Nothing to restore. Otherwise restore, and judge the
+            // restore by the bytes on disk, not by whether it threw.
+            if (try? Data(contentsOf: f.url)) == f.original { continue }
             do {
                 try publisher(f.original, f.url)
             } catch {
+                if (try? Data(contentsOf: f.url)) == f.original { continue }
                 problems.append("\(f.url.path) still holds the NEW names — restore it from \(backupDir.appendingPathComponent(f.name).path) (\(ArchiveAttestationJournal.describe(error)))")
             }
         }
