@@ -91,6 +91,12 @@ Read, no additional findings in the reviewed fixes: source identity check, resto
 
 Static review at `55e64b6e`; no builds or tests run. Supplied execution evidence was not independently reproduced.
 
+## Disposition (coordinator + Rick, 2026-09-27)
+
+- 1 (P2, a stale sheet overwrites unlisted date provenance) — Closed by: 39a1f4e1 (primary, Rick's rule: ONE Update sheet per archived file — "This file is already being edited in another Update sheet.") and 3f8ddf3b (safety net: the request carries the date cells the sheet saw; preflight refuses "This file changed since the sheet opened — reopen Update…"; apply's identity recheck under the lock pins that read)
+- 2 (P2, an empty rewrite plan skips the lock + recheck) — Closed by: e3a5e45f
+- Noted, accepted: the identity-only recheck refuses a byte-identical replacement or an mtime-only change (conservative refusal, not corruption).
+
 ## Brief
 
 Re-review, SCOPED to the fix commits for your Archive Update review (docs/codex-review-archive-update-2026-09-27.md): range 8862271c..55e64b6e on feat/archive-update (commits ee92da34 #1, 472844cc #2, c1948c0c #3, 4233b0e1 #4–#6, 55e64b6e #7). Use `git diff 8862271c..55e64b6e -- VideoScan` and `git show <sha>`. The branch then merges origin/main (9bf4d3c7 — review-cycle tooling only, no VideoScan app files); ignore it. Do not explore outside the files these commits touch; read-only; do not build or run.
