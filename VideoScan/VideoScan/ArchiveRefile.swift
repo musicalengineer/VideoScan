@@ -1,38 +1,35 @@
 // ArchiveRefile.swift
-// Refile — move an ALREADY-ARCHIVED file to the folder its CURRENT date
-// says, inside the Master Archive (Rick's approved workflow, 2026-09-27).
-// The case that started it: a Thanksgiving tape dated 1884 by a typo was
-// promoted into 30_Video/1880-1889/1884/; the date was later corrected to
-// 1984, and the file stayed filed under 1884.
+// Update an ARCHIVED file's name and/or date (Rick's ruling 2026-09-27:
+// right-click ▸ Update… — two editable things, Name and Date). The folder
+// follows the date through Promote's own placement function; the user never
+// picks a folder. The case that started it: a Thanksgiving tape dated 1884
+// by a typo sat in 30_Video/1880-1889/1884/.
 //
-// This file is the PURE layer and the FILESYSTEM engine; the model glue
-// (catalog record, ledger, audit sink, Misfiled refresh) is
-// VideoScanModel+ArchiveRefile.swift and the sheet is ArchiveRefileSheet.swift.
+// This file is the PURE layer and the FILESYSTEM engine; the model glue is
+// VideoScanModel+ArchiveUpdate.swift and the sheet ArchiveUpdateSheet.swift.
+// (Internal names keep "Refile" — the engine that moves the file.)
 //
-//   ArchiveRefile          — placement (the SAME function Promote uses:
-//                            ArchivePathResolver.baseRelativePath), the
-//                            "Misfiled" rule, the Why line, the row-targeted
-//                            manifest rewrite. No I/O except the manifest
-//                            relpath read.
-//   ArchiveRefileEngine    — the move, in Rick's order:
-//     (a) refuse BEFORE any mutation: grant does not cover the move, archive
-//         offline / read-only, source or target path not plain, target (or
-//         its .partial) exists on disk or in the manifest, source missing,
-//         source digest ≠ manifest digest (fixity first), index unreadable;
-//     (b) ONE same-volume rename — renameatx_np(RENAME_EXCL), descriptor-
-//         relative, never copy + delete (EXDEV refuses instead of copying);
+//   ArchiveRefile        — placement (ArchivePathResolver.baseRelativePath —
+//                          Promote's function), the sheet's labels, the
+//                          manifest reads, the row-targeted manifest rewrite.
+//   ArchiveRefileEngine  — the change, in order:
+//     (a) refuse BEFORE any mutation: the grant does not cover it, archive
+//         offline / read-only, a path not plain, target exists on disk or in
+//         the manifest, source missing, source digest ≠ manifest digest;
+//     (b) ONE same-volume rename — renameatx_np(RENAME_EXCL), dirfd-relative,
+//         never copy + delete (EXDEV refuses);
 //     (c) the file at the new path must be the same inode AND hash to the
 //         manifest digest — otherwise it is renamed back;
-//     (d) the 00_Index manifest row (relpath + record_date + date_confidence)
-//         and the journals' exact old path values are rewritten under a
-//         backup claimed with the #204 marker machinery
-//         (ArchiveIndexRename.apply — backup → recheck → move → publish →
-//         rollback);
-//     (f) any failure after the move → the file is renamed back, every
-//         published index file restored from its in-memory original, and
-//         the outcome says so.
-//   Step (e) — the ledger event and the catalog record — is the model's.
-//
+//     (d) the manifest row (relpath, record_date, date_confidence) and the
+//         journals' exact old-path values are rewritten under a #204 marker
+//         backup via ArchiveIndexRename.apply, holding the 00_Index lock
+//         (ArchiveIndexLock) through publish and rollback;
+//     (f) any failure after the move → the file is renamed back (only if it
+//         is still the original, by identity), every touched index file is
+//         restored; unproven recovery keeps the backup and says so.
+//   A name + date change is ONE move; a known/estimated-only change updates
+//   the index row without moving anything.
+
 // Memory (worst case): the manifest's bytes twice (read + rewritten copy)
 // plus each journal's bytes twice during the index rewrite (the
 // ArchiveIndexRename budget: ~280 MB at 100k promotions, capped at 256 MB
@@ -118,32 +115,12 @@ enum ArchiveRefile {
         }
     }
 
-    // MARK: Folders
+    // MARK: Folders and labels (for the Update sheet's "what will change" list)
 
-    /// "30_Video/1880-1889/1884/1884-xx-xx_Dad.mov" → bucket "30_Video",
-    /// tail "1880-1889/1884". nil when the path is not <media bucket>/…/<file>
-    /// (00_Index, 40_Family_Tree, a file dropped at the root).
-    static func filedTail(relPath: String) -> (bucket: String, tail: String)? {
-        let comps = relPath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        guard comps.count >= 3, MasterArchiveLayout.buckets.contains(comps[0]) else { return nil }
-        return (comps[0], comps[1..<(comps.count - 1)].joined(separator: "/"))
-    }
-
-    /// The folder tail Promote's rule gives this date ("1980-1989/1984").
-    static func expectedTail(streamType: StreamType, filename: String, ext: String,
-                             hint: ArchiveDateHint) -> String {
-        let facts = facts(streamType: streamType, filename: filename, ext: ext, hint: hint)
-        let folder = ArchivePathResolver.folder(for: facts.streamType, hint: hint, medium: facts.medium)
-        return folder.split(separator: "/").dropFirst().joined(separator: "/")
-    }
-
-    /// "1884" (a year folder), "the 1880s" (a decade folder), "Undated".
-    static func folderLabel(tail: String) -> String {
-        let last = tail.split(separator: "/").last.map(String.init) ?? tail
-        if last == MasterArchiveLayout.undatedFolder { return "Undated" }
-        if last.count == 4, Int(last) != nil { return last }
-        if last.count == 9, let start = Int(last.prefix(4)) { return "the \(start)s" }
-        return last
+    /// "30_Video/1880-1889/1884/1884-xx-xx_Dad.mov" → "1880-1889/1884".
+    static func folder(ofRelPath relPath: String) -> String {
+        let comps = relPath.split(separator: "/").map(String.init)
+        return comps.count >= 3 ? comps[1..<(comps.count - 1)].joined(separator: "/") : ""
     }
 
     /// "1984" / "November 1984" / "14 Nov 1984" / "the 1980s" / "undated".
@@ -156,173 +133,19 @@ enum ArchiveRefile {
         }
     }
 
-    // MARK: Where the current date came from
-
-    enum Provenance: Sendable, Equatable {
-        /// Rick's hand-entered date. `onCopy`: typed on the archive copy's
-        /// own record rather than on the original he sees in the lists.
-        case userDate(onCopy: Bool, known: Bool, canonical: String)
-        /// A machine date at or above the filing floor.
-        case machine(source: RecordDateResolution.Source, confidence: Float)
-        /// Typed on the Refile sheet itself.
-        case typedOnRefileSheet
-
-        /// The manifest's `date_confidence` cell for a file filed on this
-        /// date — the same vocabulary Promote writes.
-        var manifestConfidence: String {
-            switch self {
-            case .userDate(_, let known, _): return known ? "user-known" : "user-estimated"
-            case .machine(let source, let c):
-                return String(format: "%@ %.2f", source == .inferred ? "inferred" : source.rawValue, c)
-            case .typedOnRefileSheet: return "user-estimated"
-            }
-        }
-
-        /// One token for the ledger's `provenance` detail.
-        var ledgerToken: String {
-            switch self {
-            case .userDate(let onCopy, let known, let canonical):
-                return "user date \(canonical) (\(known ? "known" : "estimated"))\(onCopy ? " on the archive copy" : "")"
-            case .machine(let source, let c):
-                return "machine date from \(Self.sourcePhrase(source)) (\(Int((c * 100).rounded()))% sure)"
-            case .typedOnRefileSheet:
-                return "typed on the Refile sheet"
-            }
-        }
-
-        static func sourcePhrase(_ s: RecordDateResolution.Source) -> String {
-            switch s {
-            case .embedded: return "the date written inside the file"
-            case .inferred: return "what the video shows (on-screen dates / speech)"
-            case .filename: return "its filename"
-            case .userDate: return "your date"
-            case .none: return "nothing"
-            }
-        }
+    /// The manifest's `record_date` cell ("1884-xx-xx", "1984-11-xx",
+    /// "1984-11-14", "1880s", "") back to a hint.
+    static func hint(fromManifestDate text: String) -> ArchiveDateHint {
+        if text.hasSuffix("s"), let start = Int(text.dropLast()), text.count == 5 { return .decade(startYear: start) }
+        let parts = text.split(separator: "-").map(String.init)
+        guard let y = parts.first.flatMap({ Int($0) }), parts.first?.count == 4 else { return .unknown }
+        guard parts.count > 1, let m = Int(parts[1]) else { return .year(y) }
+        guard parts.count > 2, let d = Int(parts[2]) else { return .month(year: y, month: m) }
+        return .day(year: y, month: m, day: d)
     }
 
-    // MARK: Misfiled — the rule
-
-    /// Everything the rule reads about ONE archive copy, captured on the main
-    /// actor (a Sendable value, so the evaluation runs off-main).
-    struct Candidate: Sendable, Equatable {
-        /// The row the Archive window shows: the original (promotion source)
-        /// when it is still in the catalog, else the copy itself.
-        let rowID: UUID
-        let copyID: UUID
-        let copyRelPath: String
-        let streamTypeRaw: String
-        let copyFilename: String
-        let ext: String
-        /// The ORIGINAL's filename (what Promote resolved the date from).
-        /// NOT the archive name: "1884-xx-xx_Dad.mov" would feed the typo'd
-        /// year straight back into the filename-date rule.
-        let originalFilename: String
-        let originalUserDate: String?
-        let originalUserDateConfidence: String?
-        let copyUserDate: String?
-        let copyUserDateConfidence: String?
-        let embeddedCreationDate: Date?
-        let originMake: String?
-        let originModel: String?
-        let originEncoder: String?
-        let inferredRecordDate: Date?
-        let inferredDateConfidence: Float?
-        let inferredDateRange: InferredDateRange?
-
-        var streamType: StreamType { StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed }
-    }
-
-    /// One misfiled archive file.
-    struct Finding: Sendable, Equatable {
-        let rowID: UUID
-        let copyID: UUID
-        let filedRelPath: String
-        let filedTail: String
-        let dated: ArchiveDateHint
-        let expectedTail: String
-        let provenance: Provenance
-
-        var filedLabel: String { ArchiveRefile.folderLabel(tail: filedTail) }
-        var datedLabel: String { ArchiveRefile.datedLabel(dated) }
-        /// The Catalog badge: "filed under 1884 · dated 1984".
-        var badgeText: String { "filed under \(filedLabel) · dated \(datedLabel)" }
-    }
-
-    private static func resolve(_ c: Candidate, userDate: String?, confidence: String?) -> RecordDateResolution {
-        RecordDateResolver.resolve(userDate: userDate, userDateConfidence: confidence,
-                                   embeddedCreationDate: c.embeddedCreationDate,
-                                   originMake: c.originMake, originModel: c.originModel,
-                                   originEncoder: c.originEncoder,
-                                   inferredRecordDate: c.inferredRecordDate,
-                                   inferredDateConfidence: c.inferredDateConfidence,
-                                   inferredDateRange: c.inferredDateRange,
-                                   filename: c.originalFilename.isEmpty ? nil : c.originalFilename)
-    }
-
-    /// The file's CURRENT resolved date, by Rick's rule: a hand-entered date
-    /// first — the original's, then the copy's, and of two that disagree the
-    /// one that no longer matches the folder (at Promote and at Refile both
-    /// are made equal to the folder, so the one that differs is the one that
-    /// was changed since) — then a machine date at or above the resolver's
-    /// filing floor (`ArchivePathResolver.isLowConfidence` is false). nil =
-    /// nothing trustworthy is known.
-    static func currentDate(of c: Candidate) -> (hint: ArchiveDateHint, provenance: Provenance)? {
-        let filed = filedTail(relPath: c.copyRelPath)?.tail
-        var firstAgreeing: (ArchiveDateHint, Provenance)?
-        for (onCopy, ud, conf) in [(false, c.originalUserDate, c.originalUserDateConfidence),
-                                   (true, c.copyUserDate, c.copyUserDateConfidence)] {
-            guard let ud, !ud.isEmpty else { continue }
-            let r = resolve(c, userDate: ud, confidence: conf)
-            let hint = ArchivePathResolver.hint(from: r)
-            guard hint != .unknown else { continue }
-            let prov = Provenance.userDate(onCopy: onCopy, known: conf == UserDateConfidence.known.rawValue,
-                                           canonical: ud)
-            if let filed, expectedTail(streamType: c.streamType, filename: c.copyFilename, ext: c.ext, hint: hint) != filed {
-                return (hint, prov)
-            }
-            if firstAgreeing == nil { firstAgreeing = (hint, prov) }
-        }
-        if let firstAgreeing { return firstAgreeing }
-        let r = resolve(c, userDate: nil, confidence: nil)
-        let hint = ArchivePathResolver.hint(from: r)
-        guard hint != .unknown, !ArchivePathResolver.isLowConfidence(r) else { return nil }
-        return (hint, .machine(source: r.source, confidence: r.confidence))
-    }
-
-    /// Misfiled = the folder Promote's rule gives the current date differs
-    /// from the folder the file is in. Pure; O(1).
-    static func evaluate(_ c: Candidate) -> Finding? {
-        guard let filed = filedTail(relPath: c.copyRelPath),
-              let (hint, provenance) = currentDate(of: c) else { return nil }
-        let expected = expectedTail(streamType: c.streamType, filename: c.copyFilename, ext: c.ext, hint: hint)
-        guard expected != filed.tail else { return nil }
-        return Finding(rowID: c.rowID, copyID: c.copyID, filedRelPath: c.copyRelPath, filedTail: filed.tail,
-                       dated: hint, expectedTail: expected, provenance: provenance)
-    }
-
-    /// Every candidate the manifest lists (a file the index does not know is
-    /// not "archived" for this purpose), evaluated. O(candidates).
-    static func findings(candidates: [Candidate], manifestRelPaths: Set<String>) -> [Finding] {
-        var out: [Finding] = []
-        for c in candidates where manifestRelPaths.contains(c.copyRelPath) {
-            if let f = evaluate(c) { out.append(f) }
-        }
-        return out
-    }
 
     // MARK: Manifest reads (descriptor-relative, validated)
-
-    /// Every `archive_relpath` in the manifest, or why it could not be read.
-    /// Read THROUGH the validated index descriptor (O_NOFOLLOW, header
-    /// checked) — a missing, symlinked or header-less manifest is a failure,
-    /// never an empty success. Memory: the file's bytes once (~200 B/row).
-    static func manifestRelPaths(rootPath: String) -> Result<Set<String>, ManifestReadFailure> {
-        switch manifestRows(rootPath: rootPath) {
-        case .success(let rows): return .success(Set(rows.map(\.relPath)))
-        case .failure(let f): return .failure(f)
-        }
-    }
 
     struct ManifestReadFailure: Error, Equatable, CustomStringConvertible {
         let reason: String
@@ -335,6 +158,7 @@ enum ArchiveRefile {
         let relPath: String
         let sha256: String
         let recordDate: String
+        let dateConfidence: String
     }
 
     static func manifestRows(rootPath: String) -> Result<[ManifestRow], ManifestReadFailure> {
@@ -362,7 +186,8 @@ enum ArchiveRefile {
         for line in text.split(separator: "\n").dropFirst() {
             let f = ArchiveManifestCSV.fields(ofLine: String(line))
             guard f.count >= ArchiveManifestCSV.columnCountLegacy, !f[1].isEmpty else { continue }
-            rows.append(ManifestRow(promotedAt: iso.date(from: f[0]), relPath: f[1], sha256: f[2], recordDate: f[8]))
+            rows.append(ManifestRow(promotedAt: iso.date(from: f[0]), relPath: f[1], sha256: f[2],
+                                    recordDate: f[8], dateConfidence: f[9]))
         }
         return rows
     }
@@ -416,55 +241,6 @@ enum ArchiveRefile {
             lineNumber += 1
         }
         return (changed > 0 ? out : bytes, changed)
-    }
-
-    // MARK: The Why line
-
-    /// "You dated this 1984 (known) on 25 Sep 2026; it was filed on 1 Sep
-    /// as 1884." — from the date's provenance and the manifest's filed
-    /// date. `datedOn` = when the date was set (the ledger's dateSet line),
-    /// nil when unknown. Pure (clock and zone injected).
-    static func whyLine(provenance: Provenance, dated: ArchiveDateHint, datedOn: Date?,
-                        filedTail: String, promotedAt: Date?, isMisfiled: Bool,
-                        now: Date = Date(), timeZone: TimeZone = .current) -> String {
-        let dateText = datedLabel(dated)
-        var s: String
-        switch provenance {
-        case .userDate(let onCopy, let known, _):
-            s = "You dated \(onCopy ? "the archive copy" : "this") \(dateText) (\(known ? "known" : "estimated"))"
-            if let datedOn { s += " on \(dayText(datedOn, withYear: true, timeZone: timeZone))" }
-        case .machine(let source, _):
-            s = "Its date now reads \(dateText), from \(Provenance.sourcePhrase(source))"
-        case .typedOnRefileSheet:
-            s = "You typed \(dateText) on this sheet"
-        }
-        let filed = folderLabel(tail: filedTail)
-        if isMisfiled {
-            if let promotedAt {
-                let sameYear = year(promotedAt, timeZone) == year(now, timeZone)
-                s += "; it was filed on \(dayText(promotedAt, withYear: !sameYear, timeZone: timeZone)) as \(filed)."
-            } else {
-                s += "; it is filed as \(filed)."
-            }
-        } else {
-            s += "; it is filed as \(filed), which already matches. Change the date or the name below to refile it anyway."
-        }
-        return s
-    }
-
-    private static func year(_ d: Date, _ tz: TimeZone) -> Int {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = tz
-        return cal.component(.year, from: d)
-    }
-
-    /// "25 Sep 2026" / "1 Sep" — fixed locale, like the ledger narrator.
-    static func dayText(_ d: Date, withYear: Bool, timeZone: TimeZone) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = timeZone
-        f.dateFormat = withYear ? "d MMM yyyy" : "d MMM"
-        return f.string(from: d)
     }
 }
 
@@ -523,11 +299,6 @@ enum ArchiveRefileEngine {
         let fromRelPath: String
         let toRelPath: String
         let sha256: String
-        /// The moved file's identity (device + inode + size) — what a later
-        /// replay must find at `toRelPath` before trusting it (r3 #2).
-        let device: UInt64
-        let inode: UInt64
-        let size: Int64
         let backupDir: String?
         let indexFilesChanged: Int
         let linesChanged: Int
@@ -624,9 +395,12 @@ enum ArchiveRefileEngine {
         }
         if seams.isVolumeReadOnly(root) { return no("the archive volume is mounted read-only") }
         guard ArchivePromoteEngine.isContainedRelPath(from, root: root),
-              ArchivePromoteEngine.isContainedRelPath(to, root: root), from != to else {
-            return no("\(from) → \(to) is not a move inside the archive")
+              ArchivePromoteEngine.isContainedRelPath(to, root: root) else {
+            return no("\(from) → \(to) is not a place inside the archive")
         }
+        // from == to: only the date's known/estimated changed — the index
+        // row is updated, the file is not moved (no target to check).
+        let moves = from != to
         // The manifest: read once through the validated descriptor; its
         // bytes are the ones the rewrite is built from.
         let manifestData: Data
@@ -646,8 +420,8 @@ enum ArchiveRefileEngine {
         guard Set(mine.map(\.sha256)).count == 1 else {
             return no("the archive manifest lists \(from) with \(Set(mine.map(\.sha256)).count) different fingerprints — check it by hand")
         }
-        if rows.contains(where: { $0.relPath == to }) { return no("the archive manifest already lists a file at \(to)") }
-        if let why = targetRefusal(root: root, to: to) { return no(why) }
+        if moves, rows.contains(where: { $0.relPath == to }) { return no("the archive manifest already lists a file at \(to)") }
+        if moves, let why = targetRefusal(root: root, to: to) { return no(why) }
         let sourceIdentity: ArchivePromoteEngine.FileIdentity
         switch sourceCheck(root: root, from: from, digest: digest, seams: seams, audit: audit) {
         case .failure(let r): return .failure(r)
@@ -748,13 +522,14 @@ enum ArchiveRefileEngine {
         let backupDir: URL?
         do {
             backupDir = try ArchiveIndexRename.apply(
-                prep.plan, now: now, holder: "Refile \(req.filename)",
+                prep.plan, now: now, holder: "Archive update \(req.filename)",
                 publisher: seams.indexPublisher,
                 backupWriter: seams.backupWriter,
                 announce: { dir in
                     audit(subject + "index backup written to \(dir.path); moving \(from) → \(to) (one rename on the same volume, never a copy)…")
                 },
                 moveMedia: {
+                    guard from != to else { return }       // index-only update
                     try moveAndVerify(root: root, from: from, to: to,
                                       srcName: (from as NSString).lastPathComponent,
                                       dstName: (to as NSString).lastPathComponent,
@@ -762,6 +537,7 @@ enum ArchiveRefileEngine {
                                       moved: &moved, audit: { audit(subject + $0) })
                 },
                 undoMoveMedia: {
+                    guard from != to else { return }
                     audit(subject + "putting the file back: \(to) → \(from)…")
                     do {
                         try moveBack(root: root, from: from, to: to, seams: seams, identity: prep.sourceIdentity)
@@ -777,9 +553,7 @@ enum ArchiveRefileEngine {
         }
         let lines = prep.plan.changedLines, files = prep.plan.files.count
         audit(subject + "index updated — \(lines) line\(lines == 1 ? "" : "s") in \(files) index file\(files == 1 ? "" : "s")\(backupDir.map { "; backup \($0.path)" } ?? "")")
-        return .refiled(Done(fromRelPath: from, toRelPath: to, sha256: prep.digest,
-                             device: prep.sourceIdentity.device, inode: prep.sourceIdentity.inode,
-                             size: prep.sourceIdentity.size, backupDir: backupDir?.path,
+        return .refiled(Done(fromRelPath: from, toRelPath: to, sha256: prep.digest, backupDir: backupDir?.path,
                              indexFilesChanged: files, linesChanged: lines, promotedAt: prep.promotedAt))
     }
 

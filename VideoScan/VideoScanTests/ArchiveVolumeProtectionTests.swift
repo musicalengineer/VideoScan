@@ -615,16 +615,14 @@ struct ArchiveVolumeProtectionSourceSensor {
     /// but they MOVE files, and a move inside the Master Archive tree is an
     /// archive write. Inventoried since Refile (2026-09-27) so a new mover
     /// cannot appear unreviewed. Refile's two are the ONE audited exception
-    /// (ArchiveRefileAuthorization) — see ArchiveRefileSensorTests.
+    /// (ArchiveRefileAuthorization) — see ArchiveUpdateSensorTests.
     static let reviewedNoClobberRenames: [String: Reviewed] = [
         "VideoScan/ArchivePromoteEngine.swift": Reviewed(count: 1, reason:
             "Promote's publish: its own verified `.partial` → the final archive name, dirfd-relative; ADDS a file, never replaces"),
         "VideoScan/ArchiveRefile.swift": Reviewed(count: 2, reason:
-            "Refile (Rick 2026-09-27): the ONE in-archive move — same volume, dirfd-relative, only while holding an ArchiveRefileAuthorization that covers exactly this move — and its rename BACK on any failure"),
+            "Update… / Refile engine (Rick 2026-09-27): the ONE in-archive move — same volume, dirfd-relative, only while holding an ArchiveRefileAuthorization that covers exactly this move — and its rename BACK on any failure"),
         "VideoScan/PartialFileNaming.swift": Reviewed(count: 1, reason:
             "ExclusivePublish: a job's own `.vs-partial` → its final output name (Combine / Transcode / Reformat), outside the archive"),
-        "VideoScan/VideoScanModel+ArchiveRefile.swift": Reviewed(count: 1, reason:
-            "Refile r4 #3: sets an UNREADABLE pending-refiles.json (App Support app data, beside the ledger) aside under a fresh `.unreadable-<UTC>` name instead of overwriting it; never media, never over anything"),
         "VideoScan/POIStorage.swift": Reviewed(count: 2, reason:
             "POI folder moves under App Support (never media)"),
         "VideoScan/RescueFileCopier.swift": Reviewed(count: 1, reason:

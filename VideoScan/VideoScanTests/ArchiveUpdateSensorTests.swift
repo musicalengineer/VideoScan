@@ -1,5 +1,5 @@
-// ArchiveRefileSensorTests.swift
-// SENSOR (feature-test checklist item 5) for Refile: the Master Archive
+// ArchiveUpdateSensorTests.swift
+// SENSOR (feature-test checklist item 5) for Update… (the Refile engine): the Master Archive
 // stays near read-only. Refile is the ONLY new FamilyArchive write path,
 // and it goes through the explicit, audited exception
 // (ArchiveRefileAuthorization) — pinned here against the SOURCE, so a
@@ -10,8 +10,8 @@
 import Foundation
 import Testing
 
-@Suite("Archive Refile — source sensor")
-struct ArchiveRefileSensorTests {
+@Suite("Archive Update — source sensor")
+struct ArchiveUpdateSensorTests {
 
     private static var appDir: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -41,14 +41,14 @@ struct ArchiveRefileSensorTests {
         return out
     }
 
-    @Test("the archive write exception is granted in exactly ONE place: the model's refile")
+    @Test("the archive write exception is granted in exactly ONE place: the model's Update")
     func oneGrantSite() throws {
-        #expect(try Self.sites(of: "ArchiveRefileAuthorization.grant(") == ["VideoScanModel+ArchiveRefile.swift": 1])
+        #expect(try Self.sites(of: "ArchiveRefileAuthorization.grant(") == ["VideoScanModel+ArchiveUpdate.swift": 1])
     }
 
     @Test("the refile engine runs from exactly ONE place, and only with a grant it re-checks")
     func oneEngineCallSite() throws {
-        #expect(try Self.sites(of: "ArchiveRefileEngine.execute(") == ["VideoScanModel+ArchiveRefile.swift": 1])
+        #expect(try Self.sites(of: "ArchiveRefileEngine.execute(") == ["VideoScanModel+ArchiveUpdate.swift": 1])
         let engine = Self.code(try Self.source("ArchiveRefile.swift"))
         #expect(engine.contains("authorization: ArchiveRefileAuthorization,"), "execute requires the grant")
         #expect(engine.contains("guard authorization.covers(rootPath: root, fromRelPath: from, toRelPath: to) else {"))
@@ -59,7 +59,7 @@ struct ArchiveRefileSensorTests {
 
     @Test("Refile renames, never copies + deletes, never clobbers")
     func renameNotCopy() throws {
-        for file in ["ArchiveRefile.swift", "VideoScanModel+ArchiveRefile.swift", "ArchiveRefileSheet.swift"] {
+        for file in ["ArchiveRefile.swift", "VideoScanModel+ArchiveUpdate.swift", "ArchiveUpdateSheet.swift"] {
             let text = Self.code(try Self.source(file))
             for banned in ["moveItem(", "copyItem(", "removeItem(", "unlink(", "unlinkat(", "trashItem(", "copyfile(", "clonefile("] {
                 #expect(!text.contains(banned), "\(file) must not call \(banned)")
@@ -82,7 +82,7 @@ struct ArchiveRefileSensorTests {
                 "Promote's destination chooser starts from the same function")
         // The filing-year guard is ONE function, asked by both.
         #expect(promote.contains("ArchivePathResolver.filingYearRefusal(facts: facts)"))
-        let preview = Self.code(try Self.source("VideoScanModel+ArchiveRefile.swift"))
+        let preview = Self.code(try Self.source("VideoScanModel+ArchiveUpdate.swift"))
         #expect(preview.contains("ArchivePathResolver.filingYearRefusal("))
     }
 
@@ -99,15 +99,19 @@ struct ArchiveRefileSensorTests {
                 "a new 00_Index appender must take ArchiveIndexLock: \(appends)")
     }
 
-    @Test("every refile outcome writes an audit line through the one sink")
+    @Test("every Update outcome writes an audit line through the one sink")
     func auditLines() throws {
-        let model = Self.code(try Self.source("VideoScanModel+ArchiveRefile.swift"))
-        #expect(model.contains("appLog.write(\"[refile] \" + line)"), "videoscan.log")
+        let model = Self.code(try Self.source("VideoScanModel+ArchiveUpdate.swift"))
+        #expect(model.contains("appLog.write(\"[archive-update] \" + line)"), "videoscan.log")
         #expect(model.contains("        log(line)\n"), "console + catalog.log")
         for needle in ["— BEGIN ", "— refused: ", "— ROLLED BACK: ", "— FAILED AND COULD NOT BE FULLY UNDONE: ",
                        "fixity verified; index updated"] {
             #expect(model.contains(needle), "missing audit line: \(needle)")
         }
-        #expect(model.contains("ledgerEvent(.refiled,") && model.contains("ledgerEvent(.refileRolledBack,"))
+        #expect(model.contains("ledgerEvent(.archiveUpdated,") && model.contains("ledgerEvent(.archiveUpdateRolledBack,"))
+        // Rick 2026-09-27: no retry journal, no replay; THIS record only.
+        for gone in ["pending-refiles", "replayPending", "promotionSource(of: copy)"] {
+            #expect(!model.contains(gone), "Update must not bring back \(gone)")
+        }
     }
 }

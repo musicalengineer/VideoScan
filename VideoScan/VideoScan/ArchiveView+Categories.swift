@@ -33,12 +33,6 @@ enum ArchiveCategory: String, CaseIterable {
     case archived       = "archived"
     case notYetArchived = "notYetArchived"
     case needsDate      = "needsDate"
-    /// Refile (2026-09-27): ARCHIVED files whose folder year no longer
-    /// matches their current resolved date. Its rows come from the model's
-    /// off-main Misfiled computation (`model.archiveMisfiled`), not from
-    /// this snapshot — see `ArchiveView.filteredRecords`. Declared before
-    /// `music`, which stays the LAST category (Family Music's rule).
-    case misfiled       = "misfiled"
     case music          = "music"
 
     var label: String {
@@ -47,7 +41,6 @@ enum ArchiveCategory: String, CaseIterable {
         case .notYetArchived: return "Not Yet Archived"
         case .needsDate:      return "Needs a Date"
         case .music:          return "Music"
-        case .misfiled:       return "Misfiled"
         }
     }
 
@@ -57,7 +50,6 @@ enum ArchiveCategory: String, CaseIterable {
         case .notYetArchived: return "tray.fill"
         case .needsDate:      return "calendar.badge.exclamationmark"
         case .music:          return "music.note.list"
-        case .misfiled:       return "folder.badge.questionmark"
         }
     }
 
@@ -67,7 +59,6 @@ enum ArchiveCategory: String, CaseIterable {
         case .notYetArchived: return .primary
         case .needsDate:      return .orange
         case .music:          return .purple
-        case .misfiled:       return .orange
         }
     }
 }
@@ -150,9 +141,6 @@ struct ArchiveCategorySnapshot {
         case .notYetArchived: return notYetArchived
         case .needsDate:      return needsDate
         case .music:          return familyMusicRecords
-        // Not in this per-version snapshot: the Misfiled list needs the
-        // manifest, so it is computed off-main by the model.
-        case .misfiled:       return []
         }
     }
 

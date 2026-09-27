@@ -130,7 +130,6 @@ extension ArchiveView {
         case .notYetArchived: return "Everything is archived"
         case .needsDate:      return "Every unarchived file has a date"
         case .music:          return "No family music yet"
-        case .misfiled:       return model.archiveMisfiled.note == nil ? "Every archived file is in its year's folder" : "Misfiled could not be checked"
         }
     }
 
@@ -147,9 +146,6 @@ extension ArchiveView {
             return "Promote will file each of these under its resolved year."
         case .music:
             return "In the Catalog, right-click a recording and choose Mark as Family Music…"
-        case .misfiled:
-            if let note = model.archiveMisfiled.note { return note.prefix(1).uppercased() + note.dropFirst() + "." }
-            return "When you change the date of an archived file, it shows up here until it is refiled (right-click ▸ Refile…)."
         }
     }
 
@@ -275,13 +271,6 @@ extension ArchiveView {
             case .notArchived:
                 Text(status.label).foregroundColor(.secondary)
             }
-            // Refile: O(1) dictionary read on the off-main Misfiled list.
-            if let f = model.archiveMisfiled.finding(forRecordID: rec.id) {
-                Text("· \(f.badgeText)")
-                    .foregroundColor(.orange)
-                    .lineLimit(1)
-                    .help("Filed under \(f.filedLabel) but dated \(f.datedLabel). Right-click → Refile… to move it.")
-            }
         }
         .font(.system(size: 14))
         .help(statusHelp(status))
@@ -328,19 +317,18 @@ extension ArchiveView {
         }
         .disabled(count != 1)
 
-        // Refile (Rick 2026-09-27): move an ARCHIVED file to the folder its
-        // current date says. One file at a time; the sheet shows from → to
-        // and why, and nothing is touched until its Refile button.
-        if count == 1, let rec = recs.first, model.archiveCopyForRefile(rec) != nil {
+        // Update… (Rick 2026-09-27): change an ARCHIVED file's name and/or
+        // date; the folder follows the date. One file at a time; nothing is
+        // touched until the sheet's Update button.
+        if count == 1, let rec = recs.first, model.archiveCopyForUpdate(rec) != nil {
             Button {
-                openRefileSheet(for: rec)
+                openUpdateSheet(for: rec)
             } label: {
-                Label(model.archiveMisfiled.finding(forRecordID: rec.id) != nil ? "Refile… (misfiled)" : "Refile…",
-                      systemImage: "folder.badge.gearshape")
+                Label("Update…", systemImage: "square.and.pencil")
             }
             .disabled(model.isReadOnly || model.masterArchive == nil)
-            .help("Move this archived file to the folder its current date says, inside the Master Archive. Shows where from, where to and why before anything moves.")
-            .accessibilityIdentifier("archive.row.refile")
+            .help("Change this archived file's name or date. The archive moves it to the folder its date says — you never pick a folder.")
+            .accessibilityIdentifier("archive.row.update")
         }
 
         // File Journey (Rick 2026-08-19): in the archive the journey IS

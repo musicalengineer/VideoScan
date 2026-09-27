@@ -53,13 +53,13 @@ final class LedgerNarratorTests: XCTestCase {
         }
     }
 
-    func testRefileSentences() {
-        let d = e(.refiled, by: .rick, detail: ["from": "30_Video/1880-1889/1884/1884-xx-xx_Dad.mov",
-                                                "to": "30_Video/1980-1989/1984/1984-xx-xx_Dad.mov",
-                                                "date": "1984-xx-xx"])
-        XCTAssertTrue(one(d).hasPrefix("You refiled it in the archive on"), one(d))
-        XCTAssertTrue(one(d).hasSuffix("under 1984-xx-xx: 30_Video/1880-1889/1884/1884-xx-xx_Dad.mov → 30_Video/1980-1989/1984/1984-xx-xx_Dad.mov."), one(d))
-        let r = e(.refileRolledBack, by: .rick, detail: ["from": "30_Video/1880-1889/1884/a.mov", "reason": "index could not be written"])
+    func testArchiveUpdateSentences() {
+        let d = e(.archiveUpdated, by: .rick, detail: ["from": "30_Video/1880-1889/1884/1884-xx-xx_Dad.mov",
+                                                       "to": "30_Video/1980-1989/1984/1984-xx-xx_Dad.mov",
+                                                       "reason": "Date: 1884 → 1984 (known)"])
+        XCTAssertTrue(one(d).hasPrefix("You updated it in the archive on"), one(d))
+        XCTAssertTrue(one(d).hasSuffix("— Date: 1884 → 1984 (known): 30_Video/1880-1889/1884/1884-xx-xx_Dad.mov → 30_Video/1980-1989/1984/1984-xx-xx_Dad.mov."), one(d))
+        let r = e(.archiveUpdateRolledBack, by: .rick, detail: ["from": "30_Video/1880-1889/1884/a.mov", "reason": "index could not be written"])
         XCTAssertTrue(one(r).contains("was undone — the file stayed at 30_Video/1880-1889/1884/a.mov (index could not be written)."), one(r))
     }
 

@@ -604,8 +604,8 @@ struct ArchiveRemovalCheck: Sendable {
 ///   • the engine (ArchiveRefileEngine.execute) re-checks that the grant
 ///     covers exactly the move it is about to make.
 ///
-/// The source sensor (ArchiveRefileSensorTests) pins that the ONLY caller of
-/// `grant` is VideoScanModel+ArchiveRefile.swift and that the only
+/// The source sensor (ArchiveUpdateSensorTests) pins that the ONLY caller of
+/// `grant` is VideoScanModel+ArchiveUpdate.swift and that the only
 /// in-archive rename(2) outside Promote's publish lives in ArchiveRefile.swift.
 /// (C++ analogy: a capability token with a private constructor — you can only
 /// call the move if someone handed you one, and only one factory makes them.)
@@ -632,14 +632,12 @@ struct ArchiveRefileAuthorization: Sendable, Equatable {
     enum Denial: Error, Equatable, CustomStringConvertible {
         case notContained(String)
         case notAContentBucket(String)
-        case sameLocation
         case noReason
 
         var description: String {
             switch self {
             case .notContained(let p): return "\(p) is not a plain path inside the archive"
             case .notAContentBucket(let p): return "\(p) is not in a media bucket (10_Photos / 20_Audio / 30_Video / 50_Documents) — only media files are refiled"
-            case .sameLocation: return "the file is already there"
             case .noReason: return "no reason was given"
             }
         }
@@ -661,10 +659,8 @@ struct ArchiveRefileAuthorization: Sendable, Equatable {
                 return .failure(.notAContentBucket(rel))
             }
         }
-        guard fromRelPath != toRelPath else {
-            audit("Refile: exception REFUSED — \(Denial.sameLocation) (\(fromRelPath))")
-            return .failure(.sameLocation)
-        }
+        // from == to is an index-only update (the date's known/estimated):
+        // no media moves, the exception covers the 00_Index row only.
         let why = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !why.isEmpty else {
             audit("Refile: exception REFUSED — \(Denial.noReason)")

@@ -40,12 +40,6 @@ struct InspectorPanel: View {
     /// Archive Angel phase 2: the background sweep's verdict for this
     /// record (O(1) sidecar lookup by the CALLER). nil = not scored yet.
     var angelEvidence: ArchiveAngel.Evidence?
-    /// Refile (2026-09-27): "filed under 1884 · dated 1984" when this row's
-    /// archive copy sits in a folder its date no longer says — resolved by
-    /// the CALLER from the model's off-main Misfiled list (O(1)). The
-    /// Catalog only points at the Archive; Refile itself lives there.
-    var misfiledBadge: String?
-    var onShowInArchive: (() -> Void)?
 
     var body: some View {
         if let rec = record {
@@ -339,22 +333,6 @@ struct InspectorPanel: View {
                                     .fixedSize(horizontal: false, vertical: true)
                                     .padding(.bottom, 4)
                                     .accessibilityIdentifier("inspector.archivedBanner")
-                            }
-                            if let badge = misfiledBadge {
-                                HStack(spacing: 6) {
-                                    Label(badge, systemImage: "folder.badge.questionmark")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(.orange)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .help("The archive copy sits in a folder its date no longer says. Open it in the Archive and choose Refile… to move it.")
-                                    if let onShowInArchive {
-                                        Button("Show in Archive", action: onShowInArchive)
-                                            .buttonStyle(.link)
-                                            .font(.system(size: 12))
-                                    }
-                                }
-                                .padding(.bottom, 4)
-                                .accessibilityIdentifier("inspector.misfiledBadge")
                             }
                             if let copy = masterCopy {
                                 promotionLinkRow(label: copy.derivedFrom == rec.id ? "Master copy ✓" : "Identical copy in archive ✓",

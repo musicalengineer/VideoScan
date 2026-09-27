@@ -1018,11 +1018,6 @@ final class VideoScanModel: ObservableObject {
         }
         reresolveMasterArchiveMount()   // volume-UUID-first re-resolution
         publishFamilyAssetConfiguration()
-        // Refile step (e) retries (codex review #5): a refile whose catalog
-        // save or ledger line did not land is finished here, at launch.
-        if !Self.isRunningTests {
-            Task { [weak self] in await self?.replayPendingRefiles() }
-        }
         if !restored.isEmpty {
             records = restored
             log("Restored \(restored.count) records from previous session.")
@@ -1515,16 +1510,6 @@ final class VideoScanModel: ObservableObject {
     /// (`@MainActor () -> Bool` ≈ a std::function that must be called on
     /// the UI thread.)
     var archiveIndexWriterActive: (@MainActor () -> Bool)?
-
-    /// Refile (2026-09-27): the Archive window's "Misfiled" list and the
-    /// Catalog's "filed under 1884 · dated 1984" badge read this. Computed
-    /// OFF the main actor (VideoScanModel+ArchiveRefile.swift) — views only
-    /// do O(1) dictionary reads on it.
-    @Published var archiveMisfiled = ArchiveMisfiledState()
-    /// The in-flight Misfiled computation, and "a refresh was asked for
-    /// while one ran" (run once more when it lands).
-    var archiveMisfiledTask: Task<Void, Never>?
-    var archiveMisfiledRefreshQueued = false
 
     /// Find Similar Footage: bumped by every "same footage" / "not the
     /// same" / "forget" answer (codex #1674 F4). A run records the value
