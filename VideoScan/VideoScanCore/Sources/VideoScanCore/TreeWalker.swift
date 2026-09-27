@@ -146,13 +146,7 @@ extension TreeWalk {
         let tChecks = clock.now
         let found = runChecks(s, graph: graph, ages: ages, components: comps)
         let checksMs = milliseconds(clock.now - tChecks)
-        // Scope: the people this walk visited (a depth-limited walk visits
-        // a sliver of the tree; its log and summary must say so).
-        var walked = [Bool](repeating: false, count: s.count)
-        for layer in layers { for v in layer { walked[Int(v.ordinal)] = true } }
-        let onWalk: (Check) -> Bool = { check in
-            check.personIDs.contains { id in s.ordinal(of: id).map { walked[$0] } ?? false }
-        }
+        let onWalk = onWalkPredicate(s, layers: layers)
         for check in found.cycles where onWalk(check) { emit(.cycle(check)) }
         for check in found.all where check.severity == .warn && check.kind != .ancestorCycle && onWalk(check) {
             emit(.warnCheck(check))
@@ -324,6 +318,18 @@ extension TreeWalk {
             }
         }
         return out
+    }
+
+    /// Scope: does a check involve a person this walk VISITED? A
+    /// depth-limited walk visits a sliver of the tree; its log and summary
+    /// must count only that sliver's checks. O(visited) to build, O(log n)
+    /// per person on the check.
+    static func onWalkPredicate(_ s: TreeWalkSnapshot, layers: [[Visit]]) -> (Check) -> Bool {
+        var walked = [Bool](repeating: false, count: s.count)
+        for layer in layers { for v in layer { walked[Int(v.ordinal)] = true } }
+        return { [walked] check in
+            check.personIDs.contains { id in s.ordinal(of: id).map { walked[$0] } ?? false }
+        }
     }
 
     struct FoundChecks {

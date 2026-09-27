@@ -63,6 +63,34 @@ private let twoRoots = """
 0 TRLR
 """
 
+/// Two starts (Rick @R0@, Donna @D0@), each with a COMPLETE pedigree
+/// `depth` generations deep — the widest possible fan for that depth.
+/// `lopsided` gives Donna only a father line, so the two sides differ.
+private func twoStartPedigree(depth: Int, lopsided: Bool = false) -> GedcomFamilyGraph {
+    var out = ["0 HEAD", "1 _VS_MERGED Y", "1 _VS_ROOT @R0@", "1 _VS_ROOT @D0@"]
+    var fams: [String] = []
+    for side in ["R", "D"] {
+        let full = !(lopsided && side == "D")
+        // Heap numbering: person k's parents are 2k+1 (father) and 2k+2 (mother).
+        let last = full ? (1 << (depth + 1)) - 2 : depth
+        func parents(_ k: Int) -> (Int, Int?) { full ? (2 * k + 1, 2 * k + 2) : (k + 1, nil) }
+        for k in 0...last {
+            out.append("0 @\(side)\(k)@ INDI")
+            out.append("1 NAME P\(k) /\(side)/")
+            out.append("1 SEX \(full ? (k == 0 || k % 2 == 1 ? "M" : "F") : "M")")
+            let (f, m) = parents(k)
+            if f <= last {
+                out.append("1 FAMC @F\(side)\(k)@")
+                var fam = ["0 @F\(side)\(k)@ FAM", "1 HUSB @\(side)\(f)@"]
+                if let m, m <= last { fam.append("1 WIFE @\(side)\(m)@") }
+                fam.append("1 CHIL @\(side)\(k)@")
+                fams += fam
+            }
+        }
+    }
+    return GedcomFamilyGraph(gedcomText: (out + fams + ["0 TRLR"]).joined(separator: "\n"))
+}
+
 @MainActor
 private func scratchCenter() -> (FamilyTreeWalkCenter, URL) {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ftwalk-\(UUID().uuidString)")
@@ -99,6 +127,69 @@ struct FamilyTreeWalkAppTests {
         #expect(byLine[.second]?.allSatisfy { $0.point.x > size.width / 2 } == true, "Donna's fan right")
         #expect(layout.placed.first { $0.generation == 0 }.map { $0.point.x < size.width / 2 } == true)
         #expect(layout.placed.filter { $0.generation > 0 }.allSatisfy { $0.from != nil })
+    }
+
+    /// Rick 2026-09-27: "it doesn't fit". Every dot AND its reveal halo lies
+    /// inside the canvas with a margin, the fan is centred (left extent =
+    /// right extent, top = bottom, for a complete pedigree) and it uses the
+    /// canvas (not shrunk to a speck) — at every depth the sheet offers.
+    @Test(arguments: [3, 5, 10, 12])   // 12 stands in for "All" on a deep tree
+    func theFanFitsItsCanvasAtEveryDepth(depth: Int) throws {
+        let g = twoStartPedigree(depth: depth)
+        let r = try TreeWalk.walk(g, options: .init(starts: ["@R0@", "@D0@"], maxGenerations: depth == 12 ? nil : depth))
+        let size = CGSize(width: 600, height: 600)
+        let layout = TreeWalkFanLayout(result: r, size: size)
+        #expect(layout.placed.count == r.visitedCount)
+        let halo: CGFloat = 3.2
+        var minX = CGFloat.infinity, maxX = -CGFloat.infinity, minY = CGFloat.infinity, maxY = -CGFloat.infinity
+        for p in layout.placed {
+            let e = p.radius * halo
+            minX = min(minX, p.point.x - e); maxX = max(maxX, p.point.x + e)
+            minY = min(minY, p.point.y - e); maxY = max(maxY, p.point.y + e)
+        }
+        #expect(minX >= 0 && minY >= 0 && maxX <= size.width && maxY <= size.height,
+                "depth \(depth): x \(minX)…\(maxX), y \(minY)…\(maxY) in 600×600")
+        #expect(abs((size.width / 2 - minX) - (maxX - size.width / 2)) < 1, "left and right extents match")
+        #expect(abs((size.height / 2 - minY) - (maxY - size.height / 2)) < 1, "top and bottom extents match")
+        #expect(max(maxX - minX, maxY - minY) > size.width * 0.8, "the fan fills the canvas")
+    }
+
+    @Test func aLopsidedTreeStillFitsAndStaysCentred() throws {
+        let r = try TreeWalk.walk(twoStartPedigree(depth: 6, lopsided: true), options: .init(starts: ["@R0@", "@D0@"]))
+        let size = CGSize(width: 500, height: 500)
+        let layout = TreeWalkFanLayout(result: r, size: size)
+        for p in layout.placed {
+            let e = p.radius * 3.2
+            #expect(p.point.x - e >= 0 && p.point.x + e <= size.width && p.point.y - e >= 0 && p.point.y + e <= size.height)
+        }
+        // The starts straddle the centre: the fan's origin is the canvas centre.
+        let starts = layout.placed.filter { $0.generation == 0 }
+        #expect(starts.count == 2)
+        #expect(abs((starts[0].point.x + starts[1].point.x) / 2 - size.width / 2) < 0.5)
+    }
+
+    /// Rick 2026-09-27: at "Walk complete" the last generation still showed
+    /// as white haloed dots. On completion NOTHING is "just revealed".
+    @Test func everyNodeSettlesIntoItsLineColourWhenTheReplayEnds() async throws {
+        let r = try TreeWalk.walk(twoStartPedigree(depth: 3), options: .init(starts: ["@R0@", "@D0@"], maxGenerations: 3))
+        #expect(r.visitedCount == 30)
+        let layout = await TreeWalkAnimator.prepare(r, size: CGSize(width: 600, height: 600))
+        let animator = TreeWalkAnimator(layout: layout, summary: r.summary, displayNames: ["Rick", "Donna"])
+        animator.nodesPerSecond = 600                       // 20 per tick: 20, then the last 10
+        animator.tick()
+        #expect(animator.frame.recent.count == 20, "mid-replay the batch glows")
+        #expect(!animator.frame.finished)
+        animator.tick()
+        #expect(animator.frame.finished)
+        #expect(animator.frame.visited == 30)
+        #expect(animator.frame.recent.isEmpty, "the final batch settles; no white halos at Walk complete")
+
+        // Skip to end (Instant) settles too.
+        let again = TreeWalkAnimator(layout: layout, summary: r.summary, displayNames: ["Rick", "Donna"])
+        again.skipToEnd()
+        again.tick()
+        #expect(again.frame.finished)
+        #expect(again.frame.recent.isEmpty)
     }
 
     @Test func walkTreeIsAnMFOKindWithADetailView() {
