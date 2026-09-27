@@ -120,3 +120,7 @@ OUTPUT (stdout, Markdown, under 500 words):
 first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
 then a line `Verdict: merge / merge-after-fixes / hold`
 then findings, each with file:line, a concrete counterexample, and the test that would pin it.
+
+## Closed
+
+Closed by `96ede92d` at 2026-09-27T21:10:59Z. #1 39a1f4e1 (one editor per file) + 3f8ddf3b (changed-outside-app safety net), #2 e3a5e45f; merged to main
