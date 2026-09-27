@@ -79,3 +79,36 @@ To see what you asked for that has no answer yet — acknowledged or not:
 ```sh
 python3 tools/team-channel.py awaiting --from claude --to codex --days 3
 ```
+
+## Codex review cycles (2026-09-27)
+
+One command runs a whole codex pass: brief check, "started" post to codex,
+`codex exec`, verdict parse, review doc, and a reply on the same thread.
+
+```sh
+python3 tools/codex_review.py --title "⌘O" --range de54a7ca..48708aba \
+  --brief docs/briefs/<file>.md [--doc docs/codex-review-<slug>-<date>.md] [--timeout 1800]
+python3 tools/codex_review.py close --title "⌘O" --closed-by <sha> [--note "…"]
+python3 tools/codex_review.py status        # last 5 cycles, one line each
+```
+
+The brief must carry the output contract. The first line of the answer is
+`Credits spent: <amount> | Finding count: <N>`, and the answer includes a line
+`Verdict: merge | fix | block`. A brief without it is refused before anything
+is posted. The result is `closed` for merge with 0 findings and `fixing`
+otherwise; run `close` once the findings are pinned or declined. A timeout,
+a nonzero exit from codex, or output that breaks the contract gives `failed`.
+State is
+`~/Library/Application Support/VideoScan/team-channel/review-cycles.json`,
+which holds the newest 20 cycles and is written atomically. Raw codex
+stdout/stderr go in `review-cycles/<id>.stdout|.stderr` beside it.
+
+**Stdin gotcha:** `codex exec` with an open stdin prints "Reading additional
+input from stdin" and waits forever. The wrapper always runs it with stdin
+from `/dev/null`. Do the same if you ever run codex by hand (`</dev/null`).
+
+The menu-bar monitor shows the last 3 cycles under **Review cycles**, one line
+each, e.g. `⌘O (de54a7ca) — codex running 4m`. **Green** means the phase is
+under 10 min old, or the cycle is closed. **Yellow** means 10–30 min in an
+open phase. **Red** means over 30 min in an open phase, `failed`, or
+`running` while the codex pid is gone. Closed cycles drop off after 24 h.
