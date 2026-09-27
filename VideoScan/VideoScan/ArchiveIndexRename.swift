@@ -134,12 +134,27 @@ enum ArchiveIndexRename {
     struct Plan: Sendable {
         let root: String
         let files: [FileRewrite]
+        /// Index files `prepare` read and left OUT of the plan (no match),
+        /// or found absent (nil): name → identity at prepare time. `apply`
+        /// rechecks them under the lock too — a line naming the old path
+        /// that landed in between must refuse, never be left stale
+        /// (Archive Update review r2 #3).
+        var unchanged: [String: ArchivePromoteEngine.FileIdentity?] = [:]
         var isEmpty: Bool { files.isEmpty }
         var changedLines: Int { files.reduce(0) { $0 + $1.changedLines } }
         var indexURL: URL {
             URL(fileURLWithPath: root, isDirectory: true)
                 .appendingPathComponent(MasterArchiveLayout.indexFolder, isDirectory: true)
         }
+    }
+
+    /// What a `moveMedia` error says about the backup taken for it. Any
+    /// error that does not conform — or says false — KEEPS the backup
+    /// (incomplete marker: never counted, never pruned).
+    protocol BackupDisposition: Error {
+        /// True only when nothing is left changed: the media never moved,
+        /// or it was moved back and that move back was flushed.
+        var backupIsSafeToDiscard: Bool { get }
     }
 
     /// The publish seam: production is an atomic full-fsync publish; a
@@ -160,6 +175,9 @@ enum ArchiveIndexRename {
         /// Publish failed AND the rollback failed — mixed state, details
         /// (exact paths) in `detail` and in catalog.log.
         case publishFailedNotRolledBack(file: String, reason: String, detail: String)
+        /// Another writer holds the archive-index lock (ArchiveIndexLock).
+        /// Nothing was changed.
+        case indexBusy(detail: String)
 
         var errorDescription: String? {
             switch self {
@@ -175,6 +193,8 @@ enum ArchiveIndexRename {
                 return "Couldn't update the archive's index file “\(f)” (\(r)). The rename was undone; nothing changed."
             case .publishFailedNotRolledBack(let f, let r, let detail):
                 return "Couldn't update the archive's index file “\(f)” (\(r)), and undoing the rename also failed.\n\n\(detail)"
+            case .indexBusy(let detail):
+                return "The archive's index is being updated by something else right now — \(detail). Nothing was renamed; try again in a moment."
             }
         }
     }
@@ -195,10 +215,11 @@ enum ArchiveIndexRename {
                                      reason: String(cString: strerror(errno)))
         }
         var files: [FileRewrite] = []
+        var unchanged: [String: ArchivePromoteEngine.FileIdentity?] = [:]
         for name in indexFilenames {
             let url = indexDir.appendingPathComponent(name)
             guard lstat(url.path, &sb) == 0 else {
-                if errno == ENOENT { continue }
+                if errno == ENOENT { unchanged[name] = .some(nil); continue }
                 throw Failure.unreadable(file: name, reason: String(cString: strerror(errno)))
             }
             let isManifest = name == MasterArchiveLayout.manifestFilename
@@ -208,12 +229,12 @@ enum ArchiveIndexRename {
             let result = isManifest
                 ? try rewriteCSV(bytes, replacements: replacements, file: name)
                 : try rewriteJSONL(bytes, replacements: replacements, file: name, lenient: false)
-            guard result.changedLines > 0 else { continue }
+            guard result.changedLines > 0 else { unchanged[name] = identity; continue }
             files.append(FileRewrite(name: name, url: url, original: data,
                                      updated: Data(result.bytes), changedLines: result.changedLines,
                                      identity: identity))
         }
-        return Plan(root: root, files: files)
+        return Plan(root: root, files: files, unchanged: unchanged)
     }
 
     /// Read one index file through the validated descriptor (O_NOFOLLOW,
@@ -258,19 +279,49 @@ enum ArchiveIndexRename {
     /// and throws its own error (propagated unchanged — nothing is
     /// published). `undoMoveMedia` moves it back during a rollback.
     /// Returns the backup folder (nil when the plan was empty).
+    ///
+    /// The whole of it — backups, rechecks, the media move, every publish
+    /// and any rollback — runs holding the ONE archive-index write lock
+    /// (ArchiveIndexLock, codex review of Refile #1), so no append can land
+    /// between a recheck and the replace that would drop it. Lock busy →
+    /// `.indexBusy`, nothing changed. `holder` names the writer in logs.
     @discardableResult
     static func apply(_ plan: Plan,
                       now: Date = Date(),
+                      holder: String = "Catalog rename",
                       publisher: Publisher = livePublish(_:to:),
                       backupWriter: Publisher = livePublish(_:to:),
                       announce: (URL) -> Void = { _ in },
                       moveMedia: () throws -> Void,
                       undoMoveMedia: () throws -> Void) throws -> URL? {
-        guard !plan.isEmpty else {
+        // No index involved at all (nothing was even read): just move.
+        guard !plan.isEmpty || !plan.unchanged.isEmpty else {
             try moveMedia()
             return nil
         }
+        do {
+            return try ArchiveIndexLock.withExclusive(root: plan.root, holder: holder) {
+                // Nothing to rewrite, but index files were READ: still recheck
+                // them under the lock before the move — a line naming the old
+                // path that landed since prepare refuses (Archive Update r3 #2).
+                if plan.isEmpty {
+                    for (name, identity) in plan.unchanged where currentIdentity(root: plan.root, name: name) != identity {
+                        throw Failure.changedDuringRename(file: name)
+                    }
+                    try moveMedia()
+                    return nil
+                }
+                return try applyLocked(plan, now: now, publisher: publisher, backupWriter: backupWriter,
+                                       announce: announce, moveMedia: moveMedia, undoMoveMedia: undoMoveMedia)
+            }
+        } catch let busy as ArchiveIndexLock.Busy {
+            throw Failure.indexBusy(detail: busy.description)
+        }
+    }
 
+    private static func applyLocked(_ plan: Plan, now: Date, publisher: Publisher, backupWriter: Publisher,
+                                    announce: (URL) -> Void, moveMedia: () throws -> Void,
+                                    undoMoveMedia: () throws -> Void) throws -> URL? {
         // 2. Backups — the exact bytes the plan was built from.
         let backup = try writeBackups(plan, now: now, write: backupWriter)
         let backupDir = backup.dir
@@ -281,6 +332,12 @@ enum ArchiveIndexRename {
             removeRefusedBackup(backupDir)
             throw Failure.changedDuringRename(file: f.name)
         }
+        // …and every index file the plan left out: still as prepare saw it
+        // (or still absent)? A new line there could name the old path.
+        for (name, identity) in plan.unchanged where currentIdentity(root: plan.root, name: name) != identity {
+            removeRefusedBackup(backupDir)
+            throw Failure.changedDuringRename(file: name)
+        }
 
         // 4. The trail a crash would leave, then 5. the media move. Its
         //    failure propagates; nothing published.
@@ -288,25 +345,40 @@ enum ArchiveIndexRename {
         do {
             try moveMedia()
         } catch {
-            removeRefusedBackup(backupDir)
+            // A move that was put back without a confirmed-durable folder
+            // flush says so; its backup is then KEPT (incomplete marker —
+            // never counted, never pruned). Codex review of Refile, #4.
+            // RETAIN BY DEFAULT (codex review of Refile r2 #1): the backup
+            // goes only when the mover PROVES nothing is left changed
+            // (the move never happened, or was undone and flushed).
+            if (error as? BackupDisposition)?.backupIsSafeToDiscard == true {
+                removeRefusedBackup(backupDir)
+            } else {
+                appLog.write("Catalog: archive index backup \(backupDir.path) KEPT — the media move failed and its undo is not proven (\(ArchiveAttestationJournal.describe(error))).")
+                renameIndexLog.error("backup kept after an unproven media-move failure: \(backupDir.path, privacy: .public)")
+            }
             throw error
         }
 
         // 6. Publish, each after its own recheck; roll back on the first
-        //    refusal or failure.
-        var published: [FileRewrite] = []
+        //    refusal or failure. A file is TOUCHED the moment its publisher
+        //    is called — before it returns — so a publisher that wrote the
+        //    new bytes and then threw is restored too (codex review of
+        //    Refile, finding 2). A file refused by the recheck was never
+        //    touched by us and is left exactly as the other writer left it.
+        var touched: [FileRewrite] = []
         for f in plan.files {
             guard isUnchanged(f, root: plan.root) else {
-                throw rollback(published: published, failed: f,
+                throw rollback(published: touched, failed: f,
                                cause: .changedDuringRename(file: f.name), reason: "changed during the rename",
                                backupDir: backupDir, publisher: publisher, undoMoveMedia: undoMoveMedia)
             }
+            touched.append(f)
             do {
                 try publisher(f.updated, f.url)
-                published.append(f)
             } catch {
                 let reason = ArchiveAttestationJournal.describe(error)
-                throw rollback(published: published, failed: f,
+                throw rollback(published: touched, failed: f,
                                cause: .publishFailedRolledBack(file: f.name, reason: reason), reason: reason,
                                backupDir: backupDir, publisher: publisher, undoMoveMedia: undoMoveMedia)
             }
@@ -322,8 +394,9 @@ enum ArchiveIndexRename {
         currentIdentity(root: root, name: f.name) == f.identity
     }
 
-    /// Undo a half-published plan: restore every published file from its
-    /// in-memory original, then move the media back. Returns the error to
+    /// Undo a half-published plan: restore every TOUCHED file (published,
+    /// or handed to a publisher that then failed) from its in-memory
+    /// original, byte for byte, then move the media back. Returns the error to
     /// throw — rolled back, or (if any undo step failed) the loud one.
     private static func rollback(published: [FileRewrite], failed: FileRewrite,
                                  cause: Failure, reason: String,
@@ -331,10 +404,21 @@ enum ArchiveIndexRename {
                                  undoMoveMedia: () throws -> Void) -> Failure {
         var problems: [String] = []
         for f in published.reversed() {
+            // Already the original bytes (a publisher that threw before it
+            // wrote)? Nothing to restore. Otherwise restore, and judge the
+            // restore by the bytes on disk, not by whether it threw.
+            if (try? Data(contentsOf: f.url)) == f.original { continue }
             do {
                 try publisher(f.original, f.url)
             } catch {
-                problems.append("\(f.url.path) still holds the NEW names — restore it from \(backupDir.appendingPathComponent(f.name).path) (\(ArchiveAttestationJournal.describe(error)))")
+                // A restore that THREW is never a confirmed restore, even when
+                // the bytes read back right — the flush may not have landed
+                // (Archive Update review r2 #1). The backup is kept.
+                if (try? Data(contentsOf: f.url)) == f.original {
+                    problems.append("\(f.url.path) holds its original bytes again, but the restore is NOT confirmed durable — the backup \(backupDir.appendingPathComponent(f.name).path) is kept (\(ArchiveAttestationJournal.describe(error)))")
+                } else {
+                    problems.append("\(f.url.path) still holds the NEW names — restore it from \(backupDir.appendingPathComponent(f.name).path) (\(ArchiveAttestationJournal.describe(error)))")
+                }
             }
         }
         do {
@@ -777,7 +861,9 @@ enum ArchiveIndexRename {
     }
 
     /// Cell byte ranges (raw, including their quotes) of one CSV row.
-    private static func csvCells(_ b: ArraySlice<UInt8>, file: String, line: Int) throws -> [Range<Int>] {
+    /// Internal (not private) since 2026-09-27: Refile's row-targeted
+    /// manifest rewrite (ArchiveRefile.swift) uses the SAME parser.
+    static func csvCells(_ b: ArraySlice<UInt8>, file: String, line: Int) throws -> [Range<Int>] {
         var cells: [Range<Int>] = []
         var i = b.startIndex
         while true {
@@ -812,7 +898,7 @@ enum ArchiveIndexRename {
     }
 
     /// A raw cell's value: outer quotes removed, doubled quotes collapsed.
-    private static func csvDecode(_ raw: ArraySlice<UInt8>) -> String {
+    static func csvDecode(_ raw: ArraySlice<UInt8>) -> String {
         guard raw.count >= 2, raw.first == quote, raw.last == quote else {
             return String(decoding: raw, as: UTF8.self)
         }
@@ -1007,7 +1093,7 @@ enum ArchiveIndexRename {
     /// started at `base`) — applied back to front so earlier ranges hold.
     /// A range overlapping one already applied is skipped: one token, one
     /// edit, never two.
-    private static func splice(_ bytes: [UInt8], base: Int, edits: [(Range<Int>, [UInt8])]) -> [UInt8] {
+    static func splice(_ bytes: [UInt8], base: Int, edits: [(Range<Int>, [UInt8])]) -> [UInt8] {
         var out = bytes
         var floor = Int.max
         for (range, replacement) in edits.sorted(by: { $0.0.lowerBound > $1.0.lowerBound }) where range.upperBound <= floor {

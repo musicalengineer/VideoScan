@@ -262,9 +262,14 @@ struct FamilyMusicLogicTests {
         #expect(snap.familyMusic.allSatisfy { $0.isArchived })
     }
 
-    @Test("ledger vocabulary appends familyMusic LAST; narrator reads both actions")
+    @Test("ledger vocabulary appended familyMusic after every older kind; narrator reads both actions")
     func ledgerVocabulary() {
-        #expect(MediaLedgerEvent.Kind.allCases.last == .familyMusic)
+        // Append-only vocabulary: familyMusic came after footageDecided, and
+        // only kinds added later (Update…'s two, 2026-09-27) follow it.
+        let kinds = MediaLedgerEvent.Kind.allCases
+        let i = kinds.firstIndex(of: .familyMusic)
+        #expect(i == kinds.firstIndex(of: .footageDecided).map { $0 + 1 })
+        #expect(i.map { Array(kinds[($0 + 1)...]) } == [.archiveUpdated, .archiveUpdateRolledBack])
         #expect(MediaLedgerEvent.Kind.familyMusic.rawValue == "familyMusic")
         let at = Date(timeIntervalSince1970: 1_800_000_000)
         let marked = MediaLedgerEvent(at: at, event: .familyMusic, recordID: UUID(), contentKey: "", filename: "a.m4a",

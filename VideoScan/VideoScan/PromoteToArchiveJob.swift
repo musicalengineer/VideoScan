@@ -276,7 +276,7 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         // Batch end: ONE durable catalog save; only then are the batch's
         // journal entries marked done. Runs on cancel too — whatever was
         // published stays published and must be persisted.
-        let saved = finalizeBatch(model: model, ctx: ctx)
+        let saved = await finalizeBatch(model: model, ctx: ctx)
         finishRun(tally: tally, saved: saved, model: model, ctx: ctx)
     }
 

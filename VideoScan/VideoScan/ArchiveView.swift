@@ -56,6 +56,10 @@ struct ArchiveView: View {
     @State var timelineScrollTarget: UUID?
     /// Main-window tab index (1 = Catalog) — "Show in Catalog" writes it.
     @AppStorage("selectedTab") var selectedTab: Int = 0
+    /// Update… sheet driver (Rick 2026-09-27): set once the preview is built.
+    @State var updatePreview: ArchiveUpdatePreview?
+    /// Why Update… did not open (e.g. already being edited in another sheet).
+    @State var updateRefusal: String?
 
     @Environment(\.openWindow) var openWindow
 
@@ -105,6 +109,16 @@ struct ArchiveView: View {
         .sheet(item: $archiveDetailRecord) { rec in
             ArchiveDetailSheet(record: rec, allRecords: model.records)
         }
+        .sheet(item: $updatePreview) { preview in
+            ArchiveUpdateSheet(preview: preview)
+                // Every close path releases the one-editor claim.
+                .onDisappear { model.closeArchiveUpdate(preview) }
+        }
+        .alert("Update…", isPresented: Binding(get: { updateRefusal != nil }, set: { if !$0 { updateRefusal = nil } })) {
+            Button("OK", role: .cancel) { updateRefusal = nil }
+        } message: {
+            Text(updateRefusal ?? "")
+        }
         // Archive Angel batches are read from the buffer OUTSIDE body (disk
         // I/O) — refreshed on entry and when the MFO job list changes (the
         // strip refreshes after its own sheets and cards).
@@ -124,6 +138,20 @@ struct ArchiveView: View {
         .onChange(of: sortOrder) { old, new in
             let adjusted = ArchiveSortPolicy.adjusted(new: new, previous: old)
             if adjusted != new { sortOrder = adjusted }
+        }
+    }
+
+    // MARK: - Update…
+
+    /// Right-click ▸ Update…: build the preview (reads the manifest row off
+    /// the main actor), then show the sheet. Nothing is touched.
+    func openUpdateSheet(for rec: VideoRecord) {
+        let id = rec.id
+        Task {
+            switch await model.openArchiveUpdate(recordID: id) {
+            case .success(let p): updatePreview = p
+            case .failure(let r): updateRefusal = r.message
+            }
         }
     }
 

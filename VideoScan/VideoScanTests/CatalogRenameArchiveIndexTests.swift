@@ -532,22 +532,31 @@ struct CatalogRenameArchiveIndexTests {
         let straggler = UUID()
         var calls = 0
         var refused = false
+        var appendRefused = false
         do {
             try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase, indexPublisher: { data, url in
                 calls += 1
                 if calls == 1 {
                     // Promote appends to the journal while the rename is
-                    // publishing the manifest.
-                    try ArchivePromoteJournal.append(.init(sourceRecordID: straggler, sourcePath: "/Volumes/Src/late.mkv",
-                                                           destRelPath: "30_Video/late.mkv", state: .intent, at: Self.at),
-                                                     rootPath: f.root)
+                    // publishing the manifest. Since the archive-index lock
+                    // (codex review of Refile #1, 2026-09-27) the append is
+                    // REFUSED while the rename holds the index — the
+                    // appender is told (Busy) and its journal converges on
+                    // the next run; what must never happen is a silent drop.
+                    do {
+                        try ArchivePromoteJournal.append(.init(sourceRecordID: straggler, sourcePath: "/Volumes/Src/late.mkv",
+                                                               destRelPath: "30_Video/late.mkv", state: .intent, at: Self.at),
+                                                         rootPath: f.root)
+                    } catch is ArchiveIndexLock.Busy {
+                        appendRefused = true
+                    }
                 }
                 try ArchiveIndexRename.livePublish(data, to: url)
             })
         } catch {
             refused = true
         }
-        #expect(ArchivePromoteJournal.latestBySource(rootPath: f.root)[straggler] != nil,
+        #expect(appendRefused || ArchivePromoteJournal.latestBySource(rootPath: f.root)[straggler] != nil,
                 "the concurrent journal append was dropped by a whole-file publish")
         if refused {
             #expect(FileManager.default.fileExists(atPath: f.media))

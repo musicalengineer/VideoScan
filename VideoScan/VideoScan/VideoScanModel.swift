@@ -1511,6 +1511,11 @@ final class VideoScanModel: ObservableObject {
     /// the UI thread.)
     var archiveIndexWriterActive: (@MainActor () -> Bool)?
 
+    /// Archive copies with an Update… sheet open right now (Rick
+    /// 2026-09-27: "you can't have two writers — 'This item is being
+    /// edited.'"). Main actor, in memory only. VideoScanModel+ArchiveUpdate.
+    var archiveUpdatesOpen: Set<UUID> = []
+
     /// Find Similar Footage: bumped by every "same footage" / "not the
     /// same" / "forget" answer (codex #1674 F4). A run records the value
     /// when it snapshots the catalog; an apply whose snapshot predates the

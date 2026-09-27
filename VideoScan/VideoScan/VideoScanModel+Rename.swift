@@ -329,3 +329,14 @@ extension VideoScanModel {
         }
     }
 }
+
+/// A rename's media move that failed with `.filesystem` never moved the
+/// file (moveItem within one folder is one rename(2)), so its index backup
+/// protects nothing and may go. Anything else keeps it (retain by default,
+/// codex review of Refile r2 #1).
+extension VideoScanModel.RenameError: ArchiveIndexRename.BackupDisposition {
+    var backupIsSafeToDiscard: Bool {
+        if case .filesystem = self { return true }
+        return false
+    }
+}

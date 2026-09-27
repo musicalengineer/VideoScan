@@ -610,6 +610,25 @@ struct ArchiveVolumeProtectionSourceSensor {
             "publishes CyberBrain's own knowledge file from its temp; app data"),
     ]
 
+    /// No-clobber renames (`renamex_np` / `renameatx_np` WITH RENAME_EXCL)
+    /// — never replace anything, so the clobbering scan above skips them;
+    /// but they MOVE files, and a move inside the Master Archive tree is an
+    /// archive write. Inventoried since Refile (2026-09-27) so a new mover
+    /// cannot appear unreviewed. Refile's two are the ONE audited exception
+    /// (ArchiveRefileAuthorization) — see ArchiveUpdateSensorTests.
+    static let reviewedNoClobberRenames: [String: Reviewed] = [
+        "VideoScan/ArchivePromoteEngine.swift": Reviewed(count: 1, reason:
+            "Promote's publish: its own verified `.partial` → the final archive name, dirfd-relative; ADDS a file, never replaces"),
+        "VideoScan/ArchiveRefile.swift": Reviewed(count: 2, reason:
+            "Update… / Refile engine (Rick 2026-09-27): the ONE in-archive move — same volume, dirfd-relative, only while holding an ArchiveRefileAuthorization that covers exactly this move — and its rename BACK on any failure"),
+        "VideoScan/PartialFileNaming.swift": Reviewed(count: 1, reason:
+            "ExclusivePublish: a job's own `.vs-partial` → its final output name (Combine / Transcode / Reformat), outside the archive"),
+        "VideoScan/POIStorage.swift": Reviewed(count: 2, reason:
+            "POI folder moves under App Support (never media)"),
+        "VideoScan/RescueFileCopier.swift": Reviewed(count: 1, reason:
+            "a verified rescue partial → a FRESH destination name (the known-incomplete repair case is the clobbering one above)"),
+    ]
+
     /// `"-y"` — ffmpeg's "overwrite the output without asking".
     static let reviewedFFmpegOverwrites: [String: Reviewed] = [
         "VideoScan/AllFramesRipper.swift": Reviewed(count: 1, reason: "frames into its own fresh temp folder"),
@@ -719,6 +738,12 @@ struct ArchiveVolumeProtectionSourceSensor {
         Self.expectExact(found, Self.reviewedClobberingRenames.mapValues(\.count), what: "clobbering rename")
     }
 
+    @Test func noUnreviewedNoClobberRename() throws {
+        let found = try Self.scan(#"\b(renamex_np|renameatx_np)\("#, stripStrings: true,
+                                  lineFilter: { $0.contains("RENAME_EXCL") })
+        Self.expectExact(found, Self.reviewedNoClobberRenames.mapValues(\.count), what: "no-clobber rename")
+    }
+
     @Test func noUnreviewedFFmpegOverwriteFlag() throws {
         let found = try Self.scan(#""-y""#, stripStrings: false)
         #expect(found.count >= 10, "the scan sees the known ffmpeg -y sites — \(found.count)")
@@ -727,7 +752,8 @@ struct ArchiveVolumeProtectionSourceSensor {
 
     @Test func everyReviewedEntryHasAReason() {
         let all = [Self.reviewedTrashMoves, Self.reviewedRecycles,
-                   Self.reviewedClobberingRenames, Self.reviewedFFmpegOverwrites]
+                   Self.reviewedClobberingRenames, Self.reviewedFFmpegOverwrites,
+                   Self.reviewedNoClobberRenames]
         for table in all {
             for (file, entry) in table {
                 #expect(entry.count >= 1 && entry.reason.count >= 10, "\(file): a reviewed entry needs a count and a reason")

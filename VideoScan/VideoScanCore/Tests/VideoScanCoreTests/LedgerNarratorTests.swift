@@ -53,6 +53,35 @@ final class LedgerNarratorTests: XCTestCase {
         }
     }
 
+    func testArchiveUpdateSentences() {
+        let d = e(.archiveUpdated, by: .rick, detail: ["from": "30_Video/1880-1889/1884/1884-xx-xx_Dad.mov",
+                                                       "to": "30_Video/1980-1989/1984/1984-xx-xx_Dad.mov",
+                                                       "reason": "Date: 1884 → 1984 (known)"])
+        XCTAssertTrue(one(d).hasPrefix("You updated it in the archive on"), one(d))
+        XCTAssertTrue(one(d).hasSuffix("— Date: 1884 → 1984 (known): 30_Video/1880-1889/1884/1884-xx-xx_Dad.mov → 30_Video/1980-1989/1984/1984-xx-xx_Dad.mov."), one(d))
+        let r = e(.archiveUpdateRolledBack, by: .rick, detail: ["from": "30_Video/1880-1889/1884/a.mov", "reason": "index could not be written",
+                                                                "outcome": "rolledBack"])
+        XCTAssertTrue(one(r).contains("was undone — the file stayed at 30_Video/1880-1889/1884/a.mov (index could not be written)."), one(r))
+    }
+
+    func testFailedUpdateNarrationMatchesTheOutcome() {
+        let mixed = one(e(.archiveUpdateRolledBack, detail: ["from": "30_Video/1880-1889/1884/a.mov",
+                                                             "to": "30_Video/1980-1989/1984/a.mov",
+                                                             "outcome": "mixedState",
+                                                             "location": "30_Video/1980-1989/1984/a.mov",
+                                                             "reason": "the move back was blocked"]))
+        XCTAssertFalse(mixed.contains("was undone"), mixed)
+        XCTAssertFalse(mixed.contains("stayed"), mixed)
+        XCTAssertTrue(mixed.contains("could not be fully undone") && mixed.contains("the file is at 30_Video/1980-1989/1984/a.mov"), mixed)
+        let lost = one(e(.archiveUpdateRolledBack, detail: ["from": "a", "to": "b", "outcome": "mixedState", "location": ""]))
+        XCTAssertTrue(lost.contains("could not be confirmed"), lost)
+        let incomplete = one(e(.archiveUpdateRolledBack, detail: ["from": "30_Video/1880-1889/1884/a.mov", "outcome": "incompleteRecovery"]))
+        XCTAssertFalse(incomplete.contains("was undone"), incomplete)
+        XCTAssertTrue(incomplete.contains("put back at 30_Video/1880-1889/1884/a.mov") && incomplete.contains("did not confirm"), incomplete)
+        let undone = one(e(.archiveUpdateRolledBack, detail: ["from": "x/a.mov", "outcome": "rolledBack"]))
+        XCTAssertTrue(undone.contains("was undone — the file stayed at x/a.mov"), undone)
+    }
+
     func testActorPhrasing() {
         XCTAssertTrue(one(e(.setAside, by: .tidy, detail: ["reason": "still-image"])).hasPrefix("Tidy set it aside on"))
         XCTAssertTrue(one(e(.setAside, by: .tidy, detail: ["reason": "still-image"])).hasSuffix("— a photo, not a video."))

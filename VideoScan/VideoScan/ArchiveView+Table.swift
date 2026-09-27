@@ -317,6 +317,20 @@ extension ArchiveView {
         }
         .disabled(count != 1)
 
+        // Update… (Rick 2026-09-27): change an ARCHIVED file's name and/or
+        // date; the folder follows the date. One file at a time; nothing is
+        // touched until the sheet's Update button.
+        if count == 1, let rec = recs.first, model.archiveCopyForUpdate(rec) != nil {
+            Button {
+                openUpdateSheet(for: rec)
+            } label: {
+                Label("Update…", systemImage: "square.and.pencil")
+            }
+            .disabled(model.isReadOnly || model.masterArchive == nil)
+            .help("Change this archived file's name or date. The archive moves it to the folder its date says — you never pick a folder.")
+            .accessibilityIdentifier("archive.row.update")
+        }
+
         // File Journey (Rick 2026-08-19): in the archive the journey IS
         // the provenance — origin, repairs, promote, rename — so the
         // timeline belongs on this menu too.
