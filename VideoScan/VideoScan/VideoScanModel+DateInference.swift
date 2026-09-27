@@ -478,7 +478,7 @@ extension VideoScanModel {
     /// GH #201: clear every inferred field; `reason` (if any) stays so the
     /// inspector can say why there is no date.
     @MainActor
-    private static func clearInferredDate(_ rec: VideoRecord, reason: String?) {
+    static func clearInferredDate(_ rec: VideoRecord, reason: String?) {
         rec.inferredRecordDate = nil
         rec.inferredDateConfidence = nil
         rec.inferredDateRange = nil
@@ -916,6 +916,10 @@ extension VideoScanModel {
         var inferredRecordDate: Date
         var inferredDateConfidence: Float?
         var inferredDateSource: String
+        /// GH #201 (QA minor): the span and reason ride the undo too.
+        /// Optional — sidecars written before decode them as nil.
+        var inferredDateRange: InferredDateRange? = nil
+        var inferredDateReason: String? = nil
     }
 
     /// One retained row whose provenance was re-pointed from a cleared
@@ -1013,7 +1017,9 @@ extension VideoScanModel {
             entries.append(UnwoundDateEntry(recordID: rec.id, fullPath: rec.fullPath,
                                             inferredRecordDate: date,
                                             inferredDateConfidence: rec.inferredDateConfidence,
-                                            inferredDateSource: source))
+                                            inferredDateSource: source,
+                                            inferredDateRange: rec.inferredDateRange,
+                                            inferredDateReason: rec.inferredDateReason))
         }
         guard !victims.isEmpty else { return result }
 
@@ -1059,9 +1065,9 @@ extension VideoScanModel {
         result.sidecar = url
 
         for rec in victims {
-            rec.inferredRecordDate = nil
-            rec.inferredDateConfidence = nil
-            rec.inferredDateSource = nil
+            // All five inferred fields, so no "same bytes as …" reason or
+            // span outlives the date it explained (GH #201 QA minor).
+            Self.clearInferredDate(rec, reason: nil)
         }
         for (rec, entry) in reanchors {
             rec.inferredDateSource = entry.newSource
@@ -1174,6 +1180,8 @@ extension VideoScanModel {
             rec.inferredRecordDate = e.inferredRecordDate
             rec.inferredDateConfidence = e.inferredDateConfidence
             rec.inferredDateSource = e.inferredDateSource
+            rec.inferredDateRange = e.inferredDateRange
+            rec.inferredDateReason = e.inferredDateReason
             restored.append(rec)
         }
         for e in reanchored {

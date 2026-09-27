@@ -817,4 +817,29 @@ struct DateTriangulatorQAReviewTests {
         #expect(r.date == nil, "\(r.reason)")
         #expect(r.reason.contains("1985 mentioned as a reference"), "\(r.reason)")
     }
+
+    /// Minor: the #1413 unwind clears the span and reason too, and its
+    /// sidecar carries them back on reapply.
+    @Test func unwindClearsRangeAndReason() throws {
+        let m = model("unwind")
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DateQAReview-sidecar-\(UUID().uuidString)", isDirectory: true)
+        let orphan = rec("/Volumes/Y/a.mov")
+        orphan.partialMD5 = "y"; orphan.sizeBytes = 2
+        orphan.inferredRecordDate = pfJanuaryFirst(of: 2004)
+        orphan.inferredDateConfidence = 0.7
+        orphan.inferredDateRange = InferredDateRange(year: 2004)
+        orphan.inferredDateReason = "same bytes as gone.mov: spoken now-cue 'this is… 2004'"
+        orphan.inferredDateSource = "propagated from \(UUID().uuidString)"
+        m.records = [orphan]
+        let r = m.unwindUnverifiedPropagatedDates(sidecarDirectory: dir, trigger: "test")
+        #expect(r.unwound == 1)
+        #expect(orphan.inferredDateRange == nil)
+        #expect(orphan.inferredDateReason?.hasPrefix("same bytes") != true, "\(orphan.inferredDateReason ?? "nil")")
+        let sidecar = try #require(r.sidecar)
+        let restored = try VideoScanModel.reapplyUnwoundDates(from: sidecar, to: [orphan])
+        #expect(restored.count == 1)
+        #expect(orphan.inferredDateRange == InferredDateRange(year: 2004))
+        #expect(orphan.inferredDateReason?.hasPrefix("same bytes as gone.mov") == true)
+    }
 }
