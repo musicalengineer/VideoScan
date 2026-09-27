@@ -194,7 +194,7 @@ def parse_output(stdout: str, stderr: str) -> dict:
     if not verdicts:
         return {"failure": "malformed output: no 'Verdict:' line"}
     verdict_text = verdicts[-1].strip("* ")
-    word = re.match(r"[A-Za-z]+", verdict_text)
+    word = re.match(r"[A-Za-z]+(?:-[A-Za-z]+)*", verdict_text)
     credits = CREDITS_RE.findall(stdout)
     tokens = TOKENS_RE.findall(stderr)
     return {
