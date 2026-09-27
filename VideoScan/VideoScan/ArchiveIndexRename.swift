@@ -387,8 +387,14 @@ enum ArchiveIndexRename {
             do {
                 try publisher(f.original, f.url)
             } catch {
-                if (try? Data(contentsOf: f.url)) == f.original { continue }
-                problems.append("\(f.url.path) still holds the NEW names — restore it from \(backupDir.appendingPathComponent(f.name).path) (\(ArchiveAttestationJournal.describe(error)))")
+                // A restore that THREW is never a confirmed restore, even when
+                // the bytes read back right — the flush may not have landed
+                // (Archive Update review r2 #1). The backup is kept.
+                if (try? Data(contentsOf: f.url)) == f.original {
+                    problems.append("\(f.url.path) holds its original bytes again, but the restore is NOT confirmed durable — the backup \(backupDir.appendingPathComponent(f.name).path) is kept (\(ArchiveAttestationJournal.describe(error)))")
+                } else {
+                    problems.append("\(f.url.path) still holds the NEW names — restore it from \(backupDir.appendingPathComponent(f.name).path) (\(ArchiveAttestationJournal.describe(error)))")
+                }
             }
         }
         do {

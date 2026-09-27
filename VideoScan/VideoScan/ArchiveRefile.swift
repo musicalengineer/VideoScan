@@ -597,10 +597,13 @@ enum ArchiveRefileEngine {
                 // Only the move back's flush failed? Prove the rest by bytes
                 // and identity: every index file holds its original bytes and
                 // the original is back at `from`.
-                if let nd = recoveryNotDurable,
-                   prep.plan.files.allSatisfy({ (try? Data(contentsOf: $0.url)) == $0.original }),
+                // Everything is back in place by bytes and identity, and only
+                // DURABILITY is unconfirmed (the media's move back, or an
+                // index restore that threw) → incompleteRecovery, not mixed.
+                if prep.plan.files.allSatisfy({ (try? Data(contentsOf: $0.url)) == $0.original }),
                    locateOriginal(root: root, candidates: [from], identity: prep.sourceIdentity) == from {
-                    return incomplete("\(text) — the file was moved back to \(from) and the index restored, but \(nd)")
+                    let nd = recoveryNotDurable ?? "an index restore was not confirmed durable"
+                    return incomplete("\(text) — the file is at \(from) and the index holds its old bytes, but \(nd)")
                 }
                 return mixed(text)
             }

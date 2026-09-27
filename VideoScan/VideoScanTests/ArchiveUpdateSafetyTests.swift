@@ -40,6 +40,31 @@ struct ArchiveUpdateSafetyTests {
         #expect(FileManager.default.fileExists(atPath: a.absPath))
     }
 
+    @Test("r2 #1: a RESTORE that writes the original bytes but throws on flush is not a confirmed rollback → incompleteRecovery, backup kept")
+    func restoreDurabilityFailureIsNotRollback() async throws {
+        let a = try UpdateFixture.make("restoreflush")
+        defer { a.sb.cleanup() }
+        let p = try await UpdateFixture.preview(a)
+        let (dir, before) = backups(a)
+        final class Counter: @unchecked Sendable { var n = 0; let lock = NSLock() }
+        let c = Counter()
+        var seams = ArchiveRefileEngine.Seams.live
+        seams.indexPublisher = { data, url in
+            let n: Int = c.lock.withLock { c.n += 1; return c.n }
+            switch n {
+            case 1: try ArchiveIndexRename.livePublish(data, to: url)            // manifest published
+            case 2: throw CocoaError(.fileWriteUnknown)                          // journal publish fails
+            default:                                                             // the manifest RESTORE:
+                try ArchiveIndexRename.livePublish(data, to: url)                //   right bytes land…
+                throw CocoaError(.fileWriteUnknown)                              //   …flush not confirmed
+            }
+        }
+        let r = await a.model.updateArchivedFile(p, name: p.currentName, hint: try UpdateFixture.hint(1984), known: true, seams: seams)
+        #expect(r.kind == .incompleteRecovery, "\(r.kind): \(r.message)")
+        #expect(FileManager.default.fileExists(atPath: a.absPath))
+        #expect(Set((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).subtracting(before).count == 1, "backup kept")
+    }
+
     enum Failure: String, CaseIterable, Sendable { case verify, index }
 
     @Test("the move back's folder flush fails → incompleteRecovery, backup kept, file at the original path",
