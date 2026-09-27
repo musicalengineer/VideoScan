@@ -467,6 +467,7 @@ extension VideoScanModel {
         let label = copy.filename
         let newPath = (root as NSString).appendingPathComponent(done.toRelPath)
         let oldPath = copy.fullPath
+        let priorCopy = ArchiveRefilePendingEntry.CopyFingerprint(copy)
         moveRecord(copy, to: newPath)
         if let fx = copy.archiveFixity, fx.digest == done.sha256 {
             copy.archiveFixity = ArchiveFixity(algorithm: fx.algorithm, digest: fx.digest,
@@ -484,9 +485,10 @@ extension VideoScanModel {
         func setDate(_ rec: VideoRecord, _ ud: String, _ conf: String) {
             guard rec.userDate != ud || rec.userDateConfidence != conf else { return }
             refileNote("Refile: \(label) — date on \(rec === copy ? "the archive copy" : "the original") \(rec.filename): \(rec.userDate ?? "none") (\(rec.userDateConfidence ?? "-")) → \(ud) (\(conf)); revert in the Inspector's date field")
+            dateUpdates.append(.init(recordID: rec.id, userDate: ud, confidence: conf,
+                                     expectedUserDate: rec.userDate, expectedConfidence: rec.userDateConfidence))
             rec.userDate = ud
             rec.userDateConfidence = conf
-            dateUpdates.append(.init(recordID: rec.id, userDate: ud, confidence: conf))
         }
         switch provenance {
         case .userDate(let onCopy, let known, let canonical):
@@ -537,22 +539,18 @@ extension VideoScanModel {
 
         // The durable retry, BEFORE the two steps it covers.
         // A chain: older entries of this record whose catalog step is still
-        // owed hand over their FROM paths and their date updates (newer
-        // updates win per record), so a relaunch with NONE of the saves on
-        // disk still recognizes the record and lands the latest state.
+        // owed (and not in conflict) hand over their prior copy states and
+        // their date updates, in order, so a relaunch with NONE of the saves
+        // on disk still recognizes the record — while every write stays
+        // conditional on the value it expects (r5: a newer edit wins).
         let existing = loadPendingRefiles()
-        let owed = existing.filter { $0.copyID == copy.id && !$0.catalogDone }.sorted { $0.sequence < $1.sequence }
-        var chain: [String] = []
-        var mergedDates: [UUID: ArchiveRefilePendingEntry.DateUpdate] = [:]
-        for o in owed {
-            for p in o.chainFromPaths + [o.fromFullPath] where !chain.contains(p) { chain.append(p) }
-            for u in o.dateUpdates { mergedDates[u.recordID] = u }
-        }
-        for u in dateUpdates { mergedDates[u.recordID] = u }
-        let chainDates = mergedDates.values.sorted { $0.recordID.uuidString < $1.recordID.uuidString }
+        let owed = existing.filter { $0.copyID == copy.id && !$0.catalogDone && $0.conflict == nil }
+            .sorted { $0.sequence < $1.sequence }
+        let chainStates = owed.flatMap(\.priorCopyStates) + [priorCopy]
+        let chainDates = owed.flatMap(\.dateUpdates) + dateUpdates
         var entry = ArchiveRefilePendingEntry(id: entryID, at: now,
                                               sequence: (existing.map(\.sequence).max() ?? 0) + 1,
-                                              copyID: copy.id, fromFullPath: oldPath, chainFromPaths: chain,
+                                              copyID: copy.id, fromFullPath: oldPath, priorCopyStates: chainStates,
                                               newFullPath: newPath,
                                               fromRelPath: done.fromRelPath, toRelPath: done.toRelPath,
                                               device: done.device, inode: done.inode, size: done.size,
@@ -563,7 +561,7 @@ extension VideoScanModel {
             // This refile SUPERSEDES any older entry for the same record:
             // their catalog step is dropped (the record is here now); an
             // older ledger step still owed is kept — that history happened.
-            for i in list.indices where list[i].copyID == entry.copyID && !list[i].catalogDone {
+            for i in list.indices where list[i].copyID == entry.copyID && !list[i].catalogDone && list[i].conflict == nil {
                 list[i].catalogDone = true
                 appLog.write("[refile] pending entry \(list[i].fromRelPath) → \(list[i].toRelPath) superseded by a newer refile of the same file; its catalog step is dropped")
             }
@@ -696,32 +694,11 @@ extension VideoScanModel {
         refileNote("Refile: finishing \(pending.count) refile(s) whose catalog save or ledger line did not land (\(pendingRefilesURL.path))")
         var completed = 0
         for var entry in pending {
-            if !entry.catalogDone {
+            if !entry.catalogDone, entry.conflict != nil {
+                refileNote("Refile recovery conflict (still open): \(entry.fromRelPath) → \(entry.toRelPath) — \(entry.conflict ?? ""). Not applied; resolve by hand (the record keeps what you set).")
+            } else if !entry.catalogDone {
                 if let rec = record(forID: entry.copyID) {
-                    // Apply ONLY while the record still points where this
-                    // refile started (or already at its end) AND the file at
-                    // the end is THIS file by identity. Anything else is
-                    // stale: logged and dropped, never applied (r3 #2).
-                    let pointsHere = rec.fullPath == entry.fromFullPath || rec.fullPath == entry.newFullPath
-                        || entry.chainFromPaths.contains(rec.fullPath)
-                    let ident = Self.lstatIdentity(entry.newFullPath)
-                    let isThisFile = ident.map { $0.device == entry.device && $0.inode == entry.inode && $0.size == entry.size } ?? false
-                    if pointsHere && isThisFile {
-                        if rec.fullPath != entry.newFullPath { moveRecord(rec, to: entry.newFullPath) }
-                        for u in entry.dateUpdates {
-                            guard let r = record(forID: u.recordID) else { continue }
-                            r.userDate = u.userDate
-                            r.userDateConfidence = u.confidence
-                        }
-                        objectWillChange.send()
-                        entry.catalogDone = persistence.saveCatalog(self)
-                    } else if pointsHere && ident == nil {
-                        refileNote("Refile: pending entry for \(entry.toRelPath) — the file is not reachable at \(entry.newFullPath) now; kept for the next launch")
-                        continue
-                    } else {
-                        refileNote("Refile: pending entry \(entry.fromRelPath) → \(entry.toRelPath) is STALE (record now at \(rec.fullPath); file at the target \(isThisFile ? "is" : "is NOT") the refiled file) — dropped, not applied")
-                        entry.catalogDone = true
-                    }
+                    await replayCatalogStep(&entry, rec: rec, persistence: persistence)
                 } else {
                     refileNote("Refile: pending entry for \(entry.toRelPath) — its archive copy is no longer in the catalog; catalog step dropped")
                     entry.catalogDone = true
@@ -738,7 +715,7 @@ extension VideoScanModel {
                 entry.ledgerDone = missing.isEmpty ? true : await persistence.appendLedger(self, missing)
             }
             let finished = entry
-            if finished.catalogDone && finished.ledgerDone {
+            if finished.catalogDone && finished.ledgerDone && finished.conflict == nil {
                 completed += 1
                 _ = updatePendingRefiles { $0.removeAll { $0.id == finished.id } }
                 refileNote("Refile: pending entry for \(finished.fromRelPath) → \(finished.toRelPath) completed (catalog + ledger)")
@@ -751,6 +728,46 @@ extension VideoScanModel {
         }
         if completed > 0 { refreshArchiveMisfiled(reason: "pending refiles replayed", force: true) }
         return completed
+    }
+
+    /// One entry's catalog step (r5). The record is written ONLY while it
+    /// still says what it said before a refile of this chain (path + the
+    /// fields naming its file) or already says the result — anything else
+    /// is a newer edit: CONFLICT, logged, entry kept, nothing applied. The
+    /// file at the target must be the refiled file by identity. Each date
+    /// update applies only while its field holds its expected value.
+    private func replayCatalogStep(_ entry: inout ArchiveRefilePendingEntry, rec: VideoRecord,
+                                   persistence: ArchiveRefilePersistence) async {
+        let now = ArchiveRefilePendingEntry.CopyFingerprint(rec)
+        let atTarget = rec.fullPath == entry.newFullPath
+        let ident = Self.lstatIdentity(entry.newFullPath)
+        let isThisFile = ident.map { $0.device == entry.device && $0.inode == entry.inode && $0.size == entry.size } ?? false
+        if ident == nil, !atTarget, entry.priorCopyStates.contains(now) {
+            refileNote("Refile: pending entry for \(entry.toRelPath) — the file is not reachable at \(entry.newFullPath) now; kept for the next launch")
+            return
+        }
+        guard (atTarget || entry.priorCopyStates.contains(now)), isThisFile else {
+            let expected = entry.priorCopyStates.map { "\($0.fullPath) (\($0.sizeBytes) bytes)" }.joined(separator: " or ")
+            let why = !isThisFile
+                ? "the file at \(entry.toRelPath) is not the refiled file"
+                : "the record now says \(rec.fullPath) (\(rec.sizeBytes) bytes, md5 \(rec.partialMD5.prefix(8))); expected \(expected)"
+            entry.conflict = why
+            refileNote("Refile recovery conflict: record \(rec.id.uuidString.prefix(8)) (\(rec.filename)), pending refile \(entry.id.uuidString.prefix(8)) \(entry.fromRelPath) → \(entry.toRelPath): \(why). NOT applied — a newer edit wins; the entry is kept, marked conflict.")
+            return
+        }
+        if !atTarget { moveRecord(rec, to: entry.newFullPath) }
+        for u in entry.dateUpdates {
+            guard let r = record(forID: u.recordID) else { continue }
+            if r.userDate == u.userDate && r.userDateConfidence == u.confidence { continue }
+            guard r.userDate == u.expectedUserDate && r.userDateConfidence == u.expectedConfidence else {
+                refileNote("Refile: replay left the date on \(r.filename) alone — it says \(r.userDate ?? "none") (\(r.userDateConfidence ?? "-")), not the \(u.expectedUserDate ?? "none") this refile replaced; a newer edit wins")
+                continue
+            }
+            r.userDate = u.userDate
+            r.userDateConfidence = u.confidence
+        }
+        objectWillChange.send()
+        entry.catalogDone = persistence.saveCatalog(self)
     }
 
     /// Point a record at the file's new place (after the file moved).
@@ -794,6 +811,23 @@ struct ArchiveRefilePendingEntry: Codable, Equatable, Sendable {
         let recordID: UUID
         let userDate: String
         let confidence: String
+        /// The field's value BEFORE this update. Replay writes the update
+        /// only while the record still holds exactly this (r5): a newer
+        /// hand edit always wins over a replayed one.
+        let expectedUserDate: String?
+        let expectedConfidence: String?
+    }
+    /// What the archive copy's record said before a refile of the chain
+    /// (its path and the fields that name its file). Replay repoints the
+    /// record only while it still says one of these (r5).
+    struct CopyFingerprint: Codable, Equatable, Sendable {
+        let fullPath: String
+        let sizeBytes: Int64
+        let partialMD5: String
+        let contentHash: String
+        @MainActor init(_ r: VideoRecord) {
+            fullPath = r.fullPath; sizeBytes = r.sizeBytes; partialMD5 = r.partialMD5; contentHash = r.contentHash
+        }
     }
     let id: UUID
     let at: Date
@@ -804,10 +838,11 @@ struct ArchiveRefilePendingEntry: Codable, Equatable, Sendable {
     /// Where the record pointed BEFORE this refile — replay applies only
     /// while it still points there (or already at `newFullPath`).
     let fromFullPath: String
-    /// Earlier FROM paths of the same record's chain of refiles whose
-    /// catalog saves also did not land (r4 #1): after a relaunch the
-    /// record may still point at the FIRST of them. Replay accepts any.
-    let chainFromPaths: [String]
+    /// The copy record's state before EACH refile of this chain whose
+    /// catalog save did not land, oldest first (r4 #1 + r5): after a
+    /// relaunch the persisted record says one of these — or it was edited
+    /// since, and replay must not touch it.
+    let priorCopyStates: [CopyFingerprint]
     let newFullPath: String
     let fromRelPath: String
     let toRelPath: String
@@ -817,10 +852,15 @@ struct ArchiveRefilePendingEntry: Codable, Equatable, Sendable {
     let inode: UInt64
     let size: Int64
     let sha256: String
+    /// Every date update of the chain, oldest first; applied in order, each
+    /// only while its field still holds its expected value.
     let dateUpdates: [DateUpdate]
     let ledgerEvents: [MediaLedgerEvent]
     var catalogDone: Bool
     var ledgerDone: Bool
+    /// Set when replay found a NEWER edit of a record this entry would
+    /// write: the entry is kept, never applied (r5). nil = no conflict.
+    var conflict: String? = nil
 }
 
 /// Why Refile is not offered for a row.

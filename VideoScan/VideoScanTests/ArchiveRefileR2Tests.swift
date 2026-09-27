@@ -270,6 +270,90 @@ struct ArchiveRefileR2StepEPersistenceTests {
         #expect(a.model.loadPendingRefiles().isEmpty)
     }
 
+    // MARK: r5 — replay never overrides a newer edit
+
+    /// What the catalog on disk says (the relaunch state), captured where a
+    /// save lands (the test models persistence explicitly: debounced saves
+    /// off, refile saves failing).
+    struct Persisted {
+        let path: String, size: Int64, md5: String, hash: String
+        let copyDate: String?, copyConf: String?, srcDate: String?, srcConf: String?
+        @MainActor init(_ a: RefileFixture.Archived) {
+            path = a.copy.fullPath; size = a.copy.sizeBytes; md5 = a.copy.partialMD5; hash = a.copy.contentHash
+            copyDate = a.copy.userDate; copyConf = a.copy.userDateConfidence
+            srcDate = a.source.userDate; srcConf = a.source.userDateConfidence
+        }
+        @MainActor func restore(into a: RefileFixture.Archived) {
+            a.copy.fullPath = path; a.copy.filename = (path as NSString).lastPathComponent
+            a.copy.directory = (path as NSString).deletingLastPathComponent
+            a.copy.sizeBytes = size; a.copy.partialMD5 = md5; a.copy.contentHash = hash
+            a.copy.userDate = copyDate; a.copy.userDateConfidence = copyConf
+            a.source.userDate = srcDate; a.source.userDateConfidence = srcConf
+        }
+    }
+
+    private var failSave: ArchiveRefilePersistence {
+        var p = ArchiveRefilePersistence.live
+        p.saveCatalog = { _ in false }
+        p.scheduleRetrySave = { _ in }
+        return p
+    }
+
+    @Test("r5 (codex r4 #1): A→B dates 1984 (save fails) → Rick sets the original to 1985 (saved) → B→C with 1985 (save fails) → replay: both 1985, at C")
+    func inheritedDateNeverUndoesNewerEdit() async throws {
+        let a = try await RefileFixture.make("r5dates", redate: nil)       // both records 1964
+        defer { a.sb.cleanup() }
+        let p1 = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        let h1984 = try #require(ArchiveRefile.hint(year: 1984, month: nil, day: nil))
+        let r1 = await a.model.refileArchiveCopy(p1, hint: h1984, name: p1.initialName, persistence: failSave)
+        #expect(r1.kind == .completedWithWarnings, "\(r1.message)")
+        #expect(a.source.userDate == "1984" && a.copy.userDate == "1984")
+
+        a.source.userDate = "1985"; a.source.userDateConfidence = "known"   // Rick's Inspector edit…
+        let persisted = Persisted(a)                                          // …which a save put on disk
+
+        let p2 = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        #expect(p2.initialHint == .year(1985))
+        let r2 = await a.model.refileArchiveCopy(p2, hint: p2.initialHint, name: p2.initialName, persistence: failSave)
+        #expect(r2.kind == .completedWithWarnings, "\(r2.message)")
+        let c = a.sb.archiveRoot.appendingPathComponent(p2.target(hint: p2.initialHint, name: p2.initialName)).path
+
+        persisted.restore(into: a)                                            // relaunch
+        _ = await a.model.replayPendingRefiles()
+        #expect(a.copy.fullPath == c)
+        #expect(a.copy.userDate == "1985", "copy \(a.copy.userDate ?? "nil")")
+        #expect(a.source.userDate == "1985", "an inherited 1984 must never overwrite Rick's 1985 (got \(a.source.userDate ?? "nil"))")
+    }
+
+    @Test("r5 (codex r4 #2): A→B→C both saves fail → Rick repoints the record and saves; a different file is at A → replay keeps Rick's assignment, logs a conflict, keeps the entry")
+    func userRepointWinsOverReplay() async throws {
+        let a = try await RefileFixture.make("r5repoint")
+        defer { a.sb.cleanup() }
+        let original = Persisted(a)
+        let p1 = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        _ = await a.model.refileArchiveCopy(p1, hint: p1.initialHint, name: p1.initialName, persistence: failSave)
+        let p2 = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        let h1985 = try #require(ArchiveRefile.hint(year: 1985, month: nil, day: nil))
+        _ = await a.model.refileArchiveCopy(p2, hint: h1985, name: p2.initialName, persistence: failSave)
+
+        // Relaunch on the old catalog; then Rick repoints the record (elsewhere,
+        // then to a DIFFERENT file he put at A) and that IS saved.
+        original.restore(into: a)
+        let foreign = Data("Rick's other file".utf8)
+        try foreign.write(to: URL(fileURLWithPath: original.path))
+        a.copy.sizeBytes = Int64(foreign.count)
+        a.copy.partialMD5 = "test-foreign-md5"
+        a.copy.contentHash = ""
+
+        _ = await a.model.replayPendingRefiles()
+        #expect(a.copy.fullPath == original.path, "Rick's assignment is kept, not redirected")
+        #expect(a.copy.sizeBytes == Int64(foreign.count))
+        let pending = a.model.loadPendingRefiles()
+        #expect(pending.count == 1 && pending.first?.conflict != nil, "the entry is kept, marked conflict")
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(a.model.dashboard.consoleLines.contains { $0.contains("Refile recovery conflict") })
+    }
+
     @Test("r3 #3: a ledger write that lands only its FIRST line, then throws → replay yields every intended event exactly once")
     func partialLedgerAppend() async throws {
         let a = try await RefileFixture.make("r3partial")
