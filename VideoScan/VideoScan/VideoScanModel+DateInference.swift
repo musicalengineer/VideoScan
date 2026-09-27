@@ -598,13 +598,24 @@ extension VideoScanModel {
                                  confidence: min(DateTriangulationWeights.cap, r.confidence), what: what)
     }
 
+    /// The tail a share appends when the recipient's own evidence disagreed.
+    static let ownEvidenceMarker = "; own evidence said "
+
     @MainActor
     static func applyFootageShare(to rec: VideoRecord, from donor: VideoRecord,
                                   resolution r: RecordDateResolution, ownYear: Int?) -> Bool {
         guard let year = r.year, let v = footageShareValue(from: donor, resolution: r) else { return false }
         let source = InferredDateSource.footageShared(from: donor)
         var reason = "shared from \(donor.filename) (same footage): \(v.what)"
-        if let ownYear, ownYear != year { reason += "; own evidence said \(ownYear)" }
+        if let ownYear, ownYear != year {
+            reason += "; own evidence said \(ownYear)"
+        } else if ownYear == nil, rec.inferredDateSource == source,
+                  let old = rec.inferredDateReason, let r = old.range(of: Self.ownEvidenceMarker) {
+            // Codex F3: once shared, the row's own inference is gone, so a
+            // later pass cannot recompute the disagreement — keep what the
+            // first share recorded (and so write nothing).
+            reason += old[r.lowerBound...]
+        }
         if rec.inferredRecordDate == v.date, rec.inferredDateConfidence == v.confidence,
            rec.inferredDateRange == v.range, rec.inferredDateSource == source, rec.inferredDateReason == reason {
             return false
