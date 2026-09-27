@@ -93,6 +93,7 @@ struct HallieSupersededOffersTests {
         var state = Commit.State()
         var messages: [ArchivistMessage] = []
         var retired: [String] = []
+        var retiredSubjects: [HallieSupersededOffers.Subject] = []
         var focused: [(String, String)] = []
         var events: [String] = []
 
@@ -111,7 +112,8 @@ struct HallieSupersededOffersTests {
                 acceptImmediateOffer: { _ in },
                 retireSupersededOffers: { subject in
                     self.events.append("retire")
-                    self.retired.append(subject)
+                    self.retired.append(subject.name)
+                    self.retiredSubjects.append(subject)
                     self.messages = HallieSupersededOffers.retire(in: self.messages, keeping: subject)
                 })
         }
@@ -208,5 +210,130 @@ struct HallieSupersededOffersTests {
         #expect(capture.focused.map(\.1) == [Self.richardSr])
         #expect(capture.messages[0].chips.isEmpty, "the Dafydd chip was retired first")
         #expect(capture.messages[1].chips.map(\.label) == ["Open in Family Tree: \(Self.richardSr)"])
+    }
+
+    // MARK: - GH #202: namesakes are different people (retire by id)
+    //
+    // Night hardening 2026-09-27 D1: the conversation moves from Mary
+    // O'Connor (b. 1650) to Mary O'Connor (b. 1904). Same name, so the
+    // name comparison retired nothing and the 1650 chip stayed live — a tap
+    // opened the record the conversation had just moved away from. Same
+    // class as the Dafydd miss, one step subtler.
+
+    private static let mary = "Mary O'Connor"
+    private static let mary1650ID = "@I1650@"
+    private static let mary1904ID = "@I1904@"
+
+    private func maryAnswer(born year: Int, id: String?) -> Exec.Result {
+        result(prose: "\(Self.mary) was born in \(year).", person: Self.mary,
+               offers: id.map { [.openFamilyTreePerson(personID: $0, personName: Self.mary)] } ?? [])
+    }
+
+    @Test func aNamesakesChipIsRetiredWhenTheConversationSwitchesToTheOther() {
+        let capture = Capture()
+        capture.apply(response(maryAnswer(born: 1650, id: Self.mary1650ID)), question: "who was mary o'connor")
+        #expect(capture.messages.count == 1)
+        #expect(capture.messages[0].chips.count == 1)
+        capture.apply(response(maryAnswer(born: 1904, id: Self.mary1904ID)),
+                      question: "no, the mary o'connor born in 1904")
+        #expect(capture.messages.count == 2)
+        #expect(capture.messages[0].chips.isEmpty,
+                Comment(rawValue: "stale 1650 chip still live: " + capture.messages[0].chips.map(\.label).joined(separator: " | ")))
+        #expect(capture.messages[1].chips.map(\.action)
+                == [.openFamilyTreePerson(personID: Self.mary1904ID, personName: Self.mary)],
+                "the current answer's own chip is never touched")
+    }
+
+    /// The first Mary's id is remembered across an answer that names her
+    /// without a tree chip (a catalog answer), so the later switch to the
+    /// namesake still retires her chip.
+    @Test func theSubjectsIDSurvivesAnAnswerThatNamesHerWithoutOne() {
+        let capture = Capture()
+        capture.apply(response(maryAnswer(born: 1650, id: Self.mary1650ID)), question: "who was mary o'connor")
+        capture.apply(response(maryAnswer(born: 1650, id: nil)), question: "tell me more about her")
+        #expect(capture.messages[0].chips.count == 1, "same person, nothing retired")
+        capture.apply(response(maryAnswer(born: 1904, id: Self.mary1904ID)),
+                      question: "the one born in 1904")
+        #expect(capture.messages[0].chips.isEmpty,
+                Comment(rawValue: capture.messages[0].chips.map(\.label).joined(separator: " | ")))
+        #expect(capture.messages[2].chips.count == 1)
+    }
+
+    /// The sink is told WHO by id, not just by name.
+    @Test func theSinkReceivesTheSubjectsTreeID() {
+        let capture = Capture()
+        capture.apply(response(maryAnswer(born: 1650, id: Self.mary1650ID)), question: "who was mary o'connor")
+        capture.apply(response(maryAnswer(born: 1904, id: Self.mary1904ID)), question: "the 1904 one")
+        #expect(capture.retiredSubjects.last == .init(name: Self.mary, personID: Self.mary1904ID))
+        #expect(capture.state.memory.lastSubjectPersonID == Self.mary1904ID)
+    }
+
+    /// Name fallback, unchanged: the same name with no id on the new
+    /// answer cannot be told apart, so nothing is retired on a guess.
+    @Test func theSameNameWithoutAnIDRetiresNothing() {
+        let capture = Capture()
+        capture.apply(response(maryAnswer(born: 1650, id: Self.mary1650ID)), question: "who was mary o'connor")
+        let before = capture.retired.count
+        capture.apply(response(maryAnswer(born: 1904, id: nil)), question: "and the other one")
+        #expect(capture.retired.count == before)
+        #expect(capture.messages[0].chips.count == 1)
+    }
+
+    @Test func idsDecideWhenBothAreKnownNamesOtherwise() {
+        typealias Subject = HallieSupersededOffers.Subject
+        let open1650 = ArchivistMessage.Chip(
+            label: "Open in Family Tree: \(Self.mary)",
+            action: .openFamilyTreePerson(personID: Self.mary1650ID, personName: Self.mary))
+        let openByName = ArchivistMessage.Chip(
+            label: "Open in Family Tree: \(Self.mary)", action: .openFamilyTree(personName: Self.mary))
+        // Namesakes by id.
+        #expect(HallieSupersededOffers.isSuperseded(open1650, by: Subject(name: Self.mary, personID: Self.mary1904ID)))
+        #expect(!HallieSupersededOffers.isSuperseded(open1650, by: Subject(name: Self.mary, personID: Self.mary1650ID)))
+        // One record under another spelling is the same person.
+        #expect(!HallieSupersededOffers.isSuperseded(open1650, by: Subject(name: "Mary Connor", personID: Self.mary1650ID)))
+        // No id on either side: by name, as before.
+        #expect(!HallieSupersededOffers.isSuperseded(open1650, by: Subject(name: Self.mary)))
+        #expect(!HallieSupersededOffers.isSuperseded(openByName, by: Subject(name: Self.mary, personID: Self.mary1904ID)))
+        #expect(HallieSupersededOffers.isSuperseded(openByName, by: Subject(name: Self.richardSr, personID: Self.richardSrID)))
+        #expect(!HallieSupersededOffers.isSuperseded(Self.breens, by: Subject(name: Self.mary, personID: Self.mary1904ID)))
+    }
+
+    /// Memory takes the id from the answer's own chip for exactly that
+    /// name; two ids for one name (a which-one among namesakes) is no id.
+    @Test func memoryTakesOnlyAnUnambiguousID() {
+        let both = result(prose: "Which Mary O'Connor?", person: Self.mary,
+                          offers: [.openFamilyTreePerson(personID: Self.mary1650ID, personName: Self.mary),
+                                   .openFamilyTreePerson(personID: Self.mary1904ID, personName: Self.mary)])
+        #expect(Exec.ConversationMemory.personID(of: Self.mary, offeredBy: both) == nil)
+        let other = result(prose: "Richard …", person: Self.mary,
+                           offers: [.openFamilyTreePerson(personID: Self.richardSrID, personName: Self.richardSr)])
+        #expect(Exec.ConversationMemory.personID(of: Self.mary, offeredBy: other) == nil,
+                "another person's chip is not the subject's id")
+        #expect(Exec.ConversationMemory.personID(of: "mary o'connor", offeredBy: maryAnswer(born: 1904, id: Self.mary1904ID))
+                == Self.mary1904ID)
+
+        var memory = Exec.ConversationMemory()
+        memory.record(intent: nil, result: maryAnswer(born: 1650, id: Self.mary1650ID))
+        #expect(memory.lastSubjectPersonID == Self.mary1650ID)
+        memory.record(intent: nil, result: maryAnswer(born: 1650, id: nil))
+        #expect(memory.lastSubjectPersonID == Self.mary1650ID, "same name, no id: kept")
+        memory.record(intent: nil, result: result(prose: "Richard …", person: Self.richardSr))
+        #expect(memory.lastSubjectPersonID == nil, "another person with no id: the old id is dropped")
+        memory.reset()
+        #expect(memory.lastSubjectPersonID == nil)
+    }
+
+    /// SENSOR: the window hands the sink's Subject (id included) to the
+    /// pure retire, and the commit compares Subjects, not bare names.
+    @Test func theWindowAndCommitCompareSubjectsNotNames() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("VideoScan")
+        let commit = try String(contentsOf: dir.appendingPathComponent("HallieResponseCommit.swift"), encoding: .utf8)
+        #expect(commit.contains("var retireSupersededOffers: (HallieSupersededOffers.Subject) -> Void"))
+        #expect(commit.contains("subject.isDifferentPerson(from: previousSubject ?? .init(name: \"\"))"))
+        #expect(!commit.contains("PersonResolver.normalize(subject) != PersonResolver.normalize(previousSubject"),
+                "the name-only comparison is gone")
+        let window = try String(contentsOf: dir.appendingPathComponent("ArchivistChatWindow.swift"), encoding: .utf8)
+        #expect(window.contains("messages = HallieSupersededOffers.retire(in: messages, keeping: subject)"))
     }
 }

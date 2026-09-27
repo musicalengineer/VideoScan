@@ -56,6 +56,15 @@ extension HallieTurnExecutor {
         /// else from a single-person AST. Kept across follow-ups; replaced
         /// by the next answer about someone; cleared by reset.
         private(set) var lastSubject: String?
+        /// The family-tree person id of `lastSubject`, when an answer about
+        /// that person carried one (its own "Open in Family Tree" offer for
+        /// exactly that name). GH #202: two Mary O'Connors (b. 1650 and b.
+        /// 1904) share a name, so the NAME alone cannot say the conversation
+        /// moved from one to the other; the id can. Kept while the subject's
+        /// name stays the same and no answer names another id for it (a
+        /// catalog answer about "her" carries none); cleared when the
+        /// subject changes to a name with no id, or is cleared.
+        private(set) var lastSubjectPersonID: String?
         /// The photo the previous answer showed, so "this photo is …" can
         /// caption or correct it (2026-08-26). Cleared by the next archive
         /// answer that shows no photo; follow-ups and tellings keep it.
@@ -265,6 +274,7 @@ extension HallieTurnExecutor {
                 reset()
                 return
             }
+            let subjectBefore = lastSubject
             recordExchange(intent: intent, result: result, question: question)
             // A spoken mode correction rode in on the intent or the answer
             // (design §3.6): applied BEFORE the mode moves, so from here
@@ -281,7 +291,10 @@ extension HallieTurnExecutor {
             // intent-less answers (catalog stats, local tree answers) leave
             // through the `guard let intent` below.
             // C++ analogy: `defer` ≈ a scope-exit guard (RAII destructor).
-            defer { syncModeContexts(intent: intent, result: result) }
+            defer {
+                recordSubjectPersonID(subjectBefore: subjectBefore, result: result)
+                syncModeContexts(intent: intent, result: result)
+            }
             // An offer is good for one reply: whatever this turn was, the
             // last one's offer is gone, and only an answer that OFFERED a
             // retry in its own prose leaves a new one.
@@ -383,6 +396,41 @@ extension HallieTurnExecutor {
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
             }
+        }
+
+        /// Keep `lastSubjectPersonID` in step with `lastSubject` (GH #202).
+        /// Runs after every other field is updated, on every path out of
+        /// `record` except reset (which clears everything).
+        private mutating func recordSubjectPersonID(subjectBefore: String?, result: Result) {
+            guard let subject = lastSubject else {
+                lastSubjectPersonID = nil
+                return
+            }
+            if let id = Self.personID(of: subject, offeredBy: result) {
+                lastSubjectPersonID = id
+            } else if PersonResolver.normalize(subject) != PersonResolver.normalize(subjectBefore ?? "") {
+                // A different person by name, and this answer names no id:
+                // the old id belongs to someone else now.
+                lastSubjectPersonID = nil
+            }
+            // Same name, no id this turn: keep the one we have.
+        }
+
+        /// The ONE tree id this answer offers for `subject` by name — its
+        /// "Open in Family Tree" chip (or the immediate focus). None, or two
+        /// different ids for the same name (a which-one among namesakes),
+        /// says nothing: nil. `showPossibleDuplicate` is deliberately not
+        /// read — its id is the OTHER record of the person.
+        static func personID(of subject: String, offeredBy result: Result) -> String? {
+            let key = PersonResolver.normalize(subject)
+            var ids: Set<String> = []
+            for offer in [result.immediateOfferedAction].compactMap({ $0 }) + result.offeredActions {
+                if case .openFamilyTreePerson(let id, let name) = offer,
+                   !id.isEmpty, PersonResolver.normalize(name) == key {
+                    ids.insert(id)
+                }
+            }
+            return ids.count == 1 ? ids.first : nil
         }
 
         /// The mode transition (design §3.2): the answer's own verdict when

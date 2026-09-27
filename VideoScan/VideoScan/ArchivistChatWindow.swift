@@ -1342,7 +1342,8 @@ struct ArchivistChatWindow: View {
                 },
                 retireSupersededOffers: { subject in
                     // A tree offer for the person the conversation just
-                    // left is no longer a live button (live 2026-09-26).
+                    // left is no longer a live button (live 2026-09-26);
+                    // by tree id when known, so namesakes too (GH #202).
                     messages = HallieSupersededOffers.retire(in: messages, keeping: subject)
                 }))
     }
