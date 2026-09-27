@@ -158,7 +158,7 @@ struct ArchiveRefileLogicTests {
         // No longer misfiled.
         await RefileFixture.settle(a.model)
         #expect(a.model.archiveMisfiled.finding(forRecordID: a.source.id) == nil)
-        #expect(a.model.archiveMisfiled.count == 0)
+        #expect(a.model.archiveMisfiled.rowIDs.isEmpty)
     }
 
     @Test("target exists → refused; nothing moved, manifest byte-identical")
@@ -307,7 +307,7 @@ struct ArchiveRefileLogicTests {
         let row = try #require(MasterArchiveTestSupport.manifestRows(a.sb).first { $0[1] == to })
         #expect(row[8] == "1985-11-xx")
         await RefileFixture.settle(a.model)
-        #expect(a.model.archiveMisfiled.count == 0, "stable: neither record's date disagrees with the new folder")
+        #expect(a.model.archiveMisfiled.rowIDs.isEmpty, "stable: neither record's date disagrees with the new folder")
     }
 
     @Test("Refile guard: a year before 1900 or after next year is refused — nothing touched")
@@ -538,7 +538,7 @@ struct ArchiveRefileIsolationTests {
         try Data("garbage,not,a,manifest\n\u{0}\u{1}".utf8).write(to: a.sb.manifestURL)
         a.model.refreshArchiveMisfiled(reason: "test", force: true)
         await RefileFixture.settle(a.model)
-        #expect(a.model.archiveMisfiled.count == 0)
+        #expect(a.model.archiveMisfiled.rowIDs.isEmpty)
         #expect(a.model.archiveMisfiled.note?.contains("manifest") == true)
         try await Task.sleep(for: .milliseconds(400))   // the console flushes every 0.15 s
         #expect(a.model.dashboard.consoleLines.contains { $0.contains("the Misfiled list is empty") })
@@ -554,7 +554,7 @@ struct ArchiveRefileIsolationTests {
         try FileManager.default.removeItem(at: a.sb.manifestURL)
         a.model.refreshArchiveMisfiled(reason: "test", force: true)
         await RefileFixture.settle(a.model)
-        #expect(a.model.archiveMisfiled.count == 0)
+        #expect(a.model.archiveMisfiled.rowIDs.isEmpty)
         #expect(a.model.archiveMisfiled.note != nil)
     }
 
@@ -563,7 +563,7 @@ struct ArchiveRefileIsolationTests {
         let model = VideoScanModel()
         model.refreshArchiveMisfiled(reason: "test", force: true)
         await RefileFixture.settle(model)
-        #expect(model.archiveMisfiled.count == 0)
+        #expect(model.archiveMisfiled.rowIDs.isEmpty)
         #expect(model.archiveMisfiled.version == nil)
     }
 }
