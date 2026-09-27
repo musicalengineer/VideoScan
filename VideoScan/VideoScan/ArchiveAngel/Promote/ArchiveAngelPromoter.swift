@@ -14,6 +14,7 @@
 
 import Foundation
 import Combine
+import VideoScanCore
 
 @MainActor
 final class ArchiveAngelPromoter: ObservableObject {
@@ -45,6 +46,21 @@ final class ArchiveAngelPromoter: ObservableObject {
             return .decade(startYear: a)
         }
         return nil
+    }
+
+    /// Whose date a row's proposed date is (2026-09-27): the copy it was
+    /// taken from (Review's choice, or the identity-inherited date), a date
+    /// the person typed, or nil for the machine's own proposal (placement
+    /// only — never written as a user date).
+    nonisolated static func dateSource(entry: ArchiveAngelPlan.Entry, hint: ArchiveDateHint?,
+                                       machineHint: ArchiveDateHint?) -> ArchiveDateSource? {
+        guard let hint else { return nil }
+        let typed = entry.proposedDate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let fact = entry.inheritedDate, fact.value == typed {
+            return .copy(filename: fact.fromFilename, known: fact.confidence == UserDateConfidence.known.rawValue)
+        }
+        if let machineHint, hint == machineHint { return nil }
+        return .typed
     }
 
     /// Role label for a companion's naming row in the archive manifest.
@@ -155,6 +171,7 @@ final class ArchiveAngelPromoter: ObservableObject {
         var ids: [UUID] = []
         var titles: [UUID: String] = [:]
         var dates: [UUID: ArchiveDateHint] = [:]
+        var sources: [UUID: ArchiveDateSource] = [:]
         var roles: [UUID: String] = [:]
         var intended: [UUID: [UUID]] = [:]   // original → companion record ids
 
@@ -202,12 +219,16 @@ final class ArchiveAngelPromoter: ObservableObject {
             if let t = Self.archiveTitle(from: entry.proposedName) { titles[entry.id] = t }
             let hint = Self.dateHint(from: entry.proposedDate)
             if let hint { dates[entry.id] = hint }
+            let source = Self.dateSource(entry: entry, hint: hint,
+                                         machineHint: model.record(forID: entry.id).map { ArchivePathResolver.facts(for: $0).dateHint })
+            if let source { sources[entry.id] = source }
             var companionIDs: [UUID] = []
             for step in Self.promotableCompanions(of: entry, in: plan) {
                 guard let cid = step.recordID else { continue }
                 ids.append(cid)
                 companionIDs.append(cid)
                 if let hint { dates[cid] = hint }
+                if let source { sources[cid] = source }
                 if let t = titles[entry.id] { titles[cid] = t }
                 if let role = Self.roleLabel(for: step.kind) { roles[cid] = role }
             }
@@ -242,6 +263,7 @@ final class ArchiveAngelPromoter: ObservableObject {
         }
         promotePlan.archiveTitles = titles
         promotePlan.archiveDateOverrides = dates
+        promotePlan.archiveDateSources = sources
         promotePlan.roleLabels = roles
         for skip in promotePlan.skipped {
             let reason = VideoScanModel.skipReasonLabel(skip.reason)

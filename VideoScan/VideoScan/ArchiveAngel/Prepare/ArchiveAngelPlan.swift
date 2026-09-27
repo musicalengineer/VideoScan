@@ -171,6 +171,11 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         /// copy (same name stem and length) but carries no Balance Audio
         /// link to it — shown in Review, never used (codex #1654 P1-3).
         var balancedNomination: String?
+        /// True once the person answered Review's "which date?" question
+        /// about this row's copies (Rick 2026-09-27, PromoteDateChoice) —
+        /// Use a copy's date, Enter a date…, or Promote undated. Additive:
+        /// older plans decode nil (not answered yet).
+        var dateFromCopiesAnswered: Bool?
         var steps: [StepOutcome] = StepKind.allCases.map { StepOutcome(kind: $0) }
         var status: EntryStatus = .pending
         /// Archive relpath of the original after Promote (nil until then).

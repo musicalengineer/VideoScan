@@ -389,18 +389,23 @@ extension VideoScanModel {
             MediaLedgerEvent.Detail.confidence: writesDate ? (known ? "known" : "estimated") : "",
             MediaLedgerEvent.Detail.fixity: done.sha256,
             MediaLedgerEvent.Detail.archive: MasterArchiveLayout.displayName(forRootPath: root),
+            MediaLedgerEvent.Detail.locked: done.lockProblem == nil ? "true" : "false",
         ])])
         mediaLedger.mirror(intoArchiveRoot: root)
         let files = done.indexFilesChanged
         archiveUpdateNote("Update: \(label) — \(done.fromRelPath) → \(done.toRelPath); fixity verified; index updated (\(done.linesChanged) line(s) in \(files) file(s)\(done.backupDir.map { ", backup \($0)" } ?? "")); catalog saved: \(saved); ledger written: \(ledgered). To undo: Update it back.")
         let summary = "Updated — \(reason)."
-        guard saved, ledgered else {
+        guard saved, ledgered, done.lockProblem == nil else {
             var missing: [String] = []
+            if let lock = done.lockProblem { missing.append(lock) }
             if !saved { missing.append("the catalog could not be saved") }
             if !ledgered { missing.append("the ledger line could not be written") }
-            archiveUpdateNote("Update: \(label) — WARNING: the archive and its index ARE updated, but \(missing.joined(separator: " and ")). The next scan will catalog the file at its new path.")
+            let rescan = !saved || !ledgered
+            archiveUpdateNote("Update: \(label) — WARNING: the archive and its index ARE updated, but \(missing.joined(separator: " and "))."
+                              + (rescan ? " The next scan will catalog the file at its new path." : ""))
             return ArchiveUpdateResult(kind: .updatedWithWarnings,
-                                       message: "\(summary) The archive is updated, but \(missing.joined(separator: " and ")); the catalog will pick up the new path on the next scan.")
+                                       message: "\(summary) The archive is updated, but \(missing.joined(separator: " and "))"
+                                           + (rescan ? "; the catalog will pick up the new path on the next scan." : "."))
         }
         return ArchiveUpdateResult(kind: .updated, message: summary)
     }

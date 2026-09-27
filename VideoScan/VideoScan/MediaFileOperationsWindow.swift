@@ -561,6 +561,12 @@ struct MediaFileOperationRow: View {
                     .padding(.bottom, 10)
             }
 
+            if isExpanded, let lock = job as? ArchiveLockJob {
+                ArchiveLockDetailView(job: lock)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
+
             if isExpanded, let prune = job as? PruneApplyJob {
                 PruneApplyDetailView(job: prune)
                     .padding(.horizontal, 12)
@@ -894,7 +900,7 @@ extension MediaFileOperationKind {
     var hasDetailView: Bool {
         switch self {
         case .compare, .findPerson, .verifyArchive, .archiveAngel, .deleteDuplicates,
-             .pruneCopies, .verifyVideo:
+             .pruneCopies, .verifyVideo, .lockArchive:
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
@@ -984,6 +990,9 @@ extension MediaFileOperationKind {
         // not a media verb. Δ ≥ 0.19 from every other fill (nearest:
         // Rebuild's brown), contrast vs white ≈ 8.5.
         case .findSimilarFootage: return Color(red: 0.30, green: 0.30, blue: 0.30)
+        // Lock archive files (2026-09-27) — deep navy slate: "the vault".
+        // Δ ≥ 0.22 from every other fill; contrast vs white ≈ 13.
+        case .lockArchive: return Color(red: 0.10, green: 0.20, blue: 0.30)
         }
     }
 }

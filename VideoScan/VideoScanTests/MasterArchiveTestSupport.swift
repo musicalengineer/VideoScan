@@ -20,7 +20,34 @@ enum MasterArchiveTestSupport {
         var manifestURL: URL { MasterArchiveLayout.manifestURL(rootPath: archiveRoot.path) }
         var journalURL: URL { ArchivePromoteJournal.url(rootPath: archiveRoot.path) }
 
-        func cleanup() { try? FileManager.default.removeItem(at: root) }
+        /// Promote LOCKS archived files (UF_IMMUTABLE, 2026-09-27): clear
+        /// every flag under the sandbox first, or removeItem leaves them.
+        func cleanup() {
+            MasterArchiveTestSupport.unlockTree(root)
+            try? FileManager.default.removeItem(at: root)
+        }
+    }
+
+    /// Test-only: clear UF_IMMUTABLE on every file under `url` (never used
+    /// outside a temp sandbox).
+    static func unlockTree(_ url: URL) {
+        guard url.path.hasPrefix(FileManager.default.temporaryDirectory.path)
+                || url.path.hasPrefix("/private" + FileManager.default.temporaryDirectory.path)
+                || url.path.hasPrefix("/tmp") || url.path.hasPrefix("/private/tmp") else { return }
+        guard let e = FileManager.default.enumerator(atPath: url.path) else { return }
+        for case let rel as String in e {
+            let path = url.appendingPathComponent(rel).path
+            var sb = stat()
+            if lstat(path, &sb) == 0, (sb.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
+                _ = lchflags(path, sb.st_flags & ~UInt32(UF_IMMUTABLE))
+            }
+        }
+    }
+
+    /// Test-only: is the file at `path` locked (UF_IMMUTABLE)?
+    static func isLocked(_ path: String) -> Bool {
+        var sb = stat()
+        return lstat(path, &sb) == 0 && (sb.st_flags & UInt32(UF_IMMUTABLE)) != 0
     }
 
     static func makeSandbox(_ label: String) throws -> Sandbox {

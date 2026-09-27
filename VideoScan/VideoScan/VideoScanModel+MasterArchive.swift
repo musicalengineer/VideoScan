@@ -110,6 +110,11 @@ struct ArchivePromotePlan: Sendable {
     /// because a person who remembers 1947 knows more than an inference
     /// that found nothing. Absent means "no override" — NOT "undated".
     var archiveDateOverrides: [UUID: ArchiveDateHint] = [:]
+    /// Whose date each override is (2026-09-27, PromoteDateChoice.swift):
+    /// Rick's — typed, or taken from a copy's hand-entered date — is also
+    /// written onto the archived copy's record. An override with NO source
+    /// is placement-only (a machine proposal, e.g. the Angel's default).
+    var archiveDateSources: [UUID: ArchiveDateSource] = [:]
     /// Display-only role labels ("Master", "Lossless Copy"…) for the
     /// naming rows in the confirmation sheet, set when the promote was
     /// launched from Assess Copies. Absent = the sheet shows filenames.

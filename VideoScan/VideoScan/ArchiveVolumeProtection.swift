@@ -676,3 +676,24 @@ struct ArchiveRefileAuthorization: Sendable, Equatable {
         self.rootPath == rootPath && self.fromRelPath == fromRelPath && self.toRelPath == toRelPath
     }
 }
+
+// MARK: - The second audited operation: the lock flag (Rick 2026-09-27)
+
+/// Archived media files carry the macOS user-immutable flag (UF_IMMUTABLE,
+/// "uchg" — ArchiveFileLock.swift), so the KERNEL refuses to unlink, rename
+/// or write them; the rule above stops being the only line of defence.
+/// Changing that flag is an allowed, audited operation — never a removal —
+/// and exactly these callers may make it, each for its reason. The source
+/// sensor (ArchiveFileLockSensorTests) pins that `fchflags` / `chflags` /
+/// `UF_IMMUTABLE` writes appear ONLY in ArchiveFileLock.swift, that every
+/// `ArchiveFileLock.set(` call lives in a file listed here, and that only
+/// Update… and Rick's Unlock job may CLEAR the flag (`Reason.mayUnlock`).
+/// Folders are never locked; the system flag (schg) is never used.
+extension ArchiveVolumeProtection {
+    static let fileLockInventory: [(file: String, reason: String)] = [
+        ("ArchiveFileLock.swift", "the one primitive: fchflags(2) through the archive's dirfd O_NOFOLLOW chain"),
+        ("PromoteToArchiveJob+Steps.swift", "Promote locks each copy after its fixity is verified (.promote)"),
+        ("ArchiveRefile.swift", "Update… clears the lock on the file it moves, re-locks it at the target, and re-locks the original on any rollback (.updateUnlock / .updateRelock / .updateRollbackRelock)"),
+        ("ArchiveLockJob.swift", "Rick's one-time Lock Archive Files… and his own Unlock Archive Files… (.lockAll / .unlockAll)"),
+    ]
+}

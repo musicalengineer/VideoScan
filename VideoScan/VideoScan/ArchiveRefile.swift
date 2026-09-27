@@ -29,6 +29,14 @@
 //         restored; unproven recovery keeps the backup and says so.
 //   A name + date change is ONE move; a known/estimated-only change updates
 //   the index row without moving anything.
+//
+//   LOCKED FILES (Rick 2026-09-27): an archived file carries UF_IMMUTABLE
+//   (ArchiveFileLock). A move clears it on the source as the FIRST mutation
+//   (inside the index transaction — a file that is locked and cannot be
+//   unlocked is REFUSED, nothing changed), renames, and re-sets it on the
+//   target. Every rollback re-locks the original where it is. Update ALWAYS
+//   ends with the file locked, or says it is not ("file is not locked" —
+//   `Done.lockProblem`, a warning outcome, logged loudly); never lost.
 
 // Memory (worst case): the manifest's bytes twice (read + rewritten copy)
 // plus each journal's bytes twice during the index rewrite (the
@@ -301,6 +309,8 @@ enum ArchiveRefileEngine {
         /// Runs after every preflight check passed and before the index
         /// lock is taken — a test's window for "another writer lands now".
         var afterPreflight: @Sendable () -> Void = {}
+        /// The user-immutable flag (production = live fchflags).
+        var fileLock: ArchiveFileLock.Seams = .live
 
         static let live = Seams(
             hashFile: { root, rel in try ArchivePromoteEngine.sha256(root: root, relativePath: rel) },
@@ -325,6 +335,9 @@ enum ArchiveRefileEngine {
         let indexFilesChanged: Int
         let linesChanged: Int
         let promotedAt: Date?
+        /// nil = the file is locked at `toRelPath`; else why it is NOT
+        /// ("updated, not relocked" — a warning, never a rollback).
+        var lockProblem: String? = nil
     }
 
     enum Outcome: Sendable, Equatable {
@@ -546,6 +559,7 @@ enum ArchiveRefileEngine {
                                subject: String, audit: (String) -> Void) -> Outcome {
         let root = req.rootPath, from = req.fromRelPath, to = req.toRelPath
         var moved = false
+        var unlocked = false
         var recoveryNotDurable: String?
         let backupDir: URL?
         do {
@@ -558,6 +572,16 @@ enum ArchiveRefileEngine {
                 },
                 moveMedia: {
                     guard from != to else { return }       // index-only update
+                    // The FIRST mutation of the file: clear its lock. Locked
+                    // and cannot be unlocked → refused, nothing changed.
+                    switch ArchiveFileLock.set(.unlock, root: root, relPath: from, reason: .updateUnlock,
+                                               seams: seams.fileLock, audit: { audit(subject + $0) }) {
+                    case .changed: unlocked = true
+                    case .alreadySo: break
+                    case .absent: throw StepError.refusedBeforeMove("the file is not at \(from)")
+                    case .failed(let why):
+                        throw StepError.refusedBeforeMove("the file is locked and could not be unlocked (\(why))")
+                    }
                     try moveAndVerify(root: root, from: from, to: to,
                                       srcName: (from as NSString).lastPathComponent,
                                       dstName: (to as NSString).lastPathComponent,
@@ -576,13 +600,55 @@ enum ArchiveRefileEngine {
                     audit(subject + "the file is back at \(from)")
                 })
         } catch {
-            return failureOutcome(error, req, prep, moved: moved, recoveryNotDurable: recoveryNotDurable,
-                                  subject: subject, audit: audit)
+            let outcome = failureOutcome(error, req, prep, moved: moved, recoveryNotDurable: recoveryNotDurable,
+                                         subject: subject, audit: audit)
+            return unlocked ? relockAfterFailure(outcome, req, prep, seams: seams, subject: subject, audit: audit) : outcome
         }
         let lines = prep.plan.changedLines, files = prep.plan.files.count
         audit(subject + "index updated — \(lines) line\(lines == 1 ? "" : "s") in \(files) index file\(files == 1 ? "" : "s")\(backupDir.map { "; backup \($0.path)" } ?? "")")
+        // Re-lock at the new place — ALWAYS (an index-only update locks a
+        // file that somehow was not). A failure is a warning, never a rollback.
+        var lockProblem: String?
+        let relock = ArchiveFileLock.set(.lock, root: root, relPath: to, reason: .updateRelock,
+                                         seams: seams.fileLock, audit: { audit(subject + $0) })
+        if !relock.isOK {
+            let why: String
+            if case .failed(let w) = relock { why = w } else { why = "the file was not found at \(to) to lock" }
+            lockProblem = "the file is NOT locked at \(to) (\(why)) — run Lock archive files…"
+            audit(subject + "WARNING: updated, but \(lockProblem ?? "")")
+            refileLog.fault("refile relock failed: \(to, privacy: .public) — \(why, privacy: .public)")
+        }
         return .refiled(Done(fromRelPath: from, toRelPath: to, sha256: prep.digest, backupDir: backupDir?.path,
-                             indexFilesChanged: files, linesChanged: lines, promotedAt: prep.promotedAt))
+                             indexFilesChanged: files, linesChanged: lines, promotedAt: prep.promotedAt,
+                             lockProblem: lockProblem))
+    }
+
+    /// The file was unlocked and the change did not complete: lock the
+    /// ORIGINAL again wherever it is (found by identity). A failure to do so
+    /// is added to the outcome's text — never hidden.
+    private static func relockAfterFailure(_ outcome: Outcome, _ req: Request, _ prep: Prepared, seams: Seams,
+                                           subject: String, audit: (String) -> Void) -> Outcome {
+        let root = req.rootPath
+        let at: String?
+        switch outcome {
+        case .mixedState(_, let original): at = original
+        default: at = locateOriginal(root: root, candidates: [req.fromRelPath, req.toRelPath], identity: prep.sourceIdentity)
+        }
+        let result = at.map {
+            ArchiveFileLock.set(.lock, root: root, relPath: $0, reason: .updateRollbackRelock,
+                                seams: seams.fileLock, audit: { audit(subject + $0) })
+        } ?? .absent
+        guard !result.isOK else { return outcome }
+        let note = " — AND the file could not be locked again\(at.map { " at \($0)" } ?? " (not found by identity)"): the file is not locked; run Lock archive files…"
+        audit(subject + "WARNING\(note)")
+        refileLog.fault("refile rollback relock failed at \(at ?? "?", privacy: .public)")
+        switch outcome {
+        case .refused(let w): return .refused(w + note)
+        case .rolledBack(let w): return .rolledBack(w + note)
+        case .incompleteRecovery(let w): return .incompleteRecovery(w + note)
+        case .mixedState(let w, let o): return .mixedState(w + note, originalRelPath: o)
+        case .refiled: return outcome
+        }
     }
 
     /// Map a failure of the commit phase to an outcome, proving what it

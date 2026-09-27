@@ -146,6 +146,10 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         /// where the archived original IS ("" = not found by identity).
         public static let outcome = "outcome"
         public static let location = "location"
+        /// Locked archive files (2026-09-27): "true" / "false" on an
+        /// `archived` or `archiveUpdated` line — false = the file landed but
+        /// its user-immutable flag could not be set (a warning, not a failure).
+        public static let locked = "locked"
     }
 
     public let at: Date

@@ -151,6 +151,11 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// exports). Pause/Stop between phases and apply slices.
     /// FindSimilarFootageJob.
     case findSimilarFootage
+    /// "Lock archive files…" / "Unlock archive files…" (Rick 2026-09-27):
+    /// walks the archive manifest's rows and sets (or, for Rick's own use,
+    /// clears) the macOS user-immutable flag on each archived file.
+    /// Metadata only — no media is read. ArchiveLockJob.
+    case lockArchive
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -184,6 +189,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         // only reads.
         case .pruneCopies: return "TRASH"
         case .findSimilarFootage: return "Footage"
+        case .lockArchive: return "Lock"
         }
     }
 
@@ -214,6 +220,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .deleteDuplicates: return "delete duplicates"
         case .pruneCopies: return "trash copies"
         case .findSimilarFootage: return "find similar footage"
+        case .lockArchive: return "lock archive files"
         }
     }
 }
