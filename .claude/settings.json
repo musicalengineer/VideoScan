@@ -1,4 +1,9 @@
 {
+    "statusLine": {
+        "type": "command",
+        "command": "python3 /Users/rickb/dev/VideoScan/tools/review_status_line.py",
+        "refreshInterval": 15
+    },
     "env": {
         "PATH": "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     },
