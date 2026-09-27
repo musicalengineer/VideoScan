@@ -114,8 +114,26 @@ struct FamilyTreeRelatives: Equatable {
 struct FamilyTreeAnchor: Identifiable, Equatable {
     let id: String
     let label: String
-    /// True for the root: the label reads "your …" instead of "Donna's …".
+    /// True for a home person of the tree (every root of a merged tree).
     let isRoot: Bool
+    /// True only for the anchor that IS the reader: the pinned owner, or
+    /// the root of a single-root tree (the first-INDI assumption). Its
+    /// relation reads "your …"; every other anchor is named ("Donna's …").
+    ///
+    /// Separate from `isRoot` since 2026-09-27 (Tree Walk STEP 0, Rick:
+    /// "the joined trees can sometimes think someone is my ancestor even
+    /// though we're walking Donna's tree"). A merged tree has TWO roots;
+    /// with no owner pin both read "your", so Donna's grandmother appeared
+    /// as "your grandmother" in Donna's row. Two home people and no pin
+    /// means nobody is "you".
+    let readsAsYou: Bool
+
+    init(id: String, label: String, isRoot: Bool, readsAsYou: Bool? = nil) {
+        self.id = id
+        self.label = label
+        self.isRoot = isRoot
+        self.readsAsYou = readsAsYou ?? isRoot
+    }
 }
 
 /// One "Line to X" button for the selected person: the path when they are
@@ -1074,13 +1092,18 @@ final class FamilyTreeLiveModel: ObservableObject {
         loadWarning = nil
         let previousPerson = selectedID.flatMap { graph?.people[$0] }
         let sourceKey = newGraph.map(Self.sourceKey)
-        if sourceKey != installedSourceKey {
+        let treeChanged = sourceKey != installedSourceKey
+        let walkReason = installedSourceKey == nil ? "tree loaded" : "tree refreshed"
+        if treeChanged {
             photoOverrides.removeAll()
             photoOverrideSources.removeAll()
             installedSourceKey = sourceKey
             clearDocumentsCache()
         }
         graph = newGraph
+        // Walk Tree decorations follow the tree (Rick 2026-09-27): a silent,
+        // debounced re-walk when decorations.json is missing or stale.
+        if treeChanged, newGraph != nil { walkCenter?.treeDidChange(newGraph, reason: walkReason) }
         bookmarkSourceTransition = false
         kinshipCenter?.install(graph: newGraph)
         // Everything O(people) lives in the bundle (rows, identity
@@ -1523,8 +1546,12 @@ final class FamilyTreeLiveModel: ObservableObject {
         guard !leads.isEmpty else { return [] }
         var out: [FamilyTreeAnchor] = []
         var seen: Set<String> = []
+        // "You" is the pinned owner, or the lone root of a single-root
+        // tree. Two roots and no pin: nobody is assumed to be the reader.
+        let pinned = graph.person(familySearchID: ownerFamilySearchID) != nil
         for root in leads where seen.insert(root.id).inserted {
-            out.append(FamilyTreeAnchor(id: root.id, label: firstGivenName(root), isRoot: true))
+            out.append(FamilyTreeAnchor(id: root.id, label: firstGivenName(root), isRoot: true,
+                                        readsAsYou: pinned || leads.count == 1))
         }
         for root in leads {
             for spouse in graph.relatives(.spouse, of: root) where seen.insert(spouse.id).inserted {
@@ -1540,6 +1567,13 @@ final class FamilyTreeLiveModel: ObservableObject {
                                                  ownerFamilySearchID: String?) -> String? {
         HallieOwnerResolver.stalePinLine(familySearchID: ownerFamilySearchID, graph: graph)
             .map { $0 + " No “Line to” anchors until then." }
+    }
+
+    /// "your great-grandmother" for the reader's own anchor, "Donna's …"
+    /// for every other (see `FamilyTreeAnchor.readsAsYou`).
+    nonisolated static func relationPhrase(anchor: FamilyTreeAnchor, generations: Int, sex: String) -> String {
+        (anchor.readsAsYou ? "your" : anchor.label + "'s") + " "
+            + GedcomFamilyGraph.generationLabel(generations: generations, sex: sex)
     }
 
     /// "Richard Harding Breen Jr" → "Richard"; a lone surname or empty
@@ -1590,10 +1624,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         } else {
             let options = anchors.map { anchor -> FamilyTreeLineOption in
                 let generations = anchorIndexes[anchor.id]?.generations(from: id)
-                let relation = generations.map { n -> String in
-                    let possessive = anchor.isRoot ? "your" : anchor.label + "'s"
-                    return possessive + " " + GedcomFamilyGraph.generationLabel(
-                        generations: n, sex: graph?.people[id]?.sex ?? "")
+                let relation = generations.map { n in
+                    Self.relationPhrase(anchor: anchor, generations: n, sex: graph?.people[id]?.sex ?? "")
                 }
                 return FamilyTreeLineOption(anchor: anchor, generations: generations, relation: relation)
             }
@@ -1844,6 +1876,21 @@ final class FamilyTreeLiveModel: ObservableObject {
             familySearchID: person.familySearchID)
     }
 
+    // MARK: - Walk Tree (2026-09-27)
+
+    /// Who keeps the Walk Tree decorations current. nil in the test host
+    /// (a synthetic tree must never rewrite the real decorations.json —
+    /// the settings-pollution class); tests that want it inject a scratch
+    /// center.
+    var walkCenter: FamilyTreeWalkCenter? = TestEnvironment.isTestHost ? nil : .shared
+
+    /// The installed graph for the Family Tree Walk; nil for the demo tree.
+    /// Read-only — a value copy (copy-on-write, no records are copied).
+    var walkGraph: GedcomFamilyGraph? { isLive ? graph : nil }
+
+    /// Bookmarked people in sidebar order, for the Walk sheet's quick list.
+    var walkBookmarkedPeople: [FamilyTreePersonSummary] { bookmarkedPeopleInOrder }
+
     // MARK: - Verify Tree
 
     /// Last verification pass, nil until one is run. Rick, 2026-08-30:
@@ -1995,6 +2042,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         // recomputed only the hidden set, leaving redirects stale).
         graph = graph?.applyingIdentityRulings(updated)
         kinshipCenter?.install(graph: graph)
+        walkCenter?.treeDidChange(walkGraph, reason: "identity ruling")
         // Hallie: FamilyGraphSharedCache keys on the rulings file's content
         // revision, so the save above makes its next turn re-rule the
         // cached tree (no decode). No explicit invalidation needed — and a

@@ -68,6 +68,11 @@
 // bounded pass skips them for free and ADVANCES past them instead of
 // re-reading the same noise prefix.
 //
+// ARCHIVED (Rick 2026-09-27): a Master Archive file (`isArchiveElement`)
+// is never WRITTEN by any rule here — not cleared, re-triangulated,
+// propagated to, footage-shared to or folder-year dated — nor by the
+// #1413 unwind. It may still DONATE: its date is the filed one.
+//
 // NEVER: overwrite a userDate (not touched at all), overwrite an
 // existing own or propagated inference, propagate a copy-local mtime
 // tier (< 0.50), write to purged / set-aside / superseded rows, or to
@@ -497,9 +502,13 @@ extension VideoScanModel {
     /// One member's date CLAIM for the group. A row whose own date is
     /// footage-shared claims WITHOUT it (it is derived, and is re-derived
     /// here), so a stale share never props itself up.
+    /// `filed`: the row is a Master Archive file — its date is FROZEN (no
+    /// pass re-derives it), so it claims with the whole date even when that
+    /// date was once footage-shared: the archive's date is the filed one.
     @MainActor
-    static func footageDateClaim(_ rec: VideoRecord, now: Date) -> (resolution: RecordDateResolution, claim: RecordDateClaim)? {
-        let derived = isFootageSharedInferredDate(rec)
+    static func footageDateClaim(_ rec: VideoRecord, now: Date,
+                                 filed: Bool = false) -> (resolution: RecordDateResolution, claim: RecordDateClaim)? {
+        let derived = isFootageSharedInferredDate(rec) && !filed
         let r = RecordDateResolver.resolve(
             userDate: rec.userDate, userDateConfidence: rec.userDateConfidence,
             embeddedCreationDate: rec.embeddedCreationDate,
@@ -532,20 +541,23 @@ extension VideoScanModel {
     /// it, with the reason "shared from <member> (same footage): …".
     /// Idempotent: an identical share writes nothing. Returns the rows
     /// written.
+    /// `archived`: ids of Master Archive files (Rick 2026-09-27) — they
+    /// may be the group's donor but are never written.
     @MainActor
     static func shareDateAcrossFootageGroup(_ members: [VideoRecord], now: Date,
-                                            retained: [UUID: (year: Int, tail: String)] = [:]) -> [VideoRecord] {
+                                            retained: [UUID: (year: Int, tail: String)] = [:],
+                                            archived: Set<UUID> = []) -> [VideoRecord] {
         guard members.count >= 2 else { return [] }
         var claims: [UUID: (resolution: RecordDateResolution, claim: RecordDateClaim)] = [:]
         var best: (rec: VideoRecord, resolution: RecordDateResolution, claim: RecordDateClaim)?
         for m in members {
-            guard let c = footageDateClaim(m, now: now) else { continue }
+            guard let c = footageDateClaim(m, now: now, filed: archived.contains(m.id)) else { continue }
             claims[m.id] = c
             if best.map({ c.claim < $0.claim }) ?? true { best = (m, c.resolution, c.claim) }
         }
         guard let best, footageClaimIsShareable(best.resolution) else { return [] }
         var written: [VideoRecord] = []
-        for m in members where m.id != best.rec.id && m.userDate == nil {
+        for m in members where m.id != best.rec.id && m.userDate == nil && !archived.contains(m.id) {
             if let own = claims[m.id], !(best.claim < own.claim) { continue }   // as strong or stronger itself
             // Rick's "not the same" (either side) blocks the share (codex F2).
             if m.footageDecision(about: best.rec.id)?.verdict == .notSame
@@ -685,7 +697,8 @@ extension VideoScanModel {
     /// confidence). A retracted user date, a downgraded group or a changed
     /// donor year all clear the share; rule 2b re-shares whatever is true now.
     @MainActor
-    static func isStaleFootageShare(_ rec: VideoRecord, byID: [UUID: VideoRecord], now: Date = Date()) -> Bool {
+    static func isStaleFootageShare(_ rec: VideoRecord, byID: [UUID: VideoRecord], now: Date = Date(),
+                                    archived: Set<UUID> = []) -> Bool {
         guard isFootageSharedInferredDate(rec), let source = rec.inferredDateSource else { return false }
         guard let membership = rec.footage, membership.confidence >= footageShareMinimumConfidence,
               let donorID = UUID(uuidString: String(source.dropFirst(InferredDateSource.footageSharedPrefix.count))),
@@ -694,7 +707,8 @@ extension VideoScanModel {
               donorMembership.confidence >= footageShareMinimumConfidence else { return true }
         if rec.footageDecision(about: donor.id)?.verdict == .notSame
             || donor.footageDecision(about: rec.id)?.verdict == .notSame { return true }
-        guard let claim = footageDateClaim(donor, now: now), footageClaimIsShareable(claim.resolution),
+        guard let claim = footageDateClaim(donor, now: now, filed: archived.contains(donor.id)),
+              footageClaimIsShareable(claim.resolution),
               let v = footageShareValue(from: donor, resolution: claim.resolution) else { return true }
         return v.date != rec.inferredRecordDate || v.range != rec.inferredDateRange
             || v.confidence != rec.inferredDateConfidence
@@ -741,8 +755,12 @@ extension VideoScanModel {
         var footageGroups: [UUID: [VideoRecord]] = [:]
         var byID: [UUID: VideoRecord] = [:]
         byID.reserveCapacity(records.count)
+        // Rick 2026-09-27: Master Archive files are read-only to this pass —
+        // bucketed (they donate) but never written by any rule below.
+        var archived = Set<UUID>()
         for rec in records where Self.isEligibleForDateInference(rec) {
             byID[rec.id] = rec
+            if isArchiveElement(rec) { archived.insert(rec.id) }
             if let key = Self.contentGroupKey(rec), scopeKeys?.contains(key) ?? true {
                 groups[key, default: []].append(rec)
             }
@@ -766,12 +784,13 @@ extension VideoScanModel {
         // legacy filesystem-tier "inference" is cleared (a copy date is
         // never an inferred date); a footage-shared date whose donor left
         // the group is cleared so rules 1 / 2b re-derive it honestly.
-        for rec in candidates where Self.isEligibleForDateInference(rec) && rec.userDate == nil {
+        for rec in candidates where Self.isEligibleForDateInference(rec) && rec.userDate == nil
+            && !archived.contains(rec.id) {
             if Self.isLegacyFilesystemInference(rec) {
                 Self.clearInferredDate(rec, reason: Self.clearedFilesystemReason)
                 result.cleared += 1
                 touched.append(rec)
-            } else if Self.isStaleFootageShare(rec, byID: byID, now: started) {
+            } else if Self.isStaleFootageShare(rec, byID: byID, now: started, archived: archived) {
                 // Codex re-review R2: keep the recorded disagreement so a
                 // same-year re-share (e.g. the donor's confidence changed)
                 // carries it forward instead of losing it.
@@ -788,6 +807,7 @@ extension VideoScanModel {
         // (`refreshScope`, from the transcript / caption writebacks).
         for rec in candidates where Self.isEligibleForDateInference(rec)
             && rec.userDate == nil
+            && !archived.contains(rec.id)
             && Self.hasDateEvidence(rec) {
             let legacy = Self.needsRetriangulation(rec)
             let refresh = refreshIDs.contains(rec.id)
@@ -856,6 +876,7 @@ extension VideoScanModel {
             // re-scans the recipient's evidence).
             let recipients = members.filter {
                 !deferred.contains($0.id)
+                    && !archived.contains($0.id)
                     && $0.userDate == nil
                     && !Self.hasSettledInferredDate($0)
                     && Self.isEligibleForDateInference($0)
@@ -875,13 +896,14 @@ extension VideoScanModel {
         for key in footageKeys {
             guard let members = footageGroups[key], members.count >= 2 else { continue }
             let live = members.filter { !deferred.contains($0.id) }
-            let written = Self.shareDateAcrossFootageGroup(live, now: started, retained: retainedDisagreements)
+            let written = Self.shareDateAcrossFootageGroup(live, now: started, retained: retainedDisagreements,
+                                                           archived: archived)
             result.footageShared += written.count
             touched.append(contentsOf: written)
         }
 
         // Rule 3 — the weak folder prior, only where nothing else spoke.
-        for rec in candidates where Self.qualifiesForFolderYearPrior(rec) {
+        for rec in candidates where !archived.contains(rec.id) && Self.qualifiesForFolderYearPrior(rec) {
             guard let year = pfBareYearFolderPrior(in: rec.fullPath),
                   Self.applyFolderYear(rec, year: year) else { continue }
             result.folderYear += 1
@@ -1067,7 +1089,9 @@ extension VideoScanModel {
         var victims: [VideoRecord] = []
         var entries: [UnwoundDateEntry] = []
         for rec in records {
-            guard Self.isPropagatedInferredDate(rec),
+            // Rick 2026-09-27: an archive file's date is the filed one — the
+            // repair never clears it (nor re-anchors it, below).
+            guard Self.isPropagatedInferredDate(rec), !isArchiveElement(rec),
                   let source = rec.inferredDateSource,
                   let date = rec.inferredRecordDate else { continue }
             // codex #1439: validate against the ORIGIN of the provenance
@@ -1099,7 +1123,8 @@ extension VideoScanModel {
         // sidecar can put the previous provenance back).
         let victimIDs = Set(victims.map(\.id))
         var reanchors: [(rec: VideoRecord, entry: ReanchoredProvenanceEntry)] = []
-        for rec in records where Self.isPropagatedInferredDate(rec) && !victimIDs.contains(rec.id) {
+        for rec in records where Self.isPropagatedInferredDate(rec) && !victimIDs.contains(rec.id)
+            && !isArchiveElement(rec) {
             let chain = Self.provenanceChain(of: rec, byID: byID)
             guard let origin = chain.origin, let previous = rec.inferredDateSource,
                   chain.via.contains(where: { victimIDs.contains($0) }) else { continue }

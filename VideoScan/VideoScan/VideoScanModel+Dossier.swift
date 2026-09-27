@@ -94,7 +94,15 @@ extension VideoScanModel {
                                             includePathHints: true, now: now)
         input.pathHintStandsAlone = true   // a full pass ran: the folder year may stand alone
         let inferred = pfTriangulateRecordDate(input)
-        Self.applyTriangulation(inferred, to: record, source: nil)
+        // Rick 2026-09-27: a Master Archive file keeps its filed date — the
+        // channels above are metadata notes and land; the date does not
+        // move (its own archive folder would otherwise feed the folder-year
+        // hint straight back into it). The narrative line below still says
+        // what the pass concluded, so nothing is lost.
+        let archivedFile = isArchiveElement(record)
+        if !archivedFile {
+            Self.applyTriangulation(inferred, to: record, source: nil)
+        }
 
         // Provenance — stack id matches the Python POC shape:
         //   "qwen2.5-vl-3b-4bit+whisper-medium-mlx-q4"
@@ -128,6 +136,10 @@ extension VideoScanModel {
         let confStr  = String(format: "%.2f", inferred.confidence)
         let txtSummary = transcript.map { $0.isEmpty ? "no speech" : "\($0.count) char(s)" } ?? "no whisper"
         appLog.write("Catalog: dossier \(filename) — \(extraction.scenes.count) scene(s), \(extraction.dates.count) date(s), \(extraction.texts.count) text(s); transcript \(txtSummary); inferred \(dateStr) (conf \(confStr)) [\(stackID)]")
+        if archivedFile {
+            // A separate line (the one above keeps its format).
+            appLog.write("Catalog: dossier \(filename) — archived file: date left as filed (\(record.resolvedDateDisplay))")
+        }
         return true
     }
 }

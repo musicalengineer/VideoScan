@@ -89,6 +89,19 @@ Every feature/fix ships with tests along FIVE dimensions, not just the first:
 
 Rationale: escaped bugs are boundary bugs (environment, cost, capability) — the suite already catches function-level logic errors. NO O(records) work in view bodies. Integration-test ladder: GH #105–#108.
 
+## Long operations (Rick, 2026-09-27)
+Anything that can run longer than about a minute is an **MFO job** (Media File
+Operations window), whether Rick starts it or it runs overnight on the M4:
+- Collapsed row: coloured verb chip · what it's doing now · "N of M" ·
+  current file · time left · progress bar · Pause / Stop.
+- Double-click: the per-item detail (each item with its result and reason)
+  and running totals.
+- Finished: a one-line summary stays on the row; details stay one
+  double-click away. Overnight runs appear the same way in the morning.
+- START / progress / OUTCOME lines to the console, catalog.log and
+  videoscan.log through one sink.
+No long operation gets its own ad-hoc progress UI or runs silently.
+
 ## Known Issues / TODOs
 <!-- Add items here as they come up -->
 - Beachballs on Correlate All / catalog-wide dup detection — parked, GH #104 (fix template: VolumeStatusCache pattern)
