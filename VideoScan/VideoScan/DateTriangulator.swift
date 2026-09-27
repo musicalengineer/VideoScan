@@ -237,22 +237,30 @@ enum DateTriangulationRegex {
         pattern: #"(?<!\d)(?:((?:19|20)\d{2})|['’](\d{2}))(?!\d)"#)
 
     // NOW cues, tested against the (lower-cased) text BEFORE the year.
+    /// Occasion words a year can hang off ("Christmas 2002", "Cape 2004").
+    static let occasions = #"christmas|xmas|new year'?s?(?: eve| day)?|thanksgiving|easter|halloween|fourth of july|4th of july|summer|winter|spring|fall|autumn|vacation|birthday|wedding|graduation|reunion|cape(?: cod)?"#
+
+    // NOW cues, tested against the (lower-cased) text BEFORE the year.
+    // Every cue starts at a word boundary (QA M3: "escape" is not "cape").
     nonisolated(unsafe) static let nowBefore: [NSRegularExpression] = [
-        #"what year (?:is it|it is|are we in|is this|is it now)\b.{0,40}$"#,
-        #"(?:the year is|it'?s|it is|this is|today is|today'?s|we'?re in|we are in|welcome to|here we are in|now it'?s|the date is|it'?s now|it is now)[\s,:'"“”]*(?:the year\s*)?$"#,
-        #"(?:christmas|xmas|new year'?s?(?: eve| day)?|thanksgiving|easter|halloween|fourth of july|4th of july|summer|winter|spring|fall|autumn|vacation|birthday|wedding|graduation|reunion|cape(?: cod)?)[\s,:'"]*(?:of\s*)?$"#,
-        #"happy new year[\s,!]*$"#,
+        #"\bwhat year (?:is it|it is|are we in|is this|is it now)\b.{0,40}$"#,
+        #"\b(?:the year is|it'?s|it is|this is|today is|today'?s|we'?re in|we are in|welcome to|here we are in|now it'?s|the date is|it'?s now|it is now)[\s,:'"“”]*(?:the year\s*)?$"#,
+        #"\b(?:"# + occasions + #")[\s,:'"]*(?:of\s*)?$"#,
+        #"\bhappy new year[\s,!]*$"#,
     ].compactMap { try? NSRegularExpression(pattern: $0) }
 
-    // NOW cues in the text AFTER the year ("2004 Cape trip").
+    // NOW cues in the text AFTER the year ("2004 Cape trip"). "now" is NOT
+    // one: "that was 1975, now he's all grown up" contrasts then with now.
     nonisolated(unsafe) static let nowAfter: [NSRegularExpression] = [
-        #"^[\s,:'"]*(?:cape|trip|vacation|christmas|thanksgiving|summer|winter|reunion|birthday|wedding|graduation|here|now)\b"#,
+        #"^[\s,:'"]*(?:cape|trip|vacation|christmas|thanksgiving|summer|winter|reunion|birthday|wedding|graduation|here)\b"#,
     ].compactMap { try? NSRegularExpression(pattern: $0) }
 
-    // STRONG reference cues — these outrank a NOW word after the year
-    // ("the class of 1982 reunion": the reunion is now, 1982 is not).
+    // STRONG reference cues ("the class of 1982 reunion": the reunion is
+    // now, 1982 is not), including reminiscences about an occasion:
+    // "remember Christmas 1985", "ever since Thanksgiving '98".
     nonisolated(unsafe) static let strongReferenceBefore: [NSRegularExpression] = [
-        #"(?:back in|born in|was born|born|class of|the movie|the film|the song)[\s,:'"]*$"#,
+        #"\b(?:back in|born in|was born|born|class of|the movie|the film|the song)[\s,:'"]*$"#,
+        #"\b(?:remember|since|until|till|before|after)\s+(?:the\s+|that\s+|our\s+|last\s+|when\s+)?(?:"# + occasions + #")[\s,:'"]*(?:of\s*)?$"#,
     ].compactMap { try? NSRegularExpression(pattern: $0) }
 
     // REFERENCE cues (past tense, "ago", "since"…). The second pattern
@@ -266,6 +274,7 @@ enum DateTriangulationRegex {
     nonisolated(unsafe) static let referenceAfter: [NSRegularExpression] = [
         #"^\s*or\s+(?:['’]?\d{1,2}|\d{4})\b"#,          // "1955 or 6"
         #"^[\s,]*(?:years? ago|ago)\b"#,
+        #"^['’"]?\s*(?:was|were|had been)\b"#,         // "our wedding 1979 was the best day"
     ].compactMap { try? NSRegularExpression(pattern: $0) }
 
     static let numberWords = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety"
@@ -315,19 +324,20 @@ nonisolated func pfClassifyYearMentions(in text: String, now: Date = Date()) -> 
     return out
 }
 
-/// Strong reference cues first ("class of", "born", "back in"), then NOW
-/// cues (a "what year is it?" question is explicit), then the softer
-/// reference cues; neither ⇒ neutral. Pure over the two windows.
+/// Reference cues win over NOW cues (QA M3): a reminiscence ("remember
+/// Christmas 1985", "the summer of 1994 was hot", "that was 1975, now…")
+/// must never date the tape, and a missed now-cue only costs weight while
+/// a false one files a wrong year. Then NOW cues; neither ⇒ neutral.
+/// Pure over the two windows.
 nonisolated func pfSpokenYearRole(before: String, after: String) -> SpokenYearRole {
     func hit(_ regexes: [NSRegularExpression], _ s: String) -> Bool {
         let r = NSRange(location: 0, length: (s as NSString).length)
         return regexes.contains { $0.firstMatch(in: s, range: r) != nil }
     }
-    if hit(DateTriangulationRegex.strongReferenceBefore, before) { return .reference }
+    if hit(DateTriangulationRegex.strongReferenceBefore, before)
+        || hit(DateTriangulationRegex.referenceBefore, before)
+        || hit(DateTriangulationRegex.referenceAfter, after) { return .reference }
     if hit(DateTriangulationRegex.nowBefore, before) || hit(DateTriangulationRegex.nowAfter, after) { return .now }
-    if hit(DateTriangulationRegex.referenceBefore, before) || hit(DateTriangulationRegex.referenceAfter, after) {
-        return .reference
-    }
     return .neutral
 }
 

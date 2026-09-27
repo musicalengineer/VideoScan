@@ -791,4 +791,30 @@ struct DateTriangulatorQAReviewTests {
         #expect(mem.inferredDateReason == "on-screen date 1991-06-21 ×3")
         #expect(mem.resolvedDateDisplay == "1991-06-21", "got \(mem.resolvedDateDisplay)")
     }
+
+    /// M3: reminiscences are references — reference cues win over now-cues,
+    /// a contrastive "now" is not a cue, and cue words need word boundaries.
+    @Test func reminiscencesAreReferences() {
+        func role(_ text: String) -> SpokenYearRole? {
+            pfClassifyYearMentions(in: text, now: testNow).first?.role
+        }
+        #expect(role("that was 1975, now he's all grown up") == .reference)
+        #expect(role("Remember Christmas 1985? The big snow.") == .reference)
+        #expect(role("ever since Thanksgiving '98 she won't cook") == .reference)
+        #expect(role("Our wedding 1979 was the best day of my life") == .reference)
+        #expect(role("the summer of 1994 was hot") == .reference)
+        #expect(role("watching The Great Escape 1963 on TV") != .now, "'escape' is not 'cape'")
+        // Still now-cues:
+        #expect(role("OK Christmas 2002") == .now)
+        #expect(role("Say what year it is. 2004.") == .now)
+        // A reminiscence never files a date over an export stamp.
+        var i = DateTriangulationInput()
+        i.audioTranscript = "Remember Christmas 1985? That was the year of the big snow."
+        i.embeddedCreationDate = utc(2008, 10, 23)
+        i.originMake = "Apple"; i.originEncoder = "H.264"; i.videoCodec = "h264"
+        i.now = testNow
+        let r = pfTriangulateRecordDate(i)
+        #expect(r.date == nil, "\(r.reason)")
+        #expect(r.reason.contains("1985 mentioned as a reference"), "\(r.reason)")
+    }
 }
