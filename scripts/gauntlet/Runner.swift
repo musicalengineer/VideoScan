@@ -201,7 +201,7 @@ struct GauntletRunner {
         print("GAUNTLET DRY RUN machine=\(machine) configuration=Release")
         print("Inventory: \(validationErrors.isEmpty ? "valid" : validationErrors.joined(separator: "; "))")
         print("Isolation: per-run home, App Support, catalog, preferences, caches, logs, archive, fixtures; canonical write allowlist")
-        print("Build: ONE xcodebuild build-for-testing -scheme VideoScan -testPlan VideoScan-CI -configuration Release -derivedDataPath <run>/DerivedData")
+        print("Build: ONE xcodebuild build-for-testing -scheme VideoScan -testPlan VideoScan-CI -configuration Release ENABLE_TESTABILITY=YES -derivedDataPath <run>/DerivedData")
         for name in stageOrder {
             let entry = stageMap[name]!
             let selectors = entry["selectors"] as? [String] ?? []
@@ -262,7 +262,7 @@ struct GauntletRunner {
 
     mutating func build() throws {
         if fatalReason == nil {
-            let cmd = ["xcodebuild", "build-for-testing", "-project", repo.appendingPathComponent("VideoScan/VideoScan.xcodeproj").path, "-scheme", "VideoScan", "-testPlan", "VideoScan-CI", "-configuration", "Release", "-destination", "platform=macOS,arch=arm64", "-derivedDataPath", roots["DerivedData"]!, "-skip-testing:VideoScanUITests", "CODE_SIGN_IDENTITY=-", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_ENTITLEMENTS="]
+            let cmd = ["xcodebuild", "build-for-testing", "-project", repo.appendingPathComponent("VideoScan/VideoScan.xcodeproj").path, "-scheme", "VideoScan", "-testPlan", "VideoScan-CI", "-configuration", "Release", "-destination", "platform=macOS,arch=arm64", "-derivedDataPath", roots["DerivedData"]!, "-skip-testing:VideoScanUITests", "ENABLE_TESTABILITY=YES", "CODE_SIGN_IDENTITY=-", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_ENTITLEMENTS="]
             let build = try command(cmd, log: run.appendingPathComponent("build.log"), timeout: 3600, environment: environment)
             result["build_s"] = build.elapsed; result["build_exit_code"] = build.code
             buildOK = build.code == 0; contaminated = build.contaminated
