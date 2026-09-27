@@ -122,7 +122,7 @@ enum CatalogOpenAction {
         // the files that ARE there.
         var looksMoved = 0
         for r in targets where noteMissing(r) { looksMoved += 1 }
-        var line = "Open (\(gesture)): \(targets.count) file(s) — \(playerSummary(targets, hasVLC: hasVLC))"
+        var line = "Open (\(gesture)): \(targets.count) file(s) — by codec: \(playerSummary(targets, hasVLC: hasVLC)) (offline files are skipped by the opener)"
         if looksMoved > 0 {
             line += "; \(looksMoved) missing on a mounted volume (see the Update Catalog banner)"
         }
@@ -131,9 +131,12 @@ enum CatalogOpenAction {
         return targets
     }
 
-    /// "2 in QuickTime Player, 1 in VLC" — the same pure decision
-    /// MediaOpener.open makes, counted so the console can say it. Cheap:
-    /// three string compares per record, only for the rows being opened.
+    /// "2 for QuickTime Player, 1 for VLC" — the codec-based PREFERENCE
+    /// MediaOpener.open starts from, counted so the console can say it.
+    /// It is intent, not a receipt: the opener still skips unreachable
+    /// files and, in remote-viewer mode, routes streams to VLC (codex
+    /// 2026-09-26 F1) — its own log lines say what actually launched.
+    /// Cheap: three string compares per record, only for the rows opened.
     static func playerSummary(_ records: [VideoRecord], hasVLC: Bool) -> String {
         var qt = 0, vlc = 0, other = 0
         for r in records {
@@ -144,9 +147,9 @@ enum CatalogOpenAction {
             }
         }
         var parts: [String] = []
-        if qt > 0 { parts.append("\(qt) in QuickTime Player") }
-        if vlc > 0 { parts.append("\(vlc) in VLC") }
-        if other > 0 { parts.append("\(other) in the default app") }
+        if qt > 0 { parts.append("\(qt) for QuickTime Player") }
+        if vlc > 0 { parts.append("\(vlc) for VLC") }
+        if other > 0 { parts.append("\(other) for the default app") }
         return parts.joined(separator: ", ")
     }
 }

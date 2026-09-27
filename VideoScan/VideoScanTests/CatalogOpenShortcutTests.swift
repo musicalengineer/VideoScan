@@ -75,7 +75,7 @@ struct CatalogOpenShortcutTests {
         #expect(spy.launches.count == 1, "one launch for the whole selection — MediaOpener batches by player")
         #expect(spy.launches.first?.map(\.id) == [a.id, c.id, d.id])
         #expect(spy.noted == [a.id, c.id, d.id], "the looks-moved check ran once per opened row, none for b")
-        #expect(spy.lines == ["Open (⌘O): 3 file(s) — 2 in QuickTime Player, 1 in VLC"], "\(spy.lines)")
+        #expect(spy.lines == ["Open (⌘O): 3 file(s) — by codec: 2 for QuickTime Player, 1 for VLC (offline files are skipped by the opener)"], "\(spy.lines)")
     }
 
     @Test("logic: a file missing on a mounted volume is still opened with the rest, and the line says so")
@@ -89,7 +89,7 @@ struct CatalogOpenShortcutTests {
 
         #expect(opened.map(\.id) == [a.id, gone.id], "never blocks the open of the files that ARE there")
         #expect(spy.launches.first?.map(\.id) == [a.id, gone.id])
-        #expect(spy.lines == ["Open (double-click): 2 file(s) — 2 in QuickTime Player; 1 missing on a mounted volume (see the Update Catalog banner)"], "\(spy.lines)")
+        #expect(spy.lines == ["Open (double-click): 2 file(s) — by codec: 2 for QuickTime Player (offline files are skipped by the opener); 1 missing on a mounted volume (see the Update Catalog banner)"], "\(spy.lines)")
     }
 
     @Test("logic: the real noteMissingFileForUserAction raises the looks-moved banner for a missing file on a mounted volume")
@@ -118,8 +118,8 @@ struct CatalogOpenShortcutTests {
     }
 
     @Test("logic: the player summary is MediaOpener's decision, counted", arguments: [
-        (true,  "2 in QuickTime Player, 1 in VLC"),
-        (false, "2 in QuickTime Player, 1 in the default app"),
+        (true,  "2 for QuickTime Player, 1 for VLC"),
+        (false, "2 for QuickTime Player, 1 for the default app"),
     ])
     func playerSummaryCountsTheDecision(hasVLC: Bool, expected: String) {
         let qt1 = record("/Volumes/X9/test_1.mov")
