@@ -10,6 +10,9 @@ struct TeamChannelMonitorApp: App {
     /// verify the database opens from a given shell without a GUI.
     init() {
         guard CommandLine.arguments.contains("--check") else { return }
+        for line in ReviewCycles.lines(ReviewCycles.load()) {
+            print("review [\(line.colour)] \(line.text)")
+        }
         let snap = ChannelDB.loadToday()
         if let error = snap.error {
             print("ERROR: \(error)")
@@ -39,6 +42,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 final class MonitorModel: ObservableObject {
     @Published var snapshot = ChannelSnapshot()
+    /// Last few codex review cycles (tools/codex_review.py); empty = section hidden.
+    @Published private(set) var reviewLines: [ReviewCycleLine] = []
     @Published var lastAction: String?
     @Published private(set) var isCodexWakeInFlight = false
     /// Rows flushed from the window (monitor-only; see DismissedRows).
@@ -91,6 +96,7 @@ final class MonitorModel: ObservableObject {
             return
         }
         snapshot = ChannelDB.loadToday()
+        reviewLines = ReviewCycles.lines(ReviewCycles.load())
         let open = snapshot.rows.filter { !$0.status.isGreen }
         let pruned = DismissedRows.pruned(dismissed, keeping: open)
         if pruned != dismissed { dismissed = pruned; DismissedRows.save(pruned) }

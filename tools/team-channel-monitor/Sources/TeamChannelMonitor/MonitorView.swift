@@ -33,6 +33,10 @@ struct MonitorView: View {
                 .frame(minHeight: 5 * 34, maxHeight: 560)
                 .frame(height: min(CGFloat(max(openRows.count, 5)) * 34 + 8, 560))
             }
+            if !model.reviewLines.isEmpty {
+                Divider()
+                reviewCycles
+            }
             Divider()
             composeControls
             Divider()
@@ -52,6 +56,20 @@ struct MonitorView: View {
 
     private var flushedCount: Int {
         model.snapshot.rows.filter { !$0.status.isGreen && model.dismissed.contains($0.id) }.count
+    }
+
+    /// Codex review cycles: one line each, colour = fresh / waiting / stuck.
+    private var reviewCycles: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Review cycles").font(.caption).foregroundStyle(.secondary)
+            ForEach(model.reviewLines) { line in
+                HStack(spacing: 8) {
+                    Circle().fill(line.colour.swiftUI).frame(width: 10, height: 10)
+                    Text(line.text).font(.callout).lineLimit(1)
+                        .foregroundStyle(line.colour == .red ? Color.red : Color.primary)
+                }
+            }
+        }
     }
 
     /// One box, one button: a message from Rick to every agent at once.
@@ -249,5 +267,15 @@ private struct RowView: View {
     private func minutes(_ t: TimeInterval) -> String {
         let m = Int(t / 60)
         return m >= 60 ? "\(m / 60)h \(m % 60)m" : "\(m)m"
+    }
+}
+
+private extension ReviewCycleLine.Colour {
+    var swiftUI: Color {
+        switch self {
+        case .green: return .green
+        case .yellow: return .yellow
+        case .red: return .red
+        }
     }
 }
