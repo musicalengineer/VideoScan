@@ -139,6 +139,16 @@ enum PerformanceLane {
         TimingBudget.currentLoadAverage()
     }
 
+    /// CPU time the calling thread spent in a SYNCHRONOUS body (GH #208).
+    /// Prefer this over a load-aware wall ceiling for pure-CPU scale
+    /// tests: a saturated host stretches wall time without limit but
+    /// barely moves the thread's own CPU time. Keep wall time wherever I/O
+    /// or cross-thread fan-out is part of what the budget protects. Rule
+    /// and caveats live in VideoScanCore's `TimingBudget`.
+    static func measureThreadCPUTime(_ body: () throws -> Void) rethrows -> Duration {
+        try TimingBudget.measureThreadCPUTime(body)
+    }
+
     /// "load 9.3 on 16 cores" — for a failure message that says whether the
     /// headroom was in play.
     static func loadDescription() -> String {
