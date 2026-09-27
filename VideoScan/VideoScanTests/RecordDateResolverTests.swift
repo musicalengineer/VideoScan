@@ -396,8 +396,12 @@ struct EmbeddedDatePlacementTests {
         // Rick's own date still outranks the camera.
         rec.userDate = "2024"; rec.userDateConfidence = "known"
         #expect(ArchivePathResolver.facts(for: rec).dateHint == .year(2024))
-        // …unless it agrees, in which case the camera sharpens it.
+        // Codex F1 (GH #201): a stamp that names no camera (unknown origin)
+        // never sharpens Rick's year — it may be the copy day.
         rec.userDate = "2025"
+        #expect(ArchivePathResolver.facts(for: rec).dateHint == .year(2025))
+        // …a CAMERA's stamp that agrees does sharpen it.
+        rec.originMake = "Canon"; rec.originModel = "Canon EOS R6m2"
         #expect(ArchivePathResolver.facts(for: rec).dateHint == .day(year: 2025, month: 6, day: 15))
     }
 

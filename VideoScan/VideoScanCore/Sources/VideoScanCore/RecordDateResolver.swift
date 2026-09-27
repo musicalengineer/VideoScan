@@ -218,6 +218,10 @@ public enum RecordDateResolver {
             guard userPrecision != .day else { return user }
             for candidate in [embedded(), inferred(), fromFilename()] {
                 guard let c = candidate, c.precision < userPrecision, c.year == parts.year else { continue }
+                // Codex F1 (GH #201 review): only a CAMERA's stamp may sharpen
+                // Rick's year. A software / export stamp's day is the copy
+                // day — "2004" + an export dated 2004-12-31 stays "2004".
+                if c.source == .embedded, c.confidence < embeddedConfidenceDevice { continue }
                 if let um = parts.month, c.month != um { continue }
                 // Same year (and month, when the user gave one): the
                 // machine date is a sharper reading of the user's fact.

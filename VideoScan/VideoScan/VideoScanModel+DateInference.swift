@@ -518,6 +518,8 @@ extension VideoScanModel {
     static func footageClaimIsShareable(_ r: RecordDateResolution) -> Bool {
         switch r.source {
         case .userDate, .inferred: return true
+        // A user date refined by a stamp resolves as .embedded at the user's
+        // confidence; applyFootageShare re-checks the donor names a device.
         case .embedded: return r.confidence >= RecordDateResolver.embeddedConfidenceDevice
         case .filename, .none: return false
         }
@@ -566,7 +568,11 @@ extension VideoScanModel {
             range = r.precision == .day ? nil : InferredDateRange(year: year)
             what = "your date \(UserDateEntry.friendlyDisplay(r.isoString))"
         case .embedded:
-            guard let d = donor.embeddedCreationDate else { return false }
+            // Codex F1: a software stamp's day never travels, whatever the
+            // resolution's confidence says (a user year once lifted it to 1.0).
+            guard let d = donor.embeddedCreationDate,
+                  RecordDateResolver.namesDevice(originMake: donor.originMake, originModel: donor.originModel)
+            else { return false }
             date = d; range = nil
             what = "camera stamp \(r.isoString) (\(donor.embeddedDateOriginLabel))"
         case .inferred:
