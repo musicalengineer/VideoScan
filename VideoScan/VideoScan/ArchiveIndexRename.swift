@@ -50,6 +50,12 @@
 //                 mixed — then every path is logged loudly.
 //   A refused rename removes its own backup folder; a successful one
 //   keeps it, and `.rename_backups/` keeps the newest `backupRetention`.
+//   Backup folders are named by a UTC stamp with the "Z" offset
+//   designator ("2026-11-01T053000.123Z"), created EXCLUSIVELY (a name
+//   already taken gets -2, -3 …), and pruned by PARSED date — never by
+//   string order (GH #204: local-time names sorted lexically pruned the
+//   newest backup in the DST fall-back hour, and two renames in one
+//   millisecond shared a folder). Legacy local-time names still parse.
 //   Residual window: the recheck and the rename(2) that publishes are two
 //   syscalls — an append in the microseconds between them is still lost.
 //   The model also refuses while a Promote job runs (the main writer).
@@ -353,43 +359,112 @@ enum ArchiveIndexRename {
         }
     }
 
-    /// Keep the newest `backupRetention` folders (timestamp names sort in
-    /// time order). Only directories directly inside `.rename_backups/`.
-    static func pruneBackups(in parent: URL) {
+    /// Keep the newest `backupRetention` backup folders, newest by the
+    /// instant their NAME records (GH #204) — parsed, never string-sorted:
+    /// a legacy local-time name from the DST fall-back hour, or a legacy
+    /// name beside a UTC one, sorts wrongly as text. Only directories
+    /// directly inside `.rename_backups/` whose names parse as backup
+    /// stamps are counted or pruned; anything else there is left alone.
+    /// `legacyTimeZone` reads the old offset-less names (the zone of the
+    /// Mac that wrote them — injected so tests do not depend on the host).
+    static func pruneBackups(in parent: URL, legacyTimeZone: TimeZone = .current) {
         let fm = FileManager.default
         guard parent.lastPathComponent == backupFolder,
               let names = try? fm.contentsOfDirectory(atPath: parent.path) else { return }
-        let folders = names.filter { name in
+        let dated: [(name: String, key: BackupSortKey)] = names.compactMap { name in
             var isDir: ObjCBool = false
-            return fm.fileExists(atPath: parent.appendingPathComponent(name).path, isDirectory: &isDir) && isDir.boolValue
-        }.sorted()
-        guard folders.count > backupRetention else { return }
-        for name in folders.prefix(folders.count - backupRetention) {
-            try? fm.removeItem(at: parent.appendingPathComponent(name))
+            guard fm.fileExists(atPath: parent.appendingPathComponent(name).path, isDirectory: &isDir),
+                  isDir.boolValue,
+                  let key = backupSortKey(name, legacyTimeZone: legacyTimeZone) else { return nil }
+            return (name, key)
+        }
+        guard dated.count > backupRetention else { return }
+        let oldestFirst = dated.sorted { $0.key < $1.key }
+        for victim in oldestFirst.prefix(dated.count - backupRetention) {
+            do {
+                try fm.removeItem(at: parent.appendingPathComponent(victim.name))
+            } catch {
+                // Retention is housekeeping: a folder that will not go is
+                // logged and retried by the next rename, never fatal.
+                renameIndexLog.error("rename backup prune failed: \(victim.name, privacy: .public) — \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
+    /// Where a backup folder sits in time: the instant, then the uniquing
+    /// suffix (-2 after the plain name), then the name for a total order.
+    /// (C++: `Comparable` ≈ defining operator< for std::sort.)
+    struct BackupSortKey: Comparable {
+        let date: Date
+        let sequence: Int
+        let name: String
+
+        static func < (a: BackupSortKey, b: BackupSortKey) -> Bool {
+            if a.date != b.date { return a.date < b.date }
+            if a.sequence != b.sequence { return a.sequence < b.sequence }
+            return a.name < b.name
+        }
+    }
+
+    /// Parse a backup folder name — "2026-11-01T053000.123Z" (UTC, since
+    /// GH #204) or legacy "2026-11-01T013000.123" (local, in
+    /// `legacyTimeZone`) — each optionally followed by "-N". Nil for
+    /// anything else, which is then never pruned. A legacy name from the
+    /// repeated fall-back hour is ambiguous by construction; it resolves to
+    /// one of its two instants (Foundation's choice). New names never are.
+    static func backupSortKey(_ name: String, legacyTimeZone: TimeZone = .current) -> BackupSortKey? {
+        guard let m = name.wholeMatch(of: /(\d{4}-\d{2}-\d{2}T\d{6}\.\d{3})(Z)?(?:-(\d{1,6}))?/) else {
+            return nil
+        }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd'T'HHmmss.SSS"
+        f.timeZone = m.2 != nil ? TimeZone(identifier: "UTC") : legacyTimeZone
+        guard let date = f.date(from: String(m.1)) else { return nil }
+        let sequence = m.3.flatMap { Int($0) } ?? 1
+        return BackupSortKey(date: date, sequence: sequence, name: name)
+    }
+
+    /// "2026-11-01T053000.123Z" — UTC, millisecond, ISO-8601 basic time
+    /// with the "Z" (zero offset) designator; no colons, so it is a safe
+    /// folder name in Finder.
     static func backupStamp(_ date: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = .current
-        f.dateFormat = "yyyy-MM-dd'T'HHmmss.SSS"
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd'T'HHmmss.SSS'Z'"
         return f.string(from: date)
     }
 
+    /// Create a backup folder no other rename can share: `<stamp>`, or
+    /// `<stamp>-2`, `-3` … when taken. The leaf is made with
+    /// `withIntermediateDirectories: false`, which is mkdir(2) — it FAILS
+    /// on an existing folder instead of quietly reusing it (the ledger
+    /// path's same-millisecond overwrite, GH #204), so the check and the
+    /// claim are one atomic step.
+    static func makeBackupDirectory(in parent: URL, now: Date) throws -> URL {
+        let fm = FileManager.default
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        let stamp = backupStamp(now)
+        for n in 1...1_000 {
+            let dir = parent.appendingPathComponent(n == 1 ? stamp : "\(stamp)-\(n)", isDirectory: true)
+            do {
+                try fm.createDirectory(at: dir, withIntermediateDirectories: false)
+                return dir
+            } catch CocoaError.fileWriteFileExists {
+                continue
+            }
+        }
+        throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: parent.appendingPathComponent(stamp).path])
+    }
+
     /// Write every affected file's original bytes under a fresh
-    /// `.rename_backups/<timestamp>/` (suffix -2, -3… if taken).
+    /// `.rename_backups/<stamp>/` (see `makeBackupDirectory`).
     private static func writeBackups(_ plan: Plan, now: Date) throws -> URL {
         let parent = plan.indexURL.appendingPathComponent(backupFolder, isDirectory: true)
-        let stamp = backupStamp(now)
-        var dir = parent.appendingPathComponent(stamp, isDirectory: true)
-        var n = 2
-        while FileManager.default.fileExists(atPath: dir.path) {
-            dir = parent.appendingPathComponent("\(stamp)-\(n)", isDirectory: true)
-            n += 1
-        }
+        var dir = parent.appendingPathComponent(backupStamp(now), isDirectory: true)
         do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            dir = try makeBackupDirectory(in: parent, now: now)
             for f in plan.files {
                 try AtomicFilePublish.write(f.original, to: dir.appendingPathComponent(f.name),
                                             durability: .fullFsync, createIntermediates: false)
@@ -767,10 +842,10 @@ enum ArchiveIndexRename {
         let result = try rewriteJSONL([UInt8](data), replacements: replacements,
                                       file: url.lastPathComponent, lenient: true)
         guard result.changedLines > 0 else { return 0 }
-        let backupDir = url.deletingLastPathComponent()
-            .appendingPathComponent(backupFolder, isDirectory: true)
-            .appendingPathComponent(backupStamp(now), isDirectory: true)
-        try FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
+        // Its own folder, never shared with a same-millisecond rename (GH #204).
+        let backupDir = try makeBackupDirectory(
+            in: url.deletingLastPathComponent().appendingPathComponent(backupFolder, isDirectory: true),
+            now: now)
         try AtomicFilePublish.write(data, to: backupDir.appendingPathComponent(url.lastPathComponent),
                                     durability: .fullFsync, createIntermediates: false)
         try AtomicFilePublish.write(Data(result.bytes), to: url, durability: .fullFsync, createIntermediates: false)
