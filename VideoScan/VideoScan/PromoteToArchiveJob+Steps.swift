@@ -499,6 +499,19 @@ extension PromoteToArchiveJob {
                                                              promotedAt: now)
             appLog.write("promote: \(relPath) cataloged as a self-contained archive copy — its source record (\(sourceID.uuidString.prefix(8))…) is no longer in the catalog")
         }
+        // Adopting an EXISTING manifest row (codex r1 #2): the index is the
+        // truth for this copy's date — the record takes the row's date (a
+        // user date only when the row says it is Rick's), never the source's
+        // current fields, which may have changed since.
+        if !appendsRow, let fields = ctx.manifestFields[sourceID] {
+            let (ud, conf) = Self.userDate(fromManifestFields: fields)
+            if archiveRecord.userDate != ud || archiveRecord.userDateConfidence != conf {
+                model.log("Promote: \(relPath) — archived record date \(archiveRecord.userDate ?? "none") → \(ud ?? "none") (from the archive manifest row, not the source)")
+                archiveRecord.userDate = ud
+                archiveRecord.userDateConfidence = conf
+                model.searchIndex.update(archiveRecord)
+            }
+        }
         // The chosen date onto the ARCHIVED copy's record (never the source):
         // the same value the filename and the manifest row carry.
         if let d = decision, let ud = d.recordUserDate {

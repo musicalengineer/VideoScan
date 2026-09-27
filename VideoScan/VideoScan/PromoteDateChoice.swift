@@ -229,6 +229,15 @@ struct PromoteDateDecision: Equatable, Sendable {
 
 extension PromoteToArchiveJob {
 
+    /// A manifest row's date as the archived record's user date: only when
+    /// its date_confidence says it is Rick's (`user-known` / `user-estimated`);
+    /// otherwise none. Pure.
+    nonisolated static func userDate(fromManifestFields f: [String]) -> (date: String?, confidence: String?) {
+        guard f.count >= ArchiveManifestCSV.columnCountLegacy, f[9].hasPrefix("user-"),
+              let ud = ArchiveRefile.userDate(for: ArchiveRefile.hint(fromManifestDate: f[8])) else { return (nil, nil) }
+        return (ud, (f[9] == "user-known" ? UserDateConfidence.known : .estimated).rawValue)
+    }
+
     /// ONE date for placement, manifest and record (GH #219). Pure.
     /// - `sourceFacts` / `sourceLabel`: the source's own resolved date and
     ///   its manifest confidence label (`dateConfidenceLabel`).

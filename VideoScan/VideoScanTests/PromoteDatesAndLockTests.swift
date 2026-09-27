@@ -286,6 +286,27 @@ struct PromoteDatesAndLockEndToEndTests {
         #expect(model.mediaLedger.events(forRecordID: copy.id).contains { $0.event == .dateSet && $0.detail["date"] == "1984-11" })
     }
 
+    @Test("codex r1 #2: adopting an existing manifest row keeps the MANIFEST's date on the archived record — never the source's current one (source dated, and source undated)", arguments: ["1990", nil] as [String?])
+    func adoptionPreservesManifestDate(sourceDate: String?) async throws {
+        let (sb, model, rec) = try setup("adopt")
+        defer { sb.cleanup() }
+        _ = try await run(model, ids: [rec.id]) {
+            $0.archiveDateOverrides[rec.id] = .year(1947); $0.archiveDateSources[rec.id] = .typed
+        }
+        let first = try #require(model.masterArchiveCopy(of: rec))
+        // The catalog registration is lost (an unsaved catalog, a relaunch);
+        // the file and its manifest row are on disk. The source changed since.
+        model.records.removeAll { $0.id == first.id }
+        rec.userDate = sourceDate
+        rec.userDateConfidence = sourceDate == nil ? nil : "known"
+        let job = try await run(model, ids: [rec.id])
+        #expect(job.outcomes.first?.kind == .adopted, "\(job.outcomes)")
+        let copy = try #require(model.masterArchiveCopy(of: rec))
+        #expect(copy.userDate == "1947" && copy.userDateConfidence == "estimated",
+                "record \(copy.userDate ?? "nil") must match the manifest's 1947 (user-estimated)")
+        #expect(MasterArchiveTestSupport.manifestRows(sb).count == 1)
+    }
+
     @Test("a machine override (no source) places the file but writes no user date")
     func machineOverrideNotWritten() async throws {
         let (sb, model, rec) = try setup("machine", inferred: false)
