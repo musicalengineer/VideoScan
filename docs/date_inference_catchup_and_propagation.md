@@ -167,3 +167,123 @@ candidates, transcripts and captions between rows. Rule 1 then dates the
 recipient from that evidence at catch-up confidence. Same identity class as
 #1413 one layer down; it should adopt `haveVerifiedSameContent`. Filed as a
 follow-up on 2026-09-12; not changed tonight (one bug per dispatch).
+
+## GH #201 (2026-09-26): the scored triangulator — combine criteria, show the reason
+
+*Code: `VideoScan/VideoScan/DateTriangulator.swift` (pure), the catch-up pass in
+`VideoScanModel+DateInference.swift`, `RecordDateResolver` ·
+tests: `VideoScanTests/DateTriangulatorTests.swift`*
+
+**Rick's rule.** The inferred date is a machine **guesstimate** that combines
+criteria and shows its written reason; he confirms (the inspector's date field
+is the confirmation, and his date always wins).
+
+Two live cases: `CapeCod_notsure_NTSC.mov` showed its 2008 Final Cut export
+stamp (`make=Apple`, no model) over the transcript's "what year is it? 2004" ×3;
+`TimmyBaby-1996/Media/Clip 19` (DV) inferred 1955 from "it was 1955 or 6 … On the
+Waterfront" — a referenced year, and DV cannot predate 1995.
+
+### Fields (additive, on `VideoRecord`)
+
+| field | meaning |
+|---|---|
+| `inferredRecordDate` | the point estimate (unchanged — every reader sorts and files by it) |
+| `inferredDateConfidence` | 0–1 (unchanged) |
+| `inferredDateRange` | **new** — `{startYear, endYear}` when only the year is known; "2004" or "2003–2004". `RecordDateResolver` then files at YEAR precision, never a fabricated Jan 1, and the Angel makes no day key |
+| `inferredDateReason` | **new** — the written reason; also "no evidence…" on a row a pass examined and found nothing on |
+| `inferredDateSource` | unchanged vocabulary plus `"footage-shared from <uuid>"` |
+
+### Criteria and weights
+
+| criterion | weight | precision | note |
+|---|---|---|---|
+| on-screen burn-in date | 0.95 ≥3 frames · 0.85 2 · 0.75 1 | day | unchanged tiers |
+| camera stamp (a MODEL, or GoPro/DJI/Insta360/Garmin) | 0.90 | day | a claim only beside content; alone it is the resolver's rank 2 |
+| spoken NOW-cue year ("what year is it? 2004", "Christmas 2002", "happy new year 2000", "2004 Cape trip") | 0.65, +0.05 per repeat, cap 0.75 | year | |
+| spoken year, no cue | 0.45, +0.05 per repeat, cap 0.55 | year | two cue-less years that disagree ⇒ "ambiguous", no date |
+| caption year (VLM) | 0.45 | year | |
+| age + People-tab birth year ("how old are you? eight", "8 years old", "5th birthday", "turned six") | 0.60 one named person · 0.30 any known person | 2-year window per person | the subject is the name nearest the age, else the record's one tagged person, else everyone with a birth year; no profiles ⇒ neutral |
+| folder year ("TimmyBaby-1996") | 0.55 | year | a corroborator: claims only beside other content; stands alone only in a full dossier pass (the old 0.50 tier) |
+| spoken REFERENCE year ("it was 1955 or 6", "back in", "born in", "class of", past tense + "in") | 0 | — | written into the reason, never dates the tape |
+| export stamp (make with no model, or an `encoder`) | ceiling | — | "set aside as ingest"; a claim after it ×0.25 |
+| media-era floor | constraint | — | DV ≥ 1995 · HDV ≥ 2003 · AVCHD/phone H.264 ≥ 2006 (only with a camera named); film scans (16mm / Super 8 / "film" / "reel" in the path) exempt; a claim below is set aside and named |
+| catalog priors | constraint | — | 1950s / 1970s need two independent criteria at ≥ 0.90; 1940s / 1960s ×0.85; a lone soft claim outside 1984–2016 ×0.5 |
+
+### Combination
+
+1. Every candidate year is scored by **noisy-OR** over the claims allowing it
+   (`1 − Π(1 − wᵢ)`: 0.75 ⊕ 0.30 = 0.83; 0.65 ⊕ 0.90 = 0.97 → cap 0.95). Ties go
+   to the year with more supporters, then the earlier year.
+2. **Adjacent** spoken years (2003 and 2004) are one tape across a New Year:
+   the range widens, nothing is penalised.
+3. A **disagreeing** claim no softer than the best evidence (hardness: burn-in /
+   camera stamp 3, now-cue / named age 2, the rest 1) multiplies confidence by
+   `1 − 0.5 × its weight` and widens the range; a softer one (a folder year
+   against a burn-in) is only written into the reason. Two now-cues that
+   disagree: the more-mentioned wins, confidence drops under the filing floor,
+   the range shows both ("2004–2010").
+4. **Day precision** when the strongest agreeing claim knows the day; else
+   Jan 1 noon UTC of the year with the span (the intersection of what agreed —
+   an age window 2004–2005 and a now-cue 2004 know 2004).
+5. **Reason** = agreeing (strongest first); adjacent; the export set-aside; the
+   era floor; "but … disagrees"; references; priors. Examples:
+   `spoken now-cue 'what year it is… 2004' ×3; age 8 fits Timmy (born 1996) →
+   2004–2005; export stamp 2008-10-23 set aside as ingest (Apple, no model)` ·
+   `folder 'TimmyBaby-1996' names 1996; DV era floor 1995 respected; 1955
+   mentioned as a reference (past), not the recording year`.
+6. No content claim ⇒ `nil` + reason `no evidence` — a stamp alone, a file's
+   copy date, or a filename year is **never** an inferred date.
+
+### The catch-up pass (rule 0, rule 1, rule 2b)
+
+- **Rule 0** — housekeeping: a legacy own-pass date with no evidence under 0.50
+  (the old mtime / container-time fallback) is cleared with the reason
+  `no evidence (a file's copy date is never an inferred date)`; a
+  footage-shared date whose donor left the group is cleared.
+- **Rule 1** — the triangulator runs on undated evidence-bearing rows, on
+  **legacy** own / catch-up rows (no written reason) **once** so they gain a
+  reason and the new rules (provenance kept), and on the scoped row of a
+  transcript / caption writeback (`refreshScope`). A reasoned inference is
+  settled — disagreeing evidence heals on the next dossier pass, as before.
+- **Rule 2b** — one footage group (`FootageMembership.confidence ≥ likely`), one
+  date: the strongest member claim by `ArchiveAngelEvent.DateClaim` ordering
+  (a person's date > a camera's stamp > the dossier > a name / export stamp —
+  software stamps demoted below the dossier for this purpose; then confidence,
+  precision, earliest year). Members without a user date whose own claim is
+  weaker inherit it: `shared from <file> (same footage): <the donor's reason>;
+  own evidence said <year>`. A user date, a camera stamp or a dossier inference
+  travels; a filename year or an export stamp never does. Shared rows are
+  derived (never donors) and re-derived every pass.
+- People-tab birth years come from the POI profiles via the read-only loader,
+  cached 5 minutes; never read under a test host (tests inject
+  `dateInferencePeople`).
+- Log: the 2026-09-12 line is unchanged; a second line
+  `date triangulation: N took their footage group's date, M re-triangulated
+  with a written reason, K cleared (<trigger>)` is written only when non-zero.
+
+### Resolver changes (rules v13)
+
+- `embeddedConfidence`: a make with **no model** is a software stamp (0.80),
+  like an `encoder`; `RecordDateResolver.namesDevice` is the one device rule
+  (the Date column's displaced-stamp path and the Angel's `hasCameraOrigin`
+  read it).
+- A software stamp (≤ 0.85) is set aside by an inferred date ≥ 0.6 that
+  disagrees by more than 2 years; a device stamp still needs the GH #166
+  content-agreement tier (≥ 0.85).
+- `resolve(… inferredDateRange:)`: a ranged inference resolves at year
+  precision.
+
+### Judgement calls made 2026-09-26 (for Rick to overrule)
+
+- Weights as tabled; a single now-cue (0.65) clears the 0.6 filing floor at
+  YEAR precision; a folder year alone (0.55) or a cue-less mention (0.45) is
+  shown in the Date column but not filed.
+- A range displays with an en dash: "2003–2004"; stored as two ints.
+- Two now-cues that disagree: the more-mentioned year is the point estimate,
+  confidence is penalised under the floor, the range spans both.
+- The DV / HDV / AVCHD floors are HARD (a burn-in reading 1991 on a DV file is
+  set aside and named in the reason — Rick can type 1991 if it is a dubbed tape).
+- Footage groups share only at `likely` or better; `possible` links do not.
+- A legacy own-pass date at ≥ 0.50 with no stored evidence is left as it is
+  (its evidence cannot be re-read); it shows "from an earlier pass, no written
+  reason" in the inspector.
