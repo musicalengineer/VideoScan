@@ -244,6 +244,18 @@ enum Broadcast {
     }
 }
 
+/// What Flush hides. Rick 2026-09-27: "a Flush to kinda reset everything
+/// but WIP" — the monitor's job is "is anyone blocked, what's outstanding",
+/// so Flush clears the backlog but keeps rows young enough to still be in
+/// flight.
+enum FlushRules {
+    static let wipWindow: TimeInterval = 15 * 60
+
+    static func rowsToFlush(_ rows: [ChannelRow], now: Date) -> [ChannelRow] {
+        rows.filter { now.timeIntervalSince($0.createdAt) >= wipWindow }
+    }
+}
+
 /// Rows Rick has flushed from the MONITOR. The database is untouched —
 /// an agent still gets the message at its next turn and acks it itself;
 /// Flush only stops the row from cluttering this window.

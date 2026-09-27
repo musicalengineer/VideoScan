@@ -28,4 +28,16 @@ final class BroadcastAndFlushTests: XCTestCase {
         XCTAssertEqual(DismissedRows.fileURL.lastPathComponent, "monitor-dismissed.json")
         try? FileManager.default.removeItem(at: tmp)
     }
+
+    /// Rick 2026-09-27: Flush resets everything but work in progress.
+    func testFlushKeepsRowsYoungerThanTheWIPWindow() {
+        let now = Date()
+        func row(_ id: Int, ageMinutes: Double) -> ChannelRow {
+            ChannelRow(messageID: id, author: "claude", recipient: "codex", subject: "s", body: "",
+                       replyTo: nil, createdAt: now.addingTimeInterval(-ageMinutes * 60), deliveredAt: nil,
+                       acknowledgedAt: nil, repliedAt: nil, nudgedAt: nil, status: .stuck(ageMinutes * 60))
+        }
+        let rows = [row(1, ageMinutes: 300), row(2, ageMinutes: 15), row(3, ageMinutes: 14.9), row(4, ageMinutes: 1)]
+        XCTAssertEqual(FlushRules.rowsToFlush(rows, now: now).map(\.messageID), [1, 2])
+    }
 }

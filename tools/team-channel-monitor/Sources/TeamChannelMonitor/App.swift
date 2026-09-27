@@ -27,7 +27,7 @@ struct TeamChannelMonitorApp: App {
         MenuBarExtra {
             MonitorView(model: model)
         } label: {
-            MenuBarLabel(snapshot: model.snapshot)
+            MenuBarLabel(red: model.badgeRed, yellow: model.badgeYellow)
         }
         .menuBarExtraStyle(.window)
     }
@@ -51,11 +51,27 @@ final class MonitorModel: ObservableObject {
     @Published var showDismissed = false
     private var timer: Timer?
 
-    /// Flush: hide every open row now. Nothing is acknowledged.
+    /// Flush: a reset. Hide every open row except work in progress — rows
+    /// newer than `FlushRules.wipWindow` (Rick 2026-09-27: "reset
+    /// everything but WIP"). Nothing is acknowledged or deleted.
     func flush(_ rows: [ChannelRow]) {
-        dismissed.formUnion(rows.map(\.id))
+        let toHide = FlushRules.rowsToFlush(rows, now: Date())
+        dismissed.formUnion(toHide.map(\.id))
         DismissedRows.save(dismissed)
-        lastAction = "Flushed \(rows.count) row(s) from view — nothing was acknowledged"
+        let kept = rows.count - toHide.count
+        lastAction = "Flushed \(toHide.count) row(s)" + (kept > 0 ? "; kept \(kept) in progress" : "") + " — nothing was acknowledged"
+    }
+
+    /// The menu-bar badge counts what the WINDOW shows: flushed rows no
+    /// longer count (they used to keep the badge at "19!" after a flush),
+    /// and a stuck codex review cycle counts as red — the badge answers
+    /// "is anyone blocked?".
+    var badgeRed: Int {
+        snapshot.rows.filter { $0.status.isRed && !dismissed.contains($0.id) }.count
+            + reviewLines.filter { $0.colour == .red }.count
+    }
+    var badgeYellow: Int {
+        snapshot.rows.filter { !$0.status.isGreen && !$0.status.isRed && !dismissed.contains($0.id) }.count
     }
 
     func unflushAll() {
@@ -184,7 +200,8 @@ final class MonitorModel: ObservableObject {
 }
 
 struct MenuBarLabel: View {
-    let snapshot: ChannelSnapshot
+    let red: Int
+    let yellow: Int
 
     /// A status item shows real colour only from a NON-template NSImage
     /// (the flag CyberPower/Adobe set); SF Symbols and SwiftUI text are
@@ -192,7 +209,7 @@ struct MenuBarLabel: View {
     /// when nothing is outstanding, yellow "2" when two are waiting, red
     /// "2!" when any is unanswered past 15 minutes.
     var body: some View {
-        Image(nsImage: StatusBadge.image(red: snapshot.red, yellow: snapshot.yellow))
+        Image(nsImage: StatusBadge.image(red: red, yellow: yellow))
     }
 }
 
