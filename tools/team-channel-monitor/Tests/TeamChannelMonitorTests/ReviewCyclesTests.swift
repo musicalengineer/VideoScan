@@ -23,10 +23,16 @@ final class ReviewCyclesTests: XCTestCase {
     }
 
     func testThresholdBoundaries() {
-        XCTAssertEqual(line(cycle(1, "fixing", ago: 9 * 60 + 59)).colour, .green)
-        XCTAssertEqual(line(cycle(1, "fixing", ago: 10 * 60)).colour, .yellow)
-        XCTAssertEqual(line(cycle(1, "fixing", ago: 29 * 60 + 59)).colour, .yellow)
-        XCTAssertEqual(line(cycle(1, "fixing", ago: 30 * 60)).colour, .red)
+        // codex's own steps: 10 / 30 min
+        XCTAssertEqual(line(cycle(1, "briefed", ago: 9 * 60 + 59)).colour, .green)
+        XCTAssertEqual(line(cycle(1, "briefed", ago: 10 * 60)).colour, .yellow)
+        XCTAssertEqual(line(cycle(1, "running", ago: 29 * 60 + 59, pid: 4242)).colour, .yellow)
+        XCTAssertEqual(line(cycle(1, "running", ago: 30 * 60, pid: 4242)).colour, .red)
+        // an agent's fix round: 60 min / 2 h
+        XCTAssertEqual(line(cycle(1, "fixing", ago: 59 * 60 + 59)).colour, .green)
+        XCTAssertEqual(line(cycle(1, "fixing", ago: 60 * 60)).colour, .yellow)
+        XCTAssertEqual(line(cycle(1, "fixing", ago: 2 * 3600 - 1)).colour, .yellow)
+        XCTAssertEqual(line(cycle(1, "fixing", ago: 2 * 3600)).colour, .red)
     }
 
     func testRunningWithDeadPidIsRedEvenWhenFresh() {
