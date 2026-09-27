@@ -65,6 +65,33 @@ struct ArchiveUpdateSafetyTests {
         #expect(Set((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).subtracting(before).count == 1, "backup kept")
     }
 
+    @Test("r2 #2: the source is swapped for another file while the backup is written → refused BEFORE the rename; the replacement is not moved")
+    func sourceSwappedBeforeMoveIsRefused() async throws {
+        let a = try UpdateFixture.make("srcswap")
+        defer { a.sb.cleanup() }
+        let p = try await UpdateFixture.preview(a)
+        let h = try UpdateFixture.hint(1984)
+        let src = URL(fileURLWithPath: a.absPath), target = a.url(p.target(hint: h, name: p.currentName))
+        let aside = a.sb.root.appendingPathComponent("test_original_aside.mov")
+        let manifest = UpdateFixture.data(a.sb.manifestURL)
+        final class Once: @unchecked Sendable { var done = false; let lock = NSLock() }
+        let once = Once()
+        var seams = ArchiveRefileEngine.Seams.live
+        seams.backupWriter = { data, url in
+            try ArchiveIndexRename.livePublish(data, to: url)
+            if once.lock.withLock({ let f = !once.done; once.done = true; return f }) {
+                try? FileManager.default.moveItem(at: src, to: aside)       // another writer takes the original…
+                try? Data("replacement".utf8).write(to: src)                 // …and leaves a different file
+            }
+        }
+        let r = await a.model.updateArchivedFile(p, name: p.currentName, hint: h, known: true, seams: seams)
+        #expect(r.kind == .refused, "\(r.kind): \(r.message)")
+        #expect(String(decoding: UpdateFixture.data(src), as: UTF8.self) == "replacement", "the replacement is not moved")
+        #expect(!FileManager.default.fileExists(atPath: target.path))
+        #expect(MasterArchiveTestSupport.sha256(ofFile: aside.path) == a.sha)
+        #expect(UpdateFixture.data(a.sb.manifestURL) == manifest)
+    }
+
     enum Failure: String, CaseIterable, Sendable { case verify, index }
 
     @Test("the move back's folder flush fails → incompleteRecovery, backup kept, file at the original path",

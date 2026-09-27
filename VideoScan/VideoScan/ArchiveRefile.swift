@@ -650,6 +650,14 @@ enum ArchiveRefileEngine {
             throw StepError.refusedBeforeMove("the source folder of \(from) could not be opened (\(ArchiveAttestationJournal.describe(error)))")
         }
         defer { Darwin.close(srcDir) }
+        // The file about to move must STILL be the one whose fingerprint was
+        // checked (device + inode + size + mtime), read through the same
+        // folder descriptor the rename uses — a swapped source is refused
+        // before anything moves (Archive Update review r2 #2).
+        guard let (now, mode) = ArchivePromoteEngine.FileIdentity.at(dirfd: srcDir, name: srcName), mode == S_IFREG,
+              now == sourceIdentity else {
+            throw StepError.refusedBeforeMove("the file at \(from) changed after its fingerprint was checked — nothing was moved")
+        }
         do {
             dstDir = try ArchivePromoteEngine.openDestinationDirectory(root: root, relativePath: to, create: true)
         } catch {
