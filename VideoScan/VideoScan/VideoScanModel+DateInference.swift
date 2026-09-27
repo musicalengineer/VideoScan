@@ -546,6 +546,9 @@ extension VideoScanModel {
         var written: [VideoRecord] = []
         for m in members where m.id != best.rec.id && m.userDate == nil {
             if let own = claims[m.id], !(best.claim < own.claim) { continue }   // as strong or stronger itself
+            // Rick's "not the same" (either side) blocks the share (codex F2).
+            if m.footageDecision(about: best.rec.id)?.verdict == .notSame
+                || best.rec.footageDecision(about: m.id)?.verdict == .notSame { continue }
             if applyFootageShare(to: m, from: best.rec, resolution: best.resolution,
                                  ownYear: claims[m.id]?.resolution.year) {
                 written.append(m)
@@ -554,16 +557,25 @@ extension VideoScanModel {
         return written
     }
 
+    /// What a share of `donor`'s claim `r` writes: the date, span and
+    /// confidence (the stale check compares exactly these) and the words
+    /// for the reason. nil when the claim may not travel.
+    struct FootageShareValue: Equatable {
+        var date: Date
+        var range: InferredDateRange?
+        var confidence: Float
+        var what: String
+    }
+
     @MainActor
-    static func applyFootageShare(to rec: VideoRecord, from donor: VideoRecord,
-                                  resolution r: RecordDateResolution, ownYear: Int?) -> Bool {
-        guard let year = r.year else { return false }
+    static func footageShareValue(from donor: VideoRecord, resolution r: RecordDateResolution) -> FootageShareValue? {
+        guard let year = r.year else { return nil }
         let date: Date
         let range: InferredDateRange?
         let what: String
         switch r.source {
         case .userDate:
-            guard let d = r.precision == .day ? r.date : pfJanuaryFirst(of: year) else { return false }
+            guard let d = r.precision == .day ? r.date : pfJanuaryFirst(of: year) else { return nil }
             date = d
             range = r.precision == .day ? nil : InferredDateRange(year: year)
             what = "your date \(UserDateEntry.friendlyDisplay(r.isoString))"
@@ -572,41 +584,60 @@ extension VideoScanModel {
             // resolution's confidence says (a user year once lifted it to 1.0).
             guard let d = donor.embeddedCreationDate,
                   RecordDateResolver.namesDevice(originMake: donor.originMake, originModel: donor.originModel)
-            else { return false }
+            else { return nil }
             date = d; range = nil
             what = "camera stamp \(r.isoString) (\(donor.embeddedDateOriginLabel))"
         case .inferred:
-            guard let d = donor.inferredRecordDate else { return false }
+            guard let d = donor.inferredRecordDate else { return nil }
             date = d; range = donor.inferredDateRange
             what = donor.inferredDateReason ?? "inferred \(r.isoString)"
         case .filename, .none:
-            return false
+            return nil
         }
-        let confidence = min(DateTriangulationWeights.cap, r.confidence)
+        return FootageShareValue(date: date, range: range,
+                                 confidence: min(DateTriangulationWeights.cap, r.confidence), what: what)
+    }
+
+    @MainActor
+    static func applyFootageShare(to rec: VideoRecord, from donor: VideoRecord,
+                                  resolution r: RecordDateResolution, ownYear: Int?) -> Bool {
+        guard let year = r.year, let v = footageShareValue(from: donor, resolution: r) else { return false }
         let source = InferredDateSource.footageShared(from: donor)
-        var reason = "shared from \(donor.filename) (same footage): \(what)"
+        var reason = "shared from \(donor.filename) (same footage): \(v.what)"
         if let ownYear, ownYear != year { reason += "; own evidence said \(ownYear)" }
-        if rec.inferredRecordDate == date, rec.inferredDateConfidence == confidence,
-           rec.inferredDateRange == range, rec.inferredDateSource == source, rec.inferredDateReason == reason {
+        if rec.inferredRecordDate == v.date, rec.inferredDateConfidence == v.confidence,
+           rec.inferredDateRange == v.range, rec.inferredDateSource == source, rec.inferredDateReason == reason {
             return false
         }
-        rec.inferredRecordDate = date
-        rec.inferredDateConfidence = confidence
-        rec.inferredDateRange = range
+        rec.inferredRecordDate = v.date
+        rec.inferredDateConfidence = v.confidence
+        rec.inferredDateRange = v.range
         rec.inferredDateSource = source
         rec.inferredDateReason = reason
         return true
     }
 
-    /// A footage-shared date whose donor is gone, or no longer in the same
-    /// footage group (a later run regrouped, or Rick said "not the same").
+    /// Codex F2: a footage-shared date is STALE unless all of these still
+    /// hold — the donor exists in the same footage group; both memberships
+    /// are ≥ `likely`; neither row carries Rick's "not the same" about the
+    /// other; and the donor STILL holds a shareable claim that produces the
+    /// very value this row carries (same kind ⇒ same date / span /
+    /// confidence). A retracted user date, a downgraded group or a changed
+    /// donor year all clear the share; rule 2b re-shares whatever is true now.
     @MainActor
-    static func isStaleFootageShare(_ rec: VideoRecord, byID: [UUID: VideoRecord]) -> Bool {
+    static func isStaleFootageShare(_ rec: VideoRecord, byID: [UUID: VideoRecord], now: Date = Date()) -> Bool {
         guard isFootageSharedInferredDate(rec), let source = rec.inferredDateSource else { return false }
-        guard let groupID = rec.footage?.groupID,
+        guard let membership = rec.footage, membership.confidence >= footageShareMinimumConfidence,
               let donorID = UUID(uuidString: String(source.dropFirst(InferredDateSource.footageSharedPrefix.count))),
-              let donor = byID[donorID], donor.footage?.groupID == groupID else { return true }
-        return false
+              let donor = byID[donorID], let donorMembership = donor.footage,
+              donorMembership.groupID == membership.groupID,
+              donorMembership.confidence >= footageShareMinimumConfidence else { return true }
+        if rec.footageDecision(about: donor.id)?.verdict == .notSame
+            || donor.footageDecision(about: rec.id)?.verdict == .notSame { return true }
+        guard let claim = footageDateClaim(donor, now: now), footageClaimIsShareable(claim.resolution),
+              let v = footageShareValue(from: donor, resolution: claim.resolution) else { return true }
+        return v.date != rec.inferredRecordDate || v.range != rec.inferredDateRange
+            || v.confidence != rec.inferredDateConfidence
     }
 
     // MARK: - The pass
@@ -672,7 +703,7 @@ extension VideoScanModel {
                 Self.clearInferredDate(rec, reason: Self.clearedFilesystemReason)
                 result.cleared += 1
                 touched.append(rec)
-            } else if Self.isStaleFootageShare(rec, byID: byID) {
+            } else if Self.isStaleFootageShare(rec, byID: byID, now: started) {
                 Self.clearInferredDate(rec, reason: nil)
                 result.cleared += 1
                 touched.append(rec)
