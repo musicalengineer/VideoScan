@@ -153,3 +153,7 @@ Answer, concretely:
 6. What you'd need from Claude/Rick, and what you'd build yourself on your own branch.
 
 Be specific to this repo; cite file paths you read.
+
+## Closed
+
+Closed by `8de375a6` at 2026-09-27T23:05:59Z. codex built phase 1 (161,870 tokens); Claude reviewing + running the narrow real check
