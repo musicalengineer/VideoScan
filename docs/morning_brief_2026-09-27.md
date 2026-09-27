@@ -1,7 +1,7 @@
 # Morning brief — 2026-09-27
 
 ## CI
-- ✅ **main a858bffe — CI GREEN** (run 36291585673), 00:30. Includes every merge below.
+- ✅ **main faa710a6 — CI GREEN** (run 36295901260, ~02:10); b3015305 and a858bffe green too. Includes every merge below. Earlier reds tonight (8422f54a, 9d3afbb3: two date-merge failures; a23c7d83: a flake) are all fixed and explained below.
 - a23c7d83 (⌘O confirm, #203) went **red**: `UpdateCatalogTests.promptFiresOncePerMountedVolume` — after `resetLooksMovedDebounce()`, `noteMissingFileForUserAction` returned false. The debounce set is per-model, so the likely cause is the shared `VolumeReachability` cache seeing the temp volume as unreachable under a parallel test (settings-pollution class), not #203 itself; 3c452357 before it was green. 8422f54a's CI did NOT reproduce it (flake confirmed; filed with the timing-budget class).
 - 🔴 **8422f54a (date triangulator merge) CI red — 2 real failures my verify filter missed:** (1) the Archive Angel boundary ratchet — the date code names an Angel-internal type 4 times; (2) the Angel's pinned S0 100k class counts moved 43 candidates from "needs a date" to "ready". **Fixed, 0ace42fc:** the claim ordering moved to a neutral VideoScanCore type (boundary stays at baseline 0); the 43 are exactly the recent-digitization candidates whose stamp the v13 rule now sets aside — matches the #201 spec, re-pinned with a test naming them. Lesson taken: the pre-push verify now runs every suite family that calls the date resolver (226 filters, 1,325 tests).
 
