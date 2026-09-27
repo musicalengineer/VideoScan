@@ -76,3 +76,36 @@ struct ArchiveRefileR2RollbackDurabilityTests {
         #expect(after.subtracting(before).count == 1, "the backup of this refile is kept, never removed")
     }
 }
+
+// MARK: - Finding 3: a failed move back is reconciled by IDENTITY
+
+@Suite("Archive Refile r2 — failed move back reconciled by identity", .serialized)
+@MainActor
+struct ArchiveRefileR2MoveBackIdentityTests {
+
+    @Test("a foreign file appears at the old path during the read-back → mixedState naming both paths; the record follows the ORIGINAL; both files kept")
+    func blockerAtOldPath() async throws {
+        let a = try await RefileFixture.make("r2id")
+        defer { a.sb.cleanup() }
+        let p = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        let from = a.relPath
+        let to = p.target(hint: p.initialHint, name: p.initialName)
+        let blocker = a.absPath
+        var seams = ArchiveRefileEngine.Seams.live
+        seams.hashFile = { root, rel in
+            if rel == from { return try ArchivePromoteEngine.sha256(root: root, relativePath: rel) }
+            // While the moved file is being read back, another writer puts a
+            // DIFFERENT file at the old name; then the read-back "mismatches".
+            try Data("a different file".utf8).write(to: URL(fileURLWithPath: blocker))
+            return String(repeating: "0", count: 64)
+        }
+        let r = await a.model.refileArchiveCopy(p, hint: p.initialHint, name: p.initialName, seams: seams)
+        #expect(r.kind == .mixedState, "\(r.kind): \(r.message)")
+        #expect(r.message.contains(from) && r.message.contains(to), "both paths named: \(r.message)")
+        let newAbs = a.sb.archiveRoot.appendingPathComponent(to).path
+        #expect(MasterArchiveTestSupport.sha256(ofFile: newAbs) == a.sha, "the archived original is at the new path, untouched")
+        #expect(String(decoding: RefileFixture.data(URL(fileURLWithPath: blocker)), as: UTF8.self) == "a different file",
+                "the foreign file is preserved")
+        #expect(a.copy.fullPath == newAbs, "the record points at the ORIGINAL, never at the foreign file")
+    }
+}

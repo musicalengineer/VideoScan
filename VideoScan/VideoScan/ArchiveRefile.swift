@@ -539,7 +539,9 @@ enum ArchiveRefileEngine {
         /// the index files are their old bytes.
         case rolledBack(String)
         /// Putting it back ALSO failed — mixed state, every path in the text.
-        case mixedState(String)
+        /// `originalRelPath` = where the archived original IS, found by
+        /// identity (nil = not found at either path).
+        case mixedState(String, originalRelPath: String?)
         /// Put back (file at `from`, index files hold their old bytes) but
         /// the folder flush after the move back FAILED: not confirmed
         /// durable. The index backup is kept. Codex review #4.
@@ -564,6 +566,14 @@ enum ArchiveRefileEngine {
         case notRolledBack(String)
     }
 
+    /// Everything preflight proved, handed to the commit phase.
+    private struct Prepared {
+        let plan: ArchiveIndexRename.Plan
+        let digest: String
+        let sourceIdentity: ArchivePromoteEngine.FileIdentity
+        let promotedAt: Date?
+    }
+
     /// Run one refile. Synchronous and DISK-BOUND (two whole-file hashes) —
     /// call it off the main actor. `audit` gets every step line.
     static func execute(_ req: Request,
@@ -572,32 +582,36 @@ enum ArchiveRefileEngine {
                         now: Date = Date(),
                         audit: (String) -> Void) -> Outcome {
         let subject = "Refile: \(req.filename) — "
-        func refuse(_ why: String) -> Outcome {
-            audit(subject + "refused: \(why). Nothing was changed.")
-            return .refused(why)
+        switch preflight(req, authorization: authorization, seams: seams, audit: { audit(subject + $0) }) {
+        case .failure(let refusal):
+            audit(subject + "refused: \(refusal.why). Nothing was changed.")
+            return .refused(refusal.why)
+        case .success(let prepared):
+            return commit(req, prepared, seams: seams, now: now, subject: subject, audit: audit)
         }
-        let root = req.rootPath, from = req.fromRelPath, to = req.toRelPath
+    }
 
-        // ---- (a) Refusals — before ANY mutation.
+    private struct Refusal: Error { let why: String }
+
+    /// (a) Every refusal, before ANY mutation; builds the index plan in memory.
+    private static func preflight(_ req: Request, authorization: ArchiveRefileAuthorization,
+                                  seams: Seams, audit: (String) -> Void) -> Result<Prepared, Refusal> {
+        let root = req.rootPath, from = req.fromRelPath, to = req.toRelPath
+        func no(_ why: String) -> Result<Prepared, Refusal> { .failure(Refusal(why: why)) }
         guard authorization.covers(rootPath: root, fromRelPath: from, toRelPath: to) else {
-            return refuse("the archive write exception does not cover this move (\(from) → \(to))")
+            return no("the archive write exception does not cover this move (\(from) → \(to))")
         }
-        audit(subject + "checking the archive before moving \(from) → \(to)…")
-        let rootFD: Int32
+        audit("checking the archive before moving \(from) → \(to)…")
         do {
-            rootFD = try ArchivePromoteEngine.openDirectory(root)
+            Darwin.close(try ArchivePromoteEngine.openDirectory(root))
         } catch {
-            return refuse("the Master Archive at \(root) is not reachable (\(ArchiveAttestationJournal.describe(error)))")
+            return no("the Master Archive at \(root) is not reachable (\(ArchiveAttestationJournal.describe(error)))")
         }
-        Darwin.close(rootFD)
-        if seams.isVolumeReadOnly(root) {
-            return refuse("the archive volume is mounted read-only")
-        }
+        if seams.isVolumeReadOnly(root) { return no("the archive volume is mounted read-only") }
         guard ArchivePromoteEngine.isContainedRelPath(from, root: root),
               ArchivePromoteEngine.isContainedRelPath(to, root: root), from != to else {
-            return refuse("\(from) → \(to) is not a move inside the archive")
+            return no("\(from) → \(to) is not a move inside the archive")
         }
-
         // The manifest: read once through the validated descriptor; its
         // bytes are the ones the rewrite is built from.
         let manifestData: Data
@@ -607,107 +621,129 @@ enum ArchiveRefileEngine {
                 root: root, name: MasterArchiveLayout.manifestFilename,
                 expectedHeaders: MasterArchiveLayout.acceptedManifestHeaders)
         } catch {
-            return refuse((error as? ArchiveIndexRename.Failure)?.errorDescription ?? "the archive manifest could not be read")
+            return no((error as? ArchiveIndexRename.Failure)?.errorDescription ?? "the archive manifest could not be read")
         }
         let rows = ArchiveRefile.parseRows(String(decoding: manifestData, as: UTF8.self))
         let mine = rows.filter { $0.relPath == from }
         guard let digest = mine.last?.sha256, !digest.isEmpty else {
-            return refuse("the archive manifest has no row for \(from) — only files the index knows can be refiled")
+            return no("the archive manifest has no row for \(from) — only files the index knows can be refiled")
         }
         guard Set(mine.map(\.sha256)).count == 1 else {
-            return refuse("the archive manifest lists \(from) with \(Set(mine.map(\.sha256)).count) different fingerprints — check it by hand")
+            return no("the archive manifest lists \(from) with \(Set(mine.map(\.sha256)).count) different fingerprints — check it by hand")
         }
-        if rows.contains(where: { $0.relPath == to }) {
-            return refuse("the archive manifest already lists a file at \(to)")
+        if rows.contains(where: { $0.relPath == to }) { return no("the archive manifest already lists a file at \(to)") }
+        if let why = targetRefusal(root: root, to: to) { return no(why) }
+        let sourceIdentity: ArchivePromoteEngine.FileIdentity
+        switch sourceCheck(root: root, from: from, digest: digest, seams: seams, audit: audit) {
+        case .failure(let r): return .failure(r)
+        case .success(let id): sourceIdentity = id
         }
+        switch indexPlan(req, manifestData: manifestData, manifestIdentity: manifestIdentity, expectedRows: mine.count) {
+        case .failure(let r): return .failure(r)
+        case .success(let plan):
+            return .success(Prepared(plan: plan, digest: digest, sourceIdentity: sourceIdentity,
+                                     promotedAt: mine.last?.promotedAt))
+        }
+    }
 
-        // Target: nothing there on disk (nor an in-flight Promote partial).
+    /// Nothing at the target on disk (nor an in-flight Promote partial).
+    private static func targetRefusal(root: String, to: String) -> String? {
         do {
             for probe in [to, to + ".partial"] {
                 if let fd = try ArchivePromoteEngine.openContainedFile(root: root, relativePath: probe) {
                     Darwin.close(fd)
-                    return refuse("a file already exists at \(probe)")
+                    return "a file already exists at \(probe)"
                 }
             }
         } catch {
-            return refuse("the target \(to) cannot be checked safely (\(ArchiveAttestationJournal.describe(error)))")
+            return "the target \(to) cannot be checked safely (\(ArchiveAttestationJournal.describe(error)))"
         }
+        return nil
+    }
 
-        // Source: present, a regular file, and its bytes ARE the manifest's
-        // (fixity first — never move a file we cannot vouch for).
-        let sourceIdentity: ArchivePromoteEngine.FileIdentity
+    /// Source: present, a regular file, and its bytes ARE the manifest's
+    /// (fixity first — never move a file we cannot vouch for).
+    private static func sourceCheck(root: String, from: String, digest: String, seams: Seams,
+                                    audit: (String) -> Void) -> Result<ArchivePromoteEngine.FileIdentity, Refusal> {
+        func no(_ why: String) -> Result<ArchivePromoteEngine.FileIdentity, Refusal> { .failure(Refusal(why: why)) }
+        let identity: ArchivePromoteEngine.FileIdentity
         do {
             guard let fd = try ArchivePromoteEngine.openContainedFile(root: root, relativePath: from) else {
-                return refuse("the file is not at \(from)")
+                return no("the file is not at \(from)")
             }
             defer { Darwin.close(fd) }
-            guard let (id, _) = ArchivePromoteEngine.FileIdentity.of(fd: fd) else {
-                return refuse("could not stat \(from)")
-            }
-            sourceIdentity = id
+            guard let (id, _) = ArchivePromoteEngine.FileIdentity.of(fd: fd) else { return no("could not stat \(from)") }
+            identity = id
         } catch {
-            return refuse("the source \(from) cannot be opened safely (\(ArchiveAttestationJournal.describe(error)))")
+            return no("the source \(from) cannot be opened safely (\(ArchiveAttestationJournal.describe(error)))")
         }
-        audit(subject + "verifying its fingerprint (SHA-256) at \(from) before the move — this reads the whole file…")
+        audit("verifying its fingerprint (SHA-256) at \(from) before the move — this reads the whole file…")
         do {
-            guard let actual = try seams.hashFile(root, from) else { return refuse("the file is not at \(from)") }
+            guard let actual = try seams.hashFile(root, from) else { return no("the file is not at \(from)") }
             guard actual == digest else {
-                return refuse("the file at \(from) does not match its manifest fingerprint (\(actual.prefix(12))… ≠ \(digest.prefix(12))…) — run Verify Copies before refiling")
+                return no("the file at \(from) does not match its manifest fingerprint (\(actual.prefix(12))… ≠ \(digest.prefix(12))…) — run Verify Copies before refiling")
             }
         } catch {
-            return refuse("the file at \(from) could not be read (\(ArchiveAttestationJournal.describe(error)))")
+            return no("the file at \(from) could not be read (\(ArchiveAttestationJournal.describe(error)))")
         }
-        audit(subject + "fixity verified at \(from) (sha256 \(digest.prefix(12))…)")
+        audit("fixity verified at \(from) (sha256 \(digest.prefix(12))…)")
+        return .success(identity)
+    }
 
-        // The index plan, built in memory: the manifest row (targeted) plus
-        // the journals' exact old-path values. Nothing written yet.
-        let absFrom = (root as NSString).appendingPathComponent(from)
-        let absTo = (root as NSString).appendingPathComponent(to)
-        let plan: ArchiveIndexRename.Plan
-        let manifestRewrite: ArchiveIndexRename.FileRewrite
+    /// The index plan, built in memory: the manifest row (targeted) plus the
+    /// journals' exact old-path values. Nothing written.
+    private static func indexPlan(_ req: Request, manifestData: Data,
+                                  manifestIdentity: ArchivePromoteEngine.FileIdentity,
+                                  expectedRows: Int) -> Result<ArchiveIndexRename.Plan, Refusal> {
+        let root = req.rootPath, from = req.fromRelPath, to = req.toRelPath
         do {
             let rewrite = try ArchiveRefile.rewriteManifestRows([UInt8](manifestData), from: from, to: to,
                                                                  recordDate: req.recordDate,
                                                                  dateConfidence: req.dateConfidence)
-            guard rewrite.changedLines == mine.count else {
-                return refuse("the manifest row for \(from) could not be located for rewriting (\(rewrite.changedLines) of \(mine.count))")
+            guard rewrite.changedLines == expectedRows else {
+                return .failure(Refusal(why: "the manifest row for \(from) could not be located for rewriting (\(rewrite.changedLines) of \(expectedRows))"))
             }
-            manifestRewrite = ArchiveIndexRename.FileRewrite(
+            let manifestRewrite = ArchiveIndexRename.FileRewrite(
                 name: MasterArchiveLayout.manifestFilename,
                 url: MasterArchiveLayout.manifestURL(rootPath: root),
                 original: manifestData, updated: Data(rewrite.bytes),
                 changedLines: rewrite.changedLines, identity: manifestIdentity)
             let replacements = ArchiveIndexRename.Replacements(
-                values: [from: to, absFrom: absTo],
+                values: [from: to,
+                         (root as NSString).appendingPathComponent(from): (root as NSString).appendingPathComponent(to)],
                 oldFilename: (from as NSString).lastPathComponent,
                 newFilename: (to as NSString).lastPathComponent)
             let journals = try ArchiveIndexRename.prepare(root: root, replacements: replacements)
                 .files.filter { $0.name != MasterArchiveLayout.manifestFilename }
-            plan = ArchiveIndexRename.Plan(root: root, files: [manifestRewrite] + journals)
+            return .success(ArchiveIndexRename.Plan(root: root, files: [manifestRewrite] + journals))
         } catch let f as ArchiveIndexRename.Failure {
-            return refuse(f.errorDescription ?? "the archive index could not be prepared")
+            return .failure(Refusal(why: f.errorDescription ?? "the archive index could not be prepared"))
         } catch {
-            return refuse("the archive index could not be prepared (\(ArchiveAttestationJournal.describe(error)))")
+            return .failure(Refusal(why: "the archive index could not be prepared (\(ArchiveAttestationJournal.describe(error)))"))
         }
+    }
 
-        // ---- (b)–(d) under the #204 backup: backup → recheck → move +
-        // verify → publish; any failure after the move rolls back.
+    /// (b)–(d) under the #204 backup: backup → recheck → move + verify →
+    /// publish; any failure after the move rolls back.
+    private static func commit(_ req: Request, _ prep: Prepared, seams: Seams, now: Date,
+                               subject: String, audit: (String) -> Void) -> Outcome {
+        let root = req.rootPath, from = req.fromRelPath, to = req.toRelPath
         var moved = false
         var recoveryNotDurable: String?
-        let srcName = (from as NSString).lastPathComponent
-        let dstName = (to as NSString).lastPathComponent
         let backupDir: URL?
         do {
             backupDir = try ArchiveIndexRename.apply(
-                plan, now: now,
+                prep.plan, now: now,
                 publisher: seams.indexPublisher,
                 backupWriter: seams.backupWriter,
                 announce: { dir in
                     audit(subject + "index backup written to \(dir.path); moving \(from) → \(to) (one rename on the same volume, never a copy)…")
                 },
                 moveMedia: {
-                    try moveAndVerify(root: root, from: from, to: to, srcName: srcName, dstName: dstName,
-                                      sourceIdentity: sourceIdentity, digest: digest, seams: seams,
+                    try moveAndVerify(root: root, from: from, to: to,
+                                      srcName: (from as NSString).lastPathComponent,
+                                      dstName: (to as NSString).lastPathComponent,
+                                      sourceIdentity: prep.sourceIdentity, digest: prep.digest, seams: seams,
                                       moved: &moved, audit: { audit(subject + $0) })
                 },
                 undoMoveMedia: {
@@ -720,53 +756,90 @@ enum ArchiveRefileEngine {
                     }
                     audit(subject + "the file is back at \(from)")
                 })
-        } catch StepError.refusedBeforeMove(let why) {
-            return refuse(why)
-        } catch StepError.rolledBack(let why) {
+        } catch {
+            return failureOutcome(error, req, prep, moved: moved, recoveryNotDurable: recoveryNotDurable,
+                                  subject: subject, audit: audit)
+        }
+        let lines = prep.plan.changedLines, files = prep.plan.files.count
+        audit(subject + "index updated — \(lines) line\(lines == 1 ? "" : "s") in \(files) index file\(files == 1 ? "" : "s")\(backupDir.map { "; backup \($0.path)" } ?? "")")
+        return .refiled(Done(fromRelPath: from, toRelPath: to, sha256: prep.digest, backupDir: backupDir?.path,
+                             indexFilesChanged: files, linesChanged: lines, promotedAt: prep.promotedAt))
+    }
+
+    /// Map a failure of the commit phase to an outcome, proving what it
+    /// can from disk (bytes of the index files, identity of the file).
+    private static func failureOutcome(_ error: Error, _ req: Request, _ prep: Prepared,
+                                       moved: Bool, recoveryNotDurable: String?,
+                                       subject: String, audit: (String) -> Void) -> Outcome {
+        let root = req.rootPath, from = req.fromRelPath, to = req.toRelPath
+        func mixed(_ why: String) -> Outcome {
+            // Where is the ARCHIVED ORIGINAL now? By identity (device +
+            // inode + size), never by "a file exists at that path" — a
+            // foreign file at the old name must not be mistaken for it.
+            let at = locateOriginal(root: root, candidates: [to, from], identity: prep.sourceIdentity)
+            let place = at.map { "The archived original is at \($0)." }
+                ?? "The archived original could not be found by identity at \(from) or \(to)."
+            let text = "\(why) Paths: \(from) (old) and \(to) (new). \(place) Nothing was deleted."
+            audit(subject + "FAILED and the ROLLBACK FAILED: \(text)")
+            refileLog.fault("refile mixed state: \(text, privacy: .public)")
+            return .mixedState(text, originalRelPath: at)
+        }
+        func incomplete(_ why: String) -> Outcome {
+            audit(subject + "FAILED, put back, but recovery NOT CONFIRMED DURABLE: \(why). The index backup is KEPT in 00_Index/\(ArchiveIndexRename.backupFolder).")
+            refileLog.fault("refile incomplete recovery: \(why, privacy: .public)")
+            return .incompleteRecovery(why)
+        }
+        switch error {
+        case StepError.refusedBeforeMove(let why):
+            audit(subject + "refused: \(why). Nothing was changed.")
+            return .refused(why)
+        case StepError.rolledBack(let why):
             audit(subject + "FAILED and ROLLED BACK: \(why). The file is back at \(from); the index was not changed.")
             return .rolledBack(why)
-        } catch let e as IncompleteRecovery {
-            audit(subject + "FAILED, put back, but recovery NOT CONFIRMED DURABLE: \(e.why). The index backup is KEPT in 00_Index/\(ArchiveIndexRename.backupFolder).")
-            refileLog.fault("refile incomplete recovery: \(e.why, privacy: .public)")
-            return .incompleteRecovery(e.why)
-        } catch StepError.notRolledBack(let why) {
-            audit(subject + "FAILED and the ROLLBACK FAILED: \(why)")
-            refileLog.fault("refile mixed state: \(why, privacy: .public)")
-            return .mixedState(why)
-        } catch let f as ArchiveIndexRename.Failure {
+        case let e as IncompleteRecovery:
+            return incomplete(e.why)
+        case StepError.notRolledBack(let why):
+            return mixed(why)
+        case let f as ArchiveIndexRename.Failure:
             let text = f.errorDescription ?? "the archive index could not be updated"
-            switch f {
-            case .publishFailedNotRolledBack:
-                // The only undo problem a durability failure of the move
-                // back? Prove the rest by bytes and place: the file is at
-                // `from` and every index file holds its original bytes.
+            if case .publishFailedNotRolledBack = f {
+                // Only the move back's flush failed? Prove the rest by bytes
+                // and identity: every index file holds its original bytes and
+                // the original is back at `from`.
                 if let nd = recoveryNotDurable,
-                   plan.files.allSatisfy({ (try? Data(contentsOf: $0.url)) == $0.original }),
-                   (try? ArchivePromoteEngine.openContainedFile(root: root, relativePath: from)).flatMap({ $0 }).map({ fd -> Bool in Darwin.close(fd); return true }) == true {
-                    let why = "\(text) — the file was moved back to \(from) and the index restored, but \(nd)"
-                    audit(subject + "FAILED, put back, but recovery NOT CONFIRMED DURABLE: \(why). The index backup is KEPT in 00_Index/\(ArchiveIndexRename.backupFolder).")
-                    refileLog.fault("refile incomplete recovery: \(why, privacy: .public)")
-                    return .incompleteRecovery(why)
+                   prep.plan.files.allSatisfy({ (try? Data(contentsOf: $0.url)) == $0.original }),
+                   locateOriginal(root: root, candidates: [from], identity: prep.sourceIdentity) == from {
+                    return incomplete("\(text) — the file was moved back to \(from) and the index restored, but \(nd)")
                 }
-                audit(subject + "FAILED and the ROLLBACK FAILED: \(text)")
-                refileLog.fault("refile index rollback failed: \(text, privacy: .public)")
-                return .mixedState(text)
-            default:
-                if moved {
-                    audit(subject + "FAILED and ROLLED BACK: \(text) The file is back at \(from); every index file holds its old bytes.")
-                    return .rolledBack(text)
-                }
-                return refuse(text)
+                return mixed(text)
             }
-        } catch {
+            if moved {
+                audit(subject + "FAILED and ROLLED BACK: \(text) The file is back at \(from); every index file holds its old bytes.")
+                return .rolledBack(text)
+            }
+            audit(subject + "refused: \(text). Nothing was changed.")
+            return .refused(text)
+        default:
             let text = ArchiveAttestationJournal.describe(error)
-            return moved ? .rolledBack(text) : refuse(text)
+            if moved { return .rolledBack(text) }
+            audit(subject + "refused: \(text). Nothing was changed.")
+            return .refused(text)
         }
-        let lines = plan.changedLines
-        audit(subject + "index updated — \(lines) line\(lines == 1 ? "" : "s") in \(plan.files.count) index file\(plan.files.count == 1 ? "" : "s")\(backupDir.map { "; backup \($0.path)" } ?? "")")
-        return .refiled(Done(fromRelPath: from, toRelPath: to, sha256: digest, backupDir: backupDir?.path,
-                             indexFilesChanged: plan.files.count, linesChanged: lines,
-                             promotedAt: mine.last?.promotedAt))
+    }
+
+    /// The first candidate relpath holding the file with this identity
+    /// (device + inode + size, through the O_NOFOLLOW dirfd chain), or nil.
+    static func locateOriginal(root: String, candidates: [String],
+                               identity: ArchivePromoteEngine.FileIdentity) -> String? {
+        for rel in candidates {
+            guard let fd = try? ArchivePromoteEngine.openContainedFile(root: root, relativePath: rel) else { continue }
+            defer { Darwin.close(fd) }
+            if let (id, _) = ArchivePromoteEngine.FileIdentity.of(fd: fd),
+               id.device == identity.device, id.inode == identity.inode, id.size == identity.size {
+                return rel
+            }
+        }
+        return nil
     }
 
     /// (b) + (c): the rename and the proof. On a verify failure the file is

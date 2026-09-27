@@ -413,14 +413,17 @@ extension VideoScanModel {
             refreshArchiveMisfiled(reason: "refile incomplete recovery", force: true)
             return ArchiveRefileResult(kind: .incompleteRecovery,
                                        message: "Refile failed and was put back, but the drive did not confirm the move back was saved (recovery not confirmed durable). The index backup was kept. Check the drive, then run Verify Copies.\n\(why)")
-        case .mixedState(let why):
+        case .mixedState(let why, let originalAt):
             ledgerRefileRolledBack(copy: copy, from: p.fromRelPath, to: to, why: "ROLLBACK FAILED — \(why)", now: now)
-            // The record must say where the file IS.
-            let newPath = (root as NSString).appendingPathComponent(to)
-            let fm = FileManager.default
-            if fm.fileExists(atPath: newPath), !fm.fileExists(atPath: copy.fullPath) {
-                moveRecord(copy, to: newPath)
-                _ = saveCatalogNow()
+            // The record must say where the ARCHIVED ORIGINAL is — found by
+            // identity in the engine, never "a file exists there" (codex #3).
+            if let originalAt, originalAt != p.fromRelPath {
+                let at = (root as NSString).appendingPathComponent(originalAt)
+                refileNote("Refile: \(label) — catalog record now points at the archived original, \(originalAt) (identity-checked); the file at \(p.fromRelPath) is NOT it and was left alone")
+                moveRecord(copy, to: at)
+                if !saveCatalogNow() { saveCatalogDebounced() }
+            } else if originalAt == nil {
+                refileNote("Refile: \(label) — the archived original was not found by identity at \(p.fromRelPath) or \(to); the catalog record was left unchanged — check both paths by hand")
             }
             refileNote("Refile: \(label) — FAILED AND COULD NOT BE FULLY UNDONE: \(why)")
             refreshArchiveMisfiled(reason: "refile mixed state", force: true)
