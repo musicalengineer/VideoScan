@@ -508,7 +508,7 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/AdaFaceEngine.swift": 1, "VideoScan/ArcFaceEngine.swift": 1,
         "VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift": 1, "VideoScan/ArchiveAngel/Prepare/ArchiveAngelPlan.swift": 2,
         "VideoScan/ArchivePromoteEngine.swift": 3, "VideoScan/AudioTranscriber.swift": 1,
-        "VideoScan/ArchiveIndexRename.swift": 3,   // 2026-09-25: only 00_Index/.rename_backups/<stamp> folders (refused-rename cleanup + keep-newest-20 prune) — never media or index files
+        "VideoScan/ArchiveIndexRename.swift": 4,   // 2026-09-25: only 00_Index/.rename_backups/<stamp> folders (refused-rename cleanup + keep-newest-20 prune) — never media or index files. 2026-09-27 (codex review of GH #204): +1 `abandon` — a backup folder THIS process just claimed and failed to finish; prune now removes only real dirs carrying our complete marker
         "VideoScan/BalanceAudioJob.swift": 1, "VideoScan/BundleExporter.swift": 1,
         "VideoScan/BundleImporter.swift": 2, "VideoScan/CaptionRunner.swift": 2,
         "VideoScan/CatalogStore.swift": 1, "VideoScan/CatalogSync.swift": 3,

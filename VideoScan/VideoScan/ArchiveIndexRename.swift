@@ -51,11 +51,12 @@
 //   A refused rename removes its own backup folder; a successful one
 //   keeps it, and `.rename_backups/` keeps the newest `backupRetention`.
 //   Backup folders are named by a UTC stamp with the "Z" offset
-//   designator ("2026-11-01T053000.123Z"), created EXCLUSIVELY (a name
-//   already taken gets -2, -3 …), and pruned by PARSED date — never by
-//   string order (GH #204: local-time names sorted lexically pruned the
-//   newest backup in the DST fall-back hour, and two renames in one
-//   millisecond shared a folder). Legacy local-time names still parse.
+//   designator ("2026-11-01T053000.123Z") and created EXCLUSIVELY (a name
+//   already taken gets -2, -3 …) — GH #204. Retention never reads names
+//   or clocks: it counts and orders only folders carrying our own marker
+//   (`.videoscan-backup.json`, monotonic sequence, complete=true written
+//   after publish) — codex review 2026-09-27. Legacy (markerless)
+//   folders are left in place and never pruned.
 //   Residual window: the recheck and the rename(2) that publishes are two
 //   syscalls — an append in the microseconds between them is still lost.
 //   The model also refuses while a Promote job runs (the main writer).
@@ -257,6 +258,7 @@ enum ArchiveIndexRename {
     static func apply(_ plan: Plan,
                       now: Date = Date(),
                       publisher: Publisher = livePublish(_:to:),
+                      backupWriter: Publisher = livePublish(_:to:),
                       announce: (URL) -> Void = { _ in },
                       moveMedia: () throws -> Void,
                       undoMoveMedia: () throws -> Void) throws -> URL? {
@@ -266,7 +268,8 @@ enum ArchiveIndexRename {
         }
 
         // 2. Backups — the exact bytes the plan was built from.
-        let backupDir = try writeBackups(plan, now: now)
+        let backup = try writeBackups(plan, now: now, write: backupWriter)
+        let backupDir = backup.dir
 
         // 3. Recheck: still the file we read? (A promote appending between
         //    prepare and here would otherwise be lost by the replace.)
@@ -304,6 +307,9 @@ enum ArchiveIndexRename {
                                backupDir: backupDir, publisher: publisher, undoMoveMedia: undoMoveMedia)
             }
         }
+        // Published: only now is this backup complete, and so prunable.
+        // A rollback that failed above leaves it incomplete — kept.
+        markBackupComplete(backup)
         pruneBackups(in: backupDir.deletingLastPathComponent())
         return backupDir
     }
@@ -359,75 +365,202 @@ enum ArchiveIndexRename {
         }
     }
 
-    /// Keep the newest `backupRetention` backup folders, newest by the
-    /// instant their NAME records (GH #204) — parsed, never string-sorted:
-    /// a legacy local-time name from the DST fall-back hour, or a legacy
-    /// name beside a UTC one, sorts wrongly as text. Only directories
-    /// directly inside `.rename_backups/` whose names parse as backup
-    /// stamps are counted or pruned; anything else there is left alone.
-    /// `legacyTimeZone` reads the old offset-less names (the zone of the
-    /// Mac that wrote them — injected so tests do not depend on the host).
-    static func pruneBackups(in parent: URL, legacyTimeZone: TimeZone = .current) {
-        let fm = FileManager.default
-        guard parent.lastPathComponent == backupFolder,
-              let names = try? fm.contentsOfDirectory(atPath: parent.path) else { return }
-        let dated: [(name: String, key: BackupSortKey)] = names.compactMap { name in
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: parent.appendingPathComponent(name).path, isDirectory: &isDir),
-                  isDir.boolValue,
-                  let key = backupSortKey(name, legacyTimeZone: legacyTimeZone) else { return nil }
-            return (name, key)
-        }
-        guard dated.count > backupRetention else { return }
-        let oldestFirst = dated.sorted { $0.key < $1.key }
-        for victim in oldestFirst.prefix(dated.count - backupRetention) {
-            do {
-                try fm.removeItem(at: parent.appendingPathComponent(victim.name))
-            } catch {
-                // Retention is housekeeping: a folder that will not go is
-                // logged and retried by the next rename, never fatal.
-                renameIndexLog.error("rename backup prune failed: \(victim.name, privacy: .public) — \(error.localizedDescription, privacy: .public)")
-            }
-        }
-    }
+    // MARK: Backup provenance (GH #204 + codex review 2026-09-27)
+    //
+    // Retention decides ONLY from something this code wrote: a marker file
+    // `.videoscan-backup.json` inside each backup folder, carrying a
+    // monotonic `sequence` (taken under an exclusive lock on the backups
+    // folder when the folder is claimed) and `complete`, set true LAST,
+    // after the rename it protects was published. Folder names and wall
+    // clocks are for humans only: a clock rollback, a DST hour, a user's
+    // look-alike folder or a stamp-named symlink cannot reorder or
+    // authorize anything. A folder without a complete marker — a writer
+    // still working, a failed write, a rollback that left mixed state, a
+    // legacy backup, anything not ours — is never counted and never pruned.
+    //
+    // (C++: `Codable` ≈ a struct with generated JSON (de)serializers;
+    // `flock` is the same BSD advisory lock you'd call from C.)
 
-    /// Where a backup folder sits in time: the instant, then the uniquing
-    /// suffix (-2 after the plain name), then the name for a total order.
-    /// (C++: `Comparable` ≈ defining operator< for std::sort.)
-    struct BackupSortKey: Comparable {
-        let date: Date
+    /// The provenance file inside every backup folder written since the
+    /// codex review.
+    static let backupMarkerName = ".videoscan-backup.json"
+
+    struct BackupMarker: Codable, Equatable {
+        struct Entry: Codable, Equatable {
+            let name: String
+            let size: Int
+        }
+        var version = 1
+        /// Order of claim, 1, 2, 3 … per `.rename_backups/` — max + 1 at
+        /// claim time, under the folder lock. Retention orders by this.
         let sequence: Int
-        let name: String
+        /// UTC ISO-8601, informational only.
+        let createdAt: String
+        /// False while the backup is being written and until the rename it
+        /// protects is published; true only after. Only true is prunable.
+        var complete: Bool
+        var files: [Entry]
+    }
 
-        static func < (a: BackupSortKey, b: BackupSortKey) -> Bool {
-            if a.date != b.date { return a.date < b.date }
-            if a.sequence != b.sequence { return a.sequence < b.sequence }
-            return a.name < b.name
+    /// A claimed backup folder and the marker it carries.
+    struct BackupClaim {
+        let dir: URL
+        var marker: BackupMarker
+    }
+
+    /// lstat: is `url` itself a directory (a symlink to one is NOT)?
+    static func isRealDirectory(_ url: URL) -> Bool {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType) == .typeDirectory
+    }
+
+    /// The marker in a REAL backup directory, if it is ours: a regular
+    /// file (not a symlink), small, decodable, version 1. Nil otherwise.
+    static func readMarker(in dir: URL) -> BackupMarker? {
+        let url = dir.appendingPathComponent(backupMarkerName)
+        guard isRealDirectory(dir),
+              let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              attrs[.type] as? FileAttributeType == .typeRegular,
+              (attrs[.size] as? Int ?? .max) <= 1 << 20,
+              let data = FileManager.default.contents(atPath: url.path),
+              let marker = try? JSONDecoder().decode(BackupMarker.self, from: data),
+              marker.version == 1 else { return nil }
+        return marker
+    }
+
+    /// Every entry directly inside `.rename_backups/`, classified.
+    private static func scanBackups(_ parent: URL) -> (ours: [(name: String, marker: BackupMarker)], markerless: Int) {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: parent.path) else { return ([], 0) }
+        var ours: [(String, BackupMarker)] = []
+        var markerless = 0
+        for name in names {
+            let dir = parent.appendingPathComponent(name, isDirectory: true)
+            guard isRealDirectory(dir) else { continue }
+            if let marker = readMarker(in: dir) { ours.append((name, marker)) } else { markerless += 1 }
+        }
+        return (ours, markerless)
+    }
+
+    /// Run `body` holding an exclusive flock(2) on the `.rename_backups/`
+    /// directory itself (no lock file to clutter the folder). Opened
+    /// O_NOFOLLOW so a symlinked backups folder is refused.
+    private static func withBackupsLock<T>(_ parent: URL, _ body: () throws -> T) throws -> T {
+        let fd = open(parent.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(fd) }
+        while flock(fd, LOCK_EX) != 0 {
+            guard errno == EINTR else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
+        defer { flock(fd, LOCK_UN) }
+        return try body()
+    }
+
+    private static func writeMarker(_ marker: BackupMarker, in dir: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try AtomicFilePublish.write(try encoder.encode(marker), to: dir.appendingPathComponent(backupMarkerName),
+                                    durability: .fullFsync, createIntermediates: false)
+    }
+
+    /// Claim a fresh backup folder: under the lock, take sequence = max of
+    /// every marker present (complete or not) + 1, create the folder
+    /// exclusively (`makeBackupDirectory`), and write an INCOMPLETE marker
+    /// — so from its first instant the folder is ordered and never
+    /// prunable. A marker that cannot be written takes the folder with it.
+    static func claimBackupDirectory(in parent: URL, now: Date) throws -> BackupClaim {
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        return try withBackupsLock(parent) {
+            let next = (scanBackups(parent).ours.map(\.marker.sequence).max() ?? 0) + 1
+            let dir = try makeBackupDirectory(in: parent, now: now)
+            let marker = BackupMarker(sequence: next, createdAt: ISO8601DateFormatter().string(from: now),
+                                      complete: false, files: [])
+            do {
+                try writeMarker(marker, in: dir)
+            } catch {
+                abandon(dir, reason: "marker write failed: \(ArchiveAttestationJournal.describe(error))")
+                throw error
+            }
+            return BackupClaim(dir: dir, marker: marker)
         }
     }
 
-    /// Parse a backup folder name — "2026-11-01T053000.123Z" (UTC, since
-    /// GH #204) or legacy "2026-11-01T013000.123" (local, in
-    /// `legacyTimeZone`) — each optionally followed by "-N". Nil for
-    /// anything else, which is then never pruned. A legacy name from the
-    /// repeated fall-back hour is ambiguous by construction; it resolves to
-    /// one of its two instants (Foundation's choice). New names never are.
-    static func backupSortKey(_ name: String, legacyTimeZone: TimeZone = .current) -> BackupSortKey? {
-        guard let m = name.wholeMatch(of: /(\d{4}-\d{2}-\d{2}T\d{6}\.\d{3})(Z)?(?:-(\d{1,6}))?/) else {
-            return nil
+    /// Write the backup's files into a claimed folder through `write` (the
+    /// seam tests use to fail the Nth file). On any failure the folder is
+    /// removed (logged); were that removal to fail too, its marker is
+    /// still incomplete, so it is never counted or pruned.
+    static func writeBackupFiles(_ claim: BackupClaim, files: [(name: String, data: Data)],
+                                 write: Publisher = livePublish(_:to:)) throws -> BackupClaim {
+        var claim = claim
+        do {
+            for file in files {
+                try write(file.data, claim.dir.appendingPathComponent(file.name))
+                claim.marker.files.append(.init(name: file.name, size: file.data.count))
+            }
+            try writeMarker(claim.marker, in: claim.dir)   // still incomplete; now lists the files
+        } catch {
+            abandon(claim.dir, reason: "backup write failed: \(ArchiveAttestationJournal.describe(error))")
+            throw error
         }
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd'T'HHmmss.SSS"
-        f.timeZone = m.2 != nil ? TimeZone(identifier: "UTC") : legacyTimeZone
-        guard let date = f.date(from: String(m.1)) else { return nil }
-        let sequence = m.3.flatMap { Int($0) } ?? 1
-        return BackupSortKey(date: date, sequence: sequence, name: name)
+        return claim
+    }
+
+    /// The rename this backup protects is published: mark it complete,
+    /// the one state retention may count and prune. A failure is logged
+    /// loudly and leaves the backup incomplete — kept forever, never lost.
+    static func markBackupComplete(_ claim: BackupClaim) {
+        var marker = claim.marker
+        marker.complete = true
+        do {
+            try writeMarker(marker, in: claim.dir)
+        } catch {
+            appLog.write("Catalog: rename backup \(claim.dir.path) could not be marked complete (\(ArchiveAttestationJournal.describe(error))) — kept, never pruned.")
+            renameIndexLog.error("rename backup mark-complete failed: \(claim.dir.path, privacy: .public)")
+        }
+    }
+
+    /// Remove a backup folder this process created and could not finish.
+    private static func abandon(_ dir: URL, reason: String) {
+        do {
+            try FileManager.default.removeItem(at: dir)
+            renameIndexLog.error("rename backup abandoned (\(reason, privacy: .public)); removed \(dir.path, privacy: .public)")
+        } catch {
+            appLog.write("Catalog: rename backup \(dir.path) abandoned (\(reason)) and could not be removed (\(ArchiveAttestationJournal.describe(error))) — left in place, never pruned.")
+            renameIndexLog.error("rename backup abandoned and NOT removed: \(dir.path, privacy: .public)")
+        }
+    }
+
+    /// Keep the newest `backupRetention` COMPLETE backups, newest by marker
+    /// sequence. Only real directories directly inside `.rename_backups/`
+    /// with our complete marker are counted or removed; everything else
+    /// there is left alone, and markerless folders (legacy backups written
+    /// before the marker existed, or not ours) are reported once per pass.
+    static func pruneBackups(in parent: URL) {
+        guard parent.lastPathComponent == backupFolder, isRealDirectory(parent) else { return }
+        do {
+            try withBackupsLock(parent) {
+                let scan = scanBackups(parent)
+                if scan.markerless > 0 {
+                    renameIndexLog.notice("\(scan.markerless, privacy: .public) legacy backup folder(s) left in place — not pruned (no provenance): \(parent.path, privacy: .public)")
+                }
+                let complete = scan.ours.filter(\.marker.complete).sorted { $0.marker.sequence < $1.marker.sequence }
+                guard complete.count > backupRetention else { return }
+                for victim in complete.prefix(complete.count - backupRetention) {
+                    do {
+                        try FileManager.default.removeItem(at: parent.appendingPathComponent(victim.name, isDirectory: true))
+                    } catch {
+                        // Housekeeping: a folder that will not go is logged
+                        // and retried by the next rename, never fatal.
+                        renameIndexLog.error("rename backup prune failed: \(victim.name, privacy: .public) — \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+            }
+        } catch {
+            renameIndexLog.error("rename backup prune skipped — could not lock \(parent.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// "2026-11-01T053000.123Z" — UTC, millisecond, ISO-8601 basic time
     /// with the "Z" (zero offset) designator; no colons, so it is a safe
-    /// folder name in Finder.
+    /// folder name in Finder. For humans: retention never reads it.
     static func backupStamp(_ date: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -458,21 +591,16 @@ enum ArchiveIndexRename {
         throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: parent.appendingPathComponent(stamp).path])
     }
 
-    /// Write every affected file's original bytes under a fresh
-    /// `.rename_backups/<stamp>/` (see `makeBackupDirectory`).
-    private static func writeBackups(_ plan: Plan, now: Date) throws -> URL {
+    /// Claim a backup folder and write every affected file's original
+    /// bytes into it. The marker stays incomplete until `apply` publishes.
+    private static func writeBackups(_ plan: Plan, now: Date, write: Publisher) throws -> BackupClaim {
         let parent = plan.indexURL.appendingPathComponent(backupFolder, isDirectory: true)
-        var dir = parent.appendingPathComponent(backupStamp(now), isDirectory: true)
         do {
-            dir = try makeBackupDirectory(in: parent, now: now)
-            for f in plan.files {
-                try AtomicFilePublish.write(f.original, to: dir.appendingPathComponent(f.name),
-                                            durability: .fullFsync, createIntermediates: false)
-            }
+            let claim = try claimBackupDirectory(in: parent, now: now)
+            return try writeBackupFiles(claim, files: plan.files.map { ($0.name, $0.original) }, write: write)
         } catch {
-            throw Failure.backupFailed(path: dir.path, reason: ArchiveAttestationJournal.describe(error))
+            throw Failure.backupFailed(path: parent.path, reason: ArchiveAttestationJournal.describe(error))
         }
-        return dir
     }
 
     // MARK: Line plumbing (bytes, so untouched lines stay byte-identical)
@@ -833,7 +961,8 @@ enum ArchiveIndexRename {
     /// archive. Lenient (a damaged line is left alone — the rename has
     /// already happened), backed up beside the ledger, published
     /// atomically. Returns the number of changed lines.
-    static func rewriteLedgerFile(at url: URL, replacements: Replacements, now: Date = Date()) throws -> Int {
+    static func rewriteLedgerFile(at url: URL, replacements: Replacements, now: Date = Date(),
+                                  backupWriter: Publisher = livePublish(_:to:)) throws -> Int {
         guard FileManager.default.fileExists(atPath: url.path) else { return 0 }
         let data = try Data(contentsOf: url)
         guard data.count <= readLimit else {
@@ -842,19 +971,29 @@ enum ArchiveIndexRename {
         let result = try rewriteJSONL([UInt8](data), replacements: replacements,
                                       file: url.lastPathComponent, lenient: true)
         guard result.changedLines > 0 else { return 0 }
-        // Its own folder, never shared with a same-millisecond rename (GH #204).
-        let backupDir = try makeBackupDirectory(
-            in: url.deletingLastPathComponent().appendingPathComponent(backupFolder, isDirectory: true),
-            now: now)
-        try AtomicFilePublish.write(data, to: backupDir.appendingPathComponent(url.lastPathComponent),
-                                    durability: .fullFsync, createIntermediates: false)
-        try AtomicFilePublish.write(Data(result.bytes), to: url, durability: .fullFsync, createIntermediates: false)
+        // Its own folder, never shared with a same-millisecond rename, and
+        // ordered by its marker's sequence, not its name (GH #204). A
+        // failed backup write removes its own folder and throws: the
+        // ledger is not touched without a backup.
+        let parent = url.deletingLastPathComponent().appendingPathComponent(backupFolder, isDirectory: true)
+        let backup = try writeBackupFiles(claimBackupDirectory(in: parent, now: now),
+                                          files: [(url.lastPathComponent, data)], write: backupWriter)
+        do {
+            try AtomicFilePublish.write(Data(result.bytes), to: url, durability: .fullFsync, createIntermediates: false)
+        } catch {
+            // The atomic publish left the old ledger in place: this backup
+            // protects nothing. Remove it (logged) and report the failure.
+            abandon(backup.dir, reason: "ledger publish failed: \(ArchiveAttestationJournal.describe(error))")
+            throw error
+        }
         // Same retention as the archive index's backups (publish path above).
         // Each rename copies the WHOLE ledger; without this the folder grew
         // by one full copy per rename, forever (night QA 2026-09-25, m2).
-        // Pruned only after the publish, so the backup for THIS rename is
-        // never at risk before the new ledger is on disk.
-        pruneBackups(in: backupDir.deletingLastPathComponent())
+        // Complete — and so prunable — only after the publish, so the
+        // backup for THIS rename is never at risk before the new ledger is
+        // on disk.
+        markBackupComplete(backup)
+        pruneBackups(in: parent)
         return result.changedLines
     }
 }

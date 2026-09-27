@@ -12,10 +12,11 @@
 //     createDirectory(withIntermediateDirectories: true) succeeds on the
 //     existing folder and the second backup overwrites the first.
 //
-// Fix: UTC stamps with the "Z" offset designator, a folder created
-// exclusively (an existing name gets -2, -3 …), pruning by PARSED date —
-// legacy local-time names still parse — and a folder whose name is not a
-// backup stamp is never pruned.
+// Fix: UTC stamps with the "Z" offset designator and a folder created
+// exclusively (an existing name gets -2, -3 …). After the codex review
+// (2026-09-27) retention reads no names at all: it orders by the
+// sequence in our own completion marker — see
+// LedgerRenameBackupProvenanceTests for the five counterexamples.
 //
 // Each backup's content is unique (step i renames f<i> → f<i+1>, so the
 // backup written at step i holds "f<i>"), which lets the pins say WHICH
@@ -76,8 +77,6 @@ struct LedgerRenameBackupOrderingTests {
         ISO8601DateFormatter().date(from: iso) ?? .distantPast
     }
 
-    private static let eastern = TimeZone(identifier: "America/New_York") ?? .gmt
-
     // MARK: Pins against the real ledger path
 
     /// 2026-11-01, US fall-back. Step 0 at 05:30Z (01:30 EDT), step 1 at
@@ -122,57 +121,12 @@ struct LedgerRenameBackupOrderingTests {
         #expect(try Self.survivingSteps(f) == Set(7..<(n + 7)))
     }
 
-    // MARK: The name format and the parser (host-independent)
+    // MARK: The name format and the exclusive folder (host-independent)
 
-    @Test("#204: stamps are UTC with the Z offset and order like the instants")
-    func stampsAreUTCAndOrdered() throws {
-        let older = ArchiveIndexRename.backupStamp(Self.utc("2026-11-01T05:30:00Z"))
-        let newer = ArchiveIndexRename.backupStamp(Self.utc("2026-11-01T06:10:00Z"))
-        #expect(older == "2026-11-01T053000.000Z")
-        #expect(newer == "2026-11-01T061000.000Z")
-        let a = try #require(ArchiveIndexRename.backupSortKey(older))
-        let b = try #require(ArchiveIndexRename.backupSortKey(newer))
-        #expect(a < b)
-        #expect(a.date == Self.utc("2026-11-01T05:30:00Z"), "parses back to the same instant")
-    }
-
-    @Test("#204: legacy local-time names still parse, suffixes order after the plain name, junk is nil")
-    func legacyNamesParse() throws {
-        let legacy = try #require(ArchiveIndexRename.backupSortKey("2026-11-02T000000.000", legacyTimeZone: Self.eastern))
-        #expect(legacy.date == Self.utc("2026-11-02T05:00:00Z"), "midnight EST is 05:00Z")
-        let plain = try #require(ArchiveIndexRename.backupSortKey("2000-01-01T000000.000", legacyTimeZone: Self.eastern))
-        let second = try #require(ArchiveIndexRename.backupSortKey("2000-01-01T000000.000-2", legacyTimeZone: Self.eastern))
-        let tenth = try #require(ArchiveIndexRename.backupSortKey("2000-01-01T000000.000-10", legacyTimeZone: Self.eastern))
-        #expect(plain < second && second < tenth, "-10 after -2: numeric, not text")
-        let newSuffix = try #require(ArchiveIndexRename.backupSortKey("2026-11-01T053000.000Z-3"))
-        #expect(newSuffix.sequence == 3)
-        for junk in ["notes", ".DS_Store", "2026-11-01", "2026-11-01T053000.000+0100", "x2026-11-01T053000.000Z"] {
-            #expect(ArchiveIndexRename.backupSortKey(junk) == nil, "\(junk)")
-        }
-    }
-
-    /// A legacy local name beside UTC names: 2026-11-01 23:30 EST is
-    /// 04:30Z on the 2nd — NEWER than "2026-11-02T010000.000Z", though it
-    /// sorts before it as text. Retention must drop the UTC 01:00Z folder.
-    @Test("#204: legacy and UTC names mixed — pruned by instant, not by text")
-    func mixedLegacyAndUTCPruneByInstant() throws {
-        let f = try Self.makeFixture("mixed")
-        defer { f.cleanup() }
-        let fm = FileManager.default
-        let legacyNewer = "2026-11-01T233000.000"          // 04:30Z Nov 2 (EST)
-        let utcOldest = "2026-11-02T010000.000Z"           // 01:00Z Nov 2
-        let fillers = (0..<(ArchiveIndexRename.backupRetention - 1)).map {
-            ArchiveIndexRename.backupStamp(Self.utc("2026-11-02T02:00:00Z").addingTimeInterval(Double($0)))
-        }
-        for name in [legacyNewer, utcOldest] + fillers + ["notes"] {
-            try fm.createDirectory(at: f.backups.appendingPathComponent(name), withIntermediateDirectories: true)
-        }
-        ArchiveIndexRename.pruneBackups(in: f.backups, legacyTimeZone: Self.eastern)
-        let kept = Set(try fm.contentsOfDirectory(atPath: f.backups.path))
-        #expect(!kept.contains(utcOldest), "the oldest instant goes")
-        #expect(kept.contains(legacyNewer), "the legacy name is newer than it reads")
-        #expect(kept.contains("notes"), "a folder that is not a backup stamp is never pruned")
-        #expect(kept.count == ArchiveIndexRename.backupRetention + 1)
+    @Test("#204: stamps are UTC with the Z offset")
+    func stampsAreUTC() {
+        #expect(ArchiveIndexRename.backupStamp(Self.utc("2026-11-01T05:30:00Z")) == "2026-11-01T053000.000Z")
+        #expect(ArchiveIndexRename.backupStamp(Self.utc("2026-11-01T06:10:00Z")) == "2026-11-01T061000.000Z")
     }
 
     @Test("#204: makeBackupDirectory never hands out a folder twice")
@@ -186,18 +140,19 @@ struct LedgerRenameBackupOrderingTests {
         #expect(Set(dirs.map(\.path)).count == 3)
     }
 
-    /// SENSOR: both backup writers go through the exclusive folder maker,
-    /// and nothing sorts backup names as text.
-    @Test("#204 sensor: both writers use makeBackupDirectory; prune sorts by parsed key")
-    func sourceUsesTheExclusiveMakerAndParsedSort() throws {
+    /// SENSOR: both backup writers claim through the one exclusive, marked
+    /// path, and retention orders by marker sequence — never by name.
+    @Test("#204 sensor: both writers claim via claimBackupDirectory; prune orders by marker sequence")
+    func sourceUsesTheClaimAndMarkerOrder() throws {
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("VideoScan/ArchiveIndexRename.swift")
         let source = try String(contentsOf: url, encoding: .utf8)
-        #expect(source.components(separatedBy: "try makeBackupDirectory(").count - 1 == 2,
+        #expect(source.components(separatedBy: "claimBackupDirectory(in: parent, now: now)").count - 1 == 2,
                 "the archive-index writer and the ledger writer")
-        #expect(!source.contains("withIntermediateDirectories: true)\n        try AtomicFilePublish.write(data"),
-                "the ledger no longer reuses an existing folder")
-        #expect(source.contains("dated.sorted { $0.key < $1.key }"))
-        #expect(!source.contains("}.sorted()\n        guard folders.count > backupRetention"))
+        #expect(source.components(separatedBy: "try makeBackupDirectory(").count - 1 == 1, "only inside the claim")
+        #expect(source.components(separatedBy: "markBackupComplete(backup)").count - 1 == 2,
+                "complete only after each writer's publish")
+        #expect(source.contains(".filter(\\.marker.complete).sorted { $0.marker.sequence < $1.marker.sequence }"))
+        #expect(!source.contains("backupSortKey"), "no name parsing decides retention")
     }
 }

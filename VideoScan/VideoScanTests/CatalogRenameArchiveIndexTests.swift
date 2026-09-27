@@ -268,9 +268,15 @@ struct CatalogRenameArchiveIndexTests {
         let stamps = try FileManager.default.contentsOfDirectory(atPath: f.backups.path)
         #expect(stamps.count == 1)
         let backupDir = f.backups.appendingPathComponent(stamps[0])
+        // Plus our provenance marker (codex review of GH #204): complete,
+        // listing exactly those files.
         let backedUp = Set(try FileManager.default.contentsOfDirectory(atPath: backupDir.path))
+            .subtracting([ArchiveIndexRename.backupMarkerName])
         #expect(backedUp == [MasterArchiveLayout.manifestFilename, ArchivePromoteJournal.filename,
                              ArchiveAttestationJournal.filename])
+        let marker = try #require(ArchiveIndexRename.readMarker(in: backupDir))
+        #expect(marker.complete)
+        #expect(Set(marker.files.map(\.name)) == backedUp)
         for name in backedUp {
             #expect(try Data(contentsOf: backupDir.appendingPathComponent(name)) == before[name]!.0)
         }
@@ -685,7 +691,12 @@ struct CatalogRenameArchiveIndexTests {
         #expect(plain.filename == "renamed.mov")
     }
 
-    @Test("nit: .rename_backups keeps the newest 20 folders")
+    /// Was "keeps the newest 20 folders" by NAME, which pruned the two
+    /// oldest-named markerless folders. Codex review of GH #204
+    /// (2026-09-27): names carry no provenance, so markerless (legacy)
+    /// folders are never pruned; retention of MARKED backups is pinned in
+    /// LedgerRenameBackupProvenanceTests / LedgerRenameBackupOrderingTests.
+    @Test("nit: .rename_backups never prunes legacy (markerless) folders; this rename's backup is marked complete")
     func backupRetentionKeepsTwenty() throws {
         let f = try Self.makeFixture("retention")
         defer { f.cleanup() }
@@ -699,11 +710,14 @@ struct CatalogRenameArchiveIndexTests {
         _ = try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase)
 
         let kept = try FileManager.default.contentsOfDirectory(atPath: f.backups.path).sorted()
-        #expect(kept.count == 20)
-        #expect(!kept.contains("2000-01-01T000000.000"))
-        #expect(!kept.contains("2000-01-01T000000.002"))
-        #expect(kept.contains("2000-01-01T000000.003"))
-        #expect(kept.last?.hasPrefix("2000") == false, "this rename's own folder is kept")
+        #expect(kept.count == 23, "22 legacy folders left in place + this rename's own")
+        #expect(kept.contains("2000-01-01T000000.000"))
+        #expect(kept.contains("2000-01-01T000000.021"))
+        let own = try #require(kept.last)
+        #expect(!own.hasPrefix("2000"), "this rename's own folder is kept")
+        let marker = try #require(ArchiveIndexRename.readMarker(in: f.backups.appendingPathComponent(own)))
+        #expect(marker.complete && marker.sequence == 1)
+        #expect(!marker.files.isEmpty)
     }
 
     // MARK: Engine rules
