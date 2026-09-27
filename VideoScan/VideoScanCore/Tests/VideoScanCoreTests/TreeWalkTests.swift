@@ -218,7 +218,10 @@ struct TreeWalkCycleTests {
         let sets = Set(cycles.map { Set($0.personIDs) })
         #expect(sets == [["@P@"], ["@A@", "@B@", "@C@"], ["@Y@", "@Z@"]])
         #expect(cycles.allSatisfy { $0.severity == .warn })
-        #expect(r.summary.cycleCount == 3)
+        // The summary counts the loops ON the walk (P, Y/Z); A/B/C is a loop
+        // nobody walks into — still a check, counted in the tree total.
+        #expect(r.summary.cycleCount == 2)
+        #expect(r.summary.treeCycleCount == 3)
         for id in ["@P@", "@A@", "@B@", "@C@", "@Y@", "@Z@"] {
             #expect(r.decoration(for: id)?.inCycle == true, "\(id)")
         }
@@ -575,5 +578,169 @@ struct TreeWalkLogCadenceTests {
         var events = 0
         let r = try TreeWalk.walk(big, options: .init(starts: [big.rootPersonID!])) { if case .progress = $0 { events += 1 } }
         #expect(events == r.visitedCount / 100, "under 5,000 reachable → every 100")
+    }
+}
+
+// MARK: - Scope (Rick 2026-09-27 spot test: a 3-generation walk showed the
+// WHOLE tree's 1,119 warnings in its summary)
+
+/// Rick (@R) and Donna (@D), each with a straight father line five deep.
+/// A depth-3 walk visits R, R1, R2, R3 and D, D1, D2, D3.
+///   IN scope:  R2 age at death over 110 (walked alone);
+///              R3 born before his father R4 was 12 — R3 is walked, R4 is
+///              not; the check involves a walked person (the fan marks R3),
+///              so it counts. This is the boundary rule, pinned here.
+///   OUT of scope: R4 born before R5 was 12 (neither walked);
+///              cousin @C (a child of R2, not an ancestor) death before
+///              birth; D4 age over 110; a two-person loop @L1/@L2
+///              nobody walks into.
+private func scopedPedigree() -> GedcomFamilyGraph {
+    var f = Fam()
+    f.roots = ["@R@", "@D@"]
+    f.person("@R@", "Richard /Breen/", born: "1959")
+    f.person("@R1@", "Rone /Breen/", born: "1929")
+    f.person("@R2@", "Rtwo /Breen/", born: "1900", died: "2015")         // in: age over 110
+    f.person("@R3@", "Rthree /Breen/", born: "1850")
+    f.person("@R4@", "Rfour /Breen/", born: "1845")                       // R3 born when R4 was 5
+    f.person("@R5@", "Rfive /Breen/", born: "1840")                       // R4 born when R5 was 5
+    f.person("@C@", "Cousin /Breen/", born: "1935", died: "1930")          // out: not an ancestor
+    f.person("@D@", "Donna /Hudson/", "F", born: "1959")
+    f.person("@D1@", "Done /Hudson/", born: "1930")
+    f.person("@D2@", "Dtwo /Hudson/", born: "1900")
+    f.person("@D3@", "Dthree /Hudson/", born: "1870")
+    f.person("@D4@", "Dfour /Hudson/", born: "1840", died: "1960")          // out: generation 4, age over 110
+    f.person("@L1@", "Loop /One/"); f.person("@L2@", "Loop /Two/")
+    f.family("@F0@", husband: "@R@", wife: "@D@", children: [])
+    f.family("@FR1@", husband: "@R1@", wife: nil, children: ["@R@"])
+    f.family("@FR2@", husband: "@R2@", wife: nil, children: ["@R1@", "@C@"])
+    f.family("@FR3@", husband: "@R3@", wife: nil, children: ["@R2@"])
+    f.family("@FR4@", husband: "@R4@", wife: nil, children: ["@R3@"])
+    f.family("@FR5@", husband: "@R5@", wife: nil, children: ["@R4@"])
+    f.family("@FD1@", husband: "@D1@", wife: nil, children: ["@D@"])
+    f.family("@FD2@", husband: "@D2@", wife: nil, children: ["@D1@"])
+    f.family("@FD3@", husband: "@D3@", wife: nil, children: ["@D2@"])
+    f.family("@FD4@", husband: "@D4@", wife: nil, children: ["@D3@"])
+    f.family("@FL1@", husband: "@L1@", wife: nil, children: ["@L2@"])
+    f.family("@FL2@", husband: "@L2@", wife: nil, children: ["@L1@"])
+    return f.graph
+}
+
+@Suite("TreeWalkScope")
+struct TreeWalkScopeTests {
+
+    @Test func aThreeGenerationSummaryCountsOnlyTheWalkedPeoplesChecks() throws {
+        let r = try walk(scopedPedigree(), ["@R@", "@D@"], depth: 3)
+        #expect(r.summary.peopleWalked == 8)
+        // The tree still HAS every check (decorations.json, the inspector)…
+        #expect(r.checks.filter { $0.kind == .ageOver110 }.count == 2)
+        #expect(r.checks.filter { $0.kind == .deathBeforeBirth }.count == 1)
+        #expect(r.checks.filter { $0.kind == .childBornBeforeParentAge12 }.count == 2)
+        #expect(r.checks.filter { $0.kind == .ancestorCycle }.count == 1)
+        // …but the walk's summary counts only the checks on people it walked.
+        #expect(r.summary.checksByKind[.ageOver110] == 1, "R2 only; not D4 (generation 4)")
+        #expect(r.summary.checksByKind[.deathBeforeBirth] == nil, "the cousin is not an ancestor")
+        #expect(r.summary.checksByKind[.childBornBeforeParentAge12] == 1, "R3↔R4 (R3 walked); not R4↔R5")
+        #expect(r.summary.checksByKind[.ancestorCycle] == nil, "nobody walks into the loop")
+        #expect(r.summary.warnCount == 2)
+        #expect(r.summary.infoCount == 0)
+        #expect(r.summary.cycleCount == 0)
+        // Whole-tree totals are kept, apart and labelled by name.
+        #expect(r.summary.treeChecksByKind[.ageOver110] == 2)
+        #expect(r.summary.treeChecksByKind[.deathBeforeBirth] == 1)
+        #expect(r.summary.treeChecksByKind[.childBornBeforeParentAge12] == 2)
+        #expect(r.summary.treeCycleCount == 1)
+        #expect(r.summary.treeWarnCount == 6)
+        #expect(r.summary.treeCheckCount == r.checks.count)
+        // Coverage is over the walked 8, not the tree's 14.
+        #expect(r.summary.coverageWalked.first?.of == 8)
+        #expect(r.summary.peopleInTree == 14)
+    }
+
+    @Test func theOutcomeLineCountsTheWalksChecks() throws {
+        let r = try walk(scopedPedigree(), ["@R@", "@D@"], depth: 3)
+        let line = TreeWalkLog(mode: .foreground, displayNames: ["Rick", "Donna"]).outcome(r, savedNote: nil)
+        #expect(line.contains("visited 8 people"))
+        #expect(line.contains(", 2 checks (2 warn),"), "\(line)")
+    }
+
+    @Test func theSummarySaysWhatItWalkedInPlainWords() throws {
+        let g = scopedPedigree()
+        let three = try walk(g, ["@R@", "@D@"], depth: 3).summary
+        #expect(three.walkedSentence(names: ["Rick", "Donna"])
+                == "Walked 3 generations from Rick and Donna — 8 people (Rick's line 4, Donna's line 4)")
+        #expect(three.walkedSentence() == "Walked 3 generations from Richard and Donna — 8 people (Richard's line 4, Donna's line 4)")
+        let all = try walk(g, ["@R@", "@D@"]).summary
+        #expect(all.walkedSentence(names: ["Rick", "Donna"])
+                == "Walked every generation from Rick and Donna (5 generations above Rick, 4 above Donna) — 11 people (Rick's line 6, Donna's line 5)")
+        let one = try walk(g, ["@R@"], depth: 1).summary
+        #expect(one.walkedSentence(names: ["Rick"]) == "Walked 1 generation from Rick — 2 people")
+        let collapse = try walk(marriedWithCollapse(), ["@R@", "@D@"]).summary
+        #expect(collapse.walkedSentence(names: ["Rick", "Donna"]).hasSuffix("(Rick's line 3, Donna's line 3, on both lines 3)"))
+    }
+
+    @Test func aVersionOneFileIsStaleNotUnreadable() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("twscope-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(TreeWalkStore.fileName)
+        // The v1 shape: a summary without the v2 fields.
+        try Data(#"{"walkerVersion":1,"sourceKey":"k","generatedAt":"2026-09-27T00:00:00Z","starts":[],"people":{},"checks":[],"summary":{"peopleInTree":1}}"#.utf8).write(to: url)
+        #expect(TreeWalkStore.load(from: url, expectedSourceKey: "k") == .stale(reason: "made by walker v1; this build is v\(TreeWalk.walkerVersion)"))
+    }
+
+    @Test func theWalkLogsOnlyTheWalkedPeoplesChecks() throws {
+        var warn: [TreeWalk.Check] = [], cycles: [TreeWalk.Check] = []
+        _ = try TreeWalk.walk(scopedPedigree(), options: .init(starts: ["@R@", "@D@"], maxGenerations: 3)) { event in
+            if case .warnCheck(let c) = event { warn.append(c) }
+            if case .cycle(let c) = event { cycles.append(c) }
+        }
+        #expect(Set(warn.map(\.personIDs)) == [["@R2@"], ["@R3@", "@R4@"]])
+        #expect(cycles.isEmpty)
+    }
+}
+
+/// A 41-person father line, everyone born 1900 (so each child is "born
+/// before the father was 12": 40 warnings), and the first 30 of them with a
+/// mother who is her own parent (30 cycles, all walked).
+private func manyWarningsAndCycles() -> GedcomFamilyGraph {
+    var f = Fam()
+    for i in 1...41 { f.person("@I\(i)@", "P\(i) /Line/", born: "1900") }
+    for i in 1...30 { f.person("@Q\(i)@", "Q\(i) /Loop/", "F") }
+    for i in 1...40 {
+        f.family("@F\(i)@", husband: "@I\(i + 1)@", wife: i <= 30 ? "@Q\(i)@" : nil, children: ["@I\(i)@"])
+    }
+    for i in 1...30 { f.family("@G\(i)@", husband: nil, wife: "@Q\(i)@", children: ["@Q\(i)@"]) }
+    return f.graph
+}
+
+@Suite("TreeWalkLogCap")
+struct TreeWalkLogCapTests {
+
+    /// Rick 2026-09-27: 1,119 check lines in one burst. The first 25
+    /// warnings individually, then ONE remainder line; cycles always listed.
+    @Test func first25WarningsThenOneRemainderLineCyclesAllListed() throws {
+        var sink = TreeWalkLog.Sink(TreeWalkLog(mode: .foreground, displayNames: ["Rick"]))
+        var lines: [String] = []
+        let r = try TreeWalk.walk(manyWarningsAndCycles(), options: .init(starts: ["@I1@"])) { lines += sink.lines(for: $0) }
+        lines += sink.lines(for: .finished(r), savedNote: "decorations saved")
+        let p = TreeWalkLog.prefix
+        let warnings = r.checks.filter { $0.severity == .warn && $0.kind != .ancestorCycle }.count
+        #expect(warnings == 40)
+        #expect(lines.filter { $0.hasPrefix(p + "check — ") }.count == 25)
+        #expect(lines.filter { $0.hasPrefix(p + "cycle — ") }.count == 30, "cycles are never capped")
+        let more = lines.filter { $0.hasPrefix(p + "… and ") }
+        #expect(more == [p + "… and 15 more warnings — see the Walk Tree report / decorations.json"])
+        let moreLine = try #require(more.first)
+        let moreAt = try #require(lines.firstIndex(of: moreLine))
+        let outcomeAt = try #require(lines.firstIndex { $0.hasPrefix(p + "analysis complete") })
+        #expect(moreAt == outcomeAt - 1, "the remainder line comes right before the OUTCOME")
+    }
+
+    @Test func noRemainderLineAtOrUnderTheCap() throws {
+        var sink = TreeWalkLog.Sink(TreeWalkLog(mode: .foreground))
+        var lines: [String] = []
+        let r = try TreeWalk.walk(scopedPedigree(), options: .init(starts: ["@R@", "@D@"])) { lines += sink.lines(for: $0) }
+        lines += sink.lines(for: .finished(r))
+        #expect(!lines.contains { $0.hasPrefix(TreeWalkLog.prefix + "… and ") })
     }
 }

@@ -8,6 +8,15 @@
 //
 // Nothing here runs in the walk's hot loop: the walker emits a progress
 // event every N people and the consumer turns events into lines.
+//
+// VOLUME (Rick 2026-09-27: a full-tree walk wrote 1,119 check lines in one
+// burst): the Sink logs the first `individualWarningLimit` warnings one per
+// line, then ONE "… and N more warnings" line just before the OUTCOME.
+// Cycles are always listed individually (few, and structural). Every check
+// is still in decorations.json and the inspector.
+//
+// SCOPE: the check lines and the OUTCOME's check counts are the checks ON
+// THE WALK (involving a visited person) — see TreeWalk.Summary.
 
 import Foundation
 
@@ -87,7 +96,7 @@ public struct TreeWalkLog: Sendable {
         var head = "visited \(s.peopleWalked.formatted()) people (" + gens.joined(separator: ", ")
         if r.starts.count > 1 { head += "; \((s.byLine[.both] ?? 0).formatted()) on both lines" }
         head += ")"
-        let checks = "\(r.checks.count.formatted()) checks (\(s.warnCount.formatted()) warn)"
+        let checks = "\(s.checkCount.formatted()) checks (\(s.warnCount.formatted()) warn)"
         let cov = s.coverageWalked
         func pct(_ field: String, _ label: String) -> String? {
             cov.first { $0.field == field }.map { "\(label) \($0.percent)" }
@@ -100,14 +109,43 @@ public struct TreeWalkLog: Sendable {
             + (savedNote ?? "decorations not saved")
     }
 
+    public static let individualWarningLimit = 25
+
+    /// The line that stands in for the warnings past the limit.
+    public static func moreWarningsLine(_ n: Int) -> String {
+        prefix + "… and \(n.formatted()) more warning\(n == 1 ? "" : "s") — see the Walk Tree report / decorations.json"
+    }
+
     /// Stateful helper: remembers the starts from `.started` so later
-    /// events can name the lines.
+    /// events can name the lines, and caps the per-warning lines.
     public struct Sink: Sendable {
         public let log: TreeWalkLog
         public private(set) var starts: [TreeWalk.Start] = []
+        public private(set) var warningsLogged = 0
+        public private(set) var warningsNotLogged = 0
         public init(_ log: TreeWalkLog) { self.log = log }
         public mutating func lines(for event: TreeWalk.Event, savedNote: String? = nil) -> [String] {
-            if case .started(let info) = event { starts = info.starts }
+            switch event {
+            case .started(let info):
+                starts = info.starts
+                warningsLogged = 0
+                warningsNotLogged = 0
+            case .warnCheck:
+                guard warningsLogged < TreeWalkLog.individualWarningLimit else {
+                    warningsNotLogged += 1
+                    return []
+                }
+                warningsLogged += 1
+            case .finished, .failed, .cancelled:
+                var out: [String] = []
+                if warningsNotLogged > 0 {
+                    out.append(TreeWalkLog.moreWarningsLine(warningsNotLogged))
+                    warningsNotLogged = 0
+                }
+                return out + log.lines(for: event, starts: starts, savedNote: savedNote)
+            default:
+                break
+            }
             return log.lines(for: event, starts: starts, savedNote: savedNote)
         }
     }
