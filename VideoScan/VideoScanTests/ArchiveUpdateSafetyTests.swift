@@ -134,6 +134,24 @@ struct ArchiveUpdateSafetyTests {
         }
     }
 
+    @Test("r3 #2: an EMPTY rewrite plan (no index file names the old path) still takes the lock and rechecks — a late attestation naming the path refuses before the move")
+    func emptyPlanRechecksLateAttestation() throws {
+        let a = try UpdateFixture.make("emptyplan")
+        defer { a.sb.cleanup() }
+        let old = "/Volumes/test_Elsewhere/NotInTheIndex.mov"         // referenced by no index file
+        let plan = try ArchiveIndexRename.prepare(root: a.root, replacements: .init(
+            values: [old: "/Volumes/test_Elsewhere/Renamed.mov"], oldFilename: "NotInTheIndex.mov", newFilename: "Renamed.mov"))
+        #expect(plan.isEmpty, "nothing to rewrite")
+        let entry = ArchiveAttestationJournal.Entry(at: Date(), record: (UUID(), "NotInTheIndex.mov", old),
+                                                    attestation: BackupAttestation(kind: .cloud, answer: .yes, attestedAt: Date()))
+        try ArchiveAttestationJournal.append([entry], rootPath: a.root)   // lands after prepare
+        var moved = false
+        #expect(throws: ArchiveIndexRename.Failure.self) {
+            try ArchiveIndexRename.apply(plan, moveMedia: { moved = true }, undoMoveMedia: {})
+        }
+        #expect(!moved, "refused BEFORE the move callback")
+    }
+
     enum Failure: String, CaseIterable, Sendable { case verify, index }
 
     @Test("the move back's folder flush fails → incompleteRecovery, backup kept, file at the original path",

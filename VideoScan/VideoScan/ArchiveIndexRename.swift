@@ -294,14 +294,25 @@ enum ArchiveIndexRename {
                       announce: (URL) -> Void = { _ in },
                       moveMedia: () throws -> Void,
                       undoMoveMedia: () throws -> Void) throws -> URL? {
-        guard !plan.isEmpty else {
+        // No index involved at all (nothing was even read): just move.
+        guard !plan.isEmpty || !plan.unchanged.isEmpty else {
             try moveMedia()
             return nil
         }
         do {
             return try ArchiveIndexLock.withExclusive(root: plan.root, holder: holder) {
-                try applyLocked(plan, now: now, publisher: publisher, backupWriter: backupWriter,
-                                announce: announce, moveMedia: moveMedia, undoMoveMedia: undoMoveMedia)
+                // Nothing to rewrite, but index files were READ: still recheck
+                // them under the lock before the move — a line naming the old
+                // path that landed since prepare refuses (Archive Update r3 #2).
+                if plan.isEmpty {
+                    for (name, identity) in plan.unchanged where currentIdentity(root: plan.root, name: name) != identity {
+                        throw Failure.changedDuringRename(file: name)
+                    }
+                    try moveMedia()
+                    return nil
+                }
+                return try applyLocked(plan, now: now, publisher: publisher, backupWriter: backupWriter,
+                                       announce: announce, moveMedia: moveMedia, undoMoveMedia: undoMoveMedia)
             }
         } catch let busy as ArchiveIndexLock.Busy {
             throw Failure.indexBusy(detail: busy.description)
