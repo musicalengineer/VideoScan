@@ -83,7 +83,7 @@ struct ArchiveRefilePreview: Identifiable, Sendable {
 
 /// What the sheet says when Refile returns.
 struct ArchiveRefileResult: Equatable, Sendable {
-    enum Kind: Equatable, Sendable { case refiled, refused, rolledBack, mixedState, incompleteRecovery }
+    enum Kind: Equatable, Sendable { case refiled, refused, rolledBack, mixedState, incompleteRecovery, completedWithWarnings }
     let kind: Kind
     let message: String
 }
@@ -339,6 +339,7 @@ extension VideoScanModel {
     /// catalog record + the ledger. Returns what the sheet should say.
     func refileArchiveCopy(_ p: ArchiveRefilePreview, hint: ArchiveDateHint, name: String,
                            seams: ArchiveRefileEngine.Seams = .live,
+                           persistence: ArchiveRefilePersistence = .live,
                            now: Date = Date()) async -> ArchiveRefileResult {
         let label = p.archiveFilename
         func refused(_ why: String) -> ArchiveRefileResult {
@@ -392,11 +393,21 @@ extension VideoScanModel {
 
         switch outcome {
         case .refiled(let done):
-            applyRefiled(copy: copy, done: done, root: root, hint: hint, provenance: provenance,
-                         reason: reason, now: now)
+            let e = await applyRefiled(copy: copy, done: done, root: root, hint: hint, provenance: provenance,
+                                       reason: reason, now: now, persistence: persistence)
             refreshArchiveMisfiled(reason: "refiled", force: true)
-            return ArchiveRefileResult(kind: .refiled,
-                                       message: "Refiled — \(done.fromRelPath) → \(done.toRelPath). Fixity verified before and after; the index was updated (backup kept).")
+            let moved = "\(done.fromRelPath) → \(done.toRelPath). Fixity verified before and after; the archive index was updated (backup kept)."
+            guard e.catalogSaved, e.ledgerWritten else {
+                var pending: [String] = []
+                if !e.catalogSaved { pending.append("the catalog could not be saved") }
+                if !e.ledgerWritten { pending.append("the ledger line could not be written") }
+                let retry = e.pendingWritten
+                    ? "It will be finished automatically the next time VideoScan starts."
+                    : "The automatic retry could NOT be recorded either — the catalog may show the old path after a restart; refile again or check the log."
+                return ArchiveRefileResult(kind: .completedWithWarnings,
+                                           message: "Refiled with warnings — \(moved) But \(pending.joined(separator: " and ")). \(retry)")
+            }
+            return ArchiveRefileResult(kind: .refiled, message: "Refiled — \(moved)")
         case .refused(let why):
             refileNote("Refile: \(label) — refused: \(why). Nothing was changed.")
             return ArchiveRefileResult(kind: .refused, message: "Not refiled — \(why). Nothing was changed.")
@@ -442,11 +453,17 @@ extension VideoScanModel {
         ArchiveRefileEngine.execute(req, authorization: authorization, seams: seams, now: now, audit: audit)
     }
 
+    /// What step (e) managed to make durable.
+    struct RefileStepE { let catalogSaved: Bool; let ledgerWritten: Bool; let pendingWritten: Bool }
+
     /// Step (e): the catalog record, the dates that must now agree with the
-    /// folder, the ledger, the archive's ledger mirror, the done line.
+    /// folder, the ledger. A durable PENDING entry is written first; the
+    /// catalog save and the ledger append are AWAITED and their results
+    /// reported (codex review #5) — a failure is completedWithWarnings, and
+    /// the pending entry is replayed at the next launch.
     private func applyRefiled(copy: VideoRecord, done: ArchiveRefileEngine.Done, root: String,
                               hint: ArchiveDateHint, provenance: ArchiveRefile.Provenance,
-                              reason: String, now: Date) {
+                              reason: String, now: Date, persistence: ArchiveRefilePersistence) async -> RefileStepE {
         let label = copy.filename
         let newPath = (root as NSString).appendingPathComponent(done.toRelPath)
         moveRecord(copy, to: newPath)
@@ -462,13 +479,13 @@ extension VideoScanModel {
         // dates both say what the folder says, so the Misfiled rule (the
         // date that DIFFERS is the one that changed) stays stable.
         let source = promotionSource(of: copy)
-        var dateChanged: [VideoRecord] = []
+        var dateUpdates: [ArchiveRefilePendingEntry.DateUpdate] = []
         func setDate(_ rec: VideoRecord, _ ud: String, _ conf: String) {
             guard rec.userDate != ud || rec.userDateConfidence != conf else { return }
             refileNote("Refile: \(label) — date on \(rec === copy ? "the archive copy" : "the original") \(rec.filename): \(rec.userDate ?? "none") (\(rec.userDateConfidence ?? "-")) → \(ud) (\(conf)); revert in the Inspector's date field")
             rec.userDate = ud
             rec.userDateConfidence = conf
-            dateChanged.append(rec)
+            dateUpdates.append(.init(recordID: rec.id, userDate: ud, confidence: conf))
         }
         switch provenance {
         case .userDate(let onCopy, let known, let canonical):
@@ -485,14 +502,10 @@ extension VideoScanModel {
         }
         notifyVolumeAggregatesStale()
         objectWillChange.send()
-        if !saveCatalogNow() {
-            refileNote("Refile: \(label) — the immediate catalog save did not reach disk; the debounced save will retry (the archive and its index are already updated)")
-            saveCatalogDebounced()
-        }
 
-        // Ledger (append-only; "what happened to <file>?").
+        // Ledger lines (append-only; "what happened to <file>?").
         let subject = source ?? copy
-        ledgerAppend([ledgerEvent(.refiled, for: subject, by: .rick, at: now, detail: [
+        var events = [ledgerEvent(.refiled, for: subject, by: .rick, at: now, detail: [
             MediaLedgerEvent.Detail.from: done.fromRelPath,
             MediaLedgerEvent.Detail.to: done.toRelPath,
             MediaLedgerEvent.Detail.reason: reason,
@@ -501,11 +514,137 @@ extension VideoScanModel {
             MediaLedgerEvent.Detail.provenance: provenance.ledgerToken,
             MediaLedgerEvent.Detail.fixity: done.sha256,
             MediaLedgerEvent.Detail.archive: MasterArchiveLayout.displayName(forRootPath: root),
-        ])])
-        for rec in dateChanged { noteUserDateEdited(rec, by: .rick) }
+        ])]
+        for u in dateUpdates {
+            guard let rec = record(forID: u.recordID) else { continue }
+            events.append(ledgerEvent(.dateSet, for: rec, by: .rick, at: now, detail: [
+                MediaLedgerEvent.Detail.date: u.userDate,
+                MediaLedgerEvent.Detail.confidence: u.confidence,
+            ]))
+        }
+
+        // The durable retry, BEFORE the two steps it covers.
+        var entry = ArchiveRefilePendingEntry(id: UUID(), at: now, copyID: copy.id, newFullPath: newPath,
+                                              fromRelPath: done.fromRelPath, toRelPath: done.toRelPath,
+                                              dateUpdates: dateUpdates, ledgerEvents: events,
+                                              catalogDone: false, ledgerDone: false)
+        let pendingWritten = updatePendingRefiles { $0.append(entry) }
+        if !pendingWritten {
+            refileNote("Refile: \(label) — the pending-refile retry record could not be written (\(pendingRefilesURL.path)); continuing — the outcome will say so if anything below fails")
+        }
+
+        entry.catalogDone = persistence.saveCatalog(self)
+        if !entry.catalogDone {
+            refileNote("Refile: \(label) — the catalog could NOT be saved: the archive and its index are updated, the catalog record is not yet on disk. Pending retry: \(pendingWritten ? pendingRefilesURL.path : "NOT recorded")")
+            saveCatalogDebounced()
+        }
+        entry.ledgerDone = await persistence.appendLedger(self, events)
+        if !entry.ledgerDone {
+            refileNote("Refile: \(label) — the ledger line could NOT be written. Pending retry: \(pendingWritten ? pendingRefilesURL.path : "NOT recorded")")
+        }
+        if entry.catalogDone && entry.ledgerDone {
+            _ = updatePendingRefiles { $0.removeAll { $0.id == entry.id } }
+        } else if pendingWritten {
+            let done = entry
+            _ = updatePendingRefiles { list in
+                if let i = list.firstIndex(where: { $0.id == done.id }) { list[i] = done }
+            }
+        }
         mediaLedger.mirror(intoArchiveRoot: root)
 
-        refileNote("Refile: \(label) — moved \(done.fromRelPath) → \(done.toRelPath); fixity verified; index updated (\(done.linesChanged) line\(done.linesChanged == 1 ? "" : "s") in \(done.indexFilesChanged) file\(done.indexFilesChanged == 1 ? "" : "s")\(done.backupDir.map { ", backup \($0)" } ?? "")); ledger written. To undo: Refile it back.")
+        let status = entry.catalogDone && entry.ledgerDone ? "ledger written" : "COMPLETED WITH WARNINGS (catalog saved: \(entry.catalogDone), ledger written: \(entry.ledgerDone))"
+        refileNote("Refile: \(label) — moved \(done.fromRelPath) → \(done.toRelPath); fixity verified; index updated (\(done.linesChanged) line\(done.linesChanged == 1 ? "" : "s") in \(done.indexFilesChanged) file\(done.indexFilesChanged == 1 ? "" : "s")\(done.backupDir.map { ", backup \($0)" } ?? "")); \(status). To undo: Refile it back.")
+        return RefileStepE(catalogSaved: entry.catalogDone, ledgerWritten: entry.ledgerDone, pendingWritten: pendingWritten)
+    }
+
+    static let pendingRefilesFilename = "pending-refiles.json"
+
+    /// `<ledger folder>/pending-refiles.json` — beside the media ledger
+    /// (App Support; a sandbox under tests).
+    var pendingRefilesURL: URL { mediaLedger.directory.appendingPathComponent(Self.pendingRefilesFilename) }
+
+    func loadPendingRefiles() -> [ArchiveRefilePendingEntry] {
+        guard let data = try? Data(contentsOf: pendingRefilesURL) else { return [] }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        return (try? dec.decode([ArchiveRefilePendingEntry].self, from: data)) ?? []
+    }
+
+    /// Read-modify-publish the pending list (atomic, full fsync). Returns
+    /// false (logged) when it could not be made durable.
+    @discardableResult
+    func updatePendingRefiles(_ change: (inout [ArchiveRefilePendingEntry]) -> Void) -> Bool {
+        var list = loadPendingRefiles()
+        change(&list)
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        enc.outputFormatting = [.sortedKeys]
+        do {
+            try AtomicFilePublish.write(try enc.encode(list), to: pendingRefilesURL,
+                                        durability: .fullFsync, createIntermediates: true)
+            return true
+        } catch {
+            appLog.write("[refile] pending-refile list \(pendingRefilesURL.path) not written — \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Finish refiles whose catalog save or ledger line did not land (run
+    /// at launch, and callable any time). The catalog step re-applies the
+    /// record's path and dates; the ledger step appends the saved lines
+    /// unless the ledger already has them. Returns how many entries were
+    /// completed and cleared.
+    @discardableResult
+    func replayPendingRefiles(persistence: ArchiveRefilePersistence = .live) async -> Int {
+        let pending = loadPendingRefiles()
+        guard !pending.isEmpty else { return 0 }
+        refileNote("Refile: finishing \(pending.count) refile(s) whose catalog save or ledger line did not land (\(pendingRefilesURL.path))")
+        var completed = 0
+        for var entry in pending {
+            if !entry.catalogDone {
+                if let rec = record(forID: entry.copyID) {
+                    if rec.fullPath != entry.newFullPath {
+                        guard FileManager.default.fileExists(atPath: entry.newFullPath) else {
+                            refileNote("Refile: pending entry for \(entry.toRelPath) — the file is not reachable at \(entry.newFullPath) now; kept for the next launch")
+                            continue
+                        }
+                        moveRecord(rec, to: entry.newFullPath)
+                    }
+                    for u in entry.dateUpdates {
+                        guard let r = record(forID: u.recordID) else { continue }
+                        r.userDate = u.userDate
+                        r.userDateConfidence = u.confidence
+                    }
+                    objectWillChange.send()
+                    entry.catalogDone = persistence.saveCatalog(self)
+                } else {
+                    refileNote("Refile: pending entry for \(entry.toRelPath) — its archive copy is no longer in the catalog; catalog step dropped")
+                    entry.catalogDone = true
+                }
+            }
+            if !entry.ledgerDone {
+                // Matched on the saved event's own (millisecond) timestamp —
+                // the entry's `at` is second-precision after its JSON trip.
+                let ids = Set(entry.ledgerEvents.map(\.recordID))
+                let refiledAt = entry.ledgerEvents.first { $0.event == .refiled }?.at
+                let already = ids.flatMap { mediaLedger.events(forRecordID: $0) }
+                    .contains { e in e.event == .refiled && e.at == refiledAt && e.detail[MediaLedgerEvent.Detail.to] == entry.toRelPath }
+                entry.ledgerDone = already ? true : await persistence.appendLedger(self, entry.ledgerEvents)
+            }
+            let finished = entry
+            if finished.catalogDone && finished.ledgerDone {
+                completed += 1
+                _ = updatePendingRefiles { $0.removeAll { $0.id == finished.id } }
+                refileNote("Refile: pending entry for \(finished.fromRelPath) → \(finished.toRelPath) completed (catalog + ledger)")
+            } else {
+                _ = updatePendingRefiles { list in
+                    if let i = list.firstIndex(where: { $0.id == finished.id }) { list[i] = finished }
+                }
+                refileNote("Refile: pending entry for \(finished.toRelPath) still incomplete (catalog saved: \(finished.catalogDone), ledger written: \(finished.ledgerDone)); kept for the next launch")
+            }
+        }
+        if completed > 0 { refreshArchiveMisfiled(reason: "pending refiles replayed", force: true) }
+        return completed
     }
 
     /// Point a record at the file's new place (after the file moved).
@@ -527,6 +666,37 @@ extension VideoScanModel {
             MediaLedgerEvent.Detail.reason: why,
         ])])
     }
+}
+
+/// Step (e)'s persistence, injectable so a test can fail the catalog save
+/// and the ledger append independently (codex review #5). Production =
+/// the durable catalog save and the ledger's confirmed append.
+struct ArchiveRefilePersistence: Sendable {
+    var saveCatalog: @MainActor @Sendable (VideoScanModel) -> Bool
+    var appendLedger: @MainActor @Sendable (VideoScanModel, [MediaLedgerEvent]) async -> Bool
+
+    static let live = ArchiveRefilePersistence(
+        saveCatalog: { $0.saveCatalogNow() },
+        appendLedger: { model, events in await model.mediaLedger.appendConfirmed(events) })
+}
+
+/// One refile whose step (e) did not fully land — replayed at launch.
+struct ArchiveRefilePendingEntry: Codable, Equatable, Sendable {
+    struct DateUpdate: Codable, Equatable, Sendable {
+        let recordID: UUID
+        let userDate: String
+        let confidence: String
+    }
+    let id: UUID
+    let at: Date
+    let copyID: UUID
+    let newFullPath: String
+    let fromRelPath: String
+    let toRelPath: String
+    let dateUpdates: [DateUpdate]
+    let ledgerEvents: [MediaLedgerEvent]
+    var catalogDone: Bool
+    var ledgerDone: Bool
 }
 
 /// Why Refile is not offered for a row.

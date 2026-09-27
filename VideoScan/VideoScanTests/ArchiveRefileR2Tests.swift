@@ -165,3 +165,61 @@ struct ArchiveRefileR2IndexLockTests {
         try ArchiveIndexLock.withExclusive(root: root, holder: "test after") {}
     }
 }
+
+// MARK: - Finding 5: step (e) failures are not a silent success
+
+@Suite("Archive Refile r2 — step (e) persistence", .serialized)
+@MainActor
+struct ArchiveRefileR2StepEPersistenceTests {
+
+    private func pendingURL(_ a: RefileFixture.Archived) -> URL {
+        a.model.mediaLedger.directory.appendingPathComponent(VideoScanModel.pendingRefilesFilename)
+    }
+
+    @Test("catalog save fails → completedWithWarnings, durable pending entry; replay at launch persists it and clears the entry")
+    func catalogSaveFails() async throws {
+        let a = try await RefileFixture.make("r2cat")
+        defer { a.sb.cleanup() }
+        let p = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        var persistence = ArchiveRefilePersistence.live
+        persistence.saveCatalog = { _ in false }
+        let r = await a.model.refileArchiveCopy(p, hint: p.initialHint, name: p.initialName, persistence: persistence)
+        #expect(r.kind == .completedWithWarnings, "\(r.kind): \(r.message)")
+        #expect(r.message.contains("catalog"), "\(r.message)")
+        #expect(FileManager.default.fileExists(atPath: pendingURL(a).path), "a durable retry is on disk")
+        await a.model.mediaLedger.waitForPendingWrites()
+        #expect(a.model.mediaLedger.events(forRecordID: a.source.id).contains { $0.event == .refiled })
+
+        var saves = 0
+        var replayPersistence = ArchiveRefilePersistence.live
+        replayPersistence.saveCatalog = { m in saves += 1; return m.saveCatalogNow() }
+        let replayed = await a.model.replayPendingRefiles(persistence: replayPersistence)
+        #expect(replayed == 1)
+        #expect(saves == 1)
+        #expect(!FileManager.default.fileExists(atPath: pendingURL(a).path) || (try? Data(contentsOf: pendingURL(a)))?.count ?? 0 <= 2,
+                "entry cleared")
+        #expect(a.model.mediaLedger.events(forRecordID: a.source.id).filter { $0.event == .refiled }.count == 1,
+                "the ledger line is not written twice")
+    }
+
+    @Test("ledger append fails → completedWithWarnings, durable pending entry; replay writes the ledger line once")
+    func ledgerAppendFails() async throws {
+        let a = try await RefileFixture.make("r2led")
+        defer { a.sb.cleanup() }
+        let p = try #require(try? await a.model.makeRefilePreview(recordID: a.source.id).get())
+        var persistence = ArchiveRefilePersistence.live
+        persistence.appendLedger = { _, _ in false }
+        let r = await a.model.refileArchiveCopy(p, hint: p.initialHint, name: p.initialName, persistence: persistence)
+        #expect(r.kind == .completedWithWarnings, "\(r.kind): \(r.message)")
+        #expect(r.message.contains("ledger"), "\(r.message)")
+        #expect(FileManager.default.fileExists(atPath: pendingURL(a).path))
+        await a.model.mediaLedger.waitForPendingWrites()
+        #expect(!a.model.mediaLedger.events(forRecordID: a.source.id).contains { $0.event == .refiled })
+
+        let replayed = await a.model.replayPendingRefiles()
+        #expect(replayed == 1)
+        await a.model.mediaLedger.waitForPendingWrites()
+        #expect(a.model.mediaLedger.events(forRecordID: a.source.id).filter { $0.event == .refiled }.count == 1)
+        #expect(await a.model.replayPendingRefiles() == 0, "nothing left to replay")
+    }
+}

@@ -1018,6 +1018,11 @@ final class VideoScanModel: ObservableObject {
         }
         reresolveMasterArchiveMount()   // volume-UUID-first re-resolution
         publishFamilyAssetConfiguration()
+        // Refile step (e) retries (codex review #5): a refile whose catalog
+        // save or ledger line did not land is finished here, at launch.
+        if !Self.isRunningTests {
+            Task { [weak self] in await self?.replayPendingRefiles() }
+        }
         if !restored.isEmpty {
             records = restored
             log("Restored \(restored.count) records from previous session.")

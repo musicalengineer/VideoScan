@@ -139,6 +139,7 @@ struct ArchiveRefileSheet: View {
         switch k {
         case .refiled: return "checkmark.seal.fill"
         case .refused: return "hand.raised.fill"
+        case .completedWithWarnings: return "exclamationmark.triangle.fill"
         case .rolledBack: return "arrow.uturn.backward.circle.fill"
         case .mixedState, .incompleteRecovery: return "exclamationmark.octagon.fill"
         }
@@ -147,7 +148,7 @@ struct ArchiveRefileSheet: View {
     private func resultColor(_ k: ArchiveRefileResult.Kind) -> Color {
         switch k {
         case .refiled: return .green
-        case .refused, .rolledBack: return .orange
+        case .refused, .rolledBack, .completedWithWarnings: return .orange
         case .mixedState, .incompleteRecovery: return .red
         }
     }

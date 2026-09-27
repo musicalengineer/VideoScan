@@ -126,6 +126,53 @@ final class MediaLedger: @unchecked Sendable {
         return task
     }
 
+    /// Append a batch on the same ordered worker and REPORT whether it
+    /// reached disk (Refile step (e), codex review #5: a queued append that
+    /// fails later must not read as success). Never on main.
+    func appendConfirmed(_ events: [MediaLedgerEvent]) async -> Bool {
+        guard !events.isEmpty else { return true }
+        let data: Data
+        do {
+            data = try MediaLedgerEvent.encodeLines(events)
+        } catch {
+            mediaLedgerLog.error("ledger: could not encode \(events.count) event(s): \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+        let previous: Task<Void, Never>? = lock.withLock {
+            revision &+= 1
+            narratedCache.removeAll(keepingCapacity: true)
+            appendCount += 1
+            lineCount += events.count
+            return tail
+        }
+        let url = fileURL
+        let writer = self.writer
+        let count = events.count
+        let work = Task(priority: .utility) { [self] () -> Bool in
+            await previous?.value
+            return await self.writeOffMainReporting(data, count: count, url: url, writer: writer)
+        }
+        let tailTask = Task(priority: .utility) { _ = await work.value }
+        lock.withLock { tail = tailTask }
+        return await work.value
+    }
+
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated private func writeOffMainReporting(_ data: Data, count: Int, url: URL, writer: Writer) async -> Bool {
+        do {
+            try writer(data, url)
+            announceIfFirst(url)
+            return true
+        } catch {
+            let text = (error as? Failure)?.description ?? error.localizedDescription
+            appLog.write("ledger: \(count) line(s) not written to \(url.path) — \(text)")
+            mediaLedgerLog.error("ledger append failed: \(text, privacy: .public)")
+            return false
+        }
+    }
+
     /// Wait for every append / mirror issued so far to land.
     func waitForPendingWrites() async {
         let t: Task<Void, Never>? = lock.withLock { tail }
