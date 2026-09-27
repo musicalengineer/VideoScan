@@ -97,6 +97,11 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         case reclaimBuffer    // skipped — delete its companions, then go on
     }
 
+    /// Whose proposed date a row carries.
+    enum ProposedDateSource: String, Codable, Sendable, Equatable {
+        case typed, fromCopy, machine
+    }
+
     /// A hand-entered value and the copy it came from.
     struct InheritedFact: Codable, Sendable, Equatable {
         var value: String
@@ -176,6 +181,12 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         /// Use a copy's date, Enter a date…, or Promote undated. Additive:
         /// older plans decode nil (not answered yet).
         var dateFromCopiesAnswered: Bool?
+        /// WHOSE `proposedDate` is (codex r1 #4): set where the value is set
+        /// — the plan build (fromCopy / machine) and each Review answer
+        /// (typed / fromCopy / machine) — and read as-is by the promoter;
+        /// never inferred from equality with a machine date. Additive: nil
+        /// (older plans) is treated as the machine's.
+        var proposedDateSource: ProposedDateSource?
         var steps: [StepOutcome] = StepKind.allCases.map { StepOutcome(kind: $0) }
         var status: EntryStatus = .pending
         /// Archive relpath of the original after Promote (nil until then).

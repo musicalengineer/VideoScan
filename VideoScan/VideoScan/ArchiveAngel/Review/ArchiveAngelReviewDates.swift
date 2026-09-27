@@ -50,17 +50,20 @@ enum ArchiveAngelReviewDates {
         guard untouched || current == d.date else { return }
         entry.proposedDate = d.date
         entry.inheritedDate = fact(d)
+        entry.proposedDateSource = .fromCopy
     }
 
     static func use(_ d: PromoteCopyDate, on entry: inout ArchiveAngelPlan.Entry) {
         entry.proposedDate = d.date
         entry.inheritedDate = fact(d)
+        entry.proposedDateSource = .fromCopy
         entry.dateFromCopiesAnswered = true
     }
 
     /// "Enter a date…": the row's date field is the answer; no copy lends.
     static func enterDate(on entry: inout ArchiveAngelPlan.Entry) {
         entry.inheritedDate = nil
+        entry.proposedDateSource = .typed
         entry.dateFromCopiesAnswered = true
     }
 
@@ -68,6 +71,7 @@ enum ArchiveAngelReviewDates {
     static func decline(on entry: inout ArchiveAngelPlan.Entry, machineDefault: String?) {
         entry.proposedDate = machineDefault
         entry.inheritedDate = nil
+        entry.proposedDateSource = .machine
         entry.dateFromCopiesAnswered = true
     }
 

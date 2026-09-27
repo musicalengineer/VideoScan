@@ -48,19 +48,21 @@ final class ArchiveAngelPromoter: ObservableObject {
         return nil
     }
 
-    /// Whose date a row's proposed date is (2026-09-27): the copy it was
-    /// taken from (Review's choice, or the identity-inherited date), a date
-    /// the person typed, or nil for the machine's own proposal (placement
-    /// only — never written as a user date).
-    nonisolated static func dateSource(entry: ArchiveAngelPlan.Entry, hint: ArchiveDateHint?,
-                                       machineHint: ArchiveDateHint?) -> ArchiveDateSource? {
-        guard let hint else { return nil }
-        let typed = entry.proposedDate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if let fact = entry.inheritedDate, fact.value == typed {
+    /// Whose date a row's proposed date is (codex r1 #4): the row's EXPLICIT
+    /// source, set where the value was set — never inferred from equality
+    /// with a machine date. A copy's date (with the copy named), a date the
+    /// person typed, or nil for the machine's own proposal (placement only —
+    /// never written as a user date). An older plan without a source is the
+    /// machine's.
+    nonisolated static func dateSource(entry: ArchiveAngelPlan.Entry, hint: ArchiveDateHint?) -> ArchiveDateSource? {
+        guard hint != nil else { return nil }
+        switch entry.proposedDateSource {
+        case .typed?: return .typed
+        case .fromCopy?:
+            guard let fact = entry.inheritedDate else { return .typed }
             return .copy(filename: fact.fromFilename, known: fact.confidence == UserDateConfidence.known.rawValue)
+        case .machine?, nil: return nil
         }
-        if let machineHint, hint == machineHint { return nil }
-        return .typed
     }
 
     /// Role label for a companion's naming row in the archive manifest.
@@ -219,8 +221,7 @@ final class ArchiveAngelPromoter: ObservableObject {
             if let t = Self.archiveTitle(from: entry.proposedName) { titles[entry.id] = t }
             let hint = Self.dateHint(from: entry.proposedDate)
             if let hint { dates[entry.id] = hint }
-            let source = Self.dateSource(entry: entry, hint: hint,
-                                         machineHint: model.record(forID: entry.id).map { ArchivePathResolver.facts(for: $0).dateHint })
+            let source = Self.dateSource(entry: entry, hint: hint)
             if let source { sources[entry.id] = source }
             var companionIDs: [UUID] = []
             for step in Self.promotableCompanions(of: entry, in: plan) {

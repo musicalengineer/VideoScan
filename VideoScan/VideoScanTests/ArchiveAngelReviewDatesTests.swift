@@ -56,14 +56,37 @@ struct ArchiveAngelReviewDatesTests {
         #expect(!ArchiveAngelReviewDates.needsAnswer(typing, choice: choice))
     }
 
-    @Test("promoter date source: a copy's date → .copy; the machine proposal → nil; anything else → .typed")
-    func promoterSource() {
+    @Test("codex r1 #4: the promoter reads the row's EXPLICIT source — Rick typing the machine's own date is still Rick's; a stale machine proposal is still the machine's")
+    func promoterSourceIsExplicit() {
         let fact = ArchiveAngelPlan.InheritedFact(value: "1984", confidence: "known", fromRecordID: UUID(), fromFilename: "t.dv")
-        #expect(ArchiveAngelPromoter.dateSource(entry: entry(proposed: "1984", inherited: fact), hint: .year(1984),
-                                                machineHint: .year(2004)) == .copy(filename: "t.dv", known: true))
-        #expect(ArchiveAngelPromoter.dateSource(entry: entry(proposed: "2004"), hint: .year(2004), machineHint: .year(2004)) == nil)
-        #expect(ArchiveAngelPromoter.dateSource(entry: entry(proposed: "1990"), hint: .year(1990), machineHint: .year(2004)) == .typed)
-        #expect(ArchiveAngelPromoter.dateSource(entry: entry(proposed: nil), hint: nil, machineHint: .year(2004)) == nil)
+        var copy = entry(proposed: "1984", inherited: fact)
+        copy.proposedDateSource = .fromCopy
+        #expect(ArchiveAngelPromoter.dateSource(entry: copy, hint: .year(1984)) == .copy(filename: "t.dv", known: true))
+        // Rick typed 2004 — which happens to be what the machine says.
+        var typedSame = entry(proposed: "2004")
+        typedSame.proposedDateSource = .typed
+        #expect(ArchiveAngelPromoter.dateSource(entry: typedSame, hint: .year(2004)) == .typed)
+        // The plan build's machine proposal (1999), stale against today's machine hint.
+        var stale = entry(proposed: "1999")
+        stale.proposedDateSource = .machine
+        #expect(ArchiveAngelPromoter.dateSource(entry: stale, hint: .year(1999)) == nil)
+        // An older plan with no source: never guessed to be Rick's.
+        #expect(ArchiveAngelPromoter.dateSource(entry: entry(proposed: "1990"), hint: .year(1990)) == nil)
+        #expect(ArchiveAngelPromoter.dateSource(entry: entry(proposed: nil), hint: nil) == nil)
+    }
+
+    @Test("Review answers set the source: Use → fromCopy, Enter a date… → typed, Promote undated → machine, pre-selection → fromCopy")
+    func reviewAnswersSetSource() {
+        let d = d("1984", known: true, "t.dv")
+        var e = entry(proposed: "2004"); ArchiveAngelReviewDates.use(d, on: &e)
+        #expect(e.proposedDateSource == .fromCopy)
+        ArchiveAngelReviewDates.enterDate(on: &e)
+        #expect(e.proposedDateSource == .typed)
+        ArchiveAngelReviewDates.decline(on: &e, machineDefault: "2004")
+        #expect(e.proposedDateSource == .machine)
+        var p = entry(proposed: "2004")
+        ArchiveAngelReviewDates.applyPreselection(PromoteCopyDates.decide([d]), to: &p, machineDefault: "2004")
+        #expect(p.proposedDateSource == .fromCopy)
     }
 
     @Test("the plan row's new field decodes from an older plan (nil = not answered)")

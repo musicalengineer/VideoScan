@@ -473,6 +473,8 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                 proposedDate: inherited.date?.value
                     ?? ArchiveAngelNaming.proposedDate(fromFilenamePrefix: facts.dateHint.filenamePrefix))
             entry.inheritedDate = inherited.date
+            entry.proposedDateSource = inherited.date != nil ? .fromCopy
+                : (entry.proposedDate == nil ? nil : .machine)
             entry.inheritedPlace = inherited.place
             entry.inheritedAttestationKinds = inherited.attestationKinds
             entry.similarDate = inherited.similarDate

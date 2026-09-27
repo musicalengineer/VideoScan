@@ -634,7 +634,11 @@ struct ArchiveAngelReviewSheet: View {
 
     private func dateBinding(_ idx: Int) -> Binding<String> {
         Binding(get: { plan.entries[idx].proposedDate ?? "" },
-                set: { plan.entries[idx].proposedDate = $0.isEmpty ? nil : $0 })
+                set: {
+                    plan.entries[idx].proposedDate = $0.isEmpty ? nil : $0
+                    // Typed by the person (codex r1 #4): Rick's date, whatever its value.
+                    plan.entries[idx].proposedDateSource = $0.isEmpty ? nil : .typed
+                })
     }
 
     private func dateGuidance(_ typed: String?) -> String {
