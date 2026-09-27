@@ -474,101 +474,6 @@ struct ArchiveAngelReviewSheet: View {
         .padding(.vertical, 12)
     }
 
-    // MARK: Dates from copies (Rick 2026-09-27)
-
-    /// Selected ready rows whose copies disagree and are not answered yet.
-    private var unansweredDates: Int {
-        plan.entries.filter { $0.status == .ready && $0.selected
-            && ArchiveAngelReviewDates.needsAnswer($0, choice: copyChoices[$0.id]) }.count
-    }
-
-    /// ONE catalog pass for every ready row; pre-selects a single known date.
-    private func loadCopyDates() {
-        let ready = plan.entries.filter { $0.status == .ready }
-        let targets = ready.compactMap { model.record(forID: $0.id) }
-        let gathered = PromoteCopyDates.gather(for: targets, records: model.records)
-        var choices: [UUID: PromoteCopiesDateChoice] = [:]
-        var changed = false
-        for i in plan.entries.indices where plan.entries[i].status == .ready {
-            let entry = plan.entries[i]
-            guard let rec = model.record(forID: entry.id), rec.userDate == nil else { continue }
-            let machine = ArchiveAngelNaming.proposedDate(
-                fromFilenamePrefix: ArchivePathResolver.facts(for: rec).dateHint.filenamePrefix)
-            machineDates[entry.id] = machine
-            let list = ArchiveAngelReviewDates.candidates(entry: entry, gathered: gathered[entry.id] ?? [],
-                                                          volumeOf: { model.record(forID: $0)?.volumeName ?? "" })
-            let choice = PromoteCopyDates.decide(list)
-            guard choice != .noCopyDates else { continue }
-            choices[entry.id] = choice
-            let before = plan.entries[i]
-            ArchiveAngelReviewDates.applyPreselection(choice, to: &plan.entries[i], machineDefault: machine)
-            if plan.entries[i] != before { changed = true }
-        }
-        copyChoices = choices
-        if changed { ArchiveAngelPlanStore.saveLogged(plan, context: "review/copies date") }
-    }
-
-    @ViewBuilder
-    private func copiesDateRow(_ idx: Int, entry: ArchiveAngelPlan.Entry) -> some View {
-        let choice = copyChoices[entry.id]
-        let asking = ArchiveAngelReviewDates.needsAnswer(entry, choice: choice) || expandedDates.contains(entry.id)
-        if let choice, choice != .noCopyDates {
-            VStack(alignment: .leading, spacing: 3) {
-                if asking {
-                    Text("Its copies say different things (or only estimate) — which date?")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.orange)
-                    ForEach(Self.askList(choice)) { d in
-                        HStack(spacing: 6) {
-                            Button("Use \(UserDateEntry.friendlyDisplay(d.date))") {
-                                ArchiveAngelReviewDates.use(d, on: &plan.entries[idx])
-                                expandedDates.remove(entry.id)
-                            }
-                            .font(.system(size: 11))
-                            .disabled(isPromoting || isDone)
-                            .accessibilityIdentifier("archiveAngel.row.copyDate.use")
-                            Text(PromoteCopyDates.askRowText(d))
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
-                    HStack(spacing: 8) {
-                        Button("Enter a date…") {
-                            ArchiveAngelReviewDates.enterDate(on: &plan.entries[idx])
-                            expandedDates.remove(entry.id)
-                        }
-                        Button(machineDates[entry.id].map { "Use the file's own date (\($0))" } ?? "Promote undated") {
-                            ArchiveAngelReviewDates.decline(on: &plan.entries[idx], machineDefault: machineDates[entry.id])
-                            expandedDates.remove(entry.id)
-                        }
-                    }
-                    .font(.system(size: 11))
-                    .disabled(isPromoting || isDone)
-                } else if let line = ArchiveAngelReviewDates.line(entry, choice: choice, machineDefault: machineDates[entry.id]) {
-                    HStack(spacing: 6) {
-                        Label(line, systemImage: "calendar.badge.checkmark")
-                            .font(.system(size: 11))
-                        Button("change") { expandedDates.insert(entry.id) }
-                            .buttonStyle(.link)
-                            .font(.system(size: 11))
-                            .disabled(isPromoting || isDone)
-                    }
-                }
-            }
-            .padding(.leading, 98)
-        }
-    }
-
-    private static func askList(_ choice: PromoteCopiesDateChoice) -> [PromoteCopyDate] {
-        switch choice {
-        case .ask(let list): return list
-        case .preselected(let d, _): return [d]
-        case .noCopyDates: return []
-        }
-    }
-
     // MARK: Actions
 
     private func setAll(_ on: Bool) {
@@ -746,4 +651,105 @@ struct ArchiveAngelReviewSheet: View {
     }
 
     static func durationText(_ s: Double) -> String { ArchiveAngelScorer.durationText(s) }
+}
+
+// Split from the struct body (type-length lint): same file, so the
+// private @State above stays reachable (≈ C++ member functions defined
+// outside the class body).
+extension ArchiveAngelReviewSheet {
+
+    // MARK: Dates from copies (Rick 2026-09-27)
+
+    /// Selected ready rows whose copies disagree and are not answered yet.
+    private var unansweredDates: Int {
+        plan.entries.filter { $0.status == .ready && $0.selected
+            && ArchiveAngelReviewDates.needsAnswer($0, choice: copyChoices[$0.id]) }.count
+    }
+
+    /// ONE catalog pass for every ready row; pre-selects a single known date.
+    private func loadCopyDates() {
+        let ready = plan.entries.filter { $0.status == .ready }
+        let targets = ready.compactMap { model.record(forID: $0.id) }
+        let gathered = PromoteCopyDates.gather(for: targets, records: model.records)
+        var choices: [UUID: PromoteCopiesDateChoice] = [:]
+        var changed = false
+        for i in plan.entries.indices where plan.entries[i].status == .ready {
+            let entry = plan.entries[i]
+            guard let rec = model.record(forID: entry.id), rec.userDate == nil else { continue }
+            let machine = ArchiveAngelNaming.proposedDate(
+                fromFilenamePrefix: ArchivePathResolver.facts(for: rec).dateHint.filenamePrefix)
+            machineDates[entry.id] = machine
+            let list = ArchiveAngelReviewDates.candidates(entry: entry, gathered: gathered[entry.id] ?? [],
+                                                          volumeOf: { model.record(forID: $0)?.volumeName ?? "" })
+            let choice = PromoteCopyDates.decide(list)
+            guard choice != .noCopyDates else { continue }
+            choices[entry.id] = choice
+            let before = plan.entries[i]
+            ArchiveAngelReviewDates.applyPreselection(choice, to: &plan.entries[i], machineDefault: machine)
+            if plan.entries[i] != before { changed = true }
+        }
+        copyChoices = choices
+        if changed { ArchiveAngelPlanStore.saveLogged(plan, context: "review/copies date") }
+    }
+
+    @ViewBuilder
+    private func copiesDateRow(_ idx: Int, entry: ArchiveAngelPlan.Entry) -> some View {
+        let choice = copyChoices[entry.id]
+        let asking = ArchiveAngelReviewDates.needsAnswer(entry, choice: choice) || expandedDates.contains(entry.id)
+        if let choice, choice != .noCopyDates {
+            VStack(alignment: .leading, spacing: 3) {
+                if asking {
+                    Text("Its copies say different things (or only estimate) — which date?")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.orange)
+                    ForEach(Self.askList(choice)) { d in
+                        HStack(spacing: 6) {
+                            Button("Use \(UserDateEntry.friendlyDisplay(d.date))") {
+                                ArchiveAngelReviewDates.use(d, on: &plan.entries[idx])
+                                expandedDates.remove(entry.id)
+                            }
+                            .font(.system(size: 11))
+                            .disabled(isPromoting || isDone)
+                            .accessibilityIdentifier("archiveAngel.row.copyDate.use")
+                            Text(PromoteCopyDates.askRowText(d))
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        Button("Enter a date…") {
+                            ArchiveAngelReviewDates.enterDate(on: &plan.entries[idx])
+                            expandedDates.remove(entry.id)
+                        }
+                        Button(machineDates[entry.id].map { "Use the file's own date (\($0))" } ?? "Promote undated") {
+                            ArchiveAngelReviewDates.decline(on: &plan.entries[idx], machineDefault: machineDates[entry.id])
+                            expandedDates.remove(entry.id)
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .disabled(isPromoting || isDone)
+                } else if let line = ArchiveAngelReviewDates.line(entry, choice: choice, machineDefault: machineDates[entry.id]) {
+                    HStack(spacing: 6) {
+                        Label(line, systemImage: "calendar.badge.checkmark")
+                            .font(.system(size: 11))
+                        Button("change") { expandedDates.insert(entry.id) }
+                            .buttonStyle(.link)
+                            .font(.system(size: 11))
+                            .disabled(isPromoting || isDone)
+                    }
+                }
+            }
+            .padding(.leading, 98)
+        }
+    }
+
+    private static func askList(_ choice: PromoteCopiesDateChoice) -> [PromoteCopyDate] {
+        switch choice {
+        case .ask(let list): return list
+        case .preselected(let d, _): return [d]
+        case .noCopyDates: return []
+        }
+    }
 }
