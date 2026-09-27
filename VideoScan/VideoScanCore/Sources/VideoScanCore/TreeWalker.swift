@@ -174,9 +174,8 @@ extension TreeWalk {
                       hasCheck: !found.byPerson[Int(v.ordinal)].isEmpty)
             }
         }
-        var summary = summarize(s, layers: finalLayers, checks: found.all, onWalk: onWalk, reach: reach, ages: ages)
-        summary.maxGenerations = options.maxGenerations
-        summary.startNames = starts.map(\.shortName)
+        var summary = summarize(s, layers: finalLayers, checks: found.all, onWalk: onWalk, reach: reach, ages: ages,
+                                starts: starts, maxGenerations: options.maxGenerations)
         summary.walkMilliseconds = walkMs
         summary.checksMilliseconds = checksMs
         summary.estimatedAncestorCounts = anc.estimated
@@ -392,8 +391,11 @@ extension TreeWalk {
     /// `onWalk` says whether a check involves a visited person: those
     /// are the summary's counts; every check lands in the `tree…` totals.
     static func summarize(_ s: TreeWalkSnapshot, layers: [[Visit]], checks: [Check],
-                          onWalk: (Check) -> Bool, reach: Reach, ages: [AgeAtDeath?]) -> Summary {
+                          onWalk: (Check) -> Bool, reach: Reach, ages: [AgeAtDeath?],
+                          starts: [Start], maxGenerations: Int?) -> Summary {
         var summary = Summary()
+        summary.maxGenerations = maxGenerations
+        summary.startNames = starts.map(\.shortName)
         summary.peopleInTree = s.visible.filter { $0 }.count
         for layer in layers {
             summary.peopleWalked += layer.count
