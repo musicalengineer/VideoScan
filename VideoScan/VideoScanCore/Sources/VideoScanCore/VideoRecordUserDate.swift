@@ -274,7 +274,12 @@ extension VideoRecord {
         if let ud = userDate {
             return userDateStatus == .known ? ud : ud + " (est.)"
         }
-        if let moved = displacedStampResolution { return moved.isoString }
+        if let moved = displacedStampResolution {
+            // Codex F4: a displaced stamp must not hide the inference's span —
+            // "2003–2004" reads the same with or without the stamp.
+            if moved.source == .inferred, let range = inferredDateRange { return range.displayString }
+            return moved.isoString
+        }
         if let embedded = embeddedCreationDate {
             return Self.isoDayString(from: embedded)
         }

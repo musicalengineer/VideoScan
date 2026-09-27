@@ -271,7 +271,17 @@ Waterfront" — a referenced year, and DV cannot predate 1995.
   disagrees by more than 2 years; a device stamp still needs the GH #166
   content-agreement tier (≥ 0.85).
 - `resolve(… inferredDateRange:)`: a ranged inference resolves at year
-  precision.
+  precision. **Which year files it:** the UTC year of the inferred POINT
+  (`inferredRecordDate`), never a range endpoint — the triangulator's point is
+  its best-scoring year, so a "2003–2004" tape whose point is 2004 files under
+  2004, one whose point is 2003 under 2003 (pinned by `DateReviewF4Tests`). The
+  Date column shows the span either way, with or without a displaced stamp.
+- (codex F1) Only a CAMERA's stamp refines a user year to a day; a software or
+  unknown-origin stamp leaves "2004" a year, and its day never travels in a
+  footage share.
+- (codex F2) A footage share is re-validated every pass: it is cleared unless the
+  donor still holds the same shareable claim, both memberships are ≥ likely, and
+  neither row carries Rick's "not the same".
 
 ### Judgement calls made 2026-09-26 (for Rick to overrule)
 
