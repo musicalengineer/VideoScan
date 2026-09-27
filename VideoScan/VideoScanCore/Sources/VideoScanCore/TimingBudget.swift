@@ -71,6 +71,35 @@ public enum TimingBudget {
         return "\(debugBuild ? "Debug" : "Release"), load \(load) on \(ProcessInfo.processInfo.activeProcessorCount) cores"
     }
 
+    // MARK: Thread CPU time (GH #208, 2026-09-27)
+    //
+    // A wall-clock budget on a pure-CPU loop measures the loop AND whatever
+    // else the host is doing: DateTriangulatorScaleTests took 35.8 s against
+    // 25 s at load ~16 (four concurrent xcodebuilds), 19.2 s alone. The
+    // load-aware ×1.5 cannot cover an arbitrarily saturated host. The CPU
+    // time the measuring thread itself consumed is what an O(n) regression
+    // changes and what load mostly does not — time spent runnable-but-
+    // waiting is not counted. (C++ analogy: std::clock() per thread, i.e.
+    // CLOCK_THREAD_CPUTIME_ID, instead of steady_clock.)
+    //
+    // Use it ONLY for a synchronous, single-threaded body: work done on
+    // other threads (a TaskGroup, a DispatchQueue, an async hop) is not
+    // counted, and I/O waits are not counted either — where I/O or
+    // fan-out is the thing being budgeted, keep wall time.
+
+    /// CPU time consumed so far by the calling thread.
+    public static func currentThreadCPUTime() -> Duration {
+        .nanoseconds(Int64(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)))
+    }
+
+    /// CPU time the calling thread spent inside `body`. `body` is
+    /// synchronous, so it runs start to finish on this thread.
+    public static func measureThreadCPUTime(_ body: () throws -> Void) rethrows -> Duration {
+        let start = currentThreadCPUTime()
+        try body()
+        return currentThreadCPUTime() - start
+    }
+
     /// Seconds as a Double, for messages and Double-typed budgets.
     public static func seconds(_ duration: Duration) -> Double {
         let c = duration.components

@@ -478,7 +478,7 @@ struct DateTriangulatorScaleTests {
         return t
     }
 
-    @Test("100k realistic records (2–5 kB transcripts) through the pure triangulator inside a load-aware budget",
+    @Test("100k realistic records (2–5 kB transcripts) through the pure triangulator inside a thread-CPU budget",
           .timeLimit(.minutes(5)))
     func hundredThousand() {
         let seeds = [
@@ -507,15 +507,27 @@ struct DateTriangulatorScaleTests {
         }
         let clock = ContinuousClock()
         var dated = 0
-        let elapsed = clock.measure {
-            for input in inputs where pfTriangulateRecordDate(input).date != nil { dated += 1 }
+        var cpu = Duration.zero
+        let wall = clock.measure {
+            cpu = PerformanceLane.measureThreadCPUTime {
+                for input in inputs where pfTriangulateRecordDate(input).date != nil { dated += 1 }
+            }
         }
-        print("[date-triangulator] 100k realistic in \(elapsed), \(dated) dated")
+        print("[date-triangulator] 100k realistic: thread CPU \(cpu), wall \(wall), \(dated) dated (\(PerformanceLane.loadDescription()))")
         #expect(dated > 30_000)
         // Measured 2026-09-26 (Debug, M4 Max, idle): 19.0 s for 100k at 2–5 kB
-        // ≈ 0.19 ms / record. 25 s is ~1.3× that, load-aware — it trips on a
-        // regex compiled per call or a per-year scan of the whole transcript.
-        #expect(elapsed < PerformanceLane.loadAwareDebugCeiling(.seconds(25)), "100k triangulations took \(elapsed)")
+        // ≈ 0.19 ms / record. 25 s is ~1.3× that — it trips on a regex
+        // compiled per call or a per-year scan of the whole transcript.
+        // GH #208: the budget is on the loop's own THREAD CPU time (the loop
+        // is synchronous, single-threaded, no I/O) — time spent runnable
+        // but waiting for a core is not counted. Wall is printed only.
+        // CPU time is NOT load-immune on Apple silicon (E-core placement,
+        // shared caches/bandwidth): measured 2026-09-27, M4 Max Debug, idle
+        // 19.4 s CPU / 19.4 s wall; under 64 USER_INTERACTIVE spinners
+        // (load ~75) 26.4 s CPU / 31.7 s wall. So the load-aware ×1.5 stays;
+        // it now stretches a number that grows far less than wall does.
+        #expect(cpu < PerformanceLane.loadAwareDebugCeiling(.seconds(25)),
+                "100k triangulations used \(cpu) of thread CPU (wall \(wall), \(PerformanceLane.loadDescription()))")
     }
 }
 

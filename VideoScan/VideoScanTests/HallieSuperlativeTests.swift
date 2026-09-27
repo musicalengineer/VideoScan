@@ -171,7 +171,7 @@ struct HallieSuperlativeTests {
     typealias Exec = HallieTurnExecutor
     let graph = GedcomFamilyGraph(gedcomText: tree)
     var context: Exec.Context {
-        .init(profiles: [], graph: graph,
+        .init(profiles: [], graph: graph, assetConfiguration: { .emptyForTests },
               speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
     }
     private func pre(_ q: String) -> Exec.PreTranslation {
@@ -242,6 +242,33 @@ struct HallieSuperlativeTests {
         #expect(r.offeredActions == [.openFamilyTreePerson(personID: "@I14@", personName: "Hannah Ryan"),
                                      .openFamilyTreePerson(personID: "@I13@", personName: "Patrick Breen")])
         #expect(r.basisLine.contains("Ranked 14 of 14 people in the family tree"))
+    }
+
+    // GH #205: the winner's photo comes from the Context's asset lookup,
+    // never FamilyAssetConfigurationCenter.shared. Red before the fix (the
+    // superlative ignored the injected lookup and read the host's config,
+    // which has no fixture photo); green after.
+    @Test func theWinnersPhotoComesFromTheInjectedAssetLookup() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HallieSuperlative205-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let assets = base.appendingPathComponent("40_Family_Tree", isDirectory: true)
+        let photo = assets.appendingPathComponent("People/Tim_Breen_b1985/tim.png")
+        try FileManager.default.createDirectory(at: photo.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // 1×1 PNG.
+        try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")).write(to: photo)
+        let config = FamilyAssetConfiguration.fixture(assets: assets)
+        let withPhoto: Exec.Context = .init(profiles: [], graph: graph, assetConfiguration: { config },
+                                            speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
+        let r = try #require(HallieLineageAnswer.answer(.superlative(kind: .latestBorn, scope: .wholeTree), context: withPhoto))
+        #expect(r.prose.hasPrefix("The latest birth year in the family tree is born 1985: Tim Breen"))
+        let urls = r.attachments.compactMap { a -> URL? in
+            if case .photo(let p) = a { return p.fileURL } else { return nil }
+        }
+        #expect(urls.map(\.lastPathComponent) == ["tim.png"], "attachments: \(r.attachments)")
+        // The same question with the empty lookup attaches nothing.
+        #expect(try answer(.latestBorn).attachments.isEmpty)
     }
 
     @Test func eachKindPicksTheRightPerson() throws {

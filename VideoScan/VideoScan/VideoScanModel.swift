@@ -469,7 +469,9 @@ final class VideoScanModel: ObservableObject {
 
     /// High-frequency dashboard + console state — separate ObservableObject
     /// so updates don't trigger re-render of the main Table view.
-    let dashboard = DashboardState()
+    /// Built in `init` so a test can hand it its own log directory
+    /// (GH #211); production passes nil — the routed default.
+    let dashboard: DashboardState
 
     /// In-memory search accelerator. Built after catalog load, updated
     /// on dossier live-reload merges, cleared on full reset. Toolbar
@@ -995,7 +997,11 @@ final class VideoScanModel: ObservableObject {
         TestEnvironment.isTestHost
     }
 
-    init() {
+    /// - Parameter logDirectory: `catalog.log`'s directory. Nil — the app,
+    ///   and every existing caller — keeps the routed default. Tests that
+    ///   read their own catalog.log lines back pass a scratch dir (GH #211).
+    init(logDirectory: URL? = nil) {
+        dashboard = DashboardState(logDirectory: logDirectory)
         installLifecycleObservers()
         restoreScanTargets()
         // Restore previously-scanned records so the user can browse the
