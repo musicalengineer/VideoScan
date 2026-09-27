@@ -288,14 +288,16 @@ extension VideoRecord {
         func digits(_ r: Range<Int>) -> Bool { r.allSatisfy { u[$0] >= 0x30 && u[$0] <= 0x39 } }
         func unknown(_ r: Range<Int>) -> Bool { r.allSatisfy { u[$0] == UInt8(ascii: "x") } }
         guard digits(0..<4) else { return nil }
-        let y = String(decoding: u[0..<4], as: UTF8.self)
+        // The first 10 bytes are ASCII (checked above), so the first 10
+        // Characters are exactly those bytes.
+        let head = filename.prefix(10)
         let candidate: String
         if digits(5..<7), digits(8..<10) {
-            candidate = String(decoding: u[0..<10], as: UTF8.self)
+            candidate = String(head)
         } else if digits(5..<7), unknown(8..<10) {
-            candidate = String(decoding: u[0..<7], as: UTF8.self)
+            candidate = String(head.prefix(7))
         } else if unknown(5..<7), unknown(8..<10) {
-            candidate = y
+            candidate = String(head.prefix(4))
         } else {
             return nil
         }
