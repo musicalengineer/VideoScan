@@ -533,7 +533,8 @@ extension VideoScanModel {
     /// Idempotent: an identical share writes nothing. Returns the rows
     /// written.
     @MainActor
-    static func shareDateAcrossFootageGroup(_ members: [VideoRecord], now: Date) -> [VideoRecord] {
+    static func shareDateAcrossFootageGroup(_ members: [VideoRecord], now: Date,
+                                            retained: [UUID: (year: Int, tail: String)] = [:]) -> [VideoRecord] {
         guard members.count >= 2 else { return [] }
         var claims: [UUID: (resolution: RecordDateResolution, claim: ArchiveAngelEvent.DateClaim)] = [:]
         var best: (rec: VideoRecord, resolution: RecordDateResolution, claim: ArchiveAngelEvent.DateClaim)?
@@ -549,8 +550,9 @@ extension VideoScanModel {
             // Rick's "not the same" (either side) blocks the share (codex F2).
             if m.footageDecision(about: best.rec.id)?.verdict == .notSame
                 || best.rec.footageDecision(about: m.id)?.verdict == .notSame { continue }
+            let kept = retained[m.id].flatMap { $0.year == best.resolution.year ? $0.tail : nil }
             if applyFootageShare(to: m, from: best.rec, resolution: best.resolution,
-                                 ownYear: claims[m.id]?.resolution.year) {
+                                 ownYear: claims[m.id]?.resolution.year, retainedTail: kept) {
                 written.append(m)
             }
         }
@@ -601,9 +603,21 @@ extension VideoScanModel {
     /// The tail a share appends when the recipient's own evidence disagreed.
     static let ownEvidenceMarker = "; own evidence said "
 
+    /// A shared row's recorded "own evidence said …" tail and the year it
+    /// was recorded against (codex re-review R2). nil when there is none.
+    @MainActor
+    static func retainedDisagreement(_ rec: VideoRecord) -> (year: Int, tail: String)? {
+        guard let reason = rec.inferredDateReason, let r = reason.range(of: ownEvidenceMarker),
+              let d = rec.inferredRecordDate else { return nil }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? .current
+        return (cal.component(.year, from: d), String(reason[r.lowerBound...]))
+    }
+
     @MainActor
     static func applyFootageShare(to rec: VideoRecord, from donor: VideoRecord,
-                                  resolution r: RecordDateResolution, ownYear: Int?) -> Bool {
+                                  resolution r: RecordDateResolution, ownYear: Int?,
+                                  retainedTail: String? = nil) -> Bool {
         guard let year = r.year, let v = footageShareValue(from: donor, resolution: r) else { return false }
         let source = InferredDateSource.footageShared(from: donor)
         var reason = "shared from \(donor.filename) (same footage): \(v.what)"
@@ -615,6 +629,10 @@ extension VideoScanModel {
             // later pass cannot recompute the disagreement — keep what the
             // first share recorded (and so write nothing).
             reason += old[r.lowerBound...]
+        } else if ownYear == nil, let retainedTail {
+            // Codex re-review R2: the share was just cleared as stale and is
+            // being re-made for the SAME year — keep what was recorded.
+            reason += retainedTail
         }
         if rec.inferredRecordDate == v.date, rec.inferredDateConfidence == v.confidence,
            rec.inferredDateRange == v.range, rec.inferredDateSource == source, rec.inferredDateReason == reason {
@@ -724,6 +742,7 @@ extension VideoScanModel {
         let refreshIDs: Set<UUID> = refreshScope ? Set((scope ?? []).map(\.id)) : []
 
         var touched: [VideoRecord] = []
+        var retainedDisagreements: [UUID: (year: Int, tail: String)] = [:]
         // codex #1415 (a): evidence-bearing rows the budget left unread.
         var deferred = Set<UUID>()
 
@@ -737,6 +756,10 @@ extension VideoScanModel {
                 result.cleared += 1
                 touched.append(rec)
             } else if Self.isStaleFootageShare(rec, byID: byID, now: started) {
+                // Codex re-review R2: keep the recorded disagreement so a
+                // same-year re-share (e.g. the donor's confidence changed)
+                // carries it forward instead of losing it.
+                if let kept = Self.retainedDisagreement(rec) { retainedDisagreements[rec.id] = kept }
                 Self.clearInferredDate(rec, reason: nil)
                 result.cleared += 1
                 touched.append(rec)
@@ -836,7 +859,7 @@ extension VideoScanModel {
         for key in footageKeys {
             guard let members = footageGroups[key], members.count >= 2 else { continue }
             let live = members.filter { !deferred.contains($0.id) }
-            let written = Self.shareDateAcrossFootageGroup(live, now: started)
+            let written = Self.shareDateAcrossFootageGroup(live, now: started, retained: retainedDisagreements)
             result.footageShared += written.count
             touched.append(contentsOf: written)
         }

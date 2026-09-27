@@ -31,5 +31,22 @@ struct DateReviewF3Tests {
         #expect(F.InferredSnapshot(a) == snapA)
         #expect(F.InferredSnapshot(b) == snapB, "\(b.inferredDateReason ?? "nil")")
         #expect(b.inferredDateReason?.contains("own evidence said 2000") == true)
+
+        // Codex re-review R2: A's confidence alone changes (estimated → known).
+        // B re-shares the SAME year at the new confidence and keeps the
+        // recorded disagreement; the next unchanged pass writes nothing.
+        a.userDateConfidence = "known"
+        model.catchUpInferredDates(trigger: "test")
+        #expect(b.inferredDateConfidence == RecordDateResolver.userKnownConfidence.clampedToShareCap)
+        #expect(b.inferredDateReason?.contains("own evidence said 2000") == true, "\(b.inferredDateReason ?? "nil")")
+        let snap3 = F.InferredSnapshot(b)
+        let third = model.catchUpInferredDates(trigger: "test")
+        #expect(third.total == 0 && third.cleared == 0 && third.footageShared == 0, "\(third)")
+        #expect(F.InferredSnapshot(b) == snap3)
     }
+}
+
+private extension Float {
+    /// Shares are capped like every triangulated confidence.
+    var clampedToShareCap: Float { Swift.min(DateTriangulationWeights.cap, self) }
 }
