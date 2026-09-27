@@ -60,3 +60,57 @@ OUTPUT (stdout, Markdown, under 600 words):
 first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
 then a line `Verdict: merge / merge-after-fixes / hold`
 then findings, each with file:line, a concrete counterexample, and the test that would pin it.
+
+## Closed
+
+Closed by `55e64b6e` at 2026-09-27T20:54:32Z. 7 findings fixed red-first (ee92da34 472844cc c1948c0c 4233b0e1 55e64b6e); re-review as 'Archive Update r2'
+
+---
+
+# Codex review — Archive Update r2
+
+- Range: `8862271c..55e64b6e`
+- Credits spent: unavailable
+- Tokens: 70726
+- Finding count: 2
+- Verdict: merge-after-fixes
+- Run: 2026-09-27T20:54:32Z (cycle #8, tools/codex_review.py)
+
+## Codex answer
+
+Credits spent: unavailable | Finding count: 2
+Verdict: merge-after-fixes
+
+1. **P2 — A stale sheet can overwrite unlisted date provenance.** `VideoScanModel+ArchiveUpdate.swift:82–83` preserves the preview’s captured cells, not the manifest’s current cells. Counterexample: open two previews with Known; use one to change confidence to Estimated without moving the file; then submit a name-only change from the older preview. Preflight reads the newer manifest, but execution overwrites its confidence with the captured `user-known`. The sheet lists only Name, and the catalog’s confidence remains Estimated because `writesDate` is false. **Pin:** `stalePreviewNameOnlyPreservesNewerConfidence`: perform those sequential updates; require either stale-preview refusal or preservation of Estimated in both manifest and catalog.
+
+2. **P2 — An empty rewrite plan bypasses the new `unchanged` protection.** `ArchiveIndexRename.swift:143` defines emptiness using only `files`; `ArchiveIndexRename.swift:297–299` then moves immediately without locking or rechecking `unchanged`. Counterexample: Catalog rename preparation finds no references to the old path; an attestation naming that path arrives before apply. The plan contains observations in `unchanged` but no rewrites, so the rename proceeds and leaves the attestation stale. Archive Update’s mandatory manifest rewrite avoids this branch, but the shared helper’s claimed Catalog protection remains incomplete. **Pin:** `emptyPlanRechecksLateAttestation`: prepare a no-match plan, append the first matching attestation, apply; require refusal before the move callback.
+
+The identity-only recheck also rejects byte-identical file replacement or an mtime-only change, including for Catalog rename. That is conservative refusal rather than corruption.
+
+Read, no additional findings in the reviewed fixes: source identity check, restore-outcome classification, sheet evaluation, ledger event details/narration, and the changed test files. All failed-update writers within scope supply `outcome`; missing outcomes cannot claim successful undo.
+
+Static review at `55e64b6e`; no builds or tests run. Supplied execution evidence was not independently reproduced.
+
+## Brief
+
+Re-review, SCOPED to the fix commits for your Archive Update review (docs/codex-review-archive-update-2026-09-27.md): range 8862271c..55e64b6e on feat/archive-update (commits ee92da34 #1, 472844cc #2, c1948c0c #3, 4233b0e1 #4–#6, 55e64b6e #7). Use `git diff 8862271c..55e64b6e -- VideoScan` and `git show <sha>`. The branch then merges origin/main (9bf4d3c7 — review-cycle tooling only, no VideoScan app files); ignore it. Do not explore outside the files these commits touch; read-only; do not build or run.
+
+FIXES (each red first):
+- ee92da34 #1 — ArchiveIndexRename.rollback: a restore that THREW is never a confirmed restore, even when the original bytes read back (the problem is recorded, the backup kept). ArchiveRefile.failureOutcome: every index file back to its original bytes + the original back at its path by identity, with only durability unconfirmed → incompleteRecovery (not rolledBack, not mixedState). Pin: ArchiveUpdateSafetyTests.restoreDurabilityFailureIsNotRollback.
+- 472844cc #2 — moveAndVerify: the source's identity (device + inode + size + mtime) is rechecked through the rename's own source-folder descriptor immediately before the rename, and before the target folder is created; a swap → refusedBeforeMove. The microsecond window before renameatx_np stays covered by the post-move identity check and the identity-checked move back. Pin: sourceSwappedBeforeMoveIsRefused (swap during the backup write).
+- c1948c0c #3 — ArchiveIndexRename.Plan.unchanged: every index file prepare read but left out of the plan (no match) or found absent, with its identity; applyLocked rechecks them under the 00_Index lock alongside the planned files → changedDuringRename refusal. The engine carries prepare's `unchanged` into its plan. New seam `Seams.afterPreflight`. Pin: journalLineAfterPreparationIsNotLeftStale (an attestation naming the old path lands between preparation and the lock).
+- 4233b0e1 #4–#6 — ONE invariant: Update changes only what the sheet lists. `ArchiveUpdatePreview.plan(name:hint:known:)` feeds both the sheet (`evaluate`) and execution. `ArchiveRefile.updatedRelPath`: no name/date change → the exact current path; name only → same folder and date prefix, new slug; date changed → `ArchivePathResolver.folder` + `filenamePrefix`, the current name kept verbatim. record_date / date_confidence and the record's user date are written only when the date or known/estimated changed. A blank date keeps the current one. The filing-year guard applies to a changed date only. Pins: ArchiveUpdateOnlyWhatIsListedTests.listEqualsChanges (7 combinations × 6 shapes: legacy 1884, catalog-renamed with no prefix, undated, decade-only, inferred confidence without a user date, 80-char slug + _02) and blankYearKeepsCurrentDate.
+- 55e64b6e #7 — ledger detail `outcome` + `location` on archiveUpdateRolledBack; LedgerNarrator says rolledBack "was undone", incompleteRecovery "put back … but the drive did not confirm it was saved", mixedState "could not be fully undone — the file is at <location>" (or "could not be confirmed"); an event without an outcome never claims an undo. Pins: LedgerNarratorTests.testFailedUpdateNarrationMatchesTheOutcome; the blocker scenario's journey line.
+
+ATTACK:
+1. Any path where the sheet's list and what executes can still differ (a name that slugs to the current name; a Catalog-renamed file whose stem does not end with the extracted currentName; a date change that lands in the same folder; the guard skipped for an unchanged but implausible date).
+2. The `unchanged` recheck: a false refusal source (a file whose identity changes without content changes), and whether Catalog rename can now be refused more often than before.
+3. The restore judgment: can a restore that did NOT throw still be unconfirmed, and can incompleteRecovery be claimed while an index file holds the new bytes?
+4. Narration: any archiveUpdateRolledBack writer that omits `outcome`.
+
+EVIDENCE (Debug): M4 at 9bf4d3c7 — 362 tests in 57 suites passed, run by suite with `-only-testing` (the Update suites, including the new ArchiveUpdateOnlyWhatIsListedTests, plus the broad Master Archive / protection / rename-backup / ledger / attestation / verify / prune set). VideoScanCore MediaLedgerEventTests + LedgerNarratorTests: 17 passed. VerifyArchiveCopiesIsolationTests (the earlier M4 failure caused by Rick's running app) passed 2/2 on ricksm5 at the same commit, and passed on the M4 in this run.
+
+OUTPUT (stdout, Markdown, under 500 words):
+first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
+then a line `Verdict: merge / merge-after-fixes / hold`
+then findings, each with file:line, a concrete counterexample, and the test that would pin it.

@@ -243,7 +243,9 @@ extension VideoScanModel {
         }
         let req = ArchiveRefileEngine.Request(rootPath: root, fromRelPath: p.fromRelPath, toRelPath: to,
                                               filename: label, recordDate: plan.recordDate,
-                                              dateConfidence: plan.dateConfidence)
+                                              dateConfidence: plan.dateConfidence,
+                                              expectedRecordDate: p.currentRecordDate,
+                                              expectedDateConfidence: p.currentDateConfidence)
         archiveUpdateNote("Update: \(label) — BEGIN \(p.fromRelPath) → \(to) (by rick): \(reason)")
         let outcome = await Self.runRefileOffMain(req, authorization: auth, seams: seams, now: now,
                                                   audit: archiveUpdateAuditSink())

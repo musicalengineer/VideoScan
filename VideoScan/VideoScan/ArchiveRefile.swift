@@ -272,6 +272,12 @@ enum ArchiveRefileEngine {
         /// and the date_confidence vocabulary).
         let recordDate: String
         let dateConfidence: String
+        /// What the sheet SAW in the manifest row's date cells. If the row
+        /// says something else now, the sheet is stale and the update is
+        /// refused — it never writes a cell it did not show (r3 #1). nil =
+        /// no check (callers that do not come from a sheet).
+        var expectedRecordDate: String? = nil
+        var expectedDateConfidence: String? = nil
     }
 
     /// Test seams — production is `.live`. (`@Sendable` closures ≈
@@ -436,6 +442,10 @@ enum ArchiveRefileEngine {
         }
         guard Set(mine.map(\.sha256)).count == 1 else {
             return no("the archive manifest lists \(from) with \(Set(mine.map(\.sha256)).count) different fingerprints — check it by hand")
+        }
+        if let seen = req.expectedRecordDate, let seenConf = req.expectedDateConfidence,
+           let row = mine.last, row.recordDate != seen || row.dateConfidence != seenConf {
+            return no("This file changed since the sheet opened (the archive now says \(row.recordDate.isEmpty ? "no date" : row.recordDate), \(row.dateConfidence.isEmpty ? "no confidence" : row.dateConfidence)) — reopen Update…")
         }
         if moves, rows.contains(where: { $0.relPath == to }) { return no("the archive manifest already lists a file at \(to)") }
         if moves, let why = targetRefusal(root: root, to: to) { return no(why) }

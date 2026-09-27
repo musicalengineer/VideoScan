@@ -114,6 +114,26 @@ struct ArchiveUpdateSafetyTests {
         }
     }
 
+    @Test("r3 #1: a STALE sheet's name-only update never overwrites a newer known/estimated — refused, or the newer value kept")
+    func stalePreviewNameOnlyPreservesNewerConfidence() async throws {
+        let a = try UpdateFixture.make("stale", relPath: "30_Video/1980-1989/1984/1984-xx-xx_Clip.mov", recordDate: "1984-xx-xx")
+        defer { a.sb.cleanup() }
+        let older = try await UpdateFixture.preview(a)        // both sheets open while it says Known
+        let newer = try await UpdateFixture.preview(a)
+        let r1 = await a.model.updateArchivedFile(newer, name: newer.currentName, hint: newer.currentHint, known: false)
+        #expect(r1.kind == .updated, "\(r1.message)")
+        #expect(MasterArchiveTestSupport.manifestRows(a.sb).first?[9] == "user-estimated")
+
+        let r2 = await a.model.updateArchivedFile(older, name: "New Name", hint: older.currentHint, known: older.currentKnown)
+        let row = try #require(MasterArchiveTestSupport.manifestRows(a.sb).first)
+        if r2.kind == .refused {
+            #expect(r2.message.contains("changed since the sheet opened"), "\(r2.message)")
+        } else {
+            #expect(row[9] == "user-estimated" && a.copy.userDateConfidence == "estimated",
+                    "the stale sheet overwrote the newer confidence: \(row[9]) / \(a.copy.userDateConfidence ?? "nil")")
+        }
+    }
+
     enum Failure: String, CaseIterable, Sendable { case verify, index }
 
     @Test("the move back's folder flush fails → incompleteRecovery, backup kept, file at the original path",
