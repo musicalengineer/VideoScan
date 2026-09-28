@@ -288,6 +288,12 @@
 <!-- Real test runs (XCTest + Swift Testing) on Rick's Mac hardware via
      TestDriver. This is the only place real coverage and pass/fail counts
      show up; GitHub-hosted CI skips unit tests entirely. -->
+<h3 class="section-heading">Release Gauntlet</h3>
+<p class="subtitle" id="gauntlet-status">UI not run (phase 2). No gauntlet results published yet.</p>
+<div class="charts">
+  <div class="chart-box"><h2>Gauntlet &mdash; Stage and Total Duration (s)</h2><canvas id="chart-gauntlet-duration"></canvas></div>
+  <div class="chart-box"><h2>Gauntlet &mdash; Stage Pass / Fail / Incomplete</h2><canvas id="chart-gauntlet-outcome"></canvas></div>
+</div>
 <h3 class="section-heading">Local Test Runs &mdash; TestDriver on Mac hardware</h3>
 
 <!-- TestDriver cards -->
@@ -367,7 +373,7 @@ const EXPECTED_SEARCH_QUERIES = [
   "d", "don", "donna", "xylotheremin", "zzqx", "donna christmas 1997",
   "1990s", "people:donna", '"cape cod"', "pelicanwharf sunsetreel",
 ];
-const isTestRunRow = row => row.source !== "poi-cycle-metrics";
+const isTestRunRow = row => row.source !== "poi-cycle-metrics" && row.source !== "gauntlet";
 
 // Resolved at load time. If the API call fails (rate limit, offline,
 // etc.) these stay null and the fetch path uses the branch-pinned URL.
@@ -644,6 +650,38 @@ async function loadData() {
   const tdRows = allTdRows.filter(isTestRunRow);
   tdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
   const tdLast = tdRows.length ? tdRows[tdRows.length - 1] : {};
+
+  // Gauntlet rows share transport, never nightly averages or freshness.
+  const gauntletRows = allTdRows.filter(row => row.source === "gauntlet" && row.schemaVersion === 1);
+  if (gauntletRows.length) {
+    const last = gauntletRows[gauntletRows.length - 1];
+    document.getElementById("gauntlet-status").textContent =
+      `Latest: ${last.status || "incomplete"} · ${last.machine || "unknown"} · ${last.ts} · UI not run (phase 2)`;
+    const stages = ["unit", "regression", "integration", "performance", "hallie", "stress", "ui"];
+    const colors = ["#58a6ff", "#bc8cff", "#3fb950", "#d29922", "#db6d28", "#f85149", "#8b949e"];
+    const datasets = stages.map((name, index) => ({
+      label: name, data: gauntletRows.map(row => {
+        const stage = (row.stages || []).find(stage => stage.name === name);
+        return stage && stage.status !== "not_run" && Number(stage.elapsed_s) > 0 ? stage.elapsed_s : null;
+      }), ...lineStyle(colors[index]), fill: false,
+    }));
+    datasets.push({ label: "total (including build)", data: gauntletRows.map(row => row.elapsed_s), ...lineStyle("#e6edf3"), fill: false });
+    const gauntletOptions = { ...chartDefaults, plugins: { ...chartDefaults.plugins,
+      legend: { display: true, labels: { color: "#8b949e" } } } };
+    new Chart(document.getElementById("chart-gauntlet-duration"), {
+      type: "line", data: { labels: dateLabels(gauntletRows), datasets }, options: gauntletOptions,
+    });
+    new Chart(document.getElementById("chart-gauntlet-outcome"), {
+      type: "bar", data: { labels: dateLabels(gauntletRows), datasets: [
+        { label: "passed stages", backgroundColor: "#3fb950", data: gauntletRows.map(row => (row.stages || []).filter(stage => stage.status === "passed").length) },
+        { label: "failed stages", backgroundColor: "#f85149", data: gauntletRows.map(row => (row.stages || []).filter(stage => stage.status === "failed").length) },
+        { label: "not run / blocked / incomplete", backgroundColor: "#d29922", data: gauntletRows.map(row => (row.stages || []).filter(stage => !["passed", "failed"].includes(stage.status)).length) },
+      ] }, options: gauntletOptions,
+    });
+  } else {
+    document.getElementById("chart-gauntlet-duration").classList.add("hidden");
+    document.getElementById("chart-gauntlet-outcome").classList.add("hidden");
+  }
 
   // Dedicated catalog-search stream only. Never render the unrelated
   // generated-media benchmarks.jsonl rows in this section.
