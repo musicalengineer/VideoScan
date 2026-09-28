@@ -317,7 +317,12 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
         var seen = Set<String>()
         var media: [String] = []
         var skipped: [(row: String, why: String)] = []
-        for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated().dropFirst() {
+        // CRLF is ONE Character in Swift (a grapheme cluster), so splitting
+        // on "\n" alone never separates CRLF records (codex r2 #3) — split
+        // on either terminator. (C++ analogy: iterating Characters is like
+        // iterating grapheme clusters, not bytes.)
+        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" })
+        for (i, line) in lines.enumerated().dropFirst() {
             let raw = line.hasSuffix("\r") ? String(line.dropLast()) : String(line)
             if raw.isEmpty { continue }
             let f = ArchiveManifestCSV.fields(ofLine: raw)
