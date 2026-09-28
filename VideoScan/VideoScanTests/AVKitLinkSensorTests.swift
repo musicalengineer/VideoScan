@@ -17,14 +17,18 @@ import Foundation
 
 struct AVKitLinkSensorTests {
 
-    /// dlopen(RTLD_NOLOAD) answers "already loaded?" without loading it.
-    /// NOT a walk of _dyld_image_count/_dyld_get_image_name: that list is
-    /// not thread-safe, and with Swift Testing loading images on other
-    /// threads the walk segfaulted the test host on CI (b8ef883f, 319ba883).
+    /// dlopen(RTLD_NOLOAD) answers "already loaded?" without loading it;
+    /// dlsym finds the class symbol without touching the class.
+    /// NEVER hand a class object to #expect: on CI (Xcode 26.3) the macro's
+    /// capture of `NSClassFromString("AVPlayerView")` crashed the test runner
+    /// ("crashed … freestanding macro expansion #2 of expect", 6d6e5288),
+    /// and the restart limit then ran ZERO tests. #expect sees Bools only.
     @Test func theAppLoadsAVKitSoVideoPlayerCanFindAVPlayerView() {
         let handle = dlopen("/System/Library/Frameworks/AVKit.framework/Versions/A/AVKit", RTLD_NOLOAD)
         defer { if let handle { dlclose(handle) } }
-        #expect(handle != nil, "AVKit.framework is not loaded — VideoPlayer will abort on first play")
-        #expect(NSClassFromString("AVPlayerView") != nil)
+        let loaded = handle != nil
+        let hasPlayerView = handle.map { dlsym($0, "OBJC_CLASS_$_AVPlayerView") != nil } ?? false
+        #expect(loaded, "AVKit.framework is not loaded — VideoPlayer will abort on first play")
+        #expect(hasPlayerView, "AVPlayerView is not reachable in the loaded AVKit")
     }
 }
