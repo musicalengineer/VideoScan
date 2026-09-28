@@ -2679,6 +2679,7 @@
         "additiveField",
         "askUntilAnswered",
         "preselection",
+        "preselectionPreservesExplicitTypedMachineDate",
         "promoterSourceIsExplicit",
         "reviewAnswersSetSource"
       ]
@@ -3042,11 +3043,14 @@
         "callersAreInventoried",
         "catalogRenameRefusesLocked",
         "cleanRunHidesTheMenuItem",
+        "crlfManifestRowsAreAllPlanned",
+        "crlfRowsAfterAnLFHeaderAreAllLocked",
         "flagWritesOnlyInThePrimitive",
         "indexOnlyKeepsLock",
         "lockAllCannotInterruptUpdateRollback",
         "lockedAndCannotUnlock",
         "nonMediaSkipped",
+        "nothingPlannedFromNonEmptyManifestKeepsTheItem",
         "outcomes",
         "poisonedManifestRefuses",
         "reportsNotLocked",
@@ -23301,7 +23305,7 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2034,
+      "expected_floor": 2035,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
