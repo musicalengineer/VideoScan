@@ -37,6 +37,24 @@ struct ArchiveAngelReviewDatesTests {
         #expect(typed.proposedDate == "1990", "the person's own date wins")
     }
 
+    @Test("codex r2 #2: a date Rick TYPED stands on reload even when it equals the machine default (or the copy's date)")
+    func preselectionPreservesExplicitTypedMachineDate() {
+        let choice = PromoteCopyDates.decide([d("1984", known: true, "t.dv")])
+        // Rick typed 2004 in the row's date field — the binding marks it
+        // `.typed` but does not set `dateFromCopiesAnswered`.
+        var e = entry(proposed: "2004")
+        e.proposedDateSource = .typed
+        ArchiveAngelReviewDates.applyPreselection(choice, to: &e, machineDefault: "2004")
+        #expect(e.proposedDate == "2004", "Rick's typed 2004 was replaced by \(e.proposedDate ?? "nil")")
+        #expect(e.proposedDateSource == .typed, "source became \(String(describing: e.proposedDateSource))")
+        #expect(e.inheritedDate == nil)
+        // Typing the copy's own value is still Rick's typing, not a copy's.
+        var same = entry(proposed: "1984")
+        same.proposedDateSource = .typed
+        ArchiveAngelReviewDates.applyPreselection(choice, to: &same, machineDefault: "2004")
+        #expect(same.proposedDate == "1984" && same.proposedDateSource == .typed && same.inheritedDate == nil)
+    }
+
     @Test("disagreement asks until answered: Use / Enter a date… / Promote undated")
     func askUntilAnswered() {
         let choice = PromoteCopyDates.decide([d("1984", known: true, "a"), d("1985", known: false, "b")])
