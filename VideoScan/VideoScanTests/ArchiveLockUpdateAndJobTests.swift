@@ -288,6 +288,71 @@ struct ArchiveLockJobTests {
         }
     }
 
+    @Test("codex r2 #3: CRLF-terminated rows are each planned (all-CRLF, and CRLF rows after an LF header); a later CRLF escaping row still refuses")
+    func crlfManifestRowsAreAllPlanned() {
+        let root = "/tmp/test_lock_root"
+        func row(_ rel: String) -> String { "2026-09-27T00:00:00Z,\(rel),00,1,/x,t,\(UUID()),\(UUID()),,,,3" }
+        let header = MasterArchiveLayout.manifestHeaderLegacy
+        let rows = ["30_Video/a.mov", "30_Video/b.mov"].map(row)
+        let allCRLF = ([header] + rows).joined(separator: "\r\n") + "\r\n"
+        let lfHeader = header + "\n" + rows.joined(separator: "\r\n") + "\r\n"
+        for (label, text) in [("all CRLF", allCRLF), ("LF header, CRLF rows", lfHeader)] {
+            guard case .success(let plan) = ArchiveLockJob.plan(manifestText: text, root: root) else {
+                Issue.record("\(label): plan refused"); continue
+            }
+            #expect(plan.relPaths == ["30_Video/a.mov", "30_Video/b.mov"], "\(label): planned \(plan.relPaths)")
+            #expect(plan.skipped.isEmpty, "\(label): skipped \(plan.skipped.map(\.row))")
+            let poisoned = text + row("30_Video/../../../etc/passwd") + "\r\n"
+            guard case .failure = ArchiveLockJob.plan(manifestText: poisoned, root: root) else {
+                Issue.record("\(label): a later CRLF escaping row must refuse the plan"); continue
+            }
+        }
+    }
+
+    @Test("codex r2 #3 (end to end): CRLF rows appended after the LF header are ALL locked before the one-time marker is written")
+    func crlfRowsAfterAnLFHeaderAreAllLocked() async throws {
+        let (a, rels) = try archive("job_crlf", files: 1)
+        defer { a.sb.cleanup() }
+        var added: [String] = []
+        for i in 1...2 {
+            let rel = "30_Video/1990-1999/1992/1992-xx-xx_CR\(i).mov"
+            try FileManager.default.createDirectory(at: a.url(rel).deletingLastPathComponent(), withIntermediateDirectories: true)
+            try MasterArchiveTestSupport.writeBlob(at: a.url(rel), bytes: 500, seed: UInt64(200 + i))
+            added.append(rel)
+        }
+        let crlf = added.map { "2026-09-27T00:00:00Z,\($0),00,500,/x,t,\(UUID()),\(UUID()),,,,3\r\n" }.joined()
+        let fh = try FileHandle(forWritingTo: a.sb.manifestURL)
+        try fh.seekToEnd(); fh.write(Data(crlf.utf8)); try fh.close()
+        let job = await run(a.model)
+        #expect(!job.wasRefused, "\(job.state)")
+        #expect(job.totals.total == 3 && job.totals.changed == 3, "\(job.totals)")
+        for rel in rels + added {
+            #expect(MasterArchiveTestSupport.isLocked(a.url(rel).path), "\(rel) was never locked")
+        }
+        #expect(a.model.archiveLockCatchUpDone == added.allSatisfy { MasterArchiveTestSupport.isLocked(a.url($0).path) },
+                "the one-time marker must never claim completion while a listed file is unlocked")
+    }
+
+    @Test("codex r2 #3 follow-up: a NON-EMPTY manifest that yields nothing to lock does not write the one-time marker (the item stays); a header-only manifest still completes")
+    func nothingPlannedFromNonEmptyManifestKeepsTheItem() async throws {
+        let (a, _) = try archive("job_empty_plan", files: 1)
+        defer { a.sb.cleanup() }
+        // Every data row unparseable: nothing can be planned, nothing locked.
+        let body = MasterArchiveLayout.manifestHeaderLegacy + "\n"
+            + "2026-09-27T00:00:00Z,30_Video/x.mov,00\n" + "garbage\n"
+        try Data(body.utf8).write(to: a.sb.manifestURL)
+        let job = await run(a.model)
+        #expect(!job.wasRefused && job.totals.total == 0 && job.totals.skipped == 2, "\(job.totals)")
+        #expect(!a.model.archiveLockCatchUpDone, "nothing was planned from a non-empty manifest — the one-time item must stay")
+        guard case .failed(let why) = job.state else { Issue.record("expected not-complete, got \(job.state)"); return }
+        #expect(why.contains("none could be planned"), "\(why)")
+        // A header-only manifest (nothing promoted yet) is genuinely complete.
+        try Data((MasterArchiveLayout.manifestHeaderLegacy + "\n").utf8).write(to: a.sb.manifestURL)
+        let clean = await run(a.model)
+        guard case .finished = clean.state else { Issue.record("\(clean.state)"); return }
+        #expect(a.model.archiveLockCatchUpDone)
+    }
+
     @Test("scale: 100k manifest rows, stub flag setter, OFF the main actor, within a load-aware budget")
     func scale100k() async throws {
         let a = try UpdateFixture.make("job_scale", relPath: "30_Video/1980-1989/1984/1984-xx-xx_A.mov", recordDate: "1984-xx-xx")

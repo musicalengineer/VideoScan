@@ -42,9 +42,14 @@ enum ArchiveAngelReviewDates {
     /// At load: a single KNOWN date is pre-selected — unless the person
     /// already typed something of their own (then their date stands).
     /// `machineDefault` = the date the plan build proposed from the machine.
+    /// A row whose source is `.typed` is Rick's by construction (codex r2
+    /// #2) — whatever its value, even the machine default or the copy's
+    /// own date — so it is never touched; value equality is only the
+    /// fallback for older plans that carry no source.
     static func applyPreselection(_ choice: PromoteCopiesDateChoice, to entry: inout ArchiveAngelPlan.Entry,
                                   machineDefault: String?) {
-        guard case .preselected(let d, _) = choice, entry.dateFromCopiesAnswered != true else { return }
+        guard case .preselected(let d, _) = choice, entry.dateFromCopiesAnswered != true,
+              entry.proposedDateSource != .typed else { return }
         let current = entry.proposedDate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let untouched = current.isEmpty || current == machineDefault || current == entry.inheritedDate?.value
         guard untouched || current == d.date else { return }
