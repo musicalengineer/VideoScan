@@ -1451,7 +1451,9 @@
         "TreeWalkDateTests",
         "TreeWalkIsolationTests",
         "TreeWalkStoreTests",
-        "TreeWalkLogCadenceTests"
+        "TreeWalkLogCadenceTests",
+        "TreeWalkScopeTests",
+        "TreeWalkLogCapTests"
       ],
       "tests": [
         "aCleanFamilyHasNoChecks",
@@ -1460,6 +1462,8 @@
         "aPoisonedFileIsUnreadableNotACrash",
         "aSmallOrShallowWalkLogsEveryHundred",
         "aTenThousandGenerationChainDoesNotOverflowTheStack",
+        "aThreeGenerationSummaryCountsOnlyTheWalkedPeoplesChecks",
+        "aVersionOneFileIsStaleNotUnreadable",
         "ageAtDeath",
         "bornAfterAParentsDeath",
         "cancelledAndFailedOutcomes",
@@ -1470,12 +1474,14 @@
         "determinism",
         "distinctCountsDoNotDoubleCountTheDiamond",
         "englandIsNeverASubstringOfNewEngland",
+        "first25WarningsThenOneRemainderLineCyclesAllListed",
         "generationIsTheShortestPathAndPathsCountTheDiamond",
         "layersAreGenerationOrderedAndCarryTheFanSlots",
         "likelyDuplicateNeedsSameNameSameParentsAndCloseYears",
         "lineAttributionIncludingCollapseAcrossTheMarriage",
         "localFactsAndAgeAtDeathPrecision",
         "missingDatesAreCoverageNotACrash",
+        "noRemainderLineAtOrUnderTheCap",
         "noStartPeopleIsAnHonestError",
         "oldParents",
         "oneStartOneOutcomeAndOneProgressPairPerThousand",
@@ -1484,7 +1490,10 @@
         "roundTripCurrentAndStale",
         "spouseAgeGap",
         "tarjanReportsEveryCycleAndTheWalkTerminates",
-        "theSourceKeyFollowsTheFacts"
+        "theOutcomeLineCountsTheWalksChecks",
+        "theSourceKeyFollowsTheFacts",
+        "theSummarySaysWhatItWalkedInPlainWords",
+        "theWalkLogsOnlyTheWalkedPeoplesChecks"
       ]
     },
     {
@@ -1567,6 +1576,17 @@
         "tableHasNoDuplicateIDs",
         "theLifespanCapGetsItsOwnHonestLine",
         "unknownDeathVetoesOnlyThroughTheLifespanCap"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AVKitLinkSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AVKitLinkSensorTests"
+      ],
+      "tests": [
+        "theAppLoadsAVKitSoVideoPlayerCanFindAVPlayerView"
       ]
     },
     {
@@ -2650,6 +2670,21 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelReviewDatesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelReviewDatesTests"
+      ],
+      "tests": [
+        "additiveField",
+        "askUntilAnswered",
+        "preselection",
+        "promoterSourceIsExplicit",
+        "reviewAnswersSetSource"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveAngelScorerTests.swift",
       "stage": "unit",
       "suites": [
@@ -2995,6 +3030,40 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveLockUpdateAndJobTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveUpdateLockTests",
+        "ArchiveLockJobTests",
+        "VerifyArchiveNotLockedTests",
+        "ArchiveFileLockSensorTests"
+      ],
+      "tests": [
+        "callersAreInventoried",
+        "catalogRenameRefusesLocked",
+        "cleanRunHidesTheMenuItem",
+        "flagWritesOnlyInThePrimitive",
+        "indexOnlyKeepsLock",
+        "lockAllCannotInterruptUpdateRollback",
+        "lockedAndCannotUnlock",
+        "nonMediaSkipped",
+        "outcomes",
+        "poisonedManifestRefuses",
+        "reportsNotLocked",
+        "rollbackRelockFailureIsSaid",
+        "rollbackRelocksOriginal",
+        "scale100k",
+        "symlinkManifestRefuses",
+        "truncatedRowReportedValidRowsLocked",
+        "unlockCallSites",
+        "unlockReasons",
+        "updatedAndRelocked",
+        "updatedNotRelocked"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchivePaneLayoutTests.swift",
       "stage": "unit",
       "suites": [
@@ -3235,6 +3304,7 @@
         "catalogSaveFailsIsReported",
         "confidenceOnly",
         "containerNames",
+        "correctlyFiledConfidenceOnlyDoesNotMove",
         "dadThanksgivingEndToEnd",
         "dateOnly",
         "everyClosePathReleases",
@@ -3243,6 +3313,7 @@
         "guardAsTarget",
         "listEqualsChanges",
         "manifestRewriteIsTargeted",
+        "misplacedFileFollowsItsDate",
         "nameOnly",
         "namesAndDates",
         "nothingChanged",
@@ -8702,14 +8773,24 @@
         "FamilyTreeWalkAppTests"
       ],
       "tests": [
+        "aBurstOfThreeChangesIsOneWalk",
+        "aLopsidedTreeStillFitsAndStaysCentred",
+        "aPartialForegroundWalkIsDisplayOnly",
         "aRunLogsOneStartOneOutcomeSavesAndServesDecorations",
         "aTreeWithNoHomePeopleFailsHonestly",
         "absentPoisonedAndStaleFilesSayWhyAndRebuild",
+        "anAutomaticRefreshWaitsForARunningForegroundWalk",
         "animationTicksAreBoundedByTheBatchNotThePeople",
         "defaultStartsAreTheHomePeoplePinnedOwnerFirst",
-        "theBackgroundJobEndsDoneWithASummary",
+        "everyNodeSettlesIntoItsLineColourWhenTheReplayEnds",
+        "freshDecorationsMeanNoWalkAndNoLine",
+        "staleDecorationsGetOneSilentWalkWithTheReasonLogged",
+        "theFanFitsItsCanvasAtEveryDepth",
         "theFanPutsRickLeftAndDonnaRight",
-        "walkTreeIsAnMFOKindWithADetailView"
+        "theModelHasNoWalkCenterInTheTestHost",
+        "thePaceNoteSeparatesTheAnalysisFromTheReplay",
+        "theSheetFitsTheWindowItHangsFrom",
+        "theSummaryLabelsItsScope"
       ]
     },
     {
@@ -16418,6 +16499,38 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteDatesAndLockTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveFileLockPrimitiveTests",
+        "PromoteCopiesDateRuleTests",
+        "PromoteDatesAndLockEndToEndTests"
+      ],
+      "tests": [
+        "adoptionPreservesManifestDate",
+        "containment",
+        "copyDateAgreesEverywhere",
+        "decision",
+        "disagreement",
+        "estimatedOnly",
+        "gatherRules",
+        "lockedFileResists",
+        "machineOverrideNotWritten",
+        "none",
+        "onlyAllowedReasonsUnlock",
+        "promotedAndLocked",
+        "promotedNotLocked",
+        "reconcileUndatedPlacementWins",
+        "refused",
+        "rolledBack",
+        "sheetResolve",
+        "singleKnown",
+        "typedDateAgreesEverywhere"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PromoteProgressLoggingTests.swift",
       "stage": "unit",
       "suites": [
@@ -21740,6 +21853,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/ArchiveLockUpdateAndJobTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/ArchivePaneLayoutTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -22680,6 +22797,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/PromoteDatesAndLockTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/PromoteProgressLoggingTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -23180,9 +23301,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2028,
+      "expected_floor": 2034,
       "name": "unit",
       "selectors": [
+        "VideoScanTests/AVKitLinkSensorTests",
         "VideoScanTests/AgeBucketTests",
         "VideoScanTests/AllFramesRipPlannerTests",
         "VideoScanTests/AmbiguousAnchorNoteConcurrencyTests",
@@ -23199,6 +23321,7 @@
         "VideoScanTests/ArchiveAngelPhoneClipTests",
         "VideoScanTests/ArchiveAngelReadinessExplanationTests",
         "VideoScanTests/ArchiveAngelReadinessSoundFactTests",
+        "VideoScanTests/ArchiveAngelReviewDatesTests",
         "VideoScanTests/ArchiveAngelSelectionTests",
         "VideoScanTests/ArchiveAngelTableCellTests",
         "VideoScanTests/ArchiveDateEntryTests",

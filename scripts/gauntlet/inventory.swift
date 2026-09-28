@@ -22,7 +22,8 @@ func discover(_ root: URL) throws -> [[String: Any]] {
         let base = root.appendingPathComponent(relative)
         guard let iterator = fm.enumerator(at: base, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { continue }
         while let url = iterator.nextObject() as? URL {
-            if [".build", "__pycache__", "fixtures", "venv", "node_modules", "DerivedData", "build", ".trash"].contains(url.lastPathComponent) { iterator.skipDescendants(); continue }
+            if [".build", "__pycache__", "fixtures", "venv", "node_modules", "DerivedData", "build", ".trash"].contains(url.lastPathComponent)
+                || url.lastPathComponent.hasPrefix("venv-") { iterator.skipDescendants(); continue }
             let path = String(url.path.dropFirst(root.path.count + 1))
             guard seen.insert(path.lowercased()).inserted else { continue }
             let swift = url.pathExtension == "swift" && path.contains("Tests/")
