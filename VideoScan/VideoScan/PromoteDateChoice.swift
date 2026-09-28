@@ -233,9 +233,33 @@ extension PromoteToArchiveJob {
     /// its date_confidence says it is Rick's (`user-known` / `user-estimated`);
     /// otherwise none. Pure.
     nonisolated static func userDate(fromManifestFields f: [String]) -> (date: String?, confidence: String?) {
-        guard f.count >= ArchiveManifestCSV.columnCountLegacy, f[9].hasPrefix("user-"),
-              let ud = ArchiveRefile.userDate(for: ArchiveRefile.hint(fromManifestDate: f[8])) else { return (nil, nil) }
-        return (ud, (f[9] == "user-known" ? UserDateConfidence.known : .estimated).rawValue)
+        guard f.count >= ArchiveManifestCSV.columnCountLegacy else { return (nil, nil) }
+        return userDate(manifestDate: f[8], confidence: f[9])
+    }
+
+    /// The same rule on a row's two date cells (record_date,
+    /// date_confidence). Pure.
+    nonisolated static func userDate(manifestDate: String, confidence: String) -> (date: String?, confidence: String?) {
+        guard confidence.hasPrefix("user-"),
+              let ud = ArchiveRefile.userDate(for: ArchiveRefile.hint(fromManifestDate: manifestDate)) else { return (nil, nil) }
+        return (ud, (confidence == "user-known" ? UserDateConfidence.known : .estimated).rawValue)
+    }
+
+    /// When the archived record must take its date from the INDEX row
+    /// rather than the source's own fields (which registration copied):
+    /// - adopting an EXISTING row (codex r1 #2) — that row's date;
+    /// - appending a row whose date FOLLOWED the placement on disk (codex
+    ///   r2 #1) — the appended row's cells, which are never Rick's (the
+    ///   placement is not his choice), so no user date and no confidence.
+    /// nil = no correction (the Promote choice, if any, is applied after).
+    /// Pure.
+    nonisolated static func indexedRecordDate(appendsRow: Bool, existingFields: [String]?,
+                                              decision: PromoteDateDecision?) -> (date: String?, confidence: String?)? {
+        if !appendsRow, let existingFields { return userDate(fromManifestFields: existingFields) }
+        if appendsRow, let d = decision, d.followedFilename {
+            return userDate(manifestDate: d.hint.manifestDate, confidence: d.confidenceLabel)
+        }
+        return nil
     }
 
     /// The date a file's PLACE says: the filename prefix when it carries a

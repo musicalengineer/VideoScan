@@ -504,18 +504,13 @@ extension PromoteToArchiveJob {
                                                              promotedAt: now)
             appLog.write("promote: \(relPath) cataloged as a self-contained archive copy — its source record (\(sourceID.uuidString.prefix(8))…) is no longer in the catalog")
         }
-        // Adopting an EXISTING manifest row (codex r1 #2): the index is the
-        // truth for this copy's date — the record takes the row's date (a
-        // user date only when the row says it is Rick's), never the source's
-        // current fields, which may have changed since.
-        if !appendsRow, let fields = ctx.manifestFields[sourceID] {
-            let (ud, conf) = Self.userDate(fromManifestFields: fields)
-            if archiveRecord.userDate != ud || archiveRecord.userDateConfidence != conf {
-                model.log("Promote: \(relPath) — archived record date \(archiveRecord.userDate ?? "none") → \(ud ?? "none") (from the archive manifest row, not the source)")
-                archiveRecord.userDate = ud
-                archiveRecord.userDateConfidence = conf
-                model.searchIndex.update(archiveRecord)
-            }
+        // The index is the truth for this copy's date when the row was
+        // adopted (codex r1 #2) or its date followed the placement on disk
+        // (codex r2 #1) — never the source's current fields, which
+        // registration copied and which may say something else.
+        if let indexed = Self.indexedRecordDate(appendsRow: appendsRow, existingFields: ctx.manifestFields[sourceID],
+                                                decision: decision) {
+            Self.applyIndexedDate(indexed, to: archiveRecord, relPath: relPath, model: model)
         }
         // The chosen date onto the ARCHIVED copy's record (never the source):
         // the same value the filename and the manifest row carry.
@@ -551,6 +546,18 @@ extension PromoteToArchiveJob {
             MediaLedgerEvent.Detail.sizeBytes: String(copyProbe.sizeBytes),
             MediaLedgerEvent.Detail.locked: locked ? "true" : "false",
         ]))
+    }
+
+    /// Put the index row's date on the archived record (a user date only
+    /// when the row says it is Rick's) and log the change. No-op when the
+    /// record already agrees.
+    static func applyIndexedDate(_ indexed: (date: String?, confidence: String?), to archiveRecord: VideoRecord,
+                                 relPath: String, model: VideoScanModel) {
+        guard archiveRecord.userDate != indexed.date || archiveRecord.userDateConfidence != indexed.confidence else { return }
+        model.log("Promote: \(relPath) — archived record date \(archiveRecord.userDate ?? "none") → \(indexed.date ?? "none") (from the archive manifest row, not the source)")
+        archiveRecord.userDate = indexed.date
+        archiveRecord.userDateConfidence = indexed.confidence
+        model.searchIndex.update(archiveRecord)
     }
 
     /// Lock one verified archive file, off the main actor (a flag change on

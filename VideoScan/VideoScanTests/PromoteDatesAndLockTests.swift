@@ -321,15 +321,22 @@ struct PromoteDatesAndLockEndToEndTests {
         try ArchivePromoteJournal.append(.init(sourceRecordID: rec.id, sourcePath: rec.fullPath, destRelPath: placed,
                                                state: .renamed, sha256: sha, copyRecordID: nil, at: Date()),
                                          rootPath: sb.archiveRoot.path)
+        // The SOURCE now carries Rick's own date (codex r2 #1) — it must not
+        // ride registration onto a copy the placement files elsewhere.
+        rec.userDate = "1990"
+        rec.userDateConfidence = UserDateConfidence.known.rawValue
         // The retry carries a DIFFERENT date.
         let job = try await run(model, ids: [rec.id]) {
             $0.archiveDateOverrides[rec.id] = .year(1984); $0.archiveDateSources[rec.id] = .typed
         }
         #expect(MasterArchiveTestSupport.archivedFiles(sb) == [placed], "the placement on disk stands")
         let row = try #require(MasterArchiveTestSupport.manifestRows(sb).first)
-        #expect(row[1] == placed && row[8] == manifestDate, "manifest \(row[8]) must follow the placement")
+        #expect(row[1] == placed && row[8] == manifestDate && row[9].isEmpty,
+                "manifest \(row[8]) / \(row[9]) must follow the placement")
         let copy = try #require(model.masterArchiveCopy(of: rec))
-        #expect(copy.userDate == nil, "1984 is not written on a file filed elsewhere")
+        #expect(copy.userDate == nil, "neither 1984 nor the source's 1990 is written on a file filed elsewhere; got \(copy.userDate ?? "nil")")
+        #expect(copy.userDateConfidence == nil, "confidence must follow the placement row; got \(copy.userDateConfidence ?? "nil")")
+        #expect(rec.userDate == "1990", "the SOURCE is never re-dated")
         let o = try #require(job.outcomes.first)
         #expect(o.kind == .failed && o.detail.contains("Update…"), "\(o.kind): \(o.detail)")
     }
