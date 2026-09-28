@@ -437,6 +437,56 @@ struct FixityStampVolumeIdentityTests {
         #expect(recs[1].contentFixity == original1, "the untouched one is undone")
     }
 
+    // MARK: codex #1721 r2 #2 — a changed digest is "stored" only after the ack
+
+    private func consoleText(_ model: VideoScanModel) async -> String {
+        try? await Task.sleep(nanoseconds: 300_000_000)      // DashboardState flushes after 0.15 s
+        return model.dashboard.consoleLines.joined(separator: "\n")
+    }
+
+    private func wrongDigestRecord(_ r: Rig) throws -> VideoRecord {
+        let (url, fx) = try r.file("wrongdigest.mov", seed: 11)
+        let rec = MasterArchiveTestSupport.makeRecord(path: url.path)
+        rec.contentFixity = ContentFixity(digest: String(repeating: "0", count: 64), byteCount: 4_096,
+                                          stamp: remounted(fx.stamp, keepUUID: false))
+        return rec
+    }
+
+    private func claimsStored(_ console: String) -> Bool {
+        console.split(separator: "\n").contains { $0.contains("wrongdigest.mov") && $0.contains("stored") }
+    }
+
+    @Test func aChangedDigestIsNotClaimedStoredWhenTheSaveFails() async throws {
+        let r = try rig("dcfail"); defer { r.sb.cleanup() }
+        r.model.records = [try wrongDigestRecord(r)]
+        let job = BindFixityToVolumeJob(scopePath: r.sb.sources.path, scopeLabel: "Scratch", model: r.model)
+        job.saveCatalogForTesting = { false }
+        job.start(); await job.task?.value
+        #expect(job.saveFailed && job.tally.digestChanged == 1)
+        let console = await consoleText(r.model)
+        #expect(!claimsStored(console), "\(console)")
+    }
+
+    @Test func aChangedDigestIsClaimedStoredOnlyAfterTheAck() async throws {
+        let r = try rig("dcack"); defer { r.sb.cleanup() }
+        r.model.records = [try wrongDigestRecord(r)]
+        final class Seen: @unchecked Sendable { var beforeAck: String? }
+        let seen = Seen()
+        let job = BindFixityToVolumeJob(scopePath: r.sb.sources.path, scopeLabel: "Scratch", model: r.model)
+        let model = r.model
+        job.saveCatalogForTesting = { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            seen.beforeAck = model.dashboard.consoleLines.joined(separator: "\n")
+            return true
+        }
+        job.start(); await job.task?.value
+        #expect(job.storedCount == 1 && job.tally.digestChanged == 1)
+        let before = try #require(seen.beforeAck)
+        #expect(!claimsStored(before), "no storage claim before the save is acknowledged: \(before)")
+        let after = await consoleText(r.model)
+        #expect(claimsStored(after), "the claim appears once the save is acknowledged: \(after)")
+    }
+
     // MARK: Scale
 
     @Test func candidateScanScalesToAHundredThousandRecords() throws {

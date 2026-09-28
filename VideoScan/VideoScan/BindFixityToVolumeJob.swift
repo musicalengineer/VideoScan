@@ -35,7 +35,8 @@
 //     so the next run re-reads those files, and says so on the row and in
 //     the log; refused on a read-only catalog;
 //   • a digest that CHANGES on the re-read is stored (it is what the file
-//     holds now — the old one was unprovable) and named in the log;
+//     holds now — the old one was unprovable) and named in the log once
+//     the save holding it is acknowledged (codex #1721 r2 #2);
 //   • one START line (the Center), one summary line (console, videoscan.log,
 //     os_log), and one os_log line per refused file.
 
@@ -270,6 +271,12 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         if let saveCatalogForTesting { ok = await saveCatalogForTesting() } else { ok = await model.saveCatalogAcknowledged() }
         if ok {
             storedCount += unsaved
+            // Only now is "stored the new one" true (codex #1721 r2 #2).
+            for p in pending where p.digestChanged {
+                let name = (p.item.path as NSString).lastPathComponent
+                bindFixityLog.warning("bind fixity: \(p.item.path, privacy: .public) — the re-read digest differs from the stored one (stored the new one)")
+                model.log("  ⚠️ \(name): its bytes are not what was hashed before — stored the digest it holds now")
+            }
             pending.removeAll()
             lastSave = Date()
         } else {
@@ -328,7 +335,6 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
     }
 
     private func record(_ outcome: FixityRebind.Outcome, for item: FixityRebindItem, model: VideoScanModel) {
-        let name = (item.path as NSString).lastPathComponent
         switch outcome {
         case .bound(let fixity):
             switch model.applyFixityRebind(item, fixity: fixity) {
@@ -337,9 +343,8 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
                 pending.append(PendingBinding(item: item, written: fixity, digestChanged: false))
             case .digestChanged:
                 tally.bound += 1; tally.boundBytes += fixity.byteCount; tally.digestChanged += 1
+                // Named in the log once a save holding it is acknowledged (persist).
                 pending.append(PendingBinding(item: item, written: fixity, digestChanged: true))
-                bindFixityLog.warning("bind fixity: \(item.path, privacy: .public) — the re-read digest differs from the stored one (stored the new one)")
-                model.log("  ⚠️ \(name): its bytes are not what was hashed before — stored the digest it holds now")
             case .recordChanged:
                 tally.recordChanged += 1
                 bindFixityLog.notice("bind fixity: \(item.path, privacy: .public) — record changed during the run; skipped")
