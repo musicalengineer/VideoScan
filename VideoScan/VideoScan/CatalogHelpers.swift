@@ -1383,6 +1383,7 @@ struct CatalogContent: View {
                             .frame(maxWidth: 480, maxHeight: 180)
                             .aspectRatio(16.0/9.0, contentMode: .fit)
                         } else if isPlaying, let player = player {
+                            let _ = avKitLinkAnchor()
                             VideoPlayer(player: player)
                                 .cornerRadius(6)
                                 .shadow(radius: 3)
@@ -1817,3 +1818,13 @@ enum MediaOpener {
                                 configuration: NSWorkspace.OpenConfiguration())
     }
 }
+
+/// Load-bearing: on the macOS 27 SDK `import AVKit` links only the
+/// _AVKit_SwiftUI overlay, so AVKit.framework never loads and VideoPlayer
+/// aborts on first play ("failed to demangle superclass of VideoPlayerView
+/// from mangled name 'So12AVPlayerViewC'"). Referencing the class from a real
+/// function forces the binary to link AVKit; a bare `let _ = AVPlayerView.self`
+/// in a view body is discarded by the compiler. Crash 2026-09-28; sensor:
+/// AVKitLinkSensorTests.
+@inline(never)
+func avKitLinkAnchor() -> AnyClass { AVPlayerView.self }
