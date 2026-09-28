@@ -184,8 +184,9 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
             return
         }
         model.archiveLockNote("\(title): OUTCOME — \(summary)")
-        if totals.failed > 0 || totals.busy > 0 {
-            finish(failed: summary)       // not complete: the menu item stays
+        if let notComplete = Self.notCompleteReason(totals: totals, plan: plan, summary: summary) {
+            if notComplete != summary { model.archiveLockNote("\(title): \(notComplete)") }
+            finish(failed: notComplete)   // not complete: the menu item stays
         } else {
             finish(success: summary)
             model.markArchiveLockCatchUpDone(summary: summary)
@@ -264,6 +265,19 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
         return "\(d) of \(t) · \((current as NSString).lastPathComponent)\(left)"
     }
 
+    /// Why a finished run is NOT the one-time completion (the marker is not
+    /// written, the menu item stays): a failed or busy file; or a manifest
+    /// with data rows of which none could be planned (codex r2 #3 — a
+    /// parse that saw nothing must never claim every file is locked). nil =
+    /// complete. Pure.
+    nonisolated static func notCompleteReason(totals t: Totals, plan: Plan, summary: String) -> String? {
+        if t.failed > 0 || t.busy > 0 { return summary }
+        if plan.relPaths.isEmpty && plan.dataRows > 0 {
+            return "\(summary) — the manifest lists \(plan.dataRows) row(s) but none could be planned; not marked complete (check the manifest by hand)"
+        }
+        return nil
+    }
+
     /// Main-actor refusals, before anything is read.
     static func preflightRefusal(model: VideoScanModel) -> String? {
         if model.isReadOnly { return "this Mac is a read-only viewer of the catalog" }
@@ -283,9 +297,11 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
         let relPaths: [String]
         /// Rows skipped (malformed, or outside the media buckets) + why.
         let skipped: [(row: String, why: String)]
+        /// Non-empty data lines the manifest held (header excluded).
+        let dataRows: Int
 
         static func == (a: Plan, b: Plan) -> Bool {
-            a.relPaths == b.relPaths && a.skipped.map(\.row) == b.skipped.map(\.row)
+            a.relPaths == b.relPaths && a.skipped.map(\.row) == b.skipped.map(\.row) && a.dataRows == b.dataRows
         }
     }
 
@@ -317,6 +333,7 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
         var seen = Set<String>()
         var media: [String] = []
         var skipped: [(row: String, why: String)] = []
+        var dataRows = 0
         // CRLF is ONE Character in Swift (a grapheme cluster), so splitting
         // on "\n" alone never separates CRLF records (codex r2 #3) — split
         // on either terminator. (C++ analogy: iterating Characters is like
@@ -325,6 +342,7 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
         for (i, line) in lines.enumerated().dropFirst() {
             let raw = line.hasSuffix("\r") ? String(line.dropLast()) : String(line)
             if raw.isEmpty { continue }
+            dataRows += 1
             let f = ArchiveManifestCSV.fields(ofLine: raw)
             guard f.count >= ArchiveManifestCSV.columnCountLegacy, !f[ArchiveManifestCSV.relPathColumn].isEmpty else {
                 skipped.append(("manifest line \(i + 1)",
@@ -343,7 +361,7 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
                 skipped.append((rel, "not in a media bucket (10_Photos / 20_Audio / 30_Video / 50_Documents) — never locked"))
             }
         }
-        return .success(Plan(relPaths: media, skipped: skipped))
+        return .success(Plan(relPaths: media, skipped: skipped, dataRows: dataRows))
     }
 
     /// One chunk of flag changes, off the main actor.

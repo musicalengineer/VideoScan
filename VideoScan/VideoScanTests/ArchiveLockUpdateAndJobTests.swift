@@ -333,6 +333,26 @@ struct ArchiveLockJobTests {
                 "the one-time marker must never claim completion while a listed file is unlocked")
     }
 
+    @Test("codex r2 #3 follow-up: a NON-EMPTY manifest that yields nothing to lock does not write the one-time marker (the item stays); a header-only manifest still completes")
+    func nothingPlannedFromNonEmptyManifestKeepsTheItem() async throws {
+        let (a, _) = try archive("job_empty_plan", files: 1)
+        defer { a.sb.cleanup() }
+        // Every data row unparseable: nothing can be planned, nothing locked.
+        let body = MasterArchiveLayout.manifestHeaderLegacy + "\n"
+            + "2026-09-27T00:00:00Z,30_Video/x.mov,00\n" + "garbage\n"
+        try Data(body.utf8).write(to: a.sb.manifestURL)
+        let job = await run(a.model)
+        #expect(!job.wasRefused && job.totals.total == 0 && job.totals.skipped == 2, "\(job.totals)")
+        #expect(!a.model.archiveLockCatchUpDone, "nothing was planned from a non-empty manifest — the one-time item must stay")
+        guard case .failed(let why) = job.state else { Issue.record("expected not-complete, got \(job.state)"); return }
+        #expect(why.contains("none could be planned"), "\(why)")
+        // A header-only manifest (nothing promoted yet) is genuinely complete.
+        try Data((MasterArchiveLayout.manifestHeaderLegacy + "\n").utf8).write(to: a.sb.manifestURL)
+        let clean = await run(a.model)
+        guard case .finished = clean.state else { Issue.record("\(clean.state)"); return }
+        #expect(a.model.archiveLockCatchUpDone)
+    }
+
     @Test("scale: 100k manifest rows, stub flag setter, OFF the main actor, within a load-aware budget")
     func scale100k() async throws {
         let a = try UpdateFixture.make("job_scale", relPath: "30_Video/1980-1989/1984/1984-xx-xx_A.mov", recordDate: "1984-xx-xx")
