@@ -29,7 +29,7 @@ func swiftSuites(_ text: String) -> [String] {
     for line in text.components(separatedBy: "\n") {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("//") { continue }
-        let isTestLine = trimmed.contains("@Test") || matches(#"\bfunc\s+test[A-Za-z_0-9]*\s*\("#, trimmed).count > 0
+        let isTestLine = trimmed.contains("@Test") || !matches(#"\bfunc\s+test[A-Za-z_0-9]*\s*\("#, trimmed).isEmpty
         if !isTestLine, let name = matches(typeDecl, line, group: 1).first {
             pendingType = name
             if name.contains("Tests") || suiteAttributePending || trimmed.contains("@Suite") { add(name) }
