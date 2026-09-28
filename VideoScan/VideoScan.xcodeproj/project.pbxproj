@@ -220,6 +220,7 @@
 			packageReferences = (
 				FACE000000000000000000A0 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */,
 				C0DE0000000000000000F000 /* XCLocalSwiftPackageReference "VideoScanCore" */,
+				0D9628A8306ADB4400FE1E43 /* XCRemoteSwiftPackageReference "swift-algorithms" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 0DC193292F676647006295E7 /* Products */;
@@ -641,6 +642,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		0D9628A8306ADB4400FE1E43 /* XCRemoteSwiftPackageReference "swift-algorithms" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-algorithms.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.2.1;
+			};
+		};
 		FACE000000000000000000A0 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/ml-explore/mlx-swift-examples";
