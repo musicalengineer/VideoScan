@@ -31,8 +31,9 @@
 //     AWAITS an acknowledged durable save (codex #1721 P2-2 — the
 //     debounced save can be starved and never reports failure). Only
 //     acknowledged bindings are reported "stored"; a failed save stops the
-//     job, says so on the row and in the log, and leaves it resumable;
-//     refused on a read-only catalog;
+//     job, UNDOES the unsaved bindings (compare-and-set, codex #1721 r2 #1)
+//     so the next run re-reads those files, and says so on the row and in
+//     the log; refused on a read-only catalog;
 //   • a digest that CHANGES on the re-read is stored (it is what the file
 //     holds now — the old one was unprovable) and named in the log;
 //   • one START line (the Center), one summary line (console, videoscan.log,
@@ -95,8 +96,17 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
     private(set) var storedCount = 0
     /// True when an acknowledged save failed — the row and log say so.
     private(set) var saveFailed = false
+    /// A binding made in memory since the last acknowledged save — what a
+    /// failed save rolls back (codex #1721 r2 #1).
+    private struct PendingBinding {
+        let item: FixityRebindItem
+        /// Exactly what the job wrote (the rollback's compare-and-set key).
+        let written: ContentFixity
+        let digestChanged: Bool
+    }
     /// Bindings made in memory since the last acknowledged save.
-    private var unsaved = 0
+    private var pending: [PendingBinding] = []
+    private var unsaved: Int { pending.count }
     private var lastSave = Date()
 
     var title: String { "Bind Fixity to Volume — \(scopeLabel)" }
@@ -260,7 +270,7 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         if let saveCatalogForTesting { ok = await saveCatalogForTesting() } else { ok = await model.saveCatalogAcknowledged() }
         if ok {
             storedCount += unsaved
-            unsaved = 0
+            pending.removeAll()
             lastSave = Date()
         } else {
             saveFailed = true
@@ -268,13 +278,28 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         return ok
     }
 
-    /// A save was not acknowledged: stop reading, say so, stay resumable.
+    /// A save was not acknowledged: stop reading, UNDO the bindings it
+    /// would have held (compare-and-set — a record someone else changed
+    /// meanwhile is left alone), say so. The undone records are candidates
+    /// again, so the next run re-reads them in full (codex #1721 r2 #1;
+    /// #1707: a legacy stamp stays untrusted until one full re-read).
     private func failSave(model: VideoScanModel) async {
         await releaseGates()
-        let pending = unsaved
+        var undone = 0, leftAlone = 0
+        for p in pending {
+            if model.revertFixityRebind(p.item, written: p.written) {
+                undone += 1
+            } else {
+                leftAlone += 1
+                bindFixityLog.notice("bind fixity: \(p.item.path, privacy: .public) — changed in the catalog after its binding; left as it is, not undone")
+            }
+        }
+        pending.removeAll()
         finishSummary(model: model, ending: "stopped — catalog save FAILED")
-        let message = "The catalog could not be saved — \(pending) binding(s) are only in memory (\(storedCount) saved); "
-            + "no media was changed. Stopped; start Bind Fixity to Volume again once the catalog can be saved — it resumes where it stopped."
+        let alone = leftAlone == 0 ? "" : " (\(leftAlone) more had been changed in the catalog meanwhile and were left as they are)"
+        let message = "The catalog could not be saved — \(undone) binding(s) were not saved and were undone\(alone); "
+            + "\(storedCount) saved earlier are kept; no media was changed. Stopped; start Bind Fixity to Volume again "
+            + "once the catalog can be saved — it re-reads those files."
         model.log("  ⚠️ " + message)
         bindFixityLog.error("\(message, privacy: .public)")
         finish(failed: message)
@@ -308,9 +333,11 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         case .bound(let fixity):
             switch model.applyFixityRebind(item, fixity: fixity) {
             case .written:
-                tally.bound += 1; tally.boundBytes += fixity.byteCount; unsaved += 1
+                tally.bound += 1; tally.boundBytes += fixity.byteCount
+                pending.append(PendingBinding(item: item, written: fixity, digestChanged: false))
             case .digestChanged:
-                tally.bound += 1; tally.boundBytes += fixity.byteCount; tally.digestChanged += 1; unsaved += 1
+                tally.bound += 1; tally.boundBytes += fixity.byteCount; tally.digestChanged += 1
+                pending.append(PendingBinding(item: item, written: fixity, digestChanged: true))
                 bindFixityLog.warning("bind fixity: \(item.path, privacy: .public) — the re-read digest differs from the stored one (stored the new one)")
                 model.log("  ⚠️ \(name): its bytes are not what was hashed before — stored the digest it holds now")
             case .recordChanged:

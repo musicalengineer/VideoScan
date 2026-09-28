@@ -384,6 +384,59 @@ struct FixityStampVolumeIdentityTests {
         #expect(job.tally.bound == 2, "stops at the first failed checkpoint — resumable, nothing more read")
     }
 
+    // MARK: codex #1721 r2 #1 — a failed save is undone, so a retry re-reads
+
+    /// The FINAL batch fails: both bindings are rolled back to the legacy
+    /// fixity the catalog on disk still holds, and a second run finds them
+    /// again, re-reads them, and reaches an acknowledged save.
+    @Test func aFailedFinalSaveIsUndoneAndARetryRebindsBoth() async throws {
+        let r = try rig("ackretry"); defer { r.sb.cleanup() }
+        let recs = try legacyRecords(r, count: 2)
+        let originals = recs.map(\.contentFixity)
+        r.model.records = recs
+        let failing = BindFixityToVolumeJob(scopePath: r.sb.sources.path, scopeLabel: "Scratch", model: r.model)
+        failing.checkpointEvery = 100
+        failing.saveCatalogForTesting = { false }
+        failing.start(); await failing.task?.value
+        #expect(failing.saveFailed && failing.storedCount == 0 && failing.tally.bound == 2, "\(failing.tally)")
+        guard case .failed(let message) = failing.state else { Issue.record("expected failed, got \(failing.state)"); return }
+        #expect(message.contains("undone") && !message.contains("resumes"), "\(message)")
+        #expect(recs.map(\.contentFixity) == originals, "unsaved bindings are rolled back to the legacy fixity")
+
+        final class Saves: @unchecked Sendable { var n = 0 }
+        let saves = Saves()
+        #expect(r.model.fixityRebindCandidates(prefix: r.sb.sources.path).count == 2, "the retry sees both again")
+        let retry = BindFixityToVolumeJob(scopePath: r.sb.sources.path, scopeLabel: "Scratch", model: r.model)
+        retry.checkpointEvery = 100
+        retry.saveCatalogForTesting = { saves.n += 1; return true }
+        retry.start(); await retry.task?.value
+        #expect(saves.n == 1, "the retry reaches an acknowledged save — got \(saves.n)")
+        #expect(retry.tally.bound == 2 && retry.storedCount == 2 && !retry.saveFailed, "\(retry.summaryLine)")
+        for rec in recs {
+            #expect(rec.contentFixity?.stamp.volumeUUID != nil
+                    && rec.contentFixity?.describesFileNow(FileIdentityStamp.capture(path: rec.fullPath)) == true)
+        }
+    }
+
+    /// Control: a record someone else changed between the job's write and
+    /// the rollback is left exactly as they left it; the other is undone.
+    @Test func rollbackLeavesARecordSomeoneElseChanged() async throws {
+        let r = try rig("ackcas"); defer { r.sb.cleanup() }
+        let recs = try legacyRecords(r, count: 2)
+        let original1 = recs[1].contentFixity
+        r.model.records = recs
+        let theirs = ContentFixity(digest: String(repeating: "e", count: 64), byteCount: 4_096,
+                                   stamp: FileIdentityStamp(device: 1, inode: 2, size: 4_096, mtimeNs: 3, ctimeNs: 4,
+                                                            volumeUUID: otherDiskUUID))
+        let job = BindFixityToVolumeJob(scopePath: r.sb.sources.path, scopeLabel: "Scratch", model: r.model)
+        job.checkpointEvery = 100
+        job.saveCatalogForTesting = { [recs] in recs[0].contentFixity = theirs; return false }
+        job.start(); await job.task?.value
+        #expect(job.saveFailed)
+        #expect(recs[0].contentFixity == theirs, "someone else's value is never overwritten by the rollback")
+        #expect(recs[1].contentFixity == original1, "the untouched one is undone")
+    }
+
     // MARK: Scale
 
     @Test func candidateScanScalesToAHundredThousandRecords() throws {

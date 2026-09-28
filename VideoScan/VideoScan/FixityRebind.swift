@@ -176,4 +176,17 @@ extension VideoScanModel {
         rec.contentFixity = fixity
         return fixity.digest == item.fixity.digest ? .written : .digestChanged
     }
+
+    /// Undo a binding whose catalog save was NOT acknowledged (codex #1721
+    /// r2 #1) — compare-and-set the other way: restore the planned (legacy)
+    /// fixity only if the same record, at the same path, still holds
+    /// exactly what the job wrote. False (left alone) when anyone changed
+    /// it meanwhile. Not gated on read-only: it only returns memory to what
+    /// the catalog on disk still holds.
+    func revertFixityRebind(_ item: FixityRebindItem, written: ContentFixity) -> Bool {
+        guard let rec = record(forID: item.id), rec.fullPath == item.path,
+              rec.contentFixity == written else { return false }
+        rec.contentFixity = item.fixity
+        return true
+    }
 }
