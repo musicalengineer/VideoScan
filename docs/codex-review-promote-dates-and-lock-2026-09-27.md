@@ -62,3 +62,61 @@ OUTPUT (stdout, Markdown, under 400 words):
 first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
 then a line `Verdict: merge / merge-after-fixes / hold`
 then findings, each with file:line, a concrete counterexample, and the test that would pin it. Do not explore outside these files.
+
+## Closed
+
+Closed by `5fb050ee` at 2026-09-27T23:44:44Z. #1 #5 fc41de7b (one-time catch-up, index lock, per-row report; Unlock-all removed per Rick), #2 dcb323bb, #3 69ba2516, #4 d5874660
+
+---
+
+# Codex review — Promote dates + lock r2 (re-run after outage)
+
+- Range: `a9893539..5fb050ee`
+- Credits spent: unavailable
+- Tokens: 83049
+- Finding count: 3
+- Verdict: merge-after-fixes
+- Run: 2026-09-28T18:09:11Z (cycle #12, tools/codex_review.py)
+
+## Codex answer
+
+Credits spent: unavailable | Finding count: 3
+Verdict: merge-after-fixes
+
+1. **P2 — Reconciliation can retain the rejected source date.** `PromoteToArchiveJob+Steps.swift:511,522`: manifest-date correction applies only when adopting an existing row; a placement-following decision has no `recordUserDate`, so neither branch corrects the date inherited during registration. Counterexample: an interrupted file sits under `Undated`, the source now has userDate `1990`, and reconciliation appends an undated manifest row. The archived record retains `1990`. **Pin:** extend `reconcileUndatedPlacementWins` with source userDate `1990`/known; require nil archived userDate and confidence for both Undated and decade placement.
+
+2. **P2 — Preselection still overrides explicit typing through value equality.** `ArchiveAngel/Review/ArchiveAngelReviewDates.swift:48`: `untouched` ignores `proposedDateSource`. Counterexample: Rick types `2004`, matching the machine default; the binding sets `.typed` but leaves `dateFromCopiesAnswered` unset. Applying preselection on reload replaces it with the copy’s `1984` and `.fromCopy`. **Pin:** add `preselectionPreservesExplicitTypedMachineDate`, applying preselection to that state and asserting `2004`/`.typed` remain.
+
+3. **P2 — CRLF rows disappear from lock planning.** `ArchiveLockJob.swift:320`: Swift treats CRLF as one `Character`; splitting on the LF character does not separate CRLF records. Counterexample: pass a header and two valid rows joined with `"\r\n"` to `plan`: the entire input is dropped as the header, yielding a successful empty plan without skipped-row reporting. The completion branch at line 191 accepts empty plans for the marker. **Pin:** `crlfManifestRowsAreAllPlanned`, plus a later escaping row requiring refusal; verify incomplete parsing cannot hide the catch-up action.
+
+Other scoped changes **read, no findings**: ArchiveFileLock, ArchiveLockDetailView, ArchiveView, ArchiveRefile’s message changes, PromoteDateChoice, PromoteToArchiveJob, ArchiveAngelPromoter, ArchiveAngelPlan, ArchiveAngelJob’s source assignment, ArchiveAngelReviewSheet’s date binding, and matching test changes.
+
+Static review only; no builds or tests run. Merge commit skipped. Index-lock internals and other excluded dependencies were not inspected, so their timing/concurrency behavior was not independently verified.
+
+## Brief
+
+Re-review, SCOPED to the fix commits for your r1 findings (docs/codex-review-promote-dates-and-lock-2026-09-27.md) on `feat/promote-dates-and-lock`: range `a9893539..HEAD`. The fix commits are fc41de7b (#1, #5 and Rick's simplification), dcb323bb (#2), 69ba2516 (#3), d5874660 (#4), 2a0909b6 and 74911295 (tests only). feb938bd is a merge of origin/main (one conflict in a badge-colour switch, nothing else touched) — skip it. Use `git show <sha>`. Read-only; do not build or run. Do not explore outside the files these commits touch: ArchiveLockJob.swift, ArchiveLockDetailView.swift, ArchiveFileLock.swift, ArchiveView.swift, ArchiveRefile.swift (message text only), PromoteDateChoice.swift, PromoteToArchiveJob.swift, PromoteToArchiveJob+Steps.swift, ArchiveAngel/Promote/ArchiveAngelPromoter.swift, ArchiveAngel/Review/ArchiveAngelReviewDates.swift, ArchiveAngel/Prepare/ArchiveAngelPlan.swift, ArchiveAngel/Prepare/ArchiveAngelJob.swift (one line), ArchiveAngel/UI/ArchiveAngelReviewSheet.swift (the date binding), and the matching tests.
+
+ONE-SENTENCE WORKFLOW: "When I promote a file, use the date I already gave its copies; and once it's in the archive, nothing but Update… can change or delete it."
+
+RICK'S RULING (2026-09-27, applied in fc41de7b): Promote locks every file by default; only Update… unlocks → changes → relocks. There is NO Unlock job (removed: menu item, mode, `Reason.unlockAll`; `mayUnlock` is `.updateUnlock` only). "Lock Archive Files…" became "Lock files already in the archive (one-time)…" — a catch-up for files promoted before locking existed, hidden once it has completed cleanly (no failed, no busy file) by a marker file beside the catalog (App Support in production). Short/malformed manifest rows are skipped and REPORTED, not a whole-job refusal; a whole row whose path escapes the root still refuses the job before any flag.
+
+FIXES (each red first)
+- #1 (fc41de7b) `ArchiveLockJob.lockOne` sets each flag inside `ArchiveIndexLock.withExclusive(root:holder:wait: .zero)` — the lock Update holds for its whole `ArchiveIndexRename.apply` (move, publish, rollback) — through `ArchiveFileLock.set`, which opens the path through the dirfd chain under that lock. Busy → `.busy`: skipped, reported "busy — being updated", job not complete. Pin `lockAllCannotInterruptUpdateRollback` (lock-all driven from inside Update's failing publish): red 4 issues (rollback EPERM), green.
+- #5 (fc41de7b) `ArchiveLockJob.plan(manifestText:root:)` reads EVERY line; a row with < 12 fields or no relpath is skipped + reported, its text never used as a path; `ArchiveRefile.parseRows` is no longer used here. Pin `truncatedRowReportedValidRowsLocked`: red by mutation (silent skip, 2 issues), green.
+- #2 (dcb323bb) when the manifest already has a row for the source (adoption / reconcile), the archived record's date comes from the row (`userDate(fromManifestFields:)` — a user date only for `user-known`/`user-estimated`), never the source. Pin `adoptionPreservesManifestDate` (source 1990, and nil): red 2, green.
+- #3 (69ba2516) `placementHint(relPath:)`: prefix year, else Undated → unknown, decade folder → decade, year folder → year. When it differs from the chosen date the placement wins (no user date written) and the retry's date is refused: outcome `.failed("… already filed this under … ; the date … was NOT applied — use Update… …")`. Pin `reconcileUndatedPlacementWins` (Undated, and 1940-1949): red 6, green.
+- #4 (d5874660) `Entry.proposedDateSource` (typed / fromCopy / machine; additive, nil = machine) set where the value is set (plan build, Review field, Use / pre-selection, Enter a date…, Promote undated); `ArchiveAngelPromoter.dateSource(entry:hint:)` reads it, no machine-hint comparison. Pins `promoterSourceIsExplicit` + `reviewAnswersSetSource`: red 6 with the old inference, green.
+
+ATTACK
+1. #1: any flag change by lock-all outside the index lock; `wait: .zero` on a thread where `withExclusive` still sleeps; Update's relock-after-success and relock-after-failure run OUTSIDE apply's lock — can lock-all and those interleave into a wrong final state (they both only lock)? Promote's own lock call is outside the index lock — can it meet an Update of the same file?
+2. #5: a malformed row that `ArchiveManifestCSV.fields` splits into ≥ 12 fields with a dangerous relpath; CR/LF and quoted newlines; the one-time marker written when the run was not complete.
+3. #2/#3: `placementHint` on legacy / catalog-renamed paths (no prefix, year folder) and `_NN` suffixes — can a correctly placed fresh promote ever "follow" and drop month/day precision? A conflict message produced for a file Promote then reports as adopted.
+4. #4: a Review path that changes `proposedDate` without setting the source (catalog-rename follow, plan reload), leaving a stale `.fromCopy` / `.typed`.
+
+EVIDENCE (M4, Debug; a Gauntlet Release build ran on the same machine): after the merge, the affected suites by SUITE: 1209 tests in 210 suites, 1 issue — the index-lock inventory sensor, fixed in 74911295 (6/6 green). ArchiveAngelVocabularyTests now green (2a0909b6). The Angel run (94 suites, 518 tests) had one timing sensor (A4 determinism, 0.3 s) over under load; it passed alone 5/5.
+
+OUTPUT (stdout, Markdown, under 400 words):
+first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
+then a line `Verdict: merge / merge-after-fixes / hold`
+then findings, each with file:line, a concrete counterexample, and the test that would pin it. Do not explore outside these files.
