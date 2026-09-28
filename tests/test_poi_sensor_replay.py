@@ -62,8 +62,10 @@ class POISensorReplayTests(unittest.TestCase):
             if row.get("source") != "poi-cycle-metrics"
         ]
         self.assertEqual(product_tests, [100, 50])
+        # Gauntlet rows got their own panel (2026-09-27), so the filter now
+        # excludes both sources; the POI exclusion is what this test pins.
         self.assertIn(
-            'const isTestRunRow = row => row.source !== "poi-cycle-metrics";',
+            'const isTestRunRow = row => row.source !== "poi-cycle-metrics" && row.source !== "gauntlet";',
             page,
         )
         self.assertIn("const tdRows = allTdRows.filter(isTestRunRow);", page)
