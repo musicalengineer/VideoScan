@@ -374,8 +374,11 @@ extension VideoScanModel {
                                                verifiedAt: now, sizeBytes: fx.sizeBytes)
         }
         let stamp = ISO8601DateFormatter().string(from: now)
-        let note = "Update \(stamp): \(reason) · \(done.fromRelPath) → \(done.toRelPath) · sha256 verified before and after"
-        copy.notes = copy.notes.isEmpty ? note : "\(copy.notes)\n\(note)"
+        // Machine text is signed (NotesAuthorshipSensorTests): `promote` is the
+        // Master Archive's author, and Update is that archive's own edit.
+        let note = MachineNote.line(author: .promote,
+                                    text: "Update \(stamp): \(reason) · \(done.fromRelPath) → \(done.toRelPath) · sha256 verified before and after")
+        copy.notes = MachineNote.append(note, to: copy.notes)
         notifyVolumeAggregatesStale()
         objectWillChange.send()
         archiveUpdateNote("Update: \(label) — archive record date \(oldDate) → \(copy.userDate ?? "none") (\(copy.userDateConfidence ?? "-")); revert with Update or the Inspector")

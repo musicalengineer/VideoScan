@@ -519,8 +519,9 @@ extension PromoteToArchiveJob {
             archiveRecord.userDate = ud
             archiveRecord.userDateConfidence = (d.recordKnown ? UserDateConfidence.known : .estimated).rawValue
             let stamp = ISO8601DateFormatter().string(from: now)
-            let note = "Promote \(stamp): date \(ud) (\(d.recordKnown ? "known" : "estimated")) \(d.provenance ?? "")"
-            archiveRecord.notes = archiveRecord.notes.isEmpty ? note : "\(archiveRecord.notes)\n\(note)"
+            let note = MachineNote.line(author: .promote,
+                                        text: "Promote \(stamp): date \(ud) (\(d.recordKnown ? "known" : "estimated")) \(d.provenance ?? "")")
+            archiveRecord.notes = MachineNote.append(note, to: archiveRecord.notes)
             model.searchIndex.update(archiveRecord)
             model.log("Promote: \(relPath) — archived record date \(before) → \(ud) (\(d.recordKnown ? "known" : "estimated"), \(d.provenance ?? "chosen at Promote"))")
             ledgerEvents.append(model.ledgerEvent(.dateSet, for: archiveRecord, by: ledgerActor, at: now,
