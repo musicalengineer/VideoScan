@@ -1,6 +1,5 @@
 import Testing
 import Foundation
-import MachO
 @testable import VideoScan
 
 // MARK: - AVKitLinkSensorTests
@@ -18,12 +17,14 @@ import MachO
 
 struct AVKitLinkSensorTests {
 
+    /// dlopen(RTLD_NOLOAD) answers "already loaded?" without loading it.
+    /// NOT a walk of _dyld_image_count/_dyld_get_image_name: that list is
+    /// not thread-safe, and with Swift Testing loading images on other
+    /// threads the walk segfaulted the test host on CI (b8ef883f, 319ba883).
     @Test func theAppLoadsAVKitSoVideoPlayerCanFindAVPlayerView() {
-        let loaded = (0..<_dyld_image_count()).contains { i in
-            guard let name = _dyld_get_image_name(i) else { return false }
-            return String(cString: name).hasSuffix("/AVKit.framework/Versions/A/AVKit")
-        }
-        #expect(loaded, "AVKit.framework is not loaded — VideoPlayer will abort on first play")
+        let handle = dlopen("/System/Library/Frameworks/AVKit.framework/Versions/A/AVKit", RTLD_NOLOAD)
+        defer { if let handle { dlclose(handle) } }
+        #expect(handle != nil, "AVKit.framework is not loaded — VideoPlayer will abort on first play")
         #expect(NSClassFromString("AVPlayerView") != nil)
     }
 }

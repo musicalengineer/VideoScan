@@ -69,16 +69,18 @@ struct POIProfileAuditTests {
         #expect(POIProfileAudit.defaultDirectory.path.contains("VideoScan-tests/people-audit-"), "never the real journal under a test host")
     }
 
-    @Test("codex 2026-09-20 #12: a changed kinship at equal count, notes AB → CD, identity notes of equal length — each is a Change, shown redacted with '(changed)'")
+    @Test("codex 2026-09-20 #12: a changed kinship at equal count, notes QX → ZW, identity notes of equal length — each is a Change, shown redacted with '(changed)'")
     func sameSizeChangesAreChanges() {
+        // Sentinels are NOT hex: the line carries the uuid's first 8 hex
+        // digits, so "AB"/"CD" matched a random uuid ~5% of runs (CI red b8ef883f).
         let id = UUID()
         var before = profile("Dan", aliases: ["Dan"], uuid: id)
         before.kinships = [Kinship(relation: .sibling, relativeTo: .profile(name: "Rick"))]
-        before.notes = "AB"
+        before.notes = "QX"
         before.identityNotes = "thin, blonde"
         var after = before
         after.kinships = [Kinship(relation: .child, relativeTo: .profile(name: "Rick"))]
-        after.notes = "CD"
+        after.notes = "ZW"
         after.identityNotes = "tall, blonde"   // same length
         let diff = POIProfileAudit.changes(before: before, after: after)
         #expect(diff == [
@@ -88,11 +90,11 @@ struct POIProfileAuditTests {
         ], "\(diff)")
         let line = POIProfileAudit.line(action: .edited, before: before, after: after)
         #expect(line.contains("kinships '1' → '1 (changed)'; notes '2 chars' → '2 chars (changed)'; identityNotes '12 chars' → '12 chars (changed)'"), Comment(rawValue: line))
-        #expect(!line.contains("AB") && !line.contains("CD") && !line.contains("blonde"), "still redacted")
+        #expect(!line.contains("QX") && !line.contains("ZW") && !line.contains("blonde"), "still redacted")
         // Unchanged originals stay silent; a different count still reads as before.
         #expect(POIProfileAudit.changes(before: before, after: before).isEmpty)
         var longer = before
-        longer.notes = "ABC"; longer.kinships = []
+        longer.notes = "QXY"; longer.kinships = []
         #expect(POIProfileAudit.changes(before: before, after: longer) == [
             .init(field: "kinships", from: "1", to: "0"), .init(field: "notes", from: "2 chars", to: "3 chars"),
         ])
