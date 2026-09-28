@@ -423,6 +423,10 @@ struct FixityStampVolumeIdentityTests {
             "VideoScan/SignatureVerification.swift": 1,
             // fd vs name identity inside one publish step.
             "VideoScan/ArchivePromoteEngine.swift": 1,
+            // Refile (from main, 9/27): fd/dirfd vs the identity sourceCheck
+            // took in THIS op's prepare — never a stored stamp. A remount
+            // mid-op fails safe (refused / put back / "not found by identity").
+            "VideoScan/ArchiveRefile.swift": 3,
             // partial-file registry: lstat now vs the stat of the same op.
             "VideoScan/PartialFileNaming.swift": 1,
             // hard-link de-dup keys from stats of ONE gather pass.
