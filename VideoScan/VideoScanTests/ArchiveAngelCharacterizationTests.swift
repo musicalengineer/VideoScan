@@ -317,6 +317,7 @@ extension AngelRecommendationPolicy {
     /// from v10 by exactly that rule (Rick 2026-09-22, decision 3).
     static var rulesV10: AngelRecommendationPolicy {
         var p = AngelRecommendationPolicy.builtIn
+        p.coverage = .off   // rules v13: v10 had no coverage rules
         let stage = AngelRule(
             id: "stageMeansArchived", kind: .match,
             when: [.init(field: .archiveStage, op: .in,
@@ -377,9 +378,21 @@ struct ArchiveAngelScaleCharacterizationTests {
     /// ready + 7,586 need a date (no floors, no grades, no copy chooser
     /// beyond a shared group / name + length). Excluded is X minus the two
     /// eligible records that scored 0 (Not now — no floor named them).
+    /// Rules v12 (2026-09-25): `recentDigitization` moves 184 synthetic
+    /// files dated within a year, no device, in a digitizer's codec from
+    /// Ready to Needs a date (14,497 → 14,313; 3,724 → 3,908); nothing in
+    /// the fixture reaches 1 Gbit/s, so Worth a look and the rest hold.
+    /// GH #201 rules v13 (2026-09-26, re-pinned 2026-09-27): 43 files moved
+    /// needsDate → ready (was .ready 14313, .needsDate 3908). Each has a
+    /// camera-less container stamp within the last year (0.85, no origin)
+    /// AND a dossier date at 0.6 more than 2 years away — v13 lets a trusted
+    /// inferred date set aside a camera-less stamp, so the file is no longer
+    /// "dated 2026, looks like a digitization". Pinned exactly by
+    /// `v13SetAsideMovesRecentDigitizationsToReady`.
     static let pinnedClasses: [ArchiveAngelRecommendationClass: Int] = [
-        .ready: 14497, .needsDate: 3724, .worthALook: 2155, .notNow: 1235, .excluded: 76827, .anotherCopy: 1562,
+        .ready: 14356, .needsDate: 3865, .worthALook: 2155, .notNow: 1235, .excluded: 76827, .anotherCopy: 1562,
     ]
+    static let v13MovedToReady = 43
 
     /// The index `i` of a synthetic record from its UUID.
     static func index(_ id: UUID) -> Int {
@@ -416,7 +429,8 @@ struct ArchiveAngelScaleCharacterizationTests {
         var cs = ArchiveAngelS0Catalog.candidates(100_000, terminalStages: true)
         ArchiveAngelScorer.markDerivatives(&cs)
         ArchiveAngelScorer.applyFamilyAttention(&cs, now: ArchiveAngelS0Catalog.now)
-        let sel = ArchiveAngelScorer.select(cs, count: 10, now: ArchiveAngelS0Catalog.now)
+        // Rules v13: these are the v12 pins — coverage off (the S0 catalog has thousands of same-day rows).
+        let sel = ArchiveAngelScorer.select(cs, count: 10, policy: .coverageOff, now: ArchiveAngelS0Catalog.now)
         let head = sel.picks.map { Self.index($0.id) }
         print("[angel-s0] selection head \(head) overflow \(sel.overflow)")
         print("[angel-s0] selection rejected " + ArchiveAngelRejection.allCases.map { "\($0):\(sel.rejected[$0] ?? 0)" }.joined(separator: " "))
@@ -445,7 +459,7 @@ struct ArchiveAngelScaleCharacterizationTests {
         #expect(result.needsDate.count == Self.pinnedNudgeNear)
         #expect(head == Self.pinnedNudgeHead)
         // Projection + classify (the S3a parity test's budget; assess alone had 1 s).
-        #expect(s < 1.5, "legacy rules over 100k in \(s) s")
+        #expect(s < PerformanceLane.debugCeiling(seconds: 1.5), "legacy rules over 100k in \(s) s")
     }
 
     @Test("RULES v10 AS DATA: the data-driven scorer reproduces every v10 pin exactly (grades, reasons, score sum, batch)")
@@ -507,7 +521,45 @@ struct ArchiveAngelScaleCharacterizationTests {
         #expect(result.counts.values.reduce(0, +) == 100_000)
         #expect(result.counts == Self.pinnedClasses)
         #expect(result.ready.count == result.counts[.ready] ?? 0)
-        #expect(s < 1, "unified classify over 100k in \(s) s")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "unified classify over 100k in \(s) s")
+    }
+
+    @Test("GH #201 v13: exactly the camera-less recent stamps outvoted by a ≥ 0.6 dossier date move needsDate → ready; undo that one input and the old pins return")
+    func v13SetAsideMovesRecentDigitizationsToReady() {
+        var cs = ArchiveAngelS0Catalog.candidates(100_000, terminalStages: true)
+        ArchiveAngelScorer.markDerivatives(&cs)
+        ArchiveAngelScorer.applyFamilyAttention(&cs, now: ArchiveAngelS0Catalog.now)
+        let evidence = ArchiveAngelS0Catalog.evidence(cs)
+        let now = ArchiveAngelS0Catalog.now
+        let result = ArchiveAngelRecommendations.classify(cs, evidence: evidence, rules: .standard, now: now)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? .current
+        let nowYear = cal.component(.year, from: now)
+        // The v13 transition: no user date, no camera, a stamp within the
+        // recentDigitization window, a trusted-but-not-#166 inferred date
+        // (0.6 ≤ c < 0.85) more than 2 years from the stamp, a digitizer codec.
+        func isV13Move(_ c: ArchiveAngelCandidate) -> Bool {
+            guard c.userDate == nil, c.deviceModel.isEmpty, c.originMake == nil,
+                  let stamp = c.captureDate, let inferred = c.inferredRecordDate,
+                  let conf = c.inferredDateConfidence, conf >= 0.6, conf < 0.85,
+                  AngelPolicyDefaults.recentDigitizationCodecs.contains(c.videoCodec) else { return false }
+            let sy = cal.component(.year, from: stamp), iy = cal.component(.year, from: inferred)
+            return nowYear - sy <= 1 && abs(iy - sy) > 2
+        }
+        let moved = cs.indices.filter { result.verdicts[$0].kind == .ready && isV13Move(cs[$0]) }
+        for i in moved.prefix(5) {
+            let c = cs[i]
+            print("[angel-v13] #\(Self.index(c.id)) \(c.filename) codec \(c.videoCodec) stamp \(c.captureDate.map { cal.component(.year, from: $0) } ?? 0) (no camera) inferred \(c.inferredRecordDate.map { cal.component(.year, from: $0) } ?? 0) @\(c.inferredDateConfidence ?? 0) → \(result.verdicts[i].kind)")
+        }
+        #expect(moved.count == Self.v13MovedToReady, "moved \(moved.count)")
+        // Undo ONLY v13's input on those files (inferred just under the 0.6
+        // floor): the pre-#201 pins come back exactly.
+        var before = cs
+        for i in moved { before[i].inferredDateConfidence = 0.59 }
+        let old = ArchiveAngelRecommendations.classify(before, evidence: ArchiveAngelS0Catalog.evidence(before),
+                                                       rules: .standard, now: now)
+        #expect(old.counts[.ready] == 14313 && old.counts[.needsDate] == 3908, "\(old.counts)")
+        #expect(moved.allSatisfy { old.verdicts[$0].kind == .needsDate })
     }
 
     @Test("the background sweep stores the same grade histogram as the pure path (10k, no Spotlight, no disk budget)")
@@ -546,6 +598,7 @@ struct ArchiveAngelVocabularyTests {
             "placeSet", "dateSet", "attestation", "approval", "angelProposed", "angelSkipped", "angelCleared",
             "footageDecided",  // Find Similar Footage 2026-09-23 — appended, append-only vocabulary
             "familyMusic",     // Family Music 2026-09-23 — appended, append-only vocabulary
+            "archiveUpdated", "archiveUpdateRolledBack",  // Update… 2026-09-27 — appended
         ])
         #expect(MediaLedgerEvent.Actor.allCases.map(\.rawValue) == ["rick", "tidy", "promote", "angel", "app"])
         #expect(ArchiveAngelAttentionStore.attentionKinds == [.angelProposed, .angelSkipped, .angelCleared])
@@ -578,6 +631,13 @@ struct ArchiveAngelVocabularyTests {
             // QA on S3 (2026-09-22): ADDED.
             "Marked an extra copy — the Keep copy is the one to archive",
             "Not in a class the Angel prepares now (Not now, Needs a date, Another copy)",
+            // Rules v12 (2026-09-25): ADDED — the Angel's own buffer companions.
+            "Archive Angel's own working copy (a prepared companion in the buffer), not material",
+            // QA v12 #6: ADDED — a footage group whose original is archived.
+            "The original of this footage is already in the archive",
+            // Rules v13 (2026-09-26): ADDED — coverage's two batch limits (held for a later batch, never excluded).
+            "Another pick from the same day is already in this batch — spreading picks across events",
+            "Held for a later batch — this batch already has its share of that year",
         ])
     }
 
@@ -595,7 +655,7 @@ struct ArchiveAngelVocabularyTests {
         #expect(ArchiveAngelPlan.planFilename == "plan.json")
         #expect(ArchiveAngelEvidenceStore.filename == "evidence.json")
         #expect(ArchiveAngelEvidenceFile.currentVersion == 1)
-        #expect(ArchiveAngelScorer.rulesVersion == 11, "S3b 2026-09-22: floors/signals as policy data, stage is a vote, classes")
+        #expect(ArchiveAngelScorer.rulesVersion == 13, "v13 2026-09-26: coverage — one per day, the per-year share, the backlog bonus")
     }
 
     @Test("grade bands unchanged: A ≥ 100, B 60–99, C 25–59, D 1–24, else X")

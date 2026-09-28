@@ -118,7 +118,7 @@ struct PersistentLogWriteBatchTests {
         t.log.writeBatch(lines)
         let elapsed = Date().timeIntervalSince(t0)
         #expect(t.log.synchronizeCount - base == 1, "expected exactly one fsync for the batch, got \(t.log.synchronizeCount - base)")
-        #expect(elapsed < 2.0, "100k-line batch took \(elapsed)s (budget 2 s)")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 2.0), "100k-line batch took \(elapsed)s (budget 2 s)")
         t.log.close()
         // And every line actually landed.
         let body = try bodyLines(of: t.log.url)

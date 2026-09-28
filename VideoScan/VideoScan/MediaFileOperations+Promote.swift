@@ -12,6 +12,12 @@ private let fileOpsLog = Logger(subsystem: "Rick-Breen.VideoScan",
 
 extension MediaFileOperationsCenter {
 
+    /// A Promote job (the Archive Angel's included — it runs through
+    /// `startPromote`) is appending to the archive's index right now.
+    var hasActivePromote: Bool {
+        jobs.contains { $0.state.isActive && $0 is PromoteToArchiveJob }
+    }
+
     /// Kick off ONE Promote job for a confirmed plan (spec §4/§5). Gates
     /// on every source volume plus the archive volume so a batch off one
     /// HDD onto the RAID runs one file at a time instead of thrashing.

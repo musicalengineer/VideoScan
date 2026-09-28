@@ -439,6 +439,7 @@ public struct FindTagIngestState: Codable, Equatable, Sendable {
 /// (~/Library/Logs/VideoScan) — same split as the preview helper.
 public enum FindTagPaths {
 
+    /// Daemon/CLI-only; never a test default (app call sites gate on TestEnvironment.isTestHost first).
     /// ~/Library/Application Support/VideoScan/findtag-journal/
     public static func journalDirectoryURL(
         fileManager: FileManager = .default
@@ -451,6 +452,7 @@ public enum FindTagPaths {
             .appendingPathComponent("findtag-journal", isDirectory: true)
     }
 
+    /// Daemon/CLI-only; never a test default (app call sites gate on TestEnvironment.isTestHost first).
     /// ~/Library/Application Support/VideoScan/.findtagd.lock —
     /// same flock + identity-record protocol as the preview helper's
     /// pidfile (SingleInstanceLock writes it; the app's running-probe

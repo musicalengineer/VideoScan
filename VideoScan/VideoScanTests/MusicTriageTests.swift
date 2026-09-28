@@ -231,7 +231,7 @@ struct MusicTriageScaleTests {
         let elapsed = Date().timeIntervalSince(start)
         #expect(ids.count == expectedCandidates,
                 "expected \(expectedCandidates) candidates, got \(ids.count)")
-        #expect(elapsed < 3.0,
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 3.0),
                 "music-triage detection over 100k took \(elapsed)s — budget 3.0s (Debug)")
     }
 }

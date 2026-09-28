@@ -185,7 +185,7 @@ public enum ArchivistFamilyTreePolicy {
     /// "show family tree" with nobody named: an honest overview plus the
     /// offer to open the tab. Never picks a person for the user.
     public static func overview(in graph: GedcomFamilyGraph) -> ArchivistBiographyAnswer {
-        let people = graph.people.values
+        let people = graph.visiblePeople
         let count = people.count
         guard count > 0 else {
             return ArchivistBiographyAnswer(

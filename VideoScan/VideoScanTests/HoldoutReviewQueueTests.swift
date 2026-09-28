@@ -575,7 +575,7 @@ struct HoldoutReviewQueueTests {
         }
         #expect(loaded?.rows.count == 100_000)
         #expect(loaded?.pendingCount == 100_000)
-        #expect(elapsed < .seconds(8))
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(8)))
     }
 
     // MARK: - 5b. Center write-failure surface (QA 2026-07-26 🟠)

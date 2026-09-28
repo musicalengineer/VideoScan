@@ -1,5 +1,5 @@
 // MediaFileOperations+ArchiveAngel.swift
-// Center hook for Archive Angel Stage 1 (docs/archive_angel_design.md).
+// Center hook for Archive Angel Stage 1 (archive_angel_design.md, retired — git show f82bbd69^:docs/archive_angel_design.md).
 
 import Foundation
 

@@ -177,7 +177,7 @@ struct PrunePlanScaleTests {
         #expect(protection.workingCopyCount == 95_000)
         #expect(protection.archive == .verified)
         #expect(protection.cloud == .mixed)
-        #expect(protElapsed < .seconds(4), "batchProtection took \(protElapsed) for 100k records")
+        #expect(protElapsed < PerformanceLane.debugCeiling(.seconds(4)), "batchProtection took \(protElapsed) for 100k records")
 
         var plan = PrunePlan.empty
         let planElapsed = await clock.measure {
@@ -188,6 +188,6 @@ struct PrunePlanScaleTests {
         #expect(plan.keeperVolumes.map(\.name).sorted() == ["LaCie", "Movies", "Projects", "X10", "X9"], "MyBook is offline — never a keeper volume")
         #expect(plan.trashCount > 0 && plan.trashCount < plan.extraCount)
         #expect(plan.relatedCount == 0, "every record is in a family — nothing is only name-related")
-        #expect(planElapsed < .seconds(6), "prunePlan (families + might-be-copies pass) took \(planElapsed) for 100k records")
+        #expect(planElapsed < PerformanceLane.debugCeiling(.seconds(6)), "prunePlan (families + might-be-copies pass) took \(planElapsed) for 100k records")
     }
 }

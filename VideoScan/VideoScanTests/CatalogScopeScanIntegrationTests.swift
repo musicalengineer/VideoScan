@@ -343,7 +343,7 @@ struct CatalogScopeGateTests {
         let elapsed = start.duration(to: .now)
         #expect(outcome.admitted.isEmpty)
         #expect(outcome.unlinkedAudioExcluded == 5_000)
-        #expect(elapsed < .seconds(10),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(10)),
                 "gate over 100k catalog + 5k audio took \(elapsed) — budget 10s")
     }
 }

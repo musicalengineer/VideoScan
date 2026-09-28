@@ -227,7 +227,7 @@ struct VolumeDashboardScaleTests {
         let elapsed = ContinuousClock.now - start
         #expect(s.totalFiles + s.deletedFiles == 100_000)
         #expect(s.folders.slices.count == VolumeDashboardCalculator.maxFolders)
-        #expect(elapsed < .milliseconds(500),
+        #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(500)),
                 "volume dashboard took \(elapsed) for 100k records — over the 0.5 s budget")
     }
 }

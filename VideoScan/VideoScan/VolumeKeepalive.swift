@@ -2,6 +2,17 @@
 // Prevents remote volumes from sleeping during long overnight scans by
 // periodically stat()-ing the volume root. When the volume becomes
 // unreachable, pauses the scan via PauseGate and polls until it returns.
+//
+// The keepalive owns ONLY the gate's `.volume` pause reason (night QA
+// 2026-09-25, M2): before, it called the gate's single pause()/resume(),
+// so a network scan the user had paused resumed by itself after a share
+// blip while its row still said Paused. A user Pause is the `.user` reason
+// and survives the volume coming back.
+//
+// Each keepalive holds the volume reason under its OWN owner id
+// (adversarial QA on 2f6bce1c): after Stop → Start on the same target, an
+// old keepalive's late exit-time release must not open a gate a newer
+// keepalive still holds while the volume is still down.
 
 import Foundation
 
@@ -12,6 +23,8 @@ actor VolumeKeepalive {
     private var keepaliveTask: Task<Void, Never>?
     private var isVolumeDown = false
     private let log: @Sendable (String) -> Void
+    /// This keepalive's identity as a holder of the gate's volume reason.
+    private let ownerID = UUID()
 
     init(volumePath: String,
          pollInterval: TimeInterval = 30,
@@ -25,25 +38,45 @@ actor VolumeKeepalive {
 
     func start(pauseGate: PauseGate) {
         keepaliveTask?.cancel()
-        keepaliveTask = Task { [volumePath, pollInterval, recoveryPollInterval, log] in
+        keepaliveTask = Task { [volumePath, pollInterval, recoveryPollInterval, log, ownerID] in
+            // Whether THIS task currently holds the gate's volume reason.
+            // Tracked locally (not via isVolumeDown) so the release below
+            // happens in the same task as the pause — sequential, so it can
+            // never race a pause still in flight. C++ analogy: an RAII guard
+            // whose destructor runs when the worker thread's loop exits.
+            var holdsVolumePause = false
             while !Task.isCancelled {
                 let reachable = await Self.statVolume(volumePath)
+                if Task.isCancelled { break }
 
                 if !reachable {
                     let wasDown = await self.markDown()
                     if !wasDown {
                         log("  ⚠ Volume \(volumePath) unreachable — pausing scan, will retry every \(Int(recoveryPollInterval))s")
-                        await pauseGate.pause()
+                    }
+                    if !holdsVolumePause {
+                        await pauseGate.pause(.volume, owner: ownerID)
+                        holdsVolumePause = true
                     }
                     try? await Task.sleep(for: .seconds(recoveryPollInterval))
                 } else {
                     let wasDown = await self.markUp()
                     if wasDown {
                         log("  ✓ Volume \(volumePath) is back — resuming scan")
-                        await pauseGate.resume()
+                    }
+                    if holdsVolumePause {
+                        await pauseGate.resume(.volume, owner: ownerID)
+                        holdsVolumePause = false
                     }
                     try? await Task.sleep(for: .seconds(pollInterval))
                 }
+            }
+            // Stopped (scan finished, Stop, unmount-abort) while the volume
+            // was still down: release our reason so a stale volume pause
+            // cannot park the next scan on this target's gate forever. The
+            // stopped scan's own waiters already returned on cancellation.
+            if holdsVolumePause {
+                await pauseGate.resume(.volume, owner: ownerID)
             }
         }
     }

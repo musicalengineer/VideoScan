@@ -98,9 +98,36 @@ struct PersonRefreshBanner: View {
     }
 }
 
+/// "Refreshed from FamilySearch on 26 Sep 2026 — 2 fields" with the field
+/// diffs under it (GH #198). Small, inline, no new window: it sits in the
+/// inspector's identity block and at the top of the review sheet. The
+/// summary is a value the center already holds — no disk read here.
+struct PersonRefreshSummaryView: View {
+    let summary: PersonRefreshSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label(summary.headline, systemImage: "arrow.triangle.2.circlepath")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            ForEach(summary.diffLines, id: \.self) { line in
+                Text(line)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityIdentifier("tree.personRefresh.summary")
+    }
+}
+
 struct PersonRefreshReviewSheet: View {
     @ObservedObject var coordinator: PersonRefreshCoordinator
     let diff: PersonRefreshDiff
+    /// The refresh already applied for this person, if any — so the sheet
+    /// says when the tree's current facts came from FamilySearch.
+    let previousRefresh: PersonRefreshSummary?
     let onApplied: () -> Void
     let onClose: () -> Void
 
@@ -108,9 +135,11 @@ struct PersonRefreshReviewSheet: View {
     @State private var selected: Set<String>
 
     init(coordinator: PersonRefreshCoordinator, diff: PersonRefreshDiff,
+         previousRefresh: PersonRefreshSummary? = nil,
          onApplied: @escaping () -> Void, onClose: @escaping () -> Void) {
         self.coordinator = coordinator
         self.diff = diff
+        self.previousRefresh = previousRefresh
         self.onApplied = onApplied
         self.onClose = onClose
         _selected = State(initialValue: Set(diff.changes.map(\.field.key)))
@@ -123,6 +152,9 @@ struct PersonRefreshReviewSheet: View {
             Text(coordinator.target.familySearchID)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
+            if let previousRefresh {
+                PersonRefreshSummaryView(summary: previousRefresh)
+            }
 
             if diff.factsMatch {
                 Label("Already matches FamilySearch.", systemImage: "checkmark.seal")

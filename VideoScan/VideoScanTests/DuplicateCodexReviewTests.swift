@@ -330,8 +330,8 @@ struct DuplicateSnapshotOffMainTests {
 
         #expect(path != nil, "snapshot must land")
         #expect(FileManager.default.fileExists(atPath: path ?? ""))
-        #expect(worst < .seconds(1.5), "main thread blocked \(worst) during a 100k snapshot (budget 1.5 s)")
-        #expect(total < .seconds(60), "100k snapshot took \(total)")
+        #expect(worst < PerformanceLane.debugCeiling(.seconds(1.5)), "main thread blocked \(worst) during a 100k snapshot (budget 1.5 s)")
+        #expect(total < PerformanceLane.debugCeiling(.seconds(60)), "100k snapshot took \(total)")
     }
 }
 

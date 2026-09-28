@@ -171,7 +171,7 @@ struct HallieSuperlativeTests {
     typealias Exec = HallieTurnExecutor
     let graph = GedcomFamilyGraph(gedcomText: tree)
     var context: Exec.Context {
-        .init(profiles: [], graph: graph,
+        .init(profiles: [], graph: graph, assetConfiguration: { .emptyForTests },
               speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
     }
     private func pre(_ q: String) -> Exec.PreTranslation {
@@ -244,6 +244,33 @@ struct HallieSuperlativeTests {
         #expect(r.basisLine.contains("Ranked 14 of 14 people in the family tree"))
     }
 
+    // GH #205: the winner's photo comes from the Context's asset lookup,
+    // never FamilyAssetConfigurationCenter.shared. Red before the fix (the
+    // superlative ignored the injected lookup and read the host's config,
+    // which has no fixture photo); green after.
+    @Test func theWinnersPhotoComesFromTheInjectedAssetLookup() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HallieSuperlative205-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let assets = base.appendingPathComponent("40_Family_Tree", isDirectory: true)
+        let photo = assets.appendingPathComponent("People/Tim_Breen_b1985/tim.png")
+        try FileManager.default.createDirectory(at: photo.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // 1×1 PNG.
+        try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")).write(to: photo)
+        let config = FamilyAssetConfiguration.fixture(assets: assets)
+        let withPhoto: Exec.Context = .init(profiles: [], graph: graph, assetConfiguration: { config },
+                                            speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
+        let r = try #require(HallieLineageAnswer.answer(.superlative(kind: .latestBorn, scope: .wholeTree), context: withPhoto))
+        #expect(r.prose.hasPrefix("The latest birth year in the family tree is born 1985: Tim Breen"))
+        let urls = r.attachments.compactMap { a -> URL? in
+            if case .photo(let p) = a { return p.fileURL } else { return nil }
+        }
+        #expect(urls.map(\.lastPathComponent) == ["tim.png"], "attachments: \(r.attachments)")
+        // The same question with the empty lookup attaches nothing.
+        #expect(try answer(.latestBorn).attachments.isEmpty)
+    }
+
     @Test func eachKindPicksTheRightPerson() throws {
         #expect(try answer(.latestBorn).prose.hasPrefix("The latest birth year in the family tree is born 1985: Tim Breen"))
         #expect(try answer(.longestLived).prose.hasPrefix("The longest recorded life in the family tree is about 95 years: Agnes McGill — born 1880 in Derry, Ireland; resting in peace since 1975"))
@@ -253,7 +280,8 @@ struct HallieSuperlativeTests {
         #expect(try answer(.mostChildren).prose.hasPrefix("The most recorded children in the family tree is 3 children: Agnes McGill"))
         let deepest = try answer(.deepestAncestor, .ancestorsOf(nil))
         // Patrick, Hannah and Agnes all sit three generations above Rick.
-        #expect(deepest.prose.hasPrefix("3 people share the deepest recorded ancestor in Rick Breen’s ancestors (3 generations back): Agnes McGill"), Comment(rawValue: deepest.prose))
+        // The scope says what it ranked and how big it was (2026-09-26).
+        #expect(deepest.prose.hasPrefix("3 people share the deepest recorded ancestor among Rick Breen’s 9 recorded ancestors (3 generations back): Agnes McGill"), Comment(rawValue: deepest.prose))
         #expect(deepest.offeredActions.count == 3)
         // "oldest ancestor" is the earliest-born ancestor, not the deepest.
         #expect(Q.detect("who is my oldest ancestor") == .superlative(kind: .earliestBorn, scope: .ancestorsOf(nil)))
@@ -267,7 +295,8 @@ struct HallieSuperlativeTests {
         #expect(breen.prose.hasPrefix("The earliest birth year in the Breen family is born 1860: Patrick Breen"))
         #expect(breen.basisLine.contains("Ranked 5 of 5 people in the Breen family"))
         let youngestAncestor = try answer(.latestBorn, .ancestorsOf("Rick"))
-        #expect(youngestAncestor.prose.hasPrefix("The latest birth year in Rick Breen’s ancestors is born 1930: Eileen Latta"))
+        #expect(youngestAncestor.prose.hasPrefix("The latest birth year among Rick Breen’s 9 recorded ancestors is born 1930: Eileen Latta"), Comment(rawValue: youngestAncestor.prose))
+        #expect(youngestAncestor.basisLine.contains("Ranked 9 of Rick Breen’s 9 recorded ancestors across 3 generations that record the fact."), Comment(rawValue: youngestAncestor.basisLine))
         // Honest declines: unknown surname; a person with no ancestors; a
         // fact nobody records.
         #expect(try answer(.earliestBorn, .surname("nobody")).outcome == .declined)

@@ -152,6 +152,6 @@ struct HallieCatalogCountFollowUpTests {
         #expect(result.citations.count <= 5)
         // Budget: one presence pass over 100k snapshots, well under the
         // 4 s the presence executor's own scale tests allow.
-        #expect(elapsed < 4.0, Comment(rawValue: "100k count re-run took \(elapsed)s"))
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 4.0), Comment(rawValue: "100k count re-run took \(elapsed)s"))
     }
 }

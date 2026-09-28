@@ -152,6 +152,9 @@ struct ArchiveAngelBufferHygieneCard: View {
         .accessibilityIdentifier("archive.angelHygiene.row.\(row.id)")
     }
 
+    // Typed pieces (status chip, companion chip, spoken label): the inline
+    // form timed out CI's type-checker budget
+    // (ArchiveAngelBufferHygieneCard.swift:155, 953 ms, nightly run 36121118356).
     private func entryLine(_ entry: ArchiveAngelBufferHygiene.EntryLine, batchID: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(entry.filename)
@@ -159,30 +162,45 @@ struct ArchiveAngelBufferHygieneCard: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(entry.filename)
-            Text(entry.statusText)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(statusColor(entry))
-                .padding(.horizontal, 6).padding(.vertical, 1)
-                .background(Capsule().fill(statusColor(entry).opacity(0.14)))
-                .lineLimit(1)
-                .accessibilityIdentifier("archive.angelHygiene.row.\(batchID).entry.\(entry.id).status")
+            statusChip(entry, batchID: batchID)
             Text(MediaBytes.display(entry.sizeBytes))
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
             ForEach(entry.companions, id: \.self) { chip in
-                Text(chip)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(Capsule().strokeBorder(Color.secondary.opacity(0.4)))
+                companionChip(chip)
             }
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entry.filename), \(entry.statusText), \(MediaBytes.display(entry.sizeBytes))"
-                            + (entry.companions.isEmpty ? "" : ", companions: " + entry.companions.joined(separator: ", ")))
+        .accessibilityLabel(Self.entryAccessibilityLabel(entry))
         .accessibilityIdentifier("archive.angelHygiene.row.\(batchID).entry.\(entry.id)")
+    }
+
+    private func statusChip(_ entry: ArchiveAngelBufferHygiene.EntryLine, batchID: String) -> some View {
+        let color: Color = statusColor(entry)
+        return Text(entry.statusText)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(Capsule().fill(color.opacity(0.14)))
+            .lineLimit(1)
+            .accessibilityIdentifier("archive.angelHygiene.row.\(batchID).entry.\(entry.id).status")
+    }
+
+    private func companionChip(_ chip: String) -> some View {
+        Text(chip)
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(Capsule().strokeBorder(Color.secondary.opacity(0.4)))
+    }
+
+    /// "name, status, size[, companions: a, b]" — what VoiceOver reads.
+    static func entryAccessibilityLabel(_ entry: ArchiveAngelBufferHygiene.EntryLine) -> String {
+        let base: String = "\(entry.filename), \(entry.statusText), \(MediaBytes.display(entry.sizeBytes))"
+        if entry.companions.isEmpty { return base }
+        return base + ", companions: " + entry.companions.joined(separator: ", ")
     }
 
     private func statusColor(_ entry: ArchiveAngelBufferHygiene.EntryLine) -> Color {
@@ -250,17 +268,19 @@ struct ArchiveAngelBufferHygieneCard: View {
     private func perform(_ req: ClearRequest) {
         let reason = req.rows.count == 1 ? "cleared from the buffer card" : "Clear all from the buffer card"
         // The rows' measured sizes go along — no re-walk on the main actor.
-        let all = model.clearArchiveAngelBatches(req.rows.map(\.plan),
-                                                 bytes: Dictionary(uniqueKeysWithValues: req.rows.map { ($0.id, $0.bytes) }),
-                                                 reason: reason)
+        let plans = req.rows.map(\.plan)
+        let bytes = Dictionary(uniqueKeysWithValues: req.rows.map { ($0.id, $0.bytes) })
         pendingClear = nil
-        // Now: the rows read "in progress" while their removals run. Then
-        // again when every removal has landed and the companion pass is
-        // done (codex review 2026-09-20 #9) — a slow removal used to leave
-        // the row busy until the next unrelated refresh. The view's
-        // generation guard keeps an older scan from overwriting this one.
-        batchesChanged()
-        Task {
+        // The verb is async (codex #1714 R3): plan reads and saves run off
+        // the main actor. Then: the rows read "in progress" while their
+        // removals run, and again when every removal has landed and the
+        // companion pass is done (codex review 2026-09-20 #9) — a slow
+        // removal used to leave the row busy until the next unrelated
+        // refresh. The view's generation guard keeps an older scan from
+        // overwriting this one.
+        Task { @MainActor in
+            let all = await model.clearArchiveAngelBatches(plans, bytes: bytes, reason: reason)
+            batchesChanged()
             _ = await all.finished.value
             batchesChanged()
         }

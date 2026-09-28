@@ -8,10 +8,19 @@ import Combine
 @MainActor
 final class DashboardState: ObservableObject {
 
-    init() {
+    /// - Parameter logDirectory: where `catalog.log` lives. Nil (the
+    ///   default, and every production caller) keeps the routed default —
+    ///   ~/Library/Logs/VideoScan in the app, the per-process
+    ///   VideoScanTestLogs-<pid> dir under a test host. GH #211: under a
+    ///   test host every model shared that ONE file, and any other suite's
+    ///   resetForScan() (overwrite-mode start()) truncated it mid-test, so a
+    ///   test reading its own log lines back could read a replaced file.
+    ///   Such tests inject their own scratch directory here.
+    init(logDirectory: URL? = nil) {
+        catalogLog = PersistentLog(name: "catalog", directory: logDirectory)
         chipName = Self.detectChipName()
         // Skip timer-based polling when running as a test host
-        if NSClassFromString("XCTestCase") == nil {
+        if !TestEnvironment.isUnitTestProcess {  // shared detector, codex #1713
             startSystemMetrics()
         }
         catalogLog.start(append: true)
@@ -39,7 +48,7 @@ final class DashboardState: ObservableObject {
     private let maxConsoleLines = 2000
     private var pendingLines: [String] = []
     private var flushScheduled = false
-    let catalogLog = PersistentLog(name: "catalog")
+    let catalogLog: PersistentLog
 
     func log(_ msg: String) {
         catalogLog.write(msg)

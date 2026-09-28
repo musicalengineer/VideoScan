@@ -810,7 +810,7 @@ struct HallieAppV2IntegrationTests {
         let invocation = try #require(recorder.values.first)
         #expect(response.result.route == .presence)
         #expect(invocation.presenceCount == 100_000)
-        #expect(elapsed < .seconds(5),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(5)),
                 "app capture+execute took \(elapsed) for 100k records")
 
         let presence = try productionSource("ArchivistPresenceExecutor.swift")

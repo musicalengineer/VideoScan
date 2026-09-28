@@ -26,7 +26,9 @@ private let masterArchiveLog = Logger(subsystem: "Rick-Breen.VideoScan",
 /// Additive — legacy derivation kinds ("trim", "rebuildAudio", …) are
 /// untouched; the reverse index keys on this string.
 enum ArchivePromotion {
-    static let derivationKind = "archivePromotion"
+    /// One definition, in VideoScanCore: the Date column reads it too
+    /// (an archive copy shows its filed date).
+    static let derivationKind = VideoRecord.archivePromotionDerivationKind
 }
 
 /// Initialize refusals (retired volume, scratch volume) — surfaced in the
@@ -110,6 +112,11 @@ struct ArchivePromotePlan: Sendable {
     /// because a person who remembers 1947 knows more than an inference
     /// that found nothing. Absent means "no override" — NOT "undated".
     var archiveDateOverrides: [UUID: ArchiveDateHint] = [:]
+    /// Whose date each override is (2026-09-27, PromoteDateChoice.swift):
+    /// Rick's — typed, or taken from a copy's hand-entered date — is also
+    /// written onto the archived copy's record. An override with NO source
+    /// is placement-only (a machine proposal, e.g. the Angel's default).
+    var archiveDateSources: [UUID: ArchiveDateSource] = [:]
     /// Display-only role labels ("Master", "Lossless Copy"…) for the
     /// naming rows in the confirmation sheet, set when the promote was
     /// launched from Assess Copies. Absent = the sheet shows filenames.
@@ -620,6 +627,20 @@ extension VideoScanModel {
         record.derivationKind == ArchivePromotion.derivationKind
     }
 
+    /// True when `record` IS a file of the Master Archive — a promoted copy,
+    /// or anything whose path lies inside the archive root. Rick 2026-09-27:
+    /// "once a file is in the archive… only I will update name/date, though
+    /// the system may add metadata notes… archived elements mostly
+    /// read-only." Every BACKGROUND date writer (the inferred-date pass,
+    /// applyDossier's triangulation, live reload, duplicate enrichment, the
+    /// #1413 unwind) skips such a record; its date may still DONATE to other
+    /// copies. Narrower than `isArchived`, which also counts a SOURCE whose
+    /// content has a master copy — the source lives outside the archive and
+    /// keeps its ordinary rules. O(1): a string compare and a prefix test.
+    func isArchiveElement(_ record: VideoRecord) -> Bool {
+        isArchiveCopy(record) || isInsideMasterArchive(path: record.fullPath)
+    }
+
     /// True when `path` lies inside the Master Archive root — canonical,
     /// component-wise (codex QA major c), never a string prefix.
     func isInsideMasterArchive(path: String) -> Bool {
@@ -1019,6 +1040,8 @@ extension VideoScanModel {
         copy.inferredRecordDate = source.inferredRecordDate
         copy.inferredDateConfidence = source.inferredDateConfidence
         copy.inferredDateSource = source.inferredDateSource
+        copy.inferredDateRange = source.inferredDateRange
+        copy.inferredDateReason = source.inferredDateReason
         copy.userNotes = source.userNotes
         copy.tags = source.tags
         copy.sceneCaptions = source.sceneCaptions

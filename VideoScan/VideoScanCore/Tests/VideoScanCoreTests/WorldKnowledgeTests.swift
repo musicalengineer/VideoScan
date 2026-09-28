@@ -21,7 +21,9 @@ struct WorldKnowledgeTests {
 
     @Test func everyFactHasAYearSourceAndSpokenClause() {
         for fact in WorldKnowledge.facts {
-            #expect((1800...2100).contains(fact.years.lowerBound), "\(fact.id) year")
+            // 1700: the war spans (2026-09-23) reach back to the Revolution;
+            // the bound is a sanity check on typos, not a media rule.
+            #expect((1700...2100).contains(fact.years.lowerBound), "\(fact.id) year")
             #expect(fact.years.upperBound >= fact.years.lowerBound, "\(fact.id) range")
             #expect(fact.earliestYear == fact.years.lowerBound, "\(fact.id) earliest = lower bound")
             #expect(!fact.source.trimmingCharacters(in: .whitespaces).isEmpty, "\(fact.id) source")

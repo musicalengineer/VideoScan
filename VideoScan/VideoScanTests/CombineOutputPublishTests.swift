@@ -183,7 +183,7 @@ struct CombineOutputPublishTests {
         let map = VideoScanModel.priorCombinedOutputs(records: recs, outputFolder: out)
         let elapsed = Date().timeIntervalSince(start)
         #expect(map.count == (0..<100_000).filter { $0 % 10 == 0 && $0 % 3 == 0 }.count)
-        #expect(elapsed < 1.0, "priorCombinedOutputs took \(elapsed)s for 100k records")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 1.0), "priorCombinedOutputs took \(elapsed)s for 100k records")
     }
     // MARK: skip decision (Manager ruling 2026-09-22 — unknown provenance → skip)
 

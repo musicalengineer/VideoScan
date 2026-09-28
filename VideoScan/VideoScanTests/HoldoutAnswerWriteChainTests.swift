@@ -240,7 +240,7 @@ struct HoldoutAnswerWriteChainTests {
         let elapsed = clock.now - start
 
         #expect(errors.all.isEmpty, "chained writes threw: \(errors.all)")
-        #expect(elapsed < .seconds(5),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(5)),
                 "\(writes) chained writes over \(rows) rows took \(elapsed) — per-answer cost has regressed")
         let final = try HoldoutReviewQueue.load(csvURL: url)
         #expect(final.pendingCount == rows - writes)

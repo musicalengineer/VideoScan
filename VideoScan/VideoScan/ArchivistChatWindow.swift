@@ -856,6 +856,10 @@ struct ArchivistChatWindow: View {
         // One request owns the conversation state until it completes. Chips
         // remain visible while the local model works, but cannot start a
         // second translation that steals play intent or commits stale output.
+        // The tap is logged either way (live 2026-09-26: a stale "Open in
+        // Family Tree" chip fired the second an answer landed, and nothing
+        // in the log said a chip had been tapped — or dropped — at all).
+        appLog.write("[hallie] chip \(isThinking ? "ignored while thinking" : "tapped"): \(chip.label)")
         guard !isThinking else { return }
         pendingPersonClarification = nil
         switch chip.action {
@@ -1335,6 +1339,12 @@ struct ArchivistChatWindow: View {
                     HallieAppNavigation.acceptImmediateOffer(from: result) {
                         MainWindowHelper.shared.openMainWindow()
                     }
+                },
+                retireSupersededOffers: { subject in
+                    // A tree offer for the person the conversation just
+                    // left is no longer a live button (live 2026-09-26);
+                    // by tree id when known, so namesakes too (GH #202).
+                    messages = HallieSupersededOffers.retire(in: messages, keeping: subject)
                 }))
     }
 
@@ -2089,7 +2099,7 @@ struct ArchivistChatWindow: View {
     /// pictures gets no chip. Unknown or ambiguous names, and unknown
     /// death years, keep the chip (never guess).
     static func mayOfferMedia(for canonicalName: String, in graph: GedcomFamilyGraph) -> Bool {
-        let matches = graph.people.values.filter {
+        let matches = graph.visiblePeople.filter {
             $0.name.compare(canonicalName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
         }
         guard matches.count == 1 else { return true }

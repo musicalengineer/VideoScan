@@ -257,7 +257,8 @@ struct ArchiveCategoryTests {
         let computeMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         #expect(snap.archived.count == 5_100)
         #expect(snap.archivedDates.count == 5_100)
-        #expect(computeMs < 3_000, "compute with 5k legacy note parses took \(Int(computeMs)) ms — budget 3 s")
+        #expect(.milliseconds(computeMs) < PerformanceLane.debugCeiling(.seconds(3)),
+                "compute with 5k legacy note parses took \(Int(computeMs)) ms — budget 3 s (×\(PerformanceLane.hostedRunnerFactor(environment: ProcessInfo.processInfo.environment)) on a GitHub-hosted runner)")
         for (id, d) in expected.prefix(50) { #expect(snap.archivedDates[id] == d) }
         for id in orphanIDs.prefix(10) { #expect(snap.archivedDates[id] == orphanDate) }
         #expect(snap.archivedDates[sources[0].id] != nil && snap.archivedDates[records[1].id] == nil, "unarchived rows have no date")
@@ -270,7 +271,7 @@ struct ArchiveCategoryTests {
         }
         let renderMs = (CFAbsoluteTimeGetCurrent() - t1) * 1000
         #expect(memo.computeCount == 1 && hits == 1_000)
-        #expect(renderMs < 200, "1,000 memo hits + lookups took \(Int(renderMs)) ms")
+        #expect(.milliseconds(renderMs) < PerformanceLane.debugCeiling(.milliseconds(200)), "1,000 memo hits + lookups took \(Int(renderMs)) ms")
         // The sort policy over the archived rows uses the same map.
         let newest = ArchiveSortPolicy.sortedByArchivedDate(snap.archived, order: .reverse) { snap.archivedDates[$0.id] }
         #expect(newest.count == 5_100)
@@ -305,7 +306,8 @@ struct ArchiveCategoryTests {
         #expect(first.notYetArchived.count == 95_000)
         #expect(first.activeAssetCount == 100_000)
         #expect(first.volumeFileCounts["/Volumes/Src0"] == 25_000)
-        #expect(computeMs < 2_000, "one full compute at 100k+5k took \(Int(computeMs)) ms — budget 2 s (measured ~780 ms Debug on M4 Max)")
+        #expect(.milliseconds(computeMs) < PerformanceLane.debugCeiling(.seconds(2)),
+                "one full compute at 100k+5k took \(Int(computeMs)) ms — budget 2 s (measured ~780 ms Debug on M4 Max; ×\(PerformanceLane.hostedRunnerFactor(environment: ProcessInfo.processInfo.environment)) on a GitHub-hosted runner)")
 
         // 1,000 "renders" at the same version → zero recomputes.
         let t1 = CFAbsoluteTimeGetCurrent()
@@ -314,7 +316,7 @@ struct ArchiveCategoryTests {
         }
         let renderMs = (CFAbsoluteTimeGetCurrent() - t1) * 1000
         #expect(memo.computeCount == 1, "1,000 renders must not recompute (was \(memo.computeCount))")
-        #expect(renderMs < 200, "1,000 memo hits took \(Int(renderMs)) ms")
+        #expect(.milliseconds(renderMs) < PerformanceLane.debugCeiling(.milliseconds(200)), "1,000 memo hits took \(Int(renderMs)) ms")
 
         // A mutation (revision bump) → exactly ONE more compute.
         model.volumeAggregatesRevision &+= 1

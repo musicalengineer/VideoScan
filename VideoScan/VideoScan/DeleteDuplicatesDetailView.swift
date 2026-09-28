@@ -15,35 +15,15 @@ struct DeleteDuplicatesDetailView: View {
     /// Rows drawn at most — a 100k-row plan must not build 100k views.
     static let visibleCap = 2_000
 
+    // Split into named pieces: one inline body timed out CI's type checker
+    // budget (DeleteDuplicatesDetailView.swift:18, 1830 ms, nightly run 36121118356).
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             if let plan = job.plan, !plan.entries.isEmpty {
-                let visible = plan.entries.prefix(Self.visibleCap)
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        Section(header: DeleteDuplicatesTableHeader()) {
-                            ForEach(visible) { entry in
-                                DeleteDuplicatesEntryRow(entry: entry)
-                                Divider()
-                            }
-                            if plan.entries.count > visible.count {
-                                Text("… and \(plan.entries.count - visible.count) more")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.secondary)
-                                    .padding(DeleteDuplicatesTableLayout.rowPadding)
-                            }
-                        }
-                    }
-                }
-                .frame(maxHeight: 520)
-                .background(RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(NSColor.controlBackgroundColor)))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.primary.opacity(0.14)))
+                entriesTable(plan)
             } else {
-                Text(job.state.isActive ? "Choosing what to delete…" : "Nothing was deleted.")
+                Text(Self.emptyMessageText(isActive: job.state.isActive))
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
             }
@@ -52,6 +32,40 @@ struct DeleteDuplicatesDetailView: View {
         .background(RoundedRectangle(cornerRadius: 10)
             .fill(Color(NSColor.textBackgroundColor).opacity(0.5)))
         .accessibilityIdentifier("mfo.deleteDuplicates.detail")
+    }
+
+    /// Shown before the plan has any rows. String-typed on purpose: a
+    /// ternary of literals inside Text(...) is slow to type-check.
+    static func emptyMessageText(isActive: Bool) -> String {
+        isActive ? "Choosing what to delete…" : "Nothing was deleted."
+    }
+
+    /// The capped, scrolling table of the plan's files (pinned column titles).
+    private func entriesTable(_ plan: DeleteDuplicatesPlan) -> some View {
+        let visible: ArraySlice<DeleteDuplicatesPlan.Entry> = plan.entries.prefix(Self.visibleCap)
+        let hidden: Int = plan.entries.count - visible.count
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                Section(header: DeleteDuplicatesTableHeader()) {
+                    ForEach(visible) { entry in
+                        DeleteDuplicatesEntryRow(entry: entry)
+                        Divider()
+                    }
+                    if hidden > 0 {
+                        Text("… and \(hidden) more")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .padding(DeleteDuplicatesTableLayout.rowPadding)
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: 520)
+        .background(RoundedRectangle(cornerRadius: 10)
+            .fill(Color(NSColor.controlBackgroundColor)))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(Color.primary.opacity(0.14)))
     }
 
     private var header: some View {

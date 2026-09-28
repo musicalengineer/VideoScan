@@ -56,6 +56,8 @@ struct ArchiveReadiness: Equatable, Sendable {
         var durationSeconds: Double = 0
         var inferredRecordDate: Date?
         var inferredDateConfidence: Float?
+        /// GH #201: a year-precise inference files at year precision.
+        var inferredDateRange: InferredDateRange?
         var userDate: String?
         var userDateConfidence: String?
         // Embedded creation date + origin (2026-08-16) and the filename,
@@ -150,6 +152,7 @@ struct ArchiveReadiness: Equatable, Sendable {
                                                     originEncoder: i.originEncoder,
                                                     inferredRecordDate: i.inferredRecordDate,
                                                     inferredDateConfidence: i.inferredDateConfidence,
+                                                    inferredDateRange: i.inferredDateRange,
                                                     filename: i.filename.isEmpty ? nil : i.filename)
         let date = dateState(resolution)
 
@@ -335,6 +338,7 @@ extension ArchiveReadiness {
         i.durationSeconds = r.durationSeconds
         i.inferredRecordDate = r.inferredRecordDate
         i.inferredDateConfidence = r.inferredDateConfidence
+        i.inferredDateRange = r.inferredDateRange
         i.userDate = r.userDate ?? familyUserDate?.date
         i.userDateConfidence = r.userDate == nil
             ? (familyUserDate?.confidence ?? r.userDateConfidence)

@@ -1,5 +1,5 @@
 // ArchiveAngelJob.swift
-// Archive Angel — Stage 1 as an MFO job (docs/archive_angel_design.md §3–§5).
+// Archive Angel — Stage 1 as an MFO job (archive_angel_design.md, retired — git show f82bbd69^:docs/archive_angel_design.md §3–§5).
 //
 // Consider N candidates → prepare each one's companions in the buffer →
 // stop for review. The plan (`plan.json` in the batch folder) is saved
@@ -377,6 +377,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             store: model.archiveAngel.store, count: requestedCount, now: Date(), policy: self.policy, excluding: inFlight,
             attentionChangedAt: model.archiveAngel.attention.lastEventAt,
             attentionRevision: model.archiveAngel.attention.revision,
+            catalogRevision: model.archiveAngel.catalogRevision, launchToken: model.archiveAngel.launchToken,
             project: { id in live(id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
             selection = fromEvidence.selection
             consideredCount = model.archiveAngel.store.consideredCount
@@ -400,7 +401,17 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             }
             if stopRequested { finishCancelled(); return }
             ArchiveAngelScorer.markDerivatives(&candidates, policy: self.policy)   // T10 H3: same rule as the sweep
+            // Rules v12 pass the walk never ran (codex C1 / QA MAJOR-3,
+            // 2026-09-26): a Likely footage sibling of an archived original
+            // is covered here exactly as in the sweep — and the coverage
+            // pre-pass below counts it as archived backlog, so the
+            // "Fills a gap" line agrees between the two paths.
+            ArchiveAngelScorer.markArchivedFootage(&candidates, archivedGroups: model.archivedFootageGroupIDs(active))
             ArchiveAngelScorer.applyFamilyAttention(&candidates, weights: weights)   // Phase 1: same rule as the sweep
+            if self.policy.coverage.isActive {   // rules v13: the same pre-pass as the sweep; off = rules v12, no cost
+                let backlog = ArchiveAngelEvent.applyCoverage(&candidates, policy: self.policy)
+                note("Archive Angel: " + ArchiveAngelEvent.summaryLine(backlog))
+            }
 
             // Spotlight play history for the eligible ones only, off-main.
             let rules = self.policy
@@ -462,6 +473,8 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                 proposedDate: inherited.date?.value
                     ?? ArchiveAngelNaming.proposedDate(fromFilenamePrefix: facts.dateHint.filenamePrefix))
             entry.inheritedDate = inherited.date
+            entry.proposedDateSource = inherited.date != nil ? .fromCopy
+                : (entry.proposedDate == nil ? nil : .machine)
             entry.inheritedPlace = inherited.place
             entry.inheritedAttestationKinds = inherited.attestationKinds
             entry.similarDate = inherited.similarDate
@@ -648,6 +661,21 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             // is verified again below rather than assumed fine.
             step(idx, .verifyAudio, .skipped, note: "Already verified: \(rec.audioVerifyStatus)")
             diagnosis = cached
+        } else if let waited = await waitForRunningVerify(of: rec, index: idx, center: center) {
+            // QA 2026-09-25 MAJOR-1: an Angel Check (or Rick) was already
+            // verifying this file. Its verdict is ours; starting a second
+            // one would be refused as a duplicate, and without a diagnosis
+            // the balance step used to be skipped and the access copy cut
+            // from unbalanced sound.
+            switch waited {
+            case .diagnosis(let d):
+                diagnosis = d
+                step(idx, .verifyAudio, .done,
+                     note: ArchiveAngelAudioOutcome.from(d).headline + " (waited for the sound check in progress)")
+            case .stopped:
+                step(idx, .verifyAudio, .skipped,
+                     note: wasSkipped(idx) ? skipStepNote : "Stopped while waiting for the sound check in progress")
+            }
         } else if let vj = center.startVerifyAudio(record: rec, model: model) {
             currentSubJob = vj
             await vj.task?.value
@@ -766,6 +794,27 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             step(idx, .losslessCopy, .skipped, note: "Lossless copy not needed — \(codec) original is the preservation master")
         }
         _ = await savePlan()
+    }
+
+    enum RunningVerify { case diagnosis(AudioVerifyDiagnosis), stopped }
+
+    /// A Verify Audio job already running for `rec` (an Angel Check, or
+    /// Rick's own): wait for it — polling, so a Stop or a Skip of this row
+    /// ends the wait at once — and hand back its diagnosis. It is NOT made
+    /// `currentSubJob`: this job did not start it and must never cancel it.
+    /// nil = none was running, or it ended without a diagnosis (the caller
+    /// then verifies on its own).
+    private func waitForRunningVerify(of rec: VideoRecord, index idx: Int,
+                                      center: MediaFileOperationsCenter) async -> RunningVerify? {
+        guard let running = center.activeVerifyAudioJob(forRecordID: rec.id) else { return nil }
+        note("Archive Angel: \(rec.filename) — a sound check is already running; waiting for its verdict")
+        while running.state.isActive {
+            if stopRequested || wasSkipped(idx) { return .stopped }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        if let d = running.diagnosis { return .diagnosis(d) }
+        note("Archive Angel: \(rec.filename) — the running sound check ended without a verdict; checking it here")
+        return nil
     }
 
     /// A Balance Audio output already catalogued for `rec` whose file is

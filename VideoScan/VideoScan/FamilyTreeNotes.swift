@@ -147,9 +147,18 @@ struct FamilyTreeNotesResolver: Sendable {
 /// Where the production CyberBrain lives — the same directory Hallie's
 /// coordinator reads and the telling mode writes.
 enum FamilyTreeNotesStorage {
+    /// The real CyberBrain — EXCEPT inside a test host, where it is a
+    /// private per-process temp directory (2026-09-24, QA follow-up).
+    /// This is the DEFAULT for FamilyTreeLiveModel, the pronunciation
+    /// lexicon and the live pronunciation writer, so a test that forgets
+    /// to inject a brain used to read — and could WRITE — Rick's family
+    /// knowledge. Same rule and same shared detector as
+    /// FamilyGraphCompiledStore.production. No env override: no test has
+    /// ever needed the real brain, and none should.
     static var productionRootURL: URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first?.appendingPathComponent("VideoScan/cyberbrain", isDirectory: true)
+        let support = TestHostDetection.sandboxedApplicationSupportRoot(for: "FamilyTreeNotesStorage.productionRootURL")
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        return support?.appendingPathComponent("VideoScan/cyberbrain", isDirectory: true)
     }
 
     /// Load the archive and build an index; nil when no brain exists yet.

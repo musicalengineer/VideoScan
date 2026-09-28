@@ -1,12 +1,13 @@
 // ArchiveAngelReviewSheet.swift
 // Archive Angel — Stage 2: "Recommended To Be Archived"
-// (docs/archive_angel_design.md §6). One row per prepared candidate with
+// (archive_angel_design.md, retired — git show f82bbd69^:docs/archive_angel_design.md §6). One row per prepared candidate with
 // the WHY lines, the companions that were made (and why the others were
 // not), an editable archive name, date and notes, and a checkbox. Promote
 // hands the selection to ArchiveAngelPromoter → the existing Promote job.
 // Cancel keeps the batch (edits persisted). Discard deletes the buffer.
 
 import SwiftUI
+import VideoScanCore
 
 /// `.sheet(item:)` payload — id = the plan id so re-presenting the same
 /// batch is a no-op for SwiftUI.
@@ -35,6 +36,18 @@ struct ArchiveAngelReviewSheet: View {
     @State private var copiesRequest: ArchiveAngelShowCopiesRequest?
     /// The pre-Promote fixity stat is running (codex #1659).
     @State private var verifyingFixity = false
+    /// A Clear is in flight (QA follow-up 2026-09-24): it is async and the
+    /// sheet stays open until it lands, so Promote and a second Discard
+    /// are disabled meanwhile. The promoter's batch claim is the real
+    /// guard; this keeps the buttons from offering what it would refuse.
+    @State private var discarding = false
+    /// What each row's copies say about its date (Rick 2026-09-27) —
+    /// computed once in `.onAppear` (one catalog pass), never in the body.
+    @State private var copyChoices: [UUID: PromoteCopiesDateChoice] = [:]
+    /// The machine's own date proposal per row ("Promote undated").
+    @State private var machineDates: [UUID: String] = [:]
+    /// Rows whose one-line copies date the person opened with "change".
+    @State private var expandedDates: Set<UUID> = []
 
     init(plan: ArchiveAngelPlan) {
         _plan = State(initialValue: plan)
@@ -63,6 +76,7 @@ struct ArchiveAngelReviewSheet: View {
             if !ArchiveAngelPromoter.followRenames(plan: &plan, model: model).isEmpty {
                 ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
             }
+            loadCopyDates()
         }
         .sheet(item: $copiesRequest) { request in
             ArchiveAngelShowCopiesView(request: request)
@@ -321,6 +335,7 @@ struct ArchiveAngelReviewSheet: View {
             // Facts inherited from another copy of the recording (S4 fix):
             // stamped on Promote, never over the file's own values.
             let inherited = ArchiveAngelFamilyFacts.reviewLine(entry)
+            copiesDateRow(idx, entry: entry)
             if !inherited.isEmpty {
                 Label(inherited, systemImage: "arrow.triangle.branch")
                     .font(.system(size: 11))
@@ -421,7 +436,7 @@ struct ArchiveAngelReviewSheet: View {
             HStack {
                 if !isDone && !isPromoting {
                     Button("Discard batch…", role: .destructive) { showDiscardConfirm = true }
-                        .disabled(model.isReadOnly)
+                        .disabled(model.isReadOnly || discarding || verifyingFixity)
                 }
                 Spacer()
                 if isDone {
@@ -442,9 +457,14 @@ struct ArchiveAngelReviewSheet: View {
                             .keyboardShortcut(.defaultAction)
                             .accessibilityIdentifier("archiveAngel.done")
                     } else {
+                        if unansweredDates > 0 {
+                            Text("Choose a date for \(unansweredDates) row\(unansweredDates == 1 ? "" : "s") above")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.orange)
+                        }
                         Button("Promote \(selectedCount)") { promote() }
                             .keyboardShortcut(.defaultAction)
-                            .disabled(model.isReadOnly || isPromoting || verifyingFixity)
+                            .disabled(model.isReadOnly || isPromoting || verifyingFixity || discarding || unansweredDates > 0)
                             .accessibilityIdentifier("archiveAngel.promote")
                     }
                 }
@@ -463,7 +483,9 @@ struct ArchiveAngelReviewSheet: View {
     }
 
     private func keepAndClose() {
-        ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
+        // Never save the sheet's copy over a Clear that is landing: it
+        // would write the batch back as ready over its .discarded plan.
+        if !discarding { ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote") }
         dismiss()
     }
 
@@ -472,19 +494,28 @@ struct ArchiveAngelReviewSheet: View {
         // ledger lines for the undecided rows (half a skip), the plan saved
         // .discarded before anything is deleted, the catalogued companions
         // retired (codex #1572), the folder removed, the log line.
-        let outcome = model.clearArchiveAngelBatch(plan, reason: "discarded by you in the review sheet")
-        // `cleared`, not `refusal == nil`: a failed plan save is an error
-        // with no refusal, and the sheet's copy must not claim a decision
-        // that did not persist (codex review 2026-09-20 #2).
-        if outcome.cleared { plan.status = .discarded }
-        dismiss()
+        // Async (codex #1714 R3): the plan read and save run off the main
+        // actor; the sheet closes once the decision has landed.
+        guard !discarding, !verifyingFixity, !isPromoting else { return }
+        discarding = true
+        let snapshot = plan
+        Task { @MainActor in
+            defer { discarding = false }
+            let outcome = await model.clearArchiveAngelBatch(snapshot, reason: "discarded by you in the review sheet")
+            // `cleared`, not `refusal == nil`: a failed plan save is an error
+            // with no refusal, and the sheet's copy must not claim a decision
+            // that did not persist (codex review 2026-09-20 #2).
+            if outcome.cleared { plan.status = .discarded }
+            dismiss()
+        }
     }
 
     /// Stat the rows' whole-file fixity off the main actor first (codex
     /// #1659: only copies whose digest still describes the file may lend
     /// Rick's facts), then promote in the same main-actor turn.
     private func promote() {
-        guard !verifyingFixity else { return }
+        model.archiveAngel.noteInteraction()   // Angel Checks wait while you work (QA MAJOR-2)
+        guard !verifyingFixity, !discarding else { return }
         verifyingFixity = true
         Task { @MainActor in
             let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)
@@ -533,24 +564,48 @@ struct ArchiveAngelReviewSheet: View {
 
     /// The unchecked-at-Promote pass, idempotent per (batch, row): every
     /// ready row that is not selected AND has no `uncheckedNotedAt` yet
-    /// gets one `angelSkipped` ledger line (reason "unchecked") and the
-    /// stamp; the plan is saved so the stamp outlives this sheet. A
-    /// retried Promote (identity refused, nothing to promote, a failed
-    /// job) finds the stamp and emits nothing (codex 2026-09-20 #7).
+    /// gets the stamp and one `angelSkipped` ledger line (reason
+    /// "unchecked"). A retried Promote (identity refused, nothing to
+    /// promote, a failed job) finds the stamp and emits nothing (codex
+    /// 2026-09-20 #7).
+    ///
+    /// ORDER (codex #1714 R2, 2026-09-23): the stamped plan is SAVED FIRST
+    /// and the ledger hears of the decision only once that save succeeded.
+    /// The old order — stamp in memory, ledger line, then a save whose
+    /// failure was ignored — left the stamp only in this sheet: close and
+    /// reopen, and the same unchecked row was noted again (codex's probe:
+    /// ledger 1 → 2 for one decision), pushing it toward the 90-day rest
+    /// rule twice. On a failed save nothing is stamped, nothing is written
+    /// to the ledger, and a retry (or a reopen) notes it exactly once. A
+    /// crash between the save and the ledger line loses that one line —
+    /// the under-count, never the double count.
+    /// `save` is the test seam (production: the fsync'd plan store).
     /// Returns the ids noted this time. Main actor; the production path.
     @MainActor
     @discardableResult
     static func noteUncheckedAtPromote(plan: inout ArchiveAngelPlan, model: VideoScanModel,
-                                       at now: Date = Date()) -> [UUID] {
+                                       at now: Date = Date(),
+                                       save: (ArchiveAngelPlan) -> Bool = {
+                                           ArchiveAngelPlanStore.saveLogged($0, context: "review/promote (unchecked noted)")
+                                       }) -> [UUID] {
+        var stamped = plan
         var noted: [UUID] = []
-        for i in plan.entries.indices
-        where plan.entries[i].status == .ready && !plan.entries[i].selected && plan.entries[i].uncheckedNotedAt == nil {
-            plan.entries[i].uncheckedNotedAt = now
-            noted.append(plan.entries[i].id)
+        for i in stamped.entries.indices
+        where stamped.entries[i].status == .ready && !stamped.entries[i].selected
+            && stamped.entries[i].uncheckedNotedAt == nil {
+            stamped.entries[i].uncheckedNotedAt = now
+            noted.append(stamped.entries[i].id)
         }
         guard !noted.isEmpty else { return [] }
+        guard save(stamped) else {
+            let line = "Archive Angel: \(noted.count) unchecked row(s) of \(plan.batchID) NOT noted as passed — "
+                + "plan.json could not be saved; the next Promote will note them"
+            model.log(line)
+            appLog.write(line)
+            return []
+        }
+        plan = stamped
         model.ledgerAngelAttention(.angelSkipped, recordIDs: noted, batchID: plan.batchID, reason: "unchecked", at: now)
-        ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote (unchecked noted)")
         return noted
     }
 
@@ -579,7 +634,11 @@ struct ArchiveAngelReviewSheet: View {
 
     private func dateBinding(_ idx: Int) -> Binding<String> {
         Binding(get: { plan.entries[idx].proposedDate ?? "" },
-                set: { plan.entries[idx].proposedDate = $0.isEmpty ? nil : $0 })
+                set: {
+                    plan.entries[idx].proposedDate = $0.isEmpty ? nil : $0
+                    // Typed by the person (codex r1 #4): Rick's date, whatever its value.
+                    plan.entries[idx].proposedDateSource = $0.isEmpty ? nil : .typed
+                })
     }
 
     private func dateGuidance(_ typed: String?) -> String {
@@ -596,4 +655,105 @@ struct ArchiveAngelReviewSheet: View {
     }
 
     static func durationText(_ s: Double) -> String { ArchiveAngelScorer.durationText(s) }
+}
+
+// Split from the struct body (type-length lint): same file, so the
+// private @State above stays reachable (≈ C++ member functions defined
+// outside the class body).
+extension ArchiveAngelReviewSheet {
+
+    // MARK: Dates from copies (Rick 2026-09-27)
+
+    /// Selected ready rows whose copies disagree and are not answered yet.
+    private var unansweredDates: Int {
+        plan.entries.filter { $0.status == .ready && $0.selected
+            && ArchiveAngelReviewDates.needsAnswer($0, choice: copyChoices[$0.id]) }.count
+    }
+
+    /// ONE catalog pass for every ready row; pre-selects a single known date.
+    private func loadCopyDates() {
+        let ready = plan.entries.filter { $0.status == .ready }
+        let targets = ready.compactMap { model.record(forID: $0.id) }
+        let gathered = PromoteCopyDates.gather(for: targets, records: model.records)
+        var choices: [UUID: PromoteCopiesDateChoice] = [:]
+        var changed = false
+        for i in plan.entries.indices where plan.entries[i].status == .ready {
+            let entry = plan.entries[i]
+            guard let rec = model.record(forID: entry.id), rec.userDate == nil else { continue }
+            let machine = ArchiveAngelNaming.proposedDate(
+                fromFilenamePrefix: ArchivePathResolver.facts(for: rec).dateHint.filenamePrefix)
+            machineDates[entry.id] = machine
+            let list = ArchiveAngelReviewDates.candidates(entry: entry, gathered: gathered[entry.id] ?? [],
+                                                          volumeOf: { model.record(forID: $0)?.volumeName ?? "" })
+            let choice = PromoteCopyDates.decide(list)
+            guard choice != .noCopyDates else { continue }
+            choices[entry.id] = choice
+            let before = plan.entries[i]
+            ArchiveAngelReviewDates.applyPreselection(choice, to: &plan.entries[i], machineDefault: machine)
+            if plan.entries[i] != before { changed = true }
+        }
+        copyChoices = choices
+        if changed { ArchiveAngelPlanStore.saveLogged(plan, context: "review/copies date") }
+    }
+
+    @ViewBuilder
+    private func copiesDateRow(_ idx: Int, entry: ArchiveAngelPlan.Entry) -> some View {
+        let choice = copyChoices[entry.id]
+        let asking = ArchiveAngelReviewDates.needsAnswer(entry, choice: choice) || expandedDates.contains(entry.id)
+        if let choice, choice != .noCopyDates {
+            VStack(alignment: .leading, spacing: 3) {
+                if asking {
+                    Text("Its copies say different things (or only estimate) — which date?")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.orange)
+                    ForEach(Self.askList(choice)) { d in
+                        HStack(spacing: 6) {
+                            Button("Use \(UserDateEntry.friendlyDisplay(d.date))") {
+                                ArchiveAngelReviewDates.use(d, on: &plan.entries[idx])
+                                expandedDates.remove(entry.id)
+                            }
+                            .font(.system(size: 11))
+                            .disabled(isPromoting || isDone)
+                            .accessibilityIdentifier("archiveAngel.row.copyDate.use")
+                            Text(PromoteCopyDates.askRowText(d))
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        Button("Enter a date…") {
+                            ArchiveAngelReviewDates.enterDate(on: &plan.entries[idx])
+                            expandedDates.remove(entry.id)
+                        }
+                        Button(machineDates[entry.id].map { "Use the file's own date (\($0))" } ?? "Promote undated") {
+                            ArchiveAngelReviewDates.decline(on: &plan.entries[idx], machineDefault: machineDates[entry.id])
+                            expandedDates.remove(entry.id)
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .disabled(isPromoting || isDone)
+                } else if let line = ArchiveAngelReviewDates.line(entry, choice: choice, machineDefault: machineDates[entry.id]) {
+                    HStack(spacing: 6) {
+                        Label(line, systemImage: "calendar.badge.checkmark")
+                            .font(.system(size: 11))
+                        Button("change") { expandedDates.insert(entry.id) }
+                            .buttonStyle(.link)
+                            .font(.system(size: 11))
+                            .disabled(isPromoting || isDone)
+                    }
+                }
+            }
+            .padding(.leading, 98)
+        }
+    }
+
+    private static func askList(_ choice: PromoteCopiesDateChoice) -> [PromoteCopyDate] {
+        switch choice {
+        case .ask(let list): return list
+        case .preselected(let d, _): return [d]
+        case .noCopyDates: return []
+        }
+    }
 }

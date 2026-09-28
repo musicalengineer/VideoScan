@@ -83,6 +83,42 @@ struct HallieConversationLogTests {
         #expect(names.allSatisfy { $0.hasSuffix(".jsonl") })
     }
 
+    /// The day key names log files already on disk, so its output is
+    /// pinned exactly: UTC midnight boundaries, a leap day, before the
+    /// epoch, zero padding. (The calendar behind it was hoisted out of the
+    /// per-event path 2026-09-26; this is what keeps that refactor honest.)
+    @Test func dayFileNamesArePinnedAtUTCBoundaries() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = HallieTranscriptFileStore(directoryURL: root)
+        let pins: [(TimeInterval, String)] = [
+            (1_786_838_399, "2026-08-15"),   // 23:59:59Z
+            (1_786_838_400, "2026-08-16"),   // 00:00:00Z
+            (951_782_400, "2000-02-29"),     // leap day
+            (-1, "1969-12-31"),              // before the epoch
+            (4_102_444_799, "2099-12-31"),
+        ]
+        for (seconds, day) in pins {
+            #expect(HallieTranscriptFileStore.utcDayString(Date(timeIntervalSince1970: seconds)) == day)
+        }
+        try store.append(pins.enumerated().map { event(date: Date(timeIntervalSince1970: $0.element.0), sequence: UInt64($0.offset + 1)) })
+        let names = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+        #expect(names == pins.map { "hallie-conversation-\($0.1).jsonl" }.sorted())
+    }
+
+    /// Agreement with an independent UTC formatter across 5,000 instants
+    /// spread over two centuries — any drift in the shared calendar shows.
+    @Test func dayStringAgreesWithAnIndependentUTCFormatter() {
+        let reference = ISO8601DateFormatter()
+        reference.timeZone = TimeZone(identifier: "UTC")
+        reference.formatOptions = [.withFullDate]
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<5_000 {
+            let date = Date(timeIntervalSince1970: .random(in: -2_208_988_800...4_102_444_799, using: &generator))
+            #expect(HallieTranscriptFileStore.utcDayString(date) == reference.string(from: date), "\(date)")
+        }
+    }
+
     @Test func refusesSymlinkedLogDirectoryWithoutTouchingDestination() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -194,7 +230,10 @@ struct HallieConversationLogTests {
         let clock = ContinuousClock()
         let elapsed = try clock.measure { try store.append(events) }
 
-        #expect(elapsed < .seconds(2))
+        // 2 s on a quiet machine; ×1.5 only when a Debug battery has the
+        // machine busy (2.99 s on the M5 under full-battery load), ×3 on GitHub.
+        let ceiling = PerformanceLane.loadAwareDebugCeiling(.seconds(2))
+        #expect(elapsed < ceiling, "1,000-event append took \(elapsed), ceiling \(ceiling) (\(PerformanceLane.loadDescription()))")
         let file = try #require(FileManager.default.contentsOfDirectory(
             at: root, includingPropertiesForKeys: nil).first)
         let lineCount = try String(contentsOf: file, encoding: .utf8)

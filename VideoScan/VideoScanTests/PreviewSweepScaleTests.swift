@@ -97,7 +97,7 @@ struct PreviewSweepScaleTests {
         #expect(items.allSatisfy { $0.needsBestStill || $0.needsFilmstrip },
                 "planner emitted no-op work items")
 
-        #expect(elapsed < .seconds(10),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(10)),
                 "100k-record plan took \(elapsed) — the in-memory diff regressed (budget 10 s; suspect per-record I/O or O(n²))")
     }
 }

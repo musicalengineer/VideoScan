@@ -201,38 +201,43 @@ enum ArchiveItemVersions {
             groupMembers[g].append(i)
         }
 
-        return groupMembers
-            .filter { !$0.isEmpty }
-            .map { idx in idx.sorted() }
-            .sorted { $0[0] < $1[0] }
-            .map { idx in
-                let ms = idx.map { members[$0] }
-                // The card's face: an original with a date prefix, else any
-                // original, else a collision copy, else the first dated
-                // member, else the first.
-                let primary = ms.first { $0.role == .original && $0.dated }
-                    ?? ms.first { $0.role == .original }
-                    ?? ms.first { $0.role == .other }
-                    ?? ms.first { $0.dated }
-                    ?? ms[0]
-                var seenOriginal = 1
-                let versions: [ArchiveItemVersion] = ms
-                    .sorted { ($0.role, $0.item.archiveFilename) < ($1.role, $1.item.archiveFilename) }
-                    .map { m in
-                        var label = m.role.label
-                        if (m.role == .original || m.role == .other) && m.item.id != primary.item.id {
-                            seenOriginal += 1
-                            label = "version \(seenOriginal)"
-                        }
-                        return ArchiveItemVersion(id: m.item.id, role: m.item.id == primary.item.id ? .original : m.role,
-                                                  label: m.item.id == primary.item.id ? primary.role.label : label,
-                                                  archiveFilename: m.item.archiveFilename, relPath: m.item.relPath)
-                    }
-                var card = primary.item
-                card.versions = ms.count > 1 ? versions : []
-                // The card sits in the primary's year (the memory's year).
-                return card
+        // One card per group. A named function with explicit types, not an
+        // inline multi-statement closure: the inline form timed out CI's
+        // type checker (ArchiveItemVersions.swift:204, run 36024816525).
+        func card(_ idx: [Int]) -> ArchiveTimelineItem {
+            let ms: [Member] = idx.map { members[$0] }
+            // The card's face: an original with a date prefix, else any
+            // original, else a collision copy, else the first dated
+            // member, else the first.
+            let primary: Member = ms.first { $0.role == .original && $0.dated }
+                ?? ms.first { $0.role == .original }
+                ?? ms.first { $0.role == .other }
+                ?? ms.first { $0.dated }
+                ?? ms[0]
+            let ordered: [Member] = ms.sorted { a, b in
+                a.role != b.role ? a.role < b.role : a.item.archiveFilename < b.item.archiveFilename
             }
+            var seenOriginal = 1
+            var versions: [ArchiveItemVersion] = []
+            for m in ordered {
+                let isPrimary = m.item.id == primary.item.id
+                var label = m.role.label
+                if (m.role == .original || m.role == .other) && !isPrimary {
+                    seenOriginal += 1
+                    label = "version \(seenOriginal)"
+                }
+                versions.append(ArchiveItemVersion(id: m.item.id, role: isPrimary ? .original : m.role,
+                                                   label: isPrimary ? primary.role.label : label,
+                                                   archiveFilename: m.item.archiveFilename, relPath: m.item.relPath))
+            }
+            var result = primary.item
+            result.versions = ms.count > 1 ? versions : []
+            // The card sits in the primary's year (the memory's year).
+            return result
+        }
+
+        let groups: [[Int]] = groupMembers.filter { !$0.isEmpty }.map { $0.sorted() }
+        return groups.sorted { $0[0] < $1[0] }.map(card)
     }
 
     // MARK: Name analysis

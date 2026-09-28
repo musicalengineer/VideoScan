@@ -64,7 +64,10 @@ actor MemoryPressureMonitor {
     // Each worker increments on start and decrements on finish so that
     // recommendedConcurrency can account for already-running work.
     private var activeWorkers: Int = 0
-    private var slotWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Parked acquireWorkerSlot callers, keyed by a per-wait id so a
+    /// cancelled waiter can remove and resume exactly its own continuation.
+    private var slotWaiters: [UInt64: CheckedContinuation<Void, Never>] = [:]
+    private var nextSlotWaiterID: UInt64 = 0
 
     func incrementWorkers() { activeWorkers += 1 }
     func decrementWorkers() {
@@ -127,18 +130,52 @@ actor MemoryPressureMonitor {
 
     /// Reserve a worker slot atomically so parallel jobs do not all claim the
     /// same free-memory budget at once.
-    func acquireWorkerSlot(requested: Int, engine: RecognitionEngine) async {
-        while !canStartWorker(requested: requested, engine: engine) {
-            await withCheckedContinuation { cont in
-                slotWaiters.append(cont)
+    ///
+    /// Returns `true` when a slot was taken — the caller then owes exactly
+    /// one `decrementWorkers()`. Returns `false` when the calling task was
+    /// cancelled before a slot came free (or on entry); nothing was taken
+    /// and nothing must be decremented. Deliberately NOT
+    /// @discardableResult: the compiler makes every caller look at it.
+    ///
+    /// Cancellation (night QA 2026-09-25): a waiter used to park on a plain
+    /// continuation that only `decrementWorkers()` released, so a Person
+    /// Finder job the user Stopped sat until ANOTHER job's worker finished a
+    /// video — then took a slot anyway. C++ analogy: a condition-variable
+    /// wait whose predicate now includes a stop_token.
+    func acquireWorkerSlot(requested: Int, engine: RecognitionEngine) async -> Bool {
+        while true {
+            if Task.isCancelled { return false }
+            if canStartWorker(requested: requested, engine: engine) {
+                activeWorkers += 1
+                return true
+            }
+            let id = nextSlotWaiterID
+            nextSlotWaiterID &+= 1
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                    // Runs synchronously on this actor. A task cancelled
+                    // before this point never parks: its onCancel hop (if
+                    // it already fired) found no entry to resume.
+                    if Task.isCancelled {
+                        cont.resume()
+                    } else {
+                        slotWaiters[id] = cont
+                    }
+                }
+            } onCancel: {
+                Task { await self.cancelSlotWaiter(id) }
             }
         }
-        activeWorkers += 1
+    }
+
+    /// Release one cancelled waiter (no-op if it was already woken).
+    private func cancelSlotWaiter(_ id: UInt64) {
+        slotWaiters.removeValue(forKey: id)?.resume()
     }
 
     private func resumeWaitersIfPossible() {
         guard !slotWaiters.isEmpty else { return }
-        let pending = slotWaiters
+        let pending = slotWaiters.values
         slotWaiters.removeAll()
         for cont in pending {
             cont.resume()
@@ -219,39 +256,145 @@ func usedMemoryGB() -> Double {
 
 // MARK: - Pause Gate
 
+/// Who is holding a PauseGate paused. The gate is paused while ANY reason is
+/// held; each owner adds and removes only its own.
+///
+/// Why a set and not a Bool (night QA 2026-09-25, M2): the gate used to have
+/// one `_isPaused` flag with three owners, so any owner's resume undid the
+/// others' pauses — memory relief resumed a Combine the user had paused
+/// under "Resume All"; a network share coming back resumed a scan the user
+/// had paused; a user Resume cleared an active memory pause.
+/// C++ analogy: a std::bitset of hold reasons instead of a single bool.
+enum PauseReason: String, Sendable, Hashable, CaseIterable {
+    /// The Pause/Resume buttons — the public `pause()` / `resume()`.
+    case user
+    /// The gate's own memory auto-pause (`waitIfPaused` sets and clears it).
+    case memory
+    /// VolumeKeepalive: the scanned network volume is unreachable.
+    case volume
+}
+
 /// Cooperative pause gate for structured concurrency.
 /// Tasks call `waitIfPaused()` at safe checkpoints. When paused,
 /// they suspend until resumed — no teardown, no resource leaks.
 actor PauseGate {
-    private var _isPaused = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-    private var autoPauseEnabled = true
-    private var autoPaused = false
+    /// Who holds each reason. A reason is held while its owner set is
+    /// non-empty; a reason with no holders has no key. Owner-less callers
+    /// (the user buttons, the memory loop) share one anonymous token, so for
+    /// them this behaves exactly like a plain set of reasons.
+    ///
+    /// Why owners (adversarial QA on 2f6bce1c): Stop → Start on the same
+    /// scan target before scan #1 drains leaves TWO keepalives on one target
+    /// gate. With a plain set, scan #1's late exit-time resume(.volume)
+    /// opened a gate that scan #2's keepalive still held with the volume
+    /// still down. Each keepalive now pauses under its own id.
+    /// C++ analogy: std::map<Reason, std::set<OwnerId>> — a per-reason
+    /// multi-owner hold, released when the last owner lets go.
+    private var holders: [PauseReason: Set<UUID>] = [:]
+    private static let anonymousOwner = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
 
-    var isPaused: Bool { _isPaused }
+    /// The reasons currently held (by any owner).
+    private var reasons: Set<PauseReason> { Set(holders.keys) }
+    /// Parked waiters, keyed by a per-wait id so a cancelled waiter can
+    /// remove and resume exactly its own continuation.
+    private var waiters: [UInt64: CheckedContinuation<Void, Never>] = [:]
+    private var nextWaiterID: UInt64 = 0
+    private var autoPauseEnabled: Bool
 
-    /// Pause all tasks waiting on this gate.
-    func pause() {
-        _isPaused = true
-        autoPaused = false
+    /// How the gate asks "is memory low right now?". Production always uses
+    /// the process-wide MemoryPressureMonitor; tests inject a fixed answer so
+    /// they neither depend on the host's free RAM (a 7 GB CI runner sits
+    /// under the 4 GB floor) nor poison the shared monitor for other suites.
+    /// C++ analogy: a std::function<bool()> strategy member with a default.
+    private let pressureCheck: @Sendable () async -> Bool
+
+    /// How long the auto-pause loop sleeps between memory re-checks.
+    private let recheckInterval: Duration
+
+    /// The production reading: the shared monitor against the configured floor.
+    static let hostPressureCheck: @Sendable () async -> Bool = {
+        await MemoryPressureMonitor.shared.checkPressure()
     }
 
-    /// Resume all waiting tasks.
-    func resume() {
-        _isPaused = false
-        autoPaused = false
-        let pending = waiters
-        waiters.removeAll()
-        for cont in pending {
-            cont.resume()
+    /// Whether a gate auto-pauses on memory pressure when its creator did
+    /// not say. The app: ON (unchanged). A test host: OFF.
+    ///
+    /// Why a test-host default rather than one opt-out per suite
+    /// (2026-09-25, CI run 36192353105): every gate the app creates — the
+    /// Combine gate, each CatalogScanTarget's scan gate, the Person Finder
+    /// gates — reads the HOST's free RAM against a 4 GB floor. The GitHub
+    /// runner has ~7 GB with ~2 GB free, so ANY test that drives one of
+    /// those pipelines auto-paused on its first checkpoint and waited for
+    /// memory that never came: CombineNeverOverwritesTests one day,
+    /// tripAcrossCountryShapeCatalogsExactlyTheValidMedia the next (a scan's
+    /// probe child waits on its target's gate). Opting out suite by suite
+    /// only fixes the suites someone has already watched hang. Host RAM is
+    /// environment, not the unit under test; the gate's auto-pause logic is
+    /// tested with an injected reading and an explicit `autoPause: true`
+    /// (PauseGateCancellationTests, PauseGateTestHostDefaultTests).
+    /// Pure so both branches are testable. C++ analogy: a constexpr policy
+    /// function the constructor consults when the caller passes std::nullopt.
+    nonisolated static func defaultAutoPause(isTestHost: Bool) -> Bool {
+        !isTestHost
+    }
+
+    /// - Parameter autoPause: `nil` = `defaultAutoPause(isTestHost:)` for this
+    ///   process (on in the app, off in a test host); `true`/`false` = explicit.
+    ///   `setAutoPause(_:)` still overrides later.
+    init(pressureCheck: @escaping @Sendable () async -> Bool = PauseGate.hostPressureCheck,
+         recheckInterval: Duration = .milliseconds(500),
+         autoPause: Bool? = nil) {
+        self.pressureCheck = pressureCheck
+        self.recheckInterval = recheckInterval
+        self.autoPauseEnabled = autoPause
+            ?? Self.defaultAutoPause(isTestHost: TestHostDetection.isTestHost)
+    }
+
+    /// Whether this gate currently consults memory pressure (for tests and
+    /// diagnostics).
+    var isAutoPauseEnabled: Bool { autoPauseEnabled }
+
+    /// Paused for ANY reason (user, memory, volume).
+    var isPaused: Bool { !reasons.isEmpty }
+
+    /// Paused by the user's Pause button specifically.
+    var isUserPaused: Bool { reasons.contains(.user) }
+
+    /// Every reason currently holding the gate (diagnostics and tests).
+    var pauseReasons: Set<PauseReason> { reasons }
+
+    /// The user's Pause. Adds only the user reason.
+    func pause() { pause(.user) }
+
+    /// The user's Resume. Removes only the user reason: a gate still held
+    /// by memory pressure or a down volume stays paused until THAT owner
+    /// releases it. Also wakes every parked waiter so a cancelled one (a
+    /// Stop path: cancel, then resume()) re-checks and returns.
+    func resume() { resume(.user) }
+
+    /// Add `owner`'s hold on `reason` (nil = the shared anonymous owner).
+    /// Idempotent per owner.
+    func pause(_ reason: PauseReason, owner: UUID? = nil) {
+        holders[reason, default: []].insert(owner ?? Self.anonymousOwner)
+    }
+
+    /// Remove `owner`'s hold on `reason` (nil = the anonymous owner) — the
+    /// reason stays while any other owner still holds it — and wake parked
+    /// waiters to re-evaluate: they return if the gate is now open (or they
+    /// were cancelled and no user pause holds them), else they park again.
+    func resume(_ reason: PauseReason, owner: UUID? = nil) {
+        if var owners = holders[reason] {
+            owners.remove(owner ?? Self.anonymousOwner)
+            holders[reason] = owners.isEmpty ? nil : owners
         }
+        wakeAllWaiters()
     }
 
-    /// Toggle pause state. Returns new state.
+    /// Toggle the USER pause. Returns the new user-pause state.
     @discardableResult
     func toggle() -> Bool {
-        if _isPaused { resume() } else { pause() }
-        return _isPaused
+        if reasons.contains(.user) { resume() } else { pause() }
+        return reasons.contains(.user)
     }
 
     /// Enable/disable auto-pause from memory pressure.
@@ -262,13 +405,28 @@ actor PauseGate {
     /// Called by tasks at safe checkpoints (between videos, between probes).
     /// Suspends if paused; returns immediately if not.
     /// Also checks memory pressure and auto-pauses if needed.
+    ///
+    /// While the MEMORY reason is held, waiters poll the pressure reading
+    /// every `recheckInterval` and the first to see relief removes it; other
+    /// reasons park the waiter until their owner's resume.
+    ///
+    /// Cancellation: a cancelled caller returns at once unless the USER
+    /// pause is held (the caller re-checks Task.isCancelled after this
+    /// call). Before 2026-09-25 the memory re-check loop used
+    /// `try? await Task.sleep`, which swallows CancellationError and
+    /// returns immediately — so a cancelled waiter hot-spun on the actor for
+    /// as long as memory stayed low, and a Swift Testing time limit (which
+    /// cancels, then awaits) could never end a test stuck here. A MANUAL
+    /// pause still waits for resume() even when cancelled: Stop paths
+    /// (stopCombine, stopTarget, …) cancel and then call resume(), which
+    /// wakes the parked waiter to see its cancellation. A volume pause does
+    /// NOT hold a cancelled waiter — Stop during an outage must end the scan.
     func waitIfPaused() async {
         // Check memory pressure if auto-pause is enabled
-        if autoPauseEnabled && !_isPaused {
-            let pressureHigh = await MemoryPressureMonitor.shared.checkPressure()
+        if autoPauseEnabled && reasons.isEmpty {
+            let pressureHigh = await pressureCheck()
             if pressureHigh {
-                _isPaused = true
-                autoPaused = true
+                pause(.memory)
                 // Notify on main actor that we auto-paused
                 await MainActor.run {
                     NotificationCenter.default.post(
@@ -280,22 +438,64 @@ actor PauseGate {
             }
         }
 
-        guard _isPaused else { return }
+        while !reasons.isEmpty {
+            let cancelled = Task.isCancelled
+            if cancelled && !reasons.contains(.user) { return }
 
-        if autoPaused {
-            while _isPaused {
-                let stillHigh = await MemoryPressureMonitor.shared.checkPressure()
+            if reasons.contains(.memory) && !cancelled {
+                let stillHigh = await pressureCheck()
                 if !stillHigh {
-                    resume()
-                    break
+                    resume(.memory)
+                    continue
                 }
-                try? await Task.sleep(for: .milliseconds(500))
+                do {
+                    try await Task.sleep(for: recheckInterval)
+                } catch {
+                    // Task.sleep throws only CancellationError: the caller
+                    // was stopped. Loop to the cancellation check above —
+                    // it returns unless the user pause holds this waiter,
+                    // in which case the waiter parks (never spins).
+                    continue
+                }
+            } else {
+                await park()
             }
-            return
         }
+    }
 
-        await withCheckedContinuation { cont in
-            waiters.append(cont)
+    /// Suspend until the next resume(_:) wakes all waiters, or until this
+    /// task is cancelled while no user pause is held.
+    private func park() async {
+        let id = nextWaiterID
+        nextWaiterID &+= 1
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                // Runs synchronously on this actor, so it is ordered before
+                // the onCancel hop below can reach cancelWaiter(_:).
+                if Task.isCancelled && !reasons.contains(.user) {
+                    cont.resume()
+                } else {
+                    waiters[id] = cont
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id) }
+        }
+    }
+
+    /// Release one cancelled waiter — unless the user pause holds it, in
+    /// which case the Stop path's resume() will wake it.
+    private func cancelWaiter(_ id: UInt64) {
+        guard !reasons.contains(.user) else { return }
+        waiters.removeValue(forKey: id)?.resume()
+    }
+
+    private func wakeAllWaiters() {
+        guard !waiters.isEmpty else { return }
+        let pending = waiters.values
+        waiters.removeAll()
+        for cont in pending {
+            cont.resume()
         }
     }
 }

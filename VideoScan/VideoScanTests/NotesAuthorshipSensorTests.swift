@@ -42,9 +42,9 @@ struct NotesAuthorshipSensorTests {
     static let notesWriters: Set<String> = [
         "BalanceAudioJob.swift", "BundleImporter.swift", "BundleModels.swift", "CleanupJob.swift",
         "CyberBrainModels.swift", "DocumentIngest.swift", "HoldoutReviewQueue.swift", "MachineNote.swift", "MetadataCache.swift",
-        "PersonEditSheet.swift", "PersonFinderTypes.swift", "RebuildAudioJob.swift", "ReformatJob.swift",
+        "PersonEditSheet.swift", "PersonFinderTypes.swift", "PromoteToArchiveJob+Steps.swift", "RebuildAudioJob.swift", "ReformatJob.swift",
         "ScanEngine.swift", "ScanTargetPersistence.swift", "TranscodeJob.swift", "TrimJob.swift",
-        "VideoRecord+Clone.swift", "VideoScanModel+Combine.swift", "VideoScanModel+DuplicateEnrichment.swift",
+        "VideoRecord+Clone.swift", "VideoScanModel+ArchiveUpdate.swift", "VideoScanModel+Combine.swift", "VideoScanModel+DuplicateEnrichment.swift",
         "VideoScanModel+MasterArchive.swift", "VideoScanModel+NotesRepair.swift", "VideoScanModel+PeopleTags.swift",
         "VideoScanModel+ProbeEngine.swift", "VideoScanModel+Relocate.swift", "VideoScanModel+RepairLifecycle.swift",
         "VideoScanModel+RescanPreservation.swift", "VideoScanModel+ScanMergeMoveIdentity.swift",

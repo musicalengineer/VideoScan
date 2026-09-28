@@ -89,6 +89,33 @@ struct ArchiveAngelWholeJobTests {
         #expect(job.plan.log.contains { $0.contains("access copy: done") }, "\(job.plan.log)")
     }
 
+    /// QA MAJOR-1 (2026-09-25): an Angel Check already verifying the file
+    /// when Rick presses Prepare — the Prepare waits for that verdict
+    /// instead of recording "already running" and cutting an unbalanced copy.
+    @Test func prepareWaitsForAVerifyAlreadyRunningOnTheSameFile() async throws {
+        let b = try bench("wholejob_check_race"); defer { b.sb.cleanup() }
+        let url = try await clip("test_wj_checked.mp4", in: b.sb.sources)
+        let rec = record(url)
+        b.model.records = [rec]
+        var shape = AudioVerifyShape(); shape.audioStreams = 1; shape.audioCodec = "aac"; shape.audioChannels = 2
+        let healthy = AudioVerifyDiagnosis(findings: [], shape: shape, balanceAnalysis: nil)
+        let inFlight = try #require(b.center.startVerifyAudio(record: rec, model: b.model, diagnoseOverride: { _ in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)   // a long tape
+            return healthy
+        }))
+        let job = await run(b, [rec])
+        await inFlight.task?.value
+        guard case .finished = job.state else { Issue.record("\(job.state)"); return }
+        let entry = try #require(job.plan.entries.first)
+        let verify = try #require(entry.steps.first { $0.kind == .verifyAudio })
+        #expect(verify.state == .done, "verify step was \(verify.state): \(verify.note)")
+        #expect(!verify.note.contains("already running"))
+        let balance = try #require(entry.steps.first { $0.kind == .balanceAudio })
+        #expect(!balance.note.contains("no audio check result"), "\(balance.note)")
+        #expect(inFlight.state.isActive == false, "the Angel job must not cancel a verify it does not own")
+        if case .cancelled = inFlight.state { Issue.record("the in-flight verify was cancelled") }
+    }
+
     @Test func aSourceThatVanishesIsNamedAndTheBatchGoesOn() async throws {
         let b = try bench("wholejob_vanish"); defer { b.sb.cleanup() }
         let a = try await clip("test_wj_keep.mp4", in: b.sb.sources)

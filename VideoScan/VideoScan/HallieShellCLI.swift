@@ -295,6 +295,9 @@ enum HallieShellCLI {
             self.composeAnswer = composeAnswer
         }
 
+        /// CLI-only: the real Application Support (CyberBrain, catalog) on
+        /// purpose — `--hallie-shell` is Rick's tool, not a test host. Never
+        /// a test default; tests inject their own Dependencies.
         static var production: Dependencies {
             var production = Dependencies(
                 loadCatalog: { FileBackedCatalogSource.loadRecords(from: $0) },
@@ -306,9 +309,15 @@ enum HallieShellCLI {
                         var isDirectory: ObjCBool = false
                         guard fm.fileExists(atPath: requested.path,
                                             isDirectory: &isDirectory) else { return nil }
-                        return isDirectory.boolValue
+                        let raw = isDirectory.boolValue
                             ? FamilyGraphFileLoader(originalsDirectory: requested).loadNewest()
                             : GedcomFamilyGraph(fileURL: requested)
+                        // The rulings beside that GEDCOM (if any) apply to an
+                        // explicit --gedcom too — the same ruled view as the
+                        // default path (codex #1710 "other graph construction
+                        // paths"). Read-only: nothing is written.
+                        let folder = isDirectory.boolValue ? requested : requested.deletingLastPathComponent()
+                        return raw?.applyingIdentityRulings(FamilyIdentityDecisions.load(from: folder))
                     }
                     // Default path = the promoted artifact only, cached
                     // for the life of the shell process (codex #792).
@@ -1009,9 +1018,9 @@ enum HallieShellCLI {
             // biography, 2026-09-10) just closes it — same wording as the
             // chat window (HallieClarificationDecline); a which-one keeps
             // the policy below.
-            if pending.value.stage == .galleryOffer, HallieClarificationDecline.matches(question) {
+            if pending.value.stage.isOffer, HallieClarificationDecline.matches(question) {
                 state.pendingClarification = nil
-                let line = HallieClarificationDecline.reply(for: .galleryOffer)
+                let line = HallieClarificationDecline.reply(for: pending.value.stage)
                 output(line)
                 let event = transcriptEvent(
                     kind: .assistant, text: line,
@@ -1040,7 +1049,12 @@ enum HallieShellCLI {
                 // typed name / year / number afterwards still selects.
             } else if decision == .abandon {
                 state.pendingClarification = nil
-                output(HallieClarificationPolicy.abandonNote)
+                // An unanswered OFFER just lapses (the chat window never
+                // says anything either); only a which-one question is
+                // acknowledged as set aside.
+                if !pending.value.stage.isOffer {
+                    output(HallieClarificationPolicy.abandonNote)
+                }
                 // fall through: answer THIS question as a fresh turn
             } else {
                 return await continueClarification(
@@ -1777,6 +1791,7 @@ enum HallieShellCLI {
             originEncoder: record.originEncoder,
             inferredRecordDate: record.inferredRecordDate,
             inferredDateConfidence: record.inferredDateConfidence,
+            inferredDateRange: record.inferredDateRange,
             filename: record.filename.isEmpty ? nil : record.filename)
         guard resolution.precision <= .year else { return nil }
         return resolution.year

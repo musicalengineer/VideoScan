@@ -122,7 +122,7 @@ struct FindPersonProgressLoggingTests {
         let elapsed = CFAbsoluteTimeGetCurrent() - start
 
         #expect(checksum > 10_000_000)
-        #expect(elapsed < 5,
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 5),
                 "100k progress lines took \(elapsed)s; budget is 5s")
     }
 }

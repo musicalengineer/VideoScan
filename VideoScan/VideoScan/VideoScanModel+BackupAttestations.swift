@@ -140,10 +140,12 @@ enum ArchiveAttestationJournal {
             data.append(try encoder.encode(e))
             data.append(0x0A)
         }
-        let fd = try ArchivePromoteEngine.openIndexFile(root: rootPath, name: filename, mustExist: false)
-        defer { close(fd) }
-        try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: false,
-                                               label: "attestation journal append (\(entries.count) line(s))")
+        try ArchiveIndexLock.withExclusive(root: rootPath, holder: "attestation journal append") {
+            let fd = try ArchivePromoteEngine.openIndexFile(root: rootPath, name: filename, mustExist: false)
+            defer { close(fd) }
+            try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: false,
+                                                   label: "attestation journal append (\(entries.count) line(s))")
+        }
     }
 
     /// Every entry, in file order. Unparseable lines are skipped; a

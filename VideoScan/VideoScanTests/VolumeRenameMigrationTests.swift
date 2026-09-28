@@ -631,7 +631,7 @@ struct VolumeRenameMigrationTests {
         }
         #expect(migrated == 100_000)
         #expect(mismatched == 0)
-        #expect(elapsed < .seconds(15),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(15)),
                 "100k-record migration took \(elapsed) — over the 15 s honest-progress budget; the feature now needs a progress UI")
     }
 

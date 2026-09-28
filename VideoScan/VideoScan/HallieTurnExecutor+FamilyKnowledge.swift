@@ -40,7 +40,7 @@ extension HallieTurnExecutor {
         /// The latest four-digit birth year recorded anywhere in the tree.
         static func latestBirthYear(in graph: GedcomFamilyGraph) -> Int? {
             var latest: Int?
-            for person in graph.people.values {
+            for person in graph.people.values where !graph.isHidden(person.id) {
                 guard let year = trailingYear(person.birthDate) else { continue }
                 latest = max(latest ?? year, year)
             }
@@ -183,7 +183,17 @@ extension HallieTurnExecutor {
                 answerPlan: HallieAnswerPlan(route: result.route, shape: .fixed, fallbackText: prose),
                 composedBy: result.composedBy,
                 transcriptText: nil,
-                subjectLifeStatus: result.subjectLifeStatus)
+                // Everything but the wording passes through (GH #206: every
+                // copy helper carries every field — HallieResultCopyRoundTripTests).
+                attachments: result.attachments,
+                performsFirstOfferedAction: result.performsFirstOfferedAction,
+                immediateOfferedAction: result.immediateOfferedAction,
+                subjectLifeStatus: result.subjectLifeStatus,
+                refinableQuery: result.refinableQuery,
+                retryOffer: result.retryOffer,
+                mode: result.mode,
+                modeForce: result.modeForce,
+                superlative: result.superlative)
         }
 
         /// A not-found answer that explains the tree's reach and offers the
@@ -218,7 +228,8 @@ extension HallieTurnExecutor {
                 refinableQuery: result.refinableQuery,
                 retryOffer: result.retryOffer,
                 mode: result.mode,
-                modeForce: result.modeForce)
+                modeForce: result.modeForce,
+                superlative: result.superlative)
         }
     }
 }

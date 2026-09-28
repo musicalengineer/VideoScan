@@ -191,3 +191,12 @@ message, acknowledge its numeric ID explicitly. Use `inbox` before touching a
 shared surface when delivery is uncertain. Command examples and limitations are
 in `docs/team-channel/README.md`. Native session subagents do not use this
 channel.
+
+### Codex review scope (Rick, 2026-09-26)
+Codex usage is metered per token on extra credits. A review brief from Claude
+names a SHA range, the files in scope, and the invariant to attack. Stay inside
+that scope: read the named files and their direct callers, run the named tests,
+and do not explore the wider repo unless the brief says so or a finding
+requires it (say so in the verdict). Report findings as claims with file:line
+and a reproduction, ranked by data-loss risk first. Silence on a scoped file is
+a verdict; state it as "read, no findings" rather than omitting it.

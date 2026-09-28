@@ -149,12 +149,16 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     }
 
     var scanTask: Task<Void, Never>?
-    let pauseGate = PauseGate()
+    /// The scan's cooperative pause point (manual Pause, volume keepalive,
+    /// memory auto-pause). Injectable so a test can hand the scan a gate
+    /// whose memory reading it controls; production always takes the default.
+    let pauseGate: PauseGate
     private var taskStarted: Date?
     private var timerTask: Task<Void, Never>?
 
-    init(searchPath: String) {
+    init(searchPath: String, pauseGate: PauseGate = PauseGate()) {
         self.searchPath = searchPath
+        self.pauseGate = pauseGate
         self.isReachable = VolumeReachability.isReachable(path: searchPath)
     }
 

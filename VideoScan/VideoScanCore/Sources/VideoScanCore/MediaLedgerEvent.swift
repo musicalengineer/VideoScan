@@ -73,6 +73,18 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         /// "unmarked"), performer, title (each only when set). by: rick.
         /// Appended at the END — the on-disk vocabulary is append-only.
         case familyMusic
+        /// Update… (Rick 2026-09-27): an ARCHIVED file's name and/or date
+        /// was changed; the file moved, inside the Master Archive, to where
+        /// Promote's rule puts that name + date. detail: from / to
+        /// (archive-relative paths), reason ("Name: A → B; Date: …; Folder:
+        /// …"), date + confidence (what it is filed under now), fixity.
+        /// by: rick. Appended at the END — the vocabulary is append-only.
+        case archiveUpdated
+        /// An Update that failed after it had started changing things.
+        /// detail: from, to, reason, outcome (rolledBack / incompleteRecovery
+        /// / mixedState), location (mixed state: where the original is).
+        /// by: rick.
+        case archiveUpdateRolledBack
     }
 
     /// Who did it. "rick" for a human gesture; the app's own verbs are
@@ -126,6 +138,18 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         /// Family Music: who is playing, and what (free text, optional).
         public static let performer = "performer"
         public static let title = "title"
+        /// Update… (2026-09-27): archive-relative paths before / after.
+        public static let from = "from"
+        public static let to = "to"
+        /// A failed Update: what actually happened ("rolledBack" /
+        /// "incompleteRecovery" / "mixedState") and, for a mixed state,
+        /// where the archived original IS ("" = not found by identity).
+        public static let outcome = "outcome"
+        public static let location = "location"
+        /// Locked archive files (2026-09-27): "true" / "false" on an
+        /// `archived` or `archiveUpdated` line — false = the file landed but
+        /// its user-immutable flag could not be set (a warning, not a failure).
+        public static let locked = "locked"
     }
 
     public let at: Date

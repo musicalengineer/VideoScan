@@ -288,7 +288,7 @@ struct ArchivistKeywordMatchingTests {
         let elapsed = ContinuousClock.now - started
 
         #expect(result.evidence.totalMatchCount == 1_000)
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "keyword token scan took \(elapsed) over 100k snapshots")
     }
 }

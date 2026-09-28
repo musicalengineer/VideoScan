@@ -126,6 +126,53 @@ final class MediaLedger: @unchecked Sendable {
         return task
     }
 
+    /// Append a batch on the same ordered worker and REPORT whether it
+    /// reached disk (Refile step (e), codex review #5: a queued append that
+    /// fails later must not read as success). Never on main.
+    func appendConfirmed(_ events: [MediaLedgerEvent]) async -> Bool {
+        guard !events.isEmpty else { return true }
+        let data: Data
+        do {
+            data = try MediaLedgerEvent.encodeLines(events)
+        } catch {
+            mediaLedgerLog.error("ledger: could not encode \(events.count) event(s): \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+        let previous: Task<Void, Never>? = lock.withLock {
+            revision &+= 1
+            narratedCache.removeAll(keepingCapacity: true)
+            appendCount += 1
+            lineCount += events.count
+            return tail
+        }
+        let url = fileURL
+        let writer = self.writer
+        let count = events.count
+        let work = Task(priority: .utility) { [self] () -> Bool in
+            await previous?.value
+            return await self.writeOffMainReporting(data, count: count, url: url, writer: writer)
+        }
+        let tailTask = Task(priority: .utility) { _ = await work.value }
+        lock.withLock { tail = tailTask }
+        return await work.value
+    }
+
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated private func writeOffMainReporting(_ data: Data, count: Int, url: URL, writer: Writer) async -> Bool {
+        do {
+            try writer(data, url)
+            announceIfFirst(url)
+            return true
+        } catch {
+            let text = (error as? Failure)?.description ?? error.localizedDescription
+            appLog.write("ledger: \(count) line(s) not written to \(url.path) — \(text)")
+            mediaLedgerLog.error("ledger append failed: \(text, privacy: .public)")
+            return false
+        }
+    }
+
     /// Wait for every append / mirror issued so far to land.
     func waitForPendingWrites() async {
         let t: Task<Void, Never>? = lock.withLock { tail }
@@ -211,6 +258,56 @@ final class MediaLedger: @unchecked Sendable {
             throw Failure.io("rename \(mirrorPartialName) → \(mirrorFilename)", errno: errno)
         }
         guard fsync(indexFD) == 0 else { throw Failure.io("fsync \(MasterArchiveLayout.indexFolder)", errno: errno) }
+    }
+
+    // MARK: Rename carry-through (Rick 2026-09-25)
+
+    /// A Catalog rename that touched the archive rewrites the old names in
+    /// place — HERE, because the archive's `media-ledger.jsonl` is only a
+    /// COPY of this file: after the rewrite, when any line changed, the
+    /// mirror is re-copied into `archiveRoot` (QA m2 — the rename never
+    /// edits the copy itself). Chained on the same ordered worker as
+    /// appends and mirrors, so no append can land between the read and the
+    /// atomic replace (the whole-file replace would drop it). Exact values
+    /// only (ArchiveIndexRename's rules); a damaged line is left alone.
+    /// `archiveRoot` nil (offline / wrong volume) = no mirror.
+    @discardableResult
+    func rewriteExactValues(_ replacements: ArchiveIndexRename.Replacements,
+                            mirrorIntoArchiveRoot archiveRoot: String?) -> Task<Void, Never> {
+        let previous: Task<Void, Never>? = lock.withLock { tail }
+        let url = fileURL
+        let task = Task(priority: .utility) { [self] in
+            await previous?.value
+            let changed = await self.rewriteOffMain(url: url, replacements: replacements)
+            if changed > 0, let archiveRoot {
+                await Self.mirrorOffMain(source: url, root: archiveRoot)
+            }
+        }
+        lock.withLock { tail = task }
+        return task
+    }
+
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated private func rewriteOffMain(url: URL, replacements: ArchiveIndexRename.Replacements) async -> Int {
+        do {
+            let changed = try ArchiveIndexRename.rewriteLedgerFile(at: url, replacements: replacements)
+            if changed > 0 {
+                // The narrated sentences quote filenames — drop them.
+                lock.withLock {
+                    revision &+= 1
+                    narratedCache.removeAll(keepingCapacity: true)
+                }
+                mediaLedgerLog.info("ledger: rename updated \(changed) line(s) in \(url.path, privacy: .public)")
+            }
+            return changed
+        } catch {
+            let text = (error as? ArchiveIndexRename.Failure)?.errorDescription ?? error.localizedDescription
+            appLog.write("ledger: rename not carried into \(url.path) — \(text)")
+            mediaLedgerLog.error("ledger rename rewrite failed: \(text, privacy: .public)")
+            return 0
+        }
     }
 
     static func mirrorURL(rootPath: String) -> URL {

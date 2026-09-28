@@ -641,7 +641,11 @@ struct ArchiveAngelCurationSimulationTests {
         #expect(after.distinct >= 60, "Phase 1: mostly new files each round (\(after.distinct))")
         #expect(after.maxRepeats <= 3, "no file proposed more than three times (\(after.maxRepeats))")
         #expect(after.familiesTouched >= 60)
-        #expect(after.seconds < 5, "10 rounds over 10k records in \(after.seconds) s")
+        // Debug wall-clock budget: 5 s on our machines; widened only on a
+        // GitHub-hosted runner (shared VM, measured 5.15–5.79 s there,
+        // 2026-09-24/25) by the one shared rule, PerformanceLane.debugCeiling.
+        #expect(after.seconds < PerformanceLane.debugCeiling(seconds: 5),
+                "10 rounds over 10k records in \(after.seconds) s")
     }
 
     @Test("SCALE (codex #1573): 100k candidates, a tenth of them with skips — the family pass + one selection under 4 s, ranked output, one per family")
@@ -660,7 +664,15 @@ struct ArchiveAngelCurationSimulationTests {
         }
         let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
         print("[angel-sim] 100k family pass + select: \(String(format: "%.2f", seconds)) s")
-        #expect(seconds < 4, "100k in \(seconds) s")
+        print("[angel-perf] familyPassSelect100k \(PerformanceLane.configurationName) \(elapsed)")
+        // Budget kept at 4 s (measured 2026-09-23, suite alone, 5 reps
+        // interleaved, M5 Pro): Debug median 1.91 s (2.66 s before the
+        // RankKey sort). The full Debug battery on the M4 Max ran the old
+        // code at 4.17 s — ×1.57 its M5-alone time; the same factor puts
+        // this at ~3.0 s, inside the budget without widening it.
+        // Hosted-runner factor only (GitHub virtual M1s, 2–3× slower); no load
+        // headroom — the budget is deliberately not widened locally.
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(4)), "100k in \(seconds) s (\(PerformanceLane.loadDescription()))")
     }
 
     @Test("a promote-everything user is never slowed down: Phase 1 picks the same top ten as today on round one")

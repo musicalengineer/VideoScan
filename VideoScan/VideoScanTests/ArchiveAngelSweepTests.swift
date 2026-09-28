@@ -78,6 +78,7 @@ struct ArchiveAngelSweepTests {
         let started = ContinuousClock.now
         await sweep.runAndWait(reason: "test")
         let elapsed = ContinuousClock.now - started
+        print("[angel-perf] sweep100k \(PerformanceLane.configurationName) \(elapsed) longestSlice \(sweep.longestSliceSeconds)")
         guard case .done = sweep.status else { Issue.record("expected .done, got \(sweep.status)"); return }
         #expect(elapsed < PerformanceLane.debugCeiling(.seconds(10)), "100k assessment took \(elapsed)")
         let sliceCeiling = PerformanceLane.debugCeiling(.milliseconds(50))

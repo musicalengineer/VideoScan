@@ -52,7 +52,14 @@ extension ArchiveView {
                 ArchiveProgressBar(progress: archiveProgress)
                 // Archive Angel — ONE strip (Rick 2026-09-22), its cards and
                 // sheets (ArchiveAngel/UI/ArchiveAngelStrip.swift, S2).
-                ArchiveAngelStrip(angel: model.archiveAngel, revealArchived: { revealArchivedForAngel() })
+                // Bounded (bug 2026-09-24): the strip's turndown, hygiene
+                // card and ready batch have no height limit of their own;
+                // unbounded they pushed this header and the sidebar top
+                // under the title bar. Hug-then-scroll, capped to a share
+                // of the pane (ArchiveView+Layout.swift).
+                HuggingScrollRegion(maxHeight: ArchivePaneLayout.angelRegionCap(paneHeight: fileListHeight)) {
+                    ArchiveAngelStrip(angel: model.archiveAngel, revealArchived: { revealArchivedForAngel() })
+                }
                 // The Helper's nudge list ("It looks like N files are
                 // ready…") was retired in S4 — the strip above carries the
                 // same Ready / Needs a date numbers.
@@ -309,6 +316,20 @@ extension ArchiveView {
             Label("Show Archive Details", systemImage: "info.circle")
         }
         .disabled(count != 1)
+
+        // Update… (Rick 2026-09-27): change an ARCHIVED file's name and/or
+        // date; the folder follows the date. One file at a time; nothing is
+        // touched until the sheet's Update button.
+        if count == 1, let rec = recs.first, model.archiveCopyForUpdate(rec) != nil {
+            Button {
+                openUpdateSheet(for: rec)
+            } label: {
+                Label("Update…", systemImage: "square.and.pencil")
+            }
+            .disabled(model.isReadOnly || model.masterArchive == nil)
+            .help("Change this archived file's name or date. The archive moves it to the folder its date says — you never pick a folder.")
+            .accessibilityIdentifier("archive.row.update")
+        }
 
         // File Journey (Rick 2026-08-19): in the archive the journey IS
         // the provenance — origin, repairs, promote, rename — so the

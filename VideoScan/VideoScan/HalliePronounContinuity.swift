@@ -41,15 +41,42 @@ enum HalliePronounContinuity {
     /// The question with its first bare pronoun replaced by the last
     /// answer's people ("they" → "Rick and Donna"; "he"/"she" → the one
     /// person when there was exactly one). Nil when nothing applies.
-    static func rewrite(_ question: String, lastPeople: [String]) -> (question: String, note: String)? {
-        let people = lastPeople.filter { !$0.isEmpty && !isThirdPersonPronoun($0) }
-        guard !people.isEmpty else { return nil }
+    ///
+    /// `isKnownPerson` (live 2026-09-23): "tell me about thankful pratt and
+    /// her husband" after a Timmy answer became "…and Timmy's husband". A
+    /// known person named EARLIER in the same sentence is a singular
+    /// pronoun's antecedent: the pronoun is bound to THAT name ("…and
+    /// thankful pratt's husband"), with or without conversation memory; a
+    /// plural pronoun there is left as typed. Default: no oracle, the old
+    /// behaviour.
+    static func rewrite(
+        _ question: String,
+        lastPeople: [String],
+        isKnownPerson: (String) -> Bool = { _ in false }
+    ) -> (question: String, note: String)? {
         let tokens = question.split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "’" && $0 != "-" })
             .map(String.init)
+        if let first = tokens.firstIndex(where: isThirdPersonPronoun),
+           let antecedent = namedAntecedent(in: tokens[..<first], isKnownPerson: isKnownPerson) {
+            guard singular.contains(tokens[first].lowercased()) else { return nil }
+            return bind(question, tokens: tokens, index: first, to: [antecedent],
+                        note: "'\(tokens[first])' = \(antecedent) (named earlier in the question)")
+        }
+        let people = lastPeople.filter { !$0.isEmpty && !isThirdPersonPronoun($0) }
+        guard !people.isEmpty else { return nil }
         guard let index = tokens.firstIndex(where: { token in
             let key = token.lowercased()
             return plural.contains(key) || (singular.contains(key) && people.count == 1)
         }) else { return nil }
+        return bind(question, tokens: tokens, index: index, to: people,
+                    note: "'\(tokens[index])' = \(joinNames(people)) (from the last answer)")
+    }
+
+    /// Replace the pronoun at `index` with `people` (possessive where the
+    /// grammar needs it). Nil when the word cannot be found again.
+    private static func bind(
+        _ question: String, tokens: [String], index: Int, to people: [String], note: String
+    ) -> (question: String, note: String)? {
         let pronoun = tokens[index]
         let key = pronoun.lowercased()
         // "her" is both object and possessive. Before a kin noun it is the
@@ -73,7 +100,38 @@ enum HalliePronounContinuity {
         guard let range = question.range(of: #"\b"# + NSRegularExpression.escapedPattern(for: pronoun) + #"\b"#,
                                          options: [.regularExpression, .caseInsensitive]) else { return nil }
         let rewritten = question.replacingCharacters(in: range, with: replacement)
-        return (rewritten, "'\(pronoun)' = \(joinNames(people)) (from the last answer)")
+        return (rewritten, note)
+    }
+
+    /// Words that are never (part of) a name before a pronoun.
+    static let antecedentFillers: Set<String> = [
+        "a", "an", "and", "or", "but", "the", "of", "to", "in", "on", "at", "for", "with", "from",
+        "about", "tell", "me", "us", "show", "find", "who", "what", "where", "when", "why", "how",
+        "which", "was", "were", "is", "are", "did", "does", "do", "had", "has", "have", "can",
+        "could", "would", "please", "hallie", "hi", "hey", "ok", "okay", "so", "now", "then",
+        "i", "my", "you", "your", "we", "our", "it", "this", "that", "all", "any", "some",
+        "married", "marry", "born", "die", "died", "live", "lived", "videos", "video", "photos",
+    ]
+
+    /// The run of 1–4 tokens (no filler word inside) before the pronoun that
+    /// is a known person, longest first; nil when none is. A single word must also not be ordinary
+    /// English ("rose", "will"), so a 39k-person tree's odd given names
+    /// never pass for an antecedent.
+    static func namedAntecedent(in before: ArraySlice<String>, isKnownPerson: (String) -> Bool) -> String? {
+        let words = Array(before)
+        guard !words.isEmpty else { return nil }
+        for length in stride(from: min(4, words.count), through: 1, by: -1) {
+            for start in 0...(words.count - length) {
+                let span = words[start..<(start + length)]
+                guard !span.contains(where: {
+                    antecedentFillers.contains($0.lowercased()) || isThirdPersonPronoun($0)
+                }) else { continue }
+                if length == 1, HallieEnglishWords.contains(span[span.startIndex].lowercased()) { continue }
+                let name = span.joined(separator: " ")
+                if isKnownPerson(name) { return name }
+            }
+        }
+        return nil
     }
 
     /// What Hallie says when a pronoun reaches the tree route with nothing

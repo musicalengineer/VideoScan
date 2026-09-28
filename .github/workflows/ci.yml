@@ -61,7 +61,7 @@ jobs:
     # on hosted runners (actions/runner-images#13096). The build has no
     # choice but to use 26.x — see Select Xcode — so the budget has to
     # absorb it. Revisit once a real run gives us the actual number.
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: write
 
@@ -125,15 +125,70 @@ jobs:
       # Testing's own discovery. Goal: get 60 suites running sequentially.
       # See docs/gh-testing-19-may.md for prior binary-search findings.
       - name: Unit tests — pure-logic suites
-        timeout-minutes: 20
+        # 2026-09-25: the plan is ~9,000 tests; ricksm5 needs ~20 min, the
+        # hosted runner ~2.15x that (~47 min, measured 9/25). 20 min was
+        # timing out every push.
+        timeout-minutes: 75
         run: |
           echo "## Unit Tests — Pure-Logic Suites" >> $GITHUB_STEP_SUMMARY
           START=$(date +%s)
+          # ── Hang watchdog (fix/ci-red-4, run 36214064340) ──
+          # The test host prints TEST_HOST_HEARTBEAT every 10 s from its main
+          # run loop (VideoScan/main.swift). No heartbeat for 180 s means the
+          # main thread is blocked or spinning: `sample` the host so the log
+          # names the stack, then once more 5 min later (identical stack =
+          # blocked, moving = spinning). Diagnostic only: never kills, writes
+          # to the step log (not test-output.log), cannot change the verdict.
+          # sudo -n fallback: an unsigned host may refuse task_for_pid.
+          (
+            set +e
+            # `sleep & wait` so the TERM below lands at once and takes the
+            # sleeper with it (no orphan holding the step's stdout open).
+            trap 'kill "$NAP" 2>/dev/null; exit 0' TERM
+            nap() { sleep "$1" & NAP=$!; wait "$NAP"; }
+            n=0
+            while [ "$n" -lt 2 ]; do
+              nap 30
+              last=$(grep -a -o 'TEST_HOST_HEARTBEAT epoch=[0-9]*' test-output.log 2>/dev/null | tail -1 | sed 's/.*epoch=//')
+              case "$last" in ''|*[!0-9]*) continue ;; esac
+              stale=$(( $(date +%s) - last ))
+              [ "$stale" -gt 180 ] || continue
+              pid=$(pgrep -f 'Debug/VideoScan.app/Contents/MacOS/VideoScan' | head -1)
+              [ -n "$pid" ] || continue
+              echo "::warning::HANG WATCHDOG: no TEST_HOST_HEARTBEAT for ${stale}s; sampling test host pid $pid"
+              sample "$pid" 10 -file "hang-sample-$n.txt" >/dev/null 2>&1 \
+                || sudo -n sample "$pid" 10 -file "hang-sample-$n.txt" >/dev/null 2>&1
+              echo "::group::HANG WATCHDOG sample $n (pid $pid, heartbeat stale ${stale}s)"
+              cat "hang-sample-$n.txt" 2>/dev/null || echo "(sample failed)"
+              echo "::endgroup::"
+              n=$((n + 1))
+              nap 300
+            done
+          ) &
+          HANG_WATCHDOG_PID=$!
+          # Coverage is OFF, deliberately (2026-09-26, run 36202513830).
+          # It was never real: "Build (app + tests)" runs build-for-testing
+          # WITHOUT -enableCodeCoverage, so the binary has no profile
+          # counters, and -enableCodeCoverage YES here only made xcodebuild
+          # set LLVM_PROFILE_FILE to a real path. xccov reported "(no
+          # coverage data)" on every run, and PerformanceLaneTests' sensor
+          # ("env rule agrees with the live binary's instrumentation") went
+          # red on the contradiction. Real coverage needs the flag on BOTH
+          # steps and an instrumented (slower) Debug run — Rick's call.
           # TEST_RUNNER_ prefix: xcodebuild strips it and injects the var
           # into the test host process. CICanaryTests.mustFail is gated on
           # GITHUB_ACTIONS (CI-only since 2026-06-09 — it polluted local
           # full-suite totals); without this the host never sees the var
           # and the canary check below would hard-fail as GHOST-PASS.
+          #
+          # EXIT CODE (fix/ci-red-5, run 36223041786): this step's shell is
+          # `bash -e` WITHOUT pipefail, so `xcodebuild … | tee … || X=$?`
+          # recorded TEE's status — always 0 — and the verdict reported
+          # "Unexpected xcodebuild exit 0" on the first run ever to reach it.
+          # PIPESTATUS[0] is xcodebuild's own status. `set +e` around the
+          # pipeline keeps -e (or a future pipefail) from aborting the step
+          # before the status is read.
+          set +e
           TEST_RUNNER_GITHUB_ACTIONS=true \
           xcodebuild test-without-building \
             -project VideoScan/VideoScan.xcodeproj \
@@ -142,11 +197,15 @@ jobs:
             -configuration Debug \
             -destination 'platform=macOS' \
             -derivedDataPath DerivedData \
-            -enableCodeCoverage YES \
+            -enableCodeCoverage NO \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
-            2>&1 | tee test-output.log || TEST_EXIT=$?
+            2>&1 | tee test-output.log
+          TEST_EXIT=${PIPESTATUS[0]}
+          set -e
+          echo "xcodebuild exit status: $TEST_EXIT"
+          kill "$HANG_WATCHDOG_PID" 2>/dev/null || true
           END=$(date +%s)
           ELAPSED=$((END - START))
           # Swift Testing emits ✔/✘/◇ markers; legacy XCTest emits "Test Case ..."
@@ -212,7 +271,7 @@ jobs:
 
           # Canaries alone do not prove completion. Reject interrupted runs,
           # unexpected exit codes, and failures missed by the display counters.
-          python3 scripts/ci_test_verdict.py test-output.log --exit-code "${TEST_EXIT:-0}"
+          python3 scripts/ci_test_verdict.py test-output.log --exit-code "$TEST_EXIT"
 
       # ── Reporting ───────────────────────────────────────────────────
 
@@ -222,22 +281,8 @@ jobs:
           chmod +x scripts/ci_test_summary.sh
           scripts/ci_test_summary.sh TestResults.xcresult
 
-      - name: Coverage Summary
-        if: always()
-        run: |
-          if [ -d TestResults.xcresult ]; then
-            echo "## Coverage by File" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            xcrun xccov view --report --files-for-target VideoScan.app TestResults.xcresult \
-              | awk -F'  +' 'NR>2 && $3 != "" {printf "%-50s %s\n", $2, $3}' \
-              >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "(coverage data unavailable)" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo ""
-            echo "## Overall"
-            xcrun xccov view --report --only-targets TestResults.xcresult 2>/dev/null || echo "(no coverage data)"
-          else
-            echo "No TestResults.xcresult found" >> $GITHUB_STEP_SUMMARY
-          fi
+      # (Coverage Summary step removed 2026-09-26: coverage was never
+      # collected — see the comment on the unit-test step.)
 
       - name: Upload Test Results
         if: always()

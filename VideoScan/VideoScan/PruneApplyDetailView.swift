@@ -14,45 +14,63 @@ struct PruneApplyDetailView: View {
     /// but the cap keeps the view honest either way.
     static let visibleCap = 2_000
 
+    // Split into named pieces: one inline body timed out CI's type checker
+    // budget (PruneApplyDetailView.swift:17, 1970 ms, nightly run 36121118356).
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             if !job.rows.isEmpty {
-                let visible = job.rows.prefix(Self.visibleCap)
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        Section(header: PruneApplyTableHeader()) {
-                            ForEach(visible) { row in
-                                PruneApplyRowView(row: row)
-                                Divider()
-                            }
-                            if job.rows.count > visible.count {
-                                Text("… and \(job.rows.count - visible.count) more")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.secondary)
-                                    .padding(PruneApplyTableLayout.rowPadding)
-                            }
-                        }
-                    }
-                }
-                .frame(maxHeight: 520)
-                .background(RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(NSColor.controlBackgroundColor)))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.primary.opacity(0.14)))
+                rowsTable
             } else {
-                Text(job.isQueued
-                     ? "Waiting its turn — nothing is checked or moved until the batch before finishes. Every copy is checked when this batch starts."
-                     : (job.state.isActive ? "Working out what may go…" : "Nothing was moved."))
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
+                emptyMessage
             }
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 10)
             .fill(Color(NSColor.textBackgroundColor).opacity(0.5)))
         .accessibilityIdentifier("mfo.pruneCopies.detail")
+    }
+
+    /// The capped, scrolling table of copies (pinned column titles).
+    private var rowsTable: some View {
+        let visible: ArraySlice<PruneApplyJob.Row> = job.rows.prefix(Self.visibleCap)
+        let hidden: Int = job.rows.count - visible.count
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                Section(header: PruneApplyTableHeader()) {
+                    ForEach(visible) { row in
+                        PruneApplyRowView(row: row)
+                        Divider()
+                    }
+                    if hidden > 0 {
+                        Text("… and \(hidden) more")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .padding(PruneApplyTableLayout.rowPadding)
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: 520)
+        .background(RoundedRectangle(cornerRadius: 10)
+            .fill(Color(NSColor.controlBackgroundColor)))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(Color.primary.opacity(0.14)))
+    }
+
+    /// Queued / working / nothing-moved text shown before any row exists.
+    static func emptyMessageText(isQueued: Bool, isActive: Bool) -> String {
+        if isQueued {
+            return "Waiting its turn — nothing is checked or moved until the batch before finishes. Every copy is checked when this batch starts."
+        }
+        return isActive ? "Working out what may go…" : "Nothing was moved."
+    }
+
+    private var emptyMessage: some View {
+        Text(Self.emptyMessageText(isQueued: job.isQueued, isActive: job.state.isActive))
+            .font(.system(size: 14))
+            .foregroundStyle(.secondary)
     }
 
     private var header: some View {

@@ -128,7 +128,7 @@ struct IdentityAnnotationScaleTests {
         #expect(evidence.values.allSatisfy { !$0.sceneDescriptions.isEmpty })
         // One O(100k) pass with a Set probe per record is single-digit
         // milliseconds; 1s only trips on a complexity-class regression.
-        #expect(elapsed < .seconds(1),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)),
                 "provider walk took \(elapsed) for 100k records — the O(records) pass has regressed")
     }
 
@@ -178,9 +178,9 @@ struct IdentityAnnotationScaleTests {
         // off-main. A per-row provider regression is 1,000 × O(100k)
         // record touches; a scoring regression is ~1 ms × 1,000 rows —
         // both land past this.
-        #expect(endToEnd < .milliseconds(900),
+        #expect(endToEnd < PerformanceLane.debugCeiling(.milliseconds(900)),
                 "annotate took \(endToEnd) end-to-end at 100k records × 1,000 15-caption rows — scoring or provider walk has regressed")
-        #expect(mainActorBlocking < .milliseconds(250),
+        #expect(mainActorBlocking < PerformanceLane.debugCeiling(.milliseconds(250)),
                 "annotate blocked the MainActor for \(mainActorBlocking) — scoring must stay off-main (beachball regression)")
     }
 }

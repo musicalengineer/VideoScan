@@ -536,7 +536,7 @@ struct DurationRefusedDiagnosticTests {
 
         // Pooled scoring is ~11 candidates per video → ~550k gate+score
         // calls; single-digit seconds even on the M1. Budget 10 s.
-        #expect(elapsed < .seconds(10),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(10)),
                 "gated assignPairs took \(elapsed) at 100k records — the O(records) shape has regressed")
         #expect(assignments.count == 25_000,
                 "exactly the 25k compatible pairs must match (got \(assignments.count))")

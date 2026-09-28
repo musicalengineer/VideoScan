@@ -177,7 +177,7 @@ struct StalePairValidationTests {
         let elapsed = started.duration(to: clock.now)
 
         #expect(cleared == 0)
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "100k-record validation exceeded its O(n) budget: \(elapsed)")
     }
 

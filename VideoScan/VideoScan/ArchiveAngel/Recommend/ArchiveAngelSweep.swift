@@ -1,5 +1,5 @@
 // ArchiveAngelSweep.swift
-// Archive Angel phase 2 (docs/archive_angel_phase2_design.md): the
+// Archive Angel phase 2 (archive_angel_phase2_design.md, retired — git show f82bbd69^:docs/archive_angel_phase2_design.md): the
 // background scoring sweep. Sibling of PreviewSweepService in spirit —
 // configuration closures, an interaction gate, pacing, a @Published
 // status — but the work item is "score one record", not "make one
@@ -81,6 +81,12 @@ final class ArchiveAngelSweep: ObservableObject {
         /// older state than the store holds now (codex 2026-09-20 #5).
         /// Default = "no attention store" (tests of the sweep alone).
         var attentionState: @MainActor () -> (revision: Int, lastEventAt: Date?) = { (0, nil) }
+        /// Rules v13 coverage: the façade's `catalogRevision`, read on the
+        /// main actor right before the candidate snapshot (with the
+        /// attention state) and stamped into the evidence file, so the
+        /// Angel's pick can refuse evidence older than the catalog.
+        /// Default = "no catalog" (tests of the sweep alone).
+        var catalogState: @MainActor () -> (token: String?, revision: Int) = { (nil, 0) }
         /// Spotlight reads for a slice, off-main. Injected so tests never
         /// touch the metadata server.
         var playHistory: @Sendable ([String]) async -> [String: ArchiveAngelPlayHistory.Reading]
@@ -282,6 +288,7 @@ final class ArchiveAngelSweep: ObservableObject {
         // is stamped with — never the state at the finish line.
         let snapshotStart = clock.now
         let attention = cfg.attentionState()
+        let catalog = cfg.catalogState()
         var all = cfg.candidates()
         let policy = cfg.policy
         noteSlice(clock.now - snapshotStart)
@@ -295,6 +302,7 @@ final class ArchiveAngelSweep: ObservableObject {
         var index = 0
         let sliceSize = max(1, cfg.sliceSize)
         var sinceCheckpoint = 0
+        var nextCheckpointSave = max(1, cfg.checkpointEvery)
 
         while index < total {
             if Task.isCancelled { status = enabled ? .idle : .disabled; return }
@@ -380,11 +388,27 @@ final class ArchiveAngelSweep: ObservableObject {
             if sinceCheckpoint >= cfg.checkpointEvery, index < total {
                 sinceCheckpoint = 0
                 cfg.log("Archive Angel Assessment: \(index.formatted()) of \(total.formatted())")
+            }
+            // The partial file is written on a DOUBLING schedule (first at
+            // `checkpointEvery`, then each time the scored count has doubled),
+            // not at every log line. Each checkpoint re-encodes every record
+            // scored so far, so a fixed 5,000 cadence made a 100k sweep
+            // encode ~1.05M records — measured 2026-09-23 on the M5 Pro: ~70%
+            // of the sweep's samples in JSONEncoder (Release 5.7 s, Debug
+            // 7.7 s). Doubling bounds the total to under 2× the final file
+            // (O(n), was O(n²/checkpointEvery)). A partial file is never
+            // fresh and never resumed from — it only keeps grades visible
+            // after a mid-sweep quit — so at most half the progress so far
+            // is unsaved, the price of a linear sweep. The log contract (one
+            // line per `checkpointEvery`) is unchanged.
+            if index >= nextCheckpointSave, index < total {
+                nextCheckpointSave = index * 2
                 let checkpoint = ArchiveAngelEvidenceFile(computedAt: now, complete: false,
                                                           considered: index, eligible: eligible, records: records,
                                                           attentionRevision: attention.revision,
                                                           attentionLastEventAt: attention.lastEventAt,
-                                                          policyFingerprint: store.policyFingerprint)
+                                                          policyFingerprint: store.policyFingerprint,
+                                                          catalogRevision: catalog.revision, catalogLaunchToken: catalog.token)
                 _ = await ArchiveAngelEvidenceStore.saveOffMain(checkpoint, to: store.fileURL)
             }
             await Task.yield()
@@ -423,7 +447,8 @@ final class ArchiveAngelSweep: ObservableObject {
                                             considered: total, eligible: eligible, records: records,
                                             attentionRevision: attention.revision,
                                             attentionLastEventAt: attention.lastEventAt,
-                                            policyFingerprint: store.policyFingerprint)
+                                            policyFingerprint: store.policyFingerprint,
+                                            catalogRevision: catalog.revision, catalogLaunchToken: catalog.token)
         store.replace(with: file)
         let saved = await store.save()
         lastRunSeconds = Double((clock.now - started).components.seconds)

@@ -185,6 +185,15 @@ extension HallieTurnExecutor {
         "yes", "y", "yeah", "yep", "yup", "correct", "right", "thats right",
         "sure", "please", "yes please", "exactly", "that one", "this one",
         "yes that one", "yes this one", "thats the one",
+        // An OFFER's everyday yeses (2026-09-23, the service story: "Would
+        // you like to hear how … served his country?"). Still count-gated.
+        "ok", "okay", "ok sure", "okay sure", "yes sure", "sure thing", "of course",
+        "absolutely", "definitely", "certainly", "go ahead", "yes go ahead",
+        "please do", "yes please do", "tell me", "yes tell me", "tell me more",
+        "yes tell me more", "i would", "yes i would", "id like that",
+        "yes id like that", "id love to", "yes id love to", "id love that",
+        "sounds good", "that would be great", "yes that would be great",
+        "why not", "sure why not", "go for it",
     ]
 
     /// "the one from Sudbury" / "Matthew Rice's wife" / "the one married to

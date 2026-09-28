@@ -1,5 +1,5 @@
 // ArchiveAngelPromoter.swift
-// Archive Angel — Stage 2 executor (docs/archive_angel_design.md §6).
+// Archive Angel — Stage 2 executor (archive_angel_design.md, retired — git show f82bbd69^:docs/archive_angel_design.md §6).
 //
 // The review sheet IS the confirmation, so this goes straight from the
 // reviewed plan to the existing Promote job (buildPromotePlan →
@@ -14,6 +14,7 @@
 
 import Foundation
 import Combine
+import VideoScanCore
 
 @MainActor
 final class ArchiveAngelPromoter: ObservableObject {
@@ -45,6 +46,23 @@ final class ArchiveAngelPromoter: ObservableObject {
             return .decade(startYear: a)
         }
         return nil
+    }
+
+    /// Whose date a row's proposed date is (codex r1 #4): the row's EXPLICIT
+    /// source, set where the value was set — never inferred from equality
+    /// with a machine date. A copy's date (with the copy named), a date the
+    /// person typed, or nil for the machine's own proposal (placement only —
+    /// never written as a user date). An older plan without a source is the
+    /// machine's.
+    nonisolated static func dateSource(entry: ArchiveAngelPlan.Entry, hint: ArchiveDateHint?) -> ArchiveDateSource? {
+        guard hint != nil else { return nil }
+        switch entry.proposedDateSource {
+        case .typed?: return .typed
+        case .fromCopy?:
+            guard let fact = entry.inheritedDate else { return .typed }
+            return .copy(filename: fact.fromFilename, known: fact.confidence == UserDateConfidence.known.rawValue)
+        case .machine?, nil: return nil
+        }
     }
 
     /// Role label for a companion's naming row in the archive manifest.
@@ -128,6 +146,25 @@ final class ArchiveAngelPromoter: ObservableObject {
     func promote(plan: inout ArchiveAngelPlan, model: VideoScanModel,
                  center: MediaFileOperationsCenter, freshFixity: Set<UUID> = [],
                  onFinished: @escaping @MainActor (ArchiveAngelPlan) -> Void) -> PromoteToArchiveJob? {
+        // THE BATCH IS CLAIMED FIRST (QA follow-up 2026-09-24). Clear reads
+        // and saves plan.json off the main actor while it holds the batch
+        // (codex #1714 R3), and the sheet only closes once it lands — so
+        // Promote could start on a batch being discarded, stamping facts
+        // and saving a .promoting plan over the .discarded one. An atomic
+        // claim (not isLive-then-begin) makes the two exclusive. Refused:
+        // nothing stamped, nothing saved, the plan untouched, the other
+        // holder's claim left as it was. Held through setup and handed to
+        // the job on start; every early return below releases it.
+        let claimedDir = plan.batchDir
+        guard ArchiveAngelLiveBatches.claim(claimedDir) else {
+            let line = "Archive Angel: Promote refused — this batch is being cleared or worked on right now; "
+                + "nothing was changed (\((claimedDir as NSString).lastPathComponent))"
+            model.log(line)
+            appLog.write(line)
+            return nil
+        }
+        var claimHandedToJob = false
+        defer { if !claimHandedToJob { ArchiveAngelLiveBatches.end(claimedDir) } }
         guard model.masterArchiveRootPath != nil else {
             Self.note("Archive Angel: Promote refused — no Master Archive designated", plan: &plan, model: model)
             ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
@@ -136,6 +173,7 @@ final class ArchiveAngelPromoter: ObservableObject {
         var ids: [UUID] = []
         var titles: [UUID: String] = [:]
         var dates: [UUID: ArchiveDateHint] = [:]
+        var sources: [UUID: ArchiveDateSource] = [:]
         var roles: [UUID: String] = [:]
         var intended: [UUID: [UUID]] = [:]   // original → companion record ids
 
@@ -183,12 +221,15 @@ final class ArchiveAngelPromoter: ObservableObject {
             if let t = Self.archiveTitle(from: entry.proposedName) { titles[entry.id] = t }
             let hint = Self.dateHint(from: entry.proposedDate)
             if let hint { dates[entry.id] = hint }
+            let source = Self.dateSource(entry: entry, hint: hint)
+            if let source { sources[entry.id] = source }
             var companionIDs: [UUID] = []
             for step in Self.promotableCompanions(of: entry, in: plan) {
                 guard let cid = step.recordID else { continue }
                 ids.append(cid)
                 companionIDs.append(cid)
                 if let hint { dates[cid] = hint }
+                if let source { sources[cid] = source }
                 if let t = titles[entry.id] { titles[cid] = t }
                 if let role = Self.roleLabel(for: step.kind) { roles[cid] = role }
             }
@@ -223,6 +264,7 @@ final class ArchiveAngelPromoter: ObservableObject {
         }
         promotePlan.archiveTitles = titles
         promotePlan.archiveDateOverrides = dates
+        promotePlan.archiveDateSources = sources
         promotePlan.roleLabels = roles
         for skip in promotePlan.skipped {
             let reason = VideoScanModel.skipReasonLabel(skip.reason)
@@ -260,8 +302,8 @@ final class ArchiveAngelPromoter: ObservableObject {
         job.ledgerActor = .angel   // Media Ledger: "archived … (Archive Angel)"
         self.job = job
         var snapshot = plan
-        let planID = plan.id, liveDir = plan.batchDir
-        ArchiveAngelLiveBatches.begin(liveDir)
+        let planID = plan.id, liveDir = claimedDir
+        claimHandedToJob = true            // the claim taken above is now the job's; the watcher ends it
         Self.inFlight[planID] = self
         watch(job) { [weak self] in
             guard let self, let job = self.job, !job.state.isActive else { return }

@@ -74,17 +74,10 @@ struct ArchivistCitationRow: View {
         }
     }
 
+    /// The shared style (ColorActionButton.swift) at Hallie's regular size.
     private func actionButton(_ title: String, systemImage: String, color: Color,
                               action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(color)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 7).fill(color.opacity(0.12)))
-        }
-        .buttonStyle(.plain)
+        ColorActionButton(title: title, systemImage: systemImage, color: color, size: .regular, action: action)
     }
 
     /// The details grid. Rows come from the record when we have it; the

@@ -357,7 +357,7 @@ struct UserDateProvenanceTests {
         // production scale. Generous bound — the point is catching an
         // accidental O(records) or DateFormatter regression, which would
         // blow past this by an order of magnitude.
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "resolved-date accessors took \(elapsed) for 100k records — no longer O(1)-cheap per row")
     }
 }

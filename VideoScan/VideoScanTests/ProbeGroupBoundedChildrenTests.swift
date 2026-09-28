@@ -207,7 +207,7 @@ struct ProbeGroupBoundedChildrenTests {
         // long just tearing children down.
         // 100k × 1 ms stub / 32 pinned permits ≈ 3 s of pure probe time,
         // plus walk + drain overhead.
-        #expect(elapsed < .seconds(90), "100k stubbed scan took \(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(90)), "100k stubbed scan took \(elapsed)")
 
         // Sensor 4: every gated line present, TRAILER last, fsyncs ≪ lines.
         let lines = try bodyLines(log)

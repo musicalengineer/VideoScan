@@ -1,4 +1,5 @@
 import Foundation
+import VideoScanCore
 
 /// When a wall-clock performance budget is allowed to be authoritative.
 ///
@@ -73,15 +74,86 @@ enum PerformanceLane {
     /// as far as running tests (GH #173). The ceiling is scaled there, and
     /// only there — GITHUB_ACTIONS is set by GitHub and nothing else (the
     /// CI test plan injects CI=1 locally too, so CI can't distinguish).
+    ///
+    /// The rule itself lives in VideoScanCore's `TimingBudget` (2026-09-26)
+    /// so VideoScanCoreTests use the SAME numbers; these forward to it.
     static func hostedRunnerFactor(environment: [String: String]) -> Int {
-        environment["GITHUB_ACTIONS"] == "true" ? 3 : 1
+        TimingBudget.hostedRunnerFactor(environment: environment)
     }
 
     /// A Debug ceiling, widened on GitHub-hosted runners. Never use this on
     /// an authoritative (Release, opted-in) budget — those are the product's
     /// numbers and must not stretch to fit the hardware.
     static func debugCeiling(_ budget: Duration) -> Duration {
-        budget * hostedRunnerFactor(environment: ProcessInfo.processInfo.environment)
+        debugCeiling(budget, environment: ProcessInfo.processInfo.environment)
+    }
+
+    /// Pure form, for tests of the rule itself: off a GitHub-hosted runner
+    /// the ceiling IS the budget, to the attosecond.
+    static func debugCeiling(_ budget: Duration, environment: [String: String]) -> Duration {
+        budget * hostedRunnerFactor(environment: environment)
+    }
+
+    /// The same ceiling for suites that time with CFAbsoluteTime / Date and
+    /// compare plain `Double` seconds or milliseconds. Same multiplier; the
+    /// label only says which unit the caller is in.
+    static func debugCeiling(seconds budget: Double) -> Double {
+        budget * Double(hostedRunnerFactor(environment: ProcessInfo.processInfo.environment))
+    }
+
+    static func debugCeiling(milliseconds budget: Double) -> Double {
+        debugCeiling(seconds: budget)
+    }
+
+    /// A Debug ceiling that also allows for a machine that is measurably
+    /// busy — the full Debug battery runs suites in parallel on every core,
+    /// and a pure-CPU 100k pass then takes longer than it does alone.
+    ///
+    /// Measured 2026-09-23 (Archive Angel 100k scale tests): each suite
+    /// ALONE on the M5 Pro, Debug, passed with 24–33% headroom; the same
+    /// tests in a full Debug battery on the M4 Max ran 1.42–1.64× their
+    /// M5-alone times (machine difference and load together) and 4–20%
+    /// over budget. Use this only where the measured time is honest
+    /// per-record work with no algorithmic slack left — speed up first.
+    /// `loadedHeadroom` (default 1.5×) applies only when the machine is
+    /// busy (1-minute load average at or above half the active cores); a
+    /// quiet Debug run is held to the plain budget. Release never
+    /// stretches: it gets `budget` (× the hosted-runner factor only, as
+    /// `debugCeiling`), so the product's numbers stay authoritative.
+    static func loadAwareDebugCeiling(_ budget: Duration, loadedHeadroom: Double = 1.5) -> Duration {
+        let factor = loadFactor(debugBuild: isDebugBuild, loadAverage: currentLoadAverage(),
+                                activeProcessors: ProcessInfo.processInfo.activeProcessorCount,
+                                loadedHeadroom: loadedHeadroom)
+        return debugCeiling(budget) * factor
+    }
+
+    /// Pure form of the load rule, for tests of the rule itself.
+    static func loadFactor(debugBuild: Bool, loadAverage: Double?, activeProcessors: Int,
+                           loadedHeadroom: Double) -> Double {
+        TimingBudget.loadFactor(debugBuild: debugBuild, loadAverage: loadAverage,
+                                activeProcessors: activeProcessors, loadedHeadroom: loadedHeadroom)
+    }
+
+    /// The 1-minute load average, or nil when the kernel won't say.
+    static func currentLoadAverage() -> Double? {
+        TimingBudget.currentLoadAverage()
+    }
+
+    /// CPU time the calling thread spent in a SYNCHRONOUS body (GH #208).
+    /// Prefer this over a load-aware wall ceiling for pure-CPU scale
+    /// tests: a saturated host stretches wall time without limit but
+    /// barely moves the thread's own CPU time. Keep wall time wherever I/O
+    /// or cross-thread fan-out is part of what the budget protects. Rule
+    /// and caveats live in VideoScanCore's `TimingBudget`.
+    static func measureThreadCPUTime(_ body: () throws -> Void) rethrows -> Duration {
+        try TimingBudget.measureThreadCPUTime(body)
+    }
+
+    /// "load 9.3 on 16 cores" — for a failure message that says whether the
+    /// headroom was in play.
+    static func loadDescription() -> String {
+        let load = currentLoadAverage().map { String(format: "%.1f", $0) } ?? "?"
+        return "\(configurationName), load \(load) on \(ProcessInfo.processInfo.activeProcessorCount) cores"
     }
 
     /// Why a run is not authoritative, for a skip message that says what to

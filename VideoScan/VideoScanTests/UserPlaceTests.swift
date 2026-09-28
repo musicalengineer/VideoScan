@@ -291,7 +291,7 @@ struct UserPlaceRosterTests {
         // Tighter than the 1-minute suite guard: two linear passes and a
         // sort of ten entries. An accidental O(n²) or per-record
         // allocation storm blows past this by an order of magnitude.
-        #expect(elapsed < .seconds(2), "roster took \(elapsed) for 100k records")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "roster took \(elapsed) for 100k records")
     }
 }
 
@@ -398,7 +398,7 @@ struct UserPlaceCatalogTests {
             for r in records where pfFieldTokenMatches(.place, "cape cod", r) { hits += 1 }
         }
         #expect(hits == 33_334, "exactly the placed rows, none of the transcript-only rows")
-        #expect(elapsed < .seconds(3), "place: match took \(elapsed) for 100k records")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(3)), "place: match took \(elapsed) for 100k records")
     }
 
     // MARK: CSV

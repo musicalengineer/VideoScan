@@ -56,6 +56,15 @@ extension HallieTurnExecutor {
         /// else from a single-person AST. Kept across follow-ups; replaced
         /// by the next answer about someone; cleared by reset.
         private(set) var lastSubject: String?
+        /// The family-tree person id of `lastSubject`, when an answer about
+        /// that person carried one (its own "Open in Family Tree" offer for
+        /// exactly that name). GH #202: two Mary O'Connors (b. 1650 and b.
+        /// 1904) share a name, so the NAME alone cannot say the conversation
+        /// moved from one to the other; the id can. Kept while the subject's
+        /// name stays the same and no answer names another id for it (a
+        /// catalog answer about "her" carries none); cleared when the
+        /// subject changes to a name with no id, or is cleared.
+        private(set) var lastSubjectPersonID: String?
         /// The photo the previous answer showed, so "this photo is …" can
         /// caption or correct it (2026-08-26). Cleared by the next archive
         /// answer that shows no photo; follow-ups and tellings keep it.
@@ -94,6 +103,49 @@ extension HallieTurnExecutor {
         /// unresolved "my dad" decline the same route with no offer, and a
         /// "yes" after those must not silently rerun a stripped search.
         private(set) var pendingOffer: HallieOfferAcceptance.Offer?
+        /// Kin terms this conversation has SETTLED, keyed by the relation
+        /// word ("father") and valued by the person the answer was about
+        /// ("Richard Harding Breen Sr"). Live 2026-09-26: Rick corrected
+        /// "dad" to "dad breen", heard about Richard Sr twice, and "videos
+        /// of dad" two turns later re-resolved from scratch — to a 1360
+        /// Welshman whose alternate NAME is "Dad". A kin term the
+        /// conversation has resolved stays resolved until an answer
+        /// resolves it again; reset clears it. Written only by an ANSWERED
+        /// graph turn, whose subject is the tree's full name — never by a
+        /// catalog answer, whose person can be a contested given name.
+        private(set) var kinBindings: [String: String] = [:]
+        /// The ranking the last superlative answer RAN — kind and scope —
+        /// so "that is donna's line" / "I meant Rick" right after re-runs
+        /// the same kind over the corrected scope (live 2026-09-26: both
+        /// became biographies). Taken from the answer's own typed payload
+        /// (`Result.superlative`), never inferred from prose. Replaced by
+        /// the next superlative; cleared by any other lane answer, so a
+        /// correction two questions later is not misread; kept across
+        /// follow-ups, help and small talk; reset clears it.
+        private(set) var lastSuperlative: HallieLineageQuestion.SuperlativeAsk?
+
+        /// Who a kin term ("dad", "my dad") means in THIS conversation, if
+        /// a previous answer settled it; nil for a name or an unsettled
+        /// term. A term with a surname ("dad breen") resolves itself.
+        func boundRelative(for term: String) -> String? {
+            guard HallieTurnExecutor.RelativeFactSubject.parse(term) != nil,
+                  let relation = HallieTurnExecutor.RelativeFactSubject.kinRelation(inPersonTerm: term)
+            else { return nil }
+            return kinBindings[relation]
+        }
+
+        /// The relation words this turn's typed person terms name: the
+        /// intent's people ("dad breen", "my dad"), or — for a local answer
+        /// with no intent — the question's subject phrase.
+        private static func kinRelations(intent: Intent?, question: String?) -> [String] {
+            var terms: [String] = []
+            if let intent { terms = Self.context(of: intent.ast).0 }
+            if terms.isEmpty, let question,
+               let subject = HallieModeClassifier.subjectPhrase(question) {
+                terms = [subject]
+            }
+            return terms.compactMap { HallieTurnExecutor.RelativeFactSubject.kinRelation(inPersonTerm: $0) }
+        }
 
         // MARK: Two-mode session state (docs/hallie_two_mode_design.md §3.1-3.2)
 
@@ -222,6 +274,7 @@ extension HallieTurnExecutor {
                 reset()
                 return
             }
+            let subjectBefore = lastSubject
             recordExchange(intent: intent, result: result, question: question)
             // A spoken mode correction rode in on the intent or the answer
             // (design §3.6): applied BEFORE the mode moves, so from here
@@ -238,7 +291,10 @@ extension HallieTurnExecutor {
             // intent-less answers (catalog stats, local tree answers) leave
             // through the `guard let intent` below.
             // C++ analogy: `defer` ≈ a scope-exit guard (RAII destructor).
-            defer { syncModeContexts(intent: intent, result: result) }
+            defer {
+                recordSubjectPersonID(subjectBefore: subjectBefore, result: result)
+                syncModeContexts(intent: intent, result: result)
+            }
             // An offer is good for one reply: whatever this turn was, the
             // last one's offer is gone, and only an answer that OFFERED a
             // retry in its own prose leaves a new one.
@@ -246,6 +302,9 @@ extension HallieTurnExecutor {
             switch result.route {
             case .presence, .cross, .event, .aggregate, .temporal, .graph, .telling, .record:
                 lastProvenance = HallieProvenanceFollowUp.Provenance(result: result)
+                // A ranking replaces the last one; any other lane answer
+                // ends the window for correcting its scope.
+                lastSuperlative = result.superlative
             default:
                 break
             }
@@ -274,6 +333,16 @@ extension HallieTurnExecutor {
                 // of Rick and Donna" → "photo of Nathaniel Parker Sr" would
                 // still see the stale pair (codex #716).
                 if intent == nil { lastPeople = [name] }
+            }
+            // A kin term the answer SETTLED (live 2026-09-26): "dad breen"
+            // answered about Richard Harding Breen Sr means "dad" is him for
+            // the rest of the conversation. Graph answers only — their
+            // subject is the tree's full name, never a contested given name.
+            if let name = result.catalogPersonName, result.outcome == .answered,
+               result.route == .graph {
+                for relation in Self.kinRelations(intent: intent, question: question) {
+                    kinBindings[relation] = name
+                }
             }
             // A non-list answer that names its list (a count, an age).
             if let refinable = result.refinableQuery, result.outcome == .answered {
@@ -327,6 +396,41 @@ extension HallieTurnExecutor {
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
             }
+        }
+
+        /// Keep `lastSubjectPersonID` in step with `lastSubject` (GH #202).
+        /// Runs after every other field is updated, on every path out of
+        /// `record` except reset (which clears everything).
+        private mutating func recordSubjectPersonID(subjectBefore: String?, result: Result) {
+            guard let subject = lastSubject else {
+                lastSubjectPersonID = nil
+                return
+            }
+            if let id = Self.personID(of: subject, offeredBy: result) {
+                lastSubjectPersonID = id
+            } else if PersonResolver.normalize(subject) != PersonResolver.normalize(subjectBefore ?? "") {
+                // A different person by name, and this answer names no id:
+                // the old id belongs to someone else now.
+                lastSubjectPersonID = nil
+            }
+            // Same name, no id this turn: keep the one we have.
+        }
+
+        /// The ONE tree id this answer offers for `subject` by name — its
+        /// "Open in Family Tree" chip (or the immediate focus). None, or two
+        /// different ids for the same name (a which-one among namesakes),
+        /// says nothing: nil. `showPossibleDuplicate` is deliberately not
+        /// read — its id is the OTHER record of the person.
+        static func personID(of subject: String, offeredBy result: Result) -> String? {
+            let key = PersonResolver.normalize(subject)
+            var ids: Set<String> = []
+            for offer in [result.immediateOfferedAction].compactMap({ $0 }) + result.offeredActions {
+                if case .openFamilyTreePerson(let id, let name) = offer,
+                   !id.isEmpty, PersonResolver.normalize(name) == key {
+                    ids.insert(id)
+                }
+            }
+            return ids.count == 1 ? ids.first : nil
         }
 
         /// The mode transition (design §3.2): the answer's own verdict when
@@ -896,7 +1000,10 @@ extension HallieTurnExecutor {
                 claims: claimsA + shifted,
                 counts: planA.counts + planB.counts,
                 fallbackText: prose,
-                provenanceNote: provenance.isEmpty ? nil : provenance.joined())
+                provenanceNote: provenance.isEmpty ? nil : provenance.joined(),
+                // Only b's clarification survives the join, so only b's
+                // offer (it ends `prose`) is still a question being asked.
+                trailingOffer: planB.trailingOffer)
             if a.transcriptText != nil || b.transcriptText != nil {
                 transcript = (a.transcriptText ?? a.prose) + "\n\n"
                     + shiftClaimTags(in: b.transcriptText ?? b.prose, by: offset)
@@ -1049,6 +1156,16 @@ extension HallieTurnExecutor {
                 return .answer(result)
             }
         }
+        // "videos of dad" two turns after "dad breen" was answered about
+        // Richard Harding Breen Sr (live 2026-09-26): a kin term the
+        // conversation has settled is that person, before any lookup — the
+        // same road the pronoun above takes. An unsettled kin term goes on
+        // as typed; the resolver binds it through the People tab
+        // (HallieLineageAnswer+KinTerm), never through a tree name.
+        if let object = lineage.mediaAskPerson,
+           let bound = memory.boundRelative(for: object) {
+            lineage = lineage.replacingMediaAskPerson(with: bound)
+        }
         // A multi-hop kinship phrase ("X's great great grandpa on his
         // paternal side") is not answered by the lineage code: it is a
         // ready-made graph intent, run by the ordinary kinship route so
@@ -1152,6 +1269,18 @@ extension HallieTurnExecutor {
         modeVerdict: LazyModeVerdict,
         isTreePersonID: ((String) -> Bool)? = nil
     ) -> PreTranslation {
+        // "that is donna's line" / "not mine, I want mine" / "I meant rick"
+        // right after a ranking (live 2026-09-26: both became biographies):
+        // the SAME superlative, re-run over the corrected scope. Only while
+        // a ranking is remembered, and never for a question in its own
+        // right (HallieSuperlativeCorrection abstains on one). Before the
+        // repair turn: a scope correction is more specific than "that's
+        // wrong", and neither of the live phrasings was caught there.
+        if let last = memory.lastSuperlative, let lineageAnswer,
+           let scope = HallieSuperlativeCorrection.scope(in: question),
+           let answer = lineageAnswer(.superlative(kind: last.kind, scope: scope, media: nil)) {
+            return .answer(answer)
+        }
         // A turn ABOUT the previous answer ("that's wrong", "you presented
         // me a list of people born hundreds of years ago") is repaired from
         // memory — never translated into a search (live miss #4, 2026-08-28).
@@ -1576,7 +1705,8 @@ extension HallieTurnExecutor {
             // "when did they get married" after "who did Rick marry": the
             // pronoun stands for the last answer's people; say so to the
             // translator instead of letting it guess (HalliePronounContinuity).
-            if let rewrite = HalliePronounContinuity.rewrite(question, lastPeople: memory.pronounReferents) {
+            if let rewrite = HalliePronounContinuity.rewrite(
+                question, lastPeople: memory.pronounReferents, isKnownPerson: isKnownPerson) {
                 return .translate(question: rewrite.question, playAfterAnswer: playAfterAnswer)
             }
             return .translate(question: question, playAfterAnswer: playAfterAnswer)
@@ -1967,7 +2097,8 @@ extension HallieTurnExecutor.Result {
             refinableQuery: refinableQuery,
             retryOffer: retryOffer,
             mode: mode,
-            modeForce: modeForce)
+            modeForce: modeForce,
+            superlative: superlative)
     }
 
     func prefixingBasis(_ note: String) -> HallieTurnExecutor.Result {
@@ -2006,6 +2137,7 @@ extension HallieTurnExecutor.Result {
             refinableQuery: refinableQuery,
             retryOffer: retryOffer,
             mode: mode,
-            modeForce: modeForce)
+            modeForce: modeForce,
+            superlative: superlative)
     }
 }

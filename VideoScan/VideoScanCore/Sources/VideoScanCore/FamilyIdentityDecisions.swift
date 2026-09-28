@@ -26,6 +26,7 @@
 // living relatives in the People tab, who often prefer not to be on
 // FamilySearch at all. They are keyed by a stable local key instead.
 
+import CryptoKit
 import Foundation
 
 /// One person's identity ruling. Every field is optional evidence: a
@@ -201,9 +202,40 @@ public struct FamilyIdentityDecisions: Equatable, Sendable {
     /// from opening.
     public static func load(from directory: URL,
                             log: (String) -> Void = { _ in }) -> FamilyIdentityDecisions {
-        guard let data = try? Data(contentsOf: fileURL(in: directory)) else {
-            return FamilyIdentityDecisions()
+        loadWithRevision(from: directory, log: log).decisions
+    }
+
+    /// The rulings AND the revision of the file they came from — a SHA-256
+    /// of the exact bytes decoded, "none" when there is no file. Read ONCE,
+    /// so the revision always describes the rulings returned (codex #1710:
+    /// the shared tree cache keys on it, and a Hide, an Unhide or a hand
+    /// edit must reach Hallie's next turn). A content digest rather than
+    /// mtime: Rick edits this file by hand, and an editor or a restore can
+    /// keep the timestamp. The file is a few KB.
+    public static func loadWithRevision(from directory: URL,
+                                        log: (String) -> Void = { _ in })
+        -> (decisions: FamilyIdentityDecisions, revision: String) {
+        let url = fileURL(in: directory)
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            let ns = error as NSError
+            let missing = (ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoSuchFileError)
+                || (ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOENT))
+            if !missing {
+                // Unreadable is not "nothing ruled": say so. Still never
+                // stops the tree from opening.
+                log("[family-tree] identity rulings at \(url.lastPathComponent) could not be read, "
+                    + "so NO ruling is in force: \(error.localizedDescription)")
+            }
+            return (FamilyIdentityDecisions(), missing ? "none" : "unreadable")
         }
+        let revision = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        return (decode(data, url: url, log: log), revision)
+    }
+
+    private static func decode(_ data: Data, url: URL, log: (String) -> Void) -> FamilyIdentityDecisions {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
@@ -214,7 +246,7 @@ public struct FamilyIdentityDecisions: Equatable, Sendable {
             // thing from no file at all, and the difference is Rick's
             // rulings quietly not applying. It still must not stop the tree
             // from opening.
-            log("[family-tree] identity rulings at \(fileURL(in: directory).lastPathComponent) "
+            log("[family-tree] identity rulings at \(url.lastPathComponent) "
                 + "could not be read, so NO ruling is in force: \(error)")
             return FamilyIdentityDecisions()
         }

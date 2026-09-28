@@ -1,8 +1,9 @@
 {
-  "note": "Check-then-act-on-removable-volume baseline. Pre-existing hits only; new hits fail the nightly job. Fix template: PromoteToArchiveJob / ArchivePromoteEngine descriptor copy.",
-  "entry_count": 1,
-  "hit_count": 1,
+  "note": "Check-then-act-on-removable-volume baseline. Pre-existing hits only; new hits fail the nightly job. Fix template: PromoteToArchiveJob / ArchivePromoteEngine descriptor copy. 2026-09-25: rename's rollback (undoMoveMedia newPath\u2192oldPath) added \u2014 moveItem never overwrites, so a file that appears at oldPath makes the undo fail loudly (logged RENAME ROLLBACK FAILED), not clobber.",
+  "entry_count": 2,
+  "hit_count": 2,
   "entries": {
-    "volume-check-then-act|VideoScan/VideoScan/VideoScanModel+Rename.swift|renameRecord:fileExists(atPath:)(newPath)->moveItem(to:)(newPath)": 1
+    "volume-check-then-act|VideoScan/VideoScan/VideoScanModel+Rename.swift|renameRecord:fileExists(atPath:)(newPath)->moveItem(to:)(newPath)": 1,
+    "volume-check-then-act|VideoScan/VideoScan/VideoScanModel+Rename.swift|renameRecord:fileExists(atPath:)(oldPath)->moveItem(to:)(oldPath)": 1
   }
 }

@@ -282,7 +282,7 @@ struct KindFacetScaleTests {
         let filtered = pfApplyKindFacet(recs, facet: .videoBearing)
         let elapsed = Date().timeIntervalSince(start)
         #expect(filtered.count == 25_000)
-        #expect(elapsed < 0.5,
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 0.5),
                 "facet over 100k records took \(elapsed)s — budget 0.5s (Debug)")
         // SENSOR at production scale: the default view drops every
         // audio-only row and keeps everything else.

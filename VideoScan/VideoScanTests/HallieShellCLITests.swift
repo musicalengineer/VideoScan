@@ -1570,6 +1570,7 @@ struct HallieShellCLITests {
         utc.timeZone = TimeZone(secondsFromGMT: 0)!
         tape.embeddedCreationDate = utc.date(from: DateComponents(year: 1994, month: 12, day: 25, hour: 15))!
         tape.originMake = "Sony"
+        tape.originModel = "DCR-TRV900"   // GH #201: a make alone is an export stamp
         tape.dateCreatedRaw = Date(timeIntervalSince1970: 1_784_000_000) // 2026-07
         let harness = Harness(
             inputs: [":select xmas", "when was this filmed", "what season was this filmed in", ":quit"],
@@ -1918,7 +1919,7 @@ struct HallieShellCLITests {
 
         #expect(code == HallieShellCLI.ExitCode.noEvidence.rawValue)
         #expect(harness.output.contains("Archive ready — 100000 catalog items, read-only."))
-        #expect(elapsed < .seconds(4),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(4)),
                 "shell snapshot + typed dispatch took \(elapsed) for 100k records")
     }
 
@@ -2480,7 +2481,7 @@ struct HallieShellCLITests {
         #expect(assistantRoutes(harness) == ["record", "record"])
         #expect(harness.output.contains("In clip_73421.mov, Donna is tagged (confirmed by a person)."))
         #expect(harness.output.contains { $0.hasPrefix("clip_73421.mov is a video with sound") })
-        #expect(elapsed < .seconds(4), "two record turns over 100k records took \(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(4)), "two record turns over 100k records took \(elapsed)")
     }
 
     // MARK: - Full siblings share parents (Rick's ruling 2026-09-02) — sensor

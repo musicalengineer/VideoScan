@@ -30,6 +30,14 @@ enum HallieResponseCommit {
         let openFamilyTreePerson: (_ personID: String, _ personName: String) -> Void
         let recompileFamilyTree: (String?) -> Void
         let acceptImmediateOffer: (HallieTurnExecutor.Result) -> Void
+        /// Earlier bubbles' "Open in Family Tree: X" chips are retired when
+        /// the conversation settles on someone else (HallieSupersededOffers,
+        /// live 2026-09-26: a stale chip opened the tree on the man Rick
+        /// had just rejected). Called BEFORE the new answer's bubble is
+        /// appended, with the person the answer settled on — name AND tree
+        /// id when known, so a namesake is someone else too (GH #202).
+        /// Defaulted so a client without a transcript need not supply one.
+        var retireSupersededOffers: (HallieSupersededOffers.Subject) -> Void = { _ in }
     }
 
     @discardableResult
@@ -72,6 +80,9 @@ enum HallieResponseCommit {
         state.telling = response.telling
         state.drill = response.drill
         state.picker = response.picker
+        let previousSubject = state.memory.lastSubject.map {
+            HallieSupersededOffers.Subject(name: $0, personID: state.memory.lastSubjectPersonID)
+        }
         state.memory.record(intent: response.executedIntent,
                             result: response.result,
                             question: question)
@@ -87,6 +98,19 @@ enum HallieResponseCommit {
             }
         }
         sinks.publishState(state)
+        // The conversation moved to someone else: the offers that named the
+        // previous person are superseded, exactly as memory's
+        // tree.lastOffers already are. Before this answer's own bubble, so
+        // its chips (a which-one's several people included) are untouched.
+        // "Someone else" is by tree id when both answers carry one — the
+        // two Mary O'Connors are different people (GH #202) — else by name.
+        if let name = state.memory.lastSubject {
+            let subject = HallieSupersededOffers.Subject(
+                name: name, personID: state.memory.lastSubjectPersonID)
+            if subject.isDifferentPerson(from: previousSubject ?? .init(name: "")) {
+                sinks.retireSupersededOffers(subject)
+            }
+        }
         let clarificationChips = response.result.clarification?.candidates.map {
             ArchivistMessage.Chip(
                 label: $0.label,

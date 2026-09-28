@@ -128,7 +128,7 @@ struct AdaFaceAdversarialTests {
         #expect(expectedAda != expectedHybrid)
         #expect(mismatchCount == 0,
                 "interleaved jobs contaminated one another's cache namespace")
-        #expect(elapsed < .seconds(5),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(5)),
                 "100k cache namespaces took \(elapsed)")
     }
 

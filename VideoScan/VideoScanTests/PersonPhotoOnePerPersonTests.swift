@@ -455,9 +455,9 @@ struct PersonPhotoOnePerPersonTests {
         #expect(center.cachedEntryCount == count,
                 "every nil is cached after one bounded pass")
         #expect(center.resolutionBuildCount == 1)
-        #expect(firstPass < .seconds(5),
+        #expect(firstPass < PerformanceLane.debugCeiling(.seconds(5)),
                 "Release first-pass budget is 5 seconds; measured \(firstPass)")
-        #expect(repeatedPass < .seconds(1),
+        #expect(repeatedPass < PerformanceLane.debugCeiling(.seconds(1)),
                 "Release repeated-render budget is 1 second; measured \(repeatedPass)")
     }
 

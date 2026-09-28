@@ -40,7 +40,7 @@ struct ArchiveAngelRecommendationsLegacyParityTests {
         print("[angel-s3a] classify 100k \(String(format: "%.3f", s)) s")
         #expect(result.verdicts.count == 100_000)
         #expect(result.counts.values.reduce(0, +) == 100_000)
-        #expect(s < 1, "classify 100k in \(s) s")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "classify 100k in \(s) s")
     }
 
     // The ArchiveNudgeTests cases (Rick 2026-08-21), frozen expectations.

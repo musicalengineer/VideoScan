@@ -547,7 +547,11 @@ struct GedcomFamilyGraphTests {
         let buildStarted = ContinuousClock.now
         _ = largeGraph.index
         let build = buildStarted.duration(to: .now)
-        #expect(build < .seconds(5), "100k index build exceeded 5 seconds: \(build)")
+        // 5 s on a quiet machine; ×1.5 only for a busy Debug run (failed
+        // under full-battery load on the M5), ×3 only on GitHub.
+        let buildCeiling = TimingBudget.loadAwareDebugCeiling(.seconds(5))
+        #expect(build < buildCeiling,
+                "100k index build took \(build), ceiling \(buildCeiling) (\(TimingBudget.loadDescription()))")
 
         let started = ContinuousClock.now
         let matches = largeGraph.people(matching: "Needle Archivist")

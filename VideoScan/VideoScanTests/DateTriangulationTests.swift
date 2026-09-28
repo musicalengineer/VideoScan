@@ -304,7 +304,7 @@ struct DateTriangulationTests {
         }
         let elapsed = Date().timeIntervalSince(start)
         #expect(dated == 100_000, "mtime fallback means every record gets SOME date here")
-        #expect(elapsed < 10.0, "100k triangulations + sensor extractions took \(elapsed)s")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 10.0), "100k triangulations + sensor extractions took \(elapsed)s")
     }
 
     // MARK: realistic mixed case

@@ -177,7 +177,8 @@ struct HallieGroundedComposer: Sendable {
         // assumed tree bridge) is appended AFTER verification, so it is
         // never something the model must say, may reword, or can lose.
         // The template path needs no append — `fallbackText` carries it.
-        let provenance = plan.provenanceNote ?? ""
+        // The offer (a question, not a claim) follows the same rule, last.
+        let provenance = (plan.provenanceNote ?? "") + (plan.trailingOffer ?? "")
         return Outcome(
             displayText: covered.verification.displayText + provenance,
             transcriptText: covered.verification.transcriptText + provenance,

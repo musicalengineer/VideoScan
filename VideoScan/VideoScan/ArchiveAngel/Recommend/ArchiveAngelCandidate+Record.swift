@@ -75,7 +75,8 @@ extension ArchiveAngelCandidate {
             originEncoder: r.originEncoder,
             footageGroupID: r.footage?.groupID,
             footageRank: r.footage?.rank,
-            footageConfidence: r.footage?.confidence)
+            footageConfidence: r.footage?.confidence,
+            inferredDateRange: r.inferredDateRange)
     }
 
     /// The slice of a record the recommendation classifier reads — no
@@ -111,7 +112,8 @@ extension ArchiveAngelCandidate {
             originEncoder: r.originEncoder,
             footageGroupID: r.footage?.groupID,
             footageRank: r.footage?.rank,
-            footageConfidence: r.footage?.confidence)
+            footageConfidence: r.footage?.confidence,
+            inferredDateRange: r.inferredDateRange)
     }
 
     /// The projection the job uses: keeper policy built ONCE by the
@@ -119,7 +121,8 @@ extension ArchiveAngelCandidate {
     @MainActor
     static func project(_ r: VideoRecord,
                         model: VideoScanModel,
-                        policy: DuplicateKeeperPolicy) -> ArchiveAngelCandidate {
+                        policy: DuplicateKeeperPolicy,
+                        bufferPrefix: String?? = nil) -> ArchiveAngelCandidate {
         let facts = policy.facts(forPath: r.fullPath)
         let readiness = ArchiveReadiness.assess(record: r)
         // codex #1345: the SAME predicate the to-do view negates. A
@@ -161,7 +164,35 @@ extension ArchiveAngelCandidate {
         // Phase 1 attention memory: what the Angel already showed about
         // this file or any copy of its content.
         c.attention = model.archiveAngel.attention.summary(recordID: r.id, contentKey: c.contentKey)
+        // Rules v12: a companion inside the Angel's own buffer is never
+        // material (the `angelWorkingCopy` safety floor). One string prefix
+        // test per record; the sweep standardizes the root ONCE per pass
+        // and hands the prefix in (QA v12 #4: URL standardization per
+        // record was 0.15 s per 100k on the main actor). A lone caller
+        // (the job's few picks) pays for it here.
+        let prefix = bufferPrefix ?? Self.bufferPrefix(model.archiveAngel.environment.bufferRoot)
+        c.isAngelWorkingCopy = Self.isUnder(prefix: prefix, path: r.fullPath)
         return c
+    }
+
+    /// The buffer root as a "…/" prefix, standardized; nil for an empty
+    /// or "/" root (never treat the whole disk as the buffer).
+    nonisolated static func bufferPrefix(_ bufferRoot: URL) -> String? {
+        let root = bufferRoot.standardizedFileURL.path
+        guard !root.isEmpty, root != "/" else { return nil }
+        return root.hasSuffix("/") ? root : root + "/"
+    }
+
+    /// Is `path` the root or inside it? A string prefix test — O(|path|).
+    nonisolated static func isUnder(prefix: String?, path: String) -> Bool {
+        guard let prefix else { return false }
+        return path.hasPrefix(prefix) || path + "/" == prefix
+    }
+
+    /// Is `path` inside the Angel's buffer root (the root itself or any
+    /// descendant)? Pure — a prefix test on the standardized root.
+    nonisolated static func isUnder(bufferRoot: URL, path: String) -> Bool {
+        isUnder(prefix: bufferPrefix(bufferRoot), path: path)
     }
 }
 

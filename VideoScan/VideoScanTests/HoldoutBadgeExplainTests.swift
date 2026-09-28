@@ -286,7 +286,7 @@ struct HoldoutBadgeExplainTests {
         // Budget: the whole thing is three O(rows) passes over values
         // already in memory. 2 s is ~100x headroom and catches an
         // accidental O(rows²).
-        #expect(elapsed < .seconds(2))
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)))
         // Sanity: every pending row landed in exactly one bucket.
         let pending = HoldoutNavigation.pendingCount(rows: rows, cleared: cleared)
         #expect(result.pending == pending)

@@ -57,6 +57,19 @@ struct ArchiveAngelRowActions: View {
     }
 
     private func showInCatalog() {
+        Self.showInCatalog(model: model, recordID: recordID, filename: filename, beforeNavigate: beforeNavigate)
+    }
+
+    private func showInFinder() {
+        Self.showInFinder(model: model, path: sourcePath)
+    }
+
+    // Shared with the senior-friendly recommendations list
+    // (ArchiveAngelRecommendationList) so both surfaces navigate the same way.
+
+    @MainActor
+    static func showInCatalog(model: VideoScanModel, recordID: UUID, filename: String,
+                              beforeNavigate: () -> Void = {}) {
         guard (model as any AngelNavigator).canNavigateToRecord(id: recordID) else {
             model.log("Archive Angel: \(filename) is no longer in the catalog — it may have been removed or replaced by a re-scan.")
             return
@@ -65,9 +78,10 @@ struct ArchiveAngelRowActions: View {
         (model as any AngelNavigator).showInCatalog(recordID: recordID)
     }
 
-    private func showInFinder() {
-        if !NSWorkspace.shared.selectFile(sourcePath, inFileViewerRootedAtPath: "") {
-            model.log("Archive Angel: Finder could not show \(sourcePath) — is the volume mounted?")
+    @MainActor
+    static func showInFinder(model: VideoScanModel, path: String) {
+        if !NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "") {
+            model.log("Archive Angel: Finder could not show \(path) — is the volume mounted?")
         }
     }
 }

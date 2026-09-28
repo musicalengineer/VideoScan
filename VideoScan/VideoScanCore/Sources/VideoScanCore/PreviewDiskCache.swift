@@ -153,20 +153,9 @@ public final class PreviewDiskCache: @unchecked Sendable {
             .appendingPathComponent("preview-cache", isDirectory: true)
     }
 
-    /// True when this process is a unit-test host. Multi-signal — see
-    /// MetadataCache.isRunningTests (mirrored, not shared).
-    private static var isRunningTests: Bool {
-        if NSClassFromString("XCTestCase") != nil { return true }
-        let env = ProcessInfo.processInfo.environment
-        if env["XCTestConfigurationFilePath"] != nil { return true }
-        if env["XCTestBundlePath"] != nil { return true }
-        if env["SWIFT_TESTING_ENABLED"] != nil { return true }
-        if env["VS_UI_TEST"] == "1" { return true }
-        if Bundle.allBundles.contains(where: { $0.bundlePath.hasSuffix(".xctest") }) {
-            return true
-        }
-        return false
-    }
+    /// True when this process is a test host (incl. VS_UI_TEST=1). The
+    /// shared detector — codex #1713, TestHostDetection.swift.
+    private static var isRunningTests: Bool { TestHostDetection.isTestHost }
 
     // MARK: - State
 
@@ -576,7 +565,14 @@ public final class PreviewDiskCache: @unchecked Sendable {
             lock.lock()
             defer { lock.unlock() }
             var reaped = 0
-            for entry in payloads.sorted(by: { $0.mtime < $1.mtime }) {
+            // Oldest first; equal mtimes (coarse-timestamp volumes, bulk
+            // writes in one second) fall back to the name so the order —
+            // and therefore what survives — is deterministic.
+            let oldestFirst = payloads.sorted {
+                $0.mtime != $1.mtime ? $0.mtime < $1.mtime
+                                     : $0.url.lastPathComponent < $1.url.lastPathComponent
+            }
+            for entry in oldestFirst {
                 guard total > Self.sizeCapBytes else { break }
                 // Only count bytes that actually left the disk.
                 do {
@@ -584,6 +580,19 @@ public final class PreviewDiskCache: @unchecked Sendable {
                     total -= entry.size
                     reaped += 1
                 } catch {
+                    // Already gone: another prune (the one `init` schedules,
+                    // an explicit pruneNow, or a second process) enumerated
+                    // the same snapshot and reaped it first — the enumeration
+                    // above runs outside the lock. Its bytes DID leave the
+                    // disk, so they count. Before 2026-09-26 this path left
+                    // `total` unchanged and the second pruner reaped one
+                    // extra live payload per file the first had removed (CI
+                    // run 36202513830: two reaped where one brings the cache
+                    // to the cap).
+                    if !fm.fileExists(atPath: entry.url.path) {
+                        total -= entry.size
+                        continue
+                    }
                     diskCacheLog.notice("Prune could not remove \(entry.url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 }
             }

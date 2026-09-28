@@ -59,6 +59,83 @@ struct AngelGradeBands: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - Coverage (rules v13)
+
+/// How a batch spreads across events and years (2026-09-26,
+/// docs/footage_groups_gap_plan_2026-09-26.md Stage 2). Rick: promote the
+/// most content with the most signal while avoiding noise — "if AA
+/// recommends 5 different versions of the same Thanksgiving 1994, rather
+/// than misc birthdays, trips, christmas from other years not yet
+/// archived, then AA is not working that well." Every field is a
+/// post-band batch rule or a signal's numbers; none of them reorders the
+/// ranked list (codex #1643 A4). Every key has a default, so a policy.json
+/// written before v13 reads exactly as it did plus today's coverage.
+struct AngelCoverageRules: Codable, Sendable, Equatable {
+    /// One pick per EVENT per batch (ArchiveAngelEvent: the same day, or
+    /// the same period in the same folder). The rest wait for a later batch.
+    var onePerEvent = true
+    /// At most this many picks of one YEAR per batch; 0 = no cap. A batch
+    /// is never left short for it — when other years cannot fill the
+    /// batch, the best held-back rows top it up.
+    var maxPerYearPerBatch = 2
+    /// The `backlogBonus` signal: the most points a year with a deep
+    /// unarchived backlog and few archived files can earn (scaled by the
+    /// share of the year still unarchived). 0 switches the signal off.
+    var backlogBonusMax = 20
+    /// A year earns the bonus only with at least this many videos still
+    /// to archive (a year with three clips is not a backlog).
+    var backlogMinimumUnarchived = 10
+
+    /// Any rule on: the sweep and the walk run the coverage pre-pass, and
+    /// the cached pick checks the catalog stamps. All off = rules v12 and
+    /// the pre-pass costs nothing (QA MINOR, 2026-09-26: ~0.8 s per 100k on
+    /// the main actor otherwise).
+    var isActive: Bool { onePerEvent || maxPerYearPerBatch > 0 || backlogBonusMax > 0 }
+
+    static let standard = AngelCoverageRules()
+    /// Rules v12 behaviour: no event pass, no cap, no bonus.
+    static let off = AngelCoverageRules(onePerEvent: false, maxPerYearPerBatch: 0,
+                                        backlogBonusMax: 0, backlogMinimumUnarchived: 0)
+
+    init(onePerEvent: Bool = true, maxPerYearPerBatch: Int = 2, backlogBonusMax: Int = 20,
+         backlogMinimumUnarchived: Int = 10) {
+        self.onePerEvent = onePerEvent
+        self.maxPerYearPerBatch = maxPerYearPerBatch
+        self.backlogBonusMax = backlogBonusMax
+        self.backlogMinimumUnarchived = backlogMinimumUnarchived
+    }
+
+    /// Every key optional: an older file, or one that names a single key,
+    /// keeps the defaults for the rest (the merge does this too; this is
+    /// the belt to its braces for a directly decoded file).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        onePerEvent = try c.decodeIfPresent(Bool.self, forKey: .onePerEvent) ?? true
+        maxPerYearPerBatch = try c.decodeIfPresent(Int.self, forKey: .maxPerYearPerBatch) ?? 2
+        backlogBonusMax = try c.decodeIfPresent(Int.self, forKey: .backlogBonusMax) ?? 20
+        backlogMinimumUnarchived = try c.decodeIfPresent(Int.self, forKey: .backlogMinimumUnarchived) ?? 10
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case onePerEvent, maxPerYearPerBatch, backlogBonusMax, backlogMinimumUnarchived
+    }
+
+    var problems: [String] {
+        var out: [String] = []
+        if !(0...1_000).contains(maxPerYearPerBatch) {
+            out.append("coverage.maxPerYearPerBatch = \(maxPerYearPerBatch) — must be 0…1000 (0 = no cap)")
+        }
+        if !AngelRecommendationPolicy.pointRange.contains(backlogBonusMax) {
+            out.append("coverage.backlogBonusMax = \(backlogBonusMax) — must be "
+                       + "\(AngelRecommendationPolicy.pointRange.lowerBound)…\(AngelRecommendationPolicy.pointRange.upperBound)")
+        }
+        if !(0...1_000_000).contains(backlogMinimumUnarchived) {
+            out.append("coverage.backlogMinimumUnarchived = \(backlogMinimumUnarchived) — must be 0…1000000")
+        }
+        return out
+    }
+}
+
 // MARK: - Tables
 
 /// The lookup tables the built-in floors, signals and the batch order read.
@@ -208,12 +285,18 @@ struct AngelPolicyTables: Codable, Sendable, Equatable {
             "imovie cache", "imovie movie cache", "imovie thumbnails", "imovie thumbnails.localized",
             "render files", "transcoded media", "proxy media", "analysis files", "thumbnail media",
             "cache", "caches", "renders", "proxies", "thumbnails", "temp", "tmp", ".cache", ".thumbnails",
+            // Rules v12: Person Finder's compilation output folder — machine
+            // edits of other files, never originals (three reached the live
+            // list as Ready).
+            "personsearchresults",
         ],
         // Exactly the retired `^(cache|render|proxy|proxies|preview|thumb|
         // thumbnail|temp|tmp)([ _-]?\d+)?$` (AngelStemMatcherTests: parity).
         appCacheStemNames: ["cache", "render", "proxy", "proxies", "preview", "thumb", "thumbnail", "temp", "tmp"],
         appCacheStemNumbered: true,
-        appCacheStemGlobs: [],
+        // Rules v12: Person Finder's "Donna_compilation_39_h264_720p…" —
+        // wherever it was copied to.
+        appCacheStemGlobs: ["*_compilation_*"],
         maxOriginalsPerKey: 8)
 }
 
@@ -227,7 +310,7 @@ enum AngelPolicyDefaults {
     /// volume must never be recommended. A policy.json that disables one of
     /// these, narrows it (`when`), exempts stars, spares explicit picks,
     /// changes its kind or reason — or drops it — is REFUSED whole.
-    static let safetyFloorIDs: [String] = ["notVideo", "onMasterArchive", "archivedCopy", "fileGone", "volumeOffline"]
+    static let safetyFloorIDs: [String] = ["notVideo", "onMasterArchive", "angelWorkingCopy", "archivedCopy", "fileGone", "volumeOffline"]
 
     /// The canonical safety floors, in policy order. A `let` (computed
     /// once): the scorer's independent safety pass reads it per record.
@@ -255,6 +338,11 @@ enum AngelPolicyDefaults {
         AngelRule(id: "notVideo", kind: .notVideo, note: "Audio-only files, stills and un-probed files are not videos"),
         AngelRule(id: "onMasterArchive", kind: .onMasterArchive,
                   note: "The file is in the Master Archive or already has its copy there"),
+        // Rules v12 (2026-09-25): the Angel's own buffer — companions it
+        // prepared for review — is never material. Two 60-minute buffer
+        // copies reached the live list as "Worth a look". A safety floor.
+        AngelRule(id: "angelWorkingCopy", kind: .angelWorkingCopy,
+                  note: "A companion Archive Angel prepared in its buffer — never material of its own"),
         // Rick 2026-09-22 (decision 3): archiveStage is never "archived" —
         // but Relocate's terminal stages mean the FILE IS GONE. v10 caught
         // them by accident ("stage ≥ Master"); this names them. Live catalog
@@ -305,6 +393,10 @@ enum AngelPolicyDefaults {
         AngelRule(id: "onlyCopy", kind: .onlyCopy),
         AngelRule(id: "unassignedVolume", kind: .unassignedVolume),
         AngelRule(id: "audioProblem", kind: .audioProblem),
+        // Rules v13 coverage: a year the archive is missing earns points
+        // (coverage.backlogBonusMax / backlogMinimumUnarchived).
+        AngelRule(id: "backlogBonus", kind: .backlogBonus,
+                  note: "A year with a deep backlog and few archived files earns up to coverage.backlogBonusMax"),
         AngelRule(id: "downloadCap", kind: .downloadCap),
         AngelRule(id: "fatigue", kind: .fatigue),
     ]
@@ -334,6 +426,46 @@ enum AngelPolicyDefaults {
         .init(field: .vouched, op: .eq, value: .bool(true)),
         .init(field: .grade, op: .eq, value: .string("A")),
     ])
+
+    /// "Vouched, or grade A or B" — anything the classes below would
+    /// recommend at all.
+    static let recommendedAtAll = AngelCondition(any: [
+        .init(field: .vouched, op: .eq, value: .bool(true)),
+        .init(field: .grade, op: .in, value: .strings(["A", "B"])),
+    ])
+
+    /// Rules v12 (docs/archive_angel_wise_design.md §3.4): a file whose
+    /// bytes per second no real recording reaches (the live catalog holds
+    /// 116 above 1 Gbps — a 43 GB file for 37 s of picture) is a broken
+    /// encode until a person has looked: Worth a look, never Ready.
+    static let absurdBitrateKbps = 1_000_000.0
+    static let absurdBitrateLine = "Unusually large for its length — check it before archiving"
+    static let absurdBitrateClass = AngelClassRule(
+        .worthALook,
+        when: [recommendedAtAll, .init(field: .averageKbps, op: .ge, value: .number(absurdBitrateKbps))],
+        note: "A broken encode (over 1 Gbit/s) needs a look, not a promote",
+        line: absurdBitrateLine)
+
+    /// Rules v12 (§3.3): a file the ONE date rule places within the last
+    /// year, with no camera or phone named in its tags (make or model — QA v12 #5), in a codec a
+    /// digitizer or an editor writes (FFV1, ProRes, DV, MPEG-2, MJPEG) is
+    /// almost always a tape converted THIS year — the 22 live files under
+    /// "Converted_VHS_Tapes_2026" the Angel called Ready under 2026. It
+    /// needs its date confirmed (one click), so: Needs a date, with the
+    /// reason. A genuine 2026 ProRes export pays one click too — a year the
+    /// person typed outranks everything.
+    static let recentDigitizationCodecs = ["ffv1", "prores", "dvvideo", "mpeg2video", "mjpeg"]
+    static let recentDigitizationLine =
+        "Dated {year}, but it looks like a digitization of older footage — confirm when it was filmed"
+    static let recentDigitizationClass = AngelClassRule(
+        .needsDate,
+        when: [recommendedByPersonOrAngel,
+               .init(field: .hasUserDate, op: .eq, value: .bool(false)),
+               .init(field: .yearsAgo, op: .le, value: .number(1)),
+               .init(field: .hasCameraOrigin, op: .eq, value: .bool(false)),
+               .init(field: .videoCodec, op: .in, value: .strings(recentDigitizationCodecs))],
+        note: "Dated within the last year by a machine, no camera named, a digitizer's or editor's codec: confirm the year",
+        line: recentDigitizationLine)
 }
 
 extension AngelRecommendRules {
@@ -353,6 +485,9 @@ extension AngelRecommendRules {
         vouch: AngelPolicyDefaults.vouch,
         date: AngelDateRule(minimum: "year"),
         classes: [
+            // Rules v12: two truthfulness rules ahead of Ready.
+            AngelPolicyDefaults.absurdBitrateClass,
+            AngelPolicyDefaults.recentDigitizationClass,
             AngelClassRule(.ready, when: [AngelPolicyDefaults.recommendedByPersonOrAngel,
                                           .init(field: .dated, op: .eq, value: .bool(true))]),
             AngelClassRule(.needsDate, when: [AngelPolicyDefaults.recommendedByPersonOrAngel]),

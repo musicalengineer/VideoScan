@@ -182,7 +182,7 @@ struct ModelPathLookupTests {
         }
         let elapsed = CFAbsoluteTimeGetCurrent() - t0
         #expect(found == 2_000)
-        #expect(elapsed < 2.0, "2,000 indexed lookups took \(elapsed)s — index is not O(1)")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 2.0), "2,000 indexed lookups took \(elapsed)s — index is not O(1)")
     }
 }
 

@@ -498,6 +498,7 @@ struct ArchiveAngelCodex1643ScaleTests {
         let s = ArchiveAngelRecommendationSummary.make(evidence: records, prepared: prepared, promoted: promoted.subtracting(prepared),
                                                        revision: 1, live: live)
         let elapsed = ContinuousClock.now - started
+        print("[angel-perf] a3Summary100k \(PerformanceLane.configurationName) \(elapsed)")
         var mismatches = 0
         var counts: [ArchiveAngelRecommendationClass: Int] = [:]
         for (id, r) in records {
@@ -510,7 +511,7 @@ struct ArchiveAngelCodex1643ScaleTests {
         }
         #expect(mismatches == 0, "the filter and the effective class disagree on \(mismatches) records")
         for k in ArchiveAngelRecommendationClass.allCases where k != .prepared { #expect(s.count(k) == (counts[k] ?? 0), "\(k)") }
-        #expect(elapsed < .seconds(2), "\(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "\(elapsed)")
     }
 
     @Test("SENSOR A4: a 100k-record evidence file, 30k of them in 3-copy groups — the pick of 25 reclassifies groups live in under 2 s (Debug)")
@@ -538,13 +539,15 @@ struct ArchiveAngelCodex1643ScaleTests {
         }
         store.replace(with: ArchiveAngelEvidenceFile(computedAt: now, complete: true, considered: 100_000, eligible: 100_000, records: records))
         let started = ContinuousClock.now
-        let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now) { live[$0] }
+        // Rules v13: a one-day fixture — the v12 pins hold with coverage off (ArchiveAngelA4DeterminismTests has the coverage-on sensor).
+        let pick = ArchiveAngelJob.selectFromEvidence(store: store, count: 25, now: now, policy: .coverageOff) { live[$0] }
         let elapsed = ContinuousClock.now - started
+        print("[angel-perf] a4LiveGroupPick100k \(PerformanceLane.configurationName) \(elapsed)")
         #expect(pick?.selection.picks.count == 25)
         for p in pick?.selection.picks ?? [] where p.candidate.duplicateGroupID != nil {
             #expect(p.candidate.duplicateDisposition == .keep, "a grouped pick is the group's Keep copy")
         }
-        #expect(elapsed < .seconds(2), "\(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "\(elapsed)")
     }
 }
 

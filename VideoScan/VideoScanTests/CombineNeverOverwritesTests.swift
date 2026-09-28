@@ -22,8 +22,16 @@ import os
 // Fixtures are synthetic (ffmpeg lavfi), `test_` prefixed, in a per-test
 // temp dir. Media matrix: mov/ProRes video + wav/PCM audio, and an Avid-
 // style pair (OP1a MPEG-2 video-only MXF + OP-Atom PCM audio-only MXF).
+//
+// Isolation (2026-09-25): every model is built by `makeModel()`, which turns
+// the Combine gate's memory auto-pause OFF. The gate otherwise reads the
+// HOST's free RAM against a 4 GB floor; the GitHub runner (~7 GB, 2.2 GB
+// free) auto-paused the first pair forever and every CI run timed out here.
+// The per-test time limit makes any future stall a loud failure, not a
+// 20-minute step timeout (PauseGate now honors cancellation, so the limit's
+// cancel actually ends a stuck test — see PauseGateCancellationTests).
 
-@Suite(.serialized) @MainActor
+@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor
 struct CombineNeverOverwritesTests {
 
     enum Kind: String, CaseIterable, Sendable, CustomStringConvertible {
@@ -38,6 +46,13 @@ struct CombineNeverOverwritesTests {
     }
 
     // MARK: - Fixture helpers
+
+    /// A model whose Combine gate ignores host memory pressure (see header).
+    static func makeModel() async -> VideoScanModel {
+        let model = VideoScanModel()
+        await model.combinePauseGate.setAutoPause(false)
+        return model
+    }
 
     static func makeDir(_ purpose: String) throws -> URL {
         let dir = FileManager.default.temporaryDirectory
@@ -178,8 +193,28 @@ struct CombineNeverOverwritesTests {
 
     // MARK: - Same base name, one output folder
 
-    @Test(arguments: Kind.allCases)
+    /// mov/ProRes + wav: stream-copy mux, no encoder needed — runs everywhere.
+    @Test(arguments: [Kind.movProRes])
     func sameBaseName_twoPairs_oneFolder_bothOutputsKept(_ kind: Kind) async throws {
+        try await Self.sameBaseNameBody(kind)
+    }
+
+    /// Avid MXF pair: MPEG-2 video is not MOV-stream-copy-safe, so Combine
+    /// auto-switches to `.reencodeProRes` = `prores_videotoolbox`. The GitHub
+    /// runner is a virtual M1 with no ProRes encoder (CI run 36192353105:
+    /// okA == false in 0.8 s, while this same run's encoder probe skipped
+    /// every other prores_videotoolbox test). Gated on the project's shared
+    /// capability check: skips ONLY when the encoder is missing AND
+    /// GITHUB_ACTIONS=true; on a real Mac it always runs, and
+    /// CleanupTests' "sensor: off GitHub-hosted runners, prores_videotoolbox
+    /// encodes" fails if the encoder ever goes missing there.
+    @Test(.enabled(if: CleanupTestMedia.runsHardwareProResTests,
+                   CleanupTestMedia.hardwareProResSkipReason))
+    func sameBaseName_twoPairs_oneFolder_bothOutputsKept_mxfPair() async throws {
+        try await Self.sameBaseNameBody(.mxfPair)
+    }
+
+    static func sameBaseNameBody(_ kind: Kind) async throws {
         try #require(Self.toolsPresent, "ffmpeg/ffprobe not found")
         let root = try Self.makeDir("same_base_\(kind)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -190,7 +225,7 @@ struct CombineNeverOverwritesTests {
         let pairA = try Self.makePair(kind, in: srcA, stem: "test_clip", seconds: 2)
         let pairB = try Self.makePair(kind, in: srcB, stem: "test_clip", seconds: 4)
 
-        let model = VideoScanModel()
+        let model = await Self.makeModel()
         let okA = await Self.run(model, pairA, into: out)
         let okB = await Self.run(model, pairB, into: out)
         #expect(okA && okB)
@@ -223,7 +258,7 @@ struct CombineNeverOverwritesTests {
         let pairA = try Self.makePair(.movProRes, in: srcA, stem: "test_clip", seconds: 2)
         let pairB = try Self.makePair(.movProRes, in: srcB, stem: "test_clip", seconds: 4)
 
-        let model = VideoScanModel()
+        let model = await Self.makeModel()
         let jobA = Self.addJob(model, pair: pairA, outputFolder: out, expectedDuration: 2)
         let jobB = Self.addJob(model, pair: pairB, outputFolder: out, expectedDuration: 4)
         let tmp = FileManager.default.temporaryDirectory
@@ -255,7 +290,7 @@ struct CombineNeverOverwritesTests {
         let final = out.appendingPathComponent("test_clip_combined.mov")
         try Self.sentinel.write(to: final)
 
-        let model = VideoScanModel()
+        let model = await Self.makeModel()
         let muxStarted = OSAllocatedUnfairLock(initialState: false)
         let ok = await CombineTestSeams.$beforeMux.withValue({ _, _ in muxStarted.withLock { $0 = true } }) {
             await Self.run(model, pair, into: out)
@@ -281,7 +316,7 @@ struct CombineNeverOverwritesTests {
         let final = out.appendingPathComponent("test_clip_combined.mov")
         try Self.sentinel.write(to: final)
 
-        let model = VideoScanModel()
+        let model = await Self.makeModel()
         let other = VideoRecord()
         other.filename = final.lastPathComponent
         other.fullPath = final.path
@@ -314,7 +349,7 @@ struct CombineNeverOverwritesTests {
                                            seconds: 2, group: good.video.pairGroupID).snapshot())
         let final = out.appendingPathComponent("test_clip_combined.mov")
 
-        let model = VideoScanModel()
+        let model = await Self.makeModel()
         // Something else lands at the final name AFTER the pre-check —
         // exactly the audit's window (e.g. a same-named pair publishing).
         let sentinel = Self.sentinel
@@ -338,7 +373,7 @@ struct CombineNeverOverwritesTests {
         let pair = try Self.makePair(.movProRes, in: root, stem: "test_clip", seconds: 2)
         let final = out.appendingPathComponent("test_clip_combined.mov")
 
-        let model = VideoScanModel()
+        let model = await Self.makeModel()
         let sentinel = Self.sentinel
         // Expected 100 s vs a 2 s mux → CombineVerifier reports a duration mismatch.
         let ok = await CombineTestSeams.$beforeMux.withValue({ destination, _ in
@@ -363,7 +398,7 @@ struct CombineNeverOverwritesTests {
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let pair = try Self.makePair(.movProRes, in: root, stem: "test_clip", seconds: 2)
 
-        let model = VideoScanModel()
+        let model = await Self.makeModel()
         #expect(await Self.run(model, pair, into: out))
         let prior = VideoScanModel.priorCombinedOutputs(records: model.records, outputFolder: out)
         let priorPath = try #require(pair.video.pairGroupID.flatMap { prior[$0] })
@@ -390,7 +425,7 @@ struct CombineNeverOverwritesTests {
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let p = try Self.makePair(.movProRes, in: root, stem: "test_clip", seconds: 2)
         let pair = legacyRecord ? p : Pair(video: Self.record(path: URL(fileURLWithPath: p.video.fullPath), streamType: .videoOnly, videoCodec: "prores", seconds: 2, group: nil).snapshot(), audio: p.audio)
-        let model = VideoScanModel()
+        let model = await Self.makeModel()
         #expect(await Self.run(model, pair, into: out))
         if legacyRecord { model.records.last?.combinedFromPairID = nil }
         let prior = VideoScanModel.priorCombinedOutputs(records: model.records, outputFolder: out)
@@ -412,7 +447,7 @@ struct CombineNeverOverwritesTests {
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let pair = try Self.makePair(.movProRes, in: root, stem: "test_clip", seconds: 2)
 
-        let model = VideoScanModel()
+        let model = await Self.makeModel()
         let failFinals: @Sendable (String, String) -> Int32 = { src, dst in
             if dst.contains(".vs-kept.") {
                 return renamex_np(src, dst, UInt32(RENAME_EXCL)) == 0 ? 0 : errno
@@ -444,7 +479,7 @@ struct CombineNeverOverwritesTests {
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let pair = try Self.makePair(.movProRes, in: root, stem: "test_clip", seconds: 2)
 
-        let model = VideoScanModel()
+        let model = await Self.makeModel()
         let task = Task { @MainActor in
             await CombineTestSeams.$beforeMux.withValue({ _, writeTarget in
                 // A half-written output exists, then the user presses Stop.

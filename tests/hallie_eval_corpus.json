@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 725 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 762 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected. Service-story items (mil260923-NNN, 2026-09-23) cover family military service: war asks by everyday name (Civil War, WW2, the Revolution, WWI), one person's service, the biography's offer and its 'yes' follow-up, and typo forms.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -5496,7 +5496,10 @@
       "category": "real_family",
       "text": "did anyone in the family serve in ww2",
       "expect": "biography",
-      "notes": "Dad Breen served in the USMC but his service dates are not recorded (b. 1929 — do not assert WW2); uncles/in-laws served, per Rick, but are not in the data. Say what is recorded and what is not; never invent service."
+      "notes": "Rick 2026-09-23: Dad Breen joined the US Marine Corps in time to be counted a WWII veteran (official period ran through 31 Dec 1946), never in combat — so WW2 IS now recorded for him. Uncles/in-laws served per Rick but are not in the data; never invent service.",
+      "mustContain": [
+        "Richard Harding Breen Sr"
+      ]
     },
     {
       "id": "fam-076",
@@ -5796,6 +5799,516 @@
       "text": "videos of dan and tim",
       "expect": "catalog",
       "notes": "clean: “videos of Dan and Tim”. NAMES ARE NEVER CORRECTED: 'dan' is not 'and', 'tim' is not 'time'; Dan and Tim's videos. (typo front door, 2026-09-21)"
+    },
+    {
+      "id": "mil260923-001",
+      "category": "biography",
+      "text": "who in our family served in the civil war",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "John Robert Latta"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Also strict-046."
+    },
+    {
+      "id": "mil260923-002",
+      "category": "biography",
+      "text": "yes",
+      "expect": "biography",
+      "followsPrevious": true,
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "54th Massachusetts",
+        "family tradition"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Takes the 'Would you like to hear his story?' offer: the brief story + 'That's family tradition, from Barry Latta; no document confirms it yet.' Needs the phase-2 data step."
+    },
+    {
+      "id": "mil260923-003",
+      "category": "biography",
+      "text": "was anyone in the family in world war 2",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Richard Harding Breen Sr",
+        "Marine Corps"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Also strict-047."
+    },
+    {
+      "id": "mil260923-004",
+      "category": "biography",
+      "text": "tell me about John Robert Latta",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "John Robert Latta"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Ends with 'Would you like to hear the family story of John Robert Latta's service in the Civil War?' (phase-2 data)."
+    },
+    {
+      "id": "mil260923-005",
+      "category": "biography",
+      "text": "did my dad serve",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Marine Corps"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Also strict-049. Expected (phase 2): the brief story + 'Rick Breen told me this.'"
+    },
+    {
+      "id": "mil260923-006",
+      "category": "biography",
+      "text": "what did Chris O'Connor do",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "British Army"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Also strict-050."
+    },
+    {
+      "id": "mil260923-007",
+      "category": "biography",
+      "text": "tell me about the family's military history",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Richard Harding Breen Sr",
+        "John Robert Latta",
+        "Christopher O'Connor"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Also strict-051. Ends 'Whose story would you like to hear?' with name chips (phase 2)."
+    },
+    {
+      "id": "mil260923-008",
+      "category": "biography",
+      "text": "anyone in the American Revolution",
+      "expect": "graceful_decline",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustNotContain": [
+        "Marine"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). No family story; honest decline + invitation until the tree is re-merged with its _MILT facts (Rick's 20-generation pull has Revolutionary War soldiers)."
+    },
+    {
+      "id": "mil260923-009",
+      "category": "biography",
+      "text": "tell me about Richard Harding Breen Sr",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Richard Harding Breen Sr"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Phase 2: ends 'Would you like to hear how Richard Harding Breen Sr served his country?'"
+    },
+    {
+      "id": "mil260923-010",
+      "category": "biography",
+      "text": "yes",
+      "expect": "biography",
+      "followsPrevious": true,
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "never in combat",
+        "Rick Breen told me this"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). Takes the offer. Needs the phase-2 data step."
+    },
+    {
+      "id": "mil260923-011",
+      "category": "biography",
+      "text": "was anyone in the family in world war 1",
+      "expect": "graceful_decline",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustNotContain": [
+        "Richard Harding Breen Sr served",
+        "John Robert Latta"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). No family story for WWI; say so plainly and invite one."
+    },
+    {
+      "id": "mil260923-012",
+      "category": "typos",
+      "text": "who in our famly servd in the civl war",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "John Robert Latta"
+      ],
+      "notes": "clean: “who in our family served in the civil war”. Typo front door (service vocabulary added 2026-09-23)."
+    },
+    {
+      "id": "mil260923-013",
+      "category": "typos",
+      "text": "was anyone in the famliy in wolrd war 2",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Marine Corps"
+      ],
+      "notes": "clean: “was anyone in the family in world war 2”."
+    },
+    {
+      "id": "mil260923-014",
+      "category": "biography",
+      "text": "which side did John Robert Latta fight on",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Confederate"
+      ],
+      "notes": "Service stories (Rick 2026-09-23). One-person service shape."
+    },
+    {
+      "id": "lv260925-001",
+      "category": "live",
+      "text": "who was rick breen's dad?",
+      "expect": "kinship",
+      "notes": "Rick 2026-09-21 18:30, live: answered with Richard Harding Breen Sr's birth and death (right person). Expectation unconfirmed."
+    },
+    {
+      "id": "lv260925-002",
+      "category": "live",
+      "text": "Hi Hallie how are you?",
+      "expect": "social",
+      "notes": "harvested 2026-09-25 from the app transcript (2026-09-21); expectation unconfirmed"
+    },
+    {
+      "id": "lv260925-003",
+      "category": "live",
+      "text": "tell me about my grandparents",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-25 from the app transcript (2026-09-21); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260925-004",
+      "category": "live",
+      "text": "tell me about ellen",
+      "expect": "clarify",
+      "notes": "Rick 2026-09-21 22:56, LIVE MISS: 'Which ellen do you mean: Ellen Ronan, Ellen Ronan?' — two identical labels, and Rick's sister Ellen (People tab) not offered; his reply 'ellen engelhardt my sister' then declined 'couldn't tell who it is about'. The clarify must offer the People-tab sister and never show two identical labels. Open (ledger 2026-09-25).",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260925-005",
+      "category": "live",
+      "text": "tell me about john of gaunt",
+      "expect": "biography",
+      "notes": "Rick 2026-09-22 19:51, live: answered from the tree (John of Gaunt, b. 1340). Expectation unconfirmed.",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260925-006",
+      "category": "live",
+      "text": "find rick playing guitar",
+      "expect": "catalog",
+      "notes": "Rick 2026-09-23 22:25, live: 'I found 5 catalog items matching that.' Expectation unconfirmed."
+    },
+    {
+      "id": "lv260925-007",
+      "category": "live",
+      "text": "show timmy playing guitar",
+      "expect": "catalog",
+      "notes": "Rick 2026-09-23 22:26, live: 'I found 2 catalog items matching that.' Expectation unconfirmed.",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260925-008",
+      "category": "live",
+      "text": "tell me about thankful pratt and her husband",
+      "expect": "kinship",
+      "notes": "Rick 2026-09-23 22:26, LIVE MISS right after 'show timmy playing guitar': \"I wasn't sure which person you meant — thankful pratt or timmy?\" — HalliePronounContinuity rewrote 'her' to the last answer's person although the sentence names her. Fixed 2026-09-25 (fix/hallie-night-0925, HalliePronounInSentenceAntecedentTests). 2026-09-26 night replay: strict-055 (same words, same set-up) answered 'Nathaniel Caleb Parker was the husband of Thankful Pratt'; this advisory run read the bound \"thankful pratt's husband\" as a name — translator variance under ollama 0.34.4, still open.",
+      "followsPrevious": true,
+      "mustNotContain": [
+        "timmy"
+      ]
+    },
+    {
+      "id": "lv260925-009",
+      "category": "live",
+      "text": "what relatives fought in the american war of independence?",
+      "expect": "graceful_decline",
+      "notes": "Rick 2026-09-23 22:29, LIVE MISS: answered with tree statistics (39250 people, most common surnames) — a different question. Asked before the service-stories merge (c01c054c, 09-24); the honest answer today is the service-record reply for the American Revolution (strict-052 twin). 2026-09-26 night replay: now the honest 'Nobody in the family has told me about service in the American Revolution…' — expect graceful_decline like strict-052 until the tree carries _MILT facts.",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustNotContain": [
+        "39250",
+        "most common surnames"
+      ]
+    },
+    {
+      "id": "lv260925-010",
+      "category": "live",
+      "text": "what family members fought in the american civil war",
+      "expect": "biography",
+      "notes": "Rick 2026-09-23 22:30, LIVE MISS: answered with Rick's own biography. Asked before the service-stories merge (c01c054c, 09-24); strict-046 is the same ask ('who in our family served in the civil war').",
+      "followsPrevious": true,
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "John Robert Latta"
+      ],
+      "mustNotContain": [
+        "retired software engineer"
+      ]
+    },
+    {
+      "id": "lv260925-011",
+      "category": "live",
+      "text": "who were my parents?",
+      "expect": "kinship",
+      "notes": "Rick 2026-09-24 22:09, live: declined 'The family tree is on disk but needs recompiling after the update' — tree state, not routing (recompiled 09-24 18:28). Expect Richard Harding Breen Sr and Eileen Latta."
+    },
+    {
+      "id": "lv260926-001",
+      "category": "live",
+      "text": "find videos of dad",
+      "expect": "catalog",
+      "notes": "Rick 2026-09-26 14:14 ET (session 627FCBEB, app), LIVE MISS: \"Dafydd ab Einion \\\"Y Giwn Llwyd\\\" was born about 1360, more than five centuries before motion pictures begin in 1888\" — route=graph, no search run. The 'videos of X' lineage shape resolved 'Dad' as a tree NAME: @IB21341@ carries the alternate NAME record 'Dad ab Giwn', and people(matching:) is token-exact over every NAME record. A kin term is the owner's relative (People tab → owner's tree record → honest decline), never a name lookup. Fixed fix/hallie-dad-dafydd (HallieLineageAnswer+KinTerm), pinned by HallieDadNotDafyddTests; strict-056. Expect the presence route for Dad Breen (Richard Harding Breen Sr; catalog tags 'Dad').",
+      "expectedRoutes": [
+        "presence",
+        "cross",
+        "event"
+      ],
+      "mustNotContain": [
+        "Dafydd",
+        "1360",
+        "motion pictures"
+      ]
+    },
+    {
+      "id": "lv260926-002",
+      "category": "live",
+      "text": "dad breen not someone from 5 centuries ago",
+      "followsPrevious": true,
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Richard Harding Breen Sr"
+      ],
+      "mustNotContain": [
+        "Dafydd",
+        "1360"
+      ],
+      "notes": "Rick 2026-09-26 14:15 ET, the correction. The answer itself was right (Richard Harding Breen Sr, template on a 21 s model timeout) — but in the same second a second bubble said 'Opening the Family Tree tab focused on Dafydd ab Einion': the SUPERSEDED answer's 'Open in Family Tree' chip was still live and was tapped the instant thinking ended (a tap during thinking is dropped silently). Fixed fix/hallie-dad-dafydd: HallieSupersededOffers retires earlier tree chips when the conversation settles on someone else; chip taps are now logged. Pinned by HallieSupersededOffersTests; strict-057. The harvester skips this turn ('not' is not leading), added by hand."
+    },
+    {
+      "id": "lv260926-003",
+      "category": "live",
+      "text": "sure",
+      "followsPrevious": true,
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "mustContain": [
+        "Marine"
+      ],
+      "mustNotContain": [
+        "Dafydd"
+      ],
+      "notes": "Rick 2026-09-26 14:16 ET: 'yes' to 'Would you like to hear how Richard Harding Breen Sr served his country?' → the service story (HallieServiceStory). Not a miss; the set-up for lv260926-004. Added by hand (the harvester skips a bare affirmative)."
+    },
+    {
+      "id": "lv260926-004",
+      "category": "live",
+      "text": "sure, but I also want videos of dad",
+      "followsPrevious": true,
+      "expect": "catalog",
+      "expectedRoutes": [
+        "presence",
+        "cross",
+        "event",
+        "followUp"
+      ],
+      "mustNotContain": [
+        "Dafydd",
+        "1360",
+        "motion pictures"
+      ],
+      "notes": "Rick 2026-09-26 14:17 ET, LIVE MISS: Dafydd ab Einion again, word for word, two turns after the correction and one after Richard Sr's service story. Same lineage-shape resolution as lv260926-001, plus no memory of who 'dad' had just been settled to be. Fixed fix/hallie-dad-dafydd: ConversationMemory.kinBindings keeps a kin term an ANSWERED graph turn settled ('dad breen' → Richard Harding Breen Sr) and the media shapes use it before any lookup. Pinned by HallieDadNotDafyddTests; strict-059. Added by hand (the harvester skips 'sure, but …')."
+    },
+    {
+      "id": "lv260926-005",
+      "category": "live",
+      "text": "hi hallie, find videos of donna down the cape",
+      "expect": "catalog",
+      "expectedRoutes": [
+        "presence",
+        "cross",
+        "event"
+      ],
+      "mustNotContain": [
+        "couldn't safely interpret"
+      ],
+      "notes": "Rick 2026-09-26 16:44 ET (session E1832598), opener with a greeting on the front. Worked live: 8 of 8 Cape Cod items with Donna; 'cape' was searched even though the translator left it out. Not a miss; confirmed 2026-09-26. followsPrevious unset: a fresh conversation."
+    },
+    {
+      "id": "lv260926-006",
+      "category": "live",
+      "text": "who is the earliest ancestor in my family tree",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "notes": "Rick 2026-09-26 16:46 ET. Live: the model's tree SUMMARY ('39249 people, birth years from 780 to 1959 … tell me whose tree you want') — not wrong, but not the person either. 'earliest ancestor' carries no born/birth word, so the superlative reader stays silent and the translator's familyTree summary answers. NOT fixed in fix/hallie-superlative-scope (one bug per dispatch); flagged in docs/hallie_live_failures.md 2026-09-26 as a follow-up candidate ('earliest/first ancestor' → earliestBorn over the owner's ancestors). Expectation unconfirmed."
+    },
+    {
+      "id": "lv260926-007",
+      "category": "live",
+      "text": "find the person in the family tree with the earliest birth date",
+      "followsPrevious": true,
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "Gruffudd ap Einion"
+      ],
+      "mustMatchQueryDescription": [
+        "superlative: earliestBorn scope=wholeTree"
+      ],
+      "notes": "Rick 2026-09-26 16:47 ET. Worked live ('The earliest birth year in the family tree is born 780: Gruffudd ap Einion'). MUST NOT CHANGE — sensor for fix/hallie-superlative-scope (strict-060). Confirmed 2026-09-26."
+    },
+    {
+      "id": "lv260926-008",
+      "category": "live",
+      "text": "find the person in the family tree with the earliest birth date who is a direct ancestor to rick",
+      "followsPrevious": true,
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "recorded ancestors"
+      ],
+      "mustNotContain": [
+        "Gruffudd",
+        "780"
+      ],
+      "mustMatchQueryDescription": [
+        "superlative: earliestBorn scope=ancestorsOf"
+      ],
+      "notes": "Rick 2026-09-26 16:48 ET, LIVE MISS: the same whole-tree answer (Gruffudd b. 780, Donna's line) — 'who is a direct ancestor to rick' was dropped by the superlative scope reader. Fixed fix/hallie-superlative-scope (HallieLineageQuestion.personScope); strict-061; pinned by HallieSuperlativeScopeTests."
+    },
+    {
+      "id": "lv260926-011",
+      "category": "live",
+      "text": "that person b. 780 is donna's ancestor, not mine. I want mine",
+      "followsPrevious": true,
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "recorded ancestors"
+      ],
+      "mustNotContain": [
+        "Gruffudd",
+        "operation=familyTree",
+        "was born 4 March 1959"
+      ],
+      "mustMatchQueryDescription": [
+        "superlative: earliestBorn scope=ancestorsOf"
+      ],
+      "notes": "Rick 2026-09-26 16:48 ET, LIVE MISS: read as 'shape=graph operation=familyTree person=Rick Breen' — Rick's own biography. A correction of the previous ranking's SCOPE. Fixed fix/hallie-superlative-scope (Result.superlative → ConversationMemory.lastSuperlative → HallieSuperlativeCorrection); strict-062. Added by hand (the harvester skips a mid-sentence 'not')."
+    },
+    {
+      "id": "lv260926-009",
+      "category": "live",
+      "text": "find the earliest birth year for richard's tree",
+      "followsPrevious": true,
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "recorded ancestors"
+      ],
+      "mustNotContain": [
+        "Gruffudd",
+        "780"
+      ],
+      "mustMatchQueryDescription": [
+        "superlative: earliestBorn scope=ancestorsOf"
+      ],
+      "notes": "Rick 2026-09-26 16:49 ET, LIVE MISS (Rick: 'I added for Rick and got that same answer'): 'for richard's tree' was dropped → scope=wholeTree → Gruffudd. Fixed fix/hallie-superlative-scope; strict-063."
+    },
+    {
+      "id": "lv260926-012",
+      "category": "live",
+      "text": "that is donna's line",
+      "followsPrevious": true,
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "recorded ancestors"
+      ],
+      "mustNotContain": [
+        "Gruffudd",
+        "Brockton",
+        "operation=familyTree"
+      ],
+      "mustMatchQueryDescription": [
+        "superlative: earliestBorn scope=ancestorsOf"
+      ],
+      "notes": "Rick 2026-09-26 16:49 ET, LIVE MISS: 'shape=graph operation=familyTree person=donna' — Donna's biography. 'that is X's line' after a ranking = the other side of the family (SuperlativeScope.otherSideOf). Fixed fix/hallie-superlative-scope; strict-064. Added by hand (a bare statement, not a question)."
+    },
+    {
+      "id": "lv260926-010",
+      "category": "live",
+      "text": "tell me about Gruffudd ap Einion",
+      "expect": "clarify",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "needs-clarification",
+      "mustContain": [
+        "Which Gruffudd"
+      ],
+      "notes": "Rick 2026-09-26 17:03 ET. Worked live: four namesakes, a which-one with years; Rick picked '(b. about 0780)' and got the biography. Not a miss; confirmed 2026-09-26."
     }
   ]
 }

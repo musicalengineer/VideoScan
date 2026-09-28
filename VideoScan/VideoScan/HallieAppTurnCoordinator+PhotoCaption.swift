@@ -92,7 +92,7 @@ extension HallieAppTurnCoordinator {
         // Correction: shown for someone the caption does not name.
         var excludedName: String?
         let shownID = photo.personGedcomID ?? graph.flatMap { g in
-            let matches = g.people.values.filter {
+            let matches = g.visiblePeople.filter {
                 $0.name.compare(photo.personName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
             }
             return matches.count == 1 ? matches[0].id : nil

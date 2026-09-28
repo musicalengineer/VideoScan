@@ -191,7 +191,7 @@ struct CleanupSheet: View {
     }
 
     private func startCleanup() {
-        fileOpsCenter.startedByUser {
+        _ = fileOpsCenter.startedByUser {
             $0.startCleanup(record: request.record,
                             recipe: request.recipe,
                             model: model,

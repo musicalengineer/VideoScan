@@ -328,7 +328,7 @@ struct ArchiveAngelSkipEntryTests {
             #expect(ready + skipped + toPrepare == 100_000, "every row is accounted for exactly once")
             return Date().timeIntervalSince(t0)
         }.value
-        #expect(elapsed < 1.0, "100k rows in \(String(format: "%.3f", elapsed))s — budget 1.0s")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 1.0), "100k rows in \(String(format: "%.3f", elapsed))s — budget 1.0s")
     }
 
     // MARK: helpers

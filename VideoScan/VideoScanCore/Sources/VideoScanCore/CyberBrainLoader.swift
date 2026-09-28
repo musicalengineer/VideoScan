@@ -134,6 +134,33 @@ public enum CyberBrainValidator {
             throw CyberBrainError.invalidField("item.updatedAt before createdAt")
         }
         if let date = item.eventDate { try validate(date) }
+        if let service = item.service {
+            try validate(service, itemID: item.id, kind: item.kind)
+        }
+    }
+
+    /// A service record rides only on a life event (its `text` is the
+    /// story), names the force it served in, and keeps its engagement list
+    /// short enough to be told — a brief story, not a muster roll.
+    static let maximumServiceEngagements = 12
+
+    private static func validate(
+        _ service: CyberBrainServiceRecord, itemID: String, kind: CyberBrainItem.Kind
+    ) throws {
+        guard kind == .event else {
+            throw CyberBrainError.invalidField("service record on \(kind.rawValue) item \(itemID); only lifeEvents carry one")
+        }
+        try requireText(service.force, "service.force")
+        if let role = service.roleNote { try requireText(role, "service.roleNote") }
+        if let dates = service.serviceDates { try validate(dates) }
+        guard service.engagements.count <= maximumServiceEngagements else {
+            throw CyberBrainError.invalidField("service.engagements for \(itemID)")
+        }
+        for engagement in service.engagements {
+            try requireText(engagement.name, "service.engagements.name")
+            if let place = engagement.place { try requireText(place, "service.engagements.place") }
+            if let date = engagement.date { try validate(date) }
+        }
     }
 
     private static func validateReferences(
@@ -365,10 +392,13 @@ public struct CyberBrainLoader: Sendable {
                                               "eventDate", "place", "sourceIDs",
                                               "confidence", "privacy", "status",
                                               "supersedesItemID", "disputesItemIDs",
-                                              "createdAt", "updatedAt"],
+                                              "createdAt", "updatedAt", "service"],
                               at: "\(key)[\(itemIndex)]")
                     if let date = item["eventDate"] as? [String: Any] {
                         try knownDate(date, at: "\(key)[\(itemIndex)].eventDate")
+                    }
+                    if let service = item["service"] as? [String: Any] {
+                        try knownService(service, at: "\(key)[\(itemIndex)].service")
                     }
                 }
             }
@@ -389,6 +419,25 @@ public struct CyberBrainLoader: Sendable {
     private static func knownDate(_ value: [String: Any], at path: String) throws {
         try known(value, allowed: ["value", "precision", "qualifier", "displayText"],
                   at: path)
+    }
+
+    /// A service record (2026-09-23) and everything nested in it.
+    private static func knownService(_ value: [String: Any], at path: String) throws {
+        try known(value, allowed: ["conflict", "force", "roleNote", "serviceDates",
+                                   "engagements", "combat", "basis"], at: path)
+        if let dates = value["serviceDates"] as? [String: Any] {
+            try knownDate(dates, at: "\(path).serviceDates")
+        }
+        for (index, entry) in (value["engagements"] as? [Any] ?? []).enumerated() {
+            guard let engagement = entry as? [String: Any] else {
+                throw CyberBrainError.invalidJSON("\(path).engagements[\(index)] is not an object")
+            }
+            try known(engagement, allowed: ["name", "date", "place"],
+                      at: "\(path).engagements[\(index)]")
+            if let date = engagement["date"] as? [String: Any] {
+                try knownDate(date, at: "\(path).engagements[\(index)].date")
+            }
+        }
     }
 
     private static func known(_ value: [String: Any], allowed: Set<String>,

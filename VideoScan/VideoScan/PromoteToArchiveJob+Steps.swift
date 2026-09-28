@@ -192,6 +192,7 @@ extension PromoteToArchiveJob {
         }
         // ---- Idempotency by SOURCE IDENTITY (catalog leg).
         if model.masterArchiveCopy(of: source) != nil {
+            if let conflict = placementConflicts[source.id] { return .failed(conflict) }
             return .skipped("already in the Master Archive")
         }
         if model.isArchiveCopy(source) || ArchivePathResolver.isInside(path: source.fullPath, root: ctx.root) {
@@ -268,6 +269,15 @@ extension PromoteToArchiveJob {
         // reader was only asked because the inference found nothing.
         if let typed = plan.archiveDateOverrides[source.id] {
             facts = facts.withDateHint(typed)
+        }
+        // Filing-year guard (Rick 2026-09-27): no video under a year before
+        // 1900 or after next year — refused BEFORE the journal intent, so
+        // nothing is written for it. The same function guards Refile.
+        if let refusal = ArchivePathResolver.filingYearRefusal(facts: facts) {
+            model.log("Promote: \(entry.filename) refused — \(refusal).")
+            appLog.write("promote: \(entry.filename) refused by the filing-year guard — \(refusal)")
+            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): filing-year guard (\(facts.dateHint.manifestDate, privacy: .public))")
+            return .failed(refusal)
         }
         let choice = try await Self.chooseDestinationOffMain(
             facts: facts, title: plan.archiveTitles[source.id],
@@ -405,6 +415,19 @@ extension PromoteToArchiveJob {
         // manifest id already present in the catalog (or malformed) falls
         // back to fresh — never a duplicate id.
         let copyID = Self.recordID(fromManifestFields: ctx.manifestFields[sourceID], model: model)
+        // LOCK the verified copy (Rick 2026-09-27) before it is indexed. Every
+        // caller verified the digest first. A failure never undoes a good
+        // copy — it is recorded as "promoted — not locked" and reported.
+        let lock = await Self.lockOffMain(root: ctx.root, relPath: relPath, seams: fileLock,
+                                          audit: model.archiveLockAuditSink())
+        let locked = lock.isOK
+        if !locked {
+            switch lock {
+            case .failed(let why): lockWarnings[sourceID] = why
+            case .absent: lockWarnings[sourceID] = "the file was not found at \(relPath) to lock"
+            case .changed, .alreadySo: break
+            }
+        }
         let outcome = await model.probeFileOutcome(url: destURL)
         let copyProbe = VideoRecord(id: copyID)
         copyProbe.apply(outcome)
@@ -413,12 +436,29 @@ extension PromoteToArchiveJob {
             sourceRecordID: sourceID, sourcePath: sourcePath, destRelPath: relPath,
             state: .renamed, sha256: sha, copyRecordID: nil, at: now)
 
-        if ctx.manifestRows[sourceID] == nil {
+        // GH #219: ONE date — the Promote choice when there is one — for the
+        // manifest row AND the archived record (placement used it already).
+        var decision: PromoteDateDecision?
+        let appendsRow = ctx.manifestRows[sourceID] == nil
+        if appendsRow {
             var recordDate = "", dateConfidence = "", people: [String] = []
             if let source {
                 let facts = ArchivePathResolver.facts(for: source)
-                recordDate = facts.dateHint.manifestDate
-                dateConfidence = Self.dateConfidenceLabel(source: source, facts: facts)
+                let d = Self.dateDecision(sourceFacts: facts,
+                                          sourceLabel: Self.dateConfidenceLabel(source: source, facts: facts),
+                                          override: plan.archiveDateOverrides[sourceID],
+                                          source: plan.archiveDateSources[sourceID],
+                                          relPath: relPath)
+                if d.followedFilename {
+                    appLog.write("promote: \(relPath) — the chosen date differs from where an earlier run placed the file; the manifest follows the placement so the two agree")
+                    if let wanted = plan.archiveDateOverrides[sourceID] {
+                        // Refused, clearly (codex r1 #3): never re-dated behind Rick's back.
+                        placementConflicts[sourceID] = "an earlier, interrupted promote already filed this under \(ArchiveRefile.datedLabel(d.hint)) (\(relPath)); the date \(ArchiveRefile.datedLabel(wanted)) was NOT applied — use Update… on the archived file to change it"
+                    }
+                }
+                decision = d
+                recordDate = d.hint.manifestDate
+                dateConfidence = d.confidenceLabel
                 people = Self.peopleForManifest(source)
             }
             let row = ArchiveManifestCSV.Row(
@@ -464,6 +504,33 @@ extension PromoteToArchiveJob {
                                                              promotedAt: now)
             appLog.write("promote: \(relPath) cataloged as a self-contained archive copy — its source record (\(sourceID.uuidString.prefix(8))…) is no longer in the catalog")
         }
+        // The index is the truth for this copy's date when the row was
+        // adopted (codex r1 #2) or its date followed the placement on disk
+        // (codex r2 #1) — never the source's current fields, which
+        // registration copied and which may say something else.
+        if let indexed = Self.indexedRecordDate(appendsRow: appendsRow, existingFields: ctx.manifestFields[sourceID],
+                                                decision: decision) {
+            Self.applyIndexedDate(indexed, to: archiveRecord, relPath: relPath, model: model)
+        }
+        // The chosen date onto the ARCHIVED copy's record (never the source):
+        // the same value the filename and the manifest row carry.
+        if let d = decision, let ud = d.recordUserDate {
+            let before = "\(archiveRecord.userDate ?? "none") (\(archiveRecord.userDateConfidence ?? "-"))"
+            archiveRecord.userDate = ud
+            archiveRecord.userDateConfidence = (d.recordKnown ? UserDateConfidence.known : .estimated).rawValue
+            let stamp = ISO8601DateFormatter().string(from: now)
+            let note = MachineNote.line(author: .promote,
+                                        text: "Promote \(stamp): date \(ud) (\(d.recordKnown ? "known" : "estimated")) \(d.provenance ?? "")")
+            archiveRecord.notes = MachineNote.append(note, to: archiveRecord.notes)
+            model.searchIndex.update(archiveRecord)
+            model.log("Promote: \(relPath) — archived record date \(before) → \(ud) (\(d.recordKnown ? "known" : "estimated"), \(d.provenance ?? "chosen at Promote"))")
+            ledgerEvents.append(model.ledgerEvent(.dateSet, for: archiveRecord, by: ledgerActor, at: now,
+                                                  batchID: id.uuidString, detail: [
+                MediaLedgerEvent.Detail.date: ud,
+                MediaLedgerEvent.Detail.confidence: d.recordKnown ? "known" : "estimated",
+                MediaLedgerEvent.Detail.reason: d.provenance ?? "",
+            ]))
+        }
         publishedThisBatch.append(journal)
         // Media Ledger (stage 2): one `archived` line per file, on the
         // SOURCE record when it exists (that is the file Rick asks about)
@@ -478,7 +545,30 @@ extension PromoteToArchiveJob {
             MediaLedgerEvent.Detail.archive: MasterArchiveLayout.displayName(forRootPath: ctx.root),
             MediaLedgerEvent.Detail.relPath: relPath,
             MediaLedgerEvent.Detail.sizeBytes: String(copyProbe.sizeBytes),
+            MediaLedgerEvent.Detail.locked: locked ? "true" : "false",
         ]))
+    }
+
+    /// Put the index row's date on the archived record (a user date only
+    /// when the row says it is Rick's) and log the change. No-op when the
+    /// record already agrees.
+    static func applyIndexedDate(_ indexed: (date: String?, confidence: String?), to archiveRecord: VideoRecord,
+                                 relPath: String, model: VideoScanModel) {
+        guard archiveRecord.userDate != indexed.date || archiveRecord.userDateConfidence != indexed.confidence else { return }
+        model.log("Promote: \(relPath) — archived record date \(archiveRecord.userDate ?? "none") → \(indexed.date ?? "none") (from the archive manifest row, not the source)")
+        archiveRecord.userDate = indexed.date
+        archiveRecord.userDateConfidence = indexed.confidence
+        model.searchIndex.update(archiveRecord)
+    }
+
+    /// Lock one verified archive file, off the main actor (a flag change on
+    /// the archive volume must never be waited for on the UI thread).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func lockOffMain(root: String, relPath: String, seams: ArchiveFileLock.Seams,
+                                        audit: @escaping @Sendable (String) -> Void) async -> ArchiveFileLock.Result {
+        ArchiveFileLock.set(.lock, root: root, relPath: relPath, reason: .promote, seams: seams, audit: audit)
     }
 
     /// Batch end (codex R3 blocker 5): ONE synchronous, durable catalog
@@ -486,20 +576,37 @@ extension PromoteToArchiveJob {
     /// to `done`. A refused/failed save leaves them `published` — the next
     /// run's reconcile re-links from manifest/journal provenance, never
     /// trusting an in-memory link that may not have been persisted.
-    func finalizeBatch(model: VideoScanModel, ctx: RunContext) -> Bool {
+    ///
+    /// The `done` appends run OFF the main actor (codex review of Refile r2
+    /// #4): each takes the archive-index lock, and a contended lock must
+    /// never be waited for on the UI thread. An append refused as busy
+    /// leaves that entry `published` — reconcile converges it next run.
+    func finalizeBatch(model: VideoScanModel, ctx: RunContext) async -> Bool {
         guard !publishedThisBatch.isEmpty else { return true }
         let saved = model.saveCatalogNow()
         if saved {
-            for entry in publishedThisBatch {
-                try? ArchivePromoteJournal.append(entry.with(state: .done), rootPath: ctx.root)
+            let entries = publishedThisBatch.map { $0.with(state: .done) }
+            let marked = await Self.appendDoneOffMain(entries, root: ctx.root)
+            if marked < entries.count {
+                appLog.write("promote: \(entries.count - marked) of \(entries.count) journal entr(ies) could not be marked done (archive index busy or unwritable) — they stay 'published' and converge on the next run")
             }
-            promoteLog.info("promote: catalog saved durably — \(self.publishedThisBatch.count) journal entr(ies) marked done")
+            promoteLog.info("promote: catalog saved durably — \(marked) of \(self.publishedThisBatch.count) journal entr(ies) marked done")
         } else {
             promoteLog.error("promote: catalog save did not land — \(self.publishedThisBatch.count) entr(ies) stay 'published' for reconcile")
             appLog.write("promote: the catalog could not be saved right now — \(publishedThisBatch.count) promotion(s) are on disk and in the manifest; the catalog links will be re-established on the next promotion run")
         }
         publishedThisBatch.removeAll()
         return saved
+    }
+
+    /// Append the batch's `done` entries off-main; returns how many landed.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func appendDoneOffMain(_ entries: [ArchivePromoteJournal.Entry], root: String) async -> Int {
+        var n = 0
+        for e in entries where (try? ArchivePromoteJournal.append(e, rootPath: root)) != nil { n += 1 }
+        return n
     }
 
     // MARK: Off-main hops

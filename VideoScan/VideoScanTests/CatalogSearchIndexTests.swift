@@ -297,7 +297,9 @@ struct CatalogSearchIndexTests {
         let start = SuspendingClock.now
         idx.rebuild(records: recs)
         let elapsed = Self.elapsedSeconds(since: start)
-        #expect(elapsed < 3.0,
+        // 2026-09-24: scaled on GitHub-hosted runners only (virtual M1,
+        // 2–3× slower; CI run 36068753075 measured 3.20 s). Local = 3.0 s.
+        #expect(.seconds(elapsed) < PerformanceLane.debugCeiling(.seconds(3)),
                 "Index rebuild took \(elapsed * 1000) ms for 10k records — over budget")
     }
 

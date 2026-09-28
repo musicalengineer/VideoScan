@@ -10,6 +10,8 @@ import SwiftUI
 //   ArchiveView+Table.swift       — file table, status cell, context menu
 //   ArchiveView+Categories.swift  — pure derivations (categories, status, people)
 //   ArchiveView+DetailSheet.swift — the per-record detail sheet
+//   ArchiveView+Layout.swift      — vertical layout policy (the header stays
+//                                   on screen; the Angel strip is bounded)
 //   ArchiveHomeState.swift        — entry/hand-off state machine (HOME =
 //                                   Archived + Timeline; see that file)
 
@@ -54,6 +56,10 @@ struct ArchiveView: View {
     @State var timelineScrollTarget: UUID?
     /// Main-window tab index (1 = Catalog) — "Show in Catalog" writes it.
     @AppStorage("selectedTab") var selectedTab: Int = 0
+    /// Update… sheet driver (Rick 2026-09-27): set once the preview is built.
+    @State var updatePreview: ArchiveUpdatePreview?
+    /// Why Update… did not open (e.g. already being edited in another sheet).
+    @State var updateRefusal: String?
 
     @Environment(\.openWindow) var openWindow
 
@@ -62,14 +68,28 @@ struct ArchiveView: View {
     // consolidation S2 (2026-09-22); this view only places the strip and
     // tells the façade when to re-read the buffer.
 
+    /// Measured height of the right pane — the Angel region's cap is a
+    /// share of it (ArchivePaneLayout). Written by onGeometryChange only.
+    @State var fileListHeight: CGFloat = 0
+
     var body: some View {
         HSplitView {
             sidebar
                 // Rick 2026-08-19: "plenty of room in this window" — wider
                 // sidebar so MASTER ARCHIVE and the stage rows breathe.
-                .frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
+                // minHeight 0 + alignment .top (bug 2026-09-24): if a pane's
+                // content is ever taller than the window it clips at the
+                // bottom — the header never slides up under the title bar.
+                .frame(minWidth: 260, idealWidth: 300, maxWidth: 380,
+                       minHeight: 0, maxHeight: .infinity, alignment: .top)
             fileList
-                .frame(minWidth: 500)
+                .frame(minWidth: 500, maxWidth: .infinity,
+                       minHeight: 0, maxHeight: .infinity, alignment: .top)
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    proxy.size.height
+                } action: { newHeight in
+                    fileListHeight = newHeight
+                }
         }
         // ContentView renders tabs via `switch selectedTab`, so this view
         // is rebuilt on every tab entry and onAppear IS the entry point.
@@ -88,6 +108,16 @@ struct ArchiveView: View {
         }
         .sheet(item: $archiveDetailRecord) { rec in
             ArchiveDetailSheet(record: rec, allRecords: model.records)
+        }
+        .sheet(item: $updatePreview) { preview in
+            ArchiveUpdateSheet(preview: preview)
+                // Every close path releases the one-editor claim.
+                .onDisappear { model.closeArchiveUpdate(preview) }
+        }
+        .alert("Update…", isPresented: Binding(get: { updateRefusal != nil }, set: { if !$0 { updateRefusal = nil } })) {
+            Button("OK", role: .cancel) { updateRefusal = nil }
+        } message: {
+            Text(updateRefusal ?? "")
         }
         // Archive Angel batches are read from the buffer OUTSIDE body (disk
         // I/O) — refreshed on entry and when the MFO job list changes (the
@@ -108,6 +138,20 @@ struct ArchiveView: View {
         .onChange(of: sortOrder) { old, new in
             let adjusted = ArchiveSortPolicy.adjusted(new: new, previous: old)
             if adjusted != new { sortOrder = adjusted }
+        }
+    }
+
+    // MARK: - Update…
+
+    /// Right-click ▸ Update…: build the preview (reads the manifest row off
+    /// the main actor), then show the sheet. Nothing is touched.
+    func openUpdateSheet(for rec: VideoRecord) {
+        let id = rec.id
+        Task {
+            switch await model.openArchiveUpdate(recordID: id) {
+            case .success(let p): updatePreview = p
+            case .failure(let r): updateRefusal = r.message
+            }
         }
     }
 
@@ -374,10 +418,22 @@ struct ArchiveView: View {
             // every archive copy, restores archiveFixity on a manifest
             // match, flags mismatches loudly.
             Button("Verify Copies…") {
-                fileOpsCenter.startedByUser { $0.startVerifyArchiveCopies(model: model) }
+                _ = fileOpsCenter.startedByUser { $0.startVerifyArchiveCopies(model: model) }
                 MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // Media File Operations window (legacy id)
             }
             .disabled(model.isReadOnly)
+            // One-time catch-up (Rick 2026-09-27): Promote locks every new
+            // file; this locks the ones promoted before locking existed. Gone
+            // once it has completed cleanly (marker in App Support).
+            if !model.archiveLockCatchUpDone {
+                Divider()
+                Button("Lock files already in the archive (one-time)…") {
+                    _ = fileOpsCenter.startedByUser { $0.startArchiveLockCatchUp(model: model) }
+                    MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+                }
+                .disabled(model.isReadOnly)
+                .help("Lock every file already in the archive, so nothing but Update… can change or delete it. Folders stay unlocked. Needed once.")
+            }
         } label: {
             Image(systemName: "ellipsis.circle")
                 .font(.system(size: 17))

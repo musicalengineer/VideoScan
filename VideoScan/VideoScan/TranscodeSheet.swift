@@ -195,7 +195,7 @@ struct TranscodeSheet: View {
         }
 
         TranscodeDestination.remember(directory: outputFolder)
-        fileOpsCenter.startedByUser {
+        _ = fileOpsCenter.startedByUser {
             $0.startTranscode(record: request.record,
                               preset: preset,
                               outputURL: outputURL,

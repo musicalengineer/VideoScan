@@ -4,7 +4,7 @@
 // tree). The main-actor install then only assigns: no O(people) loop
 // runs on the UI thread.
 //
-// The three parts are independent pure functions of (graph, speaker
+// The four parts are independent pure functions of (graph, speaker
 // settings), so they build in parallel (`DispatchQueue.concurrentPerform`)
 // and each is itself chunked over ordinals where it iterates people.
 // A process-wide memo keyed by the shared cache's load token means the
@@ -30,6 +30,9 @@ struct FamilyTreeLaunchBundle: Sendable {
     let anchorsCaption: String?
     /// One upward BFS per anchor so a selection change is O(path).
     let anchorIndexes: [String: GedcomFamilyGraph.AncestorIndex]
+    /// The sidebar's token / fuzzy name search over the same rows
+    /// (2026-09-26). Built here so a keystroke never tokenizes a name.
+    let search: FamilyTreeNameSearch
 
     /// Settings the bundle depends on besides the graph.
     struct Settings: Equatable, Sendable {
@@ -52,31 +55,36 @@ struct FamilyTreeLaunchBundle: Sendable {
         var anchors: [FamilyTreeAnchor] = []
         var caption: String?
         var indexes: [String: GedcomFamilyGraph.AncestorIndex] = [:]
-        // Three independent jobs; each writes its own variable only.
+        var search: FamilyTreeNameSearch?
+        // Four independent jobs; each writes its own variable only.
         withUnsafeMutablePointer(to: &rows) { rowsOut in
             withUnsafeMutablePointer(to: &identity) { identityOut in
                 withUnsafeMutablePointer(to: &anchors) { anchorsOut in
                     withUnsafeMutablePointer(to: &caption) { captionOut in
                         withUnsafeMutablePointer(to: &indexes) { indexesOut in
-                            DispatchQueue.concurrentPerform(iterations: 3) { job in
-                                switch job {
-                                case 0:
-                                    rowsOut.pointee = FamilyTreeLiveModel.sidebarRows(of: graph)
-                                case 1:
-                                    identityOut.pointee = FamilyAssetIdentityDirectory(graph: graph, speakers: settings.speakers)
-                                default:
-                                    let owner = settings.ownerFamilySearchID
-                                    let found = FamilyTreeLiveModel.anchors(in: graph, ownerFamilySearchID: owner)
-                                    anchorsOut.pointee = found
-                                    captionOut.pointee = FamilyTreeLiveModel.staleOwnerPinCaption(in: graph, ownerFamilySearchID: owner)
-                                    // One BFS per anchor, themselves in parallel (2–4 anchors).
-                                    var built = [GedcomFamilyGraph.AncestorIndex?](repeating: nil, count: found.count)
-                                    built.withUnsafeMutableBufferPointer { slots in
-                                        DispatchQueue.concurrentPerform(iterations: found.count) { i in
-                                            slots[i] = GedcomFamilyGraph.AncestorIndex(graph: graph, descendantID: found[i].id)
+                            withUnsafeMutablePointer(to: &search) { searchOut in
+                                DispatchQueue.concurrentPerform(iterations: 4) { job in
+                                    switch job {
+                                    case 0:
+                                        rowsOut.pointee = FamilyTreeLiveModel.sidebarRows(of: graph)
+                                    case 1:
+                                        identityOut.pointee = FamilyAssetIdentityDirectory(graph: graph, speakers: settings.speakers)
+                                    case 2:
+                                        searchOut.pointee = FamilyTreeNameSearch(graph: graph)
+                                    default:
+                                        let owner = settings.ownerFamilySearchID
+                                        let found = FamilyTreeLiveModel.anchors(in: graph, ownerFamilySearchID: owner)
+                                        anchorsOut.pointee = found
+                                        captionOut.pointee = FamilyTreeLiveModel.staleOwnerPinCaption(in: graph, ownerFamilySearchID: owner)
+                                        // One BFS per anchor, themselves in parallel (2–4 anchors).
+                                        var built = [GedcomFamilyGraph.AncestorIndex?](repeating: nil, count: found.count)
+                                        built.withUnsafeMutableBufferPointer { slots in
+                                            DispatchQueue.concurrentPerform(iterations: found.count) { i in
+                                                slots[i] = GedcomFamilyGraph.AncestorIndex(graph: graph, descendantID: found[i].id)
+                                            }
                                         }
+                                        indexesOut.pointee = Dictionary(uniqueKeysWithValues: zip(found.map(\.id), built.map { $0! }))
                                     }
-                                    indexesOut.pointee = Dictionary(uniqueKeysWithValues: zip(found.map(\.id), built.map { $0! }))
                                 }
                             }
                         }
@@ -86,7 +94,8 @@ struct FamilyTreeLaunchBundle: Sendable {
         }
         return FamilyTreeLaunchBundle(graph: graph, rows: rows, identity: identity!,
                                       ownerFamilySearchID: settings.ownerFamilySearchID,
-                                      anchors: anchors, anchorsCaption: caption, anchorIndexes: indexes)
+                                      anchors: anchors, anchorsCaption: caption, anchorIndexes: indexes,
+                                      search: search!)
     }
 
     // MARK: Process-wide memo

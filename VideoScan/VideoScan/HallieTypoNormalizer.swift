@@ -252,7 +252,13 @@ enum HallieTypoNormalizer {
               previous != "the", let next, next.first?.isLetter == true,
               !possessiveBlockers.contains(next) else { return nil }
         let stem = String(token.dropLast())
-        guard builtinProtectedNames.contains(stem.lowercased()) || isProtectedName(stem),
+        // A curated inner-circle name ("donnas", "ricks") always takes the
+        // possessive. A name known only from the 39k-person tree does NOT
+        // when the token is a real English word: "Line" is a tree name, and
+        // "my materanl lines back to europe" became "line's", which hid the
+        // line noun from the birthplace trail (strict-009, 2026-09-25).
+        let builtin = builtinProtectedNames.contains(stem.lowercased())
+        guard builtin || (isProtectedName(stem) && !HallieEnglishWords.contains(lower)),
               !isProtectedName(token) else { return nil }
         return Correction(original: token, replacement: stem + "'s", kind: .possessive)
     }
@@ -369,7 +375,13 @@ enum HallieTypoNormalizer {
     static func hasTripleRun(_ lower: String) -> Bool {
         let chars = Array(lower)
         guard chars.count >= 3 else { return false }
-        return (2..<chars.count).contains { chars[$0] == chars[$0 - 1] && chars[$0] == chars[$0 - 2] }
+        // A plain loop: the one-line `contains` closure timed out CI's
+        // Xcode 26.3 type checker (run 36065155765).
+        for index in 2..<chars.count {
+            let current: Character = chars[index]
+            if current == chars[index - 1] && current == chars[index - 2] { return true }
+        }
+        return false
     }
 
     /// "helllo" → "hello", "hiii" → "hi", "thankss" → "thanks". A triple

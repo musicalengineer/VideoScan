@@ -6,6 +6,7 @@
 
 import Foundation
 import CryptoKit
+import Testing
 @testable import VideoScan
 
 // MARK: - Stub engine
@@ -74,6 +75,56 @@ enum CleanupTestMedia {
         FileManager.default.isExecutableFile(atPath: ffmpegPath)
             && FileManager.default.isExecutableFile(atPath: ffprobePath)
     }
+
+    // MARK: VideoToolbox hardware-encoder capability
+
+    /// Does `prores_videotoolbox` actually encode a frame on this host?
+    ///
+    /// 2026-09-24, CI run 36068753075: every real render through
+    /// CleanupFFmpegEngine / TranscodeJob(.editingLT) died on the GitHub
+    /// macos-15 runner with ffmpeg exit 187 "Conversion failed!". The
+    /// fixtures (including the vorbis one) generated fine; the failing step
+    /// was always the `prores_videotoolbox` encode. The runner is a virtual
+    /// M1 whose VideoToolbox exposes no hardware ProRes encoder — the
+    /// encoder is compiled into ffmpeg (so `ffmpeg -encoders` lists it) but
+    /// fails when opened. Hence a FUNCTIONAL probe (encode one 64×64 frame
+    /// to the null muxer, ~0.2 s), not a list lookup and not a hostname.
+    /// Evaluated once per test process.
+    static let proResVideoToolboxEncodes: Bool = encoderOpens(
+        ["-c:v", "prores_videotoolbox", "-profile:v", "1", "-pix_fmt", "yuv422p10le"])
+
+    static func encoderOpens(_ encoderArgs: [String]) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: ffmpegPath) else { return false }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: ffmpegPath)
+        proc.arguments = ["-hide_banner", "-loglevel", "error", "-nostdin",
+                          "-f", "lavfi", "-i", "testsrc=size=64x64:rate=10",
+                          "-frames:v", "1"] + encoderArgs + ["-f", "null", "-"]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { return false }
+        proc.waitUntilExit()
+        return proc.terminationStatus == 0
+    }
+
+    /// Whether a test that needs a working VideoToolbox ProRes encoder runs.
+    ///
+    /// Skips ONLY when the encoder is absent AND this is a GitHub-hosted
+    /// runner (GITHUB_ACTIONS=true — see PerformanceLane.hostedRunnerFactor).
+    /// On Rick's fleet (Apple Silicon, real media engine) a missing encoder
+    /// is a genuine regression, so the test still runs there and fails
+    /// loudly instead of skipping itself green.
+    static func runsHardwareProResTests(encoderWorks: Bool, environment: [String: String]) -> Bool {
+        encoderWorks || environment["GITHUB_ACTIONS"] != "true"
+    }
+
+    static var runsHardwareProResTests: Bool {
+        runsHardwareProResTests(encoderWorks: proResVideoToolboxEncodes,
+                                environment: ProcessInfo.processInfo.environment)
+    }
+
+    static let hardwareProResSkipReason: Comment =
+        "prores_videotoolbox cannot encode on this GitHub-hosted runner (virtual Mac, no hardware ProRes encoder); runs on every real Mac"
 
     /// Fresh per-test directory under the system temp dir. Callers remove
     /// it in a defer. `test_` prefix keeps it inside the fixture-naming

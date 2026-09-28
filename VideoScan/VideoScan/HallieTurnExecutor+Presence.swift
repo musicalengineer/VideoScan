@@ -16,6 +16,45 @@ extension HallieTurnExecutor {
         let source: String
     }
 
+    /// "find donna down the cape in the 90s" → people=[Donna, cape]
+    /// (clean replay 2026-09-25): a curated place/occasion word in the
+    /// people slot is a topic keyword — the tree's Cape family must not
+    /// make it a person. Inner-circle names (People tab, CyberBrain) stay.
+    static func demoteTopicPeople(
+        _ effective: inout ArchivistQueryAST.Presence, context: Context
+    ) -> String? {
+        guard let people = effective.people, !people.isEmpty else { return nil }
+        let topics = people.filter {
+            HallieDroppedTopicWord.isTopicWord($0) && !isInnerCircleName($0, context: context)
+        }
+        guard !topics.isEmpty else { return nil }
+        let kept = people.filter { !topics.contains($0) }
+        effective.people = kept.isEmpty ? nil : kept
+        effective.keywords = (effective.keywords ?? []) + topics
+        let quoted = topics.map { "“\($0)”" }.joined(separator: ", ")
+        return "\(quoted) is a place or occasion, not a person, so I searched it as a word"
+    }
+
+    /// Puts back a curated topic word the translator dropped; returns the
+    /// basis note, or nil when nothing was restored.
+    static func restoreDroppedTopicWords(
+        _ effective: inout ArchivistQueryAST.Presence,
+        original payload: ArchivistQueryAST.Presence,
+        request: Request
+    ) -> String? {
+        let intent = request.intent
+        let isReRun = intent.refinementNote != nil || intent.refinementChain != nil
+            || intent.refinementChange != nil || intent.citationOffset > 0
+        guard !isReRun else { return nil }
+        let restored = HallieDroppedTopicWord.missing(
+            question: intent.originalQuestion,
+            people: (payload.people ?? []) + (effective.people ?? []),
+            terms: effective.keywords ?? [])
+        guard !restored.isEmpty else { return nil }
+        effective.keywords = (effective.keywords ?? []) + restored
+        return HallieDroppedTopicWord.note(restored)
+    }
+
     static func executePresenceLike(
         _ payload: ArchivistQueryAST.Presence,
         route: Route,
@@ -26,6 +65,8 @@ extension HallieTurnExecutor {
         var effective = payload
         var notes: [String] = []
         var correctionAnnouncements: [String] = []
+
+        if let note = demoteTopicPeople(&effective, context: context) { notes.append(note) }
 
         if let people = effective.people, !people.isEmpty {
             let recovery = recoverPresencePeople(people, context: context)
@@ -93,6 +134,15 @@ extension HallieTurnExecutor {
         let droppedPronouns = dropSpeakerPronouns(&effective)
         if !droppedPronouns.isEmpty {
             notes.append("“\(droppedPronouns.joined(separator: "”, “"))” means you or me, not a search word, so I left it out")
+        }
+
+        // "Christmas videos from 2006" arrived as year=2006 alone (live
+        // 09-22, 09-24, 09-25) and the answer counted every 2006 item. A
+        // holiday / family-event / family-place word the reader said is put
+        // back (+HallieDroppedTopicWord). Fresh translations only: a
+        // refinement or paging re-run carries the previous AST on purpose.
+        if let note = restoreDroppedTopicWords(&effective, original: payload, request: request) {
+            notes.append(note)
         }
 
         // "pull up anything from Franklin": the translator took a place for

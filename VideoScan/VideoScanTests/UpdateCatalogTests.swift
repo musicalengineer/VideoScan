@@ -532,6 +532,34 @@ struct LooksMovedPromptTests {
         model.closeUpdateCatalog()
     }
 
+    // The flake behind promptFiresOncePerMountedVolume's "after
+    // resetLooksMovedDebounce" failure (#211 body, a23c7d83 CI). The first
+    // isReachable(path:) for an internal-disk path answers optimistic-true
+    // and schedules a background probe; for internal keys that probe asks
+    // "does THIS FILE exist" — false for a missing file — and caches it for
+    // 5 s. Once it lands (sooner under parallel load, or when any other
+    // caller — the catalog cell, another suite — asked first), the old
+    // noteMissingFileForUserAction read "volume offline" and returned
+    // false. The poisoner here is that probe, made deterministic: ask, wait
+    // for it to land, THEN act. The prompt must still fire — the boot disk
+    // is mounted; only the file is gone.
+    @Test @MainActor
+    func promptFiresAfterTheMissingFilesReachabilityProbeLanded() throws {
+        let dir = try makeTempDir("looks-probed")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: dir.path)
+        model.scanTargets = [target]
+        let missing = makeRecord(path: dir.appendingPathComponent("gone-probed.mov").path)
+
+        _ = VolumeReachability.isReachable(path: missing.fullPath)   // poisoner: a cell/suite asks first
+        VolumeReachability.awaitPendingProbesForTesting()            // …and its probe lands
+
+        #expect(model.noteMissingFileForUserAction(missing),
+                "A missing file on the mounted boot disk still 'looks moved' after its probe landed")
+        #expect(model.looksMovedNotice?.targetID == target.id)
+    }
+
     @Test @MainActor
     func promptNeverFiresForAnOfflineVolume() {
         let model = VideoScanModel()

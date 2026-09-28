@@ -68,6 +68,11 @@
 // bounded pass skips them for free and ADVANCES past them instead of
 // re-reading the same noise prefix.
 //
+// ARCHIVED (Rick 2026-09-27): a Master Archive file (`isArchiveElement`)
+// is never WRITTEN by any rule here — not cleared, re-triangulated,
+// propagated to, footage-shared to or folder-year dated — nor by the
+// #1413 unwind. It may still DONATE: its date is the filed one.
+//
 // NEVER: overwrite a userDate (not touched at all), overwrite an
 // existing own or propagated inference, propagate a copy-local mtime
 // tier (< 0.50), write to purged / set-aside / superseded rows, or to
@@ -115,7 +120,21 @@ extension VideoScanModel {
         static func propagated(from donor: VideoRecord) -> String {
             propagatedPrefix + donor.id.uuidString
         }
+        /// GH #201 rule 2b: the date came from the footage group's
+        /// strongest member. Re-derived every pass (never a donor).
+        static let footageSharedPrefix = "footage-shared from "
+        static func footageShared(from donor: VideoRecord) -> String {
+            footageSharedPrefix + donor.id.uuidString
+        }
     }
+
+    /// GH #201: the People tab's birth years are re-read this often.
+    static let dateInferencePeopleTTL: TimeInterval = 300
+
+    /// The catch-up pass writes this reason when it clears a legacy
+    /// filesystem-tier "inference" (the old 0.30 mtime fallback).
+    static let clearedFilesystemReason = DateTriangulationResult.noEvidenceReason
+        + " (a file's copy date is never an inferred date)"
 
     /// Year-precision folder prior — see rule 3 in the header.
     static let folderYearPriorConfidence: Float = 0.30
@@ -149,10 +168,18 @@ extension VideoScanModel {
         var propagated = 0
         /// Rule 3 — dated at 0.30 from a bare-year folder.
         var folderYear = 0
+        /// GH #201 rule 2b — took the footage group's strongest claim.
+        var footageShared = 0
+        /// GH #201 — a legacy own / catch-up date re-derived by the
+        /// triangulator (now carries a written reason).
+        var retriangulated = 0
+        /// GH #201 — a legacy filesystem-tier date, or a stale
+        /// footage-shared date, cleared to nil.
+        var cleared = 0
         /// `limit` stopped rule 1 early; the rest catch up next pass.
         var truncated = false
         var elapsed: TimeInterval = 0
-        var total: Int { inferredFromEvidence + propagated + folderYear }
+        var total: Int { inferredFromEvidence + propagated + folderYear + footageShared + retriangulated }
     }
 
     // MARK: - Predicates (pure; the tests pin each one)
@@ -181,6 +208,107 @@ extension VideoScanModel {
         !rec.ocrDateCandidates.isEmpty
             || !(rec.audioTranscript ?? "").isEmpty
             || !rec.sceneCaptions.isEmpty
+    }
+
+    /// GH #201: true when the row's date came from its footage group
+    /// (rule 2b provenance) — re-derived every pass, never a donor.
+    @MainActor
+    static func isFootageSharedInferredDate(_ rec: VideoRecord) -> Bool {
+        rec.inferredDateSource?.hasPrefix(InferredDateSource.footageSharedPrefix) == true
+    }
+
+    /// GH #201: a date the OLD triangulator wrote (no written reason) on a
+    /// row that has evidence to re-read — its own dossier pass (source
+    /// nil) or a catch-up. Re-derived ONCE by the scored triangulator so
+    /// it gains a reason, a year span and the export-stamp / era-floor /
+    /// now-cue rules (Clip 19's 1955 → 1996). Propagated, folder-year and
+    /// footage-shared rows are recomputed by their own rules instead.
+    @MainActor
+    static func needsRetriangulation(_ rec: VideoRecord) -> Bool {
+        rec.inferredRecordDate != nil
+            && rec.inferredDateReason == nil
+            && (rec.inferredDateSource == nil || rec.inferredDateSource == InferredDateSource.catchUp)
+            && hasDateEvidence(rec)
+    }
+
+    /// GH #201: a legacy own-pass date with NO evidence behind it under
+    /// 0.50 — the old mtime / container-time fallback (Rick's "filesystem
+    /// fallback wearing the inferred label"). Cleared to nil with a reason.
+    @MainActor
+    static func isLegacyFilesystemInference(_ rec: VideoRecord) -> Bool {
+        rec.inferredRecordDate != nil
+            && rec.inferredDateReason == nil
+            && rec.inferredDateSource == nil
+            && !hasDateEvidence(rec)
+            && (rec.inferredDateConfidence ?? 0) < inferredDatePropagationFloor
+    }
+
+    /// GH #201: the triangulator's view of one record. Folder hints ride
+    /// along only when the row has some content evidence (a VLM / Whisper
+    /// pass, or a burn-in) — an evidence-less row is rule 3's business.
+    @MainActor
+    static func triangulationInput(for rec: VideoRecord, people: [DateTriangulationPerson],
+                                   includePathHints: Bool, now: Date = Date()) -> DateTriangulationInput {
+        var input = DateTriangulationInput()
+        input.ocrDateCandidates = rec.ocrDateCandidates.map(\.text)
+        input.audioTranscript = rec.audioTranscript
+        input.sceneCaptionTexts = rec.sceneCaptions.map(\.text)
+        input.pathYearHints = includePathHints ? pfPathYearHints(in: rec.fullPath) : []
+        input.embeddedCreationDate = rec.embeddedCreationDate
+        input.originMake = rec.originMake
+        input.originModel = rec.originModel
+        input.originEncoder = rec.originEncoder
+        input.videoCodec = rec.videoCodec
+        input.container = rec.container
+        input.fullPath = rec.fullPath
+        input.peopleOnRecord = rec.confirmedByUserPeople.map(\.name) + rec.detectedPeople
+        input.people = people
+        input.now = now
+        return input
+    }
+
+    /// GH #201: write a triangulation onto the record — date, confidence,
+    /// span, reason, provenance. A nil date CLEARS the fields and keeps the
+    /// reason ("no evidence…") so the inspector can say what was looked at.
+    @MainActor
+    static func applyTriangulation(_ r: DateTriangulationResult, to rec: VideoRecord, source: String?) {
+        rec.inferredRecordDate = r.date
+        rec.inferredDateConfidence = r.date == nil ? nil : r.confidence
+        rec.inferredDateRange = r.date == nil ? nil : r.range
+        rec.inferredDateReason = r.reason
+        rec.inferredDateSource = r.date == nil ? nil : source
+    }
+
+    /// GH #201: the People tab's birth years, loaded once from the POI
+    /// profiles (read-only — `HallieShellCLI.loadProfilesReadOnly` never
+    /// migrates or writes) and refreshed every `dateInferencePeopleTTL`.
+    /// Under a test host the real People store is never read: tests get
+    /// `[]` unless they inject `dateInferencePeople` (isolation).
+    @MainActor
+    var dateInferencePeopleResolved: [DateTriangulationPerson] {
+        if let people = dateInferencePeople,
+           let at = dateInferencePeopleLoadedAt, Date().timeIntervalSince(at) < Self.dateInferencePeopleTTL {
+            return people
+        }
+        if let people = dateInferencePeople, dateInferencePeopleLoadedAt == nil { return people }   // injected
+        guard !TestEnvironment.isTestHost else { return dateInferencePeople ?? [] }
+        let loaded = Self.loadDateInferencePeople()
+        dateInferencePeople = loaded
+        dateInferencePeopleLoadedAt = Date()
+        return loaded
+    }
+
+    /// Profiles → (name, aliases, birth year). Profiles without a birth
+    /// date are left out: they cannot corroborate an age.
+    static func loadDateInferencePeople() -> [DateTriangulationPerson] {
+        guard case .loaded(let profiles) = HallieShellCLI.loadProfilesReadOnly() else { return [] }
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC") ?? .current
+        return profiles.compactMap { p in
+            guard let birth = p.birthdate else { return nil }
+            return DateTriangulationPerson(name: p.name, aliases: p.aliases,
+                                           birthYear: utc.component(.year, from: birth))
+        }
     }
 
     /// The record's VERIFIED content-group identity: partialMD5 + size
@@ -223,16 +351,21 @@ extension VideoScanModel {
     /// tiers only — no path hint, no mtime, no container time — so a nil
     /// result means "the evidence names no date", never "we guessed".
     @MainActor
-    static func inferDateFromStoredEvidence(_ rec: VideoRecord) -> (date: Date, confidence: Float)? {
-        let r = pfInferRecordDate(
-            ocrDateCandidates: rec.ocrDateCandidates.map(\.text),
-            audioTranscript: rec.audioTranscript,
-            sceneCaptionTexts: rec.sceneCaptions.map(\.text),
-            pathYearHints: [],
-            fileMtime: nil,
-            containerCreationTime: nil)
+    static func inferDateFromStoredEvidence(_ rec: VideoRecord,
+                                            people: [DateTriangulationPerson] = []) -> (date: Date, confidence: Float)? {
+        let r = triangulateStoredEvidence(rec, people: people)
         guard let d = r.date else { return nil }
         return (d, r.confidence)
+    }
+
+    /// GH #201: the scored triangulator over the record's stored evidence
+    /// plus its own format / stamp / folder facts. Pure over the record.
+    @MainActor
+    static func triangulateStoredEvidence(_ rec: VideoRecord,
+                                          people: [DateTriangulationPerson],
+                                          now: Date = Date()) -> DateTriangulationResult {
+        pfTriangulateRecordDate(triangulationInput(for: rec, people: people,
+                                                   includePathHints: hasDateEvidence(rec), now: now))
     }
 
     /// What the record's own evidence CLAIMS, with the precision it can
@@ -241,9 +374,11 @@ extension VideoScanModel {
     /// evidence names nothing (or contradicts itself — pfInferRecordDate's
     /// ambiguity guard).
     @MainActor
-    static func ownEvidenceClaim(_ rec: VideoRecord) -> (date: Date, precision: RecordDateResolution.Precision)? {
-        guard let hit = inferDateFromStoredEvidence(rec) else { return nil }
-        return (hit.date, pfInferredDatePrecision(confidence: hit.confidence))
+    static func ownEvidenceClaim(_ rec: VideoRecord,
+                                 people: [DateTriangulationPerson] = []) -> (date: Date, precision: RecordDateResolution.Precision)? {
+        let r = triangulateStoredEvidence(rec, people: people)
+        guard let d = r.date else { return nil }
+        return (d, r.precision == .unknown ? .year : r.precision)
     }
 
     /// Rule 2 guard: may `rec` take `donor`'s date? Eligible, no user
@@ -262,7 +397,8 @@ extension VideoScanModel {
               haveVerifiedSameContent(donor, rec),
               let donorDate = donor.inferredRecordDate else { return false }
         if let own = ownEvidenceClaim(rec) {
-            let donorPrecision = pfInferredDatePrecision(confidence: donor.inferredDateConfidence ?? 0)
+            let donorPrecision = pfInferredDatePrecision(confidence: donor.inferredDateConfidence ?? 0,
+                                                         range: donor.inferredDateRange)
             if own.precision < donorPrecision { return false }
             let at = max(own.precision, donorPrecision)
             if !pfDatesAgree(own.date, donorDate, at: at) { return false }
@@ -282,6 +418,7 @@ extension VideoScanModel {
         isEligibleForDateInference(rec)
             && hasSettledInferredDate(rec)
             && !isPropagatedInferredDate(rec)
+            && !isFootageSharedInferredDate(rec)
             && (rec.inferredDateConfidence ?? 0) >= inferredDatePropagationFloor
     }
 
@@ -325,15 +462,11 @@ extension VideoScanModel {
         guard canDonateInferredDate(donor), canReceivePropagatedDate(rec, from: donor) else { return false }
         rec.inferredRecordDate = donor.inferredRecordDate
         rec.inferredDateConfidence = donor.inferredDateConfidence
+        rec.inferredDateRange = donor.inferredDateRange
+        rec.inferredDateReason = "same bytes as \(donor.filename)"
+            + (donor.inferredDateReason.map { ": \($0)" } ?? "")
         rec.inferredDateSource = InferredDateSource.propagated(from: donor)
         return true
-    }
-
-    @MainActor
-    private static func applyCatchUp(_ rec: VideoRecord, date: Date, confidence: Float) {
-        rec.inferredRecordDate = date
-        rec.inferredDateConfidence = confidence
-        rec.inferredDateSource = InferredDateSource.catchUp
     }
 
     @MainActor
@@ -341,8 +474,244 @@ extension VideoScanModel {
         guard let d = pfJanuaryFirst(of: year) else { return false }
         rec.inferredRecordDate = d
         rec.inferredDateConfidence = folderYearPriorConfidence
+        rec.inferredDateRange = InferredDateRange(year: year)
+        rec.inferredDateReason = "bare-year folder '\(year)' — a placeholder any real evidence replaces"
         rec.inferredDateSource = InferredDateSource.folderYear
         return true
+    }
+
+    /// GH #201: clear every inferred field; `reason` (if any) stays so the
+    /// inspector can say why there is no date.
+    @MainActor
+    static func clearInferredDate(_ rec: VideoRecord, reason: String?) {
+        rec.inferredRecordDate = nil
+        rec.inferredDateConfidence = nil
+        rec.inferredDateRange = nil
+        rec.inferredDateSource = nil
+        rec.inferredDateReason = reason
+    }
+
+    // MARK: - GH #201 rule 2b: one footage group, one date
+
+    /// A footage group shares dates only when the machine is at least
+    /// `likely` sure it is one recording (byte-identical, Rick's word, or
+    /// strong metadata). `possible` links (a camera-counter name + the
+    /// same length) are one guess too many to date a file by.
+    static let footageShareMinimumConfidence: FootageConfidence = .likely
+
+    /// One member's date CLAIM for the group. A row whose own date is
+    /// footage-shared claims WITHOUT it (it is derived, and is re-derived
+    /// here), so a stale share never props itself up.
+    /// `filed`: the row is a Master Archive file — its date is FROZEN (no
+    /// pass re-derives it), so it claims with the whole date even when that
+    /// date was once footage-shared: the archive's date is the filed one.
+    @MainActor
+    static func footageDateClaim(_ rec: VideoRecord, now: Date,
+                                 filed: Bool = false) -> (resolution: RecordDateResolution, claim: RecordDateClaim)? {
+        let derived = isFootageSharedInferredDate(rec) && !filed
+        let r = RecordDateResolver.resolve(
+            userDate: rec.userDate, userDateConfidence: rec.userDateConfidence,
+            embeddedCreationDate: rec.embeddedCreationDate,
+            originMake: rec.originMake, originModel: rec.originModel, originEncoder: rec.originEncoder,
+            inferredRecordDate: derived ? nil : rec.inferredRecordDate,
+            inferredDateConfidence: derived ? nil : rec.inferredDateConfidence,
+            inferredDateRange: derived ? nil : rec.inferredDateRange,
+            filename: rec.filename.isEmpty ? nil : rec.filename, now: now)
+        guard let claim = RecordDateClaim(r, demoteSoftwareStamps: true) else { return nil }
+        return (r, claim)
+    }
+
+    /// Only a person's date, a camera's stamp or a dossier inference is a
+    /// RECORDING date worth sharing; a filename year or a software stamp
+    /// (an export's copy day) never travels.
+    static func footageClaimIsShareable(_ r: RecordDateResolution) -> Bool {
+        switch r.source {
+        case .userDate, .inferred: return true
+        // A user date refined by a stamp resolves as .embedded at the user's
+        // confidence; applyFootageShare re-checks the donor names a device.
+        case .embedded: return r.confidence >= RecordDateResolver.embeddedConfidenceDevice
+        case .filename, .none: return false
+        }
+    }
+
+    /// The group's date = its strongest member claim (`RecordDateClaim`
+    /// ordering: a person's date > a camera's stamp > the dossier > a name
+    /// / export stamp; then confidence, precision, earliest year). Every
+    /// other member with no user date whose own claim is weaker inherits
+    /// it, with the reason "shared from <member> (same footage): …".
+    /// Idempotent: an identical share writes nothing. Returns the rows
+    /// written.
+    /// `archived`: ids of Master Archive files (Rick 2026-09-27) — they
+    /// may be the group's donor but are never written.
+    @MainActor
+    static func shareDateAcrossFootageGroup(_ members: [VideoRecord], now: Date,
+                                            retained: [UUID: (year: Int, tail: String)] = [:],
+                                            archived: Set<UUID> = []) -> [VideoRecord] {
+        guard members.count >= 2 else { return [] }
+        var claims: [UUID: (resolution: RecordDateResolution, claim: RecordDateClaim)] = [:]
+        var best: (rec: VideoRecord, resolution: RecordDateResolution, claim: RecordDateClaim)?
+        for m in members {
+            guard let c = footageDateClaim(m, now: now, filed: archived.contains(m.id)) else { continue }
+            claims[m.id] = c
+            if best.map({ c.claim < $0.claim }) ?? true { best = (m, c.resolution, c.claim) }
+        }
+        guard let best, footageClaimIsShareable(best.resolution) else { return [] }
+        var written: [VideoRecord] = []
+        for m in members where m.id != best.rec.id && m.userDate == nil && !archived.contains(m.id) {
+            if let own = claims[m.id], !(best.claim < own.claim) { continue }   // as strong or stronger itself
+            // Rick's "not the same" (either side) blocks the share (codex F2).
+            if m.footageDecision(about: best.rec.id)?.verdict == .notSame
+                || best.rec.footageDecision(about: m.id)?.verdict == .notSame { continue }
+            let kept = retained[m.id].flatMap { $0.year == best.resolution.year ? $0.tail : nil }
+            if applyFootageShare(to: m, from: best.rec, resolution: best.resolution,
+                                 ownYear: claims[m.id]?.resolution.year, retainedTail: kept) {
+                written.append(m)
+            }
+        }
+        return written
+    }
+
+    /// What a share of `donor`'s claim `r` writes: the date, span and
+    /// confidence (the stale check compares exactly these) and the words
+    /// for the reason. nil when the claim may not travel.
+    struct FootageShareValue: Equatable {
+        var date: Date
+        var range: InferredDateRange?
+        var confidence: Float
+        var what: String
+    }
+
+    @MainActor
+    static func footageShareValue(from donor: VideoRecord, resolution r: RecordDateResolution) -> FootageShareValue? {
+        guard let year = r.year else { return nil }
+        let date: Date
+        let range: InferredDateRange?
+        let what: String
+        switch r.source {
+        case .userDate:
+            guard let d = r.precision == .day ? r.date : pfJanuaryFirst(of: year) else { return nil }
+            date = d
+            range = r.precision == .day ? nil : InferredDateRange(year: year)
+            what = "your date \(UserDateEntry.friendlyDisplay(r.isoString))"
+        case .embedded:
+            // Codex F1: a software stamp's day never travels, whatever the
+            // resolution's confidence says (a user year once lifted it to 1.0).
+            guard let d = donor.embeddedCreationDate,
+                  RecordDateResolver.namesDevice(originMake: donor.originMake, originModel: donor.originModel)
+            else { return nil }
+            date = d; range = nil
+            what = "camera stamp \(r.isoString) (\(donor.embeddedDateOriginLabel))"
+        case .inferred:
+            guard let d = donor.inferredRecordDate else { return nil }
+            date = d; range = donor.inferredDateRange
+            what = donor.inferredDateReason ?? "inferred \(r.isoString)"
+        case .filename, .none:
+            return nil
+        }
+        return FootageShareValue(date: date, range: range,
+                                 confidence: min(DateTriangulationWeights.cap, r.confidence), what: what)
+    }
+
+    /// The tail a share appends when the recipient's own evidence disagreed.
+    static let ownEvidenceMarker = "; own evidence said "
+
+    /// A shared row's recorded "own evidence said …" tail and the year it
+    /// was recorded against (codex re-review R2). nil when there is none.
+    @MainActor
+    static func retainedDisagreement(_ rec: VideoRecord) -> (year: Int, tail: String)? {
+        guard let reason = rec.inferredDateReason, let r = reason.range(of: ownEvidenceMarker),
+              let d = rec.inferredRecordDate else { return nil }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? .current
+        return (cal.component(.year, from: d), String(reason[r.lowerBound...]))
+    }
+
+    @MainActor
+    static func applyFootageShare(to rec: VideoRecord, from donor: VideoRecord,
+                                  resolution r: RecordDateResolution, ownYear: Int?,
+                                  retainedTail: String? = nil) -> Bool {
+        guard let year = r.year, let v = footageShareValue(from: donor, resolution: r) else { return false }
+        let source = InferredDateSource.footageShared(from: donor)
+        var reason = "shared from \(donor.filename) (same footage): \(v.what)"
+        if let ownYear, ownYear != year {
+            reason += "; own evidence said \(ownYear)"
+        } else if ownYear == nil, rec.inferredDateSource == source,
+                  let old = rec.inferredDateReason, let r = old.range(of: Self.ownEvidenceMarker) {
+            // Codex F3: once shared, the row's own inference is gone, so a
+            // later pass cannot recompute the disagreement — keep what the
+            // first share recorded (and so write nothing).
+            reason += old[r.lowerBound...]
+        } else if ownYear == nil, let retainedTail {
+            // Codex re-review R2: the share was just cleared as stale and is
+            // being re-made for the SAME year — keep what was recorded.
+            reason += retainedTail
+        }
+        if rec.inferredRecordDate == v.date, rec.inferredDateConfidence == v.confidence,
+           rec.inferredDateRange == v.range, rec.inferredDateSource == source, rec.inferredDateReason == reason {
+            return false
+        }
+        rec.inferredRecordDate = v.date
+        rec.inferredDateConfidence = v.confidence
+        rec.inferredDateRange = v.range
+        rec.inferredDateSource = source
+        rec.inferredDateReason = reason
+        return true
+    }
+
+    /// `scope` plus every record whose footage-shared source names a record
+    /// in `scope` (codex re-review R1) OR a member of a scoped record's
+    /// footage / content group — every row this pass may WRITE (GH #207:
+    /// A-scoped, B in A's group becomes a share from A and so can no longer
+    /// donate; C, in another group, still said "shared from B" and was
+    /// never re-checked). Two O(records) scans, scoped passes only. Order
+    /// kept, no duplicates.
+    @MainActor
+    static func withFootageShareDependents(of scope: [VideoRecord], in all: [VideoRecord]) -> [VideoRecord] {
+        var donorIDs = Set(scope.map(\.id))
+        let scopeFootage = Set(scope.compactMap { $0.footage?.groupID })
+        let scopeKeys = Set(scope.compactMap { contentGroupKey($0) })
+        for rec in all {
+            if let g = rec.footage?.groupID, scopeFootage.contains(g) {
+                donorIDs.insert(rec.id)
+            } else if !scopeKeys.isEmpty, let key = contentGroupKey(rec), scopeKeys.contains(key) {
+                donorIDs.insert(rec.id)
+            }
+        }
+        var seen = Set(scope.map(\.id))
+        var out = scope
+        let prefix = InferredDateSource.footageSharedPrefix
+        for rec in all {
+            guard let source = rec.inferredDateSource, source.hasPrefix(prefix),
+                  let donorID = UUID(uuidString: String(source.dropFirst(prefix.count))),
+                  donorIDs.contains(donorID), seen.insert(rec.id).inserted else { continue }
+            out.append(rec)
+        }
+        return out
+    }
+
+    /// Codex F2: a footage-shared date is STALE unless all of these still
+    /// hold — the donor exists in the same footage group; both memberships
+    /// are ≥ `likely`; neither row carries Rick's "not the same" about the
+    /// other; and the donor STILL holds a shareable claim that produces the
+    /// very value this row carries (same kind ⇒ same date / span /
+    /// confidence). A retracted user date, a downgraded group or a changed
+    /// donor year all clear the share; rule 2b re-shares whatever is true now.
+    @MainActor
+    static func isStaleFootageShare(_ rec: VideoRecord, byID: [UUID: VideoRecord], now: Date = Date(),
+                                    archived: Set<UUID> = []) -> Bool {
+        guard isFootageSharedInferredDate(rec), let source = rec.inferredDateSource else { return false }
+        guard let membership = rec.footage, membership.confidence >= footageShareMinimumConfidence,
+              let donorID = UUID(uuidString: String(source.dropFirst(InferredDateSource.footageSharedPrefix.count))),
+              let donor = byID[donorID], let donorMembership = donor.footage,
+              donorMembership.groupID == membership.groupID,
+              donorMembership.confidence >= footageShareMinimumConfidence else { return true }
+        if rec.footageDecision(about: donor.id)?.verdict == .notSame
+            || donor.footageDecision(about: rec.id)?.verdict == .notSame { return true }
+        guard let claim = footageDateClaim(donor, now: now, filed: archived.contains(donor.id)),
+              footageClaimIsShareable(claim.resolution),
+              let v = footageShareValue(from: donor, resolution: claim.resolution) else { return true }
+        return v.date != rec.inferredRecordDate || v.range != rec.inferredDateRange
+            || v.confidence != rec.inferredDateConfidence
     }
 
     // MARK: - The pass
@@ -359,41 +728,96 @@ extension VideoScanModel {
     @discardableResult
     func catchUpInferredDates(scope: [VideoRecord]? = nil,
                               limit: Int = 50_000,
-                              trigger: String = "manual") -> InferredDateCatchUpResult {
+                              trigger: String = "manual",
+                              refreshScope: Bool = false) -> InferredDateCatchUpResult {
         let started = Date()
         var result = InferredDateCatchUpResult()
+        let people = dateInferencePeopleResolved
+        // Codex re-review R1: a DONOR-scoped pass must also reach the donor's
+        // former dependents — rows whose "footage-shared from <id>" names a
+        // scoped record, even after the donor left their group (regrouped,
+        // downgraded) — and (GH #207) rows naming a scoped row's footage /
+        // content groupmate, which this pass may also rewrite. Two
+        // O(records) scans, only for scoped passes.
+        let scope = scope.map { Self.withFootageShareDependents(of: $0, in: records) }
 
-        // One pass: bucket every eligible row by VERIFIED content group.
-        // References only; the arrays hold pointers to records the model
-        // already owns. A scoped pass still computes every key (cheap:
-        // two string tests) but only buckets the scope's own groups, so
-        // no per-group array is allocated for the rest of the catalog.
+        // One pass: bucket every eligible row by VERIFIED content group,
+        // and (GH #201) by footage group. References only; the arrays
+        // hold pointers to records the model already owns. A scoped pass
+        // still computes every key (cheap: two string tests) but only
+        // buckets the scope's own groups, so no per-group array is
+        // allocated for the rest of the catalog.
         let scopeKeys: Set<CatalogSizeTotals.GroupKey>? = scope.map { rows in
             Set(rows.compactMap { Self.contentGroupKey($0) })
         }
+        let scopeFootage: Set<UUID>? = scope.map { rows in Set(rows.compactMap { $0.footage?.groupID }) }
         var groups: [CatalogSizeTotals.GroupKey: [VideoRecord]] = [:]
+        var footageGroups: [UUID: [VideoRecord]] = [:]
+        var byID: [UUID: VideoRecord] = [:]
+        byID.reserveCapacity(records.count)
+        // Rick 2026-09-27: Master Archive files are read-only to this pass —
+        // bucketed (they donate) but never written by any rule below.
+        var archived = Set<UUID>()
         for rec in records where Self.isEligibleForDateInference(rec) {
-            guard let key = Self.contentGroupKey(rec) else { continue }
-            if let scopeKeys, !scopeKeys.contains(key) { continue }
-            groups[key, default: []].append(rec)
+            byID[rec.id] = rec
+            if isArchiveElement(rec) { archived.insert(rec.id) }
+            if let key = Self.contentGroupKey(rec), scopeKeys?.contains(key) ?? true {
+                groups[key, default: []].append(rec)
+            }
+            if let f = rec.footage, f.confidence >= Self.footageShareMinimumConfidence,
+               scopeFootage?.contains(f.groupID) ?? true {
+                footageGroups[f.groupID, default: []].append(rec)
+            }
         }
 
         // The rows this pass may write to, and the groups it may share within.
-        let (candidates, groupKeys) = Self.dateInferenceScope(scope, allRecords: records, groups: groups)
+        let (candidates, groupKeys, footageKeys) = Self.dateInferenceScope(
+            scope, allRecords: records, groups: groups, footageGroups: footageGroups)
+        let refreshIDs: Set<UUID> = refreshScope ? Set((scope ?? []).map(\.id)) : []
 
         var touched: [VideoRecord] = []
+        var retainedDisagreements: [UUID: (year: Int, tail: String)] = [:]
         // codex #1415 (a): evidence-bearing rows the budget left unread.
         var deferred = Set<UUID>()
 
-        // Rule 1 — own evidence.
+        // Rule 0 (GH #201) — housekeeping before anything is derived: a
+        // legacy filesystem-tier "inference" is cleared (a copy date is
+        // never an inferred date); a footage-shared date whose donor left
+        // the group is cleared so rules 1 / 2b re-derive it honestly.
+        for rec in candidates where Self.isEligibleForDateInference(rec) && rec.userDate == nil
+            && !archived.contains(rec.id) {
+            if Self.isLegacyFilesystemInference(rec) {
+                Self.clearInferredDate(rec, reason: Self.clearedFilesystemReason)
+                result.cleared += 1
+                touched.append(rec)
+            } else if Self.isStaleFootageShare(rec, byID: byID, now: started, archived: archived) {
+                // Codex re-review R2: keep the recorded disagreement so a
+                // same-year re-share (e.g. the donor's confidence changed)
+                // carries it forward instead of losing it.
+                if let kept = Self.retainedDisagreement(rec) { retainedDisagreements[rec.id] = kept }
+                Self.clearInferredDate(rec, reason: nil)
+                result.cleared += 1
+                touched.append(rec)
+            }
+        }
+
+        // Rule 1 — own evidence: rows with no settled date, legacy rows the
+        // old triangulator dated (re-derived once, so they gain a written
+        // reason — GH #201), and rows a new channel just landed on
+        // (`refreshScope`, from the transcript / caption writebacks).
         for rec in candidates where Self.isEligibleForDateInference(rec)
-            && !Self.hasSettledInferredDate(rec)
+            && rec.userDate == nil
+            && !archived.contains(rec.id)
             && Self.hasDateEvidence(rec) {
+            let legacy = Self.needsRetriangulation(rec)
+            let refresh = refreshIDs.contains(rec.id)
+                && !Self.isPropagatedInferredDate(rec) && !Self.isFootageSharedInferredDate(rec)
+            guard !Self.hasSettledInferredDate(rec) || legacy || refresh else { continue }
             let fingerprint = Self.dateEvidenceFingerprint(rec)
             // (d) Classified "no date" by an earlier pass, evidence
             // unchanged: costs nothing and is NOT deferred — its
             // evidence was read; it can still receive a sibling's date.
-            if inferredDateNoDateEvidence[rec.id] == fingerprint {
+            if !legacy, !refresh, inferredDateNoDateEvidence[rec.id] == fingerprint {
                 result.alreadyClassified += 1
                 continue
             }
@@ -406,13 +830,32 @@ extension VideoScanModel {
                 continue
             }
             result.examined += 1
-            if let hit = Self.inferDateFromStoredEvidence(rec) {
-                Self.applyCatchUp(rec, date: hit.date, confidence: hit.confidence)
+            let hadDate = rec.inferredRecordDate != nil
+            let r = Self.triangulateStoredEvidence(rec, people: people, now: started)
+            if r.date != nil {
+                // A legacy row re-derived from its OWN dossier pass keeps
+                // that provenance (nil); everything else — a new date, a
+                // catch-up, or a folder-year placeholder that just gained
+                // evidence (QA M1: it must SETTLE, not be re-examined every
+                // launch) — becomes a catch-up.
+                let keepOwnPass = hadDate && rec.inferredDateSource == nil
+                Self.applyTriangulation(r, to: rec, source: keepOwnPass ? nil : InferredDateSource.catchUp)
                 inferredDateNoDateEvidence[rec.id] = nil
-                result.inferredFromEvidence += 1
+                if hadDate { result.retriangulated += 1 } else { result.inferredFromEvidence += 1 }
                 touched.append(rec)
             } else {
                 inferredDateNoDateEvidence[rec.id] = fingerprint
+                if hadDate {
+                    // The old date rested on nothing the new rules accept
+                    // (Clip 19's "1955" as a reference with no folder hint):
+                    // clear it with the reason.
+                    Self.applyTriangulation(r, to: rec, source: nil)
+                    result.cleared += 1
+                    touched.append(rec)
+                } else if rec.inferredDateReason != r.reason {
+                    rec.inferredDateReason = r.reason
+                    touched.append(rec)
+                }
             }
         }
 
@@ -433,6 +876,7 @@ extension VideoScanModel {
             // re-scans the recipient's evidence).
             let recipients = members.filter {
                 !deferred.contains($0.id)
+                    && !archived.contains($0.id)
                     && $0.userDate == nil
                     && !Self.hasSettledInferredDate($0)
                     && Self.isEligibleForDateInference($0)
@@ -446,8 +890,20 @@ extension VideoScanModel {
             }
         }
 
+        // Rule 2b (GH #201) — one footage group, one date: the strongest
+        // member claim; the others inherit with the reason. Deferred rows
+        // are left alone (their own evidence is still unread).
+        for key in footageKeys {
+            guard let members = footageGroups[key], members.count >= 2 else { continue }
+            let live = members.filter { !deferred.contains($0.id) }
+            let written = Self.shareDateAcrossFootageGroup(live, now: started, retained: retainedDisagreements,
+                                                           archived: archived)
+            result.footageShared += written.count
+            touched.append(contentsOf: written)
+        }
+
         // Rule 3 — the weak folder prior, only where nothing else spoke.
-        for rec in candidates where Self.qualifiesForFolderYearPrior(rec) {
+        for rec in candidates where !archived.contains(rec.id) && Self.qualifiesForFolderYearPrior(rec) {
             guard let year = pfBareYearFolderPrior(in: rec.fullPath),
                   Self.applyFolderYear(rec, year: year) else { continue }
             result.folderYear += 1
@@ -461,24 +917,38 @@ extension VideoScanModel {
         if result.total > 0 || result.truncated {
             log(Self.dateInferenceLogLine(result, limit: limit, trigger: trigger))
         }
+        if result.footageShared + result.retriangulated + result.cleared > 0 {
+            log(Self.dateTriangulationLogLine(result, trigger: trigger))
+        }
         return result
+    }
+
+    /// GH #201's own line (the 2026-09-12 line above is unchanged):
+    /// "date triangulation: 3 took their footage group's date, 12
+    /// re-triangulated with a written reason, 2 cleared (load)".
+    static func dateTriangulationLogLine(_ r: InferredDateCatchUpResult, trigger: String) -> String {
+        "date triangulation: \(r.footageShared) took their footage group's date, "
+            + "\(r.retriangulated) re-triangulated with a written reason, \(r.cleared) cleared (\(trigger))"
     }
 
     /// Which rows a pass may write to and which groups it may share within:
     /// the whole catalog, or the scoped rows plus every member of their
-    /// content groups (a sibling with its own evidence should get its own
-    /// date rather than a propagated one).
+    /// content groups and footage groups (a sibling with its own evidence
+    /// should get its own date rather than a propagated one).
     @MainActor
     private static func dateInferenceScope(
         _ scope: [VideoRecord]?,
         allRecords: [VideoRecord],
-        groups: [CatalogSizeTotals.GroupKey: [VideoRecord]]
-    ) -> (candidates: [VideoRecord], groupKeys: [CatalogSizeTotals.GroupKey]) {
-        guard let scope else { return (allRecords, Array(groups.keys)) }
+        groups: [CatalogSizeTotals.GroupKey: [VideoRecord]],
+        footageGroups: [UUID: [VideoRecord]]
+    ) -> (candidates: [VideoRecord], groupKeys: [CatalogSizeTotals.GroupKey], footageKeys: [UUID]) {
+        guard let scope else { return (allRecords, Array(groups.keys), Array(footageGroups.keys)) }
         var seen = Set<UUID>()
         var rows: [VideoRecord] = []
         var keys: [CatalogSizeTotals.GroupKey] = []
         var seenKeys = Set<CatalogSizeTotals.GroupKey>()
+        var footageKeys: [UUID] = []
+        var seenFootage = Set<UUID>()
         for rec in scope {
             if seen.insert(rec.id).inserted { rows.append(rec) }
             if let key = Self.contentGroupKey(rec), seenKeys.insert(key).inserted {
@@ -487,15 +957,26 @@ extension VideoScanModel {
                     rows.append(member)
                 }
             }
+            if let f = rec.footage?.groupID, footageGroups[f] != nil, seenFootage.insert(f).inserted {
+                footageKeys.append(f)
+                for member in footageGroups[f] ?? [] where seen.insert(member.id).inserted {
+                    rows.append(member)
+                }
+            }
         }
-        return (rows, keys)
+        return (rows, keys, footageKeys)
     }
 
     /// The one line a pass writes: "date inference: N records caught up (…)".
-    /// Format unchanged since 2026-09-12 (log formats are a Rick decision).
+    /// Format unchanged since 2026-09-12 (log formats are a Rick decision)
+    /// EXCEPT that the breakdown must sum to N (GH #201 QA minor): the two
+    /// new counts are listed only when non-zero, so every older line reads
+    /// byte-identical.
     static func dateInferenceLogLine(_ r: InferredDateCatchUpResult, limit: Int, trigger: String) -> String {
         "date inference: \(r.total) record\(r.total == 1 ? "" : "s") caught up "
             + "(\(r.inferredFromEvidence) from own evidence, \(r.propagated) propagated, "
+            + (r.footageShared > 0 ? "\(r.footageShared) footage-shared, " : "")
+            + (r.retriangulated > 0 ? "\(r.retriangulated) re-triangulated, " : "")
             + "\(r.folderYear) folder-year prior; \(r.examined) examined"
             + (r.truncated ? ", limit \(limit) hit — more next pass" : "")
             + String(format: ", %.0f ms, ", r.elapsed * 1000) + trigger + ")"
@@ -508,8 +989,9 @@ extension VideoScanModel {
     @discardableResult
     func propagateInferredDate(from donor: VideoRecord) -> Int {
         // Solo rows have nobody to share with; skip the group walk.
-        guard Self.contentGroupKey(donor) != nil else { return 0 }
-        return catchUpInferredDates(scope: [donor], trigger: "dossier").propagated
+        guard Self.contentGroupKey(donor) != nil || donor.footage != nil else { return 0 }
+        let r = catchUpInferredDates(scope: [donor], trigger: "dossier")
+        return r.propagated + r.footageShared
     }
 
     // MARK: - Repair (codex #1413) — one-shot, reversible, runs at load
@@ -522,6 +1004,10 @@ extension VideoScanModel {
         var inferredRecordDate: Date
         var inferredDateConfidence: Float?
         var inferredDateSource: String
+        /// GH #201 (QA minor): the span and reason ride the undo too.
+        /// Optional — sidecars written before decode them as nil.
+        var inferredDateRange: InferredDateRange? = nil
+        var inferredDateReason: String? = nil
     }
 
     /// One retained row whose provenance was re-pointed from a cleared
@@ -603,7 +1089,9 @@ extension VideoScanModel {
         var victims: [VideoRecord] = []
         var entries: [UnwoundDateEntry] = []
         for rec in records {
-            guard Self.isPropagatedInferredDate(rec),
+            // Rick 2026-09-27: an archive file's date is the filed one — the
+            // repair never clears it (nor re-anchors it, below).
+            guard Self.isPropagatedInferredDate(rec), !isArchiveElement(rec),
                   let source = rec.inferredDateSource,
                   let date = rec.inferredRecordDate else { continue }
             // codex #1439: validate against the ORIGIN of the provenance
@@ -619,7 +1107,9 @@ extension VideoScanModel {
             entries.append(UnwoundDateEntry(recordID: rec.id, fullPath: rec.fullPath,
                                             inferredRecordDate: date,
                                             inferredDateConfidence: rec.inferredDateConfidence,
-                                            inferredDateSource: source))
+                                            inferredDateSource: source,
+                                            inferredDateRange: rec.inferredDateRange,
+                                            inferredDateReason: rec.inferredDateReason))
         }
         guard !victims.isEmpty else { return result }
 
@@ -633,7 +1123,8 @@ extension VideoScanModel {
         // sidecar can put the previous provenance back).
         let victimIDs = Set(victims.map(\.id))
         var reanchors: [(rec: VideoRecord, entry: ReanchoredProvenanceEntry)] = []
-        for rec in records where Self.isPropagatedInferredDate(rec) && !victimIDs.contains(rec.id) {
+        for rec in records where Self.isPropagatedInferredDate(rec) && !victimIDs.contains(rec.id)
+            && !isArchiveElement(rec) {
             let chain = Self.provenanceChain(of: rec, byID: byID)
             guard let origin = chain.origin, let previous = rec.inferredDateSource,
                   chain.via.contains(where: { victimIDs.contains($0) }) else { continue }
@@ -665,9 +1156,9 @@ extension VideoScanModel {
         result.sidecar = url
 
         for rec in victims {
-            rec.inferredRecordDate = nil
-            rec.inferredDateConfidence = nil
-            rec.inferredDateSource = nil
+            // All five inferred fields, so no "same bytes as …" reason or
+            // span outlives the date it explained (GH #201 QA minor).
+            Self.clearInferredDate(rec, reason: nil)
         }
         for (rec, entry) in reanchors {
             rec.inferredDateSource = entry.newSource
@@ -780,6 +1271,8 @@ extension VideoScanModel {
             rec.inferredRecordDate = e.inferredRecordDate
             rec.inferredDateConfidence = e.inferredDateConfidence
             rec.inferredDateSource = e.inferredDateSource
+            rec.inferredDateRange = e.inferredDateRange
+            rec.inferredDateReason = e.inferredDateReason
             restored.append(rec)
         }
         for e in reanchored {
@@ -842,6 +1335,13 @@ extension VideoScanModel.UnwoundDateSidecar {
 /// exists today; the comparator below still handles one.)
 nonisolated func pfInferredDatePrecision(confidence: Float) -> RecordDateResolution.Precision {
     (0.50...0.60).contains(confidence) ? .year : .day
+}
+
+/// GH #201: a triangulated date carries its span when it only knows the
+/// year — that is the precision, whatever the confidence. Legacy rows
+/// (no span) fall back to the confidence table above.
+nonisolated func pfInferredDatePrecision(confidence: Float, range: InferredDateRange?) -> RecordDateResolution.Precision {
+    range != nil ? .year : pfInferredDatePrecision(confidence: confidence)
 }
 
 /// Do two dates agree when read at `precision`? Day compares y/m/d,

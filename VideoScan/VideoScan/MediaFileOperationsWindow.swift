@@ -161,7 +161,7 @@ struct MediaFileOperationsWindow: View {
             Divider()
             if let pending = model.pendingDeleteDuplicatesResume {
                 DeleteDuplicatesResumeBanner(plan: pending,
-                                             onResume: { center.startedByUser { $0.resumeDeleteDuplicates(plan: pending, model: model) } },
+                                             onResume: { _ = center.startedByUser { $0.resumeDeleteDuplicates(plan: pending, model: model) } },
                                              onPutBack: { model.putBackStrandedDuplicates() },
                                              onDiscard: { model.discardPendingDeleteDuplicatesPlan() })
                 Divider()
@@ -561,6 +561,12 @@ struct MediaFileOperationRow: View {
                     .padding(.bottom, 10)
             }
 
+            if isExpanded, let lock = job as? ArchiveLockJob {
+                ArchiveLockDetailView(job: lock)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
+
             if isExpanded, let prune = job as? PruneApplyJob {
                 PruneApplyDetailView(job: prune)
                     .padding(.horizontal, 12)
@@ -894,7 +900,7 @@ extension MediaFileOperationKind {
     var hasDetailView: Bool {
         switch self {
         case .compare, .findPerson, .verifyArchive, .archiveAngel, .deleteDuplicates,
-             .pruneCopies, .verifyVideo:
+             .pruneCopies, .verifyVideo, .lockArchive:
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
@@ -988,6 +994,9 @@ extension MediaFileOperationKind {
         // read that only rewrites catalog stamps. Δ ≥ 0.29 from every
         // other fill (nearest: Frames' purple), contrast vs white ≈ 7.
         case .bindFixity: return Color(red: 0.55, green: 0.00, blue: 0.80)
+        // Lock files already in the archive (2026-09-27) — deep navy slate: "the vault".
+        // Δ ≥ 0.22 from every other fill; contrast vs white ≈ 13.
+        case .lockArchive: return Color(red: 0.10, green: 0.20, blue: 0.30)
         }
     }
 }

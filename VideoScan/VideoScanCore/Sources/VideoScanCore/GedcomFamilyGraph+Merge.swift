@@ -365,6 +365,7 @@ extension GedcomFamilyGraph {
         out.surname = p.surname
         out.alternateSurnames = p.alternateSurnames
         out.familySearchID = p.familySearchID
+        out.militaryFacts = p.militaryFacts
         let famc = (p.childOfFamilies.isEmpty ? [p.childOfFamily].compactMap { $0 } : p.childOfFamilies)
             .compactMap { familyMap[$0] }
         out.childOfFamilies = famc
@@ -378,7 +379,7 @@ extension GedcomFamilyGraph {
     /// and that disagreement is reported; a nil on the first side is
     /// filled from the second. A differing second NAME is kept as an
     /// alternate name. Links (FAMC/FAMS) are unioned, first source's
-    /// order first.
+    /// order first; military facts are unioned the same way.
     static func reconcile(_ a: Person, _ b: Person,
                           policy: MergePolicy = .unionKeepingFirst) -> (Person, [ConflictReport]) {
         var conflicts: [ConflictReport] = []
@@ -429,6 +430,12 @@ extension GedcomFamilyGraph {
             surnames.append(s)
         }
         out.alternateSurnames = surnames
+        // Military facts (2026-09-23) are a list, like alternate names:
+        // unioned, first record's order first, exact duplicates once —
+        // under either policy, so no pull can silently erase one.
+        var military = a.militaryFacts
+        for fact in b.militaryFacts where !military.contains(fact) { military.append(fact) }
+        out.militaryFacts = military
         var famc = a.childOfFamilies.isEmpty ? [a.childOfFamily].compactMap { $0 } : a.childOfFamilies
         for f in (b.childOfFamilies.isEmpty ? [b.childOfFamily].compactMap { $0 } : b.childOfFamilies)
         where !famc.contains(f) { famc.append(f) }

@@ -13,7 +13,8 @@
 // here is authoritative; delete the cache and the ledger rebuilds it.
 //
 // How the scorer uses it (ArchiveAngelScorer, rules v8):
-//   • novelty      — never proposed → +noveltyBonus (the explore arm);
+//   • novelty      — never proposed → a reserved fresh slot (freshShare,
+//                    freshMinimumScore) — the explore arm; NOT points;
 //   • fatigue      — score × fatigueFactor^effectiveSkips, printed as a
 //                    negative evidence line so the score is still the sum
 //                    of its printed reasons;
@@ -246,9 +247,17 @@ final class ArchiveAngelAttentionStore: ObservableObject {
     /// Rebuild from the ledger file, read off the main actor. `reader` is
     /// the seam a test uses to hold the read open while it notes events.
     func load(from ledger: MediaLedger,
-              reader: @Sendable (MediaLedger) async -> [MediaLedgerEvent] = ArchiveAngelAttentionStore.readOffMain) async {
+              reader: @Sendable (MediaLedger) async -> [MediaLedgerEvent]) async {
         let events = await reader(ledger)
         replace(from: events)
+    }
+
+    /// The production read. An overload rather than a default argument:
+    /// a default argument naming a `@concurrent` static on this main-actor
+    /// type crashed the Swift 6.2.4 frontend in CI (DefaultInitializerIsolation,
+    /// run 35938870258).
+    func load(from ledger: MediaLedger) async {
+        await load(from: ledger, reader: { await ArchiveAngelAttentionStore.readOffMain($0) })
     }
 
     #if compiler(>=6.2)

@@ -521,3 +521,354 @@ The 32 new ones fall into three clusters, each with a lane:
    "what do you know about the Breen family". Same lane.
 
 Correction to the wrong-person entry above: the Matthew Rice row was codex's replay turn interleaved in the shared transcript. Rick's own answer was "Richard was 64–65 years old during 1994" — right person, invented year. Fixed on the same branch (age-at-death from People-tab dates; the translator's invented year no longer trusted); strict-045.
+
+## 2026-09-25 → 26 night — regression check (branch `fix/hallie-night-0925`)
+
+**Brain:** `qwen3.8:27b-mlx` (digest `5642e97495e1`), M4 loopback ollama **0.34.4**,
+headless read-only shell (`scripts/hallie --no-actions`, no UI automation).
+**The 09-18 baseline ran on ollama 0.34.0.** Ollama auto-updated to 0.34.2
+(09-22) and 0.34.4 (09-24) with the same model weights; the translator now
+mis-slots facets it used to fill (a place in the people slot, a stated year
+left out, a media ask read as an age question). That is the drift behind most
+of the advisory losses below — not a code change. Run-to-run variance on the
+advisory lane is about ±30 flips each way.
+
+**Harvest:** 11 new live turns 2026-09-21…24 (`lv260925-001…011`), five of
+them live misses, annotated in the corpus.
+
+| run | strict | advisory (all) | advisory on 09-18's 399 |
+|-----|--------|----------------|-------------------------|
+| 09-18 nightly (baseline, 93b97f2f, ollama 0.34.0) | 41 / 44 | 343 / 399 | 343 |
+| 09-25 03:04 nightly (44708097) | 23 / 52 | 443 / 739 | — (no tree loaded, see below) |
+| tonight, main `0e021ea6` (clean) | 48 / 55 · **46 / 52** on the pre-existing entries | 598 / 750 | 332 |
+| tonight, branch `47bc3d3c` (clean) | **51 / 55** · 48 / 52 on the pre-existing entries | **608 / 750** | 335 |
+
+Not measurements: a first pass at 20:50 shared the M4's brain with a
+model-fitness review lane (`review_real_commits.py`, 8-minute generations);
+every Hallie `/api/chat` timed out at 6 s / 21 s ("I'm having trouble reaching
+my language helper"), 5 strict turns failed that way and the advisory lane
+finished 249 of 750. **Hallie replays and model reviews must not share the M4
+brain.**
+
+**Why the 09-23…25 nightlies read 16–23 strict:** the replay found no tree
+("I don't have an imported family tree") — the 09-24 codec bump and the
+recovery-floor bug fixed on main in 6160e837. Tonight's main binary loads it.
+
+### Fixed tonight (red test first, then the fix; ricksm5, Debug, suite-filtered)
+
+| # | live / replay | cause | fix | pinned by |
+|---|---------------|-------|-----|-----------|
+| 1 | "Christmas videos from 2006" (live 09-22, 09-24, **09-25 20:33**) → "There are 864 catalog items from 2006" | translator returned `year=2006`, Christmas dropped | `HallieDroppedTopicWord`: a curated `ArchivistKeywordAliases` word the question says and no AST term covers is put back; basis names it (`HallieTurnExecutor+Presence.swift` `restoreDroppedTopicWords`) | `HallieDroppedTopicWordTests`; strict-053 |
+| 2 | "tell me about thankful pratt and her husband" after a Timmy answer (live 09-23) → "thankful pratt or timmy?" | `HalliePronounContinuity.rewrite` bound "her" to the last answer's person | a known person named earlier in the sentence is the antecedent; the pronoun is bound to that name | `HalliePronounInSentenceAntecedentTests`; strict-054/055 |
+| 3 | "tell me about ellen" (live 09-21, still so on main) → "Which ellen do you mean: Ellen Ronan, Ellen Ronan?" | CyberBrain matched one WORD of two Ellen Ronan records and pre-empted the People tab's exact "Ellen" (his sister) | a token-only CyberBrain match yields to an exact People-tab claim (`HallieTurnExecutor.swift` `executeCyberBrainBiography`) | `HallieCyberBrainTokenMatchVsPeopleTabTests` |
+| 4 | strict-009 "…my materanl lines back to europe" (green 09-18/21) → catalog search | typo front door rewrote "lines" → "line's" (Line is a tree name), hiding the line noun from the materanl repair | a real English word is never a possessive of a tree-only name (`HallieTypoNormalizer.possessive`) | `HallieTypoPossessiveRealWordTests` |
+| 5 | "how old was dad in 1985" ×13 (var-age) → "give me a year" | translator dropped the year (`reference=currentSelection`) | the one stated four-digit year becomes the reference; basis says so (`ArchivistTemporalExecutor.statedYear`) | `HallieDadBreenAgeAtDeathTests` (+2) |
+| 6 | "find donna down the cape in the 90s" ×5 live asks → "no videos tagged with Donna and cape" | translator put `cape` in the people slot; the tree's Cape family kept it a person | a curated place/occasion word in the people slot is searched as a word unless inner circle (`demoteTopicPeople`) | `HallieDroppedTopicWordTests` |
+| 7 | "Christmas videos from 2006" as `shape=temporal` (live 09-24, branch replay) → "I need a dated video" | translator read a media ask as an age question | a fresh temporal turn with a media noun and no age word runs its presence search (`mediaAskMisreadAsAge`) | `HallieDroppedTopicWordTests` |
+
+Manifest: strict-052 `expect` biography → graceful_decline (its honest decline
+graded as a defect every night since 09-23; the note already said outcome
+unconstrained). Suites: 2,333 Swift Testing tests in 276 suites (every
+Hallie*/Archivist*/PeopleTab*/CyberBrain*/Person* suite) + 7 XCTest, green, 1
+known issue (#567); pytest 75 passed.
+
+Cape asks 8 → 14 of 16 clean; var-age 42 → 50 of 72.
+
+### Still open
+
+- **strict-036** "show me", **strict-042** "why do you ask me for a photo of Thankful Pratt…", **strict-044** "Beth Breen Beth McAuliffe" — red since the 09-18 baseline.
+- **strict-048** "tell me about John Robert Latta": the MODEL-composed answer drops Rick's Fort Wagner note (the template kept it on 09-25 03:04). The composition verifier does not require every planned claim to survive phrasing.
+- **"Ellen Ronan"** — two CyberBrain records for Rick's great-grandmother (`person.ellen-ronan.i342486919798`, pointer `@I342486919798@` not in the current tree, and `person.ellen-ronan.i10`); the which-one shows two identical names and a raw id. Data, needs Rick's ruling on merging them.
+- **"Did you mean Richard or Richard?"** (strict-026, graded clean) — two same-name candidates, no qualifier.
+- A People profile marked notInFamilyTree is still bound to a lone tree namesake by given name (seen in a fixture: "Ellen Ronan (Ellen in the People tab)").
+- lv260925-008 in the advisory run: the bound "thankful pratt's husband" was read as a name; strict-055 (same words) answered "Nathaniel Caleb Parker". Translator variance.
+- The advisory drift on 09-18's 399 (343 → 335) tracks the ollama 0.34.0 → 0.34.4 update; social/identity turns becoming catalog searches ("who made you" → 10,506 items) are the largest remaining group.
+
+## 2026-09-26 — "find videos of dad" → Dafydd ab Einion (b. ~1360), twice, and the tree opened on him after Rick said no
+
+Rick, 14:14–14:17 ET (session `627FCBEB`, app; the transcript's `Z` stamps are
+UTC). Corpus `lv260926-001…004`; strict `strict-056…059`; branch
+`fix/hallie-dad-dafydd`.
+
+| # | id | asked | what came back | status |
+|---|----|-------|----------------|--------|
+| 1 | `lv260926-001` | "find videos of dad" | *"Dafydd ab Einion "Y Giwn Llwyd" was born about 1360, more than five centuries before motion pictures begin in 1888 — no one lives that long, so there can’t be film of him."* route=graph, no search run | **FIXED** (A) |
+| 2 | `lv260926-002` | "dad breen not someone from 5 centuries ago" | Richard Harding Breen Sr's biography (right) — **and** a second bubble in the same second: *"Opening the Family Tree tab focused on Dafydd ab Einion."* | **FIXED** (C) |
+| 3 | `lv260926-003` | "sure" | Richard Sr's Marine Corps service; "I have 4 photos of him — want to see them all?" | fine |
+| 4 | `lv260926-004` | "sure, but I also want videos of dad" | Dafydd ab Einion, word for word, again | **FIXED** (A + B) |
+
+**Failure class.** The 9/07 shape once more — a confident, cited answer about
+the WRONG PERSON — and this time the wrong person was one Rick had just
+rejected in so many words. Row 2 is the worst of it: the app *acted* on the
+rejected person after the correction.
+
+### A. "dad" was never fuzzy-matched. The tree has a man named Dad.
+
+`docs/hallie_live_failures.md` and the 9/11 strict notes both say "fuzzy-
+matched 'dad' to Dafydd". It is not fuzzy. The merged FamilySearch tree's
+`@IB21341@` — Dafydd ab Einion "Y Giwn Llwyd", b. about 1360 — carries
+fifteen NAME records, and the seventh is
+
+```
+1 NAME Dad ab Giwn
+```
+
+`GedcomFamilyGraph.people(matching:)` (`GedcomFamilyGraph+Index.swift:702`,
+rung 1) is token-exact over EVERY NAME record of every person, so "Dad" is
+an exact, unique hit, and every rung that guards recovery (the ≤4-letter
+rule at `ArchivistGraphExecutor.swift:945`, the bare-given-name rule) is
+never reached.
+
+The road: "find videos of dad" matched the "videos of X" lineage shape
+(`HallieLineageQuestion.swift:382`, which runs before the mode gate and before
+the translator — the `[hallie-mode] … reason=conflict` line is logged after
+the answer was already made) → `HallieLineageAnswer.personVideos`
+(`+GedcomAwareness.swift:191`) → `resolveDetailed("Dad")`
+(`HallieLineageQuestion.swift:1505`) → CyberBrain (no "dad" token) →
+`ArchivistGraphExecutor.resolveSubject` → `people(matching:)` → Dafydd →
+`photographyFloorLine(.film)` → the 1888 sentence. `[hallie] film offer
+suppressed: Dafydd ab Einion … (b. about 1360 + 125 < film 1888)` is in
+`videoscan.log` at 14:14:45 and 14:17:07.
+
+GH #180 (9/11) fixed this for the person-fact lane (`HalliePersonFactQuestion
+.swift:70` rewrites a bare kin word to "my dad") and 9/21 for the temporal
+lane — each for its own road. Every lineage shape ("videos of X", "photo of
+X", "X's line", "center on X", "X's family tree") shares ONE resolver, and
+none of them asked whether X was a kin word first.
+
+**Fix.** `HallieLineageAnswer+KinTerm.swift` — `ownerRelative(_:context:graph:)`,
+called from `resolveDetailed` as step 0b, so every lineage shape gets it.
+The ladder, first rung that settles wins: (0) a bare kin word a CURATED name
+claims ("Ma" is Eileen's alias) keeps the alias road, as GH #180 ruled;
+(1) the People tab's own relationship rows (Rick: "child of Dad") → the
+relative's pinned tree record; (2) the owner's OWN tree record (FamilySearch
+ID, else `HallieOwnerResolver`) → `relatives(_:of:)` or the extended walk;
+(3) an honest decline naming the gap. Never a name lookup. Pinned by
+`HallieDadNotDafyddTests` — the fixture tree keeps `1 NAME Dad ab Giwn` on a
+1360 record, and `theTreeReallyHasAManNamedDad` proves the rung still fires
+so the other tests still mean something.
+
+### B. Two turns after the correction, "dad" was resolved from scratch
+
+Turn 2 settled that "dad breen" is Richard Harding Breen Sr; turn 3 was about
+him; turn 4's "videos of dad" ran the same lookup as turn 1 with no memory of
+either. **Fix.** `ConversationMemory.kinBindings` (`HallieTurnExecutor
++Conversation.swift`): an ANSWERED graph turn whose typed person term names a
+kin word ("dad breen", "my dad", "dad") writes relation → settled person
+(`father` → "Richard Harding Breen Sr"); graph answers only, because a catalog
+answer's person can be the contested given name "Richard". `lineageTurn`
+substitutes the bound person into a media ask before any lookup — the same
+road "photos of him" takes. Pinned by
+`afterTheCorrectionVideosOfDadKeepsRichardSr`, with a People tab that has NO
+relationship rows and a tree with NO parents for the owner, so only the
+conversation can bind it; `aDeclinedCorrectionBindsNothing` and
+`aFatherBindingNeverLeaksToMother` are the sensors.
+
+### C. The tree opened on the man Rick had just rejected
+
+Log, 14:15: `[hallie-mode] mode=tree reason=explicitCue(dad)` at 14:15:07 →
+`Hallie: phrased graph/answered by template (template: model timeout)` at
+14:15:28 → `Family Tree: selected Dafydd ab Einion … (@IB21341@)` and
+`[family-tree] focus kind=record-id result=applied` at 14:15:29. The only code
+that writes *"Opening the Family Tree tab focused on X."* is the window's own
+chip handler (`ArchivistChatWindow.swift:1036`, `announce: true`); the
+commit path's auto-focus sink announces nothing and writes `[family-tree]
+Hallie focus requested target=person-id`, which is absent. The web bridge
+turns tree offers into "tell me about X" asks. So turn 1's **superseded**
+"Open in Family Tree: Dafydd …" chip was tapped in the second the corrected
+answer landed. A chip tapped while Hallie thinks is dropped silently
+(`handle(chip:)` `guard !isThinking`) — during a 21 s timeout that invites
+repeat clicks, and the last one lands on the first frame after thinking ends.
+Whether Rick's hand or something else pressed it, the chip should not have
+been live: the conversation had moved from Dafydd to Richard Sr, and memory's
+`tree.lastOffers` (what "show me" acts on) already forgets an earlier
+answer's offers on every new tree answer. The transcript did not.
+
+**Fix.** `HallieSupersededOffers.swift` (pure) + a `retireSupersededOffers`
+sink on `HallieResponseCommit.Sinks`, called when the settled person changes,
+BEFORE the new answer's bubble is appended (so a which-one's own chips are
+untouched): earlier bubbles' `openFamilyTree` / `openFamilyTreePerson` chips
+for anyone else are removed; asks, folders, surnames and app-tab chips stay.
+`ArchivistChatWindow.handle(chip:)` now logs every tap — `[hallie] chip
+tapped: …` / `chip ignored while thinking: …` — so next time the trail exists.
+Pinned by `HallieSupersededOffersTests` (the pure function, the commit
+order, an answer about the same person retires nothing, and an immediate
+action only ever opens the result's own person).
+
+### For Rick's ruling
+
+- **Retiring old chips is a visible change.** After the conversation moves to
+  someone else, an earlier bubble's "Open in Family Tree: X" button is gone;
+  ask about X again and it is offered afresh (the same words
+  `HallieTreeFollowUp` uses for a stale offer). The gentler alternative is a
+  confirm-on-tap ("that was about Dafydd; still want the tree on him?") —
+  more UI, and it would still have needed the tap to be logged.
+- **A chip tapped while Hallie thinks is dropped without a word.** Disabling
+  chips visibly while thinking would need `isThinking` in every row's
+  equality (two re-renders per turn — cheap, but it is the row that the
+  2026-08-29 beachball fix made equatable on purpose). Not done here.
+- The unmerged `fix/hallie-kin-term-collision` (dfffe347, "a kin term names
+  WHO, it does not argue about the mode") is NOT needed for this fix and was
+  not cherry-picked: the Dafydd answer was made before the mode verdict, and
+  `mode=unknown reason=conflict` on turns 1 and 4 only means the translator
+  ran afterwards. That branch's ruling — whether "videos of my dad" should
+  route to the catalog outright — stands as it was.
+- `1 NAME Dad ab Giwn` is a legitimate FamilySearch alternate name; nothing
+  to fix in the data. The lesson is in the resolver, not the record.
+
+### Same matcher, one road over: the graph route (found by the sensor, fixed)
+
+Two probes written for the same fixture went red on the graph route:
+"show dad's family tree" (`.graph(people: ["dad"], operation: .familyTree)`)
+rendered Dafydd's tree with an "Open in Family Tree: Dafydd" offer, and "who
+is dad's mother" (`.kinship`, relation `.mother`) answered for Dafydd.
+`HallieTurnExecutor+GraphPreflight.swift` rebinds only a "my/our <kin>"
+PHRASE in the question (`SpeakerKinship.kinshipPhrase`); a bare "dad"
+subject went straight to `ArchivistGraphExecutor.resolveSubject` and the
+same `people(matching:)` rung. (`executeRelativeFact`, GH #180, runs first
+but claims only biography / birth / death.) **Fix**, same file: a bare kin
+word that is the ONE subject, not a curated alias, is read as "my <kin>" and
+sent down the existing `SpeakerKinship.rebind` ladder — People tab → owner's
+tree record → honest failure — for every remaining graph operation. Pinned
+by `showDadsFamilyTreeIsNeverDafydd` / `whoIsDadsMotherIsNeverDafydd`.
+Not covered (unchanged, reported): a bare kin word outside the rebind
+vocabulary ("grandma", "nana") on a family-tree / kinship op still reaches
+the name resolver; the biography ops already handle those through
+`executeRelativeFact`.
+
+**Runs (branch `fix/hallie-dad-dafydd`, worktree, Debug, M4, suite-filtered).**
+Red first: `HallieDadNotDafyddTests` 10 of 13 red on the unfixed code with the
+live symptom reproduced through the fixture (Dafydd for "dad", "my dad", the
+photo shape, the post-correction turn); the two graph-route probes red on the
+lineage fix alone. Green: every `Hallie*` / `Archivist*` / `People*` suite —
+**1,855 Swift Testing tests in 226 suites + 7 XCTest, 0 failures, 257 s**
+(`HallieDadNotDafyddTests` 15, `HallieSupersededOffersTests` 8 among them);
+pytest `test_hallie_question_testbed.py` + `test_hallie_harvest_queries.py`
+(+ `test_hallie_eval.py`) 66 passed, 17 subtests. Harvest: `lv260926-001`
+by `hallie_harvest_queries.py --since 2026-09-26 --append`; `002…004` by hand
+(the harvester skips a mid-sentence "not", a bare "sure" and "sure, but …").
+
+## 2026-09-26 — "find the earliest birth year for richard's tree" → Gruffudd ap Einion b. 780 (Donna's line), and the corrections drew biographies
+
+Rick, 16:46–16:49 ET (session `E1832598`, app; the transcript's `Z` stamps are
+UTC). Rick's words: *"Example query that worked well: 'Find earliest birth
+year in...' but I noticed it did not go to me, so I added 'for Rick' and got
+that same answer, this person is not an ancestor of Rick."* Corpus
+`lv260926-006…012`; strict `strict-060…064`; branch
+`fix/hallie-superlative-scope`.
+
+| # | id | asked | what came back | status |
+|---|----|-------|----------------|--------|
+| 1 | `lv260926-006` | "who is the earliest ancestor in my family tree" | the model's tree SUMMARY ("39249 people, birth years from 780 to 1959 … tell me whose tree you want") | open, follow-up candidate (see below) |
+| 2 | `lv260926-007` | "find the person in the family tree with the earliest birth date" | *"The earliest birth year in the family tree is born 780: Gruffudd ap Einion …"* — `superlative: earliestBorn scope=wholeTree` | fine — **sensor**, must not change |
+| 3 | `lv260926-008` | "… with the earliest birth date **who is a direct ancestor to rick**" | the SAME answer, `scope=wholeTree` | **FIXED** (A) |
+| 4 | `lv260926-011` | "that person b. 780 is donna's ancestor, not mine. I want mine" | Rick's own biography (`operation=familyTree person=Rick Breen`) | **FIXED** (B) |
+| 5 | `lv260926-009` | "find the earliest birth year **for richard's tree**" | the SAME answer, `scope=wholeTree` | **FIXED** (A) |
+| 6 | `lv260926-012` | "that is donna's line" | Donna's biography (`operation=familyTree person=donna`) | **FIXED** (B) |
+
+**Failure class.** The 9/07 shape yet again — a true, cited answer to a
+different question, twice — and then the corrections were answered as if
+they were new questions. Row 6 is the sharpest: Rick told Hallie whose line
+the answer was from, and she described that person.
+
+### A. The scope reader knew "of X's ancestors" and nothing else
+
+`HallieLineageQuestion.superlativeKindAndScope` (the scope block, formerly
+`HallieLineageQuestion.swift:1100–1116`) accepted exactly two person forms:
+`of|among|in|from X's ancestors|ancestry|forebears|line|lineage|pedigree` and
+`ancestor(s) of X` at the end of the sentence. Not "for", not "tree" /
+"family tree" / "side", not "ancestor **to** rick", not a relative clause,
+not a trailing "for rick". Every scoped ask fell to `.wholeTree`, the log
+said so (`scope=wholeTree`), and the whole-tree winner is on Donna's side.
+
+**Fix.** `HallieLineageQuestion.personScope(in:)` — one reader, first match
+wins: (1) a trailing relative clause "who|that is a (direct) ancestor|
+descendant of|to X"; (2) a trailing "for X" / "for X's tree" (never "for
+example"); (3) a possessive after a preposition, `of|among|in|from|for|on|
+within|across X's ancestors|line|side|tree|family tree|family|descendants…`
+— "my/our family tree" stays the WHOLE tree, as pinned 2026-08-26;
+(4) "ancestor(s)|descendant(s) of|to X" at the end. A name is a run of name
+TOKENS, never a grammar word, so "born in ireland among rick's ancestors" is
+read from "among" (the first cut of this read "ireland among rick" as the
+name, and the birthplace kind read "Ireland Among Rick's Ancestors" as a
+place — both caught RED by the new suite). The reader also returns its
+RANGE so the birthplace kind stops its place capture where the scope starts.
+`SuperlativeScope` gains `.descendantsOf(String?)` ("X's descendants") and
+`.otherSideOf(String?)` (only ever produced by a correction, see B).
+
+The answer (`HallieLineageAnswer+Superlatives`) walks the person's ancestors
+with the biography's own enumeration (`GedcomFamilyGraph.ancestorLine`,
+de-duplicated by the walk's `seen` bitmap — the same count the family-tree
+card reports as "N recorded ancestors across G generations") or descendants
+(`descendants(of:depth:)`), and SAYS what it ranked: *"The earliest birth
+year among Richard Harding Breen Jr’s 6 recorded ancestors is born 1860:
+Patrick Breen …"*; basis *"Ranked 6 of Richard Harding Breen Jr’s 6 recorded
+ancestors across 3 generations that record the fact."* The whole-tree and
+surname wording is byte-identical to before (sensor C:
+`theUnscopedSuperlativeStillRanksTheWholeTreeWordForWord` pins prose, basis,
+query description and chips on the fixture; strict-060 pins it on the real
+tree). "richard" resolves the way every lineage shape resolves a name — the
+owner's FamilySearch pin settled it in the fixture and the People-tab bridge
+did live ("Richard Harding Breen Jr (Richard in the People tab)"); a genuine
+tie asks which one, as elsewhere.
+
+### B. Nothing remembered the ranking, so the correction became a question
+
+"that is donna's line" reached the translator, which read it as a family-tree
+card for Donna; "not mine. I want mine" became Rick's card. `HallieRepairTurn`
+did not fire either — neither sentence carries a complaint cue.
+
+**Fix.** Three small parts, in the `kinBindings` style of the morning's fix:
+- `Result.superlative` — a typed payload (kind + the scope as RUN) set only
+  by `HallieLineageAnswer.superlative`, on answers, declines and which-ones
+  alike; carried by every copy helper (`HallieResultCopyRoundTripTests`
+  walks them). Typed, never parsed back out of prose or the query
+  description (codex #1352's ruling for `retryOffer`).
+- `ConversationMemory.lastSuperlative` — taken from that payload; replaced by
+  the next ranking, cleared by any other lane answer (a correction two
+  questions later is not misread), kept across follow-ups / help / small
+  talk; reset clears it.
+- `HallieSuperlativeCorrection.scope(in:)` (pure) — "I want mine" / "not
+  mine" / "that's not my side" / "I meant rick" / "no, I meant for rick" /
+  "for rick" / "what about donna's side" / "donna's side" → that person's
+  ancestors; "that is donna's line" / "those are donna's ancestors" → the
+  OTHER side (`.otherSideOf`: the owner's ancestors when X is not the owner,
+  the spouse's when X is — "that is my line"). Runs in `preTranslationSingle`
+  BEFORE the repair turn, only while a ranking is remembered, and abstains on
+  anything `HallieLineageQuestion.detect` claims, so a fresh "who is the
+  oldest person on donna's side" is its own ranking, never a correction.
+  The corrected answer carries the payload too, so a second correction
+  works ("that is rick's line" → Donna's).
+
+### Not fixed here, reported
+
+- **Row 1, "who is the earliest ancestor in my family tree".** No born/birth
+  word, so the superlative reader stays silent and the translator's tree
+  summary answers (true, cited, not the person). "earliest / first ancestor"
+  → earliest-born over the owner's ancestors is a one-regex addition to the
+  kind reader, but it is a second bug and this dispatch is one bug.
+- **Same gap, one road over:** `HallieTreeStatisticsQuestion.ancestorScope`
+  knows only "my/our ancestors" / "my line", so "how many of **rick's**
+  ancestors were born in ireland" counts the whole tree. That route's engine
+  scope is owner-only (`TreeStatistics.Scope.ancestors(of:)` resolves the
+  owner); naming a person there is a small feature, not this fix.
+- **Precedence, pre-existing:** "who was born first among my ancestors" is
+  claimed by the birthplace-trail shape, which runs before the superlatives;
+  "who is the oldest person among my ancestors" is a superlative. Left as is.
+- **A name with a grammar word in it** ("john of gaunt's ancestors") is cut
+  at the grammar word by the scope reader ("Gaunt"). Superlatives scoped to a
+  medieval name are rare; the resolver's which-one / not-found is the
+  fallback.
+
+**Runs (branch `fix/hallie-superlative-scope`, worktree, Debug, M4, suite-filtered).**
+Red first: `HallieSuperlativeScopeTests` 14 issues on the unfixed code with the
+live symptom reproduced through the fixture (the scoped asks and the
+corrections), then the two reader bugs above caught by the same suite. Green:
+every `Hallie*` / `Archivist*` / `People*` suite — **2,145 Swift Testing tests
+in 260 suites + 7 XCTest, 0 failures, 1 pre-existing known issue, 286 s**
+(`HallieSuperlativeScopeTests` 11, `HallieSuperlativeTests` 7 and
+`HallieResultCopyRoundTripTests` 2 among them); pytest
+`test_hallie_question_testbed.py` + `test_hallie_harvest_queries.py` +
+`test_hallie_eval.py` 66 passed, 17 subtests. Harvest: `lv260926-005…010` by
+`hallie_harvest_queries.py --since 2026-09-26 --append`; `011` and `012` by
+hand (a mid-sentence "not" and a bare statement), placed in conversation order.

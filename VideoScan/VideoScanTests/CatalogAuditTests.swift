@@ -74,7 +74,7 @@ struct CatalogAuditTests {
         let targets = (0..<8).map { tgt("/Volumes/D\($0)", cached: 12_500) }
         let start = ContinuousClock.now
         let r = CatalogAuditor.run(CatalogAuditInputs(records: records, targets: targets, archiveIndexPromoted: 0))
-        #expect(ContinuousClock.now - start < .seconds(1))
+        #expect(ContinuousClock.now - start < PerformanceLane.debugCeiling(.seconds(1)))
         #expect(r.overall == .pass, "\(r.text)")
     }
 }

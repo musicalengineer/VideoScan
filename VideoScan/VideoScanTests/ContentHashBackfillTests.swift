@@ -145,7 +145,7 @@ struct ContentHashBackfillPlanTests {
         let plan = VideoScanModel.planContentHashBackfill(records: recs, isReachable: allReachable)
         let elapsed = ContinuousClock.now - start
         #expect(plan.candidates == 100_000)
-        #expect(elapsed < .seconds(2), "plan took \(elapsed) for 100k records")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "plan took \(elapsed) for 100k records")
     }
 }
 

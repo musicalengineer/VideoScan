@@ -145,7 +145,7 @@ struct PreviewFrameRouteTests {
             }
         }
         #expect(ffmpegCount > 0)  // keep the loop un-optimizable
-        #expect(elapsed < .seconds(1),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)),
                 "100k pure route decisions took \(elapsed) — did someone add I/O to previewRoute?")
     }
 }

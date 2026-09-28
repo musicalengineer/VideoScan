@@ -2,6 +2,7 @@
 // The Archive Angel's front door (ArchiveAngel/Facade/ArchiveAngel.swift):
 // `model.archiveAngel` answers exactly what the pieces behind it answer.
 
+import Combine
 import Foundation
 import Testing
 @testable import VideoScan
@@ -58,10 +59,39 @@ struct ArchiveAngelFacadeTests {
 
     /// A job runner that records what it was asked and never starts anything
     /// (no MFO window, no ffmpeg).
+    /// A stand-in for a background verify / footage job (never runs anything).
+    @MainActor
+    final class FakeBackgroundJob: @MainActor MediaFileOperationJob {
+        let id = UUID()
+        let kind: MediaFileOperationKind
+        let title: String
+        var subtitle = ""
+        var fraction: Double = 0
+        var isIndeterminate = true
+        let startedAt = Date()
+        var finishedAt: Date?
+        @Published var settable: MediaFileOperationState = .running
+        var state: MediaFileOperationState { settable }
+        init(kind: MediaFileOperationKind, title: String) { self.kind = kind; self.title = title }
+        func cancel() { settable = .cancelled }
+    }
+
     @MainActor
     final class FakeRunner: AngelJobRunner {
         var isBusy = false
+        var hasActiveJobs = false
         var calls: [(count: Int, recordIDs: [UUID]?, lossless: Bool, root: URL, policy: AngelRecommendationPolicy)] = []
+        var verifyStarts: [UUID] = []
+        var footageStarts = 0
+        var refuseFootage = false
+        func startVerifyAudioForAngel(record: VideoRecord, model: VideoScanModel) -> (any MediaFileOperationJob)? {
+            verifyStarts.append(record.id)
+            return FakeBackgroundJob(kind: .verifyAudio, title: "Verify Audio — \(record.filename)")
+        }
+        func startFindSimilarFootageForAngel(model: VideoScanModel) -> (any MediaFileOperationJob)? {
+            footageStarts += 1
+            return refuseFootage ? nil : FakeBackgroundJob(kind: .findSimilarFootage, title: "Find Similar Footage — whole catalog")
+        }
         func startArchiveAngelByUser(count: Int, recordIDs: [UUID]?, makeLossless: Bool,
                                      model: VideoScanModel, bufferRoot: URL,
                                      policy: AngelRecommendationPolicy) -> ArchiveAngelJob {
@@ -118,6 +148,177 @@ struct ArchiveAngelFacadeTests {
         #expect(!ArchiveAngel(model: model, environment: env(root, defaults: defaults, testHost: false)).sweepEnabled)
         #expect(ArchiveAngel(model: model, environment: env(root, defaults: defaults, testHost: true)).sweepEnabled)
         defaults.removePersistentDomain(forName: defaults.description)
+    }
+
+    // MARK: Angel Checks + Keep footage current (docs/archive_angel_wise_design.md §4–§5)
+
+    @Test("settings: checks and footage-auto keys, ON when missing, persisted through the façade; a test host starts from the pristine defaults")
+    func checksAndFootageSettings() throws {
+        let (model, root) = try model()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(ArchiveAngelSettings.checksEnabledKey == "archiveAngel.checksEnabled")
+        #expect(ArchiveAngelSettings.footageAutoEnabledKey == "archiveAngel.footageAutoEnabled")
+        let defaults = suite()
+        let angel = ArchiveAngel(model: model, environment: env(root, defaults: defaults))
+        #expect(angel.checksEnabled && angel.footageAutoEnabled, "ON by default")
+        angel.setChecks(false)
+        angel.setFootageAuto(false)
+        #expect(defaults.object(forKey: "archiveAngel.checksEnabled") as? Bool == false)
+        #expect(defaults.object(forKey: "archiveAngel.footageAutoEnabled") as? Bool == false)
+        #expect(!angel.checksEnabled && !angel.footageAutoEnabled)
+        #expect(angel.checks.status == .disabled)
+        let production = ArchiveAngel(model: model, environment: env(root, defaults: defaults, testHost: false))
+        #expect(!production.checksEnabled && !production.footageAutoEnabled, "a production façade restores the choice")
+        #expect(ArchiveAngel(model: model, environment: env(root, defaults: defaults, testHost: true)).checksEnabled,
+                "a test host never reads the person's preference")
+        defaults.removePersistentDomain(forName: defaults.description)
+    }
+
+    @Test("checkFacts: the seams answer the checker — never-verified sound, sound track, mount, Master Archive, gone record")
+    func checkFacts() throws {
+        let (model, root) = try model()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let angel = model.archiveAngel
+        let r = VideoRecord()
+        r.filename = "tape.mov"; r.fullPath = "/Volumes/NoSuchVolume_\(UUID().uuidString.prefix(6))/tape.mov"
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        let v = VideoRecord()
+        v.filename = "silent.mov"; v.fullPath = root.appendingPathComponent("silent.mov").path
+        v.streamTypeRaw = StreamType.videoOnly.rawValue
+        let ok = VideoRecord()
+        ok.filename = "checked.mov"; ok.fullPath = root.appendingPathComponent("checked.mov").path
+        ok.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        ok.audioVerifyStatus = "ok"; ok.audioVerifyDate = Date()
+        model.records = [r, v, ok]
+        let f = try #require(angel.checkFacts(for: r.id))
+        #expect(f.audioNotVerified && f.hasAudioTrack && !f.volumeMounted && !f.onMasterArchive)
+        #expect(f.ineligibleReason == "drive not connected")
+        #expect(angel.checkFacts(for: v.id)?.hasAudioTrack == false)
+        #expect(angel.checkFacts(for: ok.id)?.audioNotVerified == false)
+        #expect(angel.checkFacts(for: UUID()) == nil)
+        #expect(angel.checkFacts(for: ok.id)?.volumeMounted == true, "a boot-disk path is reachable")
+    }
+
+    @Test("keep footage current: fires once after arming when nothing is grouped, not while busy / read-only / off, and not again within 6 h")
+    func footageAutoRun() throws {
+        let (model, root) = try model()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = suite()
+        let angel = ArchiveAngel(model: model, environment: env(root, defaults: defaults))
+        let runner = FakeRunner()
+        #expect(!angel.considerFootageRun(trigger: "no runner"), "no runner attached: nothing starts")
+        angel.attach(jobRunner: runner)
+        runner.isBusy = true
+        #expect(!angel.considerFootageRun(trigger: "busy") && runner.footageStarts == 0)
+        runner.isBusy = false
+        #expect(angel.considerFootageRun(trigger: "first complete assessment"))
+        #expect(runner.footageStarts == 1)
+        #expect(angel.lastFootageAutoRunAt != nil)
+        #expect(!angel.considerFootageRun(trigger: "again"), "disarmed after a run")
+        #expect(runner.footageStarts == 1)
+        // Turning the setting on re-arms — but a record grouped just now is current.
+        let r = VideoRecord()
+        r.filename = "a.mov"; r.fullPath = "/Volumes/T/a.mov"
+        r.footage = FootageMembership(groupID: r.id, groupSize: 2, confidence: .likely, role: .original, rank: 0,
+                                      likelyOriginalID: r.id, originalInCatalog: true, evidence: [],
+                                      scannedAt: Date(), algorithmVersion: 1)
+        model.records = [r]
+        angel.setFootageAuto(true)
+        #expect(runner.footageStarts == 1, "an automatic run started just now: current")
+        // A day-old automatic run is stale (QA MAJOR-4: the persisted run
+        // stamp decides, not the records' scannedAt).
+        ArchiveAngelSettings.saveFootageLastAutoRunAt(Date().addingTimeInterval(-25 * 3600), to: defaults, isTestHost: true)
+        angel.setFootageAuto(true)
+        #expect(runner.footageStarts == 2)
+        // Off: never.
+        angel.setFootageAuto(false)
+        #expect(!angel.considerFootageRun(trigger: "off") && runner.footageStarts == 2)
+        defaults.removePersistentDomain(forName: defaults.description)
+    }
+
+    @Test("QA MAJOR-4: a run that found nothing new still counts — the next arming (or launch) does not start another whole-catalog run")
+    func footageRunThatChangedNothingIsCurrent() throws {
+        let (model, root) = try model()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = suite()
+        defer { defaults.removePersistentDomain(forName: defaults.description) }
+        let angel = ArchiveAngel(model: model, environment: env(root, defaults: defaults))
+        let runner = FakeRunner()
+        angel.attach(jobRunner: runner)
+        let a = VideoRecord(), b = VideoRecord()
+        let old = Date().addingTimeInterval(-25 * 3600)
+        a.footage = FootageMembership(groupID: a.id, groupSize: 2, confidence: .likely, role: .original, rank: 0,
+                                      likelyOriginalID: a.id, originalInCatalog: true, evidence: [], scannedAt: old, algorithmVersion: 1)
+        b.footage = FootageMembership(groupID: a.id, groupSize: 2, confidence: .likely, role: .copy, rank: 1,
+                                      likelyOriginalID: a.id, originalInCatalog: true, evidence: [], scannedAt: old, algorithmVersion: 1)
+        model.records = [a, b]
+        #expect(angel.considerFootageRun(trigger: "launch"), "a day-old run is stale: this first run is right")
+        #expect(runner.footageStarts == 1)
+        // The run changed no answer, so no record's scannedAt moved.
+        angel.setFootageAuto(true)   // re-armed
+        #expect(runner.footageStarts == 1, "started again although a run just happened")
+        // The next launch (a fresh façade over the same preferences) agrees.
+        let next = ArchiveAngel(model: model, environment: env(root, defaults: defaults))
+        next.attach(jobRunner: runner)
+        #expect(!next.considerFootageRun(trigger: "launch"))
+        #expect(runner.footageStarts == 1, "every launch re-ran Find Similar Footage on an unchanged catalog")
+    }
+
+    @Test("QA MAJOR-4 isolation: a test host on the app's own defaults never reads or writes the footage stamp there")
+    func footageStampNeverTouchesStandardInATestHost() throws {
+        let (model, root) = try model()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = ArchiveAngelSettings.footageLastAutoRunAtKey
+        let before = UserDefaults.standard.object(forKey: key) as? Date
+        var e = env(root, defaults: .standard)
+        e.isTestHost = true
+        let angel = ArchiveAngel(model: model, environment: e)
+        let runner = FakeRunner()
+        angel.attach(jobRunner: runner)
+        #expect(angel.considerFootageRun(trigger: "test host"))
+        #expect(UserDefaults.standard.object(forKey: key) as? Date == before, "wrote Rick's real preferences")
+        #expect(angel.lastFootageAutoRunAt != nil, "kept in memory instead")
+        #expect(!ArchiveAngelSettings.persistsFootageStamp(.standard, isTestHost: true))
+    }
+
+    @Test("QA MINOR-7: an Archive Angel check's START line says so; the user's own verify lines are unchanged")
+    func verifyStartPlanNamesTheAngelCheck() {
+        #expect(MediaFileOperationsCenter.verifyAudioStartPlan(autoRepair: false, angelCheck: true)
+                == "Archive Angel check (background) — diagnose the audio track")
+        #expect(MediaFileOperationsCenter.verifyAudioStartPlan(autoRepair: false, angelCheck: false) == "diagnose the audio track")
+        #expect(MediaFileOperationsCenter.verifyAudioStartPlan(autoRepair: true, angelCheck: false) == "diagnose + repair if damaged")
+    }
+
+    @Test("QA MAJOR-2: pressing a button on an Angel row counts as the person working (Angel Checks wait)")
+    func angelRowActionPingsTheInteractionGate() throws {
+        let (model, root) = try model()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let r = VideoRecord()
+        r.filename = "tape.mov"; r.fullPath = root.appendingPathComponent("tape.mov").path
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        model.records = [r]
+        #expect(model.lastUserInteractionAt == nil)
+        let actions = ArchiveAngelListActions(model: model, angel: model.archiveAngel, prepare: { _ in })
+        let row = ArchiveAngelListRowBuilder.row(ArchiveAngelRowFacts.make(record: r, evidence: nil, kind: .ready))
+        _ = actions.readiness(row)
+        #expect(model.lastUserInteractionAt != nil, "the Archive tab's own buttons never tell Angel Checks the person is here")
+    }
+
+    @Test("footage currency seam: counts grouped active records and the newest run stamp")
+    func footageCurrency() throws {
+        let (model, root) = try model()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let none = model.footageCurrency()
+        #expect(none.grouped == 0 && none.newestScan == nil)
+        let a = VideoRecord(), b = VideoRecord(), c = VideoRecord()
+        let older = Date(timeIntervalSince1970: 1_700_000_000), newer = Date(timeIntervalSince1970: 1_800_000_000)
+        a.footage = FootageMembership(groupID: a.id, groupSize: 2, confidence: .likely, role: .original, rank: 0,
+                                      likelyOriginalID: a.id, originalInCatalog: true, evidence: [], scannedAt: older, algorithmVersion: 1)
+        b.footage = FootageMembership(groupID: a.id, groupSize: 2, confidence: .likely, role: .copy, rank: 1,
+                                      likelyOriginalID: a.id, originalInCatalog: true, evidence: [], scannedAt: newer, algorithmVersion: 1)
+        model.records = [a, b, c]
+        let cur = model.footageCurrency()
+        #expect(cur.grouped == 2 && cur.newestScan == newer)
     }
 
     @Test("busy gate: the sweep parks while the job runner reports an Angel/Promote job (AngelJobRunner.isBusy)")

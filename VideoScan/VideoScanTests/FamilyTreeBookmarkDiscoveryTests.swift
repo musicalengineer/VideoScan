@@ -252,6 +252,6 @@ struct FamilyTreeBookmarkDiscoveryTests {
             #expect(model.filteredPeople.count == 100_000)
         }
         let elapsed = clock.now - start
-        #expect(elapsed < .seconds(2), "100k-person scope/search updates took \(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "100k-person scope/search updates took \(elapsed)")
     }
 }

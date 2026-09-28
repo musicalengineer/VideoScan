@@ -125,7 +125,7 @@ struct ArchiveAngelBufferReconcileTests {
         let asked = OSAllocatedUnfairLock(initialState: 0)
         let n = await model.reconcileArchiveAngelBufferAtLaunch(bufferRoot: root) { _ in
             asked.withLock { $0 += 1 }
-            return true
+            return .present
         }
         #expect(n == 0)
         #expect(asked.withLock { $0 } == 0)

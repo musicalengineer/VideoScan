@@ -431,11 +431,20 @@ extension VideoScanModel {
     /// Finder" signature. Returns false when the file is there, or the
     /// whole volume is offline (that's the existing offline story, not a
     /// move). Never blocks the caller.
+    ///
+    /// Asks `isVolumeReachable` — "is the VOLUME mounted" — never
+    /// `isReachable`, which for internal-disk paths answers "does this FILE
+    /// exist" from a 5 s cache. Once that cache held the missing file's
+    /// `false` (the background probe landed, or a catalog cell asked
+    /// first) the prompt read the boot disk as offline and stayed silent
+    /// for internal-disk files — the UpdateCatalogTests flake after
+    /// resetLooksMovedDebounce (2026-09-27), and the same two-facts
+    /// confusion as the 2026-09-21 "M4drive not connected" fix.
     @discardableResult
     func noteMissingFileForUserAction(_ rec: VideoRecord) -> Bool {
         let path = rec.fullPath
         guard !path.isEmpty,
-              VolumeReachability.isReachable(path: path),
+              VolumeReachability.isVolumeReachable(path: path),
               !FileManager.default.fileExists(atPath: path) else { return false }
         let volume = VolumeReachability.volumeName(forPath: path)
         let volumeKey = volume.isEmpty ? VideoScanModel.volumeRootForPathPublic(path) : volume

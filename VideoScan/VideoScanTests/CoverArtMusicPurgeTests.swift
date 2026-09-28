@@ -123,7 +123,7 @@ struct CoverArtMusicPurgeScaleTests {
         #expect(count == plantedCandidates)
         // A single metadata-only pass over 100k records is trivial; a
         // generous 2 s ceiling catches any accidental O(n²) regression.
-        #expect(elapsed < 2.0, "isCandidate scan took \(elapsed)s over 100k records")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 2.0), "isCandidate scan took \(elapsed)s over 100k records")
 
         // candidateIDs must agree with count (same predicate, dedup by id).
         #expect(CoverArtMusicPurge.candidateIDs(in: records).count == plantedCandidates)

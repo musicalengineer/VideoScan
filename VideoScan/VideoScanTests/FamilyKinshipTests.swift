@@ -1122,7 +1122,8 @@ struct FamilyKinshipTests {
         let elapsed = clock.measure {
             overlay = FamilyKinshipOverlay(profiles: profiles, graph: nil)
         }
-        #expect(elapsed < .milliseconds(50), "overlay build took \(elapsed)")
+        // 50 ms locally; ×3 on a GitHub-hosted runner only (71 ms there, run 36202513830).
+        #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(50)), "overlay build took \(elapsed)")
         #expect(overlay?.edgeCount == 5_000)
 
         // Queries stay bounded on the dense ring (≤ 3 hops, no blow-up).

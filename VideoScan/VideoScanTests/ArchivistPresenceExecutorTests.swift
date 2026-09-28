@@ -302,7 +302,7 @@ struct ArchivistPresenceExecutorTests {
         #expect(snapshots.first?.id == value.id)
         #expect(snapshots.last?.id == value.id)
         #expect(snapshots.allSatisfy { $0.fullPath == value.fullPath })
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "main-actor snapshot capture took \(elapsed) for 100k records")
     }
 
@@ -341,7 +341,7 @@ struct ArchivistPresenceExecutorTests {
         #expect(result.evidence.totalMatchCount == 50_000)
         #expect(result.evidence.citations.count
                 == ArchivistPresenceExecutor.maxCitations)
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "detached presence execution took \(elapsed) over 100k snapshots")
     }
 

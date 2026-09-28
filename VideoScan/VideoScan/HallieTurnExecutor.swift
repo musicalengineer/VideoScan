@@ -132,13 +132,30 @@ enum HallieTurnExecutor {
         /// selects it and resumes the carried gallery intent; "no" is the
         /// client's to clear with an "Okay." (HallieClarificationDecline).
         case galleryOffer
+        /// "Would you like to hear how Richard Harding Breen Sr served his
+        /// country?" after a biography, or "Whose story would you like to
+        /// hear?" after a family-wide service answer (2026-09-23): the
+        /// candidates are the CyberBrain people whose service story "yes" /
+        /// a pick tells; "no" is the client's to clear with an "Okay."
+        case serviceOffer
+
+        /// An OFFER Hallie made, not a which-one question: nobody is being
+        /// guessed at, the answer before it is complete, and "no" just
+        /// closes it.
+        var isOffer: Bool {
+            switch self {
+            case .galleryOffer, .serviceOffer: return true
+            case .profileIdentity, .gedcomPerson, .cyberBrainPerson, .suggestedIdentity: return false
+            }
+        }
 
         func accepts(_ source: IdentitySource) -> Bool {
             switch (self, source) {
             case (.profileIdentity, .peopleProfile), (.gedcomPerson, .gedcom),
                  (.cyberBrainPerson, .cyberBrain),
                  (.suggestedIdentity, .peopleProfile), (.suggestedIdentity, .gedcom),
-                 (.galleryOffer, .peopleProfile), (.galleryOffer, .gedcom):
+                 (.galleryOffer, .peopleProfile), (.galleryOffer, .gedcom),
+                 (.serviceOffer, .cyberBrain):
                 return true
             default:
                 return false
@@ -697,6 +714,12 @@ enum HallieTurnExecutor {
         /// memory applies it when the answer is recorded. Nil otherwise.
         /// Copied by every copy helper.
         let modeForce: HallieModeForce?
+        /// The ranking a superlative answer RAN (live 2026-09-26): kind and
+        /// scope, so "that is donna's line" right after re-runs the same
+        /// kind over the corrected scope (ConversationMemory.lastSuperlative).
+        /// Set only by HallieLineageAnswer.superlative; nil everywhere else.
+        /// Copied by every copy helper.
+        let superlative: HallieLineageQuestion.SuperlativeAsk?
 
         init(
             route: Route,
@@ -721,7 +744,8 @@ enum HallieTurnExecutor {
             refinableQuery: RefinableQuery? = nil,
             retryOffer: HallieOfferAcceptance.Offer? = nil,
             mode: HallieMode? = nil,
-            modeForce: HallieModeForce? = nil
+            modeForce: HallieModeForce? = nil,
+            superlative: HallieLineageQuestion.SuperlativeAsk? = nil
         ) {
             self.route = route
             self.outcome = outcome
@@ -748,6 +772,7 @@ enum HallieTurnExecutor {
             self.retryOffer = retryOffer
             self.mode = mode
             self.modeForce = modeForce
+            self.superlative = superlative
         }
 
         /// The same answer with extra things to look at. Facts untouched.
@@ -766,7 +791,8 @@ enum HallieTurnExecutor {
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
                 mode: mode,
-                modeForce: modeForce)
+                modeForce: modeForce,
+                superlative: superlative)
         }
 
         /// The same answer with an OFFER appended (2026-09-10, the gallery
@@ -775,11 +801,16 @@ enum HallieTurnExecutor {
         /// the offered intent. Facts, basis, citations, attachments and the
         /// answer plan are untouched — the sentence is a question Hallie
         /// asks, never a claim about the family.
+        ///
+        /// A route that built its own plan gets the offer on the plan too
+        /// (HallieAnswerPlan.trailingOffer), so a model-phrased answer still
+        /// ends with the question its pending "yes" answers (2026-09-23).
         func offering(_ sentence: String, clarification offer: Clarification) -> Result {
-            Result(
+            let separated = prose.hasSuffix(" ") || prose.isEmpty ? sentence : " " + sentence
+            return Result(
                 route: route,
                 outcome: outcome,
-                prose: prose.hasSuffix(" ") || prose.isEmpty ? prose + sentence : prose + " " + sentence,
+                prose: prose + separated,
                 basisLine: basisLine,
                 queryDescription: queryDescription,
                 citations: citations,
@@ -789,7 +820,7 @@ enum HallieTurnExecutor {
                 matchCount: matchCount,
                 mediaAction: mediaAction,
                 offeredActions: offeredActions,
-                answerPlan: answerPlan,
+                answerPlan: answerPlan?.offering(separated),
                 composedBy: composedBy,
                 transcriptText: transcriptText.map { $0 + " " + sentence },
                 attachments: attachments,
@@ -799,7 +830,8 @@ enum HallieTurnExecutor {
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
                 mode: mode,
-                modeForce: modeForce)
+                modeForce: modeForce,
+                superlative: superlative)
         }
 
         /// The same answer carrying a PROVENANCE note — how Hallie read the
@@ -815,10 +847,15 @@ enum HallieTurnExecutor {
             guard !note.isEmpty, answerPlan?.provenanceNote != note else { return self }
             let plan = (answerPlan ?? HallieAnswerPlan.derive(from: self))
                 .carrying(provenance: note)
+            // An offer stays the last sentence: the note goes in before it.
+            var noted = prose + note
+            if let offer = answerPlan?.trailingOffer, prose.hasSuffix(offer) {
+                noted = String(prose.dropLast(offer.count)) + note + offer
+            }
             return Result(
                 route: route,
                 outcome: outcome,
-                prose: prose + note,
+                prose: noted,
                 basisLine: basisLine,
                 queryDescription: queryDescription,
                 citations: citations,
@@ -838,7 +875,8 @@ enum HallieTurnExecutor {
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
                 mode: mode,
-                modeForce: modeForce)
+                modeForce: modeForce,
+                superlative: superlative)
         }
 
         /// The same answer with its prose replaced by a verified composition.
@@ -869,7 +907,8 @@ enum HallieTurnExecutor {
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
                 mode: mode,
-                modeForce: modeForce)
+                modeForce: modeForce,
+                superlative: superlative)
         }
 
         /// The same answer carrying a mode force (a spoken correction's
@@ -899,7 +938,8 @@ enum HallieTurnExecutor {
                 refinableQuery: refinableQuery,
                 retryOffer: retryOffer,
                 mode: mode,
-                modeForce: force)
+                modeForce: force,
+                superlative: superlative)
         }
     }
 
@@ -1168,6 +1208,15 @@ enum HallieTurnExecutor {
             // shell's fixture translator) there is nothing to judge against:
             // the year stands.
             let hasQuestionText = !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            // "Christmas videos from 2006" read as an age question (live
+            // 2026-09-24): a media ask with no age word is searched.
+            if !isRefinement, hasQuestionText, request.selectedIdentity == nil,
+               let presence = mediaAskMisreadAsAge(question, subject: rawPayload.subject) {
+                return try await executePresenceLike(
+                    presence, route: .presence, request: request,
+                    context: context, dependencies: dependencies)
+                .prefixingBasis("the question has a media word and no age word, so it is not an age question; I searched the catalog")
+            }
             var payload = rawPayload
             var inventedYear: Int?
             if !isRefinement, hasQuestionText, case .explicitYear(let year) = rawPayload.reference,
@@ -1175,11 +1224,26 @@ enum HallieTurnExecutor {
                 payload.reference = .currentSelection
                 inventedYear = year
             }
+            // The mirror case (replay 2026-09-25): the question states a
+            // year and the translator dropped it — "how old was dad in
+            // 1985" arrived as currentSelection and Hallie asked for a
+            // dated video.
+            var restoredYear: Int?
+            if !isRefinement, hasQuestionText, inventedYear == nil,
+               case .currentSelection = rawPayload.reference,
+               let year = ArchivistTemporalExecutor.statedYear(in: question) {
+                payload.reference = .explicitYear(year)
+                restoredYear = year
+            }
             var result = try await executeTemporalCase(
                 payload, request: request, context: context, dependencies: dependencies)
             if let inventedYear {
                 result = result.prefixingBasis(
                     "the translator supplied year \(inventedYear), which the question never mentions, so it was ignored")
+            }
+            if let restoredYear {
+                result = result.prefixingBasis(
+                    "the question says \(restoredYear); the translator left it out, so I counted to \(restoredYear)")
             }
             // The mode gate KEEPS a tree-mode session on an age question
             // (HallieModeGate.reconcileTree); say so on the answer, or
@@ -1275,9 +1339,14 @@ enum HallieTurnExecutor {
                    rawPayload, request: request, context: context, dependencies: dependencies) {
                 return handled
             }
-            let result = try await executeGraphCase(
+            var result = try await executeGraphCase(
                 rawPayload, request: request, context: context,
                 dependencies: dependencies)
+            // A biography of someone with a service story ends by offering
+            // it (+Service, Rick 2026-09-23): "Would you like to hear how
+            // … served his country?" — "yes" tells the brief story.
+            result = ServiceAnswer.offeringStory(
+                on: result, payload: rawPayload, request: request, context: context)
             // The binding is evidence: say what "you" and "I" meant.
             if let note = bindingNote(request.intent.speakerBindings) {
                 return result.prefixingBasis(note)
@@ -1907,6 +1976,34 @@ enum HallieTurnExecutor {
     /// nickname → profile → GEDCOM bridging, profile ambiguity/conflict
     /// handling, and `.profileStableID` / `.gedcomPersonID` continuations;
     /// CyberBrain must not shadow it with a weaker name-only GEDCOM lookup.
+    /// True when a CyberBrain person matched by `resolution` carries the
+    /// typed spelling as its whole canonical name or alias (not one word).
+    static func cyberBrainMatchesExactly(
+        _ typed: String, resolution: CyberBrainIdentityResolution
+    ) -> Bool {
+        let people: [CyberBrainPerson]
+        switch resolution {
+        case .resolved(let person): people = [person]
+        case .ambiguous(let many): people = many
+        case .notFound: return false
+        }
+        let key = FamilyIdentityText.normalized(typed)
+        return people.contains { person in
+            ([person.canonicalName] + person.aliases)
+                .contains { FamilyIdentityText.normalized($0) == key }
+        }
+    }
+
+    /// True when a People-tab profile owns the typed spelling exactly — by
+    /// name, alias or full-name form.
+    static func profileClaimsExactly(_ typed: String, context: Context) -> Bool {
+        (context.profiles ?? []).contains {
+            PersonNameClaim.strength(
+                of: typed, name: $0.canonicalName,
+                aliases: $0.aliases + $0.fullNameForms) != nil
+        }
+    }
+
     private static func executeCyberBrainBiography(
         payload: ArchivistQueryAST.Graph,
         request: Request,
@@ -1925,11 +2022,23 @@ enum HallieTurnExecutor {
         }
         let graph = context.graph
         let privacyCeiling = appPrivacyCeiling
+        let resolution = index.resolve(requestedName)
         let cyberBrainKnowsName: Bool
-        if case .notFound = index.resolve(requestedName) {
+        if case .notFound = resolution {
             cyberBrainKnowsName = false
         } else {
             cyberBrainKnowsName = true
+        }
+        // "tell me about ellen" (live 2026-09-21, still so 09-25): CyberBrain
+        // matched ONE WORD of two "Ellen Ronan" records and asked which,
+        // while the People tab's "Ellen" — Rick's sister — owns the exact
+        // spelling. A token-only CyberBrain match yields to an exact
+        // People-tab claim (the People tab is the source of truth for the
+        // inner circle; exact name wins, PersonNameClaim).
+        if request.selectedIdentity == nil,
+           !cyberBrainMatchesExactly(requestedName, resolution: resolution),
+           profileClaimsExactly(requestedName, context: context) {
+            return nil
         }
         let plan: CyberBrainAnswerPlan
         switch request.selectedIdentity {

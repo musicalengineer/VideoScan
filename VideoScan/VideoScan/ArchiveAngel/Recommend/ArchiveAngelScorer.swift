@@ -1,5 +1,5 @@
 // ArchiveAngelScorer.swift
-// Archive Angel — Stage 1 candidate selection (docs/archive_angel_design.md §3).
+// Archive Angel — Stage 1 candidate selection (archive_angel_design.md, retired — git show f82bbd69^:docs/archive_angel_design.md §3).
 //
 // PURE CORE. Takes Sendable inputs projected from VideoRecord, returns a
 // verdict per candidate: eligible with a score AND the evidence lines that
@@ -44,6 +44,9 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     var userDate: String?
     var inferredRecordDate: Date?
     var inferredDateConfidence: Float?
+    /// GH #201: present when the inferred date is year-precise — the
+    /// resolver then files at YEAR precision and no day key is made.
+    var inferredDateRange: InferredDateRange?
     var formatAtRisk: Bool
     var audioProblem: String?
     /// True when this record is one half of a correlated MXF pair — the
@@ -109,6 +112,38 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     /// The group's confidence — only Likely or stronger groups collapse
     /// (a Possible group is shown to the person, not decided for them).
     var footageConfidence: FootageConfidence?
+    /// Rules v12 (2026-09-25, docs/archive_angel_wise_design.md §3): the
+    /// file lives under the Angel's OWN buffer root — a prepared companion
+    /// (`.vs.archive.mov`, `.vs.preserve.mkv`, `_balanced`) waiting for
+    /// review. Two of them reached the live list as "Worth a look". A
+    /// SAFETY floor (`angelWorkingCopy`): the buffer is never material.
+    var isAngelWorkingCopy: Bool
+    /// Rules v12: this record's footage group (Likely or stronger) has its
+    /// likely original already in the archive, and this member is not that
+    /// original (rank > 0). Folded into the `archivedCopy` floor — "A copy
+    /// is already in the archive" — so a re-encode or export of an archived
+    /// tape is never proposed as new material. Set by the sweep's candidate
+    /// builder in one O(n) pre-pass; nowhere else.
+    var archivedFootageOriginal: Bool
+    /// Rules v13 coverage (2026-09-26, ArchiveAngelEvent): the DAY this
+    /// file records ("d:1994-11-24") and its year at any precision. nil =
+    /// the pre-pass has not run (computed on demand by `resolvedEvent`);
+    /// "" = no day-precise date (never collapses).
+    var eventKey: String?
+    var eventYear: Int?
+    /// Rules v13: the catalog's backlog for this file's year — recordings
+    /// still to archive and recordings already archived — written by the
+    /// same pre-pass (`ArchiveAngelEvent.applyCoverage`). 0 / 0 when it
+    /// has not run; the `backlogBonus` signal then says nothing.
+    var yearUnarchived: Int
+    var yearArchived: Int
+
+    /// The event key and year: the pre-pass's answer when it ran, else
+    /// resolved now (the evidence path's few per-record projections).
+    func resolvedEvent(now: Date) -> (key: String, year: Int?) {
+        if let key = eventKey { return (key, eventYear) }
+        return ArchiveAngelEvent.resolve(self, now: now)
+    }
 
     /// Rick 2026-09-21: a Live Photo's motion half
     /// (`jpegvideocomplement_*.mov`, ~3 s) is part of a photo, not a video.
@@ -175,7 +210,10 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
          familyKey: String = "", deviceModel: String = "", captureDate: Date? = nil,
          duplicateGroupCount: Int = 0, duplicateDisposition: DuplicateDisposition = .none,
          userDateConfidence: String? = nil, originMake: String? = nil, originEncoder: String? = nil,
-         footageGroupID: UUID? = nil, footageRank: Int? = nil, footageConfidence: FootageConfidence? = nil) {
+         footageGroupID: UUID? = nil, footageRank: Int? = nil, footageConfidence: FootageConfidence? = nil,
+         isAngelWorkingCopy: Bool = false, archivedFootageOriginal: Bool = false,
+         eventKey: String? = nil, eventYear: Int? = nil, yearUnarchived: Int = 0, yearArchived: Int = 0,
+         inferredDateRange: InferredDateRange? = nil) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds; self.streamTypeRaw = streamTypeRaw; self.isPlayable = isPlayable
         self.starRating = starRating; self.mediaDisposition = mediaDisposition; self.archiveStage = archiveStage
@@ -198,6 +236,11 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         self.originEncoder = originEncoder
         self.footageGroupID = footageGroupID; self.footageRank = footageRank
         self.footageConfidence = footageConfidence
+        self.isAngelWorkingCopy = isAngelWorkingCopy
+        self.archivedFootageOriginal = archivedFootageOriginal
+        self.eventKey = eventKey; self.eventYear = eventYear
+        self.yearUnarchived = yearUnarchived; self.yearArchived = yearArchived
+        self.inferredDateRange = inferredDateRange
     }
 }
 
@@ -266,6 +309,27 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     /// QA on S3: Prepare takes only the classes the policy prepares
     /// (`recommend.prepare`: Ready, then Worth a look by default).
     case notRecommendedNow = "Not in a class the Angel prepares now (Not now, Needs a date, Another copy)"
+    /// Rules v12 (2026-09-25): a file inside the Angel's own buffer — a
+    /// companion it prepared for review. Two reached the live list as
+    /// "Worth a look" (60-minute FFV1 / HEVC copies of a file being
+    /// prepared). A SAFETY floor: the buffer is never material.
+    case angelWorkingCopy = "Archive Angel's own working copy (a prepared companion in the buffer), not material"
+    /// Rules v12, QA v12 #6: a member of a footage group (Find Similar
+    /// Footage, Likely or stronger) whose likely ORIGINAL is archived. Not
+    /// "a copy is in the archive" — this file's bytes may be nowhere in
+    /// it; the footage is. A SAFETY reason (the `archivedCopy` floor).
+    case footageOriginalArchived = "The original of this footage is already in the archive"
+    /// Rules v13 coverage (2026-09-26): one pick per DAY per batch, whatever
+    /// the name or folder. Rick: five versions of Thanksgiving 1994 are one
+    /// pick; the rest wait for a later batch. A diversity choice (codex
+    /// D2), never "a copy" and never an exclusion — the batch is topped up
+    /// from these when no other day can fill it.
+    case sameEventAsPick = "Another pick from the same day is already in this batch — spreading picks across events"
+    /// Rules v13 coverage: a batch holds at most `coverage.maxPerYearPerBatch`
+    /// files of one year, so the picks spread across the years still to
+    /// archive. Held for a later batch, never excluded; only counted when
+    /// the batch could be filled from other years.
+    case yearCoverage = "Held for a later batch — this batch already has its share of that year"
 }
 
 extension ArchiveAngelRejection {
@@ -273,7 +337,8 @@ extension ArchiveAngelRejection {
     /// a file excluded for one of these is never recommended, whatever the
     /// class rules say — `useAngelFloors: false` included.
     static let safetyReasons: Set<ArchiveAngelRejection> = [
-        .notVideo, .alreadyArchived, .duplicateArchived, .fileGone, .volumeOffline,
+        .notVideo, .alreadyArchived, .duplicateArchived, .fileGone, .volumeOffline, .angelWorkingCopy,
+        .footageOriginalArchived,
     ]
 }
 
@@ -342,6 +407,13 @@ struct ArchiveAngelWeights: Sendable, Equatable, Codable {
     var halfTapeSeconds = 1800.0
     var longSceneSeconds = 900.0
     var sceneSeconds = 300.0
+    // Rules v13 (2026-09-26, codex review, acceptance gate "Duration
+    // policy"): the duration band is UNCHANGED. Under 2 min is the
+    // `tooShort` floor (60 s for an explicit pick), 2–5 min earns nothing,
+    // 5 min–1 h the tiers above, and a three-hour capture keeps its +60 —
+    // "no ceiling — a two-tape capture is still the whole thing"
+    // (ArchiveAngelScorerTests). The band's edges are already these policy
+    // keys; ArchiveAngelDurationBandTests pins every edge as a sensor.
     /// Hard floor for EVERY automatically proposed clip, marked or not.
     /// Rick 2026-09-10: "exclude short videos under 1 minute for now …
     /// we'll keep these short videos in the catalog". (Earlier: 60 s
@@ -436,8 +508,19 @@ enum ArchiveAngelScorer {
     /// floors and signals are the policy's rule arrays, archiveStage
     /// Ready/Master is a VOTE (no longer "already archived" — Rick
     /// 2026-09-22), and every record carries its recommendation class
-    /// (Consolidation S3b).
-    static let rulesVersion = 11
+    /// (Consolidation S3b); 12 = truthful readiness (2026-09-25,
+    /// docs/archive_angel_wise_design.md §3): the `angelWorkingCopy` safety
+    /// floor, a footage group's archived original excludes its other
+    /// members (`archivedFootageOriginal`), the `recentDigitization` and
+    /// `absurdBitrate` class rules, Person Finder compilations as app
+    /// output, and RecordDateResolver's filename-year-beats-conversion-
+    /// stamp rule — every v11 sidecar must rescore; 13 = coverage
+    /// (2026-09-26, docs/footage_groups_gap_plan_2026-09-26.md Stage 2):
+    /// one pick per DAY per batch and a per-year share (both soft, both
+    /// post-band), the `backlogBonus` signal over unique recordings, and
+    /// the evidence file's `catalogRevision` stamp — every v12 sidecar
+    /// must rescore.
+    static let rulesVersion = 13
 
     /// The verdict for one record under the built-in rules with these
     /// weights. Pure.
@@ -582,9 +665,9 @@ enum ArchiveAngelScorer {
         }
         let tables = p.tables
         var order: (ArchiveAngelPick, ArchiveAngelPick) -> Bool = { rank($0, $1, tables: tables) }
+        var tier: [UUID: Int] = [:]
         if byClass, !p.recommend.prepareClasses.isEmpty {
             let result = ArchiveAngelRecommendations.classify(candidates, evidence: evidence, rules: p.recommend, now: now)
-            var tier: [UUID: Int] = [:]
             let prepare = p.recommend.prepareClasses
             for (i, v) in result.verdicts.enumerated() {
                 if let t = prepare.firstIndex(of: v.kind) { tier[candidates[i].id] = t }
@@ -592,30 +675,23 @@ enum ArchiveAngelScorer {
             let before = picks.count
             picks = picks.filter { tier[$0.id] != nil }
             if before > picks.count { rejected[.notRecommendedNow, default: 0] += before - picks.count }
-            order = { a, b in
+            order = { [tier] a, b in
                 let ta = tier[a.id] ?? .max, tb = tier[b.id] ?? .max
                 return ta != tb ? ta < tb : rank(a, b, tables: tables)
             }
         }
-        picks.sort(by: order)
+        // = `picks.sort(by: order)`, over small keys (ArchiveAngelScorer+Sets.swift).
+        picks = sortedByRank(picks, tables: tables,
+                             tier: byClass && !p.recommend.prepareClasses.isEmpty ? { tier[$0.id] ?? .max } : { _ in 0 })
         picks = onePerDuplicateGroup(picks, rejected: &rejected, collapseBy: p.recommend.copies.batchCollapseBy)
         picks = onePerFamily(picks, rejected: &rejected)
+        // Rules v13 coverage: POST-band filters only (codex #1643 A4 — the
+        // ranked order above is never mutated): one per event, then the
+        // per-year share, both SOFT (a batch is never left short for
+        // them), both counted, never silently dropped.
+        picks = coverageCut(picks, coverage: p.coverage, count: max(0, count), rejected: &rejected, now: now, by: order).picks
         let kept = withFreshSlots(picks, count: max(0, count), weights: w, by: order)
         return .init(picks: kept, overflow: max(0, picks.count - kept.count), rejected: rejected)
-    }
-
-    /// Phase 1: one member per EVENT FAMILY per batch (the generalised
-    /// duplicateOfPick — "one Thanksgiving variant per batch"). `picks`
-    /// must be in `rank` order; the best member stays, the rest are
-    /// counted under `.sameFamilyAsPick`. Pure.
-    static func onePerFamily(_ picks: [ArchiveAngelPick],
-                             rejected: inout [ArchiveAngelRejection: Int]) -> [ArchiveAngelPick] {
-        var seen: Set<String> = []
-        return picks.filter { pick in
-            if seen.insert(pick.candidate.resolvedFamilyKey).inserted { return true }
-            rejected[.sameFamilyAsPick, default: 0] += 1
-            return false
-        }
     }
 
     /// Phase 1's explore arm: of `count` slots, `ceil(count × freshShare)`
@@ -784,76 +860,6 @@ enum ArchiveAngelScorer {
     }
 
     // MARK: helpers
-
-    /// T10 H3. One pass over a candidate set: an export (a stem carrying a
-    /// derivative token, `ArchiveAngelNaming.derivativeBaseStem`) is marked
-    /// with its original's filename when a RELATED, USABLE original is in
-    /// the set. Related = same folder; else same duplicate group; else same
-    /// grandparent folder AND the same known year (inferred or user date).
-    /// Usable = passes the hard floor (online, playable, a video, not junk,
-    /// not too short, not a cache) and runs at least 0.9 × the export (an
-    /// original is not shorter than its export). Otherwise the export is
-    /// left alone — it is the best copy the family has. codex #1306: the
-    /// earlier any-folder fallback let "Clip 01" in another tree displace
-    /// an unrelated export.
-    ///
-    /// O(n): originals are indexed under exact keys (folder|stem,
-    /// group|stem, grandparent|year|stem), at most `maxOriginalsPerKey`
-    /// per key, so 5,000 same-named "Clip 01" originals cost 8 compares per
-    /// export, never n².
-    static var maxOriginalsPerKey: Int { AngelPolicyTables.standard.maxOriginalsPerKey }
-
-    static func markDerivatives(_ candidates: inout [ArchiveAngelCandidate],
-                                weights w: ArchiveAngelWeights = .standard) {
-        markDerivatives(&candidates, policy: AngelRecommendationPolicy.builtIn.with(weights: w))
-    }
-
-    static func markDerivatives(_ candidates: inout [ArchiveAngelCandidate], policy p: AngelRecommendationPolicy) {
-        let maxOriginalsPerKey = p.tables.maxOriginalsPerKey
-        var byFolder: [String: [Int]] = [:]        // "folder|stem" → indices
-        var byGroup: [String: [Int]] = [:]         // "group|stem"  → indices
-        var byGrandparent: [String: [Int]] = [:]   // "grandparent|year|stem" → indices
-        func add(_ table: inout [String: [Int]], _ key: String, _ i: Int) {
-            var list = table[key, default: []]
-            guard list.count < maxOriginalsPerKey else { return }
-            list.append(i)
-            table[key] = list
-        }
-        // The base stem once per candidate (one regex pass, not two).
-        let bases: [String?] = candidates.map {
-            ArchiveAngelNaming.derivativeBaseStem(($0.filename as NSString).deletingPathExtension)?.lowercased()
-        }
-        for (i, c) in candidates.enumerated() {
-            var probe = c
-            probe.attention = .none                                          // a resting original is still the original
-            guard bases[i] == nil,                                           // an export is never an original
-                  c.derivativeOfOriginal == nil,
-                  hardFloor(probe, policy: p) == nil else { continue }      // usable NOW
-            let stem = (c.filename as NSString).deletingPathExtension.lowercased()
-            let folder = (c.fullPath as NSString).deletingLastPathComponent
-            add(&byFolder, folder + "|" + stem, i)
-            if let g = c.duplicateGroupID { add(&byGroup, g.uuidString + "|" + stem, i) }
-            if let year = c.knownYear {
-                let grandparent = (folder as NSString).deletingLastPathComponent
-                add(&byGrandparent, grandparent + "|\(year)|" + stem, i)
-            }
-        }
-        for i in candidates.indices {
-            guard let base = bases[i] else { continue }
-            let export = candidates[i]
-            let folder = (export.fullPath as NSString).deletingLastPathComponent
-            var related: [Int] = byFolder[folder + "|" + base] ?? []
-            if related.isEmpty, let g = export.duplicateGroupID { related = byGroup[g.uuidString + "|" + base] ?? [] }
-            if related.isEmpty, let year = export.knownYear {
-                let grandparent = (folder as NSString).deletingLastPathComponent
-                related = byGrandparent[grandparent + "|\(year)|" + base] ?? []
-            }
-            guard let original = related.first(where: { j in
-                j != i && candidates[j].durationSeconds >= 0.9 * export.durationSeconds
-            }) else { continue }
-            candidates[i].derivativeOfOriginal = candidates[original].filename
-        }
-    }
 
     /// The "Has notes, 2 tags, people…" items. `notes` means a HUMAN note
     /// (the projection filters machine text out of userNotes, T10 H1).

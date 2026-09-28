@@ -309,7 +309,7 @@ struct VerifyVideoScaleTests {
         }
         #expect(matched == 10_000, "notes:broken finds exactly the broken rows")
         #expect(red == 10_000, "warnings are not painted red")
-        #expect(elapsed < .seconds(5), "100k notes:+tint pass took \(elapsed) (Debug budget 5 s)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(5)), "100k notes:+tint pass took \(elapsed) (Debug budget 5 s)")
     }
 }
 

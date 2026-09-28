@@ -752,7 +752,8 @@ struct CatalogContent: View {
                 filename: $renameText,
                 originalExt: (renameTarget?.filename as NSString?)?.pathExtension ?? "",
                 onConfirm: { performRename() },
-                onCancel: { showRenameSheet = false }
+                onCancel: { showRenameSheet = false },
+                inArchive: renameTarget.map { model.renameUpdatesArchiveIndex($0) } ?? false
             )
         }
         // Surface rename failures (silent fail was the original bug).
@@ -928,7 +929,7 @@ struct CatalogContent: View {
         panel.allowsMultipleSelection = false
         panel.prompt = "Select"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
-        fileOpsCenter.startedByUser { $0.startExtract(record: rec, destinationParent: dest) }
+        _ = fileOpsCenter.startedByUser { $0.startExtract(record: rec, destinationParent: dest) }
         // The job brings the operations window forward itself (not key,
         // Settings-gated) — MediaFileOperationsWindowForwarder, 2026-09-21.
     }
@@ -1382,6 +1383,7 @@ struct CatalogContent: View {
                             .frame(maxWidth: 480, maxHeight: 180)
                             .aspectRatio(16.0/9.0, contentMode: .fit)
                         } else if isPlaying, let player = player {
+                            let _ = avKitLinkAnchor()
                             VideoPlayer(player: player)
                                 .cornerRadius(6)
                                 .shadow(radius: 3)
@@ -1816,3 +1818,13 @@ enum MediaOpener {
                                 configuration: NSWorkspace.OpenConfiguration())
     }
 }
+
+/// Load-bearing: on the macOS 27 SDK `import AVKit` links only the
+/// _AVKit_SwiftUI overlay, so AVKit.framework never loads and VideoPlayer
+/// aborts on first play ("failed to demangle superclass of VideoPlayerView
+/// from mangled name 'So12AVPlayerViewC'"). Referencing the class from a real
+/// function forces the binary to link AVKit; a bare `let _ = AVPlayerView.self`
+/// in a view body is discarded by the compiler. Crash 2026-09-28; sensor:
+/// AVKitLinkSensorTests.
+@inline(never)
+func avKitLinkAnchor() -> AnyClass { AVPlayerView.self }

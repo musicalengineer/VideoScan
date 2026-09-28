@@ -56,7 +56,13 @@ struct FamilyTreeView: View {
     /// inspector so its width goes to genealogy). `.photosPicker(isPresented:)`
     /// is the programmatic form of the `PhotosPicker` button.
     @State private var showApplePhotosPicker = false
-    @State private var showVerifyReport = false
+    /// The Verify report and the Walk Tree sheet share ONE `.sheet(item:)`
+    /// (2026-09-27): two `.sheet(isPresented:)` side by side race each
+    /// other's dismiss animation (project_chained_sheet_antipattern).
+    @State private var toolSheet: FamilyTreeToolSheet?
+    /// This view's size, so the Walk Tree sheet can size itself to the
+    /// window instead of running off it (Rick 2026-09-27).
+    @State private var toolSheetHostSize: CGSize = .zero
     /// The Get Family Tree coordinator is owned by the app-wide center, not
     /// this view, so closing the sheet no longer kills the file watcher
     /// (2026-08-25: a 2 h pull finished into a file nobody was watching).
@@ -289,6 +295,7 @@ struct FamilyTreeView: View {
         if case .ready(let diff) = refresh.phase {
             PersonRefreshReviewSheet(
                 coordinator: refresh, diff: diff,
+                previousRefresh: refreshCenter.summary(for: refresh.target.familySearchID),
                 onApplied: {
                     refreshReview = nil
                     refreshCenter.noteApplied()
@@ -382,6 +389,23 @@ struct FamilyTreeView: View {
             }
     }
 
+    @ViewBuilder private func toolSheetView(_ sheet: FamilyTreeToolSheet) -> some View {
+        switch sheet {
+        case .verify:
+            if let report = model.verification {
+                FamilyTreeVerifyReportView(report: report) { personID in
+                    model.select(personID)
+                    toolSheet = nil
+                }
+            }
+        case .walk:
+            // "Walk Tree…" (2026-09-27): one sheet with its own stages.
+            FamilyTreeWalkSheet(model: model, hostSize: toolSheetHostSize) {
+                toolSheet = nil
+            }
+        }
+    }
+
     /// Stage 2: window background, colour scheme, every sheet and alert.
     private func withSheets<V: View>(_ view: V) -> some View {
         view
@@ -390,14 +414,8 @@ struct FamilyTreeView: View {
             .onChange(of: selectedPhotoItem) { _, item in
                 importApplePhoto(item)
             }
-            .sheet(isPresented: $showVerifyReport) {
-                if let report = model.verification {
-                    FamilyTreeVerifyReportView(report: report) { personID in
-                        model.select(personID)
-                        showVerifyReport = false
-                    }
-                }
-            }
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { toolSheetHostSize = $0 }
+            .sheet(item: $toolSheet) { sheet in toolSheetView(sheet) }
             .photosPicker(isPresented: $showApplePhotosPicker,
                           selection: $selectedPhotoItem, matching: .images)
             .sheet(item: $adjustSource) { source in
@@ -708,10 +726,20 @@ struct FamilyTreeView: View {
                 .controlSize(.small)
                 .disabled(model.isVerifying)
 
+                Button {
+                    FamilyTreeWalkCenter.shared.consoleLog = { [weak catalogModel] line in catalogModel?.log(line) }
+                    toolSheet = .walk
+                } label: {
+                    Label("Walk Tree…", systemImage: "figure.walk.circle")
+                }
+                .controlSize(.small)
+                .help("Decorate everyone (line, generations, age at death, birth region) and run the consistency checks")
+                .accessibilityIdentifier("ft.walkTree")
+
                 if let report = model.verification {
                     if report.needingReview > 0 {
                         Button {
-                            showVerifyReport = true
+                            toolSheet = .verify
                         } label: {
                             Text("\(report.needingReview)")
                                 .font(.system(size: 11, weight: .bold))
@@ -761,7 +789,7 @@ struct FamilyTreeView: View {
             .labelsHidden()
             .accessibilityIdentifier("ft.peopleScope")
 
-            TextField("Search name, surname, or GEDCOM ID", text: $model.searchText)
+            TextField("Search names — partial or approximate is fine", text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
                 .focused($searchFocused)
                 // Return picks the first match; ↑/↓ walk the list without
@@ -786,6 +814,15 @@ struct FamilyTreeView: View {
             }
 
             Divider()
+
+            // The search loosened up (fuzzy fallback): say so above the
+            // list so nobody takes a close match for an exact one.
+            if let caption = model.searchCaption {
+                Text(caption)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("ft.searchCaption")
+            }
 
             // `ScrollViewReader` ≈ a handle that lets code scroll to a row by
             // id; the ids are the ForEach ids (person.id).
@@ -1113,7 +1150,8 @@ struct FamilyTreeView: View {
                 hasFamilySearchRefresh: refreshCenter.hasRefresh(for: card.person.familySearchID),
                 onUndoFamilySearchRefresh: {
                     if let target = model.personRefreshTarget(for: card.person.id) { undoPersonRefresh(target) }
-                }
+                },
+                familySearchRefreshSummary: refreshCenter.summary(for: card.person.familySearchID)
             )
     }
 
@@ -1301,6 +1339,11 @@ struct FamilyTreeView: View {
                                 copyableID("FS", fsID)
                             }
                         }
+                        // GH #198: when the facts above came from a
+                        // FamilySearch refresh, say so, with the diffs.
+                        if let summary = refreshCenter.summary(for: model.selectedFamilySearchID) {
+                            PersonRefreshSummaryView(summary: summary)
+                        }
                         if let adjustError {
                             Text(adjustError)
                                 .font(.system(size: 11))
@@ -1340,6 +1383,18 @@ struct FamilyTreeView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(14)
                             .background(panelBackground)
+                    }
+
+                    if model.isLive {
+                        FamilyTreeWalkDecorationPanel(personID: person.id)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(panelBackground)
+                            // Reads decorations.json off the main actor once
+                            // per installed tree (O(1) lookups after).
+                            .task(id: model.peopleCount) {
+                                await FamilyTreeWalkCenter.shared.ensureLoaded(for: model.walkGraph)
+                            }
                     }
 
                     if !model.selectedRelatives.isEmpty {
@@ -1981,4 +2036,13 @@ struct FamilyTreeView: View {
     private func removeDocument(_ row: PersonDocumentRow) {
         Task { documentsError = await model.removeDocument(row) }
     }
+}
+
+/// The Family Tree tab's tool sheets, presented through one `.sheet(item:)`.
+/// A single shared id: switching from one to the other replaces the sheet
+/// instead of racing a dismiss against a present.
+enum FamilyTreeToolSheet: Identifiable {
+    case verify
+    case walk
+    var id: String { "familyTree.toolSheet" }
 }

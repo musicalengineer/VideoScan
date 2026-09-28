@@ -109,7 +109,7 @@ struct SignatureConcurrencyScaleTests {
             items: input, volumeOf: volumeOfPath, lanesFor: { _ in 6 })
         let elapsed = ContinuousClock.now - start
         #expect(lanes.flatMap { $0 }.count == 100_000)
-        #expect(elapsed < .seconds(10), "planning took \(elapsed)")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(10)), "planning took \(elapsed)")
     }
 
     /// The media policy table, pinned. Rick's Pegasus R4 is RAID-5 with

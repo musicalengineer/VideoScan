@@ -132,8 +132,11 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
 
     static let fileName = "pronunciations.json"
 
+    /// In a test host: the shared per-process sandbox (QA follow-up
+    /// 2026-09-24) — the drill store and the live writer default here too.
     static var defaultFileURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let base = TestHostDetection.sandboxedApplicationSupportRoot(for: "HalliePronunciationLexicon.defaultFileURL")
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory())
         return base.appendingPathComponent("VideoScan/Hallie", isDirectory: true)
             .appendingPathComponent(fileName)

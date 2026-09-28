@@ -51,7 +51,9 @@ extension VideoScanModel {
         // A transcript can name the year (2026-09-12): derive a date from
         // it when the record has none, and share it with the group — the
         // single-channel road must not leave evidence without a conclusion.
-        catchUpInferredDates(scope: [record], trigger: "transcript")
+        // GH #201: a row already dated from weaker evidence is re-triangulated
+        // with the new channel (`refreshScope`).
+        catchUpInferredDates(scope: [record], trigger: "transcript", refreshScope: true)
         objectWillChange.send()
         saveCatalogDebounced()
 

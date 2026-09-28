@@ -274,6 +274,22 @@ public class VideoRecord: Identifiable, Decodable {
     /// Additive optional: legacy catalogs decode as nil and round-trip
     /// byte-identical (encodeIfPresent).
     public var inferredDateSource: String?
+    /// GH #201 (2026-09-26): the span of years the criteria allow when
+    /// `inferredRecordDate` is only year-precise ("2004", or "2003–2004"
+    /// for a tape that ran across a New Year). nil when the date is
+    /// day-precise (a burn-in, a camera stamp) or absent. Additive
+    /// optional — legacy catalogs decode nil, the DTO writes the key only
+    /// when present. RecordDateResolver reads it to file at YEAR precision.
+    public var inferredDateRange: InferredDateRange?
+    /// GH #201: the WRITTEN reason behind `inferredRecordDate` — every
+    /// criterion that agreed, what was set aside and why ("spoken now-cue
+    /// 'what year is it… 2004' ×3; export stamp 2008-10-23 set aside as
+    /// ingest"). Rick's rule: the inferred date is a machine guesstimate
+    /// that shows its reasoning; he confirms. Also written ("no evidence")
+    /// when a pass examined the record and found nothing, so the inspector
+    /// can say so. nil on rows no GH #201 pass has examined yet. Additive
+    /// optional, same migration shape as `inferredDateSource`.
+    public var inferredDateReason: String?
     /// Wall-clock time the dossier pass ran. Lets the UI offer
     /// "re-run with newer model" actions and lets the catalog-wide
     /// orchestrator skip already-processed records idempotently.
@@ -457,6 +473,12 @@ public class VideoRecord: Identifiable, Decodable {
     /// Derivatives (trim / balanceAudio outputs) inherit it from their
     /// source record — same footage, same date.
     public var userDate: String?
+    /// Memo for the Date column's "was the container stamp set aside?"
+    /// answer (VideoRecordUserDate.displacedStampResolution) — NOT
+    /// persisted (not in CodingKeys), keyed by every input it reads, so an
+    /// edit to any of them recomputes it. Sort comparators read the key
+    /// per compare; this keeps that O(1) after the first read.
+    var displacedStampMemo: DisplacedStampMemo?
 
     /// Confidence in `userDate`: "estimated" (Rick's best guess, the
     /// entry UI's default) or "known" — where "known" applies AT THE
@@ -743,6 +765,9 @@ public class VideoRecord: Identifiable, Decodable {
         inferredRecordDate          = try c.decodeIfPresent(Date.self, forKey: .inferredRecordDate)
         inferredDateConfidence      = try c.decodeIfPresent(Float.self, forKey: .inferredDateConfidence)
         inferredDateSource          = try c.decodeIfPresent(String.self, forKey: .inferredDateSource)
+        // GH #201 — additive optionals: legacy catalogs come back nil.
+        inferredDateRange           = try c.decodeIfPresent(InferredDateRange.self, forKey: .inferredDateRange)
+        inferredDateReason          = try c.decodeIfPresent(String.self, forKey: .inferredDateReason)
         dossierProcessedAt          = try c.decodeIfPresent(Date.self, forKey: .dossierProcessedAt)
         dossierProcessedBy          = try c.decodeIfPresent(String.self, forKey: .dossierProcessedBy)
         // Audio transcript fields — additive optional, same migration pattern

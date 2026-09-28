@@ -40,9 +40,11 @@ enum ArchivePromoteDecisions {
             data.append(line); data.append(0x0A)
         }
         do {
-            let fd = try ArchivePromoteEngine.openIndexFile(root: rootPath, name: filename, mustExist: false)
-            defer { close(fd) }
-            try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: false, label: "decisions append")
+            try ArchiveIndexLock.withExclusive(root: rootPath, holder: "Promote decisions append") {
+                let fd = try ArchivePromoteEngine.openIndexFile(root: rootPath, name: filename, mustExist: false)
+                defer { close(fd) }
+                try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: false, label: "decisions append")
+            }
             return entries.count
         } catch {
             return 0

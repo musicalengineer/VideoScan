@@ -57,6 +57,7 @@ public struct PreviewSweepCLIOptions: Equatable {
 
     // MARK: Defaults
 
+    /// Daemon/CLI-only; never a test default (app call sites gate on TestEnvironment.isTestHost first).
     /// The real production catalog:
     /// ~/Library/Application Support/VideoScan/catalog.json
     public static func defaultCatalogURL(
@@ -266,6 +267,7 @@ public final class SingleInstanceLock: @unchecked Sendable {
         close(fd)
     }
 
+    /// Daemon/CLI-only; never a test default (app call sites gate on TestEnvironment.isTestHost first).
     /// Default lock location:
     /// ~/Library/Application Support/VideoScan/.previewsweepd.lock
     public static func defaultURL(fileManager: FileManager = .default) -> URL {

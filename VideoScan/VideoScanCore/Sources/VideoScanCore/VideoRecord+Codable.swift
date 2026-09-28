@@ -55,6 +55,7 @@ extension VideoRecord {
         case sceneCaptions, sceneCaptionModel, sceneCaptionDate
         case ocrDateCandidates, ocrText
         case inferredRecordDate, inferredDateConfidence, inferredDateSource
+        case inferredDateRange, inferredDateReason   // GH #201, additive
         case dossierProcessedAt, dossierProcessedBy
         case audioTranscript, audioTranscriptModel, audioTranscriptDate
         case sourceHost

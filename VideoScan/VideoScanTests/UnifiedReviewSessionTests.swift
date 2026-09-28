@@ -275,7 +275,7 @@ struct UnifiedReviewSessionTests {
                                     topN: 100, controlK: 5,
                                     alreadyLabeled: [], rng: &rng)
         }
-        #expect(elapsed < .seconds(10),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(10)),
                 "candidate scoring at 100k records took \(elapsed) — the phase transition will feel it")
         #expect(result?.stats.candidatesSurfaced == 1_000)
         // topN positives + up to controlK controls.
@@ -285,7 +285,21 @@ struct UnifiedReviewSessionTests {
 
     // MARK: - 7. Isolation (poisoned state on BOTH surfaces at once)
 
-    @Test @MainActor func isolation_garbageCSVAndGarbageLabelsDegradeIndependently() throws {
+    // .timeLimit: CI runs 36214064340, 36221025080 and 36223041786
+    // (macos-15-arm64, 7 GB VM) all stalled HERE — but this test was the
+    // VICTIM, not the cause (ROOT CAUSE PROVEN, fix/ci-red-5). The test plan
+    // runs alphabetically, so this is always the first @MainActor test
+    // after scale_confirmRoundOver100kRecordsWithinBudget, whose 99k
+    // reachability probes each posted reachabilityDidChange; every post fanned
+    // out to the leaked probe-change observer of every VideoScanModel the
+    // run had built, one main-actor Task each. XCTest's spindump (result
+    // bundle of 36223041786): host footprint 42.98 GB, process suspended,
+    // main thread inside Task.init from the probe-change observer, not in
+    // this test's code. Fixed by NotificationObserverBag (observers
+    // die with their model) + coalesced repaint posts; pinned by
+    // NotificationObserverLeakTests. The limit stays as a cheap guard.
+    @Test(.timeLimit(.minutes(1))) @MainActor
+    func isolation_garbageCSVAndGarbageLabelsDegradeIndependently() throws {
         let root = try makeTempDir()
         // Poison surface 1: the newest dated queue dir holds binary garbage
         // where the CSV should be.

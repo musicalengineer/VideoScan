@@ -1,5 +1,5 @@
 // ArchiveAngelEvidenceStore.swift
-// Archive Angel phase 2 (docs/archive_angel_phase2_design.md): the SIDECAR
+// Archive Angel phase 2 (archive_angel_phase2_design.md, retired — git show f82bbd69^:docs/archive_angel_phase2_design.md): the SIDECAR
 // that holds the background sweep's machine-tier evidence — one record per
 // catalog id: the score and its printed why-lines, or the hard-floor
 // rejection. Fully re-derivable, so a stale or missing file is harmless and
@@ -174,11 +174,26 @@ struct ArchiveAngelEvidenceFile: Codable, Sendable, Equatable {
     /// file written before the stamp existed: accepted only while the
     /// DEFAULT policy is active (no forced re-score on upgrade).
     var policyFingerprint: String?
+    /// Rules v13 coverage: the façade's `catalogRevision` at the sweep's
+    /// snapshot — bumped on every catalog change within a launch. The
+    /// per-year backlog and the archived set are catalog facts; with a
+    /// coverage rule on, the pick declines evidence stamped older than the
+    /// catalog is now. nil = not stamped (a test-built file, or written
+    /// before v13): read as revision 0. Meaningless across launches (the
+    /// counter restarts at 0), where the launch sweep re-stamps within
+    /// minutes; the 24 h freshness rule covers the gap.
+    var catalogRevision: Int?
+    /// QA MAJOR-4 (2026-09-26): the LAUNCH the revision counts within
+    /// (`ArchiveAngel.launchToken`, a UUID per façade instance). The counter
+    /// restarts at 0 every launch, so yesterday's "57" must never beat
+    /// today's "3": with a coverage rule on, a stamp from another launch —
+    /// or no token at all — is not current. nil = not stamped.
+    var catalogLaunchToken: String?
 
     init(computedAt: Date = Date(), complete: Bool = true, considered: Int = 0,
          eligible: Int = 0, records: [UUID: ArchiveAngelEvidenceRecord] = [:],
          attentionRevision: Int? = nil, attentionLastEventAt: Date? = nil,
-         policyFingerprint: String? = nil) {
+         policyFingerprint: String? = nil, catalogRevision: Int? = nil, catalogLaunchToken: String? = nil) {
         self.computedAt = computedAt
         self.complete = complete
         self.considered = considered
@@ -187,6 +202,8 @@ struct ArchiveAngelEvidenceFile: Codable, Sendable, Equatable {
         self.attentionRevision = attentionRevision
         self.attentionLastEventAt = attentionLastEventAt
         self.policyFingerprint = policyFingerprint
+        self.catalogRevision = catalogRevision
+        self.catalogLaunchToken = catalogLaunchToken
     }
 }
 
@@ -248,6 +265,9 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     /// The attention state the file was scored with (nil = not stamped).
     var attentionRevision: Int? { file?.attentionRevision }
     var attentionLastEventAt: Date? { file?.attentionLastEventAt }
+    /// Rules v13: the catalog revision the file was scored at (nil = not stamped).
+    var catalogRevision: Int? { file?.catalogRevision }
+    var catalogLaunchToken: String? { file?.catalogLaunchToken }
     var isLoaded: Bool { file != nil }
     /// Grades A + B (the default filter).
     var candidateCount: Int { candidateIDs.count }
@@ -292,30 +312,63 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     }
 
     /// The Prepare order (QA on S3): records whose class Prepare takes,
-    /// by (tier = index in `prepare`, score desc, id); an UNCLASSIFIED
-    /// eligible record (a pre-S3b or test-built file) takes the last tier,
-    /// so old evidence still prepares by score. `skipped` = eligible
-    /// records in classes Prepare does not take. One O(records) pass + sort.
-    func rankedPrepareIDs(_ prepare: [ArchiveAngelRecommendationClass]) -> (ids: [(UUID, Int)], skipped: Int) {
+    /// by (tier = index in `prepare`, ARRIVAL score desc, id); an
+    /// UNCLASSIFIED eligible record (a pre-S3b or test-built file) takes the
+    /// last tier, so old evidence still prepares by score. `skipped` =
+    /// eligible records in classes Prepare does not take. Two O(records)
+    /// passes + one sort.
+    ///
+    /// Arrival score (Manager ruling on codex #1643 A4, 2026-09-23): a row
+    /// that carries a copy key arrives at the score of its group's
+    /// HIGHEST-SCORING ELIGIBLE member (and the best Prepare tier any member
+    /// holds), because Prepare re-decides the group live and a Keep chosen
+    /// after the sweep may outscore the cached pick. Ranked by the cached
+    /// row's own score, such a group arrived late: the scan either stopped
+    /// before it (the Keep was missed) or ran to the end of the file — which
+    /// of the two depended on the random record ids. The arrival score is an
+    /// UPPER bound on whatever that group can put in the batch, which is what
+    /// lets `selectFromEvidence` stop exactly.
+    func rankedPrepareIDs(_ prepare: [ArchiveAngelRecommendationClass])
+    -> (ids: [(id: UUID, tier: Int, score: Int)], skipped: Int) {
         guard let f = file else { return ([], 0) }
-        var rows: [(UUID, Int, Int)] = []
+        func tier(_ r: ArchiveAngelEvidenceRecord) -> Int? {
+            if prepare.isEmpty { return 0 }                  // no class filter: score order
+            guard let k = r.recommendation else { return prepare.count }
+            return prepare.firstIndex(of: k)
+        }
+        var groupScore: [String: Int] = [:]
+        var groupTier: [String: Int] = [:]
+        for r in f.records.values where r.isEligible {
+            guard let key = r.copyKey else { continue }
+            groupScore[key] = max(groupScore[key] ?? r.score, r.score)
+            // A cached Another copy is a member the classifier COLLAPSED —
+            // its own class was a recommended one — and Prepare re-chooses
+            // the group live (codex #1643 A4): a Keep marked after the
+            // sweep wins in its own class, which the cache never recorded.
+            // The group's arrival tier must be an upper bound on that
+            // (QA follow-up 2026-09-24: a live-Ready Keep in a group that
+            // arrived at Worth a look was cut by the band), so such a
+            // member bounds the group at the best tier.
+            let t = r.recommendation == .anotherCopy ? 0 : tier(r)
+            if let t { groupTier[key] = min(groupTier[key] ?? t, t) }
+        }
+        var rows: [(id: UUID, tier: Int, score: Int, order: String)] = []
         var skipped = 0
         for (id, r) in f.records where r.isEligible {
-            if prepare.isEmpty {
-                rows.append((id, 0, r.score))   // no class filter: score order
-            } else if let k = r.recommendation {
-                guard let tier = prepare.firstIndex(of: k) else { skipped += 1; continue }
-                rows.append((id, tier, r.score))
-            } else {
-                rows.append((id, prepare.count, r.score))
+            guard var t = tier(r) else { skipped += 1; continue }
+            var score = r.score
+            if let key = r.copyKey {
+                score = max(score, groupScore[key] ?? score)
+                t = min(t, groupTier[key] ?? t)
             }
+            rows.append((id, t, score, id.uuidString))
         }
         rows.sort { a, b in
-            if a.1 != b.1 { return a.1 < b.1 }
-            if a.2 != b.2 { return a.2 > b.2 }
-            return a.0.uuidString < b.0.uuidString
+            if a.tier != b.tier { return a.tier < b.tier }
+            if a.score != b.score { return a.score > b.score }
+            return a.order < b.order
         }
-        return (rows.map { ($0.0, $0.1) }, skipped)
+        return (rows.map { ($0.id, $0.tier, $0.score) }, skipped)
     }
 
     /// Floor rejections by reason — one O(records) pass, for the Angel

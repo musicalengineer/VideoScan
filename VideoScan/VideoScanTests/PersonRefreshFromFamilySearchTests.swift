@@ -298,7 +298,7 @@ struct PersonRefreshCoordinatorTests {
                 installedFacts: { model.personFacts(familySearchID: target.familySearchID) },
                 locator: FamilySearchToolLocator(overridePath: layout.tool.path, candidatePaths: []),
                 launcher: AF.SilentLauncher(), pollInterval: .milliseconds(20),
-                log: { lines.append($0) })
+                sink: PersonRefreshNoteSink(videoscanLog: { lines.append($0) }))
         }
     }
 
@@ -355,11 +355,14 @@ struct PersonRefreshCoordinatorTests {
         #expect(rig.model.selectedID == "@I1@")
         #expect(rig.model.peopleCount == 30)
 
-        // One log line per step.
+        // One log line per step, every one naming the person and the id
+        // (GH #198 wording; PersonRefreshAuditLogTests has the full set).
         let log = rig.lines.all
-        for step in ["[fs-refresh] started", "[fs-refresh] received", "[fs-refresh] diff 3 field(s)",
-                     "[fs-refresh] applied 3 field(s) for Walter James Dunn (WWWW-111)"] {
-            #expect(log.contains { $0.hasPrefix(step) }, "missing \(step)")
+        let subject = "[fs-refresh] Refresh from FamilySearch: Walter James Dunn (WWWW-111) — "
+        for step in ["started", "received 2 people from FamilySearch in", "3 fields differ: birthDate, deathPlace, marriageDate:MMMM-222",
+                     "applied birthDate '21 Feb 1928' → '21 Feb 1929' (from FamilySearch, ",
+                     "done: 3 fields changed, 0 relationship notes. Overlay: "] {
+            #expect(log.contains { $0.hasPrefix(subject + step) }, "missing \(step) in \(log)")
         }
 
         // A second refresh of the same answer: nothing left to change.
@@ -387,7 +390,7 @@ struct PersonRefreshCoordinatorTests {
 
         let message = await PersonRefreshCoordinator.undoLast(
             familySearchID: "WWWW-111", personName: "Walter", overlayStore: rig.layout.overlayStore,
-            journalDirectory: rig.layout.refreshRoot, log: { rig.lines.append($0) })
+            journalDirectory: rig.layout.refreshRoot, sink: PersonRefreshNoteSink(videoscanLog: { rig.lines.append($0) }))
         #expect(message.contains("shows the pulled facts again"))
         await rig.model.reloadAfterPersonRefresh(selecting: "@I1@")
         #expect(rig.model.personFacts(familySearchID: "WWWW-111")?.birthDate == "21 Feb 1928")
@@ -428,9 +431,11 @@ struct PersonRefreshCoordinatorTests {
         }
         #expect(!FileManager.default.fileExists(atPath: store.fileURL.path), "nothing was written in its place")
         #expect(PersonRefreshAudit.entries(directory: rig.layout.refreshRoot).isEmpty)
-        let refusals = rig.lines.all.filter { $0.hasPrefix("[fs-refresh] refused reason=overlay-unreadable apply for WWWW-111") }
+        let refusals = rig.lines.all.filter {
+            $0.hasPrefix("[fs-refresh] Refresh from FamilySearch: Walter James Dunn (WWWW-111) — apply failed: overlay.json can't be read")
+        }
         #expect(refusals.count == 1)
-        #expect(!rig.lines.all.contains { $0.hasPrefix("[fs-refresh] applied") })
+        #expect(!rig.lines.all.contains { $0.contains(" — applied ") || $0.contains(" — done:") })
 
         // The next refresh starts a fresh record; the set-aside file is untouched.
         let again = rig.coordinator()
@@ -479,7 +484,7 @@ struct PersonRefreshCoordinatorTests {
         try original.write(to: store.fileURL)
         let message = await PersonRefreshCoordinator.undoLast(
             familySearchID: "WWWW-111", personName: "Walter", overlayStore: store,
-            journalDirectory: rig.layout.refreshRoot, log: { rig.lines.append($0) })
+            journalDirectory: rig.layout.refreshRoot, sink: PersonRefreshNoteSink(videoscanLog: { rig.lines.append($0) }))
         #expect(message.hasPrefix("The refresh record can't be read, so nothing was changed — it's kept as overlay.json.bad-"))
         let kept = try FileManager.default.contentsOfDirectory(atPath: rig.layout.refreshRoot.path)
             .filter { $0.hasPrefix("overlay.json.bad-") }
@@ -488,7 +493,9 @@ struct PersonRefreshCoordinatorTests {
             #expect(try Data(contentsOf: rig.layout.refreshRoot.appendingPathComponent(name)) == original)
         }
         #expect(PersonRefreshAudit.entries(directory: rig.layout.refreshRoot).isEmpty)
-        #expect(rig.lines.all.filter { $0.hasPrefix("[fs-refresh] refused reason=overlay-unreadable undo for WWWW-111") }.count == 1)
+        #expect(rig.lines.all.filter {
+            $0.hasPrefix("[fs-refresh] Refresh from FamilySearch: Walter (WWWW-111) — undo failed: overlay.json can't be read")
+        }.count == 1)
     }
 
     @Test(arguments: [
@@ -513,7 +520,7 @@ struct PersonRefreshCoordinatorTests {
         #expect(message.contains(scenario.2), "\(message)")
         #expect(message.contains("Nothing was changed"))
         #expect(rig.layout.overlayStore.load().entries.isEmpty)
-        #expect(rig.lines.all.contains { $0.hasPrefix("[fs-refresh] refused reason=") })
+        #expect(rig.lines.all.contains { $0.contains(" (WWWW-111) — refused: ") && $0.contains("Nothing was changed") })
     }
 
     /// SENSOR: FamilySearch shows a spouse the tree does not have. The
@@ -550,7 +557,9 @@ struct PersonRefreshCoordinatorTests {
         try AF.onePerson().write(to: output, atomically: true, encoding: .utf8)
         try await Task.sleep(for: .milliseconds(200))
         #expect(coordinator.phase == .idle)
-        #expect(rig.lines.all.contains { $0.hasPrefix("[fs-refresh] cancelled") })
+        #expect(rig.lines.all.contains {
+            $0.hasPrefix("[fs-refresh] Refresh from FamilySearch: Walter James Dunn (WWWW-111) — cancelled while waiting for Terminal; nothing was changed")
+        })
     }
 
     @Test func missingToolFailsWithTheInstallSentence() throws {
@@ -560,7 +569,7 @@ struct PersonRefreshCoordinatorTests {
         let coordinator = PersonRefreshCoordinator(
             target: target, root: rig.layout.refreshRoot, overlayStore: rig.layout.overlayStore,
             installedFacts: { nil }, locator: FamilySearchToolLocator(overridePath: nil, candidatePaths: []),
-            launcher: AF.SilentLauncher(), log: { _ in })
+            launcher: AF.SilentLauncher(), sink: PersonRefreshNoteSink(videoscanLog: { _ in }))
         coordinator.launch()
         #expect(coordinator.phase == .failed(message: FamilySearchPullError.toolNotFound.errorDescription!))
     }

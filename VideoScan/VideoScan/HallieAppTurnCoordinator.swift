@@ -4,6 +4,7 @@
 // catalog objects are projected into immutable snapshots in bounded batches.
 
 import Foundation
+import VideoScanCore
 
 enum HallieAppTurnCoordinator {
     struct Translation: Sendable {
@@ -289,7 +290,12 @@ enum HallieAppTurnCoordinator {
             self.loadAppOwner = loadAppOwner ?? loadSpeakers
         }
 
-        private static let productionApplicationSupportRoot = FileManager.default.urls(
+        /// Real Application Support — or, in a test host, the shared
+        /// per-process sandbox (QA follow-up 2026-09-24): `live` derives
+        /// the CyberBrain, pronunciation and drill paths from it, so a test
+        /// that touched `.live` used to reach Rick's real brain.
+        static let productionApplicationSupportRoot = TestHostDetection.sandboxedApplicationSupportRoot(
+            for: "HallieAppTurnCoordinator.Dependencies.live") ?? FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask).first
 
         static let live = makeLive(
@@ -1255,7 +1261,7 @@ enum HallieAppTurnCoordinator {
                 loadBook: dependencies.loadKindWords)
 
             let photo: ArchivistBiographyPhoto?
-            if result.clarification == nil,
+            if result.needsNoChoice,
                case .graph(let payload) = ast,
                payload.operation == .biography,
                let canonicalName = result.catalogPersonName {
@@ -1275,7 +1281,7 @@ enum HallieAppTurnCoordinator {
                         assets.identity = directory
                         FamilyAssetConfigurationCenter.shared.publishIdentity(directory)
                     }
-                    let graphMatches = context.graph?.people.values.filter {
+                    let graphMatches = context.graph?.visiblePeople.filter {
                         $0.name.compare(
                             canonicalName,
                             options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
@@ -1305,7 +1311,7 @@ enum HallieAppTurnCoordinator {
                 // resumes the gallery ask. Only for an answered biography
                 // about ONE person with two or more files.
                 if result.outcome == .answered, result.clarification == nil {
-                    let graphMatches = context.graph?.people.values.filter {
+                    let graphMatches = context.graph?.visiblePeople.filter {
                         $0.name.compare(
                             canonicalName,
                             options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame

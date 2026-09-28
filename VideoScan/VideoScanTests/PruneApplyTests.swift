@@ -64,6 +64,11 @@ struct PruneApplyTests {
         let job = try #require(await MasterArchiveTestSupport.promote(model, ids: [recA.id]))
         await job.completionTask?.value
         let archive = try #require(model.archivedCopy(of: recA), "fixture: promote made an archive copy")
+        // These tests TAMPER with the archive copy from outside (rewrite,
+        // remove) to prove the prune guard. Promote LOCKS it (2026-09-27);
+        // tampering past the lock needs root in real life, so the fixture
+        // unlocks it to keep simulating that.
+        MasterArchiveTestSupport.unlockTree(sb.root)
 
         let dupDir = sb.sources.appendingPathComponent("copies", isDirectory: true)
         try FileManager.default.createDirectory(at: dupDir, withIntermediateDirectories: true)

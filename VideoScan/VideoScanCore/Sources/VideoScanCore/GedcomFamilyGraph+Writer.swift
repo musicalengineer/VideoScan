@@ -9,8 +9,10 @@
 // `_VS_DROPPED` sub-lines per source, codex #794) / `_VS_ROOT` lines the
 // parser reads back), then every INDI — roots first, in root order, so a reader that
 // only knows the first-INDI convention still lands on Rick — with NAME
-// (primary and alternates), SEX, BIRT/DEAT DATE+PLAC, FAMC, FAMS,
-// _FSFTID; then every FAM with HUSB, WIFE, CHIL, MARR DATE; then TRLR.
+// (primary and alternates), SEX, BIRT/DEAT DATE+PLAC, military facts
+// (_MILT / MILI / typed EVEN with TYPE, DATE, PLAC, NOTE — 2026-09-23),
+// FAMC, FAMS, _FSFTID; then every FAM with HUSB, WIFE, CHIL, MARR DATE;
+// then TRLR.
 // Sources, notes and everything else the parser ignores are NOT carried
 // over — the source files stay on disk untouched for that.
 //
@@ -64,6 +66,15 @@ extension GedcomFamilyGraph {
                 lines.append("1 DEAT")
                 if let d = p.deathDate { lines.append("2 DATE " + d) }
                 if let pl = p.deathPlace { lines.append("2 PLAC " + pl) }
+            }
+            // Military facts (2026-09-23), under the tag they were read
+            // with, so a merge carries them instead of losing them.
+            for fact in p.militaryFacts {
+                lines.append("1 " + fact.tag + (fact.value.map { " " + $0 } ?? ""))
+                if let t = fact.type { lines.append("2 TYPE " + t) }
+                if let d = fact.date { lines.append("2 DATE " + d) }
+                if let pl = fact.place { lines.append("2 PLAC " + pl) }
+                if let n = fact.note { Self.appendNote(n, level: 2, to: &lines) }
             }
             let famc = p.childOfFamilies.isEmpty ? [p.childOfFamily].compactMap { $0 } : p.childOfFamilies
             for f in famc { lines.append("1 FAMC " + f) }

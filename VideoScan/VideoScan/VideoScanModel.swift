@@ -469,7 +469,9 @@ final class VideoScanModel: ObservableObject {
 
     /// High-frequency dashboard + console state — separate ObservableObject
     /// so updates don't trigger re-render of the main Table view.
-    let dashboard = DashboardState()
+    /// Built in `init` so a test can hand it its own log directory
+    /// (GH #211); production passes nil — the routed default.
+    let dashboard: DashboardState
 
     /// In-memory search accelerator. Built after catalog load, updated
     /// on dossier live-reload merges, cleared on full reset. Toolbar
@@ -942,6 +944,14 @@ final class VideoScanModel: ObservableObject {
     /// memo table, `std::unordered_map<uuid, size_t>`, keyed by row.)
     var inferredDateNoDateEvidence: [UUID: Int] = [:]
 
+    /// GH #201: the People tab's birth years the date triangulator reads
+    /// for "how old are you? eight". nil = not loaded yet (loaded on first
+    /// use from the POI profiles, cached for `dateInferencePeopleTTL`);
+    /// tests inject `[]` or a fixture so the real People store is never
+    /// read (isolation). See VideoScanModel+DateInference.
+    var dateInferencePeople: [DateTriangulationPerson]?
+    var dateInferencePeopleLoadedAt: Date?
+
     /// Per-volume snapshot of dossier + user-edit fields, captured by
     /// `snapshotPreservedFieldsForRescan` before the scan's removeAll
     /// destroys them, applied by `applyPreservedFieldsAfterRescan`
@@ -983,19 +993,15 @@ final class VideoScanModel: ObservableObject {
     // Internal so VideoScanModel+ScanTargetPersistence can gate persistence
     // during XCTest runs.
     static var isRunningTests: Bool {
-        if NSClassFromString("XCTestCase") != nil { return true }
-        let env = ProcessInfo.processInfo.environment
-        if env["XCTestConfigurationFilePath"] != nil { return true }
-        if env["XCTestBundlePath"] != nil { return true }
-        if env["SWIFT_TESTING_ENABLED"] != nil { return true }
-        if env["VS_UI_TEST"] == "1" { return true } // UI-test target — see TestEnvironment.detect
-        if Bundle.allBundles.contains(where: { $0.bundlePath.hasSuffix(".xctest") }) {
-            return true
-        }
-        return false
+        // The shared detector (codex #1713) — incl. VS_UI_TEST=1 and `swift test`.
+        TestEnvironment.isTestHost
     }
 
-    init() {
+    /// - Parameter logDirectory: `catalog.log`'s directory. Nil — the app,
+    ///   and every existing caller — keeps the routed default. Tests that
+    ///   read their own catalog.log lines back pass a scratch dir (GH #211).
+    init(logDirectory: URL? = nil) {
+        dashboard = DashboardState(logDirectory: logDirectory)
         installLifecycleObservers()
         restoreScanTargets()
         // Restore previously-scanned records so the user can browse the
@@ -1202,7 +1208,8 @@ final class VideoScanModel: ObservableObject {
         // (and any other downstream view that mutates a VideoRecord's
         // class-typed fields, which can't fire @Published didSet on
         // the records array). Triggers the debounced save path.
-        NotificationCenter.default.addObserver(
+        let center = NotificationCenter.default
+        let catalogMutated = center.addObserver(
             forName: .videoScanCatalogMutated,
             object: nil,
             queue: .main
@@ -1233,7 +1240,7 @@ final class VideoScanModel: ObservableObject {
         // entries on its own eventually; this makes it immediate. Also
         // stop any in-flight prewarm so it doesn't refill what we just
         // freed.
-        NotificationCenter.default.addObserver(
+        let memoryPause = center.addObserver(
             forName: .memoryPressureAutoPause,
             object: nil,
             queue: .main
@@ -1244,12 +1251,20 @@ final class VideoScanModel: ObservableObject {
                 self.thumbnailPrecacher.cancel(reason: "memory pressure")
             }
         }
+        // Both tokens used to be discarded — registered forever, one pair
+        // per model ever built. The bag unregisters them with the model.
+        notificationObservers.add(catalogMutated, to: center)
+        notificationObservers.add(memoryPause, to: center)
     }
 
-    // Internal (not private) so VideoScanModel+VolumeLifecycle can mutate it.
-    // mountObservers stays in the main class because extensions can't add
-    // stored properties.
-    var mountObservers: [any NSObjectProtocol] = []
+    /// EVERY block-based NotificationCenter registration this model makes
+    /// (lifecycle, volume mount/unmount/probe-change, archive-snapshot).
+    /// Released with the model, and releasing it unregisters them all —
+    /// see NotificationObserverBag for the CI run 36223041786 leak that
+    /// made this necessary. Lives in the main class because extensions
+    /// can't add stored properties; internal so the +VolumeLifecycle and
+    /// +ArchiveVolumeSnapshot extensions can add to it.
+    let notificationObservers = NotificationObserverBag()
 
 
 
@@ -1452,8 +1467,6 @@ final class VideoScanModel: ObservableObject {
     var archiveVolumeSnapshotCache = ArchiveVolumeSnapshotCache()
     /// The in-flight off-main rebuild, if any.
     var archiveVolumeSnapshotTask: Task<Void, Never>?
-    /// NSWorkspace mount / unmount / rename observers for the snapshot.
-    var archiveVolumeSnapshotObservers: [NSObjectProtocol] = []
 
     /// Reverse index source-id → promoted-copy record (and copy-id →
     /// source-id), memoized on `RecordsVersion` like the CatalogHelpers
@@ -1488,6 +1501,20 @@ final class VideoScanModel: ObservableObject {
     /// under App Support/VideoScan/ledger/ (a test host writes to a
     /// scratch folder). Injectable so a test can point it at a sandbox.
     var mediaLedger = MediaLedger()
+
+    /// True while something is appending to the Master Archive's index
+    /// (a Promote job — the Archive Angel's included). A Catalog rename
+    /// that would rewrite the index refuses while it answers true
+    /// (VideoScanModel+Rename). Wired by VideoScanApp to the Media File
+    /// Operations center; nil (tests, previews) = not busy.
+    /// (`@MainActor () -> Bool` ≈ a std::function that must be called on
+    /// the UI thread.)
+    var archiveIndexWriterActive: (@MainActor () -> Bool)?
+
+    /// Archive copies with an Update… sheet open right now (Rick
+    /// 2026-09-27: "you can't have two writers — 'This item is being
+    /// edited.'"). Main actor, in memory only. VideoScanModel+ArchiveUpdate.
+    var archiveUpdatesOpen: Set<UUID> = []
 
     /// Find Similar Footage: bumped by every "same footage" / "not the
     /// same" / "forget" answer (codex #1674 F4). A run records the value

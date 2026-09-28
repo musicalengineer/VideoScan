@@ -289,7 +289,7 @@ struct HallieCatalogStatsTests {
         #expect(stats.archiveProgress.remaining == tab.remaining)
         #expect(stats.archiveProgress.percentText == tab.percentText)
         #expect(HallieCatalogStats.answer(.archived, stats: stats).prose.hasPrefix("200 files have been promoted to the Master Archive, of which 100 are verified"))
-        #expect(elapsed < 3.0, "took \(elapsed)s")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 3.0), "took \(elapsed)s")
     }
 
     // MARK: codex #717/#718 — promoted vs verified, and arithmetic that cannot pass 100%
@@ -378,6 +378,6 @@ struct HallieCatalogStatsTests {
         let elapsed = Date().timeIntervalSince(start)
         #expect(stats.fileCount == 100_000)
         #expect(stats.archivedVerified == 2_000)
-        #expect(elapsed < 3.0, "took \(elapsed)s")
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 3.0), "took \(elapsed)s")
     }
 }

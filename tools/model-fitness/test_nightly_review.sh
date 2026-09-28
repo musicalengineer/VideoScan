@@ -241,6 +241,104 @@ else
     fail "pending commit was not reviewed after the host returned: $(tail -1 "$STATE/nightly.log")"
 fi
 
+echo "== 10: a night that ABANDONS many commits still reaches the channel (subject <= 160 chars) =="
+# RED 2026-09-25: nightly_review.sh builds the subject as
+# "…, abandoned <every sha>"; the 09/25 04:30 run abandoned 46 and
+# tools/team-channel.py refused it ("subject must be 1..160 characters"),
+# so the digest never arrived. The stub channel accepts anything, so assert
+# the length here.
+FAKES=$(python3 -c 'print(",".join(f"{i:08x}" for i in range(0xabc00000, 0xabc00000 + 20)))')
+: > "$STATE/retry_attempts"
+for s in ${FAKES//,/ }; do echo "$s 2" >> "$STATE/retry_attempts"; done
+echo "$FAKES" > "$STATE/unreviewed_shas"
+: > "$POSTS"
+MAX_RETRIES=3 run_reviewer "$FAKES"
+LONG=$(python3 -c 'import sys; print(sum(1 for l in open(sys.argv[1]) if l.startswith("SUBJECT: ") and len(l.rstrip("\n")) - 9 > 160))' "$POSTS")
+if grep -q '^SUBJECT:' "$POSTS" && [ "$LONG" -eq 0 ]; then
+    pass "the abandoned-commits subject fits the channel's 160-char limit (SHAs belong in the body)"
+else
+    fail "subject over 160 chars ($LONG) — team-channel.py would refuse it: $(grep '^SUBJECT:' "$POSTS" | cut -c1-120)"
+fi
+
+# Subject/body length as the REAL channel measures it (tools/team-channel.py
+# MAX_SUBJECT / MAX_BODY), read from the source so the two cannot drift.
+CHANNEL_SRC="$SCRIPT_DIR/../team-channel.py"
+MAX_SUBJECT=$(sed -n 's/^MAX_SUBJECT = \([0-9_]*\).*/\1/p' "$CHANNEL_SRC" | tr -d _)
+MAX_BODY=$(sed -n 's/^MAX_BODY = \([0-9_]*\).*/\1/p' "$CHANNEL_SRC" | tr -d _)
+posts_over_limits() {   # prints "<long subjects> <long bodies>" for $POSTS
+    python3 - "$POSTS" "$MAX_SUBJECT" "$MAX_BODY" <<'PY2'
+import sys
+text = open(sys.argv[1]).read()
+ms, mb = int(sys.argv[2]), int(sys.argv[3])
+ls = lb = 0
+for post in [p for p in text.split("\n===\n") if p.strip()]:
+    head, _, body = post.lstrip("\n").partition("\n")
+    subject = head[len("SUBJECT: "):] if head.startswith("SUBJECT: ") else head
+    ls += len(subject) > ms
+    lb += len(body.rstrip("\n")) > mb
+print(ls, lb)
+PY2
+}
+
+echo "== 11: a python that cannot reach the host (curl can) is a LOUD skip, not 150 ERRORs =="
+# 2026-09-23..25: after the macOS 26.7 update, launchd-run Homebrew python got
+# "[Errno 65] No route to host" to ricksm5 (Local Network privacy) while the
+# curl preflight — Apple-signed, exempt — sailed through. Every commit ERRORed
+# for three nights. Simulated here with a sitecustomize that fails connect().
+mkdir -p "$SANDBOX/blockednet"
+cat > "$SANDBOX/blockednet/sitecustomize.py" <<'PY2'
+import errno, socket
+def _blocked(self, *a, **k):
+    raise OSError(errno.EHOSTUNREACH, "No route to host")
+socket.socket.connect = _blocked
+socket.socket.connect_ex = lambda self, *a, **k: errno.EHOSTUNREACH
+PY2
+: > "$POSTS"
+echo eleven > "$WORK/k.txt"; git -C "$WORK" add -A; git -C "$WORK" commit -q -m "lands while python is blocked"
+BEFORE_SHA=$(cat "$STATE/last_sha")
+PYTHONPATH="$SANDBOX/blockednet" run_reviewer ""; rc=$?
+if [ "$rc" -ne 0 ] && tail -1 "$STATE/nightly.log" | grep -q "SKIPPED — .*python.*cannot reach $STUB_ENDPOINT"; then
+    pass "a blocked python is named in the skip line, not reported as reviewed (rc=$rc)"
+else
+    fail "blocked python not caught by the preflight (rc=$rc): $(tail -1 "$STATE/nightly.log")"
+fi
+if tail -1 "$STATE/nightly.log" | grep -q "curl CAN reach it"; then
+    pass "the skip says curl can reach the host, pointing at the interpreter, not the network"
+else
+    fail "skip line does not distinguish a blocked python from a sleeping host: $(tail -1 "$STATE/nightly.log")"
+fi
+if [ "$(cat "$STATE/last_sha")" = "$BEFORE_SHA" ]; then
+    pass "baseline kept while python is blocked"
+else
+    fail "baseline advanced while python could not reach the host"
+fi
+read -r LS LB <<< "$(posts_over_limits)"
+if grep -q '^SUBJECT: nightly review: SKIPPED' "$POSTS" && [ "$LS" -eq 0 ]; then
+    pass "the skip post's subject fits the channel ($MAX_SUBJECT chars)"
+else
+    fail "skip subject missing or over $MAX_SUBJECT chars: $(grep '^SUBJECT:' "$POSTS" | cut -c1-200)"
+fi
+run_reviewer ""   # python unblocked: review the pending commit so later cases start clean
+: > "$STATE/unreviewed_shas"; : > "$STATE/retry_attempts"
+
+echo "== 12: a night with hundreds of UNREVIEWED commits still fits the channel's body limit =="
+# 2026-09-25: the digest was 20,538 bytes; MAX_BODY is 20,000.
+MANY=$(python3 -c 'print(",".join(f"{i:08x}" for i in range(0xcd000000, 0xcd000000 + 700)))')
+: > "$POSTS"
+echo twelve > "$WORK/l.txt"; git -C "$WORK" add -A; git -C "$WORK" commit -q -m "a very bad night"
+run_reviewer "$MANY"
+read -r LS LB <<< "$(posts_over_limits)"
+if grep -q '^SUBJECT:' "$POSTS" && [ "$LS" -eq 0 ] && [ "$LB" -eq 0 ]; then
+    pass "the digest post fits the channel (subject <= $MAX_SUBJECT, body <= $MAX_BODY)"
+else
+    fail "digest over the channel limits (long subjects $LS, long bodies $LB)"
+fi
+if grep -q "$STATE/.*digest.md" "$POSTS"; then
+    pass "a truncated body points at the full digest file"
+else
+    fail "truncated body does not say where the full digest is"
+fi
+
 echo
 echo "════════════════════════════════════════════════"
 echo "Tests passed: $PASSES"

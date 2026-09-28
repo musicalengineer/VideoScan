@@ -273,7 +273,7 @@ struct UnifiedReviewAdversarialTests {
                                     topN: 100, controlK: 100)
         }
 
-        #expect(elapsed < .seconds(12),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(12)),
                 "100k records + 50k blind exclusions took \(elapsed)")
         #expect(output?.all.isDisjoint(with: heldOut) == true)
         #expect(output?.positives.count == 100)

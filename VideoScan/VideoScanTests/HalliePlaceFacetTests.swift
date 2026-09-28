@@ -378,11 +378,11 @@ struct HalliePlaceFacetExecutorTests {
         var known: [String] = []
         let collect = clock.measure { known = HalliePlaceFacet.knownPlaces(in: records) }
         #expect(known.count == 4)
-        #expect(collect < .seconds(1), "knownPlaces took \(collect)")
+        #expect(collect < PerformanceLane.debugCeiling(.seconds(1)), "knownPlaces took \(collect)")
         var result: ArchivistPresenceResult?
         let elapsed = clock.measure { result = run(.init(place: "Cape Cod"), records) }
         #expect(result?.evidence.totalMatchCount == 8_334, "only the placed rows — every row's transcript says it")
-        #expect(elapsed < .seconds(3), "place facet took \(elapsed) over 100k")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(3)), "place facet took \(elapsed) over 100k")
     }
 }
 

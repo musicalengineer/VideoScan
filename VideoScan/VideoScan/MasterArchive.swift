@@ -207,7 +207,10 @@ enum MasterArchiveLayout {
                   promoted here (when, where it came from, its SHA-256
                   fingerprint, who is in it, its rating, where it was
                   shot, and the family's word on cloud / off-site
-                  copies). Append-only.
+                  copies). One row is added per file; when a file is
+                  renamed in the VideoScan Catalog (to fix a typo), the
+                  name is corrected in place here and in the journals
+                  beside it, with a backup in .rename_backups/.
                   README_Naming_and_Layout.txt — this file.
       10_Photos/  Loose photo scans (Apple Photos owns the photo library;
                   this bucket exists for stray scans).
@@ -246,8 +249,12 @@ enum MasterArchiveLayout {
       • Every copy is verified: the SHA-256 in the manifest was computed
         from the file after it landed here. `shasum -a 256 <file>` in
         Terminal should print the same value.
-      • Nothing in 00_Index/ is ever rewritten by hand-tools; the manifest
-        only grows.
+      • Nothing in 00_Index/ is ever rewritten by hand-tools. The
+        manifest grows by one row per file; the only in-place changes
+        are a name corrected by a Catalog rename, and a file REFILED to
+        the folder its corrected date says (moved within this archive,
+        never copied; its fingerprint checked before and after). Both
+        are backed up first, in 00_Index/.rename_backups/.
     """
 
     /// Manifest header as written by Initialize BEFORE 2026-08-16 (12
@@ -527,7 +534,8 @@ enum ArchivePathResolver {
                          originModel: String? = nil,
                          originEncoder: String? = nil,
                          filename: String? = nil,
-                         userDateConfidence: String? = nil) -> (hint: ArchiveDateHint, lowConfidence: Bool) {
+                         userDateConfidence: String? = nil,
+                         inferredDateRange: InferredDateRange? = nil) -> (hint: ArchiveDateHint, lowConfidence: Bool) {
         let r = RecordDateResolver.resolve(userDate: userDate,
                                            userDateConfidence: userDateConfidence,
                                            embeddedCreationDate: embeddedCreationDate,
@@ -536,6 +544,7 @@ enum ArchivePathResolver {
                                            originEncoder: originEncoder,
                                            inferredRecordDate: inferredRecordDate,
                                            inferredDateConfidence: inferredDateConfidence,
+                                           inferredDateRange: inferredDateRange,
                                            filename: filename)
         return (hint(from: r), isLowConfidence(r))
     }
@@ -565,6 +574,56 @@ enum ArchivePathResolver {
     }
 }
 
+// MARK: - Filing-year guard (Rick 2026-09-27)
+
+/// "Refuse to file any video under a year < 1900 or > next year, with a
+/// clear reason line." The typo that motivated Refile — 1884 typed for
+/// 1984 — put a Thanksgiving tape in 30_Video/1880-1889/. Promote and
+/// Refile both ask THIS function before a byte moves, so the two can never
+/// disagree about what a plausible video year is.
+///
+/// Scope is the VIDEO bucket only: a photo scan or a document (a birth
+/// certificate) from the 1880s is real, and so, rarely, is audio (Edison
+/// cylinders date from 1888) — those stay unguarded until Rick says.
+extension ArchivePathResolver {
+
+    /// Nothing in 30_Video may be filed before this year.
+    static let earliestVideoYear = 1900
+
+    /// The last year a video may be filed under: next calendar year (UTC)
+    /// — a clip shot on New Year's Eve in a later time zone is still fine.
+    static func latestFilingYear(now: Date) -> Int {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? .current
+        return cal.component(.year, from: now) + 1
+    }
+
+    /// nil = fine to file; else the one-line reason (no trailing period,
+    /// so callers can prefix the filename). Undated files are never
+    /// refused here — Undated/ is always a legitimate place.
+    static func filingYearRefusal(facts: RecordFacts, now: Date = Date()) -> String? {
+        guard bucket(for: facts.streamType, medium: facts.medium) == MasterArchiveLayout.videoBucket else { return nil }
+        let year: Int
+        let label: String
+        switch facts.dateHint {
+        case .day(let y, _, _), .month(let y, _), .year(let y):
+            year = y; label = String(format: "%04d", y)
+        case .decade(let start):
+            year = start; label = "the \(start)s"
+        case .unknown:
+            return nil
+        }
+        if year < earliestVideoYear {
+            return "would be filed under \(label), before \(earliestVideoYear) — no home video is that old, so the date is probably a typo (1884 for 1984?). Nothing was filed; fix the date and try again"
+        }
+        let latest = latestFilingYear(now: now)
+        if year > latest {
+            return "would be filed under \(label), after \(latest) — a date in the future is a typo. Nothing was filed; fix the date and try again"
+        }
+        return nil
+    }
+}
+
 // MARK: - Main-actor bridge (record → facts)
 
 extension ArchivePathResolver {
@@ -580,7 +639,8 @@ extension ArchivePathResolver {
                                    originModel: record.originModel,
                                    originEncoder: record.originEncoder,
                                    filename: record.filename,
-                                   userDateConfidence: record.userDateConfidence)
+                                   userDateConfidence: record.userDateConfidence,
+                                   inferredDateRange: record.inferredDateRange)
         return RecordFacts(streamType: record.streamType,
                            filename: record.filename,
                            ext: record.ext,
@@ -715,15 +775,19 @@ enum ArchiveManifestCSV {
     /// (`nonisolated` ≈ a free function: safe to call from the job's
     /// background work.)
     nonisolated static func append(_ row: Row, rootPath: String) throws {
-        let fd = try ArchivePromoteEngine.openIndexFile(
-            root: rootPath, name: MasterArchiveLayout.manifestFilename,
-            mustExist: true, expectedHeaders: MasterArchiveLayout.acceptedManifestHeaders)
-        defer { close(fd) }
-        // The full v3 row is appended whatever header the file carries
-        // (Rick's ruling 2026-09-12: trailing columns are additive, the
-        // header is never rewritten, old readers ignore the extra cells).
-        let data = Data(line(for: row).utf8)
-        try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: true, label: "manifest append")
+        // Held for the append (ArchiveIndexLock): a Refile / rename rewrite
+        // in progress refuses this row rather than dropping it later.
+        try ArchiveIndexLock.withExclusive(root: rootPath, holder: "Promote manifest append") {
+            let fd = try ArchivePromoteEngine.openIndexFile(
+                root: rootPath, name: MasterArchiveLayout.manifestFilename,
+                mustExist: true, expectedHeaders: MasterArchiveLayout.acceptedManifestHeaders)
+            defer { close(fd) }
+            // The full v3 row is appended whatever header the file carries
+            // (Rick's ruling 2026-09-12: trailing columns are additive, the
+            // header is never rewritten, old readers ignore the extra cells).
+            let data = Data(line(for: row).utf8)
+            try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: true, label: "manifest append")
+        }
     }
 
     /// Preflight: the manifest under `rootPath` is reachable descriptor-

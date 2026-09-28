@@ -335,7 +335,7 @@ struct ArchiveAngelLifecycleCompanionTests {
         #expect(!job.skip(entryID: big1.id))
         #expect(!job.skip(entryID: small.id), "the job is over — decide it in the review")
         #expect(try ArchiveAngelPlanStore.load(batchDir: job.plan.batchDir).entries.first { $0.id == small.id }?.status == .ready)
-        let cleared = b.model.clearArchiveAngelBatch(onDisk, reason: "test")
+        let cleared = await b.model.clearArchiveAngelBatch(onDisk, reason: "test")
         #expect(cleared.cleared)
         _ = await cleared.removal?.value
         #expect(!fm.fileExists(atPath: job.plan.batchDir))

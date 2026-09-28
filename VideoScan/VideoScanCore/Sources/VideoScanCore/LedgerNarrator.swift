@@ -109,15 +109,8 @@ public enum LedgerNarrator {
             if e.by == .angel { s += " (Archive Angel)" }
             return s
 
-        case .copyTrashed:
-            let vol = detail[MediaLedgerEvent.Detail.volume] ?? ""
-            let whereText = vol.isEmpty ? "" : " (the copy on \(vol))"
-            return "\(who) moved this copy to the Trash on \(d)\(whereText)."
-
-        case .copyDeleted:
-            let vol = detail[MediaLedgerEvent.Detail.volume] ?? ""
-            let whereText = vol.isEmpty ? "" : " (the copy on \(vol))"
-            return "\(who) deleted this copy permanently on \(d)\(whereText)."
+        case .copyTrashed, .copyDeleted:
+            return copyRemovedSentence(e.event, who: who, dateText: d, detail: detail)
 
         case .placeSet:
             let place = detail[MediaLedgerEvent.Detail.place] ?? ""
@@ -161,20 +154,8 @@ public enum LedgerNarrator {
             }
             return s + "."
 
-        case .angelProposed:
-            let score = detail[MediaLedgerEvent.Detail.score] ?? ""
-            let scoreText = score.isEmpty ? "" : " (score \(score))"
-            return "Archive Angel proposed it for the archive on \(d)\(scoreText)."
-
-        case .angelSkipped:
-            let reason = detail[MediaLedgerEvent.Detail.reason] ?? ""
-            if reason == "unchecked" {
-                return "\(who) left it unchecked when the batch was promoted on \(d)."
-            }
-            return "\(who) passed on it (Archive Angel skip) on \(d)."
-
-        case .angelCleared:
-            return "\(who) cleared the Archive Angel batch it was in on \(d), undecided."
+        case .angelProposed, .angelSkipped, .angelCleared:
+            return angelAttentionSentence(e.event, who: who, dateText: d, detail: detail)
 
         case .footageDecided:
             let other = detail[MediaLedgerEvent.Detail.label] ?? ""
@@ -190,7 +171,70 @@ public enum LedgerNarrator {
 
         case .familyMusic:
             return familyMusicSentence(who: who, dateText: d, detail: detail)
+
+        case .archiveUpdated, .archiveUpdateRolledBack:
+            return archiveUpdateSentence(e.event, who: who, dateText: d, detail: detail)
         }
+    }
+
+    /// Archive Angel attention memory — split out (2026-09-27) with the
+    /// copy-removed pair below, same text, to keep `sentence` under the
+    /// lint complexity ceiling.
+    static func angelAttentionSentence(_ kind: MediaLedgerEvent.Kind, who: String, dateText d: String,
+                                       detail: [String: String]) -> String {
+        switch kind {
+        case .angelProposed:
+            let score = detail[MediaLedgerEvent.Detail.score] ?? ""
+            let scoreText = score.isEmpty ? "" : " (score \(score))"
+            return "Archive Angel proposed it for the archive on \(d)\(scoreText)."
+        case .angelSkipped:
+            if (detail[MediaLedgerEvent.Detail.reason] ?? "") == "unchecked" {
+                return "\(who) left it unchecked when the batch was promoted on \(d)."
+            }
+            return "\(who) passed on it (Archive Angel skip) on \(d)."
+        default:
+            return "\(who) cleared the Archive Angel batch it was in on \(d), undecided."
+        }
+    }
+
+    /// A copy left the disk — split out (2026-09-27) to keep `sentence`
+    /// under the lint complexity ceiling when Refile's kinds arrived.
+    static func copyRemovedSentence(_ kind: MediaLedgerEvent.Kind, who: String, dateText d: String,
+                                    detail: [String: String]) -> String {
+        let vol = detail[MediaLedgerEvent.Detail.volume] ?? ""
+        let whereText = vol.isEmpty ? "" : " (the copy on \(vol))"
+        return kind == .copyTrashed
+            ? "\(who) moved this copy to the Trash on \(d)\(whereText)."
+            : "\(who) deleted this copy permanently on \(d)\(whereText)."
+    }
+
+    /// Update… (2026-09-27) — split out like Family Music.
+    static func archiveUpdateSentence(_ kind: MediaLedgerEvent.Kind, who: String, dateText d: String,
+                                      detail: [String: String]) -> String {
+        let from = detail[MediaLedgerEvent.Detail.from] ?? ""
+        let to = detail[MediaLedgerEvent.Detail.to] ?? ""
+        let why = detail[MediaLedgerEvent.Detail.reason] ?? ""
+        if kind == .archiveUpdateRolledBack {
+            // Say what ACTUALLY happened (Archive Update review r2 #7).
+            let place = from.isEmpty ? "its folder" : from
+            var s: String
+            switch detail[MediaLedgerEvent.Detail.outcome] ?? "" {
+            case "rolledBack":
+                s = "An archive update on \(d) was undone — the file stayed at \(place)"
+            case "incompleteRecovery":
+                s = "An archive update on \(d) failed; the file was put back at \(place), but the drive did not confirm it was saved"
+            default:   // mixedState, or anything unknown: never claim an undo
+                let at = detail[MediaLedgerEvent.Detail.location] ?? ""
+                s = "An archive update on \(d) failed and could not be fully undone — "
+                    + (at.isEmpty ? "where the file is could not be confirmed; see the log" : "the file is at \(at)")
+            }
+            if !why.isEmpty { s += " (\(why))" }
+            return s + "."
+        }
+        var s = "\(who) updated it in the archive on \(d)"
+        if !why.isEmpty { s += " — \(why)" }
+        if !from.isEmpty && !to.isEmpty && from != to { s += ": \(from) → \(to)" }
+        return s + "."
     }
 
     /// Family Music (2026-09-23) — split out so the big switch above gains

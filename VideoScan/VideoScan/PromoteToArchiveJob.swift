@@ -27,6 +27,18 @@ import os
 //   5. Main actor: linked record + source stamp + noteCatalogRecordsMutated
 //      + debounced save → journal DONE.
 //
+// Locked archive files (Rick 2026-09-27): once a copy's fixity is verified
+// it is LOCKED (UF_IMMUTABLE, ArchiveFileLock) before its manifest row is
+// written. A lock that fails never undoes a good copy: the file stays
+// promoted and the outcome says "promoted — not locked" (warned on the row,
+// logged, and the ledger's `archived` line carries locked=false).
+//
+// One date, three places (GH #219): the date chosen at Promote — typed on
+// the sheet, set in Angel Review, or taken from a copy's hand-entered date —
+// is the ONE value used for the placement (folder + filename prefix), the
+// manifest's record_date / date_confidence, and the archived copy's catalog
+// record (`dateDecision`).
+//
 // Free space for the WHOLE batch is checked once, up front (§5.2).
 // Cancel-safe: the in-flight partial is removed; completed files stay
 // (they are verified, journaled, indexed and recorded). Source files are
@@ -81,8 +93,20 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         /// rows must match on this, never the name. Nil only for outcomes
         /// recorded without a record (none from the promote loop).
         var recordID: UUID? = nil
+        /// Set when the file landed but could NOT be locked — why. The
+        /// copy is good and stays; Verify Copies keeps listing it as not locked.
+        var notLocked: String? = nil
     }
     @Published private(set) var outcomes: [FileOutcome] = []
+
+    /// The flag primitives (production = live chflags). Tests replace it
+    /// before `start()` to inject a lock failure.
+    var fileLock: ArchiveFileLock.Seams = .live
+    /// source record id → why its archive copy could not be locked (this run).
+    var lockWarnings: [UUID: String] = [:]
+    /// source record id → why this run's date was refused: an earlier,
+    /// interrupted run had already placed the file elsewhere (codex r1 #3).
+    var placementConflicts: [UUID: String] = [:]
 
     /// Destination paths claimed by THIS batch — resolved but possibly not
     /// on disk yet when the next file resolves. Folded into the collision
@@ -222,6 +246,8 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
 
     struct Tally {
         var promoted = 0, adopted = 0, skipped = 0, failed = 0
+        /// Landed (promoted or adopted) but not locked — a warning.
+        var notLocked = 0
         var bytesDone: Int64 = 0
     }
 
@@ -251,11 +277,13 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
             case .promoted(let relPath):
                 tally.promoted += 1
                 tally.bytesDone += entry.sizeBytes
-                record(.promoted, entry.filename, relPath, recordID: entry.recordID)
+                record(.promoted, entry.filename, relPath, recordID: entry.recordID,
+                       notLocked: noteLockWarning(entry, &tally, model: model))
             case .adopted(let relPath):
                 tally.adopted += 1
                 tally.bytesDone += entry.sizeBytes
-                record(.adopted, entry.filename, relPath, recordID: entry.recordID)
+                record(.adopted, entry.filename, relPath, recordID: entry.recordID,
+                       notLocked: noteLockWarning(entry, &tally, model: model))
                 model.log("Promote: \(entry.filename) — an identical copy already sat at \(relPath); adopted it (no second copy).")
             case .skipped(let why):
                 tally.skipped += 1
@@ -276,7 +304,7 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         // Batch end: ONE durable catalog save; only then are the batch's
         // journal entries marked done. Runs on cancel too — whatever was
         // published stays published and must be persisted.
-        let saved = finalizeBatch(model: model, ctx: ctx)
+        let saved = await finalizeBatch(model: model, ctx: ctx)
         finishRun(tally: tally, saved: saved, model: model, ctx: ctx)
     }
 
@@ -301,6 +329,9 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         if tally.adopted > 0 { parts.append("adopted \(tally.adopted)") }
         parts.append("skipped \(tally.skipped)")
         parts.append("failed \(tally.failed)")
+        if tally.notLocked > 0 {
+            parts.append("\(tally.notLocked) promoted — NOT locked (Verify Copies lists them)")
+        }
         if !saved && (tally.promoted + tally.adopted) > 0 {
             parts.append("catalog save deferred (links re-established next run)")
         }
@@ -344,8 +375,22 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         return model.mediaLedger.mirror(intoArchiveRoot: root)
     }
 
-    func record(_ kind: FileOutcome.Kind, _ filename: String, _ detail: String, recordID: UUID? = nil) {
-        outcomes.append(FileOutcome(filename: filename, kind: kind, detail: detail, recordID: recordID))
+    func record(_ kind: FileOutcome.Kind, _ filename: String, _ detail: String, recordID: UUID? = nil,
+                notLocked: String? = nil) {
+        outcomes.append(FileOutcome(filename: filename, kind: kind, detail: detail, recordID: recordID,
+                                    notLocked: notLocked))
+    }
+
+    /// The "promoted — not locked" warning for one landed entry, if any:
+    /// counted, logged loudly, returned for the outcome row.
+    private func noteLockWarning(_ entry: ArchivePromotePlan.Entry, _ tally: inout Tally,
+                                 model: VideoScanModel) -> String? {
+        guard let why = lockWarnings[entry.recordID] else { return nil }
+        tally.notLocked += 1
+        model.log("Promote: WARNING \(entry.filename) is promoted but NOT locked — \(why). The copy is good and stays; Verify Copies will list it as not locked.")
+        appLog.write("promote: WARNING \(entry.filename) promoted but NOT locked — \(why)")
+        promoteLog.error("promote NOT LOCKED \(entry.filename, privacy: .public): \(why, privacy: .public)")
+        return why
     }
 
     func applyProgress(_ fraction: Double) {

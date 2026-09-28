@@ -12,14 +12,30 @@
 //      (user "1992" + camera 1992-06-15 → 1992-06-15).
 //   2. `embeddedCreationDate` — the container's creation stamp
 //      (day precision). Confidence by ORIGIN: a named camera/phone
-//      make/model 0.95, a transcoder encoder string only 0.80 (it may
-//      be the re-encode date), neither 0.85.
+//      MODEL 0.95; a make with NO model is a SOFTWARE stamp (GH #201:
+//      `com.apple.quicktime.make=Apple` with no model is what Final Cut
+//      / QuickTime / iMovie write on an EXPORT — the day the file was
+//      made, not the day the tape was shot) and rates encoder-grade
+//      0.80, the same as a transcoder's `encoder` string; neither 0.85.
+//      The action-camera makers whose files carry the maker only in a
+//      stream handler ("GoPro AVC", DJI, Insta360, Garmin) stay device-
+//      grade — no model tag is normal for them.
+//      Rules v12 exception: a stamp with no camera behind it (≤ 0.85)
+//      whose year disagrees by more than 2 years with a year in the
+//      FILENAME is a copy-era date; resolution then continues with
+//      rank 3 (an inferred date agreeing with the stamp keeps the
+//      stamp; a disagreeing one wins) and only then rank 4.
+//      Rules v13 (GH #201): the same software stamp is set aside by an
+//      inferred date at/above the trust floor (0.6) that contradicts it
+//      by more than 2 years — CapeCod_notsure_NTSC.mov, exported 2008,
+//      whose transcript says "what year is it? 2004" three times.
 //      GH #166 exception: an inferred date whose confidence marks
 //      CONTENT evidence agreeing with itself (≥ 0.85 — multi-frame OCR
 //      consensus, or OCR corroborated by transcript/caption) OUTVOTES
-//      the stamp when it contradicts it by more than 2 years. On old
-//      tape rewrapped by a later copy, the container stamp IS the copy
-//      date; what's burned into the frames beats what a muxer wrote.
+//      ANY stamp, device or not, when it contradicts it by more than 2
+//      years. On old tape rewrapped by a later copy, the container
+//      stamp IS the copy date; what's burned into the frames beats what
+//      a muxer wrote.
 //   3. `inferredRecordDate` (dossier OCR / speech) at ≥ 0.6 confidence.
 //   4. A date pattern in the FILENAME: YYYY-MM-DD, MM-DD-YYYY (US;
 //      DD-MM-YYYY when the first number cannot be a month), YYYYMMDD,
@@ -106,10 +122,11 @@ public enum RecordDateResolver {
     /// camera clock set sloppily; a decade is a copy date).
     public static let contentStampToleranceYears: Int = 2
 
-    // Embedded-date confidence tiers by origin (Rick 2026-08-16).
-    public static let embeddedConfidenceDevice: Float = 0.95      // make/model names a camera/phone
+    // Embedded-date confidence tiers by origin (Rick 2026-08-16; the
+    // make-without-model rule is GH #201, 2026-09-26).
+    public static let embeddedConfidenceDevice: Float = 0.95      // a camera/phone MODEL is named
     public static let embeddedConfidenceUnknownOrigin: Float = 0.85
-    public static let embeddedConfidenceEncoderOnly: Float = 0.80 // a transcoder stamped it
+    public static let embeddedConfidenceEncoderOnly: Float = 0.80 // a program stamped it (encoder, or make with no model)
     /// Filename patterns are a hint, not a fact.
     public static let filenameConfidence: Float = 0.5
 
@@ -117,10 +134,28 @@ public enum RecordDateResolver {
     public static let userKnownConfidence: Float = 1.0
     public static let userEstimatedConfidence: Float = 0.8
 
+    /// Makers whose files name the device ONLY through a stream handler
+    /// ("GoPro AVC") — a make with no model is still a camera for these.
+    /// Lower-cased for the comparison.
+    static let handlerOnlyMakers: Set<String> = ["gopro", "dji", "insta360", "garmin"]
+
+    /// GH #201: does this origin name a DEVICE (a camera or phone), as
+    /// opposed to the program that exported the file? A model does; a
+    /// make alone does not — except for the action-camera makers above.
+    /// `VideoRecord.displacedStampResolution` and the Angel's event key
+    /// read this so "Apple, no model" is treated the same everywhere.
+    public static func namesDevice(originMake: String?, originModel: String?) -> Bool {
+        if originModel != nil { return true }
+        guard let make = originMake?.trimmingCharacters(in: .whitespaces).lowercased(), !make.isEmpty else {
+            return false
+        }
+        return handlerOnlyMakers.contains(make)
+    }
+
     /// Confidence to assign an embedded date given its origin.
     public static func embeddedConfidence(originMake: String?, originModel: String?, originEncoder: String?) -> Float {
-        if originMake != nil || originModel != nil { return embeddedConfidenceDevice }
-        if originEncoder != nil { return embeddedConfidenceEncoderOnly }
+        if namesDevice(originMake: originMake, originModel: originModel) { return embeddedConfidenceDevice }
+        if originMake != nil || originEncoder != nil { return embeddedConfidenceEncoderOnly }
         return embeddedConfidenceUnknownOrigin
     }
 
@@ -135,6 +170,7 @@ public enum RecordDateResolver {
                                originEncoder: String? = nil,
                                inferredRecordDate: Date?,
                                inferredDateConfidence: Float?,
+                               inferredDateRange: InferredDateRange? = nil,
                                filename: String?,
                                now: Date = Date()) -> RecordDateResolution {
 
@@ -156,6 +192,12 @@ public enum RecordDateResolver {
             guard conf >= inferredConfidenceFloor else { rejectedInferred = true; return nil }
             let dc = utcGregorian.dateComponents([.year, .month, .day], from: d)
             guard let y = dc.year, let m = dc.month, let dd = dc.day else { return nil }
+            // GH #201: a triangulated date that only knows the YEAR carries
+            // its span; file it as "2004", never as a fabricated Jan 1.
+            if inferredDateRange != nil {
+                return RecordDateResolution(year: y, month: nil, day: nil, precision: .year,
+                                            confidence: conf, source: .inferred)
+            }
             return RecordDateResolution(year: y, month: m, day: dd, precision: .day,
                                         confidence: conf, source: .inferred)
         }
@@ -176,6 +218,10 @@ public enum RecordDateResolver {
             guard userPrecision != .day else { return user }
             for candidate in [embedded(), inferred(), fromFilename()] {
                 guard let c = candidate, c.precision < userPrecision, c.year == parts.year else { continue }
+                // Codex F1 (GH #201 review): only a CAMERA's stamp may sharpen
+                // Rick's year. A software / export stamp's day is the copy
+                // day — "2004" + an export dated 2004-12-31 stays "2004".
+                if c.source == .embedded, c.confidence < embeddedConfidenceDevice { continue }
                 if let um = parts.month, c.month != um { continue }
                 // Same year (and month, when the user gave one): the
                 // machine date is a sharper reading of the user's fact.
@@ -197,6 +243,38 @@ public enum RecordDateResolver {
                let iy = i.year, let ey = e.year,
                abs(iy - ey) > contentStampToleranceYears {
                 return i
+            }
+            // Rules v13 (GH #201): a stamp with NO camera behind it (a
+            // transcoder's, an export's "Apple, no model", or one of
+            // unknown origin — ≤ 0.85) is the day the COPY was made. Any
+            // inferred date the resolver would trust (≥ 0.6) that puts
+            // the footage more than 2 years away sets it aside. A DEVICE
+            // stamp still needs the GH #166 content-agreement tier.
+            if e.confidence <= embeddedConfidenceUnknownOrigin,
+               let i = inferred(), let iy = i.year, let ey = e.year,
+               abs(iy - ey) > contentStampToleranceYears {
+                return i
+            }
+            // Rules v12 (2026-09-25, docs/archive_angel_wise_design.md §3.2):
+            // a stamp with NO camera behind it (a transcoder's, or one of
+            // unknown origin — ≤ 0.85) is a copy-era date whenever the name
+            // says otherwise. "DickyDonnaDancing1992.mov" stamped 2026-04-03
+            // by Apple ProRes 422 was filmed in 1992; the Angel called it
+            // Ready under 2026. A device-stamped date (0.95) is never
+            // outvoted by a name; a disagreement within ±2 years is clock
+            // slop. Once the stamp is discredited the ranking CONTINUES in
+            // order (QA v12 #2): an inferred date (rank 3, ≥ 0.6) that
+            // AGREES with the stamp keeps the stamp — two machine signals
+            // beat a name; one that disagrees wins (already handled by the
+            // v13 rule above); only with no inferred date does the filename
+            // year (rank 4, 0.5 — Promote flags it low-confidence) take over.
+            if e.confidence <= embeddedConfidenceUnknownOrigin,
+               let f = fromFilename(), let fy = f.year, let ey = e.year,
+               abs(fy - ey) > contentStampToleranceYears {
+                if inferred() != nil { return e }
+                return RecordDateResolution(year: f.year, month: f.month, day: f.day, precision: f.precision,
+                                            confidence: f.confidence, source: f.source,
+                                            hadRejectedSignal: rejectedInferred)
             }
             return e
         }
@@ -280,6 +358,26 @@ public enum FilenameDatePattern {
         }
 
         func plausibleYear(_ y: Int) -> Bool { y >= minYear && y <= maxYear }
+
+        /// Is this digit run one side of a measurement — "WxH"
+        /// ("1920x1080" / "1080x1920"), or a number with a unit glued on
+        /// ("2000k", "2000kbps", "2000fps", "1920p", "48000hz")? Linear in
+        /// the few characters it reads.
+        func isMeasurementToken(_ r: DigitRun) -> Bool {
+            func isDigit(_ i: Int) -> Bool { i >= 0 && i < chars.count && chars[i].isASCII && chars[i].isNumber }
+            func isLetter(_ i: Int) -> Bool { i >= 0 && i < chars.count && chars[i].isLetter }
+            func lower(_ i: Int) -> Character? { i >= 0 && i < chars.count ? Character(chars[i].lowercased()) : nil }
+            // "…x1080" after the run, or "1080x…" before it.
+            if lower(r.end) == "x", isDigit(r.end + 1) { return true }
+            if r.start >= 2, lower(r.start - 1) == "x", isDigit(r.start - 2) { return true }
+            // A unit glued on, ending the token (not the start of a word).
+            let tail = (r.end..<min(chars.count, r.end + 4)).compactMap { lower($0) }
+            let word = String(tail.prefix { $0.isLetter })
+            for unit in ["kbps", "mbps", "fps", "hz", "k", "p"] where word == unit {
+                return !isLetter(r.end + unit.count)
+            }
+            return false
+        }
 
         /// The single separator character between two ADJACENT runs, or nil.
         func separator(_ a: DigitRun, _ b: DigitRun) -> Character? {
@@ -384,6 +482,11 @@ public enum FilenameDatePattern {
             var e = r.start
             if e > 0, s.chars[e - 1] == "_" || s.chars[e - 1] == "-" { e -= 1 }
             if e > 0, s.chars[e - 1].isNumber { continue }
+            // QA v12 #1: a dimension, bitrate or rate is not a year —
+            // "1920x1080", "1080x1920", "2000k", "2000kbps", "2000fps",
+            // "1920p". Only IMMEDIATE neighbours count ("1994pics" and
+            // "Christmas1995Party" stay years).
+            if s.isMeasurementToken(r) { continue }
             var start = e
             while start > 0, s.chars[start - 1].isLetter { start -= 1 }
             let word = String(s.chars[start..<e]).lowercased()

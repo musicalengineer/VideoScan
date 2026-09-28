@@ -53,18 +53,7 @@ private func makeDefaultAppLog() -> LogSink {
 
 /// Mirrors CatalogStore.isRunningTests so the default appLog sink is
 /// consistent with the codebase's other test-environment checks.
-private let appLogIsRunningUnderTests: Bool = {
-    if NSClassFromString("XCTestCase") != nil { return true }
-    let env = ProcessInfo.processInfo.environment
-    if env["XCTestConfigurationFilePath"] != nil { return true }
-    if env["XCTestBundlePath"] != nil { return true }
-    if env["SWIFT_TESTING_ENABLED"] != nil { return true }
-    if env["VS_UI_TEST"] == "1" { return true } // UI-test target — see TestEnvironment.detect
-    if Bundle.allBundles.contains(where: { $0.bundlePath.hasSuffix(".xctest") }) {
-        return true
-    }
-    return false
-}()
+private let appLogIsRunningUnderTests: Bool = TestEnvironment.isTestHost  // codex #1713: the shared detector
 
 // MARK: - App Delegate (RAM disk lifecycle)
 
@@ -98,9 +87,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// still-running generation) and relies on the `_exit` backstop.
     private var vlmDrainTimedOut = false
 
-    /// True when the app is launched as a test host (unit tests).
+    /// True when the app is launched as a test host (unit tests). Runner
+    /// signals only — the shared detector, codex #1713.
     static var isRunningTests: Bool {
-        NSClassFromString("XCTestCase") != nil
+        TestEnvironment.isUnitTestProcess
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -559,9 +549,19 @@ struct VideoScanApp: App {
                     .onAppear {
                         appDelegate.catalogModel = catalogModel
                         appDelegate.fileOpsCenter = fileOpsCenter
+                        // A Catalog rename refuses to rewrite the archive
+                        // index while a Promote appends to it.
+                        let center = fileOpsCenter
+                        catalogModel.archiveIndexWriterActive = { [weak center] in center?.hasActivePromote ?? false }
                         // Hallie on the home network (iPad / MBP) — starts
                         // only if enabled in Hallie's settings.
                         HallieWebAccess.shared.attach(model: catalogModel)
+                        // Refresh from FamilySearch lines reach the in-app
+                        // console + catalog.log through the model's log
+                        // (GH #198); videoscan.log is wired in the sink.
+                        PersonRefreshCenter.shared.console = { [weak catalogModel] line in
+                            catalogModel?.log(line)
+                        }
                         // Quit path drains in-flight VLM inference —
                         // see AppDelegate.applicationShouldTerminate.
                         appDelegate.captionOrchestrator = captionOrchestrator
@@ -689,6 +689,12 @@ struct VideoScanApp: App {
             // exists — the symptom Rick saw: File menu had only New and
             // Close.
             CommandGroup(after: .newItem) {
+                Divider()
+                // ⌘O as a real key equivalent (2026-09-26): opens the
+                // focused catalog table's highlighted rows the way a
+                // double-click does — see CatalogOpenCommand.swift.
+                // (⇧⌘O stays the Analyze Dashboard.)
+                CatalogOpenMenuItem()
                 Divider()
                 // Documents are added deliberately, never swept up by a
                 // volume scan — the scan is video-only on purpose. See

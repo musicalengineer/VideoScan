@@ -49,7 +49,8 @@ enum HallieNameSuggestion {
 
         var found: [Suggestion] = []
         if let graph {
-            for person in graph.people.values {
+            // A record Rick hid is never suggested (codex #1710 (3)).
+            for person in graph.people.values where !graph.isHidden(person.id) {
                 guard let cost = matchCost(preparedTyped,
                                            against: FamilyIdentityText.tokens(person.name),
                                            &scratch) else { continue }

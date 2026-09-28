@@ -46,7 +46,9 @@ struct InferredDatePropagationTests {
 
     /// A model whose saves land in scratch, never in ~/Library/Application Support.
     private func makeModel(_ dir: URL) -> VideoScanModel {
-        let model = VideoScanModel()
+        // Own catalog.log too (GH #211): the shared test-host file is
+        // truncated by any other suite's resetForScan().
+        let model = VideoScanModel(logDirectory: dir)
         model.catalogStore = CatalogStore(directory: dir)
         return model
     }
@@ -129,10 +131,14 @@ struct InferredDatePropagationTests {
                 "The MediaExpansion copy must read 1991, never the 2026 mtime")
         #expect(mediaExpansion.inferredDateSource != nil,
                 "A date the record did not derive in its own dossier pass carries provenance")
-        // The Projects copy — its own pass — is untouched.
+        // The Projects copy — its own pass — keeps its provenance. GH #201:
+        // the legacy 0.75 is re-triangulated ONCE (the "/1991/" folder
+        // agrees with the burn-in, so the confidence rises) and gains a
+        // written reason; that re-derivation counts in `total`.
         #expect(projects.inferredDateSource == nil)
-        #expect(projects.inferredDateConfidence == 0.75)
-        #expect(result.total == 1)
+        #expect((projects.inferredDateConfidence ?? 0) >= 0.75)
+        #expect(projects.inferredDateReason?.contains("on-screen date 1991-06-21") == true, "\(projects.inferredDateReason ?? "nil")")
+        #expect(result.total == 2 && result.retriangulated == 1)
         // Idempotent: a second pass finds nothing to do.
         #expect(model.catchUpInferredDates(trigger: "test").total == 0)
     }
@@ -159,7 +165,10 @@ struct InferredDatePropagationTests {
 
     // MARK: - Rule 1: catch-up from stored evidence
 
-    @Test func catchUp_transcriptAndCaptionAgreeingYear_isYearPrecisionBelowTheResolverFloor() throws {
+    @Test func catchUp_transcriptAndCaptionAgreeingYear_isYearPrecisionWithARange() throws {
+        // GH #201: a now-cue ("Christmas 1997") and an agreeing caption
+        // combine ABOVE the resolver floor — honest now, because the range
+        // makes the resolver file at YEAR precision ("1997", never Jan 1).
         let dir = try scratchDir("mentions")
         defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
@@ -169,21 +178,36 @@ struct InferredDatePropagationTests {
         model.records = [rec]
         model.catchUpInferredDates(trigger: "test")
         #expect(year(rec.inferredRecordDate) == 1997)
-        #expect(rec.inferredDateConfidence == 0.58)
+        #expect((rec.inferredDateConfidence ?? 0) >= RecordDateResolver.inferredConfidenceFloor)
+        #expect(rec.inferredDateRange == InferredDateRange(year: 1997))
         #expect(rec.inferredDateSource == VideoScanModel.InferredDateSource.catchUp)
+        let r = RecordDateResolver.resolve(userDate: nil, embeddedCreationDate: nil,
+                                           inferredRecordDate: rec.inferredRecordDate,
+                                           inferredDateConfidence: rec.inferredDateConfidence,
+                                           inferredDateRange: rec.inferredDateRange, filename: rec.filename)
+        #expect(r.isoString == "1997" && r.precision == .year)
     }
 
-    @Test func catchUp_ambiguousYearMentions_produceNothing() throws {
+    @Test func catchUp_ambiguousYearMentions_produceNothing_butANowCueBeatsAReference() throws {
         let dir = try scratchDir("ambiguous")
         defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
+        // Two cue-less years date nothing (the ambiguity guard, unchanged).
         let rec = makeRecord(path: "/Volumes/X/a.mov", md5: "m", size: 1,
-                             transcript: "born in 1962, and this is 1997 now")
+                             transcript: "the labels say 1962 and 1997")
         model.records = [rec]
         let result = model.catchUpInferredDates(trigger: "test")
-        #expect(rec.inferredRecordDate == nil, "two spoken years date nothing")
+        #expect(rec.inferredRecordDate == nil, "two cue-less spoken years date nothing")
+        #expect(rec.inferredDateReason?.contains("ambiguous") == true, "\(rec.inferredDateReason ?? "nil")")
         #expect(result.examined == 1)
         #expect(result.total == 0)
+        // GH #201: "born in 1962" is a reference, "this is 1997 now" is a now-cue.
+        let cued = makeRecord(path: "/Volumes/X/b.mov", md5: "n", size: 1,
+                              transcript: "born in 1962, and this is 1997 now")
+        model.records = [rec, cued]
+        model.catchUpInferredDates(trigger: "test")
+        #expect(year(cued.inferredRecordDate) == 1997, "\(cued.inferredDateReason ?? "nil")")
+        #expect(cued.inferredDateReason?.contains("1962 mentioned as a reference") == true)
     }
 
     @Test func catchUp_noiseOnlyOCR_isExaminedButNotDated() throws {
@@ -212,8 +236,31 @@ struct InferredDatePropagationTests {
         #expect(rec.inferredRecordDate == nil, "the copy date is not evidence about the footage")
     }
 
-    @Test func catchUp_neverOverwritesAnExistingInference_evenWhenEvidenceDisagrees() throws {
+    @Test func catchUp_neverOverwritesAReasonedInference_evenWhenEvidenceDisagrees() throws {
         let dir = try scratchDir("keep")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let stamp2007 = Date(timeIntervalSince1970: 1_180_000_000)
+        // GH #201: a date the scored triangulator wrote (it carries a
+        // written reason) is settled — disagreeing evidence heals on the
+        // next dossier pass, not here.
+        let rec = makeRecord(path: "/Volumes/X/Clip 01.dv", md5: "m", size: 1,
+                             ocr: [SceneCaption(timestamp: 1, text: "JUN 21 '97")],
+                             inferred: stamp2007, confidence: 0.75)
+        rec.inferredDateReason = "on-screen date 2007-12-06 ×1"
+        model.records = [rec]
+        let result = model.catchUpInferredDates(trigger: "test")
+        #expect(rec.inferredRecordDate == stamp2007, "a reasoned inference is never overwritten by the catch-up")
+        #expect(rec.inferredDateSource == nil)
+        #expect(result.examined == 0 && result.total == 0)
+    }
+
+    @Test func catchUp_reTriangulatesALegacyInferenceOnce_soItGainsAWrittenReason() throws {
+        // GH #201: the OLD triangulator's own-pass date (no reason) on a row
+        // with evidence is re-derived ONCE — Clip 01.dv's 2007 copy stamp
+        // becomes the burn-in's 1997 with the reason written down — and is
+        // then settled (idempotent).
+        let dir = try scratchDir("legacy")
         defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
         let stamp2007 = Date(timeIntervalSince1970: 1_180_000_000)
@@ -221,10 +268,30 @@ struct InferredDatePropagationTests {
                              ocr: [SceneCaption(timestamp: 1, text: "JUN 21 '97")],
                              inferred: stamp2007, confidence: 0.30)
         model.records = [rec]
+        let first = model.catchUpInferredDates(trigger: "test")
+        #expect(first.retriangulated == 1 && first.examined == 1)
+        #expect(year(rec.inferredRecordDate) == 1997)
+        #expect(rec.inferredDateSource == nil, "re-derived from its OWN evidence: the own-pass provenance stays")
+        #expect(rec.inferredDateReason?.contains("on-screen date 1997-06-21") == true, "\(rec.inferredDateReason ?? "nil")")
+        let second = model.catchUpInferredDates(trigger: "test")
+        #expect(second.total == 0 && second.examined == 0, "settled once it carries a reason")
+    }
+
+    @Test func catchUp_clearsALegacyFilesystemFallback_neverLabelsACopyDateInferred() throws {
+        // GH #201 (the CapeCod twin): "inferred 2008 @0.3" was the mtime
+        // fallback wearing the inferred label. No evidence ⇒ nil, and the
+        // reason says so; the Date column falls back to the stamp / file date.
+        let dir = try scratchDir("fsclear")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        let rec = makeRecord(path: "/Volumes/X/CapeCod twin.mov", md5: "m", size: 1,
+                             inferred: Date(timeIntervalSince1970: 1_224_720_000), confidence: 0.30)
+        model.records = [rec]
         let result = model.catchUpInferredDates(trigger: "test")
-        #expect(rec.inferredRecordDate == stamp2007, "an existing inference heals on the next dossier pass, not here")
-        #expect(rec.inferredDateSource == nil)
-        #expect(result.examined == 0 && result.total == 0)
+        #expect(result.cleared == 1)
+        #expect(rec.inferredRecordDate == nil && rec.inferredDateConfidence == nil)
+        #expect(rec.inferredDateReason?.hasPrefix("no evidence") == true)
+        #expect(model.catchUpInferredDates(trigger: "test").cleared == 0, "idempotent")
     }
 
     @Test func catchUp_skipsPurgedSetAsideSupersededAndUnreadableRows() throws {
@@ -407,6 +474,7 @@ struct InferredDatePropagationTests {
         model.records = (0..<n).map { i in
             let r = makeRecord(path: "/V/\(i).mov", md5: "same", size: 1,
                                ocr: [Self.nv12OCR], inferred: Self.june21_1991, confidence: 0.95)
+            r.inferredDateReason = "on-screen date 1991-06-21 ×3"   // GH #201: already dated by the scored triangulator
             if i % 2 == 1 { r.userDate = "1991" }
             return r
         }
@@ -852,11 +920,21 @@ struct InferredDatePropagationTests {
         let other = Date(timeIntervalSince1970: 900_000_000)
         let donor = makeRecord(path: "/V/a.mov", md5: "m", size: 1,
                                inferred: Self.june21_1991, confidence: 0.95)
-        let own = makeRecord(path: "/W/a.mov", md5: "m", size: 1, inferred: other, confidence: 0.30)
+        // A reasoned (GH #201) inference at any confidence is settled.
+        let own = makeRecord(path: "/W/a.mov", md5: "m", size: 1, inferred: other, confidence: 0.45)
+        own.inferredDateReason = "1998 mentioned in speech (no cue)"
         model.records = [donor, own]
         #expect(model.catchUpInferredDates(trigger: "test").propagated == 0)
         #expect(own.inferredRecordDate == other)
-        #expect(own.inferredDateConfidence == 0.30)
+        #expect(own.inferredDateConfidence == 0.45)
+        // A LEGACY filesystem-tier date (no reason, no evidence, < 0.5) is
+        // cleared first and then honestly filled from the sibling.
+        let legacy = makeRecord(path: "/X/a.mov", md5: "m", size: 1, inferred: other, confidence: 0.30)
+        model.records = [donor, own, legacy]
+        let r = model.catchUpInferredDates(trigger: "test")
+        #expect(r.cleared == 1 && r.propagated == 1)
+        #expect(legacy.inferredRecordDate == Self.june21_1991)
+        #expect(legacy.inferredDateReason?.hasPrefix("same bytes as a.mov") == true)
     }
 
     @Test func propagation_refusesWhenTheRecipientsOwnEvidenceDisagrees() throws {
@@ -865,14 +943,17 @@ struct InferredDatePropagationTests {
         let model = makeModel(dir)
         let donor = makeRecord(path: "/V/a.mov", md5: "m", size: 1,
                                inferred: Self.june21_1991, confidence: 0.95)
-        // Its own transcript names 1997 — a single mention is not enough
-        // to date it (ambiguity guard) but it IS enough to refuse 1991.
+        // GH #201: "born in 1962" is a REFERENCE (weight 0); "this is 1997"
+        // is a NOW-cue — so the row dates ITSELF 1997 from its own
+        // evidence and the 1991 sibling is refused (was: two mentions →
+        // ambiguous → propagated).
         let dissent = makeRecord(path: "/W/a.mov", md5: "m", size: 1,
                                  transcript: "born in 1962, this is 1997")
         model.records = [donor, dissent]
         let result = model.catchUpInferredDates(trigger: "test")
-        // Two years mentioned → pfContentEvidenceYear is nil → no dissent.
-        #expect(result.propagated == 1, "ambiguous evidence does not disagree")
+        #expect(result.propagated == 0, "a now-cue is a real dissent")
+        #expect(year(dissent.inferredRecordDate) == 1997)
+        #expect(dissent.inferredDateReason?.contains("1962 mentioned as a reference") == true, "\(dissent.inferredDateReason ?? "nil")")
 
         let dissent2 = makeRecord(path: "/X/a.mov", md5: "m", size: 1,
                                   transcript: "Let's go swimming.",
@@ -1060,9 +1141,10 @@ struct InferredDatePropagationTests {
         model.applyDossier(DossierExtraction(scenes: [], dates: [Self.nv12OCR, Self.nv12OCR], texts: []),
                            to: path, vlmModel: "qwen2.5-vl-3b-4bit", transcript: nil, whisperModel: nil)
 
-        #expect(target.inferredRecordDate == Self.june21_1991 && target.inferredDateConfidence == 0.85)
+        // GH #201: two burn-in frames (0.85) and the "/1991/" folder agree → ≥ 0.85.
+        #expect(target.inferredRecordDate == Self.june21_1991 && (target.inferredDateConfidence ?? 0) >= 0.85)
         #expect(twin.inferredRecordDate == Self.june21_1991)
-        #expect(twin.inferredDateConfidence == 0.85)
+        #expect(twin.inferredDateConfidence == target.inferredDateConfidence)
         #expect(twin.inferredDateSource == "propagated from \(target.id.uuidString)")
         #expect(userDated.inferredRecordDate == nil && userDated.userDate == "1991-06")
     }
@@ -1078,7 +1160,8 @@ struct InferredDatePropagationTests {
         model.records = [spoken, spokenTwin, captioned, captionedTwin]
 
         model.applyAudioTranscript("Merry Christmas 1997 everybody!", modelID: "whisper-medium", to: spoken)
-        #expect(year(spoken.inferredRecordDate) == 1997 && spoken.inferredDateConfidence == 0.55)
+        // GH #201: "Merry Christmas 1997" is a spoken NOW-cue (0.65).
+        #expect(year(spoken.inferredRecordDate) == 1997 && spoken.inferredDateConfidence == DateTriangulationWeights.spokenNow)
         #expect(spoken.inferredDateSource == VideoScanModel.InferredDateSource.catchUp)
         // Dossier propagation already copied the transcript to the twin, so
         // the twin reads its OWN evidence rather than borrowing.
@@ -1086,7 +1169,8 @@ struct InferredDatePropagationTests {
 
         model.applyCaptions([SceneCaption(timestamp: 0, text: "A cake with candles reading 1985")],
                             to: "/V/b.mov", model: "qwen2.5-vl-3b-4bit")
-        #expect(year(captioned.inferredRecordDate) == 1985 && captioned.inferredDateConfidence == 0.55)
+        // GH #201: a caption year alone is a soft claim (0.45) — shown, not filed.
+        #expect(year(captioned.inferredRecordDate) == 1985 && captioned.inferredDateConfidence == DateTriangulationWeights.captionYear)
         #expect(year(captionedTwin.inferredRecordDate) == 1985)
     }
 
@@ -1193,7 +1277,9 @@ struct InferredDatePropagationPersistenceAndScaleTests {
     }
 
     private func makeModel(_ dir: URL) -> VideoScanModel {
-        let model = VideoScanModel()
+        // Own catalog.log too (GH #211): the shared test-host file is
+        // truncated by any other suite's resetForScan().
+        let model = VideoScanModel(logDirectory: dir)
         model.catalogStore = CatalogStore(directory: dir)
         return model
     }
@@ -1332,13 +1418,13 @@ struct InferredDatePropagationPersistenceAndScaleTests {
         // Bucketing 100k references + 15k regex scans + 5k group walks is
         // well under a second in Debug; 3 s only trips on a complexity
         // regression (e.g. an O(records) sibling search per group).
-        #expect(elapsed < .seconds(3),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(3)),
                 "catch-up took \(elapsed) for 100k records / 5k groups")
 
         var second = VideoScanModel.InferredDateCatchUpResult()
         let again = clock.measure { second = model.catchUpInferredDates(trigger: "scale") }
         #expect(second.total == 0, "idempotent at scale")
-        #expect(again < .seconds(3))
+        #expect(again < PerformanceLane.debugCeiling(.seconds(3)))
     }
 }
 

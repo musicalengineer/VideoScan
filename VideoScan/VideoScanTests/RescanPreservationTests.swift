@@ -1140,7 +1140,7 @@ struct RescanPreservationTests {
         #expect(fresh[54_321].archiveStage == .masterAssigned)
         #expect(fresh[54_321].sizeBytes == 54_321, "scan-derived size untouched")
         #expect(fresh.allSatisfy { $0.archiveFixity != nil }, "identity held everywhere — nothing dropped")
-        #expect(elapsed < .seconds(2),
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)),
                 "100k snapshot + restore took \(elapsed) — budget 2s")
     }
 
@@ -1180,7 +1180,7 @@ struct RescanPreservationTests {
         #expect(restored == 100_000, "curated fields still restored on every record")
         #expect(fresh.allSatisfy { $0.archiveFixity == nil }, "every fixity dropped")
         #expect(fresh[77_777].masterLocation == "/Volumes/FamilyArchive", "location association kept")
-        #expect(elapsed < .seconds(2), "100k drop path took \(elapsed) — budget 2s")
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "100k drop path took \(elapsed) — budget 2s")
 
         try? await Task.sleep(nanoseconds: 400_000_000)
         let console = model.dashboard.consoleLines.joined(separator: "\n")

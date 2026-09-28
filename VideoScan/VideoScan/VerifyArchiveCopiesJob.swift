@@ -37,6 +37,10 @@
 //   ORPHAN       → manifest row with no catalog record — REPORT ONLY
 //                  (Promote's adopt path or a rescan restores it; this
 //                  job never invents catalog records).
+//   NOT LOCKED   → (Rick 2026-09-27) an in-archive file present on disk
+//                  without its user-immutable flag. REPORT ONLY — counted,
+//                  named in the log, never changed here ("Lock archive
+//                  files…" is the verb that locks). Never turns the row red.
 //   UNMANIFESTED → catalog archive copy with no manifest row — re-hash
 //                  if the file exists, report; never append a manifest
 //                  row (the manifest is Promote's to write, and a fresh
@@ -254,6 +258,8 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         /// between plan and write (codex #983). Overlaps the verdict
         /// counters: a skipped mismatch is in `mismatch` AND here.
         var changedUnderVerify = 0
+        /// Present in the archive but NOT locked (report only).
+        var notLocked = 0
         var bytesDone: Int64 = 0
     }
     private(set) var tally = Tally()
@@ -283,6 +289,12 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     /// applied — the exact window a same-path rescan merge or another
     /// fixity writer can land in. Production never sets it.
     var testHookAfterHash: (@MainActor (VerifyArchivePlan.Item) -> Void)?
+
+    /// Is this archive file locked? (production = fstat UF_IMMUTABLE through
+    /// the contained chain). nil = could not tell — not reported.
+    var isLockedProbe: @Sendable (_ root: String, _ relPath: String) -> Bool? = ArchiveFileLock.liveIsLocked
+    /// The in-archive files found NOT locked, archive-relative (report only).
+    private(set) var notLockedFiles: [String] = []
 
     var title: String { "Verify Archive Copies" }
     var subtitle: String {
@@ -605,6 +617,15 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         // changed while the bytes were being read.
         testHookAfterHash?(item)
 
+        // Report-only lock check for a file that IS there (Rick 2026-09-27).
+        if actualOrNil != nil, let rel = item.relPath {
+            let probe = isLockedProbe
+            if await Task.detached(operation: { probe(root, rel) }).value == false {
+                tally.notLocked += 1
+                notLockedFiles.append(rel)
+            }
+        }
+
         guard let actual = actualOrNil?.lowercased() else {
             // Absent — but absent from WHAT? If the archive root itself is
             // gone (volume yanked mid-run), no file under it can be judged
@@ -802,6 +823,12 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             finishCancelled()
             return
         }
+        if tally.notLocked > 0 {
+            let names = notLockedFiles.prefix(20).joined(separator: ", ")
+            let more = notLockedFiles.count > 20 ? " … and \(notLockedFiles.count - 20) more" : ""
+            model.log("Verify Archive: \(tally.notLocked) archived file(s) are NOT locked (report only — Promote locks new files; files from before locking existed are locked by the one-time catch-up): \(names)\(more)")
+            appLog.write("verify archive NOT LOCKED (\(tally.notLocked)): \(notLockedFiles.joined(separator: ", "))")
+        }
         // ONE line per run for the race skips (never per-record spam).
         if tally.changedUnderVerify > 0 {
             model.log("Verify Archive: \(tally.changedUnderVerify) record(s) changed under Verify; re-run to settle them.")
@@ -834,6 +861,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         if t.unmanifested > 0 { parts.append("\(t.unmanifested) unmanifested") }
         if t.failed > 0 { parts.append("\(t.failed) failed") }
         if t.changedUnderVerify > 0 { parts.append("\(t.changedUnderVerify) changed under Verify — re-run to settle") }
+        if t.notLocked > 0 { parts.append("\(t.notLocked) not locked") }
         return parts.joined(separator: " · ")
     }
 

@@ -97,6 +97,7 @@ enum FamilyMusicShelf {
                                            originEncoder: rec.originEncoder,
                                            inferredRecordDate: rec.inferredRecordDate,
                                            inferredDateConfidence: rec.inferredDateConfidence,
+                                           inferredDateRange: rec.inferredDateRange,
                                            filename: rec.filename.isEmpty ? nil : rec.filename)
         return r.precision <= .year ? r.year : nil
     }

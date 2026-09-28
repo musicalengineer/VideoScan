@@ -46,8 +46,16 @@ extension VideoScanModel {
     /// Every path that flips purgedAt / lifecycleStage / setAsideReason /
     /// supersededByID outside the banner-armed purge/tidy/confirm flows
     /// must call this after its batch.
+    ///
+    /// Rules v13 (QA MAJOR-1, 2026-09-26): the Archive Angel hears it too.
+    /// A footage regroup, a footage decision, a Master Archive designation
+    /// change or a lifecycle flip is a CATALOG change the coverage rules
+    /// read (the per-year backlog, the archived set), and only the
+    /// `records` didSet reached `archiveAngel.catalogChanged()` before.
+    /// O(1): an integer bump and two debounced schedules.
     func noteCatalogRecordsMutated() {
         notifyVolumeAggregatesStale()
+        archiveAngel.catalogChanged()
     }
 
     @discardableResult

@@ -20,12 +20,20 @@ extension VideoScanModel {
     // non-nil dossierProcessedAt is enough). The UI can offer "re-
     // dossier with current stack" via force=true if the engine
     // version drifts and the user wants a fresh pass.
+    //
+    // GH #201 (2026-09-26): the date is TRIANGULATED — every criterion
+    // (burn-ins, spoken now-cues, ages + People-tab birth years, the
+    // folder year, a camera stamp) is combined, constrained by the export
+    // stamp / media-era floor / catalog priors, and the record gets the
+    // point date, its year span and the WRITTEN reason. A filesystem or
+    // container time is never an inferred date any more: no evidence ⇒
+    // nil, reason "no evidence".
 
     /// Apply a fresh dossier extraction (and optional Whisper transcript)
     /// to a single catalog record by path. Triangulates the record's
-    /// inferred date from OCR + path-year + file mtime via
-    /// `pfInferRecordDate`. Stamps `dossierProcessedAt` + `dossierProcessedBy`
-    /// for idempotent-skip on the next pass.
+    /// inferred date via `pfTriangulateRecordDate` (DateTriangulator.swift).
+    /// Stamps `dossierProcessedAt` + `dossierProcessedBy` for idempotent-skip
+    /// on the next pass.
     ///
     /// - Parameters:
     ///   - extraction: Output of `CaptionRunner.dossier(...)`. Scenes
@@ -77,23 +85,24 @@ extension VideoScanModel {
             record.audioTranscriptDate  = now
         }
 
-        // Date triangulation — pure helper, depends only on the signals
-        // we just wrote plus the file's existing time hints.
-        let ocrStrings = extraction.dates.map(\.text)
-        let yearHints  = pfPathYearHints(in: path)
-        let inferred = pfInferRecordDate(
-            ocrDateCandidates:      ocrStrings,
-            audioTranscript:        transcript,
-            sceneCaptionTexts:      extraction.scenes.map(\.text),
-            pathYearHints:          yearHints,
-            fileMtime:              record.dateModifiedRaw,
-            containerCreationTime:  record.dateCreatedRaw
-        )
-        record.inferredRecordDate     = inferred.date
-        record.inferredDateConfidence = inferred.confidence
-        // This IS the record's own pass — whatever it inherited before
-        // (a propagated / folder-year placeholder) is superseded.
-        record.inferredDateSource     = nil
+        // Date triangulation (GH #201) — pure helper over the signals we
+        // just wrote plus the record's own format / stamp / folder facts.
+        // This IS the record's own pass — whatever it inherited before (a
+        // propagated / folder-year / footage-shared placeholder) is
+        // superseded, so the source is nil.
+        var input = Self.triangulationInput(for: record, people: dateInferencePeopleResolved,
+                                            includePathHints: true, now: now)
+        input.pathHintStandsAlone = true   // a full pass ran: the folder year may stand alone
+        let inferred = pfTriangulateRecordDate(input)
+        // Rick 2026-09-27: a Master Archive file keeps its filed date — the
+        // channels above are metadata notes and land; the date does not
+        // move (its own archive folder would otherwise feed the folder-year
+        // hint straight back into it). The narrative line below still says
+        // what the pass concluded, so nothing is lost.
+        let archivedFile = isArchiveElement(record)
+        if !archivedFile {
+            Self.applyTriangulation(inferred, to: record, source: nil)
+        }
 
         // Provenance — stack id matches the Python POC shape:
         //   "qwen2.5-vl-3b-4bit+whisper-medium-mlx-q4"
@@ -115,8 +124,9 @@ extension VideoScanModel {
 
         // Same bytes, same date (Rick 2026-09-12): every other active copy
         // of this content that has no date of its own gets this one, with
-        // provenance. Never overwrites a user date or an existing
-        // inference — see VideoScanModel+DateInference.
+        // provenance; and (GH #201) the footage group settles on its
+        // strongest claim. Never overwrites a user date — see
+        // VideoScanModel+DateInference.
         propagateInferredDate(from: record)
 
         // Narrative log — one line per file. Same shape as applyCaptions
@@ -126,6 +136,10 @@ extension VideoScanModel {
         let confStr  = String(format: "%.2f", inferred.confidence)
         let txtSummary = transcript.map { $0.isEmpty ? "no speech" : "\($0.count) char(s)" } ?? "no whisper"
         appLog.write("Catalog: dossier \(filename) — \(extraction.scenes.count) scene(s), \(extraction.dates.count) date(s), \(extraction.texts.count) text(s); transcript \(txtSummary); inferred \(dateStr) (conf \(confStr)) [\(stackID)]")
+        if archivedFile {
+            // A separate line (the one above keeps its format).
+            appLog.write("Catalog: dossier \(filename) — archived file: date left as filed (\(record.resolvedDateDisplay))")
+        }
         return true
     }
 }
@@ -151,12 +165,15 @@ nonisolated func pfPathYearHints(in fullPath: String) -> [Int] {
     let nsPath = fullPath as NSString
     let directory = nsPath.deletingLastPathComponent
     let parts = (directory as NSString).pathComponents
-    let regex = try? NSRegularExpression(pattern: #"(?<![\d])((?:19|20)\d{2})(?![\d])"#)
+    // Compiled once (GH #201: the catch-up pass now reads folder hints for
+    // every evidence-bearing row; the old per-call compile was the cost).
+    guard let regex = DateTriangulationRegex.directoryYear else { return [] }
     var hints: [Int] = []
     // Walk components from deepest to shallowest so the closest
     // directory's year wins.
     for component in parts.reversed() {
-        guard let regex else { break }
+        // Cheap gate: no "19"/"20" digits, no year.
+        guard component.contains("19") || component.contains("20") else { continue }
         let range = NSRange(component.startIndex..., in: component)
         let matches = regex.matches(in: component, range: range)
         for match in matches {

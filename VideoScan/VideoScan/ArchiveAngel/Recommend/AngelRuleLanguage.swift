@@ -77,6 +77,10 @@ enum AngelField: String, CaseIterable, Sendable {
     // Numbers
     case durationSeconds, durationMinutes, sizeMB, averageKbps, starRating, junkScore
     case tagCount, useCount, peopleCount, year, captureYear, duplicateGroupCount
+    /// Rules v12: how many years ago the ONE date rule places the file
+    /// (now's year − RecordDateResolver's year — the date Promote would
+    /// file it under). Nil when undated, so a comparison never matches.
+    case yearsAgo
     // Lists of names (case-insensitive)
     case people, machinePeople
     // Choices (one of a fixed set of names)
@@ -85,6 +89,9 @@ enum AngelField: String, CaseIterable, Sendable {
     case isPhoneClip, isLivePhotoMotion, isHumanMarked, hasUserNotes, formatAtRisk, isOnlyCopy
     case isPairedHalf, volumeOnline, isOnMasterArchive, hasArchivedDuplicate, hasDuplicateGroup
     case hasUserDate, hasCaptions, hasOCRText
+    /// Rules v12 (QA v12 #5): a camera or phone is named in the tags —
+    /// a make OR a model, the same test RecordDateResolver trusts at 0.95.
+    case hasCameraOrigin
     // Classifier-only facts (the `recommend.classes` rules): the Angel's
     // grade, whether the record passed the floors, the vouch tally, the
     // date rule's answer.
@@ -99,7 +106,7 @@ enum AngelField: String, CaseIterable, Sendable {
         switch self {
         case .filename, .path, .videoCodec, .deviceModel, .volumeName: return .text
         case .durationSeconds, .durationMinutes, .sizeMB, .averageKbps, .starRating, .junkScore,
-             .tagCount, .useCount, .peopleCount, .year, .captureYear, .duplicateGroupCount, .vouchPoints:
+             .tagCount, .useCount, .peopleCount, .year, .captureYear, .duplicateGroupCount, .vouchPoints, .yearsAgo:
             return .number
         case .people, .machinePeople: return .textList
         case .mediaDisposition: return .choice(MediaDisposition.allCases.map(Self.name))
@@ -109,7 +116,7 @@ enum AngelField: String, CaseIterable, Sendable {
         case .grade: return .choice(ArchiveAngelGrade.allCases.map(\.rawValue))
         case .isPhoneClip, .isLivePhotoMotion, .isHumanMarked, .hasUserNotes, .formatAtRisk, .isOnlyCopy,
              .isPairedHalf, .volumeOnline, .isOnMasterArchive, .hasArchivedDuplicate, .hasDuplicateGroup,
-             .hasUserDate, .hasCaptions, .hasOCRText, .eligible, .vouched, .dated:
+             .hasUserDate, .hasCaptions, .hasOCRText, .hasCameraOrigin, .eligible, .vouched, .dated:
             return .flag
         }
     }
@@ -498,6 +505,7 @@ struct AngelEvalContext {
             originEncoder: c.originEncoder,
             inferredRecordDate: c.inferredRecordDate,
             inferredDateConfidence: c.inferredDateConfidence,
+            inferredDateRange: c.inferredDateRange,
             filename: c.filename.isEmpty ? nil : c.filename,
             now: now)
         resolution = r
@@ -533,8 +541,14 @@ struct AngelEvalContext {
         }
     }
 
-    func number(_ f: AngelField, _ c: ArchiveAngelCandidate) -> Double? {
+    mutating func number(_ f: AngelField, _ c: ArchiveAngelCandidate) -> Double? {
         switch f {
+        case .yearsAgo:
+            // The resolved date (cached with `dated`), never the raw file-date
+            // guess: a 1990 camera stamp on a file whose inferred guess says
+            // 2026 is 36 years ago, not 0.
+            guard let y = dateResolution(c).year else { return nil }
+            return Double(ArchiveAngelCandidate.utcCalendar.component(.year, from: now) - y)
         case .durationSeconds: return c.durationSeconds
         case .durationMinutes: return c.durationSeconds / 60
         case .sizeMB: return Double(c.sizeBytes) / 1_000_000
@@ -578,6 +592,12 @@ struct AngelEvalContext {
         case .hasArchivedDuplicate: return c.hasArchivedDuplicate
         case .hasDuplicateGroup: return c.duplicateGroupID != nil
         case .hasUserDate: return !(c.userDate ?? "").isEmpty
+        // GH #201: a make with NO model ("Apple", no model — a Final Cut /
+        // QuickTime export) is not a camera; the ONE device rule lives in
+        // RecordDateResolver.namesDevice (GoPro / DJI stay cameras).
+        case .hasCameraOrigin:
+            return RecordDateResolver.namesDevice(originMake: c.originMake,
+                                                  originModel: c.deviceModel.isEmpty ? nil : c.deviceModel)
         case .hasCaptions: return c.hasCaptions
         case .hasOCRText: return c.hasOCRText
         default: return false
@@ -644,9 +664,17 @@ enum AngelRuleKind: String, CaseIterable, Sendable {
     case notVideo, onMasterArchive, archivedCopy, notPlayable, pairedHalf, livePhotoMotion, recentPhoneClip
     case appCache, derivativeOfOriginal, tooShort, proxyStream, markedJunk, suspectedJunk, junkScore
     case volumeOffline, resting
+    /// Rules v12: a file inside the Angel's own buffer (a safety floor).
+    case angelWorkingCopy
     // Signals (built-in evidence lines; points come from `weights`).
     case confirmedPeople, machinePeople, playHistory, richness, date, duration, formatAtRisk, onlyCopy
     case unassignedVolume, audioProblem, downloadCap, fatigue
+    /// Rules v13 coverage: a year with a deep unarchived backlog and few
+    /// archived files earns points (`coverage.backlogBonusMax`, scaled by
+    /// the share of the year still to archive; `backlogMinimumUnarchived`
+    /// gates it). Reads the per-year table the sweep's pre-pass wrote onto
+    /// the candidate; says nothing when that pass has not run.
+    case backlogBonus
 }
 
 enum AngelRuleSection: String, Sendable {
@@ -657,10 +685,10 @@ enum AngelRuleSection: String, Sendable {
         case .floors:
             return [.match, .notVideo, .onMasterArchive, .archivedCopy, .notPlayable, .pairedHalf, .livePhotoMotion,
                     .recentPhoneClip, .appCache, .derivativeOfOriginal, .tooShort, .proxyStream, .markedJunk,
-                    .suspectedJunk, .junkScore, .volumeOffline, .resting]
+                    .suspectedJunk, .junkScore, .volumeOffline, .resting, .angelWorkingCopy]
         case .signals:
             return [.match, .stars, .confirmedPeople, .machinePeople, .playHistory, .richness, .date, .duration,
-                    .formatAtRisk, .onlyCopy, .unassignedVolume, .audioProblem, .downloadCap, .fatigue]
+                    .formatAtRisk, .onlyCopy, .unassignedVolume, .audioProblem, .backlogBonus, .downloadCap, .fatigue]
         case .vouch:
             return [.match, .stars]
         case .exclude:
@@ -833,6 +861,10 @@ extension ArchiveAngelRejection {
         case .fileGone: return "fileGone"
         case .extraCopy: return "extraCopy"
         case .notRecommendedNow: return "notRecommendedNow"
+        case .angelWorkingCopy: return "angelWorkingCopy"
+        case .footageOriginalArchived: return "footageOriginalArchived"
+        case .sameEventAsPick: return "sameEventAsPick"
+        case .yearCoverage: return "yearCoverage"
         }
     }
 

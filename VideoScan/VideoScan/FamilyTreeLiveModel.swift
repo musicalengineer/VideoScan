@@ -114,8 +114,26 @@ struct FamilyTreeRelatives: Equatable {
 struct FamilyTreeAnchor: Identifiable, Equatable {
     let id: String
     let label: String
-    /// True for the root: the label reads "your …" instead of "Donna's …".
+    /// True for a home person of the tree (every root of a merged tree).
     let isRoot: Bool
+    /// True only for the anchor that IS the reader: the pinned owner, or
+    /// the root of a single-root tree (the first-INDI assumption). Its
+    /// relation reads "your …"; every other anchor is named ("Donna's …").
+    ///
+    /// Separate from `isRoot` since 2026-09-27 (Tree Walk STEP 0, Rick:
+    /// "the joined trees can sometimes think someone is my ancestor even
+    /// though we're walking Donna's tree"). A merged tree has TWO roots;
+    /// with no owner pin both read "your", so Donna's grandmother appeared
+    /// as "your grandmother" in Donna's row. Two home people and no pin
+    /// means nobody is "you".
+    let readsAsYou: Bool
+
+    init(id: String, label: String, isRoot: Bool, readsAsYou: Bool? = nil) {
+        self.id = id
+        self.label = label
+        self.isRoot = isRoot
+        self.readsAsYou = readsAsYou ?? isRoot
+    }
 }
 
 /// One "Line to X" button for the selected person: the path when they are
@@ -177,6 +195,11 @@ final class FamilyTreeLiveModel: ObservableObject {
     @Published private(set) var filteredPeople: [FamilyTreePersonSummary] = [] {
         didSet { filteredIndexByIDCache = nil }
     }
+    /// One line above the list when the search had to loosen up
+    /// (2026-09-26): "Close matches" when nothing matched the typed tokens
+    /// exactly, "Includes close matches" when the exact rows were too few
+    /// and approximate ones were added below them. nil otherwise.
+    @Published private(set) var searchCaption: String?
     /// What the loader is doing while `loadState == .loading` ("Compiling
     /// family tree (16,383 people)…"); nil otherwise. A first import of a
     /// big pull compiles for a few seconds — the caption is the progress.
@@ -382,6 +405,13 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// (off the main thread when loaded from disk) so a filter maps row
     /// numbers to ready-made summaries.
     private var summariesInOrder: [FamilyTreePersonSummary] = []
+    /// Token / fuzzy name search over `summariesInOrder` (VideoScanCore),
+    /// built with the launch bundle — never per keystroke.
+    private var nameSearch: FamilyTreeNameSearch?
+    /// People-tab knowledge for the search (which rows have a profile,
+    /// their nicknames), memoized per (profiles snapshot, installed tree)
+    /// the same way `bridgeMemo` is.
+    private var searchOverlayMemo: (profiles: [POIProfile], sourceKey: String?, overlay: FamilyTreeNameSearch.Overlay)?
     /// Where compiled artifacts live; nil = parse every load (tests).
     private let compiledStore: FamilyGraphCompiledStore?
     /// "Refresh from FamilySearch…" fact overlay for a model that loads
@@ -621,6 +651,10 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// except hiding a record he has called a duplicate; not knowing who
     /// someone is must never hide them.
     private(set) var identityDecisions = FamilyIdentityDecisions()
+    /// True while a ruling exists only in memory (the archive was not
+    /// writable when it was made): a reload must not replace it with the
+    /// file's older contents.
+    private var identityRulingsUnsaved = false
 
     /// True when Rick has ruled this record is a duplicate of another. The
     /// ruling is keyed on the FamilySearch id, so it survives the re-pull
@@ -747,7 +781,10 @@ final class FamilyTreeLiveModel: ObservableObject {
         // loader. Either way the bundle is built here, off the main actor.
         let configuration = usesSharedCache ? FamilyAssetConfigurationCenter.shared.snapshot() : nil
         let overlayStore = personRefreshOverlayStore
-        let loaded = await Task.detached(priority: .userInitiated) { [weak self] () -> (FamilyGraphFileLoader.Outcome, FamilyTreeLaunchBundle?) in
+        let rulings = identityDecisions
+        let keepInMemoryRulings = identityRulingsUnsaved
+        let loaded = await Task.detached(priority: .userInitiated) { [weak self] ()
+            -> (FamilyGraphFileLoader.Outcome, FamilyTreeLaunchBundle?, FamilyIdentityDecisions?) in
             let progress: (String) -> Void = { phase in
                 Task { @MainActor [weak self] in
                     guard let self, self.loadGeneration == generation else { return }
@@ -766,12 +803,22 @@ final class FamilyTreeLiveModel: ObservableObject {
                 mark = clock.now
                 let bundle = shared.loaded.map { FamilyTreeLaunchBundle.Cache.shared.bundle(for: $0, settings: settings) }
                 Self.logStep("load: launch bundle (rows + identity + anchors)", took: clock.now - mark, people: people)
-                return (outcome, bundle)
+                // The shared cache ruled `outcome.graph` from the file on
+                // disk; the tab adopts the same file so its menus and its
+                // installed graph agree with Hallie (codex #1710/#1711).
+                // Rulings this model holds only in memory (a read-only
+                // archive) are kept.
+                let onDisk = keepInMemoryRulings ? nil
+                    : FamilyIdentityDecisions.load(from: directory, log: { appLog.write($0) })
+                return (outcome, bundle, onDisk)
             }
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)
             loader.compiledStore = store
             loader.progress = progress
-            let outcome = Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory)
+            var outcome = Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory)
+            // The same ruled view the shared cache hands out (codex #1711),
+            // before the bundle is built from it.
+            if let raw = outcome.graph { outcome = outcome.replacingGraph(raw.applyingIdentityRulings(rulings)) }
             let people = outcome.graph?.people.count ?? 0
             Self.logStep("load: decode/parse", took: clock.now - mark, people: people)
             // Sidebar rows, the group-photo identity directory and the
@@ -780,7 +827,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             mark = clock.now
             let bundle = outcome.graph.map { FamilyTreeLaunchBundle.build(graph: $0, settings: settings) }
             Self.logStep("load: launch bundle (rows + identity + anchors)", took: clock.now - mark, people: people)
-            return (outcome, bundle)
+            return (outcome, bundle, nil)
         }.value
         guard generation == loadGeneration else {
             // A genuinely newer LOAD is in flight and will install; this
@@ -792,6 +839,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             return
         }
         loadPhase = nil
+        if let onDisk = loaded.2, !identityRulingsUnsaved { identityDecisions = onDisk }
         install(outcome: loaded.0, bundle: loaded.1)
         loadedAppearanceSettings = settings
         if isLive, let revision { loadedRevision = revision }
@@ -1035,16 +1083,27 @@ final class FamilyTreeLiveModel: ObservableObject {
     private func installSteps(graph newGraph: GedcomFamilyGraph?,
                               bundle: FamilyTreeLaunchBundle?,
                               settings: FamilyTreeLaunchBundle.Settings) {
+        // Every installed graph is the RULED query view (codex #1711):
+        // the shared-cache path arrives ruled (this is then a no-op — same
+        // rulings, same value), an injected or synchronous loader's graph
+        // is ruled here. Before 2026-09-23 the installed graph carried no
+        // suppression at all; only the sidebar filter hid the rows.
+        let newGraph = newGraph.map { $0.applyingIdentityRulings(identityDecisions) }
         loadWarning = nil
         let previousPerson = selectedID.flatMap { graph?.people[$0] }
         let sourceKey = newGraph.map(Self.sourceKey)
-        if sourceKey != installedSourceKey {
+        let treeChanged = sourceKey != installedSourceKey
+        let walkReason = installedSourceKey == nil ? "tree loaded" : "tree refreshed"
+        if treeChanged {
             photoOverrides.removeAll()
             photoOverrideSources.removeAll()
             installedSourceKey = sourceKey
             clearDocumentsCache()
         }
         graph = newGraph
+        // Walk Tree decorations follow the tree (Rick 2026-09-27): a silent,
+        // debounced re-walk when decorations.json is missing or stale.
+        if treeChanged, newGraph != nil { walkCenter?.treeDidChange(newGraph, reason: walkReason) }
         bookmarkSourceTransition = false
         kinshipCenter?.install(graph: newGraph)
         // Everything O(people) lives in the bundle (rows, identity
@@ -1064,13 +1123,16 @@ final class FamilyTreeLiveModel: ObservableObject {
             anchors = ready.anchors
             anchorsCaption = ready.anchorsCaption
             anchorIndexes = ready.anchorIndexes
+            nameSearch = ready.search
         } else {
             summariesInOrder = []
             peopleCount = FamilyTreeDemoData.people.count
             anchors = []
             anchorsCaption = nil
             anchorIndexes = [:]
+            nameSearch = nil
         }
+        searchOverlayMemo = nil
         loadState = .loaded(live: newGraph != nil)
         lineCache.removeAll()
         lineChain = nil
@@ -1184,6 +1246,7 @@ final class FamilyTreeLiveModel: ObservableObject {
                 ? FamilyTreeBookmarks() : FamilyTreeBookmarks.load(from: directory)
         }
         if sourceChanged {
+            identityRulingsUnsaved = false
             identityDecisions = source.access == .unavailable
                 ? FamilyIdentityDecisions()
                 : FamilyIdentityDecisions.load(from: directory, log: { appLog.write($0) })
@@ -1483,8 +1546,12 @@ final class FamilyTreeLiveModel: ObservableObject {
         guard !leads.isEmpty else { return [] }
         var out: [FamilyTreeAnchor] = []
         var seen: Set<String> = []
+        // "You" is the pinned owner, or the lone root of a single-root
+        // tree. Two roots and no pin: nobody is assumed to be the reader.
+        let pinned = graph.person(familySearchID: ownerFamilySearchID) != nil
         for root in leads where seen.insert(root.id).inserted {
-            out.append(FamilyTreeAnchor(id: root.id, label: firstGivenName(root), isRoot: true))
+            out.append(FamilyTreeAnchor(id: root.id, label: firstGivenName(root), isRoot: true,
+                                        readsAsYou: pinned || leads.count == 1))
         }
         for root in leads {
             for spouse in graph.relatives(.spouse, of: root) where seen.insert(spouse.id).inserted {
@@ -1500,6 +1567,13 @@ final class FamilyTreeLiveModel: ObservableObject {
                                                  ownerFamilySearchID: String?) -> String? {
         HallieOwnerResolver.stalePinLine(familySearchID: ownerFamilySearchID, graph: graph)
             .map { $0 + " No “Line to” anchors until then." }
+    }
+
+    /// "your great-grandmother" for the reader's own anchor, "Donna's …"
+    /// for every other (see `FamilyTreeAnchor.readsAsYou`).
+    nonisolated static func relationPhrase(anchor: FamilyTreeAnchor, generations: Int, sex: String) -> String {
+        (anchor.readsAsYou ? "your" : anchor.label + "'s") + " "
+            + GedcomFamilyGraph.generationLabel(generations: generations, sex: sex)
     }
 
     /// "Richard Harding Breen Jr" → "Richard"; a lone surname or empty
@@ -1550,10 +1624,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         } else {
             let options = anchors.map { anchor -> FamilyTreeLineOption in
                 let generations = anchorIndexes[anchor.id]?.generations(from: id)
-                let relation = generations.map { n -> String in
-                    let possessive = anchor.isRoot ? "your" : anchor.label + "'s"
-                    return possessive + " " + GedcomFamilyGraph.generationLabel(
-                        generations: n, sex: graph?.people[id]?.sex ?? "")
+                let relation = generations.map { n in
+                    Self.relationPhrase(anchor: anchor, generations: n, sex: graph?.people[id]?.sex ?? "")
                 }
                 return FamilyTreeLineOption(anchor: anchor, generations: generations, relation: relation)
             }
@@ -1804,6 +1876,21 @@ final class FamilyTreeLiveModel: ObservableObject {
             familySearchID: person.familySearchID)
     }
 
+    // MARK: - Walk Tree (2026-09-27)
+
+    /// Who keeps the Walk Tree decorations current. nil in the test host
+    /// (a synthetic tree must never rewrite the real decorations.json —
+    /// the settings-pollution class); tests that want it inject a scratch
+    /// center.
+    var walkCenter: FamilyTreeWalkCenter? = TestEnvironment.isTestHost ? nil : .shared
+
+    /// The installed graph for the Family Tree Walk; nil for the demo tree.
+    /// Read-only — a value copy (copy-on-write, no records are copied).
+    var walkGraph: GedcomFamilyGraph? { isLive ? graph : nil }
+
+    /// Bookmarked people in sidebar order, for the Walk sheet's quick list.
+    var walkBookmarkedPeople: [FamilyTreePersonSummary] { bookmarkedPeopleInOrder }
+
     // MARK: - Verify Tree
 
     /// Last verification pass, nil until one is run. Rick, 2026-08-30:
@@ -1931,10 +2018,13 @@ final class FamilyTreeLiveModel: ObservableObject {
             existing.duplicateOf = nil
             updated.record(existing)
         }
-        identityDecisions = updated
+        // SAVE FIRST (codex #1710): a ruling the disk refused must not be
+        // in force in this tab alone — Hallie reads the file, so the two
+        // would disagree until relaunch. A failed save changes nothing.
         if let directory = bookmarksDirectory ?? originalsDirectory as URL?, sourceAccess == .readWrite {
             do {
                 try updated.save(to: directory)
+                identityRulingsUnsaved = false
                 appLog.write("Family Tree: \(hidden ? "HID" : "un-hid") \(person.name) (\(fsid)) — "
                     + "\(updated.suppressedFamilySearchIDs.count) record(s) now hidden")
             } catch {
@@ -1942,25 +2032,25 @@ final class FamilyTreeLiveModel: ObservableObject {
                 return false
             }
         } else {
+            identityRulingsUnsaved = true
             appLog.write("Family Tree: ruling for \(fsid) kept in memory only — the archive is not writable")
         }
-        // Copy first: `suppressedIDs(in:)` reads `graph` while the
-        // assignment needs exclusive access to it.
-        let recomputed = suppressedIDs(in: graph)
-        graph?.suppressedPersonIDs = recomputed
+        identityDecisions = updated
+        // The installed graph becomes the ruled view of the NEW rulings —
+        // the same function the shared cache uses, so hidden records,
+        // redirects and relationship edges all move together (the old code
+        // recomputed only the hidden set, leaving redirects stale).
+        graph = graph?.applyingIdentityRulings(updated)
+        kinshipCenter?.install(graph: graph)
+        walkCenter?.treeDidChange(walkGraph, reason: "identity ruling")
+        // Hallie: FamilyGraphSharedCache keys on the rulings file's content
+        // revision, so the save above makes its next turn re-rule the
+        // cached tree (no decode). No explicit invalidation needed — and a
+        // hand edit of the file reaches it the same way.
         PersonPhotoCenter.shared.invalidate()
         refilter()
         rebuildScene()
         return true
-    }
-
-    private func suppressedIDs(in graph: GedcomFamilyGraph?) -> Set<String> {
-        guard let graph else { return [] }
-        let ids = identityDecisions.suppressedFamilySearchIDs
-        guard !ids.isEmpty else { return [] }
-        return Set(graph.people.values.compactMap {
-            ($0.familySearchID.map(ids.contains) ?? false) ? $0.id : nil
-        })
     }
 
     func notePhotoChoiceWritten() {
@@ -2300,6 +2390,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             return
         }
         let needle = searchText.trimmingCharacters(in: .whitespaces)
+        searchCaption = nil
         guard !needle.isEmpty else {
             let all = showsBookmarkedPeopleOnly ? bookmarkedPeopleInOrder
                 : (isLive ? summariesInOrder : FamilyTreeDemoData.people)
@@ -2311,12 +2402,28 @@ final class FamilyTreeLiveModel: ObservableObject {
             return
         }
         if let graph, isLive {
-            // Case-insensitive substring over name, alternate names,
-            // surname(s), pointer and FamilySearch ID — one memmem sweep
-            // over the compiled sidebar haystack (GedcomFamilyGraph+Index),
-            // then rows → ready-made summaries. Same rows as the old
-            // per-person localizedCaseInsensitiveContains scan
-            // (GedcomIndexEquivalenceTests pins it on the real export).
+            // Ranked token / fuzzy search (FamilyTreeNameSearch, 2026-09-26):
+            // every typed token must prefix-match a name token (any order,
+            // apostrophes and case folded), with a bounded-edit-distance
+            // fallback when that finds fewer than five rows. Rows come back
+            // scored — exact > prefix > fuzzy, then a slight lean toward
+            // People-tab profiles and recent births — as positions into
+            // `summariesInOrder`. Suppression and the bookmark scope apply
+            // after ranking, as they did to the substring filter.
+            if let search = nameSearch {
+                let result = search.search(needle, overlay: searchOverlay(graph: graph, search: search))
+                filteredPeople = result.hits.compactMap { hit in
+                    let person = summariesInOrder[Int(hit.row)]
+                    guard !isSuppressedRecord(person.id) else { return nil }
+                    return !showsBookmarkedPeopleOnly || bookmarks.contains(person.id) ? person : nil
+                }
+                searchCaption = Self.searchCaption(for: result)
+                return
+            }
+            // No search table (never expected once the bundle carries it):
+            // the old case-insensitive substring over the compiled sidebar
+            // haystack (GedcomFamilyGraph+Index), same rows as the original
+            // per-person scan (GedcomIndexEquivalenceTests still pins it).
             let rows = graph.index.sidebarRows(containing: needle.lowercased())
             filteredPeople = rows.compactMap { row in
                 let person = summariesInOrder[Int(row)]
@@ -2331,6 +2438,48 @@ final class FamilyTreeLiveModel: ObservableObject {
                 || ($0.surname?.localizedCaseInsensitiveContains(needle) ?? false)
                 || $0.reference.localizedCaseInsensitiveContains(needle)
         }
+    }
+
+    /// The caption for a ranked result: nil while every row matched the
+    /// typed tokens; otherwise says that approximate rows are present.
+    nonisolated static func searchCaption(for result: FamilyTreeNameSearch.Result) -> String? {
+        guard result.includesCloseMatches else { return nil }
+        return result.exactCount == 0 ? "Close matches" : "Includes close matches"
+    }
+
+    /// People-tab rows and nicknames for the search, through the SAME
+    /// fail-closed bridge the cards use (`PersonPhotoBridge.Snapshot`: a
+    /// pin wins; otherwise the profile's spellings must reach exactly one
+    /// record). A profile that bridges nobody contributes nothing — the
+    /// bias is neutral, never a guess. Memoized per (profiles, tree);
+    /// comparing a dozen profile structs per keystroke is cheap.
+    private func searchOverlay(graph: GedcomFamilyGraph, search: FamilyTreeNameSearch) -> FamilyTreeNameSearch.Overlay {
+        let profiles = profilesProvider()
+        if let memo = searchOverlayMemo, memo.profiles == profiles, memo.sourceKey == installedSourceKey {
+            return memo.overlay
+        }
+        var overlay = FamilyTreeNameSearch.Overlay()
+        if !profiles.isEmpty {
+            let snapshot = PersonPhotoBridge.Snapshot(
+                profiles: profiles, graph: graph,
+                fingerprint: { [weak self] in self?.kinshipCenter?.graphFingerprint })
+            for profile in profiles {
+                guard let person = snapshot.treePerson(for: profile),
+                      let ordinal = graph.index.ordinal(of: person.id),
+                      Int(ordinal) < search.rowByOrdinal.count else { continue }
+                let row = search.rowByOrdinal[Int(ordinal)]
+                overlay.profileRows.insert(row)
+                var tokens = overlay.aliasTokens[row] ?? []
+                for spelling in [profile.name] + profile.aliases {
+                    for token in FamilyTreeNameSearch.queryTokens(spelling) where !tokens.contains(token) {
+                        tokens.append(token)
+                    }
+                }
+                if !tokens.isEmpty { overlay.aliasTokens[row] = tokens }
+            }
+        }
+        searchOverlayMemo = (profiles, installedSourceKey, overlay)
+        return overlay
     }
 
     private func rebuildSelection() {

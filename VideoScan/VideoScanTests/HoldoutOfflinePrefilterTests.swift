@@ -200,6 +200,6 @@ struct HoldoutOfflinePrefilterTests {
             _ = HoldoutNavigation.hiddenPendingCounts(
                 rows: bigRows, inFlight: [], offlineExcluded: offline, unplayableExcluded: [])
         }
-        #expect(elapsed < .seconds(2))
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)))
     }
 }

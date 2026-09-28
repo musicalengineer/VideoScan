@@ -224,7 +224,7 @@ struct HallieKindWordsDecisionTests {
         var memory = Memory()
         let rotation = HallieKindWordsRotation()
         let result = KindFixture.biographyResult(name: nil)
-        let offer = try #require(offer(for: result))
+        let offer = try #require(self.offer(for: result))
         var logged: [String] = []
 
         let first = HallieKindWords.apply(offer, to: result, memory: &memory, rotation: rotation,
@@ -257,7 +257,7 @@ struct HallieKindWordsDecisionTests {
         // the book is keyed by UUID, so the line still follows her.
         let renamed = KindFixture.ellenProfile(name: "Eleanor", aliases: ["Nell"])
         let result = KindFixture.biographyResult(name: nil, prose: "Eleanor is in the People tab.")
-        let offer = try #require(offer(for: result, typed: "Nell", profiles: [renamed]))
+        let offer = try #require(self.offer(for: result, typed: "Nell", profiles: [renamed]))
         #expect(offer.uuid == KindFixture.ellenUUID)
         #expect(offer.lines == KindFixture.ellenLines)
         // …and the old spelling no longer claims anyone.
@@ -283,7 +283,7 @@ struct HallieKindWordsDecisionTests {
         let pinned = KindFixture.ellenProfile(treeIdentity: .familySearchID("ZZZZ-111"))
         let result = KindFixture.biographyResult(name: "Ellen Marie Fixture",
                                                  prose: "Ellen Marie Fixture is in the family tree.")
-        let offer = try #require(offer(for: result, typed: "ellen", profiles: [pinned], graph: graph))
+        let offer = try #require(self.offer(for: result, typed: "ellen", profiles: [pinned], graph: graph))
         #expect(offer.uuid == KindFixture.ellenUUID)
         // The same name, unpinned and not a profile spelling → nothing.
         #expect(self.offer(for: result, typed: "ellen", profiles: [KindFixture.ellenProfile()], graph: graph) == nil)

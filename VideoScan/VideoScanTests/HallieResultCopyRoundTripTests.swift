@@ -65,7 +65,8 @@ struct HallieResultCopyRoundTripTests {
             refinableQuery: .wholeCatalog,
             retryOffer: offer,
             mode: .tree,
-            modeForce: .force(.tree))
+            modeForce: .force(.tree),
+            superlative: .init(kind: .earliestBorn, scope: .ancestorsOf("Rick")))
         return (result, offer)
     }
 
@@ -89,6 +90,8 @@ struct HallieResultCopyRoundTripTests {
             ("applying(_:)", { $0.applying(.template(plan, note: "template: fixture")) }),
             ("prefixingBasis(_:)", { $0.prefixingBasis("reading “ricks” as “rick’s”") }),
             ("inMode(_:)", { $0.inMode($0.mode ?? .tree) }),
+            // GH #206: forcing dropped `superlative` (reset to nil).
+            ("forcing(_:)", { $0.forcing(.force(.tree)) }),
             ("FamilyKnowledgeSupplement.notFoundOffer", {
                 HallieTurnExecutor.FamilyKnowledgeSupplement.notFoundOffer($0, typed: "nobody", graph: nil)
             }),
@@ -100,6 +103,8 @@ struct HallieResultCopyRoundTripTests {
             #expect(copied.refinableQuery == .wholeCatalog, Comment(rawValue: "\(name) dropped refinableQuery"))
             #expect(copied.mode == .tree, Comment(rawValue: "\(name) dropped mode"))
             #expect(copied.modeForce == .force(.tree), Comment(rawValue: "\(name) dropped modeForce"))
+            #expect(copied.superlative == .init(kind: .earliestBorn, scope: .ancestorsOf("Rick")),
+                    Comment(rawValue: "\(name) dropped superlative"))
             #expect(copied.performsFirstOfferedAction, Comment(rawValue: "\(name) dropped performsFirstOfferedAction"))
             #expect(copied.immediateOfferedAction == original.immediateOfferedAction,
                     Comment(rawValue: "\(name) changed immediateOfferedAction"))
@@ -111,6 +116,72 @@ struct HallieResultCopyRoundTripTests {
             #expect(copied.queryDescription == "fixture kinship", Comment(rawValue: "\(name) changed queryDescription"))
             #expect(copied.route == .graph && copied.outcome == .answered, Comment(rawValue: name))
         }
+    }
+
+    /// GH #206: a forced route (a spoken mode correction answered locally)
+    /// keeps the ranking it ran, so "that is donna's line" right after
+    /// re-runs the same superlative instead of falling to a biography.
+    @Test func aForcedSuperlativeResultKeepsItsSuperlativeAsk() {
+        let ask = HallieLineageQuestion.SuperlativeAsk(kind: .earliestBorn, scope: .ancestorsOf("Rick"))
+        let ranked = HallieTurnExecutor.Result(
+            route: .graph, outcome: .answered, prose: "The earliest-born is John Smith.",
+            basisLine: "Basis: fixture tree.", queryDescription: "superlative",
+            citations: [], catalogPersonName: nil, superlative: ask)
+        let forced = ranked.forcing(.force(.tree))
+        #expect(forced.superlative == ask)
+        #expect(forced.modeForce == .force(.tree))
+        #expect(ranked.forcing(nil) == ranked, "nil force is the identity")
+    }
+
+    /// GH #206 sweep: FamilyKnowledgeSupplement.apply rewrites the prose of a
+    /// `.missingFact` graph answer (adds a quoted CyberBrain passage) and
+    /// used to rebuild the Result from nine fields, dropping attachments,
+    /// the immediate action, refinableQuery, retryOffer, mode, modeForce
+    /// and superlative. The wording and plan change; nothing else may.
+    @Test func familyKnowledgeSupplementCarriesEveryPassThroughField() throws {
+        let (original, offer) = fullResult()
+        let tree = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Richard Harding /Breen/ Jr
+        1 SEX M
+        1 BIRT
+        2 DATE 4 Mar 1959
+        0 TRLR
+        """)
+        let rick = try #require(tree.people["@I1@"])
+        let graphResult = ArchivistGraphExecutor.executeSingleHop(
+            .children, person: rick, graph: tree, identityBridge: nil)
+        #expect(graphResult.conclusion == .missingFact)
+        let told = Date(timeIntervalSince1970: 1_787_300_000)
+        let brain = try CyberBrainIndex(archive: CyberBrainArchive(
+            archiveID: "fixture", displayName: "Fixture",
+            people: [CyberBrainPerson(
+                id: "person.rick", gedcomPersonID: "@I1@", canonicalName: "Rick Breen", aliases: [],
+                biographyPassages: [CyberBrainItem(
+                    id: "bio.sons", kind: .biography, text: "Rick has four adult sons.",
+                    subjectPersonIDs: ["person.rick"], sourceIDs: ["source.rick"],
+                    confidence: .confirmed, privacy: .family, createdAt: told, updatedAt: told)])],
+            sources: [CyberBrainSource(id: "source.rick", type: .firstPerson,
+                                       title: "Fixture", attribution: "Rick Breen")]))
+        let enriched = HallieTurnExecutor.FamilyKnowledgeSupplement.apply(
+            to: original,
+            payload: ArchivistQueryAST.Graph(people: ["Rick"], operation: .kinship, relation: .children),
+            graphResult: graphResult, graph: tree,
+            context: .init(graph: tree, cyberBrain: brain))
+        #expect(enriched.prose != original.prose, "the fixture must reach the rewrite branch")
+        #expect(enriched.subjectLifeStatus == .deceased)
+        #expect(enriched.retryOffer == offer)
+        #expect(enriched.refinableQuery == .wholeCatalog)
+        #expect(enriched.mode == .tree)
+        #expect(enriched.modeForce == .force(.tree))
+        #expect(enriched.superlative == .init(kind: .earliestBorn, scope: .ancestorsOf("Rick")))
+        #expect(enriched.performsFirstOfferedAction)
+        #expect(enriched.immediateOfferedAction == original.immediateOfferedAction)
+        #expect(enriched.offeredActions == original.offeredActions)
+        #expect(enriched.attachments == original.attachments)
+        #expect(enriched.catalogPersonName == "Rick")
+        #expect(enriched.matchCount == 3)
     }
 
     @Test func prefixingBasisOnlyTouchesTheBasisLine() {
