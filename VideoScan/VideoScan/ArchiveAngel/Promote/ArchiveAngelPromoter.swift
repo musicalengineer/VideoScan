@@ -14,6 +14,7 @@
 
 import Foundation
 import Combine
+import VideoScanCore
 
 @MainActor
 final class ArchiveAngelPromoter: ObservableObject {
@@ -45,6 +46,23 @@ final class ArchiveAngelPromoter: ObservableObject {
             return .decade(startYear: a)
         }
         return nil
+    }
+
+    /// Whose date a row's proposed date is (codex r1 #4): the row's EXPLICIT
+    /// source, set where the value was set — never inferred from equality
+    /// with a machine date. A copy's date (with the copy named), a date the
+    /// person typed, or nil for the machine's own proposal (placement only —
+    /// never written as a user date). An older plan without a source is the
+    /// machine's.
+    nonisolated static func dateSource(entry: ArchiveAngelPlan.Entry, hint: ArchiveDateHint?) -> ArchiveDateSource? {
+        guard hint != nil else { return nil }
+        switch entry.proposedDateSource {
+        case .typed?: return .typed
+        case .fromCopy?:
+            guard let fact = entry.inheritedDate else { return .typed }
+            return .copy(filename: fact.fromFilename, known: fact.confidence == UserDateConfidence.known.rawValue)
+        case .machine?, nil: return nil
+        }
     }
 
     /// Role label for a companion's naming row in the archive manifest.
@@ -155,6 +173,7 @@ final class ArchiveAngelPromoter: ObservableObject {
         var ids: [UUID] = []
         var titles: [UUID: String] = [:]
         var dates: [UUID: ArchiveDateHint] = [:]
+        var sources: [UUID: ArchiveDateSource] = [:]
         var roles: [UUID: String] = [:]
         var intended: [UUID: [UUID]] = [:]   // original → companion record ids
 
@@ -202,12 +221,15 @@ final class ArchiveAngelPromoter: ObservableObject {
             if let t = Self.archiveTitle(from: entry.proposedName) { titles[entry.id] = t }
             let hint = Self.dateHint(from: entry.proposedDate)
             if let hint { dates[entry.id] = hint }
+            let source = Self.dateSource(entry: entry, hint: hint)
+            if let source { sources[entry.id] = source }
             var companionIDs: [UUID] = []
             for step in Self.promotableCompanions(of: entry, in: plan) {
                 guard let cid = step.recordID else { continue }
                 ids.append(cid)
                 companionIDs.append(cid)
                 if let hint { dates[cid] = hint }
+                if let source { sources[cid] = source }
                 if let t = titles[entry.id] { titles[cid] = t }
                 if let role = Self.roleLabel(for: step.kind) { roles[cid] = role }
             }
@@ -242,6 +264,7 @@ final class ArchiveAngelPromoter: ObservableObject {
         }
         promotePlan.archiveTitles = titles
         promotePlan.archiveDateOverrides = dates
+        promotePlan.archiveDateSources = sources
         promotePlan.roleLabels = roles
         for skip in promotePlan.skipped {
             let reason = VideoScanModel.skipReasonLabel(skip.reason)

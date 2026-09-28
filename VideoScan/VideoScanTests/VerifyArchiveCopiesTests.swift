@@ -56,6 +56,11 @@ private enum VerifyTestSupport {
         model.records = sources
         _ = try #require(await MasterArchiveTestSupport.promote(model, ids: sources.map(\.id)))
         let copies = try sources.map { try #require(model.masterArchiveCopy(of: $0)) }
+        // The logic tests TAMPER with archive copies from outside (flip a
+        // byte, delete one) — what Verify exists to catch. Promote LOCKS
+        // them (2026-09-27); getting past the lock needs root in real life,
+        // so this fixture unlocks them to keep simulating that.
+        MasterArchiveTestSupport.unlockTree(sb.root)
         return (sb, model, sources, copies)
     }
 

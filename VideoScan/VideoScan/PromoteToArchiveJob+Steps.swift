@@ -192,6 +192,7 @@ extension PromoteToArchiveJob {
         }
         // ---- Idempotency by SOURCE IDENTITY (catalog leg).
         if model.masterArchiveCopy(of: source) != nil {
+            if let conflict = placementConflicts[source.id] { return .failed(conflict) }
             return .skipped("already in the Master Archive")
         }
         if model.isArchiveCopy(source) || ArchivePathResolver.isInside(path: source.fullPath, root: ctx.root) {
@@ -414,6 +415,19 @@ extension PromoteToArchiveJob {
         // manifest id already present in the catalog (or malformed) falls
         // back to fresh — never a duplicate id.
         let copyID = Self.recordID(fromManifestFields: ctx.manifestFields[sourceID], model: model)
+        // LOCK the verified copy (Rick 2026-09-27) before it is indexed. Every
+        // caller verified the digest first. A failure never undoes a good
+        // copy — it is recorded as "promoted — not locked" and reported.
+        let lock = await Self.lockOffMain(root: ctx.root, relPath: relPath, seams: fileLock,
+                                          audit: model.archiveLockAuditSink())
+        let locked = lock.isOK
+        if !locked {
+            switch lock {
+            case .failed(let why): lockWarnings[sourceID] = why
+            case .absent: lockWarnings[sourceID] = "the file was not found at \(relPath) to lock"
+            case .changed, .alreadySo: break
+            }
+        }
         let outcome = await model.probeFileOutcome(url: destURL)
         let copyProbe = VideoRecord(id: copyID)
         copyProbe.apply(outcome)
@@ -422,12 +436,29 @@ extension PromoteToArchiveJob {
             sourceRecordID: sourceID, sourcePath: sourcePath, destRelPath: relPath,
             state: .renamed, sha256: sha, copyRecordID: nil, at: now)
 
-        if ctx.manifestRows[sourceID] == nil {
+        // GH #219: ONE date — the Promote choice when there is one — for the
+        // manifest row AND the archived record (placement used it already).
+        var decision: PromoteDateDecision?
+        let appendsRow = ctx.manifestRows[sourceID] == nil
+        if appendsRow {
             var recordDate = "", dateConfidence = "", people: [String] = []
             if let source {
                 let facts = ArchivePathResolver.facts(for: source)
-                recordDate = facts.dateHint.manifestDate
-                dateConfidence = Self.dateConfidenceLabel(source: source, facts: facts)
+                let d = Self.dateDecision(sourceFacts: facts,
+                                          sourceLabel: Self.dateConfidenceLabel(source: source, facts: facts),
+                                          override: plan.archiveDateOverrides[sourceID],
+                                          source: plan.archiveDateSources[sourceID],
+                                          relPath: relPath)
+                if d.followedFilename {
+                    appLog.write("promote: \(relPath) — the chosen date differs from where an earlier run placed the file; the manifest follows the placement so the two agree")
+                    if let wanted = plan.archiveDateOverrides[sourceID] {
+                        // Refused, clearly (codex r1 #3): never re-dated behind Rick's back.
+                        placementConflicts[sourceID] = "an earlier, interrupted promote already filed this under \(ArchiveRefile.datedLabel(d.hint)) (\(relPath)); the date \(ArchiveRefile.datedLabel(wanted)) was NOT applied — use Update… on the archived file to change it"
+                    }
+                }
+                decision = d
+                recordDate = d.hint.manifestDate
+                dateConfidence = d.confidenceLabel
                 people = Self.peopleForManifest(source)
             }
             let row = ArchiveManifestCSV.Row(
@@ -473,6 +504,37 @@ extension PromoteToArchiveJob {
                                                              promotedAt: now)
             appLog.write("promote: \(relPath) cataloged as a self-contained archive copy — its source record (\(sourceID.uuidString.prefix(8))…) is no longer in the catalog")
         }
+        // Adopting an EXISTING manifest row (codex r1 #2): the index is the
+        // truth for this copy's date — the record takes the row's date (a
+        // user date only when the row says it is Rick's), never the source's
+        // current fields, which may have changed since.
+        if !appendsRow, let fields = ctx.manifestFields[sourceID] {
+            let (ud, conf) = Self.userDate(fromManifestFields: fields)
+            if archiveRecord.userDate != ud || archiveRecord.userDateConfidence != conf {
+                model.log("Promote: \(relPath) — archived record date \(archiveRecord.userDate ?? "none") → \(ud ?? "none") (from the archive manifest row, not the source)")
+                archiveRecord.userDate = ud
+                archiveRecord.userDateConfidence = conf
+                model.searchIndex.update(archiveRecord)
+            }
+        }
+        // The chosen date onto the ARCHIVED copy's record (never the source):
+        // the same value the filename and the manifest row carry.
+        if let d = decision, let ud = d.recordUserDate {
+            let before = "\(archiveRecord.userDate ?? "none") (\(archiveRecord.userDateConfidence ?? "-"))"
+            archiveRecord.userDate = ud
+            archiveRecord.userDateConfidence = (d.recordKnown ? UserDateConfidence.known : .estimated).rawValue
+            let stamp = ISO8601DateFormatter().string(from: now)
+            let note = "Promote \(stamp): date \(ud) (\(d.recordKnown ? "known" : "estimated")) \(d.provenance ?? "")"
+            archiveRecord.notes = archiveRecord.notes.isEmpty ? note : "\(archiveRecord.notes)\n\(note)"
+            model.searchIndex.update(archiveRecord)
+            model.log("Promote: \(relPath) — archived record date \(before) → \(ud) (\(d.recordKnown ? "known" : "estimated"), \(d.provenance ?? "chosen at Promote"))")
+            ledgerEvents.append(model.ledgerEvent(.dateSet, for: archiveRecord, by: ledgerActor, at: now,
+                                                  batchID: id.uuidString, detail: [
+                MediaLedgerEvent.Detail.date: ud,
+                MediaLedgerEvent.Detail.confidence: d.recordKnown ? "known" : "estimated",
+                MediaLedgerEvent.Detail.reason: d.provenance ?? "",
+            ]))
+        }
         publishedThisBatch.append(journal)
         // Media Ledger (stage 2): one `archived` line per file, on the
         // SOURCE record when it exists (that is the file Rick asks about)
@@ -487,7 +549,18 @@ extension PromoteToArchiveJob {
             MediaLedgerEvent.Detail.archive: MasterArchiveLayout.displayName(forRootPath: ctx.root),
             MediaLedgerEvent.Detail.relPath: relPath,
             MediaLedgerEvent.Detail.sizeBytes: String(copyProbe.sizeBytes),
+            MediaLedgerEvent.Detail.locked: locked ? "true" : "false",
         ]))
+    }
+
+    /// Lock one verified archive file, off the main actor (a flag change on
+    /// the archive volume must never be waited for on the UI thread).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func lockOffMain(root: String, relPath: String, seams: ArchiveFileLock.Seams,
+                                        audit: @escaping @Sendable (String) -> Void) async -> ArchiveFileLock.Result {
+        ArchiveFileLock.set(.lock, root: root, relPath: relPath, reason: .promote, seams: seams, audit: audit)
     }
 
     /// Batch end (codex R3 blocker 5): ONE synchronous, durable catalog

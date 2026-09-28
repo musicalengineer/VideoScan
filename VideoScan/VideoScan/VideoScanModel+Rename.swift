@@ -87,6 +87,9 @@ extension VideoScanModel {
         case archiveIdentity(String)
         /// A Promote job is appending to the archive's index right now.
         case archiveBusy
+        /// The file is a LOCKED archive file (Rick 2026-09-27): only
+        /// Update… changes an archived file's name.
+        case lockedArchiveFile
 
         var errorDescription: String? {
             switch self {
@@ -108,6 +111,8 @@ extension VideoScanModel {
                 return reason
             case .archiveBusy:
                 return "The archive is busy adding files right now. Rename this file after that finishes — nothing was renamed."
+            case .lockedArchiveFile:
+                return "This file is in the Master Archive and is locked. Use Update… (right-click) to change its name — nothing was renamed."
             }
         }
     }
@@ -215,6 +220,12 @@ extension VideoScanModel {
         // Archive index: decide cheaply whether it is involved at all, then
         // prepare everything in memory before touching anything.
         let inArchive = isInsideMasterArchive(path: oldPath)
+        // A locked archive file changes only through Update… (the kernel
+        // would refuse the rename anyway; say so before anything is written).
+        if inArchive, Self.isUserImmutable(path: oldPath) {
+            appLog.write("Catalog: rename of \(oldName) refused — it is a locked Master Archive file; use Update…")
+            throw RenameError.lockedArchiveFile
+        }
         let promotedSource = !inArchive && masterArchiveCopy(of: record) != nil
         var root: String?
         if inArchive || promotedSource,
@@ -338,5 +349,14 @@ extension VideoScanModel.RenameError: ArchiveIndexRename.BackupDisposition {
     var backupIsSafeToDiscard: Bool {
         if case .filesystem = self { return true }
         return false
+    }
+}
+
+extension VideoScanModel {
+    /// lstat UF_IMMUTABLE on a path (no follow). One stat — for one gesture.
+    nonisolated static func isUserImmutable(path: String) -> Bool {
+        var sb = stat()
+        guard lstat(path, &sb) == 0 else { return false }
+        return (sb.st_flags & UInt32(UF_IMMUTABLE)) != 0
     }
 }

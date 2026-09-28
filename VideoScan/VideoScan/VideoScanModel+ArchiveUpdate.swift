@@ -62,15 +62,38 @@ struct ArchiveUpdatePreview: Identifiable, Sendable {
         let writesDate: Bool
     }
 
+    /// True when the index's date is RICK's ("user-known" / "user-estimated"):
+    /// then the file's place always follows it (Rick 2026-09-27, the 17:23
+    /// DadThanksgiving case — the index said 1984, the folder said 1884). A
+    /// machine date in the index never moves a file on its own: a GH #219
+    /// row may carry the machine's date while the filename carries the one
+    /// Rick typed, and there the filename is the better witness.
+    var locationFollowsIndexDate: Bool { currentDateConfidence.hasPrefix("user-") }
+
     func plan(name: String, hint: ArchiveDateHint, known: Bool) -> Plan {
         let typed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let nameChanged = !typed.isEmpty && typed != currentName && ArchivePathResolver.slug(from: typed) != currentName
         let dateChanged = hint != currentHint
         let dateTouched = dateChanged || known != currentKnown
+        // The location follows the date: when the date changed, or the index
+        // already holds Rick's date, the target is Promote's placement for it.
+        // A file already placed there maps to its EXACT current path (r1 #4:
+        // a known/estimated-only change on a correctly filed file = no rename).
+        let follow = dateChanged || locationFollowsIndexDate
         let to = ArchiveRefile.updatedRelPath(fromRelPath: fromRelPath, streamType: streamType, currentName: currentName,
-                                              newName: nameChanged ? typed : nil, newHint: dateChanged ? hint : nil)
+                                              newName: nameChanged ? typed : nil, newHint: follow ? hint : nil)
         var lines: [String] = []
-        if nameChanged { lines.append("Name: \(currentName) → \(ArchivePathResolver.slug(from: typed))") }
+        let fromStem = ((fromRelPath as NSString).lastPathComponent as NSString).deletingPathExtension
+        let toStem = ((to as NSString).lastPathComponent as NSString).deletingPathExtension
+        let prefixMoved = !dateChanged && String(fromStem.dropLast(currentName.count)) != String(toStem.dropLast(
+            (nameChanged ? ArchivePathResolver.slug(from: typed) : currentName).count))
+        if prefixMoved {
+            // Misfiled: the date prefix follows the index's date — one line
+            // with the whole name, so nothing about the rename is hidden.
+            lines.append("Name: \(fromStem) → \(toStem)")
+        } else if nameChanged {
+            lines.append("Name: \(currentName) → \(ArchivePathResolver.slug(from: typed))")
+        }
         if dateTouched {
             let conf = known ? "known" : "estimated"
             let old = ArchiveRefile.datedLabel(currentHint) + (known != currentKnown ? " (\(currentKnown ? "known" : "estimated"))" : "")
@@ -366,18 +389,23 @@ extension VideoScanModel {
             MediaLedgerEvent.Detail.confidence: writesDate ? (known ? "known" : "estimated") : "",
             MediaLedgerEvent.Detail.fixity: done.sha256,
             MediaLedgerEvent.Detail.archive: MasterArchiveLayout.displayName(forRootPath: root),
+            MediaLedgerEvent.Detail.locked: done.lockProblem == nil ? "true" : "false",
         ])])
         mediaLedger.mirror(intoArchiveRoot: root)
         let files = done.indexFilesChanged
         archiveUpdateNote("Update: \(label) — \(done.fromRelPath) → \(done.toRelPath); fixity verified; index updated (\(done.linesChanged) line(s) in \(files) file(s)\(done.backupDir.map { ", backup \($0)" } ?? "")); catalog saved: \(saved); ledger written: \(ledgered). To undo: Update it back.")
         let summary = "Updated — \(reason)."
-        guard saved, ledgered else {
+        guard saved, ledgered, done.lockProblem == nil else {
             var missing: [String] = []
+            if let lock = done.lockProblem { missing.append(lock) }
             if !saved { missing.append("the catalog could not be saved") }
             if !ledgered { missing.append("the ledger line could not be written") }
-            archiveUpdateNote("Update: \(label) — WARNING: the archive and its index ARE updated, but \(missing.joined(separator: " and ")). The next scan will catalog the file at its new path.")
+            let rescan = !saved || !ledgered
+            archiveUpdateNote("Update: \(label) — WARNING: the archive and its index ARE updated, but \(missing.joined(separator: " and "))."
+                              + (rescan ? " The next scan will catalog the file at its new path." : ""))
             return ArchiveUpdateResult(kind: .updatedWithWarnings,
-                                       message: "\(summary) The archive is updated, but \(missing.joined(separator: " and ")); the catalog will pick up the new path on the next scan.")
+                                       message: "\(summary) The archive is updated, but \(missing.joined(separator: " and "))"
+                                           + (rescan ? "; the catalog will pick up the new path on the next scan." : "."))
         }
         return ArchiveUpdateResult(kind: .updated, message: summary)
     }
