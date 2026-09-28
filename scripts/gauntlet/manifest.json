@@ -234,7 +234,6 @@
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainWriterTests.swift",
       "stage": "unit",
       "suites": [
-        "CyberBrainWriterTests",
         "CyberBrainWriterTests"
       ],
       "tests": [
@@ -1293,6 +1292,7 @@
       "stage": "unit",
       "suites": [
         "TestHostStoreIsolationTests",
+        "TestHostDetectionProbe",
         "TestHostDetectionClassifierTests"
       ],
       "tests": [
@@ -1420,7 +1420,9 @@
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/TreeWalkRealTreeReport.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "TreeWalkRealTreeReport"
+      ],
       "tests": [
         "reportOnTheRealTree"
       ]
@@ -1822,7 +1824,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArcFaceModelLoaderTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "ArcFaceModelLoaderTests"
+      ],
       "tests": [
         "concurrentPredictionsAcrossJobsDoNotCrash",
         "getModelReturnsDistinctInstancesAcrossCalls"
@@ -2122,8 +2126,10 @@
         "ArchiveAngelPolicyNoRegexTests",
         "ArchiveAngelSafetyPassTests",
         "ArchiveAngelEffectiveClassTests",
+        "filter",
         "ArchiveAngelPrepareLiveKeeperTests",
         "AngelStemMatcherTests",
+        "and",
         "ArchiveAngelCodex1643ScaleTests",
         "ArchiveAngelOversizedGroupTests"
       ],
@@ -2846,7 +2852,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveAngelTestbed.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "ArchiveAngelTestbed"
+      ],
       "tests": [
         "badDurationTokenRejectsTheList",
         "greenRuleIsStrict",
@@ -2862,6 +2870,7 @@
       "stage": "unit",
       "suites": [
         "ArchiveAngelWorkingCopyFloorTests",
+        "rules",
         "ArchiveAngelV12ClassRuleTests",
         "ArchiveAngelCompilationTableTests",
         "ArchiveAngelArchivedFootageTests"
@@ -3368,7 +3377,8 @@
       "stage": "unit",
       "suites": [
         "ArchiveVolumeProtectionTests",
-        "ArchiveVolumeProtectionIdentityTests"
+        "ArchiveVolumeProtectionIdentityTests",
+        "ArchiveVolumeProtectionSourceSensor"
       ],
       "tests": [
         "archiveVolumeFileStillServesAsTheKeeperForACopyElsewhere",
@@ -3905,7 +3915,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchivistQueryBench.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "ArchivistQueryBench"
+      ],
       "tests": [
         "benchTimerKeepsWholeSeconds",
         "knownPeopleVocabularyIsCheapAt100k",
@@ -4219,7 +4231,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/BackupDefaultDirectoryTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "BackupDefaultDirectoryTests"
+      ],
       "tests": [
         "emptyPathGivesNil",
         "existingParentDirectoryIsReturned",
@@ -4367,7 +4381,9 @@
         "CatalogFilterBoundaryTests",
         "OnlineSubstituteBoundaryTests",
         "CodecCompatibilityBoundaryTests",
+        "DashboardBoundaryTests",
         "DuplicateDetectorBoundaryTests",
+        "MediaAnalyzerBoundaryTests",
         "CombineEngineBoundaryTests",
         "StreamTypeBoundaryTests",
         "VideoRecordBoundaryTests",
@@ -4574,7 +4590,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CICanaryTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "CICanaryTests"
+      ],
       "tests": [
         "mustFail",
         "mustPass"
@@ -5393,7 +5411,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogSearchProfileBench.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "CatalogSearchProfileBench"
+      ],
       "tests": [
         "profile100kSearchPipeline"
       ]
@@ -6106,8 +6126,14 @@
       "path": "VideoScan/VideoScanTests/CombineTests.swift",
       "stage": "unit",
       "suites": [
+        "CombineEngineTests",
+        "CombineEngineExtendedTests",
         "DashboardCombineCounterTests",
-        "CatalogNavigationTests"
+        "CatalogNavigationTests",
+        "OnlineSubstituteTests",
+        "CodecCompatibilityTests",
+        "CombineTechniquePropagationTests",
+        "CombinedRecordSpecTests"
       ],
       "tests": [
         "applyCopiesAllFields",
@@ -6287,6 +6313,8 @@
       "path": "VideoScan/VideoScanTests/CopyFamilyAssessorTests.swift",
       "stage": "unit",
       "suites": [
+        "CopyFamilyClipCase",
+        "CopyFamilyRules",
         "ArchiveNameAdvisorTests",
         "ArchiveTitleThreadingTests",
         "CopyFamilyEvidenceTests",
@@ -6329,7 +6357,8 @@
       "path": "VideoScan/VideoScanTests/CorrelateLedgerTests.swift",
       "stage": "unit",
       "suites": [
-        "CorrelateLedgerTests"
+        "CorrelateLedgerTests",
+        "CorrelateLedgerPerfTests"
       ],
       "tests": [
         "avidCorrelatePairsBestUnpairedCopy",
@@ -6351,7 +6380,8 @@
         "DurationGateMathTests",
         "DurationGatePairFormationTests",
         "IsVideoLinkedUngatedTests",
-        "DurationRefusedDiagnosticTests"
+        "DurationRefusedDiagnosticTests",
+        "DurationGateScaleTests"
       ],
       "tests": [
         "avidClipIDPathRefusesKnownIncompatibleDurations",
@@ -7065,7 +7095,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/DiskFeederIOErrorTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "DiskFeederIOErrorTests"
+      ],
       "tests": [
         "feederContinuesPastBadFile",
         "feederSurvivesDeletedFile",
@@ -7078,7 +7110,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/DiskFeederTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "DiskFeederTests"
+      ],
       "tests": [
         "bytesWarmedMatchesActualFileSizes",
         "cancelReleasesBlockedWaiters",
@@ -7470,7 +7504,8 @@
       "path": "VideoScan/VideoScanTests/DuplicateLedgerTests.swift",
       "stage": "unit",
       "suites": [
-        "DuplicateLedgerTests"
+        "DuplicateLedgerTests",
+        "DuplicateLedgerPerfTests"
       ],
       "tests": [
         "affectedSubsetIncludesTransitiveBucketNeighbors",
@@ -7653,7 +7688,17 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ExtractedModuleTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "FilenameCorrelationKeyTests",
+        "AvidClipIDTests",
+        "ScoreCorrelatePairTests",
+        "BuildAudioPoolsTests",
+        "ResolveScopeTests",
+        "AssignCandidatesTests",
+        "IsMpegTSTests",
+        "FileHasherTests",
+        "FormattingDelegateTests"
+      ],
       "tests": [
         "belowThresholdReturnsNil",
         "caseInsensitiveMXF",
@@ -8236,7 +8281,6 @@
       "path": "VideoScan/VideoScanTests/FamilyTaggingTests.swift",
       "stage": "unit",
       "suites": [
-        "FamilyTaggingTests",
         "FamilyTaggingTests"
       ],
       "tests": [
@@ -8514,6 +8558,7 @@
       "path": "VideoScan/VideoScanTests/FamilyTreeLiveModelTests.swift",
       "stage": "unit",
       "suites": [
+        "FamilyTreeLiveModelTests",
         "FamilyTreeLayoutShapeTests",
         "FamilyTreeModelTextTests",
         "FamilyTreeModelBehaviourTests",
@@ -8592,7 +8637,6 @@
         "FamilyTreeNotesRoundTripTests",
         "FamilyTreeNotesScaleTests",
         "FamilyTreePronunciationChipTests",
-        "FamilyTreePronunciationRoundTripTests",
         "FamilyTreePronunciationRoundTripTests"
       ],
       "tests": [
@@ -9352,7 +9396,8 @@
       "path": "VideoScan/VideoScanTests/HallieAttributeFollowUpTests.swift",
       "stage": "hallie",
       "suites": [
-        "HallieAttributeFollowUpTests"
+        "HallieAttributeFollowUpTests",
+        "HallieFollowUpJunkNameTests"
       ],
       "tests": [
         "aBareFieldFollowUpOutranksTheGeneralLane",
@@ -11071,7 +11116,8 @@
       "path": "VideoScan/VideoScanTests/HalliePlaceQuestionTests.swift",
       "stage": "hallie",
       "suites": [
-        "HalliePlaceQuestionTests"
+        "HalliePlaceQuestionTests",
+        "HallieRelationGuardSubjectTests"
       ],
       "tests": [
         "aRelationTheSentenceNamesIsNotLeftToTheModel",
@@ -11267,9 +11313,6 @@
       "path": "VideoScan/VideoScanTests/HalliePronunciationLexiconTests.swift",
       "stage": "hallie",
       "suites": [
-        "HalliePronunciationLexiconTests",
-        "HalliePronunciationLexiconTests",
-        "HalliePronunciationLexiconTests",
         "HalliePronunciationLexiconTests"
       ],
       "tests": [
@@ -11360,7 +11403,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieQueryBench.swift",
       "stage": "hallie",
-      "suites": [],
+      "suites": [
+        "HallieQueryBench"
+      ],
       "tests": [
         "mainActorResidentWork",
         "multiUserScaling",
@@ -12018,7 +12063,6 @@
       "path": "VideoScan/VideoScanTests/HallieStrictReplayFamilyIntentTests.swift",
       "stage": "hallie",
       "suites": [
-        "HallieStrictReplayFamilyIntentTests",
         "HallieStrictReplayFamilyIntentTests"
       ],
       "tests": [
@@ -12186,7 +12230,6 @@
       "path": "VideoScan/VideoScanTests/HallieTellingModePronunciationTests.swift",
       "stage": "hallie",
       "suites": [
-        "HallieTellingModeTests",
         "HallieTellingModeTests"
       ],
       "tests": [
@@ -12995,7 +13038,8 @@
       "path": "VideoScan/VideoScanTests/IdentityPriorScoringTests.swift",
       "stage": "unit",
       "suites": [
-        "IdentityPriorScoringTests"
+        "IdentityPriorScoringTests",
+        "IdentityNarrowingRegressionSensors"
       ],
       "tests": [
         "ambiguousSceneWithBothSexesPenalizesNoOne",
@@ -13085,7 +13129,7 @@
       "suites": [
         "InferredDatePropagationTests",
         "InferredDatePropagationPersistenceAndScaleTests",
-        "InferredDatePropagationTests"
+        "InferredDatePropagationRealCatalogReport"
       ],
       "tests": [
         "applyDossier_sharesTheFreshDateWithTheContentGroup",
@@ -13395,7 +13439,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/LedgerRenameBackupRetentionTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "LedgerRenameBackupRetentionTests"
+      ],
       "tests": [
         "ledgerBackups_areBounded"
       ]
@@ -13499,7 +13545,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/LogVerificationTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "LogVerificationTests"
+      ],
       "tests": [
         "buildInfoSummaryContainsVersion",
         "buildInfoVersionIsSet",
@@ -13626,7 +13674,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/MKVDossierPipelineTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "MKVDossierPipelineTests"
+      ],
       "tests": [
         "audioPreflightDetectsPCMAudioInMKV",
         "audioPreflightStillThrowsForMissingFile",
@@ -15089,7 +15139,6 @@
       "path": "VideoScan/VideoScanTests/POIUUIDMigrationTests.swift",
       "stage": "unit",
       "suites": [
-        "POIUUIDMigrationTests",
         "POIUUIDMigrationTests"
       ],
       "tests": [
@@ -15159,7 +15208,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PathScopeTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "PathScopeTests"
+      ],
       "tests": [
         "bareRootSlashRejected",
         "emptyRootRejected",
@@ -15174,7 +15225,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PauseGateCancellationTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "PauseGateCancellationTests"
+      ],
       "tests": [
         "autoPauseDisabled_neverWaits",
         "autoPausedWaiter_cancelled_returnsPromptly",
@@ -15189,7 +15242,13 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PauseGateReasonTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "PauseGateManualPauseSurvivesPressureReliefTests",
+        "PauseGateUserResumeKeepsMemoryPauseTests",
+        "KeepaliveRecoveryKeepsUserPauseTests",
+        "KeepaliveVolumeReasonOwnershipTests",
+        "PauseGateEdgeProbeTests"
+      ],
       "tests": [
         "manualPauseDuringAutoPause_survivesPressureRelief",
         "oldKeepaliveExit_doesNotOpenGateHeldByNewKeepalive",
@@ -15223,7 +15282,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PauseGateToggleReasonTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "PauseGateToggleReasonTests"
+      ],
       "tests": [
         "toggleOff_leavesOtherReasonHeld",
         "toggleWhileHeldByOtherReason_addsUserHold"
@@ -15734,7 +15795,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PersonFinderStopWhilePausedTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "PersonFinderStopWhilePausedTests"
+      ],
       "tests": [
         "removeWhilePaused_releasesParkedWorkers",
         "stopAllWhilePaused_releasesParkedWorkers",
@@ -16782,7 +16845,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RealTreeVerifyProbe.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "RealTreeVerifyProbe"
+      ],
       "tests": [
         "reportOnTheRealTree"
       ]
@@ -17196,7 +17261,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RelocateSheetBrowseTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "RelocateSheetBrowseTests"
+      ],
       "tests": [
         "derivedDestination_deeperFolderIsUsedAsIs",
         "derivedDestination_homeFolderSource",
@@ -18539,6 +18606,7 @@
       "stage": "unit",
       "suites": [
         "TestEnvironmentSharedDetectorTests",
+        "AppTestHostDetectionProbe",
         "CyberBrainDefaultRootSandboxTests"
       ],
       "tests": [
@@ -19145,6 +19213,7 @@
       "path": "VideoScan/VideoScanTests/UserDateTests.swift",
       "stage": "unit",
       "suites": [
+        "UserDateParserTests",
         "UserDateProvenanceTests"
       ],
       "tests": [
@@ -19168,6 +19237,7 @@
       "path": "VideoScan/VideoScanTests/UserPlaceTests.swift",
       "stage": "unit",
       "suites": [
+        "UserPlaceEntryTests",
         "UserPlaceRecordTests",
         "UserPlaceRosterTests",
         "UserPlaceCatalogTests"
@@ -19935,7 +20005,9 @@
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/WorkerSlotCancellationTests.swift",
       "stage": "unit",
-      "suites": [],
+      "suites": [
+        "WorkerSlotCancellationTests"
+      ],
       "tests": [
         "acquireWorkerSlot_returnsWhetherAcquired",
         "cancelledSlotWaiter_leavesWorkerCountCorrect",
@@ -20479,6 +20551,18 @@
     {
       "blocked_reason": "Python script-test adapter pending; run directly with unittest during phase-1 development",
       "kind": "python",
+      "path": "tests/test_gauntlet_inventory.py",
+      "stage": "regression",
+      "suites": [
+        "test_gauntlet_inventory.py"
+      ],
+      "tests": [
+        "test_every_suite_that_holds_a_test_is_discovered_and_helpers_are_not"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending; run directly with unittest during phase-1 development",
+      "kind": "python",
       "path": "tests/test_gauntlet_publish.py",
       "stage": "regression",
       "suites": [
@@ -20508,6 +20592,7 @@
         "test_dry_run_prints_plan_without_building_or_writing_results",
         "test_exited_leader_with_live_descendant_blocks_next_stage",
         "test_failure_preserves_exit_and_continues_using_one_build",
+        "test_known_issue_is_counted_and_named_not_a_pass",
         "test_missing_structured_counts_and_skips_fail",
         "test_omitted_blocked_assignment_projection_fails_preflight",
         "test_poisoned_home_and_roots_replaced_in_child_and_xctestrun",
@@ -23351,6 +23436,7 @@
         "VideoScanTests/ArchivistQueryASTTests",
         "VideoScanTests/ArchivistQueryASTTranslatorDecodingTests",
         "VideoScanTests/ArchivistQueryASTTranslatorTests",
+        "VideoScanTests/ArchivistQueryBench",
         "VideoScanTests/ArchivistQueryPlannerTests",
         "VideoScanTests/ArchivistQuestionParserTests",
         "VideoScanTests/ArchivistRecordExecutorTests",
@@ -23383,6 +23469,7 @@
         "VideoScanTests/ConfirmJourneyStampTests",
         "VideoScanTests/ConfirmedRejectedTagSchemaTests",
         "VideoScanTests/CopyMetadataCrashTests",
+        "VideoScanTests/CorrelateLedgerPerfTests",
         "VideoScanTests/CorrelateLedgerTests",
         "VideoScanTests/CorrelatorTests",
         "VideoScanTests/CoverArtMusicPurgePredicateTests",
@@ -23409,6 +23496,7 @@
         "VideoScanTests/DossierWritebackTests",
         "VideoScanTests/DuplicateDeletionSafetyTests",
         "VideoScanTests/DuplicateDetectorTests",
+        "VideoScanTests/DuplicateLedgerPerfTests",
         "VideoScanTests/DuplicateLedgerTests",
         "VideoScanTests/EmbeddedDatePlacementTests",
         "VideoScanTests/EvalPresenceRuleTests",
@@ -23436,6 +23524,7 @@
         "VideoScanTests/FormattingTests",
         "VideoScanTests/GedcomLookupConcurrencyTests",
         "VideoScanTests/HammingTests",
+        "VideoScanTests/IdentityNarrowingRegressionSensors",
         "VideoScanTests/IdentityNarrowingTests",
         "VideoScanTests/IdentityPriorScoringTests",
         "VideoScanTests/InspectorArchivedBannerTests",
@@ -23447,6 +23536,7 @@
         "VideoScanTests/LifeStatusRuleTests",
         "VideoScanTests/LoggingHardeningTests",
         "VideoScanTests/MFOVanishOnCancelTests",
+        "VideoScanTests/MKVDossierPipelineTests",
         "VideoScanTests/MachineNoteAuthorTests",
         "VideoScanTests/MachineNoteWriterTests",
         "VideoScanTests/MediaBytesTests",
@@ -23464,7 +23554,10 @@
         "VideoScanTests/OllamaRequestOptionsTests",
         "VideoScanTests/OnlineCopyFinderTests",
         "VideoScanTests/PairedFileTests",
+        "VideoScanTests/PathScopeTests",
         "VideoScanTests/PathYearHintsTests",
+        "VideoScanTests/PauseGateCancellationTests",
+        "VideoScanTests/PauseGateToggleReasonTests",
         "VideoScanTests/PeopleGalleryGesturesTests",
         "VideoScanTests/PeopleGalleryKeyboardNavigationTests",
         "VideoScanTests/PeopleSortKeyTests",
@@ -23477,6 +23570,7 @@
         "VideoScanTests/PersonFinderDownsampleTests",
         "VideoScanTests/PersonFinderFpsClampTests",
         "VideoScanTests/PersonFinderPresenceArithmeticTests",
+        "VideoScanTests/PersonFinderStopWhilePausedTests",
         "VideoScanTests/PersonFinderWatchdogTests",
         "VideoScanTests/PersonResolverTests",
         "VideoScanTests/PersonWarningExplanationTests",
@@ -23561,6 +23655,7 @@
         "VideoScanTests/VolumesPendingSelectionTests",
         "VideoScanTests/VolumesWindowRetireTests",
         "VideoScanTests/VolumesWithDeletableDuplicatesTests",
+        "VideoScanTests/WorkerSlotCancellationTests",
         "VideoScanTests/WorkflowTagSearchTokenTests",
         "VideoScanTests/WorkflowTagsLogicTests",
         "VideoScanTests/WorkflowTagsModelTests",
@@ -23686,6 +23781,10 @@
         {
           "name": "VideoScan/VideoScanTests/TwoRichardsConsumerSensorTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "tests/test_gauntlet_inventory.py",
+          "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         },
         {
           "name": "tests/test_gauntlet_publish.py",
@@ -24150,6 +24249,7 @@
         "VideoScanTests/HallieFamilyIsNotAWordTests",
         "VideoScanTests/HallieFamilyKnowledgeSupplementTests",
         "VideoScanTests/HallieFamilyWideTreeGateTests",
+        "VideoScanTests/HallieFollowUpJunkNameTests",
         "VideoScanTests/HallieFragmentGuardTests",
         "VideoScanTests/HallieGH184RoutesShellTests",
         "VideoScanTests/HallieGeneralAnswerBoundaryTests",
@@ -24200,6 +24300,7 @@
         "VideoScanTests/HalliePronunciationShellSessionTests",
         "VideoScanTests/HallieProvenanceFollowUpTests",
         "VideoScanTests/HallieRecordScopeTurnTests",
+        "VideoScanTests/HallieRelationGuardSubjectTests",
         "VideoScanTests/HallieRelationshipTests",
         "VideoScanTests/HallieRelationshipsOverviewTests",
         "VideoScanTests/HallieRelativeFactTests",

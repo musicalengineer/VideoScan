@@ -61,9 +61,9 @@ else:
     if settings.get('malformed'):
         print('{}')
     else:
-        passed, failed, skipped = (settings.get(k, d) for k,d in [('passed',2),('failed',0),('skipped',0)])
-        print(json.dumps(dict(passedTests=passed, failedTests=failed, skippedTests=skipped,
-                             totalTestCount=passed+failed+skipped, result='Failed' if failed else 'Passed')))
+        passed, failed, skipped, known = (settings.get(k, d) for k,d in [('passed',2),('failed',0),('skipped',0),('known',0)])
+        print(json.dumps(dict(passedTests=passed, failedTests=failed, skippedTests=skipped, expectedFailures=known,
+                             totalTestCount=passed+failed+skipped+known, result='Failed' if failed else 'Passed')))
 '''
         for tool in ('xcodebuild', 'xcrun'):
             path = cls.bin_dir / tool
@@ -189,6 +189,17 @@ else:
         self.assertIn('counts unavailable', self.stage('unit')['reason'])
         self.assertEqual(self.stage('regression')['status'], 'failed')
         self.assertIn('skipped', self.stage('regression')['reason'])
+
+    def test_known_issue_is_counted_and_named_not_a_pass(self):
+        # 2026-09-28 baseline: one withKnownIssue (#567) made the Hallie stage
+        # report "counts unavailable". It stays not-a-pass, but says why.
+        self.config.update(unit={'passed': 5, 'known': 1})
+        self.run_runner()
+        unit = self.stage('unit')
+        self.assertEqual(unit['status'], 'failed')
+        self.assertIn('1 known issue', unit['reason'])
+        self.assertEqual(unit['known_issues'], 1)
+        self.assertEqual(unit['passed'], 5)
 
     def test_build_failure_blocks_stages_and_records_code(self):
         self.config['build_exit'] = 23

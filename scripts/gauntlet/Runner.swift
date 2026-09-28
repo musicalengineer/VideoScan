@@ -108,17 +108,20 @@ func classify(exitCode: Int32, counts: [String: Int]?, floor: Int) -> (String, S
     guard let counts else { return ("failed", "structured test counts unavailable") }
     if counts["failed", default: 0] > 0 { return ("failed", "test failures") }
     if counts["skipped", default: 0] > 0 { return ("failed", "unexpected skipped tests") }
-    if counts["passed", default: 0] + counts["failed", default: 0] < max(1, floor) { return ("failed", "executed count below expected floor \(max(1, floor))") }
+    let known = counts["known_issues", default: 0]
+    if counts["passed", default: 0] + counts["failed", default: 0] + known < max(1, floor) { return ("failed", "executed count below expected floor \(max(1, floor))") }
+    // A withKnownIssue is a tracked bug, never a pass — but say so by name.
+    if known > 0 { return ("failed", "\(known) known issue\(known == 1 ? "" : "s") (withKnownIssue) — expected failures are not passes") }
     return ("passed", nil)
 }
 func countsFromSummary(_ object: [String: Any]) -> [String: Int]? {
     guard let passed = object["passedTests"] as? Int, let failed = object["failedTests"] as? Int, let skipped = object["skippedTests"] as? Int else { return nil }
     guard passed >= 0 && failed >= 0 && skipped >= 0 else { return nil }
-    guard let total = object["totalTestCount"] as? Int, total == passed + failed + skipped,
-          (object["expectedFailures"] as? Int ?? 0) == 0,
+    let known = object["expectedFailures"] as? Int ?? 0
+    guard known >= 0, let total = object["totalTestCount"] as? Int, total == passed + failed + skipped + known,
           let verdict = object["result"] as? String, ["Passed", "Failed", "Skipped"].contains(verdict),
           verdict != "Failed" || failed > 0 else { return nil }
-    return ["passed": passed, "failed": failed, "skipped": skipped]
+    return ["passed": passed, "failed": failed, "skipped": skipped, "known_issues": known]
 }
 func stageResult(_ name: String, _ status: String, _ reason: String?, floor: Int = 0) -> [String: Any] {
     ["name": name, "status": status, "reason": reason as Any? ?? NSNull(), "exit_code": NSNull(), "elapsed_s": 0.0, "expected": floor, "passed": NSNull(), "failed": NSNull(), "skipped": NSNull(), "incomplete": status == "passed" ? 0 : 1, "artifacts": []]

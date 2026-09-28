@@ -12,6 +12,42 @@ func matches(_ pattern: String, _ text: String, group: Int = 0) -> [String] {
         $0.range(at: group).location == NSNotFound ? nil : ns.substring(with: $0.range(at: group))
     }
 }
+// A type is a suite when its name says so, it is marked @Suite (same or previous
+// line, e.g. `@Suite(.serialized) struct X`), or it directly holds a test. The old
+// line-start/"Tests"-only rule missed all three and silently deselected their tests
+// (baseline 2026-09-28: 35 unit + 6 Hallie declarations never ran).
+func swiftSuites(_ text: String) -> [String] {
+    let typeDecl = #"^\s*(?:@\S.*?\s+)?(?:(?:final|private|fileprivate|public|internal)\s+)*(?:struct|class|extension|enum|actor)\s+([A-Za-z_][A-Za-z_0-9]*)"#
+    var names: [String] = []
+    var suiteAttributePending = false
+    // Enclosing types by brace depth, so a test after a nested helper type
+    // (`struct Boom: Error {}`) is credited to the suite, not the helper.
+    var depth = 0
+    var open: [(name: String, depth: Int)] = []
+    var pendingType: String?
+    func add(_ name: String?) { if let name, !names.contains(name) { names.append(name) } }
+    for line in text.components(separatedBy: "\n") {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("//") { continue }
+        let isTestLine = trimmed.contains("@Test") || matches(#"\bfunc\s+test[A-Za-z_0-9]*\s*\("#, trimmed).count > 0
+        if !isTestLine, let name = matches(typeDecl, line, group: 1).first {
+            pendingType = name
+            if name.contains("Tests") || suiteAttributePending || trimmed.contains("@Suite") { add(name) }
+        }
+        if isTestLine { add(open.last?.name) }
+        for ch in line {
+            if ch == "{" {
+                depth += 1
+                if let t = pendingType { open.append((t, depth)); pendingType = nil }
+            } else if ch == "}" {
+                depth -= 1
+                while let last = open.last, last.depth > depth { open.removeLast() }
+            }
+        }
+        suiteAttributePending = trimmed.hasPrefix("@Suite") && matches(typeDecl, line, group: 1).isEmpty
+    }
+    return names
+}
 func discover(_ root: URL) throws -> [[String: Any]] {
     let fm = FileManager.default
     var result: [[String: Any]] = []
@@ -44,7 +80,7 @@ func discover(_ root: URL) throws -> [[String: Any]] {
             }
             let kind = swift ? (path.hasPrefix("VideoScan/VideoScanTests/") ? "xcode" : path.contains("UITests/") ? "ui" : "package") : url.pathExtension == "py" ? "python" : "shell"
             result.append(["path": path, "kind": kind, "tests": tests,
-                           "suites": swift ? matches(#"(?m)^\s*(?:(?:final|private|public|internal)\s+)*(?:struct|class|extension)\s+([A-Za-z_][A-Za-z_0-9]*)"#, text, group: 1).filter { $0.contains("Tests") } : [url.lastPathComponent]])
+                           "suites": swift ? swiftSuites(text) : [url.lastPathComponent]])
         }
     }
     return result.sorted { ($0["path"] as! String) < ($1["path"] as! String) }
