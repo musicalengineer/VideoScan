@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[1]
 STAGES = ['unit', 'regression', 'integration', 'performance', 'hallie', 'stress', 'ui']
 
 
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only: builds with /usr/bin/swift and Xcode; the Python CI runner is Linux")
 class GauntletRunnerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

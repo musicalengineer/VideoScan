@@ -1,5 +1,6 @@
 """Scratch-only publication tests: no origin, no network, no real metrics writes."""
 import json
+import sys
 from pathlib import Path
 import shutil
 import subprocess
@@ -9,6 +10,7 @@ import unittest
 REPO = Path(__file__).resolve().parents[1]
 
 
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only: builds with /usr/bin/swift and Xcode; the Python CI runner is Linux")
 class GauntletPublishTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -106,6 +108,7 @@ class GauntletPublishTests(unittest.TestCase):
         self.assertEqual(row['elapsed_s'], 0)
 
 
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only: builds with /usr/bin/swift and Xcode; the Python CI runner is Linux")
 class GauntletDashboardTests(unittest.TestCase):
     def test_dashboard_separates_nightly_and_keeps_blocked_stage_duration(self):
         harness = r"""

@@ -6,6 +6,7 @@ suite in the file, a suite name without "Tests". A selector is only as good
 as this list.
 """
 import json
+import sys
 import pathlib
 import subprocess
 import tempfile
@@ -41,6 +42,7 @@ struct RegressionSensors {
 '''
 
 
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only: builds with /usr/bin/swift and Xcode; the Python CI runner is Linux")
 class SuiteDiscoveryTests(unittest.TestCase):
     def test_every_suite_that_holds_a_test_is_discovered_and_helpers_are_not(self):
         with tempfile.TemporaryDirectory() as tmp:
