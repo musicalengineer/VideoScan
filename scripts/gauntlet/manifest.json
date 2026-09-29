@@ -5958,6 +5958,20 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogVerifyMenuPlanTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogVerifyMenuPlanTests"
+      ],
+      "tests": [
+        "allRunnableCountsAll",
+        "labelCountsOnlyTheRowsThatWillRun",
+        "nothingRunnableIsDisabled",
+        "oneRunnableOfManyHasNoCount"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogVerifyTests.swift",
@@ -6490,6 +6504,19 @@
         "scaleTwoThousandMembers",
         "suggestions",
         "truncatedCopyIsUnconfirmed"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CopyFamilyExternalLineageTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CopyFamilyExternalLineageTests"
+      ],
+      "tests": [
+        "aGenuineNativeRootBeatsANativeOrphan",
+        "nativeCopyDerivedFromAbsentRecordIsNotCalledTheProvenOriginal",
+        "oneStaleDerivedFromInAnIdenticalGroupDoesNotDemoteTheOriginal"
       ]
     },
     {
@@ -8144,6 +8171,25 @@
         "versionRefusedMultiSourceGenerationIsNotDemotedToNewestFile",
         "versionRefusedNarrowedCurrentStillDefersToTheTwoPullPrevious",
         "versionRefusedSingleFileCurrentIsNotOutrankedByAMultiSourcePrevious"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyGraphCurrentManifestReadTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyGraphCurrentManifestReadTests"
+      ],
+      "tests": [
+        "manifestMatchesWhatAFullLoadReports",
+        "manifestReadOnALargeStoreIsCheap",
+        "missingSourceIsNotHashedAndDoesNotHideTheManifest",
+        "noPointerIsNil",
+        "pointerFromAnotherSchemaIsNil",
+        "poisonedCurrentStillAnswersAndThePointerIsNotTouched",
+        "poisonedOnlyGenerationStillAnswers",
+        "pullCoordinatorNeverDecodesTheGraphForAManifest"
       ]
     },
     {
@@ -19235,6 +19281,7 @@
       ],
       "tests": [
         "deleteAndAngelEmptyMessages",
+        "deleteDuplicatesEntryRowStrings",
         "entryAccessibilityLabel",
         "locationSummary",
         "pruneEmptyMessage",
@@ -22619,6 +22666,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/FamilyGraphCurrentManifestReadTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/FamilyGraphFileLoaderTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -23615,7 +23666,7 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2035,
+      "expected_floor": 2043,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -23686,6 +23737,7 @@
         "VideoScanTests/CatalogSearchBarTests",
         "VideoScanTests/CatalogSearchTokenizeAndTests",
         "VideoScanTests/CatalogTargetStatusResilienceTests",
+        "VideoScanTests/CatalogVerifyMenuPlanTests",
         "VideoScanTests/CatalogWideMetadataCandidatesTests",
         "VideoScanTests/CombineBatchPlanTests",
         "VideoScanTests/CombineEngineArgsTests",
@@ -23693,6 +23745,7 @@
         "VideoScanTests/CompareTests",
         "VideoScanTests/ConfirmJourneyStampTests",
         "VideoScanTests/ConfirmedRejectedTagSchemaTests",
+        "VideoScanTests/CopyFamilyExternalLineageTests",
         "VideoScanTests/CopyMetadataCrashTests",
         "VideoScanTests/CorrelateLedgerPerfTests",
         "VideoScanTests/CorrelateLedgerTests",
