@@ -183,33 +183,53 @@ extension CatalogContent {
         model.archiveAngel.candidateIDsPublisher
     }
 
+    // Split into three typed stages (stage-0 triage R2, 2026-09-29): as
+    // ONE chain of an onAppear and fifteen onChange modifiers this getter
+    // took 21.7 s to type-check on the nightly runner — one wobble short of
+    // "unable to type-check in reasonable time", the 2026-09-01 CI-red
+    // shape. Each stage below resolves its onChange overloads against a
+    // fixed `some View`, so the solver never sees the whole chain at once.
+    // Order is irrelevant to behaviour: every trigger does the same thing.
+    // (C++ analogy: breaking one giant template expression into named
+    // intermediate typedefs so overload resolution stays local.)
     private var tableWithCatalogTriggers: some View {
+        tableWithFilterTriggers
+            .onChange(of: model.lastTidyBatch) { tableData = computeFiltered() }
+            // Re-compute when purge state flips on any record (purge, undo, restore).
+            // We key off lastPurgedBatch so mutations from the model are observed.
+            .onChange(of: model.lastPurgedBatch) { tableData = computeFiltered() }
+            // In-place purge/lifecycle mutations that arm no banner (Delete
+            // Confirmed Junk, workbench discard, dossier auto-purge) — #160.
+            .onChange(of: model.volumeAggregatesRevision) { tableData = computeFiltered() }
+            // Confirm Repair supersedes originals (and undo restores them) —
+            // same observation pattern as the purge batch (GH #132).
+            .onChange(of: model.lastConfirmBatch) { tableData = computeFiltered() }
+    }
+
+    /// Reveal toggles: disconnected media, kind facet, removed / set-aside /
+    /// superseded rows.
+    private var tableWithFilterTriggers: some View {
+        tableWithSearchTriggers
+            // Reachable-only baseline opt-out (2026-07-20).
+            .onChange(of: showDisconnectedMedia) { tableData = computeFiltered() }
+            // Media-kind facet chip flip (GH #124).
+            .onChange(of: kindFacet) { tableData = computeFiltered() }
+            .onChange(of: showRemoved) { tableData = computeFiltered() }
+            .onChange(of: showSetAside) { tableData = computeFiltered() }
+            // Superseded reveal toggle (GH #132).
+            .onChange(of: showSuperseded) { tableData = computeFiltered() }
+    }
+
+    /// First appearance, record count, and the search / scope inputs.
+    private var tableWithSearchTriggers: some View {
         tableWithMenus
-        .onAppear { tableData = computeFiltered() }
-        .onChange(of: records.count) { tableData = computeFiltered() }
-        .onChange(of: searchText) { tableData = computeFiltered() }
-        .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
-        .onChange(of: showPairsOnly) { tableData = computeFiltered() }
-        .onChange(of: filterByIDs) { tableData = computeFiltered() }
-        .onChange(of: viewFilters) { tableData = computeFiltered() }
-        // Reachable-only baseline opt-out (2026-07-20).
-        .onChange(of: showDisconnectedMedia) { tableData = computeFiltered() }
-        // Media-kind facet chip flip (GH #124).
-        .onChange(of: kindFacet) { tableData = computeFiltered() }
-        .onChange(of: showRemoved) { tableData = computeFiltered() }
-        .onChange(of: showSetAside) { tableData = computeFiltered() }
-        // Superseded reveal toggle (GH #132).
-        .onChange(of: showSuperseded) { tableData = computeFiltered() }
-        .onChange(of: model.lastTidyBatch) { tableData = computeFiltered() }
-        // Re-compute when purge state flips on any record (purge, undo, restore).
-        // We key off lastPurgedBatch so mutations from the model are observed.
-        .onChange(of: model.lastPurgedBatch) { tableData = computeFiltered() }
-        // In-place purge/lifecycle mutations that arm no banner (Delete
-        // Confirmed Junk, workbench discard, dossier auto-purge) — #160.
-        .onChange(of: model.volumeAggregatesRevision) { tableData = computeFiltered() }
-        // Confirm Repair supersedes originals (and undo restores them) —
-        // same observation pattern as the purge batch (GH #132).
-        .onChange(of: model.lastConfirmBatch) { tableData = computeFiltered() }
+            .onAppear { tableData = computeFiltered() }
+            .onChange(of: records.count) { tableData = computeFiltered() }
+            .onChange(of: searchText) { tableData = computeFiltered() }
+            .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
+            .onChange(of: showPairsOnly) { tableData = computeFiltered() }
+            .onChange(of: filterByIDs) { tableData = computeFiltered() }
+            .onChange(of: viewFilters) { tableData = computeFiltered() }
     }
 
     /// Sort + menus stage of the split — see `catalogTable`'s note.
@@ -1239,14 +1259,13 @@ extension CatalogContent {
     /// O(records).
     @ViewBuilder
     private func verifyVideoMenuItem(activeRecs: [VideoRecord]) -> some View {
-        let verifiableRecs = activeRecs.filter {
+        let plan = CatalogVerifyMenuPlan(verb: "Verify Video", selection: activeRecs) {
             $0.streamType != .audioOnly
                 && VolumeReachability.isReachable(path: $0.fullPath)
         }
-        Button(activeRecs.count > 1
-               ? "Verify Video (\(activeRecs.count) Files)"
-               : "Verify Video") {
-            _ = fileOpsCenter.startedByUser { center in
+        let verifiableRecs = plan.runnable
+        Button(plan.label) {
+            fileOpsCenter.startedByUser { center in
                 for r in verifiableRecs {
                     model.noteMissingFileForUserAction(r)
                     center.startVerifyVideo(record: r, model: model)
@@ -1254,7 +1273,7 @@ extension CatalogContent {
             }
             MediaFileOperationsWindowOpener.openBehindMain(openWindow)
         }
-        .disabled(verifiableRecs.isEmpty)
+        .disabled(plan.isDisabled)
         .help("Check the picture — does every frame decode, are the timing and frame rate sane, is the file a sensible size for its picture? Says OK, Warning or Broken, and what to do. Runs in the operations window; the catalog stays usable.")
         .accessibilityIdentifier("catalog.row.verifyVideo")
     }
@@ -1282,14 +1301,13 @@ extension CatalogContent {
     private func audioLifecycleMenuItems(rec: VideoRecord,
                                          activeRecs: [VideoRecord],
                                          pureActive: Bool) -> some View {
-        let verifiableRecs = activeRecs.filter {
+        let plan = CatalogVerifyMenuPlan(verb: "Verify Audio", selection: activeRecs) {
             VolumeReachability.isReachable(path: $0.fullPath)
         }
-        Button(activeRecs.count > 1
-               ? "Verify Audio (\(activeRecs.count) Files)"
-               : "Verify Audio") {
+        let verifiableRecs = plan.runnable
+        Button(plan.label) {
             // One scope for the whole selection: N jobs, one raise.
-            _ = fileOpsCenter.startedByUser { center in
+            fileOpsCenter.startedByUser { center in
                 for r in verifiableRecs {
                     model.noteMissingFileForUserAction(r)
                     center.startVerifyAudio(record: r, model: model)
@@ -1297,7 +1315,7 @@ extension CatalogContent {
             }
             MediaFileOperationsWindowOpener.openBehindMain(openWindow)
         }
-        .disabled(verifiableRecs.isEmpty)
+        .disabled(plan.isDisabled)
         .help("Check the sound track — levels, format, and whether the audio really belongs to the picture. Runs in the operations window; the catalog stays usable.")
         .accessibilityIdentifier("catalog.row.verifyAudio")
 
@@ -1899,5 +1917,22 @@ extension CatalogContent {
         case .ffprobeFailed: return .red
         default:             return .primary
         }
+    }
+}
+
+/// What a Verify Audio / Verify Video context-menu item says and runs
+/// (stage-0 triage R4, 2026-09-29). The label used to count the whole
+/// SELECTION while the action ran only the rows that can be verified — 3
+/// selected with one audio-only or offline said "(3 Files)" and started 2
+/// jobs. One value now carries both, so they cannot drift apart again.
+/// O(selection). (C++: a small POD computed once, read by the view.)
+struct CatalogVerifyMenuPlan {
+    let label: String
+    let runnable: [VideoRecord]
+    var isDisabled: Bool { runnable.isEmpty }
+
+    init(verb: String, selection: [VideoRecord], canRun: (VideoRecord) -> Bool) {
+        runnable = selection.filter(canRun)
+        label = runnable.count > 1 ? "\(verb) (\(runnable.count) Files)" : verb
     }
 }
