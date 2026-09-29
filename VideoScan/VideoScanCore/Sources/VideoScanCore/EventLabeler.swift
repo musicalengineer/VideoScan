@@ -391,7 +391,7 @@ public enum EventLabeler {
             // Year last or next year's.
             var bestOffset = 0, bestYear = 0, found = false
             for y in (d.year - 1)...(d.year + 1) {
-                guard y > b.born.year, b.diedYear == nil || y <= b.diedYear!,
+                guard y > b.born.year, y <= (b.diedYear ?? Int.max),
                       let anniversary = anniversaryJulianDay(of: b.born, in: y) else { continue }
                 let offset = jdn - anniversary
                 let distance = offset < 0 ? -offset : offset
