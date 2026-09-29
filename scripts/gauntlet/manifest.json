@@ -12528,6 +12528,22 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieTurnMemoTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieTurnMemoTests"
+      ],
+      "tests": [
+        "aWriteDuringTheTurnIsNeverAnsweredFromTheOlderRead",
+        "concurrentGuardsShareOneRead",
+        "eachTurnReadsOnceAndTheNextTurnReadsFresh",
+        "forgetMakesTheNextAskReadAgain",
+        "nilIsAnAnswerNotAReasonToLookAgain",
+        "theUnwrappedDependenciesStillReadEveryTime"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieTwoModeGateIntegrationTests.swift",
       "stage": "integration",
       "suites": [
@@ -24285,7 +24301,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1045,
+      "expected_floor": 1051,
       "modes": [
         {
           "name": "strict",
@@ -24433,6 +24449,7 @@
         "VideoScanTests/HallieTreeStatisticsQuestionTests",
         "VideoScanTests/HallieTurnExecutorCyberBrainRegressionTests",
         "VideoScanTests/HallieTurnExecutorKinshipBridgeTests",
+        "VideoScanTests/HallieTurnMemoTests",
         "VideoScanTests/HallieTwoModeReplayTests",
         "VideoScanTests/HallieTwoModeShellTests",
         "VideoScanTests/HallieTwoQuestionTurnTests",

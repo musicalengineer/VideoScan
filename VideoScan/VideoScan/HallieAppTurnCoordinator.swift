@@ -138,25 +138,25 @@ enum HallieAppTurnCoordinator {
             [String],
             String
         ) async -> SocialReply
-        let loadProfiles: @Sendable () -> [HallieTurnExecutor.ProfileSnapshot]?
+        var loadProfiles: @Sendable () -> [HallieTurnExecutor.ProfileSnapshot]?
         let loadGraph: @Sendable () -> GedcomFamilyGraph?
         /// The pulls behind a compiled tree this version refused (live
         /// miss #8); consulted only when `loadGraph` returned nil. Default
         /// = none, so tests without a store never see a recompile offer.
         let loadNeedsRecompile: @Sendable () -> [URL]
-        let loadCyberBrain: @Sendable () -> CyberBrainIndex?
+        var loadCyberBrain: @Sendable () -> CyberBrainIndex?
         /// Durably record one told passage (HallieTellingMode). The default
         /// records nothing so tests never touch the real CyberBrain; live
         /// writes through CyberBrainWriter.
-        let recordTestimony: @Sendable (CyberBrainWriter.Testimony) throws -> Void
+        var recordTestimony: @Sendable (CyberBrainWriter.Testimony) throws -> Void
         /// Durably record a photo caption ("this photo is me and Donna",
         /// 2026-08-26). Default records nothing; live writes through
         /// CyberBrainWriter.
-        let recordPhotoCaption: @Sendable (CyberBrainWriter.PhotoCaption) throws -> Void
+        var recordPhotoCaption: @Sendable (CyberBrainWriter.PhotoCaption) throws -> Void
         /// Durably keep how a name is said ("Nathaniel is pronounced …",
         /// 2026-08-26). Default records nothing; live writes through
         /// CyberBrainWriter.setPronunciation or pronunciations.json.
-        let recordPronunciation: @Sendable (PronunciationWrite) throws -> Void
+        var recordPronunciation: @Sendable (PronunciationWrite) throws -> Void
         /// The name drill's sheet (2026-08-29): the judged status per name,
         /// loaded once per drill turn and saved explicitly after a change.
         /// Defaults keep everything in memory so tests never touch
@@ -512,6 +512,9 @@ enum HallieAppTurnCoordinator {
         dependencies: Dependencies = .live
     ) async throws -> Response {
         try Task.checkCancellation()
+        // One read of People and CyberBrain serves every guard in this turn
+        // (#567); the next turn reads fresh.
+        let dependencies = dependencies.readingIdentitySourcesOncePerTurn()
 
         // The variations picker ("here are a few ways to say Latta",
         // 2026-08-29) owns a number / "none of these" while its offer is

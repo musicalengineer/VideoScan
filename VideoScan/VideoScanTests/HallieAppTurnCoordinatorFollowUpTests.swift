@@ -135,14 +135,16 @@ struct HallieAppTurnCoordinatorFollowUpTests {
                                       memory: &memory, calls: calls)
         #expect(first.result.matchCount == 3)
         #expect(first.executedIntent != nil)
-        // KNOWN ISSUE (team channel #567, codex's lane): since 87a21a4d the
-        // coordinator loads profiles + cyberbrain on the FIRST turn too
-        // (the interpretation guards ask "is this a person?"). The
-        // expectation stays so the regression is visible, not blessed.
-        withKnownIssue("eager identity-source loading on a fresh turn — #567") {
-            #expect(calls.values == ["start", "translate:how many videos of donna do we have?",
-                                     "execute:shape=presence offset=0"])
-        }
+        // #567 (closed 2026-09-28): a question naming someone is checked
+        // against People/CyberBrain before translation ("is donna a
+        // person?", since 87a21a4d) — that read is the design. What the
+        // known issue caught was the SECOND read by context capture; one
+        // read now serves the whole turn.
+        #expect(calls.values.filter { $0 == "profiles" }.count == 1, "\(calls.values)")
+        #expect(calls.values.filter { $0 == "cyberbrain" }.count == 1, "\(calls.values)")
+        #expect(calls.values.filter { !["graph", "profiles", "cyberbrain"].contains($0) }
+                == ["start", "translate:how many videos of donna do we have?",
+                    "execute:shape=presence offset=0"])
         let callsAfterFirstTurn = calls.values.count
 
         let play = try await execute("play one of them, say the first one",
