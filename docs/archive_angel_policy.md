@@ -55,7 +55,7 @@ So the smallest useful file is:
 | **Another copy** | The same recording as a recommended copy (same footage group from Find Similar Footage, same duplicate group, or same name + length). The copy you marked Keep wins; then, in a footage group, its likely original; otherwise the best-ranked copy does. |
 | **Prepared** | Sitting in a prepared batch, waiting for your review |
 
-5. **Coverage** (`coverage`, rules v13) shapes each *batch* Prepare builds, after the ranking: one pick per **day**, at most `maxPerYearPerBatch` picks per **year**. Neither is an exclusion — a row held back this way waits for a later batch, and a batch is never left short for it (see below).
+5. **Coverage** (`coverage`, rules v13; event labels v14) shapes each *batch* Prepare builds, after the ranking: one pick per **day or labelled occasion** (Christmas 1994, Timmy's birthday 1994), at most `maxPerYearPerBatch` picks per **year**. Neither is an exclusion — a row held back this way waits for a later batch, and a batch is never left short for it (see below).
 
 archiveStage Ready/Master is a **vote** to archive. Only a real Master Archive copy (`onMasterArchive`, `archivedCopy`) means "already archived".
 
@@ -165,10 +165,23 @@ Rick: *"If AA recommends 5 different versions of the same Thanksgiving 1994, rat
 
 | Key | Default | Meaning |
 |---|---|---|
-| `onePerEvent` | `true` | One pick per **day** per batch. The day is the ONE date rule's answer at day precision — your date, a camera's or phone's stamp, or the dossier's inferred date. A month, a year, a transcoder's stamp (the day a *copy* was made) or no date at all is **not** a day: such rows never collapse. Whatever the name or folder, two files shot on the same day are one event for this rule — a *diversity* choice, never "a copy" and never "already archived". |
+| `onePerEvent` | `true` | One pick per **day** (rules v14: or labelled occasion — `eventLabels`) per batch. The day is the ONE date rule's answer at day precision — your date, a camera's or phone's stamp, or the dossier's inferred date. A month, a year, a transcoder's stamp (the day a *copy* was made) or no date at all is **not** a day: such rows never collapse. Whatever the name or folder, two files shot on the same day are one event for this rule — a *diversity* choice, never "a copy" and never "already archived". |
 | `maxPerYearPerBatch` | `2` | At most this many picks of one year per batch, so a batch spreads across the years still to archive. `0` = no cap. Rows with no year are not capped (there is no year to spread them over). |
 | `backlogBonusMax` | `20` | The `backlogBonus` signal: a year with a deep backlog and few archived files earns up to this many points, scaled by the share of the year's recordings still to archive (2010 with 156 to archive and 27 archived → 17 points; a year half archived → 10). `0` switches it off. |
 | `backlogMinimumUnarchived` | `10` | A year earns the bonus only with at least this many recordings still to archive. |
+| `eventLabels` | `true` | Rules v14. `onePerEvent`'s event is a labelled **occasion** as well as a day — a holiday, a family birthday, a name word with the year (see *Event labels* below). Two Christmas-1994 files shot on the 24th and the 25th, and an `xmas94` tape with only a year, are one event; two files of one day still are. `false` = rules v13's day rule exactly (same keys, same picks). |
+| `birthdayWindowDays` | `3` | A day within this many days of a People-tab birthday is that person's birthday. `0…14`. |
+
+### Event labels (rules v14, 2026-09-29)
+
+Derived each time from what the catalog already knows — nothing is stored on a record and no background job runs (VideoScanCore `EventLabeler`, one pure type). Each label carries where it came from and a reason line, and the **Archive Readiness** sheet shows it as an *Occasion* line: `Christmas 1994 (Dec 25 — Christmas; file name says 'xmas')`.
+
+- **Calendar** — only from a day-precise date the day rule trusts (the same rule as the day key: never a transcoder's copy stamp). Christmas Dec 24–26 · New Year Dec 31–Jan 1 (New Year's Eve belongs to the *new* year) · Thanksgiving, the 4th Thursday of November ±1 day (US rule for every year) · Easter Sunday ±1 (Gregorian computus) · the Fourth of July, Jul 3–5 · Halloween, Oct 31 · Mother's Day (2nd Sunday of May) · Father's Day (3rd Sunday of June).
+- **Birthday** — the same trusted day within ±`birthdayWindowDays` of a People-tab birthdate, in a year after the birth year and not after a known death year: `3 days after Timmy's 12th birthday`. A Feb 29 birthday is kept on Feb 28 in common years; across New Year the nearest anniversary wins (Dec 30 is 2 days before a Jan 1 birthday of the *next* year). Several people → a label each. The birthdays are read the way Hallie reads the People tab — read-only, never migrating anything — off the main actor when the Angel starts and before each assessment. A birthdate stored as exactly midnight UTC (a hand-edited `profile.json`) is read as that day; anything else in the Mac's own calendar (what the People sheet's date picker stores).
+- **Name** — a curated word list in the file name (extension dropped) and the two nearest parent folders (never the `/Volumes/<drive>` or `/Users/<you>` part): `xmas`/`christmas`, `bday`/`birthday`/`party`, `thanksgiving`, `easter`, `halloween`, `wedding`, `graduation`, `vacation`/`trip`, `beach`, `cape`, `disney`/`disneyland`/`disneyworld`, `camp`, `recital`, `game` (and simple plurals). Whole words only, any case; digits, spaces and punctuation break words and so does a camelCase hump (`xmas94_tape2` → *xmas*; `ChristmasMorning` → *christmas*). A name word needs only a **year** — `xmas94_tape2.mov` whose year is 1994 is *Christmas 1994* — but never lends itself to a copy-era stamp's year, and a word with no year keys nothing (Christmas across fifty years is fifty events).
+- **Judgement calls.** `capetown`, `partyline`, `gamecube`, `endgame`, `campbell`, `escape` are *not* events (whole words). `Cape Town` *is* cape and `GameCube` is *game* + *cube* — accepted: the family's Cape is the Cape, and a hump is a word break. `party` counts as a birthday only when nothing else in the same name is an event word (`xmas party` is Christmas).
+
+**How the key changes.** Rules v13 keyed an event by its day, `d:1994-12-25`. With labels on, a labelled file's key names its occasions *and* its day, `e:christmas:1994|d:1994-12-25` (a birthday: `e:birthday:timmy:1994`), and a row is held back when **any** of its keys is already in the batch. So every v13 same-day collapse still happens and a labelled occasion collapses across its days too. Unlabelled files keep the v13 key byte for byte. The labels never change a score or the ranked order — the pass runs after the ranking, like the rest of `coverage` (codex #1643 A4).
 
 **Recordings, not files.** The backlog counts unique recordings — one per duplicate group, and per footage group when the policy collapses by it (never by name + length). Importing a thousand copies of one 1994 tape adds one recording to 1994, not a thousand. A recording counts as *archived* when any copy, its content or its footage's original is in the Master Archive; as *to archive* when it is not and some copy is real material: a video, not junk (marked or suspected), not Archive Angel's own working copy, not a Live Photo motion half, not a file Relocate reports gone, and at least `weights.minimumDurationSeconds` long. Recordings nobody can date have their own bucket — reported in the log, never rewarded.
 
@@ -181,6 +194,12 @@ Off, as a file would write it:
 ```json
 { "schemaVersion": 2, "name": "no coverage",
   "coverage": { "onePerEvent": false, "maxPerYearPerBatch": 0, "backlogBonusMax": 0 } }
+```
+
+Event labels off, everything else as it is (rules v13's day rule):
+
+```json
+{ "schemaVersion": 2, "name": "days only", "coverage": { "eventLabels": false } }
 ```
 
 ## `grades` and `tables`
@@ -303,3 +322,7 @@ Measured on the live catalog that morning and fixed as data (docs/archive_angel_
 ## Rules v13 (2026-09-26) — coverage across days and years
 
 docs/footage_groups_gap_plan_2026-09-26.md Stage 2, bounded by docs/codex-review-angel-coverage-2026-09-26.md. The `coverage` section above (one pick per day, `maxPerYearPerBatch`, the `backlogBonus` signal over unique recordings), the evidence file's `catalogRevision` stamp, and two batch-limit reasons. The duration band is unchanged: under 2 min is the `tooShort` floor (60 s for an explicit pick), 2–5 min earns nothing, 5 min–1 h the tiers, and a three-hour capture keeps its +60 — every edge is pinned by `ArchiveAngelDurationBandTests`. Every v12 evidence file re-scores.
+
+## Rules v14 (2026-09-29) — event labels
+
+Rick approved steps a–c that day. `coverage.eventLabels` (on) and `coverage.birthdayWindowDays` (3), and the *Event labels* section above: holidays, People-tab birthdays and a curated name lexicon widen `onePerEvent`'s event from a day to an occasion. Additive — a v13 `policy.json` loads with both defaults; an unknown key is still named in the log and ignored; a window outside 0…14 refuses the file. The Archive Readiness sheet gains an *Occasion* line. With `eventLabels` off, every key and every pick is rules v13's (`ArchiveAngelEventLabelParityTests`). Every v13 evidence file re-scores.
