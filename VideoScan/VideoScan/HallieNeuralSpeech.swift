@@ -62,6 +62,23 @@ enum HallieNeuralSpeech {
             .appendingPathComponent(directoryName, isDirectory: true)
     }
 
+    /// The voice engine's environment: ours, less Metal's DEBUG switches.
+    /// Launched from Xcode the app carries `MTL_DEBUG_LAYER=1` (the
+    /// scheme's "Metal API Validation"), a child process inherits it, and
+    /// on macOS 27 / Xcode 27 the validation layer ABORTS the engine on a
+    /// harmless zero-length `setBytes` — so every sentence fell back to
+    /// Apple speech (2026-09-29: "Hallie's voice regressed after the
+    /// upgrade"). Validating an ML worker gains nothing; the app's own
+    /// Metal use keeps whatever the scheme asked for. Pure.
+    nonisolated static func workerEnvironment(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        environment.filter { key, _ in
+            !(key.hasPrefix("MTL_DEBUG") || key.hasPrefix("MTL_SHADER_VALIDATION")
+              || key.hasPrefix("METAL_DEVICE_WRAPPER") || key.hasPrefix("METAL_DEBUG"))
+        }
+    }
+
     static var isInstalled: Bool {
         let directory = installationDirectory
         let executable = directory.appendingPathComponent(executableName).path
@@ -513,6 +530,7 @@ actor HallieNeuralSpeechWorker {
             "--voices", installationDirectory.appendingPathComponent(HallieNeuralSpeech.voicesName).path,
         ]
         process.currentDirectoryURL = installationDirectory
+        process.environment = HallieNeuralSpeech.workerEnvironment()
         process.standardInput = inputPipe
         process.standardOutput = outputPipe
         process.standardError = errorPipe
@@ -660,6 +678,7 @@ final class HallieNeuralSpeechJob: @unchecked Sendable {
                     "--text", self.text,
                 ]
                 process.currentDirectoryURL = install
+                process.environment = HallieNeuralSpeech.workerEnvironment()
                 process.standardOutput = stdout
                 process.standardError = stderr
 

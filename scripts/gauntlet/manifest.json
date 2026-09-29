@@ -10900,6 +10900,20 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieNeuralWorkerEnvironmentTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HallieNeuralWorkerEnvironmentTests"
+      ],
+      "tests": [
+        "aCleanEnvironmentPassesThroughUnchanged",
+        "everyEngineLaunchUsesTheFilteredEnvironment",
+        "metalDebugSwitchesAreDroppedEverythingElseKept"
+      ],
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieOfferAcceptanceTests.swift",
       "stage": "hallie",
       "suites": [
@@ -20889,6 +20903,23 @@
       ]
     },
     {
+      "kind": "python",
+      "path": "tests/test_hallie_voice_signature.py",
+      "stage": "unit",
+      "suites": [
+        "test_hallie_voice_signature.py"
+      ],
+      "tests": [
+        "test_a_slower_render_is_caught",
+        "test_another_kokoro_voice_is_caught",
+        "test_apple_speech_is_not_hallie",
+        "test_live_hallie_still_sounds_like_the_reference",
+        "test_signature_of_the_stored_reference_is_stable",
+        "test_the_engine_dies_under_metal_debug_so_the_app_must_strip_it"
+      ],
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit"
+    },
+    {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_label_queue_to_manifest.py",
@@ -23460,6 +23491,10 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "tests/test_hallie_voice_signature.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "tests/test_label_queue_to_manifest.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
@@ -23903,6 +23938,10 @@
         {
           "name": "VideoScan/VideoScanTests/ExternalMediaRegressionTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/HallieNeuralWorkerEnvironmentTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/LoaderRecoveryRegressionTests.swift",
