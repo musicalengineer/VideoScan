@@ -169,11 +169,8 @@ struct CatalogTrashShortcutTests {
     // MARK: (c) Source sensor — one Trash routine, one refusal sentence
 
     private func productionSource(_ filename: String) throws -> String {
-        let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        let url = testsDirectory.deletingLastPathComponent()
-            .appendingPathComponent("VideoScan")
-            .appendingPathComponent(filename)
-        return try String(contentsOf: url, encoding: .utf8)
+        // By NAME anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
+        try SourceTree.appSource(named: filename)
     }
 
     @Test("sensor: the shortcut and the row menu end in the same deleteConfirmedJunk(mode: .toTrash); the new file owns no file deletion")

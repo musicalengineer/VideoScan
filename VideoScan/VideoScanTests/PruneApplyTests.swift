@@ -1462,8 +1462,8 @@ struct PruneApplyTests {
     /// no file deletion, and the sheet never asks for permanent deletion.
     @Test func sensorApplyOwnsNoFileDeletionAndTheSheetOnlyTrashes() throws {
         func source(_ name: String) throws -> String {
-            let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            return try String(contentsOf: dir.appendingPathComponent("VideoScan").appendingPathComponent(name), encoding: .utf8)
+            // By NAME anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
+            try SourceTree.appSource(named: name)
         }
         let apply = try source("VideoScanModel+PruneApply.swift")
         #expect(apply.contains("await deleteConfirmedJunk([rec], mode: mode, guard: fileGuard)"),

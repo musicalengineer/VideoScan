@@ -205,9 +205,7 @@ struct BackupParentLockTests {
 
     @Test("codex #1 sensor: nothing removes the .rename_backups folder itself")
     func parentIsNeverRemoved() throws {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan/ArchiveIndexRename.swift")
-        let source = try String(contentsOf: url, encoding: .utf8)
+        let source = try SourceTree.appSource(named: "ArchiveIndexRename.swift")
         #expect(!source.contains("removeItem(at: parent)"), "the backups folder is the lock inode — permanent")
         #expect(source.contains("try withBackupsLock(parent) {\n                try FileManager.default.removeItem(at: dir)\n"),
                 "the refused-rename cleanup removes only its own folder, under the lock")

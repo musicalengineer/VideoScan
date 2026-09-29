@@ -195,9 +195,9 @@ struct AtomicFilePublishSensorTests {
         let stores = [
             "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelPlan.swift",
             "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelEvidenceStore.swift",
-            "VideoScan/VideoScan/IgnoredContentStore.swift",
-            "VideoScan/VideoScan/HoldoutClearStore.swift",
-            "VideoScan/VideoScan/ResearchStore.swift",
+            "VideoScan/VideoScan/Catalog/IgnoredContentStore.swift",
+            "VideoScan/VideoScan/People/HoldoutClearStore.swift",
+            "VideoScan/VideoScan/FamilyTree/ResearchStore.swift",
             "VideoScan/VideoScanCore/Sources/VideoScanCore/PreviewDiskCache.swift",
         ]
         var missing: [String] = []
@@ -234,9 +234,9 @@ struct AtomicFilePublishSensorTests {
             // the wrapper itself
             "VideoScan/VideoScanCore/Sources/VideoScanCore/AtomicFilePublish.swift",
             // publishes a resumed .partial media copy (82f92b46, crash-safe rescue)
-            "VideoScan/VideoScan/RescueFileCopier.swift",
+            "VideoScan/VideoScan/MediaOps/RescueFileCopier.swift",
             // rebases a symlink atomically (People #3, codex review 2026-09-13)
-            "VideoScan/VideoScan/POIStorage.swift",
+            "VideoScan/VideoScan/People/POIStorage.swift",
             // publishes a validated CyberBrain archive
             "VideoScan/VideoScanCore/Sources/VideoScanCore/CyberBrainWriter.swift",
             // CombineOutputPublish.swift REMOVED (codex #1642, 2026-09-23):

@@ -708,8 +708,7 @@ struct DerivativePublishQATests {
         let p = DerivativeOutputPublish.uniquePartialURL(for: URL(fileURLWithPath: "/tmp/a.vs.edit.mov"))
         #expect(p.lastPathComponent.contains(DerivativeOutputPublish.partialMarker))
         #expect(p.pathExtension == "mov")
-        let walker = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("VideoScan/FilesystemWalker.swift"), encoding: .utf8)
+        let walker = try SourceTree.appSource(named: "FilesystemWalker.swift")
         #expect(walker.contains("url.lastPathComponent.contains(\"\(DerivativeOutputPublish.partialMarker)\")"),
                 "FilesystemWalker skips the same marker")
     }

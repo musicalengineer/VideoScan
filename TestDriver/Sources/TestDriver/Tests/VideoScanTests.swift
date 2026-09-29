@@ -165,7 +165,7 @@ enum VideoScanTests {
             description: "Source mentions invalidateCache/SWRProbeCache — issue #87 fix landed"
         ) { _, log in
             let started = Date()
-            let path = projectDir + "/VideoScan/VideoScan/VolumeReachability.swift"
+            let path = projectDir + "/VideoScan/VideoScan/Volumes/VolumeReachability.swift"
             log("Reading \(path)")
             let elapsed = Date().timeIntervalSince(started)
             guard let content = try? String(contentsOfFile: path) else {

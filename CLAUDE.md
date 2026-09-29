@@ -41,11 +41,12 @@ Personal video cataloging and person-finding suite for organizing family home vi
 | `swift_cli/PersonFinder.swift` | Standalone Swift CLI for person finding |
 | `swift_cli/FaceDetect.swift` | Face detection utilities |
 | `swift_cli/FaceDiagnose.swift` | Face detection diagnostics CLI |
-| `VideoScan/VideoScan/VideoScanApp.swift` | SwiftUI app entry point, about window |
-| `VideoScan/VideoScan/ContentView.swift` | Tab UI, catalog view, combine dialog |
-| `VideoScan/VideoScan/VideoScanModel.swift` | Core scanning, ffprobe, CSV export, audio/video correlation |
-| `VideoScan/VideoScan/PersonFinderModel.swift` | Multi-job face recognition engine, reference loading, job lifecycle |
-| `VideoScan/VideoScan/PersonFinderView.swift` | Person finder UI (reference bar, settings, jobs, results) |
+| `VideoScan/VideoScan/App/VideoScanApp.swift` | SwiftUI app entry point, about window |
+| `VideoScan/VideoScan/App/ContentView.swift` | Tab UI, catalog view, combine dialog |
+| `VideoScan/VideoScan/Model/VideoScanModel.swift` | Core scanning, ffprobe, CSV export, audio/video correlation |
+| `VideoScan/VideoScan/People/PersonFinderModel.swift` | Multi-job face recognition engine, reference loading, job lifecycle |
+| `VideoScan/VideoScan/People/PersonFinderView.swift` | Person finder UI (reference bar, settings, jobs, results) |
+| `docs/source_layout.md` | Which feature folder under `VideoScan/VideoScan/` holds what; data-risk folders for review |
 | `tests/run_personfinder_tests.py` | Manifest-driven test runner for face recognition |
 | `tests/personfinder_cases.json` | Test case definitions and expectations |
 

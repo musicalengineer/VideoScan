@@ -417,13 +417,6 @@ struct ScanTargetRecordFactsTests {
 
     // MARK: - 5. Source sensors
 
-    private var repoRoot: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-    }
-
     /// `model.records` used as anything but O(1) `.isEmpty` / `.count`.
     /// `.count(where:)` is a walk and is NOT allowed (codex #1393).
     private static let forbiddenRecordsUse = try! NSRegularExpression(
@@ -460,8 +453,7 @@ struct ScanTargetRecordFactsTests {
 
     @Test
     func paneViewBuilderHasNoRecordsWalk() throws {
-        let file = repoRoot.appendingPathComponent("VideoScan/VideoScan/CatalogView+ScanTargetsPane.swift")
-        let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+        let lines = try SourceTree.appSource(named: "CatalogView+ScanTargetsPane.swift").components(separatedBy: "\n")
         let start = try NSRegularExpression(
             pattern: #"^\s*(?:private |fileprivate |internal |public )?(?:var \w+\s*:\s*some View\s*\{|@ViewBuilder\b)"#)
         let found = offenders(in: lines, regionStart: start)
@@ -472,8 +464,7 @@ struct ScanTargetRecordFactsTests {
 
     @Test
     func contentViewDeleteAlertHasNoRecordsWalk() throws {
-        let file = repoRoot.appendingPathComponent("VideoScan/VideoScan/ContentView.swift")
-        let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+        let lines = try SourceTree.appSource(named: "ContentView.swift").components(separatedBy: "\n")
         // The alert stage (`withAlerts`) hosts the Delete Volume Catalog
         // confirmation whose message read the same per-target walk.
         let start = try NSRegularExpression(pattern: #"^\s*(?:private )?func withAlerts\b"#)
@@ -491,8 +482,7 @@ struct ScanTargetRecordFactsTests {
 
     @Test
     func paneObservesTheOneAuthoritativeRevision() throws {
-        let file = repoRoot.appendingPathComponent("VideoScan/VideoScan/CatalogView+ScanTargetsPane.swift")
-        let source = try String(contentsOf: file, encoding: .utf8)
+        let source = try SourceTree.appSource(named: "CatalogView+ScanTargetsPane.swift")
         #expect(source.contains(".onChange(of: model.catalogMutationRevision)"),
                 "the pane must be driven by catalogMutationRevision")
         for stale in [".onChange(of: model.records.count)",

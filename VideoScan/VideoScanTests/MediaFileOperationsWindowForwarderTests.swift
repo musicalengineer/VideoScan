@@ -358,15 +358,9 @@ struct MediaFileOperationsWindowForwardSensorTests {
     // (Rick's complaint); wrapping a background start makes it pop up
     // uninvited. Both directions are pinned.
 
-    private var appSourceDir: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()      // VideoScanTests
-            .deletingLastPathComponent()      // VideoScan (project dir)
-            .appendingPathComponent("VideoScan")
-    }
-
+    /// By NAME (or folder/NAME) anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
     private func source(_ file: String) throws -> String {
-        try String(contentsOf: appSourceDir.appendingPathComponent(file), encoding: .utf8)
+        try SourceTree.appSource(named: file)
     }
 
     /// File → how many `startedByUser` scopes it must contain.
@@ -840,18 +834,12 @@ struct MediaFileOperationsWindowForwardTimingSensorTests {
     }
 
     @Test func legacyOpenBehindChecksTheForwardAtEntryAndOnEveryRetry() throws {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan/MediaFileOperationsWindow.swift")
-        let s = try String(contentsOf: url, encoding: .utf8)
+        let s = try SourceTree.appSource(named: "MediaFileOperationsWindow.swift")
         #expect(s.components(separatedBy: "defersToForward(forwardedAt: forwardedAt, now: Date())").count - 1 == 2)
     }
 
     @Test func productionPresenterIsTheDeferredOne() throws {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan/MediaFileOperationsWindowForwarder.swift")
-        let s = try String(contentsOf: url, encoding: .utf8)
+        let s = try SourceTree.appSource(named: "MediaFileOperationsWindowForwarder.swift")
         #expect(s.contains("presenter: AppKitMediaFileOperationsWindowPresenter()"))
         // The honest line is composed only from a report, never logged inline.
         #expect(s.components(separatedBy: "log(\"[mfo] brought").count - 1 == 0)

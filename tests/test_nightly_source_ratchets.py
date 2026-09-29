@@ -168,7 +168,7 @@ class TestNoShellCommandStrings(unittest.TestCase):
             classify_source_role("VideoScan/VideoScanTests/ProcessControlTests.swift"),
             ROLE_TEST)
         self.assertEqual(
-            classify_source_role("VideoScan/VideoScan/CombineEngine.swift"),
+            classify_source_role("VideoScan/VideoScan/MediaOps/CombineEngine.swift"),
             ROLE_PRODUCTION)
 
 
@@ -176,7 +176,7 @@ class TestNoShellCommandStrings(unittest.TestCase):
 # ffmpeg concat demuxer escaping
 # ==========================================================================
 
-# Verbatim from VideoScan/VideoScan/PersonFinderCompilation.swift (~line 417).
+# Verbatim from VideoScan/VideoScan/People/PersonFinderCompilation.swift (~line 417).
 REAL_CONCAT_WRITER_A = """
     let listContent = entries.map { e -> String in
         let escaped = e.clipPath.replacingOccurrences(of: "'", with: "'\\\\''")

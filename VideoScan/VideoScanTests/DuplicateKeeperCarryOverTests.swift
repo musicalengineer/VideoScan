@@ -173,11 +173,7 @@ struct DuplicateKeeperCarryOverTests {
     /// Source-level sensor: the delete loop routes through the ONE shared
     /// merge (no second copy of the rules that could drift).
     @Test func deletePathRoutesThroughSharedInheritance() throws {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("VideoScan/VideoScanModel+Duplicates.swift")
-        let source = try String(contentsOf: url, encoding: .utf8)
+        let source = try SourceTree.appSource(named: "VideoScanModel+Duplicates.swift")
         #expect(source.contains("applyHumanMetadataInheritance(from:"),
                 "deleteDuplicates no longer carries human metadata onto the keeper")
     }

@@ -14,10 +14,8 @@ import Testing
 struct ArchiveTimelineRailScrollSensorTests {
 
     private func source() throws -> String {
-        let here = URL(fileURLWithPath: #filePath)
-        let file = here.deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan/ArchiveView+Timeline.swift")
-        return try String(contentsOf: file, encoding: .utf8)
+        // By NAME anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
+        try SourceTree.appSource(named: "ArchiveView+Timeline.swift")
     }
 
     @Test("every stream anchor and the rail's scrollTo go through anchorID (String), never a bare decade Int")

@@ -51,7 +51,7 @@ DEFAULT_JSONL = Path("/Volumes/Crucial2TB/dossier-deltas/junk-tagging.jsonl")
 DEFAULT_OFFSETS = Path("~/Library/Application Support/VideoScan/dossier-merger-offsets.json").expanduser()
 
 # Swift `MediaDisposition` case name -> raw value. Kept in lock-step with
-# VideoScan/VideoScan/Models.swift::MediaDisposition. The Swift contract
+# VideoScan/VideoScan/Model/Models.swift::MediaDisposition. The Swift contract
 # test MediaDispositionRawValueContractTests.allRawValuesAreStableContract
 # pins the other side.
 CASE_NAME_TO_RAW = {

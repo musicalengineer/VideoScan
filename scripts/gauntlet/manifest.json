@@ -18526,7 +18526,10 @@
       ],
       "tests": [
         "aFileOutsideTheRootIsRefusedLoudly",
-        "enumeratedURLUnderASymlinkedRootIsRelativeToIt"
+        "aMissingAppSourceIsRefusedLoudly",
+        "appSourcesAreFoundByNameInsideTheirFeatureFolder",
+        "enumeratedURLUnderASymlinkedRootIsRelativeToIt",
+        "everyAppSourceNameIsUnique"
       ]
     },
     {

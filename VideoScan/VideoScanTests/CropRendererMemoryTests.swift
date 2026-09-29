@@ -83,18 +83,15 @@ struct CropRendererMemoryTests {
     /// Grep sensor: the presenting view and the sheet must not reintroduce
     /// the NSImage → TIFF → decode path.
     @Test func adjustPhotoSourcesContainNoUnboundedDecode() throws {
-        let sources = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()            // VideoScanTests
-            .deletingLastPathComponent()            // VideoScan (project dir)
-            .appendingPathComponent("VideoScan", isDirectory: true)
+        // By NAME anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
         for name in ["FamilyTreeView.swift", "FamilyPhotoAdjustSheet.swift", "CropGeometry.swift"] {
-            let text = try String(contentsOf: sources.appendingPathComponent(name), encoding: .utf8)
+            let text = try SourceTree.appSource(named: name)
             for forbidden in ["tiffRepresentation", "NSImage(contentsOf", "NSImage(data", "NSBitmapImageRep(data"] {
                 #expect(!text.contains(forbidden), "\(name) uses \(forbidden) — decode must go through CropRenderer.boundedImage")
             }
         }
         // And the sheet saves through the injected store, not the shared center.
-        let sheet = try String(contentsOf: sources.appendingPathComponent("FamilyPhotoAdjustSheet.swift"), encoding: .utf8)
+        let sheet = try SourceTree.appSource(named: "FamilyPhotoAdjustSheet.swift")
         #expect(!sheet.contains("FamilyAssetConfigurationCenter.shared"),
                 "FamilyPhotoAdjustSheet must save through source.store (codex #707 / 11)")
     }

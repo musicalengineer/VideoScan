@@ -20,12 +20,8 @@ struct HallieTurnExecutorTests {
     }
 
     private func source(named filename: String) throws -> String {
-        let testsDirectory = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-        let url = testsDirectory.deletingLastPathComponent()
-            .appendingPathComponent("VideoScan")
-            .appendingPathComponent(filename)
-        return try String(contentsOf: url, encoding: .utf8)
+        // By NAME anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
+        try SourceTree.appSource(named: filename)
     }
 
     @Test func allSixASTShapesHaveClosedRoutesAndUnsupportedShapesDecline() async throws {

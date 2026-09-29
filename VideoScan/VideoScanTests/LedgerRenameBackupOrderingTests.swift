@@ -144,9 +144,7 @@ struct LedgerRenameBackupOrderingTests {
     /// path, and retention orders by marker sequence — never by name.
     @Test("#204 sensor: both writers claim via claimBackupDirectory; prune orders by marker sequence")
     func sourceUsesTheClaimAndMarkerOrder() throws {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan/ArchiveIndexRename.swift")
-        let source = try String(contentsOf: url, encoding: .utf8)
+        let source = try SourceTree.appSource(named: "ArchiveIndexRename.swift")
         #expect(source.components(separatedBy: "claimBackupDirectory(in: parent, now: now)").count - 1 == 2,
                 "the archive-index writer and the ledger writer")
         #expect(source.components(separatedBy: "try makeBackupDirectory(").count - 1 == 1, "only inside the claim")

@@ -72,11 +72,7 @@ struct PromoteProgressTextTests {
 struct PromoteBeginLineSensorTests {
 
     private static func stepsSource() throws -> String {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()          // VideoScanTests
-            .deletingLastPathComponent()          // VideoScan
-            .appendingPathComponent("VideoScan/PromoteToArchiveJob+Steps.swift")
-        return try String(contentsOf: url, encoding: .utf8)
+        try SourceTree.appSource(named: "PromoteToArchiveJob+Steps.swift")
     }
 
     /// SENSOR. This is a source sensor on purpose: the behaviour it pins —

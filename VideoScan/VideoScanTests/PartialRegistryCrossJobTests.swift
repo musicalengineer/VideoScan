@@ -147,9 +147,7 @@ struct PartialRegistryCrossJobTests {
     // MARK: Sensor — Transcode reserves through the registry
 
     @Test func transcodeReservesAndReleasesThroughTheOneRegistry() throws {
-        let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan/TranscodeJob.swift")
-        let text = try String(contentsOf: src, encoding: .utf8)
+        let text = try SourceTree.appSource(named: "TranscodeJob.swift")
         #expect(text.contains("DerivativeOutputPublish.reservePartial(for: outputURL)"),
                 "Transcode reserves (and so registers) its partial")
         #expect(!text.contains("uniquePartialURL("), "no unregistered partial names in Transcode")
@@ -265,9 +263,7 @@ struct PartialRegistryCrossJobTests {
 
     /// QA 4: the exit-failure branch removes the (reserved) partial too.
     @Test func transcodeExitFailureDiscardsItsPartialAndPublishFailureKeepsTheEncode() throws {
-        let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan/TranscodeJob.swift")
-        let text = try String(contentsOf: src, encoding: .utf8)
+        let text = try SourceTree.appSource(named: "TranscodeJob.swift")
         #expect(!text.contains("No partial at all"), "stale wording: the partial is reserved up front")
         let exitBranch = try #require(text.range(of: "if let failure = FFmpegEncodeCheck.exitFailure("))
         let nextReturn = try #require(text.range(of: "return", range: exitBranch.upperBound..<text.endIndex))
