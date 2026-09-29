@@ -58,6 +58,8 @@ struct TreeWalkFanLayout: Sendable {
         let line: TreeWalk.Line
         let hasCheck: Bool
         let generation: Int
+        /// The person (the walk's ordinal) — what the highlight matches on.
+        let ordinal: Int32
     }
 
     /// The reveal halo's largest radius as a multiple of the dot's (the
@@ -147,7 +149,7 @@ struct TreeWalkFanLayout: Sendable {
             point[v.ordinal] = p
             out.append(Placed(point: p, radius: Self.dotRadius(generation: Int(v.generation)),
                               from: v.from < 0 ? nil : point[v.from], line: v.line,
-                              hasCheck: v.hasCheck, generation: Int(v.generation)))
+                              hasCheck: v.hasCheck, generation: Int(v.generation), ordinal: v.ordinal))
         }
         placed = out
     }
@@ -321,8 +323,13 @@ final class TreeWalkAnimator: ObservableObject {
 /// counters, and — once the replay ends — the summary in a scroll view.
 struct TreeWalkAnimationView: View {
     @ObservedObject var animator: TreeWalkAnimator
+    /// Surname / place highlight (Donna 2026-09-29); drawn once the replay
+    /// has ended.
+    @ObservedObject var highlighter: TreeWalkHighlighter
 
-    static let sidePanelWidth: CGFloat = 300
+    static let sidePanelWidth: CGFloat = 320
+    /// How much of the trail shows through while a highlight is on.
+    static let dimmedOpacity = 0.14
     static let minimumFan: CGFloat = 240
 
     var body: some View {
@@ -343,6 +350,8 @@ struct TreeWalkAnimationView: View {
             let frame = animator.frame
             let layoutSize = animator.layout.size
             let pulse = 0.5 + 0.5 * sin(timeline.date.timeIntervalSinceReferenceDate * 6)
+            let highlighting = frame.finished && !highlighter.selection.isEmpty
+            let lit = highlighting ? highlighter.lit : []
             Canvas { gc, size in
                 gc.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(white: 0.07)))
                 // Draw in layout coordinates, scaled to fit and centred.
@@ -350,7 +359,18 @@ struct TreeWalkAnimationView: View {
                 gc.translateBy(x: (size.width - layoutSize.width * s) / 2, y: (size.height - layoutSize.height * s) / 2)
                 gc.scaleBy(x: s, y: s)
                 if let trail = frame.trail {
+                    // A highlight dims everyone; the matches are drawn on top.
+                    gc.opacity = highlighting ? Self.dimmedOpacity : 1
                     gc.draw(Image(decorative: trail, scale: 2), in: CGRect(origin: .zero, size: layoutSize))
+                    gc.opacity = 1
+                }
+                for p in lit {
+                    let r = max(p.radius * 1.3, 2.2)
+                    let ring = CGRect(x: p.point.x - r - 1.2, y: p.point.y - r - 1.2,
+                                      width: (r + 1.2) * 2, height: (r + 1.2) * 2)
+                    gc.fill(Path(ellipseIn: ring), with: .color(.white.opacity(0.9)))
+                    gc.fill(Path(ellipseIn: CGRect(x: p.point.x - r, y: p.point.y - r, width: r * 2, height: r * 2)),
+                            with: .color(TreeWalkPalette.color(p.line)))
                 }
                 // The frontier: this tick's people, haloed (never after the end).
                 for p in frame.recent {
@@ -388,10 +408,16 @@ struct TreeWalkAnimationView: View {
             if f.finished {
                 Divider()
                 ScrollView(.vertical) {
-                    TreeWalkSummaryView(summary: animator.summary, displayNames: animator.displayNames)
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.08)))
+                    VStack(alignment: .leading, spacing: 12) {
+                        TreeWalkHighlightPanel(highlighter: highlighter)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.07)))
+                        TreeWalkSummaryView(summary: animator.summary, displayNames: animator.displayNames)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.08)))
+                    }
                 }
             }
         }

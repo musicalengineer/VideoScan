@@ -10,17 +10,22 @@
 //
 // Setup: start people (default Rick + Donna — the tree's home people, the
 // pinned owner first; or the selected person; or a bookmarked person) and
-// depth (All / 3 / 5 / 10 generations). A tree with no home people and
-// nobody selected says so instead of guessing.
+// depth (3 / 5 / 7 / 10 / All generations; default 7 — Donna 2026-09-29:
+// "fewer generations" reads better on a first look, and All is one click
+// away; the Highlight checks keep a deep walk readable). A tree with no
+// home people and nobody selected says so instead of guessing.
 //
 // SIZE (Rick 2026-09-27: "it doesn't fit"). A macOS sheet takes its
 // content's size and is NOT clipped to the window it hangs from, so the
 // old fixed 600-pt fan + counters + summary ran off both sides of the
 // Family Tree window. Now, while walking and watching, the sheet is the
 // host window's size less an inset (`watchingSize`), never smaller than
-// 640 × 520 (fits a 13" laptop) nor larger than 1,100 × 860. Inside it the
-// fan scales to the space left of a fixed 300-pt side panel, and the
-// summary scrolls in that panel.
+// 640 × 520 (fits a 13" laptop) nor larger than 1,800 × 1,200 (Donna
+// 2026-09-29: "a bigger window" — a big display should get a big fan).
+// Inside it the fan scales to the space left of a fixed 320-pt side panel,
+// and the highlight checks and summary scroll in that panel. The fan's
+// canvas is laid out at the size it will be SHOWN (`fanSide`), so a big
+// window gets crisp dots rather than a small bitmap scaled up.
 //
 // (For Rick: `hostSize` is measured by the presenting view with
 // `onGeometryChange` — think of it as a resize callback that stores the
@@ -39,21 +44,29 @@ struct FamilyTreeWalkSheet: View {
     enum Stage {
         case setup
         case walking(String)
-        case watching(TreeWalkAnimator)
+        case watching(TreeWalkAnimator, TreeWalkHighlighter)
         case failed(String)
     }
 
     @State private var stage: Stage = .setup
     @State private var startChoice = "default"
-    @State private var depth = 0          // 0 = all
+    @State private var depth = 7          // 0 = all
     @State private var walkTask: Task<Void, Never>?
 
-    /// The fan's LOGICAL canvas (layout + trail bitmap). The view scales it
-    /// to whatever room the sheet has.
-    static let fanSize = CGSize(width: 600, height: 600)
-
     static let minimumWatchingSize = CGSize(width: 640, height: 520)
-    static let maximumWatchingSize = CGSize(width: 1_100, height: 860)
+    static let maximumWatchingSize = CGSize(width: 1_800, height: 1_200)
+
+    /// The fan's LOGICAL canvas side (layout + trail bitmap): the square the
+    /// sheet will show it in — width left of the side panel, height below
+    /// the title and above the buttons — never under 600 (the old fixed
+    /// size). The view still scales it, so an estimate that is a little off
+    /// only rescales slightly. Trail memory: side × 2 squared × 4 B ≈ 16 MB
+    /// at the 1,100-pt maximum-window fan.
+    static func fanSide(for sheet: CGSize) -> CGFloat {
+        let w = sheet.width - 40 - TreeWalkAnimationView.sidePanelWidth - 16
+        let h = sheet.height - 40 - 90
+        return max(600, min(w, h).rounded(.down))
+    }
     static let hostInset: CGFloat = 48
 
     /// The sheet's size while walking / watching, from the host window's.
@@ -87,8 +100,8 @@ struct FamilyTreeWalkSheet: View {
                     Text(phase).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .watching(let animator):
-                TreeWalkAnimationView(animator: animator)
+            case .watching(let animator, let highlighter):
+                TreeWalkAnimationView(animator: animator, highlighter: highlighter)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed(let why):
                 Text(why).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
@@ -148,11 +161,12 @@ struct FamilyTreeWalkSheet: View {
                     }
                 }
             }
-            Picker("Depth", selection: $depth) {
+            Picker("Generations", selection: $depth) {
+                Text("3").tag(3)
+                Text("5").tag(5)
+                Text("7").tag(7)
+                Text("10").tag(10)
                 Text("All").tag(0)
-                Text("3 generations").tag(3)
-                Text("5 generations").tag(5)
-                Text("10 generations").tag(10)
             }
             .pickerStyle(.segmented)
         }
@@ -193,16 +207,18 @@ struct FamilyTreeWalkSheet: View {
                 if !Task.isCancelled { stage = .failed(center.recentLines.last ?? "The walk did not finish.") }
                 return
             }
-            let layout = await TreeWalkAnimator.prepare(result, size: Self.fanSize)
+            let side = Self.fanSide(for: Self.watchingSize(host: hostSize))
+            let layout = await TreeWalkAnimator.prepare(result, size: CGSize(width: side, height: side))
+            let inputs = await TreeWalkHighlighter.prepare(result: result, graph: graph, layout: layout)
             let animator = TreeWalkAnimator(layout: layout, summary: result.summary, displayNames: names)
-            stage = .watching(animator)
+            stage = .watching(animator, TreeWalkHighlighter(inputs: inputs))
             animator.start()
         }
     }
 
     private func close() {
         walkTask?.cancel()
-        if case .watching(let animator) = stage { animator.stop() }
+        if case .watching(let animator, _) = stage { animator.stop() }
         onClose()
     }
 }
