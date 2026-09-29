@@ -112,7 +112,7 @@ struct ArchiveAngelCodex1654Tests {
         // P1-2): each record carries a usable fixity and the fresh set is
         // DECLARED here (pure lender logic; ArchiveAngelCodex1673Tests pins
         // the stat).
-        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 10, mtimeNs: 0, ctimeNs: 1)
+        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 10, mtimeNs: 0, ctimeNs: 1, volumeUUID: "0978904A-3D3C-4546-BC51-5A53F32BCB23")   // usable: ctime + volume
         for (r, d) in [(tape, "a1"), (trim, "b2"), (balanced, "c3")] {
             r.sizeBytes = 10
             r.contentFixity = ContentFixity(digest: String(repeating: d, count: 32), byteCount: 10, stamp: stamp)

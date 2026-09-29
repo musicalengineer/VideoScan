@@ -904,7 +904,7 @@ extension MediaFileOperationKind {
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
-             .promote, .findSimilarFootage:
+             .promote, .findSimilarFootage, .bindFixity:
             return false
         }
     }
@@ -990,6 +990,10 @@ extension MediaFileOperationKind {
         // not a media verb. Δ ≥ 0.19 from every other fill (nearest:
         // Rebuild's brown), contrast vs white ≈ 8.5.
         case .findSimilarFootage: return Color(red: 0.30, green: 0.30, blue: 0.30)
+        // Bind Fixity to Volume (2026-09-23) — deep violet: a slow full
+        // read that only rewrites catalog stamps. Δ ≥ 0.29 from every
+        // other fill (nearest: Frames' purple), contrast vs white ≈ 7.
+        case .bindFixity: return Color(red: 0.55, green: 0.00, blue: 0.80)
         // Lock files already in the archive (2026-09-27) — deep navy slate: "the vault".
         // Δ ≥ 0.22 from every other fill; contrast vs white ≈ 13.
         case .lockArchive: return Color(red: 0.10, green: 0.20, blue: 0.30)

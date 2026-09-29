@@ -151,6 +151,12 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// exports). Pause/Stop between phases and apply slices.
     /// FindSimilarFootageJob.
     case findSimilarFootage
+    /// "Bind Fixity to Volume" (2026-09-23, codex #1707): re-read every
+    /// file on one volume whose stored whole-file digest predates volume
+    /// identity, in full, with before/after identity checks on the same
+    /// opened file, and re-store it bound to the volume's persistent UUID.
+    /// Read-only on media; catalog writes only. BindFixityToVolumeJob.
+    case bindFixity
     /// "Lock files already in the archive (one-time)…" (Rick 2026-09-27):
     /// walks the archive manifest's rows and sets the macOS user-immutable
     /// flag on each archived file promoted before locking existed.
@@ -189,6 +195,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         // only reads.
         case .pruneCopies: return "TRASH"
         case .findSimilarFootage: return "Footage"
+        case .bindFixity: return "Bind"
         case .lockArchive: return "Lock"
         }
     }
@@ -220,6 +227,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .deleteDuplicates: return "delete duplicates"
         case .pruneCopies: return "trash copies"
         case .findSimilarFootage: return "find similar footage"
+        case .bindFixity: return "bind fixity"
         case .lockArchive: return "lock archive files"
         }
     }

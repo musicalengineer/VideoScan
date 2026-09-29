@@ -146,7 +146,7 @@ struct ArchiveAngelFamilyFactsTests {
         original.durationSeconds = 600
         let twin = rec("twin.mov", hash: "v1:t")
         // Proven the same bytes (codex #1654: a sampled contentHash alone is not).
-        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 10, mtimeNs: 0, ctimeNs: 1)   // ctime-bearing = usable
+        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 10, mtimeNs: 0, ctimeNs: 1, volumeUUID: "0978904A-3D3C-4546-BC51-5A53F32BCB23")   // ctime + volume UUID = usable
         for r in [original, twin] {
             r.sizeBytes = 10
             r.contentFixity = ContentFixity(digest: String(repeating: "cd", count: 32), byteCount: 10, stamp: stamp)

@@ -105,7 +105,7 @@ enum ArchiveAngelCopyFamily {
     /// ("sha256:<hex>:<bytes>") — a CANDIDATE only. It may authorise
     /// anything only once `ArchiveAngelFixityCheck` has confirmed, with a
     /// stat, that the stored ContentFixity still describes the file NOW
-    /// (`describesFileNow`: device, inode, size, mtime AND ctime) — codex
+    /// (`describesFileNow`: volume (UUID), inode, size, mtime AND ctime) — codex
     /// #1659: a same-size rewrite keeps the size but not the stamp. A bare
     /// ArchiveFixity (no stamp) never counts on its own; an archive copy
     /// joins through its own verified ContentFixity or the promotion link.

@@ -468,6 +468,21 @@ extension CatalogView {
                 .disabled(model.isReadOnly)
                 .help("Record which of this volume's files are probably the same footage as files anywhere in the catalog (copies, re-encodes, transcodes, exports). Catalog metadata only — no media is read.")
             }
+            // Bind Fixity to Volume (2026-09-23, codex #1707): stored digests
+            // from before volume identity are untrusted after any remount;
+            // one full re-read per file binds them again. Rick starts it —
+            // it reads every such file on the volume in full (overnight-sized).
+            if single, !first.searchPath.isEmpty {
+                Button(action: {
+                    startFileOperation("Bind Fixity to Volume") { center in
+                        center.startBindFixityToVolume(scopePath: first.searchPath, model: model)
+                    }
+                }) {
+                    Label("Bind Fixity to Volume", systemImage: "lock.doc")
+                }
+                .disabled(model.isReadOnly || !first.isReachable)
+                .help("Re-read, in full, every file on this volume whose stored whole-file digest predates volume identity, and bind it to this volume's UUID so it survives remounts. Reads a lot — can run overnight; Pause frees the disk.")
+            }
 
             if single {
                 Button(action: { model.verifyCatalog(for: first) }) {
