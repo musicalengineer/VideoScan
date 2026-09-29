@@ -879,7 +879,7 @@ enum ArchiveManifestCSV {
         guard let data = try? ArchivePromoteEngine.readAll(fd: fd),
               let text = String(data: data, encoding: .utf8) else { return [:] }
         var out: [UUID: [String]] = [:]
-        for line in text.split(separator: "\n").dropFirst() {   // header
+        for line in ArchiveIndexText.lines(text).dropFirst() {   // header (CRLF-safe)
             let fields = fields(ofLine: String(line))
             guard fields.count >= 12,
                   let id = UUID(uuidString: fields[sourceRecordIDColumn]) else { continue }

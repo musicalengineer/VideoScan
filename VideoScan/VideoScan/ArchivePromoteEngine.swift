@@ -861,7 +861,7 @@ enum ArchivePromoteJournal {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         var out: [UUID: Entry] = [:]
-        for line in text.split(separator: "\n") {
+        for line in ArchiveIndexText.lines(text) {   // CRLF-safe
             guard let d = line.data(using: .utf8),
                   let e = try? decoder.decode(Entry.self, from: d) else { continue }
             out[e.sourceRecordID] = e

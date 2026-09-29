@@ -204,7 +204,7 @@ enum ArchiveRefile {
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime]
         var rows: [ManifestRow] = []
-        for line in text.split(separator: "\n").dropFirst() {
+        for line in ArchiveIndexText.lines(text).dropFirst() {   // header (CRLF-safe)
             let f = ArchiveManifestCSV.fields(ofLine: String(line))
             guard f.count >= ArchiveManifestCSV.columnCountLegacy, !f[1].isEmpty else { continue }
             rows.append(ManifestRow(promotedAt: iso.date(from: f[0]), relPath: f[1], sha256: f[2],

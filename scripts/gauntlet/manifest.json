@@ -3062,6 +3062,39 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveIndexCRLFTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveIndexCRLFTests"
+      ],
+      "tests": [
+        "archivedAtManifestDates",
+        "attestationJournalEntries",
+        "lockPlanMixed",
+        "manifestFieldRowsBySource",
+        "promoteJournalLatestBySource",
+        "refileParseRows",
+        "verifyIndexParse"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveIndexLineSplitSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveIndexLineSplitSensorTests"
+      ],
+      "tests": [
+        "helperContract",
+        "helperScale",
+        "knownReadersUseTheHelper",
+        "noRawNewlineSplitInIndexReaders"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveItemVersionsTests.swift",
       "stage": "unit",
@@ -22045,6 +22078,14 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ArchiveHomeStateTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ArchiveIndexCRLFTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ArchiveIndexLineSplitSensorTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

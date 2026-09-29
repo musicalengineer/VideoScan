@@ -112,7 +112,7 @@ struct VerifyArchiveManifestIndex: Sendable {
         var byRelPath: [String: Row] = [:]
         var byRecordID: [UUID: Row] = [:]
         var bySourceID: [UUID: Row] = [:]
-        for line in text.split(separator: "\n").dropFirst() {   // header
+        for line in ArchiveIndexText.lines(text).dropFirst() {   // header (CRLF-safe)
             let f = ArchiveManifestCSV.fields(ofLine: String(line))
             guard f.count >= 12, !f[ArchiveManifestCSV.relPathColumn].isEmpty else { continue }
             let row = Row(relPath: f[ArchiveManifestCSV.relPathColumn],

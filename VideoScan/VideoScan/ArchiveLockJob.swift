@@ -347,12 +347,13 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
         var dataRows = 0
         var malformedRows = 0
         // CRLF is ONE Character in Swift (a grapheme cluster), so splitting
-        // on "\n" alone never separates CRLF records (codex r2 #3) — split
-        // on either terminator. (C++ analogy: iterating Characters is like
-        // iterating grapheme clusters, not bytes.)
-        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" })
+        // on "\n" alone never separates CRLF records (codex r2 #3). The
+        // shared ArchiveIndexText.lines splits on either terminator and
+        // drops a trailing "\r"; blank lines are KEPT (omittingEmpty: false)
+        // so `i + 1` stays the file's own line number.
+        let lines = ArchiveIndexText.lines(text, omittingEmpty: false)
         for (i, line) in lines.enumerated().dropFirst() {
-            let raw = line.hasSuffix("\r") ? String(line.dropLast()) : String(line)
+            let raw = String(line)
             if raw.isEmpty { continue }
             dataRows += 1
             let f = ArchiveManifestCSV.fields(ofLine: raw)

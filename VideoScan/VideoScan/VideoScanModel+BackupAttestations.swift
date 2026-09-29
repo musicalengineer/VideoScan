@@ -161,7 +161,7 @@ enum ArchiveAttestationJournal {
         guard let data = try? ArchivePromoteEngine.readAll(fd: fd),
               let text = String(data: data, encoding: .utf8) else { return [] }
         let decoder = JSONDecoder()
-        return text.split(separator: "\n").compactMap { line in
+        return ArchiveIndexText.lines(text).compactMap { line in   // CRLF-safe
             guard let d = line.data(using: .utf8) else { return nil }
             return try? decoder.decode(Entry.self, from: d)
         }
