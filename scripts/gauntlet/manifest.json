@@ -21032,6 +21032,24 @@
       ]
     },
     {
+      "kind": "python",
+      "path": "tests/test_nightly_hallie_voice.py",
+      "stage": "unit",
+      "suites": [
+        "test_nightly_hallie_voice.py"
+      ],
+      "tests": [
+        "test_a_rotated_log_is_read_from_the_start",
+        "test_fallbacks_are_counted_only_since_the_last_run",
+        "test_missing_engine_is_not_run_never_green",
+        "test_no_log_and_no_state_is_zero_not_an_error",
+        "test_the_lane_never_raises_and_only_writes_voice_keys",
+        "test_verdict_a_good_voice_with_app_fallbacks_is_not_ok",
+        "test_worker_env_mirrors_the_app_filter"
+      ],
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit"
+    },
+    {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_nightly_source_ratchets.py",
@@ -23504,6 +23522,10 @@
         },
         {
           "name": "tests/test_migrate_people_folders.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_nightly_hallie_voice.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
