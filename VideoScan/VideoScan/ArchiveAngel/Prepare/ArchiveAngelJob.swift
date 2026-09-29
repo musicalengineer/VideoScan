@@ -378,6 +378,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             attentionChangedAt: model.archiveAngel.attention.lastEventAt,
             attentionRevision: model.archiveAngel.attention.revision,
             catalogRevision: model.archiveAngel.catalogRevision, launchToken: model.archiveAngel.launchToken,
+            birthdays: model.archiveAngel.familyBirthdays,
             project: { id in live(id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
             selection = fromEvidence.selection
             consideredCount = model.archiveAngel.store.consideredCount
@@ -409,7 +410,8 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             ArchiveAngelScorer.markArchivedFootage(&candidates, archivedGroups: model.archivedFootageGroupIDs(active))
             ArchiveAngelScorer.applyFamilyAttention(&candidates, weights: weights)   // Phase 1: same rule as the sweep
             if self.policy.coverage.isActive {   // rules v13: the same pre-pass as the sweep; off = rules v12, no cost
-                let backlog = ArchiveAngelEvent.applyCoverage(&candidates, policy: self.policy)
+                let backlog = ArchiveAngelEvent.applyCoverage(&candidates, policy: self.policy,
+                                                              birthdays: model.archiveAngel.familyBirthdays)
                 note("Archive Angel: " + ArchiveAngelEvent.summaryLine(backlog))
             }
 

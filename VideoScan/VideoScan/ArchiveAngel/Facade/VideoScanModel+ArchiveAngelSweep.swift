@@ -34,8 +34,10 @@ extension VideoScanModel {
         // members count as archived backlog, not as work to do.
         // With every coverage key off (rules v12) the pass is skipped: the
         // scorer then resolves nothing and the bonus never fires.
+        // Rules v14: the event labels read the People tab's birthdays the
+        // façade already holds (read off-main before this run).
         if rules.coverage.isActive {
-            let backlog = ArchiveAngelEvent.applyCoverage(&out, policy: rules)
+            let backlog = ArchiveAngelEvent.applyCoverage(&out, policy: rules, birthdays: archiveAngel.familyBirthdays)
             coverageLog.info("\(ArchiveAngelEvent.summaryLine(backlog), privacy: .public)")
         }
         return out

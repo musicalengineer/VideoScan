@@ -24,6 +24,7 @@
 // `ArchiveAngelNeed.audioRepair(note:)`, ≈ a tagged union / std::variant.)
 
 import Foundation
+import VideoScanCore
 
 // MARK: - Snapshot
 
@@ -74,6 +75,11 @@ struct ArchiveAngelRowFacts: Sendable, Equatable, Identifiable {
     /// this file queued or running — "Checking the sound…" instead of
     /// "Needs audio checked".
     var isBeingChecked: Bool = false
+    /// Rules v14 event labels (VideoScanCore.EventLabeler): the occasions
+    /// this file records and why ("Christmas 1994" — "Dec 25 — Christmas").
+    /// Filled only when Archive Readiness is pressed
+    /// (ArchiveAngelListActions.readiness); empty for the list rows.
+    var occasions: [EventLabel] = []
 }
 
 // MARK: - Where the file is

@@ -32,6 +32,21 @@
 // evidence path's few per-record projections compute the key on demand
 // (`resolvedEvent(now:)`), exactly as `resolvedFamilyKey` does.
 
+//
+// Rules v14 (2026-09-29, EVENT LABELS — Rick approved a–c): a day is too
+// narrow an event. Christmas shot on the 24th and the 25th were two
+// events; a Christmas tape with only a year had none. With
+// `coverage.eventLabels` on, VideoScanCore.EventLabeler names the
+// OCCASION — a holiday from a trusted day, a People-tab birthday within
+// the window, a curated name word with the year — and the key carries it
+// BESIDE the day: "e:christmas:1994|d:1994-12-25". onePerEvent treats a
+// row as the same event as a kept row when ANY key matches (`claim`), so
+// every v13 same-day collapse still happens and labelled occasions now
+// collapse across days too. Keys are strings with no "|" of their own
+// (the labeler's person key strips it). With the switch off, or no label,
+// the key is v13's day key byte for byte. Birthdays are INJECTED
+// (ArchiveAngelEventContext) — this file never reads the People tab.
+
 import Foundation
 import VideoScanCore
 
@@ -43,12 +58,14 @@ enum ArchiveAngelEvent {
     /// an event.
     static let dayKeyMinimumConfidence: Float = RecordDateResolver.embeddedConfidenceUnknownOrigin
 
-    /// The event key ("d:1994-11-24", or "" when the file has no
-    /// day-precise date worth trusting) and the year (at any precision)
-    /// for one candidate. Pure over the candidate's date facts; `now` only
+    /// The event key ("d:1994-11-24", "e:christmas:1994|d:1994-12-25", or
+    /// "" when the file has neither a trusted day nor a labelled occasion
+    /// with a year) and the year (at any precision) for one candidate.
+    /// Pure over the candidate's date facts and `context`; `now` only
     /// bounds the resolver's filename-year search.
-    nonisolated static func resolve(_ c: ArchiveAngelCandidate, now: Date) -> (key: String, year: Int?) {
-        let d = resolveDetailed(c, now: now)
+    nonisolated static func resolve(_ c: ArchiveAngelCandidate, now: Date,
+                                    context: ArchiveAngelEventContext = .builtIn) -> (key: String, year: Int?) {
+        let d = resolveDetailed(c, now: now, context: context)
         return (d.key, d.year)
     }
 
@@ -58,7 +75,39 @@ enum ArchiveAngelEvent {
     typealias DateClaim = RecordDateClaim
 
     /// `resolve` plus the file's date claim, from ONE resolver call.
-    nonisolated static func resolveDetailed(_ c: ArchiveAngelCandidate, now: Date) -> (key: String, year: Int?, claim: DateClaim?) {
+    nonisolated static func resolveDetailed(_ c: ArchiveAngelCandidate, now: Date,
+                                            context: ArchiveAngelEventContext = .builtIn)
+    -> (key: String, year: Int?, claim: DateClaim?) {
+        var folders = EventLabeler.FolderWordCache()
+        return resolveDetailed(c, now: now, context: context, folders: &folders)
+    }
+
+    /// `resolveDetailed` with the pass's folder-word memo (the pre-pass:
+    /// each folder's name is scanned once, not once per file in it).
+    nonisolated static func resolveDetailed(_ c: ArchiveAngelCandidate, now: Date, context: ArchiveAngelEventContext,
+                                            folders: inout EventLabeler.FolderWordCache)
+    -> (key: String, year: Int?, claim: DateClaim?) {
+        let d = derive(c, now: now, context: context, keysOnly: true, folders: &folders)
+        return (d.key, d.year, d.claim)
+    }
+
+    /// The labels behind a candidate's key, with their reason lines — what
+    /// the Archive Readiness sheet shows. Empty with labels off. A name
+    /// word on a file whose year is unknown (or only a copy-era stamp's)
+    /// is returned WITHOUT a year: it explains, it keys nothing. Pure.
+    nonisolated static func labels(_ c: ArchiveAngelCandidate, now: Date,
+                                   context: ArchiveAngelEventContext) -> [EventLabel] {
+        var folders = EventLabeler.FolderWordCache()
+        return derive(c, now: now, context: context, keysOnly: false, folders: &folders).labels
+    }
+
+    /// The one derivation behind `resolveDetailed` and `labels`.
+    /// `keysOnly` (the pre-pass, once per catalog file): skip the labels
+    /// that could never key anything — a file with no year, or only a
+    /// copy-era stamp's year, and no trusted day.
+    nonisolated static func derive(_ c: ArchiveAngelCandidate, now: Date, context: ArchiveAngelEventContext,
+                                   keysOnly: Bool, folders: inout EventLabeler.FolderWordCache)
+    -> (key: String, year: Int?, claim: DateClaim?, labels: [EventLabel]) {
         let r = RecordDateResolver.resolve(
             userDate: c.userDate,
             userDateConfidence: c.userDateConfidence,
@@ -71,12 +120,58 @@ enum ArchiveAngelEvent {
             inferredDateRange: c.inferredDateRange,
             filename: c.filename.isEmpty ? nil : c.filename,
             now: now)
-        guard let year = r.year else { return ("", nil, nil) }
-        let claim = DateClaim(r)
-        guard r.precision == .day, r.source != .embedded || r.confidence >= dayKeyMinimumConfidence else {
-            return ("", year, claim)
+        guard let year = r.year else {
+            let explain = context.labels && !keysOnly
+            return ("", nil, nil, explain ? EventLabeler.nameLabels(filename: c.filename, fullPath: c.fullPath, year: nil,
+                                                                    cache: &folders) : [])
         }
-        return ("d:" + r.isoString, year, claim)
+        let claim = DateClaim(r)
+        // A stamp with no camera behind it dates the COPY: it keys no day,
+        // and (v14) lends no year to a label either.
+        let trusted = r.source != .embedded || r.confidence >= dayKeyMinimumConfidence
+        var day: EventDay?
+        if r.precision == .day, trusted, let m = r.month, let dd = r.day { day = EventDay(year: year, month: m, day: dd) }
+        let dayKey = day == nil ? "" : "d:" + r.isoString
+        guard context.labels, trusted || !keysOnly else { return (dayKey, year, claim, []) }
+        let labels = EventLabeler.labels(day: day, year: trusted ? year : nil, filename: c.filename, fullPath: c.fullPath,
+                                         birthdays: context.birthdays, birthdayWindowDays: context.birthdayWindowDays,
+                                         cache: &folders)
+        return (composeKey(labels, dayKey: dayKey), year, claim, labels)
+    }
+
+    /// The label keys (each once, in label order) and then the day key,
+    /// joined by `keySeparator`; the bare day key when no label has a year.
+    nonisolated static func composeKey(_ labels: [EventLabel], dayKey: String) -> String {
+        // The usual cases without an array (once per labelled file per pass).
+        if labels.isEmpty { return dayKey }
+        if labels.count == 1 {
+            guard let k = labels[0].key else { return dayKey }
+            return dayKey.isEmpty ? k : k + String(keySeparator) + dayKey
+        }
+        var keys: [String] = []
+        for l in labels {
+            if let k = l.key, !keys.contains(k) { keys.append(k) }
+        }
+        guard !keys.isEmpty else { return dayKey }
+        if !dayKey.isEmpty { keys.append(dayKey) }
+        return keys.joined(separator: String(keySeparator))
+    }
+
+    static let keySeparator: Character = "|"
+
+    /// onePerEvent's bookkeeping for one row, in rank order: true = the
+    /// row is the first of every event it belongs to and now CLAIMS them
+    /// all; false = one of its events is already claimed by a better row
+    /// (hold it back — it claims nothing). An empty key never collapses.
+    /// With a single key this is exactly rules v13's
+    /// `seen.insert(key).inserted`. O(keys), a handful at most.
+    nonisolated static func claim(_ key: String, in seen: inout Set<String>) -> Bool {
+        if key.isEmpty { return true }
+        guard key.contains(keySeparator) else { return seen.insert(key).inserted }
+        let parts = key.split(separator: keySeparator).map(String.init)
+        if parts.contains(where: { seen.contains($0) }) { return false }
+        seen.formUnion(parts)
+        return true
     }
 
     // MARK: The coverage pre-pass
@@ -133,12 +228,19 @@ enum ArchiveAngelEvent {
     ///               goes to `unknownDate`
     ///
     /// Memory: O(recordings) for the table plus two Ints and one short
-    /// string per candidate — at 100k candidates well under 20 MB.
+    /// string per candidate (v14: at most a few keys joined) — at 100k
+    /// candidates well under 20 MB.
+    ///
+    /// Rules v14: `birthdays` (the People tab's, injected by the caller)
+    /// feed the event labels when `coverage.eventLabels` is on.
     @discardableResult
     nonisolated static func applyCoverage(_ candidates: inout [ArchiveAngelCandidate],
                                           policy p: AngelRecommendationPolicy = .builtIn,
-                                          now: Date = Date()) -> CoverageTable {
+                                          now: Date = Date(),
+                                          birthdays: [FamilyBirthday] = []) -> CoverageTable {
         let collapseBy = p.recommend.copies.batchCollapseBy
+        let context = ArchiveAngelEventContext(coverage: p.coverage, birthdays: birthdays)
+        var folders = EventLabeler.FolderWordCache()   // one per pass: each folder's words scanned once
         let junkFloors = junkFloors(of: p)      // ONCE per pass, not per record (three rules, not nineteen)
         // 1. Dates, once per candidate.
         var years: [Int?] = []
@@ -146,7 +248,7 @@ enum ArchiveAngelEvent {
         years.reserveCapacity(candidates.count)
         claims.reserveCapacity(candidates.count)
         for i in candidates.indices {
-            let d = resolveDetailed(candidates[i], now: now)
+            let d = resolveDetailed(candidates[i], now: now, context: context, folders: &folders)
             candidates[i].eventKey = d.key
             candidates[i].eventYear = d.year
             years.append(d.year)
@@ -279,4 +381,29 @@ enum ArchiveAngelEvent {
         return "coverage: \(table.years.count) years · \(table.recordings.formatted()) recordings · deepest backlog "
             + parts.joined(separator: ", ") + " · undated \(table.unknownDate.unarchived) to archive"
     }
+}
+
+// MARK: - Context
+
+/// What the event rule knows beyond the candidate: the policy's label
+/// switch and birthday window, and the People tab's birthdays — INJECTED
+/// by the caller (the façade reads them read-only, off the main actor;
+/// a test passes its own), never read here. (≈ a small const config
+/// struct passed by value.)
+struct ArchiveAngelEventContext: Sendable, Equatable {
+    var labels: Bool
+    var birthdayWindowDays: Int
+    var birthdays: [FamilyBirthday]
+
+    init(coverage: AngelCoverageRules, birthdays: [FamilyBirthday] = []) {
+        labels = coverage.eventLabels
+        birthdayWindowDays = coverage.birthdayWindowDays
+        self.birthdays = coverage.eventLabels ? birthdays : []
+    }
+
+    /// Rules v13: the day and nothing else.
+    static let dayOnly = ArchiveAngelEventContext(coverage: .off)
+    /// The built-in coverage with no birthdays — what a caller with no
+    /// policy in hand gets (the on-demand `resolvedEvent`).
+    static let builtIn = ArchiveAngelEventContext(coverage: .standard)
 }

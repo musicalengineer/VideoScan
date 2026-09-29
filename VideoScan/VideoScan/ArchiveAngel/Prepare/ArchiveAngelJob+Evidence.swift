@@ -30,6 +30,7 @@
 // effective-class function the counts and the badge use (codex #1643 A3).
 
 import Foundation
+import VideoScanCore
 
 extension ArchiveAngelJob {
 
@@ -77,6 +78,7 @@ extension ArchiveAngelJob {
                                    attentionRevision: Int? = nil,
                                    catalogRevision: Int? = nil,
                                    launchToken: String? = nil,
+                                   birthdays: [FamilyBirthday] = [],
                                    project: (UUID) -> ArchiveAngelCandidate?) -> EvidencePick? {
         guard count > 0, store.isFresh(within: freshness, now: now),
               store.eligibleCount >= count else { return nil }
@@ -84,6 +86,10 @@ extension ArchiveAngelJob {
               coverageIsCurrent(stampedToken: store.catalogLaunchToken, stampedRevision: store.catalogRevision,
                                 currentToken: launchToken, currentRevision: catalogRevision, coverage: policy.coverage) else { return nil }
         let coverage = policy.coverage
+        // Rules v14: the per-record projections carry no event key; the arm
+        // and the cut resolve them under the SAME labels and birthdays the
+        // walk's pre-pass uses, so the cache and the walk agree.
+        let events = ArchiveAngelEventContext(coverage: coverage, birthdays: birthdays)
         let weights = policy.weights
         var collected: [ArchiveAngelPick] = []
         var tiers: [UUID: Int] = [:]
@@ -130,7 +136,7 @@ extension ArchiveAngelJob {
         var settledGroups: Set<String> = []
         // Rules v13 — the COVERAGE ARM (CoverageArm below): past the band,
         // rows whose year still has room are read too.
-        var arm = CoverageArm(coverage: coverage, count: count, now: now)
+        var arm = CoverageArm(coverage: coverage, count: count, now: now, events: events)
         let armActive = arm.active               // hoisted: rules v12 (every key off) touches the arm nowhere in the loop
         var stoppedEarly = false                // the loop broke out; rows remain unread
         for (id, rowTier, arrivalScore) in ranked.ids {
@@ -236,7 +242,8 @@ extension ArchiveAngelJob {
         // skipped nothing on its year alone; otherwise rows it never read
         // could rank above the ones it would put back — decline, the job
         // walks. The same when a coverage budget ran out short.
-        let cut = ArchiveAngelScorer.coverageCut(kept, coverage: coverage, count: count, rejected: &rejected, now: now, by: order)
+        let cut = ArchiveAngelScorer.coverageCut(kept, coverage: coverage, count: count, rejected: &rejected, now: now,
+                                                 events: events, by: order)
         kept = cut.picks
         let picks = ArchiveAngelScorer.withFreshSlots(kept, count: count, weights: weights, by: order)
         let declined = arm.incomplete || (cut.toppedUp > 0 && (stoppedEarly || arm.skipped > 0))
@@ -388,6 +395,9 @@ extension ArchiveAngelJob {
         let onePerEvent: Bool
         let count: Int
         let now: Date
+        /// Rules v14: the labels and birthdays a projection's event key is
+        /// resolved under (the walk's pre-pass uses the same).
+        let events: ArchiveAngelEventContext
         /// Rows collected that pass the day and year rules so far.
         private(set) var within = 0
         /// Rows skipped on their evidence year alone (never read).
@@ -403,11 +413,12 @@ extension ArchiveAngelJob {
         private var looks = 0
         private var projections = 0
 
-        init(coverage: AngelCoverageRules, count: Int, now: Date) {
+        init(coverage: AngelCoverageRules, count: Int, now: Date, events: ArchiveAngelEventContext? = nil) {
             cap = coverage.maxPerYearPerBatch
             onePerEvent = coverage.onePerEvent
             self.count = count
             self.now = now
+            self.events = events ?? ArchiveAngelEventContext(coverage: coverage)
             done = cap <= 0 && !coverage.onePerEvent   // nothing to spread: never asks for a row
         }
 
@@ -432,8 +443,8 @@ extension ArchiveAngelJob {
         @discardableResult
         mutating func noteCollected(_ c: ArchiveAngelCandidate) -> Bool {
             guard active else { return true }
-            let (day, year) = c.resolvedEvent(now: now)
-            if onePerEvent, !day.isEmpty, !seenDays.insert(day).inserted { return false }
+            let (event, year) = c.resolvedEvent(now: now, context: events)
+            if onePerEvent, !ArchiveAngelEvent.claim(event, in: &seenDays) { return false }
             guard let year, cap > 0 else { within += 1; return true }
             perYearAll[year, default: 0] += 1
             perYearThisBand[year, default: 0] += 1

@@ -59,7 +59,7 @@ struct AngelGradeBands: Codable, Sendable, Equatable {
     }
 }
 
-// MARK: - Coverage (rules v13)
+// MARK: - Coverage (rules v13; event labels v14)
 
 /// How a batch spreads across events and years (2026-09-26,
 /// docs/footage_groups_gap_plan_2026-09-26.md Stage 2). Rick: promote the
@@ -71,8 +71,9 @@ struct AngelGradeBands: Codable, Sendable, Equatable {
 /// ranked list (codex #1643 A4). Every key has a default, so a policy.json
 /// written before v13 reads exactly as it did plus today's coverage.
 struct AngelCoverageRules: Codable, Sendable, Equatable {
-    /// One pick per EVENT per batch (ArchiveAngelEvent: the same day, or
-    /// the same period in the same folder). The rest wait for a later batch.
+    /// One pick per EVENT per batch (ArchiveAngelEvent: the same day, or —
+    /// rules v14, `eventLabels` — the same labelled occasion in the same
+    /// year). The rest wait for a later batch.
     var onePerEvent = true
     /// At most this many picks of one YEAR per batch; 0 = no cap. A batch
     /// is never left short for it — when other years cannot fill the
@@ -85,24 +86,39 @@ struct AngelCoverageRules: Codable, Sendable, Equatable {
     /// A year earns the bonus only with at least this many videos still
     /// to archive (a year with three clips is not a backlog).
     var backlogMinimumUnarchived = 10
+    /// Rules v14 (2026-09-29): event LABELS widen `onePerEvent`'s event
+    /// from a day to an occasion — Christmas Dec 24–26, a family birthday
+    /// ±`birthdayWindowDays`, a name word ("xmas94") with the year
+    /// (VideoScanCore.EventLabeler). A labelled file's event is
+    /// "e:christmas:1994" AS WELL AS its day, so two Christmas-1994 files
+    /// on different days are one event and two files of one day still
+    /// are. false = rules v13's day key exactly.
+    var eventLabels = true
+    /// A day within this many days of a People-tab birthday is that
+    /// person's birthday (0…14).
+    var birthdayWindowDays = EventLabeler.defaultBirthdayWindowDays
 
     /// Any rule on: the sweep and the walk run the coverage pre-pass, and
     /// the cached pick checks the catalog stamps. All off = rules v12 and
     /// the pre-pass costs nothing (QA MINOR, 2026-09-26: ~0.8 s per 100k on
-    /// the main actor otherwise).
+    /// the main actor otherwise). The labels only refine `onePerEvent`, so
+    /// they never make coverage active on their own.
     var isActive: Bool { onePerEvent || maxPerYearPerBatch > 0 || backlogBonusMax > 0 }
 
     static let standard = AngelCoverageRules()
     /// Rules v12 behaviour: no event pass, no cap, no bonus.
     static let off = AngelCoverageRules(onePerEvent: false, maxPerYearPerBatch: 0,
-                                        backlogBonusMax: 0, backlogMinimumUnarchived: 0)
+                                        backlogBonusMax: 0, backlogMinimumUnarchived: 0, eventLabels: false)
 
     init(onePerEvent: Bool = true, maxPerYearPerBatch: Int = 2, backlogBonusMax: Int = 20,
-         backlogMinimumUnarchived: Int = 10) {
+         backlogMinimumUnarchived: Int = 10, eventLabels: Bool = true,
+         birthdayWindowDays: Int = EventLabeler.defaultBirthdayWindowDays) {
         self.onePerEvent = onePerEvent
         self.maxPerYearPerBatch = maxPerYearPerBatch
         self.backlogBonusMax = backlogBonusMax
         self.backlogMinimumUnarchived = backlogMinimumUnarchived
+        self.eventLabels = eventLabels
+        self.birthdayWindowDays = birthdayWindowDays
     }
 
     /// Every key optional: an older file, or one that names a single key,
@@ -114,10 +130,13 @@ struct AngelCoverageRules: Codable, Sendable, Equatable {
         maxPerYearPerBatch = try c.decodeIfPresent(Int.self, forKey: .maxPerYearPerBatch) ?? 2
         backlogBonusMax = try c.decodeIfPresent(Int.self, forKey: .backlogBonusMax) ?? 20
         backlogMinimumUnarchived = try c.decodeIfPresent(Int.self, forKey: .backlogMinimumUnarchived) ?? 10
+        eventLabels = try c.decodeIfPresent(Bool.self, forKey: .eventLabels) ?? true
+        birthdayWindowDays = try c.decodeIfPresent(Int.self, forKey: .birthdayWindowDays)
+            ?? EventLabeler.defaultBirthdayWindowDays
     }
 
     private enum CodingKeys: String, CodingKey {
-        case onePerEvent, maxPerYearPerBatch, backlogBonusMax, backlogMinimumUnarchived
+        case onePerEvent, maxPerYearPerBatch, backlogBonusMax, backlogMinimumUnarchived, eventLabels, birthdayWindowDays
     }
 
     var problems: [String] {
@@ -131,6 +150,9 @@ struct AngelCoverageRules: Codable, Sendable, Equatable {
         }
         if !(0...1_000_000).contains(backlogMinimumUnarchived) {
             out.append("coverage.backlogMinimumUnarchived = \(backlogMinimumUnarchived) — must be 0…1000000")
+        }
+        if !(0...EventLabeler.maxBirthdayWindowDays).contains(birthdayWindowDays) {
+            out.append("coverage.birthdayWindowDays = \(birthdayWindowDays) — must be 0…\(EventLabeler.maxBirthdayWindowDays)")
         }
         return out
     }

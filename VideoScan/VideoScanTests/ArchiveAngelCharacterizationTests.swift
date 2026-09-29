@@ -655,7 +655,7 @@ struct ArchiveAngelVocabularyTests {
         #expect(ArchiveAngelPlan.planFilename == "plan.json")
         #expect(ArchiveAngelEvidenceStore.filename == "evidence.json")
         #expect(ArchiveAngelEvidenceFile.currentVersion == 1)
-        #expect(ArchiveAngelScorer.rulesVersion == 13, "v13 2026-09-26: coverage — one per day, the per-year share, the backlog bonus")
+        #expect(ArchiveAngelScorer.rulesVersion == 14, "v14 2026-09-29: event labels — one per day OR labelled occasion (holiday, birthday, name word + year)")
     }
 
     @Test("grade bands unchanged: A ≥ 100, B 60–99, C 25–59, D 1–24, else X")

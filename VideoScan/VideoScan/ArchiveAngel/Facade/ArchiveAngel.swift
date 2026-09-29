@@ -27,6 +27,7 @@
 import Combine
 import Foundation
 import OSLog
+import VideoScanCore
 
 private let facadeLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "archiveAngel")
 
@@ -81,6 +82,12 @@ final class ArchiveAngel: ObservableObject {
     /// — stamped beside the revision; a stamp from another launch is never
     /// current (the counter restarts at 0).
     let launchToken = UUID().uuidString
+    /// Rules v14 event labels: the People tab's birthdays, read OFF the
+    /// main actor through `environment.familyBirthdays` when the façade is
+    /// made and again before every sweep (an edited birthday counts from
+    /// the next assessment). [] until the first read lands, and always
+    /// under a test host.
+    private(set) var familyBirthdays: [FamilyBirthday] = []
     private(set) var policySource: AngelRecommendationPolicy.Source = .builtIn
     private(set) var policyIsLoaded = false
     private var policyLoad: Task<Void, Never>?
@@ -175,12 +182,27 @@ final class ArchiveAngel: ObservableObject {
         policyLoad = Task { [weak self] in
             let loaded = await AngelRecommendationPolicy.loadOffMain(overrideURL: overrideURL, bundledURL: bundledURL)
             self?.adoptPolicy(loaded)
+            await self?.refreshFamilyBirthdays()
         }
     }
 
     /// Waits for the off-main policy load (instant once it has landed).
     func policyLoaded() async {
         await policyLoad?.value
+    }
+
+    /// Re-reads the People tab's birthdays off the main actor (a few dozen
+    /// small JSON files, read-only) and adopts them here.
+    func refreshFamilyBirthdays() async {
+        let birthdays = await Self.readBirthdaysOffMain(environment.familyBirthdays)
+        familyBirthdays = birthdays
+    }
+
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func readBirthdaysOffMain(_ read: @escaping @Sendable () -> [FamilyBirthday]) async -> [FamilyBirthday] {
+        read()
     }
 
     /// The loaded rules take effect: the evidence stamp, the sweep's rules,
@@ -245,8 +267,12 @@ final class ArchiveAngel: ObservableObject {
             policy: policy,
             log: { [weak self] line in self?.catalog?.angelLog(line) }
         )
-        // Every run first waits for the off-main policy load (codex #1643).
-        configuration.policyReady = { [weak self] in await self?.policyLoaded() }
+        // Every run first waits for the off-main policy load (codex #1643),
+        // then (rules v14) re-reads the People tab's birthdays off-main.
+        configuration.policyReady = { [weak self] in
+            await self?.policyLoaded()
+            await self?.refreshFamilyBirthdays()
+        }
         sweep.configure(configuration, enabled: sweepEnabled)
         checks.configure(checksConfiguration(), enabled: checksEnabled && !environment.isTestHost)
 
