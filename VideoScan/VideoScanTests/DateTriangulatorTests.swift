@@ -405,7 +405,14 @@ struct DateTriangulatorSensorTests {
         let c = ArchiveAngelCandidate(filename: "CapeCod_notsure_NTSC.mov", inferredRecordDate: utc(2004, 1, 1),
                                       inferredDateConfidence: 0.75, inferredDateRange: InferredDateRange(year: 2004))
         let e = ArchiveAngelEvent.resolve(c, now: testNow)
-        #expect(e.key.isEmpty && e.year == 2004, "a year is not an event")
+        // A year is not a DAY: no fabricated "d:" key. Rules v14 (2026-09-29)
+        // let a name word plus a year name an OCCASION — "CapeCod…" in 2004
+        // is the "cape" occasion, by design — so the key may carry "e:…";
+        // a year with no name word still keys nothing at all.
+        #expect(!e.key.contains("d:") && e.year == 2004, "a year is not a day: \(e.key)")
+        let plain = ArchiveAngelCandidate(filename: "notsure_NTSC.mov", inferredRecordDate: utc(2004, 1, 1),
+                                          inferredDateConfidence: 0.75, inferredDateRange: InferredDateRange(year: 2004))
+        #expect(ArchiveAngelEvent.resolve(plain, now: testNow).key.isEmpty, "a year alone is not an event")
         let day = ArchiveAngelCandidate(filename: "a.dv", inferredRecordDate: utc(1991, 6, 21), inferredDateConfidence: 0.95)
         #expect(ArchiveAngelEvent.resolve(day, now: testNow).key == "d:1991-06-21")
     }
