@@ -142,48 +142,100 @@ struct DeleteDuplicatesTableHeader: View {
 struct DeleteDuplicatesEntryRow: View {
     let entry: DeleteDuplicatesPlan.Entry
 
+    // Split into typed pieces (stage-0 triage R2, 2026-09-29): the single
+    // inline body — five columns, nested optional maps inside `.help`, and
+    // string ternaries — took 525 ms to type-check and turned the nightly
+    // ratchet red (DeleteDuplicatesDetailView.swift:145, run 36558911631).
+    // Every String below is computed once with an explicit type, so the
+    // view builder only ever sees `Text(String)`.
     var body: some View {
-        let chip = DeleteDuplicatesDetailView.chip(entry)
-        HStack(spacing: 0) {
-            Text(entry.filename)
-                .font(.system(size: 13, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(entry.path)
-            Text(ByteCountFormatter.string(fromByteCount: entry.sizeBytes, countStyle: .file))
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .frame(width: DeleteDuplicatesTableLayout.sizeWidth, alignment: .trailing)
-            Text(chip.label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(chip.color)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(width: DeleteDuplicatesTableLayout.statusWidth, alignment: .leading)
-                .padding(.leading, 12)
-                .help(entry.note.isEmpty ? chip.label : entry.note)
-            Text(entry.tierLabel)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(width: DeleteDuplicatesTableLayout.tierWidth, alignment: .leading)
-                .help(entry.tierReason.map { r in
-                    entry.remainingVerifiedCopies.map { "\(r) (\($0) verified copies remain)" } ?? r
-                } ?? "Decided when the file is reached")
-            Text(entry.keeperPath.isEmpty ? "—" : "\(entry.keeperVolumeName): \(entry.keeperFilename)")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(width: DeleteDuplicatesTableLayout.keeperWidth, alignment: .leading)
-                .help(entry.keeperPath)
+        let chip: (label: String, color: Color) = DeleteDuplicatesDetailView.chip(entry)
+        return HStack(spacing: 0) {
+            fileColumn
+            sizeColumn
+            statusColumn(chip)
+            tierColumn
+            keeperColumn
         }
         .padding(.horizontal, DeleteDuplicatesTableLayout.rowPadding)
         .padding(.vertical, 5)
-        .background(Color.accentColor.opacity(entry.status == .verifying ? 0.08 : 0))
+        .background(Color.accentColor.opacity(rowHighlightOpacity))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entry.filename): \(chip.label)")
+        .accessibilityLabel(Self.accessibilityText(entry, chipLabel: chip.label))
+    }
+
+    // MARK: Strings (pure, explicitly typed)
+
+    private var rowHighlightOpacity: Double { entry.status == .verifying ? 0.08 : 0 }
+
+    static func sizeText(_ entry: DeleteDuplicatesPlan.Entry) -> String {
+        ByteCountFormatter.string(fromByteCount: entry.sizeBytes, countStyle: .file)
+    }
+
+    static func statusHelp(_ entry: DeleteDuplicatesPlan.Entry, chipLabel: String) -> String {
+        entry.note.isEmpty ? chipLabel : entry.note
+    }
+
+    static func tierHelp(_ entry: DeleteDuplicatesPlan.Entry) -> String {
+        guard let reason = entry.tierReason else { return "Decided when the file is reached" }
+        guard let remaining = entry.remainingVerifiedCopies else { return reason }
+        return "\(reason) (\(remaining) verified copies remain)"
+    }
+
+    static func keeperText(_ entry: DeleteDuplicatesPlan.Entry) -> String {
+        entry.keeperPath.isEmpty ? "—" : "\(entry.keeperVolumeName): \(entry.keeperFilename)"
+    }
+
+    static func accessibilityText(_ entry: DeleteDuplicatesPlan.Entry, chipLabel: String) -> String {
+        "\(entry.filename): \(chipLabel)"
+    }
+
+    // MARK: Columns
+
+    private var fileColumn: some View {
+        Text(entry.filename)
+            .font(.system(size: 13, design: .monospaced))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(entry.path)
+    }
+
+    private var sizeColumn: some View {
+        Text(Self.sizeText(entry))
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .frame(width: DeleteDuplicatesTableLayout.sizeWidth, alignment: .trailing)
+    }
+
+    private func statusColumn(_ chip: (label: String, color: Color)) -> some View {
+        Text(chip.label)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(chip.color)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(width: DeleteDuplicatesTableLayout.statusWidth, alignment: .leading)
+            .padding(.leading, 12)
+            .help(Self.statusHelp(entry, chipLabel: chip.label))
+    }
+
+    private var tierColumn: some View {
+        Text(entry.tierLabel)
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(width: DeleteDuplicatesTableLayout.tierWidth, alignment: .leading)
+            .help(Self.tierHelp(entry))
+    }
+
+    private var keeperColumn: some View {
+        Text(Self.keeperText(entry))
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(width: DeleteDuplicatesTableLayout.keeperWidth, alignment: .leading)
+            .help(entry.keeperPath)
     }
 }

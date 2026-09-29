@@ -404,8 +404,6 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             // cancelled parse has nothing left to do.
             guard (try? await Task.sleep(for: parseDelay)) != nil else { return }
         }
-        let gedcomDirectory = self.gedcomDirectory
-        let fileManager = self.fileManager
         let folderIDs = FamilyAssetConfigurationCenter.shared.snapshot().makeStore().personFolderGEDCOMIDs()
         // A SUMMARY IS A READ. It needs a count and a filename, not a
         // graph — so take them from the compiled generation's MANIFEST,
@@ -414,7 +412,11 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         // by being consulted for the sheet). `readOnly` was the wrong
         // lever: it means "decode only a promoted generation", so with no
         // store the sheet showed nothing at all.
-        let currentGeneration = compiledStore()?.loadCurrent()?.manifest
+        // `loadCurrentManifest`, not the full `loadCurrent()` (stage-0
+        // triage R1, 2026-09-29): this is the main actor, and the latter
+        // hashed every source and decoded the whole tree to read two
+        // numbers — and could repoint on a corrupt artifact.
+        let currentGeneration = compiledStore()?.loadCurrentManifest()
         // Fallback for a tree that has never been compiled: a loader with
         // NO store, which is inherently non-promoting.
         let summaryLoader = currentTreeLoader(promoting: false, usingStore: false)
@@ -667,7 +669,6 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         // a sentence for the sheet, not an `Error`.
         enum Staged { case written(URL, Int, GedcomFamilyGraph.MergeOutcome), failed(String) }
         let loader = currentTreeLoader()
-        let compiledStore = self.compiledStore
         // THE BASELINE IS READ BEFORE THE LOAD (codex, 2026-09-17).
         // `loadNewestOutcome` below may itself compile and promote a
         // fallback when a source of a multi-source generation is missing
@@ -675,7 +676,13 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         // would compare the already-narrowed tree against itself, see
         // 1-vs-1 and pass — the read defeating the check it feeds. Take
         // the picture first.
-        let baselineGeneration = self.compiledStore()?.loadCurrent()?.manifest
+        //
+        // Manifest only (stage-0 triage R1, 2026-09-29): no decode, no
+        // source hashing, no rollback write on the main actor. It also
+        // keeps the guard FAIL-CLOSED where the full load did not: with a
+        // source missing, `loadCurrent()` returned nil and the guard was
+        // skipped; the manifest still reports every source.
+        let baselineGeneration = self.compiledStore()?.loadCurrentManifest()
         let staged = await Task.detached(priority: .userInitiated) { () -> Staged in
             guard var new = GedcomFamilyGraph(fileURL: output), !new.people.isEmpty else {
                 return .failed(FamilySearchPullError.downloadedFileUnreadable(output).localizedDescription)
