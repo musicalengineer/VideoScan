@@ -119,13 +119,20 @@ struct ArchiveAngelCoverageTests {
                                       deviceModel: "HDR-CX150", captureDate: utc(1994, 11, 24), originMake: "Sony")
         let c = ArchiveAngelCandidate(filename: "clip07.dv", fullPath: "/Users/rickb/Movies/clip07.dv",
                                       inferredRecordDate: utc(1994, 11, 24), inferredDateConfidence: 0.9)
-        let ka = ArchiveAngelEvent.resolve(a, now: testNow), kb = ArchiveAngelEvent.resolve(b, now: testNow)
-        let kc = ArchiveAngelEvent.resolve(c, now: testNow)
+        // Rules v13's DAY rule, as it stands with `coverage.eventLabels` off
+        // (rules v14 labels Nov 24–25 1994 as one Thanksgiving on purpose —
+        // ArchiveAngelEventLabelTests pins that).
+        let dayOnly = ArchiveAngelEventContext.dayOnly
+        let ka = ArchiveAngelEvent.resolve(a, now: testNow, context: dayOnly), kb = ArchiveAngelEvent.resolve(b, now: testNow, context: dayOnly)
+        let kc = ArchiveAngelEvent.resolve(c, now: testNow, context: dayOnly)
         #expect(ka.key == "d:1994-11-24" && kb.key == ka.key && kc.key == ka.key, "no false split across Exports / Restored / Movies")
         #expect(ka.year == 1994 && kb.year == 1994 && kc.year == 1994)
         let other = ArchiveAngelCandidate(filename: "Thanksgiving 94 part 2.mov", fullPath: "/Volumes/LaCie/Exports/Thanksgiving 94 part 2.mov",
                                           userDate: "1994-11-25")
-        #expect(ArchiveAngelEvent.resolve(other, now: testNow).key == "d:1994-11-25", "no false merge: the next day is another event")
+        #expect(ArchiveAngelEvent.resolve(other, now: testNow, context: dayOnly).key == "d:1994-11-25", "no false merge: the next day is another event")
+        // With labels on (the default) the day keys are still there, beside the occasion.
+        #expect(ArchiveAngelEvent.resolve(a, now: testNow).key == "e:thanksgiving:1994|d:1994-11-24")
+        #expect(ArchiveAngelEvent.resolve(c, now: testNow).key == "e:thanksgiving:1994|d:1994-11-24")
     }
 
     @Test("a year or a month is NOT an event: no key (a year is not a day; two 1994 tapes under DCIM must not become one thing) — the year still counts for the cap")

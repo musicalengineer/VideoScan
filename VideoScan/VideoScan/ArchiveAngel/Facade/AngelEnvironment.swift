@@ -18,6 +18,7 @@
 //                  temp path, so a real override never leaks into a test.
 
 import Foundation
+import VideoScanCore
 
 struct AngelEnvironment {
     /// Where prepared batches live (`<root>/batch-…/plan.json`).
@@ -33,6 +34,10 @@ struct AngelEnvironment {
     var isTestHost: Bool
     /// Preferences (ArchiveAngelSettings' keys live here).
     var defaults: UserDefaults
+    /// Rules v14 event labels: the People tab's birthdays (read-only, the
+    /// way Hallie reads profiles — AngelFamilyBirthdays). Called off the
+    /// main actor. A test host gets none: the real POI store is never read.
+    var familyBirthdays: @Sendable () -> [FamilyBirthday] = { [] }
 
     /// The running app's environment.
     static var app: AngelEnvironment {
@@ -46,7 +51,15 @@ struct AngelEnvironment {
             bundledPolicyURL: Bundle.main.url(forResource: AngelRecommendationPolicy.bundledResourceName,
                                               withExtension: "json"),
             isTestHost: testHost,
-            defaults: .standard)
+            defaults: .standard,
+            familyBirthdays: familyBirthdaysReader(isTestHost: testHost))
+    }
+
+    /// The People tab's birthdays for production; none under a test host
+    /// (the real POI store is never read by a test).
+    nonisolated static func familyBirthdaysReader(isTestHost: Bool) -> @Sendable () -> [FamilyBirthday] {
+        if isTestHost { return { [] } }
+        return { AngelFamilyBirthdays.readPeopleTab() }
     }
 
     // MARK: Paths (pure — the production formulas are unit-tested)

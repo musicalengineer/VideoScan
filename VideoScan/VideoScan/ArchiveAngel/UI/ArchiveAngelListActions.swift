@@ -78,6 +78,12 @@ struct ArchiveAngelListActions {
         }
         // The row's off-main existence probe, carried over (no stat here).
         if row.location == .fileNotFound { f.fileExists = false }
+        // Rules v14: the occasion and why, under the loaded policy and the
+        // birthdays the façade already holds (one record, O(1)).
+        if let rec = model.record(forID: row.id) {
+            let events = ArchiveAngelEventContext(coverage: angel.policy.coverage, birthdays: angel.familyBirthdays)
+            f.occasions = ArchiveAngelEvent.labels(ArchiveAngelCandidate(recommendationFactsOf: rec), now: Date(), context: events)
+        }
         return ArchiveAngelReadinessExplanation.make(f)
     }
 

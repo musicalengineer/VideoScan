@@ -336,6 +336,41 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/EventLabelerTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EventLabelerCalendarTests",
+        "EventLabelerBirthdayTests",
+        "EventLabelerNameTests",
+        "EventLabelerCombinedTests"
+      ],
+      "tests": [
+        "birthAndDeathYears",
+        "caseAndHumps",
+        "easterAcrossYears",
+        "easterWindow",
+        "falsePositives",
+        "fixedWindows",
+        "folders",
+        "leapDay",
+        "noYear",
+        "nothing",
+        "order",
+        "ordinals",
+        "parentsDays",
+        "personKey",
+        "several",
+        "tableEqualsScan",
+        "thanksgivingEdges",
+        "weakParty",
+        "window",
+        "xmas94",
+        "yearBoundary"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FFmpegPreviewRendererE2ETests.swift",
       "stage": "integration",
       "suites": [
@@ -2358,6 +2393,37 @@
         "tenDiverseThroughBothPaths",
         "yearCapHonoured",
         "yearCapTopsUp"
+      ]
+    },
+    {
+      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelEventLabelTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelEventLabelTests",
+        "ArchiveAngelEventLabelParityTests",
+        "ArchiveAngelEventLabelCacheTests",
+        "ArchiveAngelEventLabelScaleTests",
+        "ArchiveAngelEventLabelIsolationTests",
+        "ArchiveAngelEventLabelSensorTests"
+      ],
+      "tests": [
+        "birthdateDay",
+        "birthdays",
+        "cacheEqualsWalk",
+        "christmasAcrossDays",
+        "claimSemantics",
+        "hundredThousand",
+        "neverTwoOfOneOccasion",
+        "offDropsBirthdays",
+        "offIsV13",
+        "ordinaryDay",
+        "policyKeys",
+        "readiness",
+        "testHostReadsNoProfiles",
+        "untrustedStamp",
+        "yearOnlyNameJoins"
       ]
     },
     {
@@ -21661,6 +21727,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/EventLabelerTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyGraphCompiledRootOverrideTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -21986,6 +22056,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ArchiveAngelCoverageTests.swift",
+          "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ArchiveAngelEventLabelTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
         {

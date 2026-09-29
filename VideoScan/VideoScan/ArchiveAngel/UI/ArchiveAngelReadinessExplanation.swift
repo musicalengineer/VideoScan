@@ -19,6 +19,7 @@
 // ArchiveAngelReadinessExplanationTests' table goes red.
 
 import Foundation
+import VideoScanCore
 
 struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
 
@@ -189,7 +190,7 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
             return "Find Similar Footage matched it to footage whose original is already in the archive, so it is not new material."
         // Rules v13 coverage: batch limits, never exclusions.
         case ArchiveAngelRejection.sameEventAsPick.rawValue:
-            return "Another file from the same day is already in this batch, so this one waits for a later batch."
+            return "Another file from the same day or occasion (the same Christmas, the same birthday) is already in this batch, so this one waits for a later batch."
         case ArchiveAngelRejection.yearCoverage.rawValue:
             return "This batch already has its share of that year; Archive Angel spreads each batch across the years still to archive, so this one waits for a later batch."
         // Rules v12 class-rule lines (AngelPolicyDefaults).
@@ -278,6 +279,7 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
             out.append(Fact(label: "Length", value: ArchiveAngelScorer.durationText(f.durationSeconds)))
         }
         out.append(Fact(label: "Date", value: dateValue(f)))
+        if let occasion = occasionValue(f.occasions) { out.append(Fact(label: "Occasion", value: occasion)) }
         out.append(Fact(label: "Sound", value: soundValue(f)))
         out.append(Fact(label: "People", value: peopleValue(f)))
         out.append(Fact(label: "Copies", value: copiesValue(f)))
@@ -291,6 +293,20 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
         if let decade = decade(in: label) { s += " — the \(decade)s" }
         if f.date == .lowConfidence { s += " (a guess)" }
         return s
+    }
+
+    /// Rules v14 event labels, one phrase per occasion with its reasons:
+    /// "Christmas 1994 (Dec 25 — Christmas; file name says 'xmas')". nil
+    /// when the file has no labelled occasion.
+    static func occasionValue(_ labels: [EventLabel]) -> String? {
+        var titles: [String] = []
+        var reasons: [String: [String]] = [:]
+        for l in labels {
+            if reasons[l.title] == nil { titles.append(l.title) }
+            reasons[l.title, default: []].append(l.reason)
+        }
+        guard !titles.isEmpty else { return nil }
+        return titles.map { "\($0) (\((reasons[$0] ?? []).joined(separator: "; ")))" }.joined(separator: ", ")
     }
 
     /// 1994 → 1990. The first plausible year (1800–2099) in the text.

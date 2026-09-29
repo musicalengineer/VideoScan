@@ -128,7 +128,9 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     /// Rules v13 coverage (2026-09-26, ArchiveAngelEvent): the DAY this
     /// file records ("d:1994-11-24") and its year at any precision. nil =
     /// the pre-pass has not run (computed on demand by `resolvedEvent`);
-    /// "" = no day-precise date (never collapses).
+    /// "" = no day-precise date (never collapses). Rules v14: with event
+    /// labels on, the labelled occasions too, "|"-joined before the day
+    /// ("e:christmas:1994|d:1994-12-25").
     var eventKey: String?
     var eventYear: Int?
     /// Rules v13: the catalog's backlog for this file's year — recordings
@@ -139,10 +141,11 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     var yearArchived: Int
 
     /// The event key and year: the pre-pass's answer when it ran, else
-    /// resolved now (the evidence path's few per-record projections).
-    func resolvedEvent(now: Date) -> (key: String, year: Int?) {
+    /// resolved now (the evidence path's few per-record projections) under
+    /// `context` — the caller's policy and birthdays when it has them.
+    func resolvedEvent(now: Date, context: ArchiveAngelEventContext = .builtIn) -> (key: String, year: Int?) {
         if let key = eventKey { return (key, eventYear) }
-        return ArchiveAngelEvent.resolve(self, now: now)
+        return ArchiveAngelEvent.resolve(self, now: now, context: context)
     }
 
     /// Rick 2026-09-21: a Live Photo's motion half
@@ -519,8 +522,11 @@ enum ArchiveAngelScorer {
     /// one pick per DAY per batch and a per-year share (both soft, both
     /// post-band), the `backlogBonus` signal over unique recordings, and
     /// the evidence file's `catalogRevision` stamp — every v12 sidecar
-    /// must rescore.
-    static let rulesVersion = 13
+    /// must rescore; 14 = event labels (2026-09-29, VideoScanCore
+    /// EventLabeler): onePerEvent's event is a labelled OCCASION as well
+    /// as a day — a holiday, a family birthday, a name word with the year
+    /// (`coverage.eventLabels`, `coverage.birthdayWindowDays`).
+    static let rulesVersion = 14
 
     /// The verdict for one record under the built-in rules with these
     /// weights. Pure.

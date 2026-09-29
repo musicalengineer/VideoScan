@@ -1,6 +1,7 @@
 // ArchiveAngelScorer+Coverage.swift
 // Rules v13 (2026-09-26): the scorer's two POST-band coverage passes —
-// one pick per DAY and the per-year share of a batch — and the soft rule
+// one pick per DAY (v14: per day or labelled occasion) and the per-year
+// share of a batch — and the soft rule
 // they share. Split out of ArchiveAngelScorer.swift (the +Sets / +Rules
 // pattern) so that file stays readable. Both passes run AFTER the one
 // rank order and never change it (codex #1643 A4); both are batch
@@ -23,9 +24,12 @@ extension ArchiveAngelScorer {
     }
 
     /// Both coverage passes in order: one per event (when the policy says
-    /// so), then the per-year share. Pure.
+    /// so), then the per-year share. Pure. `events` = the policy's label
+    /// rules and the People tab's birthdays (rules v14); nil = `coverage`'s
+    /// rules with no birthdays.
     static func coverageCut(_ picks: [ArchiveAngelPick], coverage: AngelCoverageRules, count: Int,
                             rejected: inout [ArchiveAngelRejection: Int], now: Date = Date(),
+                            events: ArchiveAngelEventContext? = nil,
                             by order: (ArchiveAngelPick, ArchiveAngelPick) -> Bool = rank) -> CoverageCut {
         guard coverage.onePerEvent || coverage.maxPerYearPerBatch > 0 else {
             return CoverageCut(picks: picks, heldBack: 0, toppedUp: 0)
@@ -33,9 +37,10 @@ extension ArchiveAngelScorer {
         // A pick that missed the pre-pass (a set scored without it) is
         // resolved ONCE here, not once per pass: RecordDateResolver is the
         // costly read (0.8 s per 100k in Debug).
+        let context = events ?? ArchiveAngelEventContext(coverage: coverage)
         var picks = picks
         for i in picks.indices where picks[i].candidate.eventKey == nil {
-            let r = ArchiveAngelEvent.resolve(picks[i].candidate, now: now)
+            let r = ArchiveAngelEvent.resolve(picks[i].candidate, now: now, context: context)
             picks[i].candidate.eventKey = r.key
             picks[i].candidate.eventYear = r.year
         }
@@ -58,6 +63,10 @@ extension ArchiveAngelScorer {
     /// `.sameEventAsPick`. Rows with no day never collapse. The result is
     /// in `order` (a top-up re-sorts: everything kept is in the batch, so
     /// its order is the rank order again). Pure.
+    ///
+    /// Rules v14: a row's key may name several events (its labelled
+    /// occasions and its day); it is held when ANY of them is taken
+    /// (`ArchiveAngelEvent.claim`).
     static func onePerEvent(_ picks: [ArchiveAngelPick], count: Int,
                             rejected: inout [ArchiveAngelRejection: Int],
                             now: Date = Date(),
@@ -68,7 +77,7 @@ extension ArchiveAngelScorer {
         within.reserveCapacity(picks.count)
         for pick in picks {
             let key = pick.candidate.resolvedEvent(now: now).key
-            if key.isEmpty || seen.insert(key).inserted { within.append(pick) } else { held.append(pick) }
+            if ArchiveAngelEvent.claim(key, in: &seen) { within.append(pick) } else { held.append(pick) }
         }
         return softCut(within: within, held: held, count: count, reason: .sameEventAsPick, rejected: &rejected, by: order)
     }

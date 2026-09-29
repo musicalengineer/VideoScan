@@ -2,6 +2,8 @@
   "coverage" : {
     "backlogBonusMax" : 20,
     "backlogMinimumUnarchived" : 10,
+    "birthdayWindowDays" : 3,
+    "eventLabels" : true,
     "maxPerYearPerBatch" : 2,
     "onePerEvent" : true
   },
