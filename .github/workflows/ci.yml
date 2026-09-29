@@ -49,6 +49,43 @@ jobs:
       - name: Selftest — Xcode selector
         run: scripts/ci_select_xcode.sh --selftest
 
+  # VideoScanCore's own package tests (Rick 2026-09-29: "all tests when
+  # possible should be automated"). 83 test files / ~720 tests — fixity,
+  # volume identity, GEDCOM merge, tree walk, CyberBrain … — ran in NO
+  # automated lane until now: the app scheme does not build the package's
+  # test target, the gauntlet blocks package tests, and the nightly never
+  # called `swift test`. Separate job so it runs in parallel with the app
+  # build instead of adding to its 120-minute budget. Timing budgets in
+  # these tests already triple on GitHub (TimingBudget: GITHUB_ACTIONS).
+  core:
+    name: VideoScanCore package tests
+    needs: preflight
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode (26.x required)
+        run: scripts/ci_select_xcode.sh
+
+      # FFmpegPreviewRendererE2ETests and friends spawn real ffmpeg/ffprobe.
+      - name: Install FFmpeg
+        run: |
+          brew install ffmpeg || true
+          ffmpeg -version | head -1
+
+      # `run` uses bash -eo pipefail, so tee cannot mask a failure.
+      - name: swift test
+        run: swift test --package-path VideoScan/VideoScanCore 2>&1 | tee core-tests.log
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-tests-log
+          path: core-tests.log
+
   test:
     name: Build & Test
     # Gated on preflight, not parallel with it: the linters were put ahead
