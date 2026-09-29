@@ -155,6 +155,26 @@ struct EventLabelerBirthdayTests {
         #expect(Set(l.compactMap(\.key)).count == 3)
     }
 
+    @Test("The pass's day-of-year table finds exactly what the full scan finds, every day of a common and a leap year, windows 0…14")
+    func tableEqualsScan() {
+        let people = [timmy, FamilyBirthday(name: "Leap", born: day(1984, 2, 29)), FamilyBirthday(name: "Jan", born: day(1990, 1, 1)),
+                      FamilyBirthday(name: "Eve", born: day(1990, 12, 31)), FamilyBirthday(name: "Dad", born: day(1929, 2, 21), diedYear: 2008)]
+        for window in [0, 3, 14] {
+            var cache = EventLabeler.FolderWordCache()
+            for year in [1995, 1996] {
+                for m in 1...12 {
+                    for d in 1...31 where EventLabeler.julianDay(year, m, d) != nil {
+                        let scan = EventLabeler.birthdayLabels(day(year, m, d), birthdays: people, windowDays: window)
+                        let viaTable = EventLabeler.labels(day: day(year, m, d), year: year, filename: "", fullPath: "",
+                                                           birthdays: people, birthdayWindowDays: window, cache: &cache)
+                            .filter { $0.source == .birthday }
+                        #expect(viaTable == scan, "\(year)-\(m)-\(d) window \(window)")
+                    }
+                }
+            }
+        }
+    }
+
     @Test("Ordinals")
     func ordinals() {
         #expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111, 112].map(EventLabeler.ordinal)
