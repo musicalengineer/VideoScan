@@ -564,7 +564,9 @@ public enum CyberBrainWriter {
     /// resolution ladder shared by testimony and captions: a known GEDCOM
     /// pointer wins; a name match that carries a DIFFERENT pointer is
     /// somebody else (Jr/Sr); an unlinked name match acquires the pointer.
-    private static func resolveSubject(
+    /// Internal (not private) so note corrections resolve a MOVE target by
+    /// exactly this ladder instead of a copy of it.
+    static func resolveSubject(
         _ subject: String,
         gedcomPersonID: String?,
         aliases: [String],
@@ -615,8 +617,9 @@ public enum CyberBrainWriter {
     }
 
     /// Validate the root directory and load what is there (nil when the
-    /// archive does not exist yet). Shared by both durable writers.
-    private static func prepareRoot(_ rootURL: URL) throws -> (URL, CyberBrainArchive?) {
+    /// archive does not exist yet). Shared by every durable writer,
+    /// including note corrections (CyberBrainCorrections.swift).
+    static func prepareRoot(_ rootURL: URL) throws -> (URL, CyberBrainArchive?) {
         let root = rootURL.standardizedFileURL
         let fileManager = FileManager.default
         if !fileManager.fileExists(atPath: root.path) {
@@ -831,8 +834,12 @@ public enum CyberBrainWriter {
         return try encoder.encode(archive)
     }
 
-    private static func save(_ archive: CyberBrainArchive, root: URL,
-                             hadExisting: Bool) throws {
+    /// Temp → probe-load → backup → atomic rename. Returns where the
+    /// previous file was copied (nil when there was none), so a caller can
+    /// log how to revert. Internal so note corrections share this path.
+    @discardableResult
+    static func save(_ archive: CyberBrainArchive, root: URL,
+                     hadExisting: Bool) throws -> URL? {
         let data = try encode(archive)
         let finalURL = root.appendingPathComponent(
             CyberBrainLoader.defaultFilename, isDirectory: false)
@@ -883,8 +890,9 @@ public enum CyberBrainWriter {
             throw WriteError.ioFailure("new archive failed validation: \(error.localizedDescription)")
         }
 
+        var backupURL: URL?
         if hadExisting {
-            try backup(finalURL, root: root)
+            backupURL = try backup(finalURL, root: root)
         }
         // rename(2) is atomic on APFS/HFS+: readers see the old or the new file.
         guard rename(tempURL.path, finalURL.path) == 0 else {
@@ -897,10 +905,11 @@ public enum CyberBrainWriter {
             fsync(dirDescriptor)
             close(dirDescriptor)
         }
+        return backupURL
     }
 
     /// backups/cyberbrain-<timestamp>.json, bounded to `backupsToKeep`.
-    private static func backup(_ fileURL: URL, root: URL) throws {
+    private static func backup(_ fileURL: URL, root: URL) throws -> URL {
         let backups = root.appendingPathComponent("backups", isDirectory: true)
         let fileManager = FileManager.default
         do {
@@ -919,6 +928,7 @@ public enum CyberBrainWriter {
                     try? fileManager.removeItem(at: stale)
                 }
             }
+            return target
         } catch {
             throw WriteError.ioFailure("backup failed: \(error.localizedDescription)")
         }
