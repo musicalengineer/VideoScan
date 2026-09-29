@@ -421,13 +421,35 @@ struct FamilyTreeNoteRow: View {
     }
 
     let note: FamilyTreeNote
+    /// "…" menu → Edit… / Remove… / Move to… (2026-09-29). Nil hides the
+    /// menu (demo tree, previews). The menu is master-only.
+    var onCorrect: ((FamilyTreeNoteCorrectionMode) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(note.text)
-                .font(.system(size: 12))
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 4) {
+                Text(note.text)
+                    .font(.system(size: 12))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 2)
+                if let onCorrect {
+                    // `Menu` ≈ a pull-down button; `.menuStyle(.borderlessButton)`
+                    // draws just the glyph.
+                    Menu {
+                        Button("Edit…") { onCorrect(.edit) }
+                        Button("Remove…") { onCorrect(.remove) }
+                        Button("Move to…") { onCorrect(.move) }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Correct this note — edit, remove or move it. Nothing is erased.")
+                    .masterOnly()
+                }
+            }
             HStack(spacing: 6) {
                 Text(note.attribution)
                     .font(.system(size: 10))
@@ -436,6 +458,10 @@ struct FamilyTreeNoteRow: View {
                 Spacer(minLength: 4)
                 badge(note.confidence.rawValue, color: confidenceColor)
                 badge(note.privacy.rawValue, color: .gray)
+            }
+            // Only filled while "Show corrections" is on.
+            ForEach(note.earlierVersions) { earlier in
+                FamilyTreeNoteCorrectionLineView(line: earlier)
             }
         }
         .padding(8)

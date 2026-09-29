@@ -75,6 +75,10 @@ struct FamilyTreeView: View {
     /// Archivist Notes draft + last save error (view-local, not persisted).
     @State private var draftNote = ""
     @State private var noteError: String?
+    /// Edit… / Remove… / Move to… on one note (2026-09-29). One
+    /// `.sheet(item:)`: non-nil = the sheet is up, holding the row as it
+    /// was when the menu was opened.
+    @State private var noteCorrectionTarget: FamilyTreeNoteCorrectionTarget?
     /// "Said as" editor: the name word being edited, its draft respelling,
     /// and the last save error (view-local).
     @State private var editingPronunciationWord: String?
@@ -458,6 +462,11 @@ struct FamilyTreeView: View {
                 Text(researchRefusal ?? "")
             }
             .sheet(item: $documentAddTarget) { target in documentAddSheet(target) }
+            .sheet(item: $noteCorrectionTarget) { target in
+                FamilyTreeNoteCorrectionSheet(model: model, target: target) {
+                    noteCorrectionTarget = nil
+                }
+            }
             .sheet(item: $refreshReview) { refresh in refreshReviewSheet(refresh) }
             .sheet(item: $identityPickTarget) { target in
                 TreeIdentityPickerSheet(target: target, center: identityCenter,
@@ -1454,6 +1463,13 @@ struct FamilyTreeView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
+                // Off by default; when on, removed / moved notes and earlier
+                // wordings show struck through (forensic genealogy: nothing
+                // is erased, it is only hidden).
+                Toggle("Show corrections", isOn: $model.showsNoteCorrections)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 10))
+                    .help("Show notes that were removed, moved to another person, or reworded")
                 Button {
                     Task { await model.loadCyberBrain() }
                 } label: {
@@ -1472,11 +1488,27 @@ struct FamilyTreeView: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(model.selectedNotes) { note in
-                    FamilyTreeNoteRow(note: note)
+                    FamilyTreeNoteRow(note: note) { mode in
+                        noteCorrectionTarget = FamilyTreeNoteCorrectionTarget(note: note, mode: mode)
+                    }
+                }
+            }
+            // Rows computed once per selection by the model (only while the
+            // switch is on) — nothing is derived here.
+            if model.showsNoteCorrections {
+                ForEach(model.selectedCorrections) { line in
+                    FamilyTreeNoteCorrectionLineView(line: line)
                 }
             }
 
             Divider()
+
+            if model.noteDraftIsForAnotherPerson, let owner = model.noteDraftOwner {
+                draftOwnerWarning(owner)
+            }
+            Text("Note about \(draftHeaderName)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
 
             // `TextEditor` ≈ NSTextView bound to a String; `$draftNote` is a
             // two-way binding (think reference to the @State storage).
@@ -1496,7 +1528,7 @@ struct FamilyTreeView: View {
                         .lineLimit(2)
                 }
                 Spacer()
-                Button("Add note") { saveDraftNote() }
+                Button("Add note to \(draftButtonName)") { saveDraftNote() }
                     .masterOnly()
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
@@ -1515,6 +1547,55 @@ struct FamilyTreeView: View {
             editingPronunciationWord = nil
             pronunciationError = nil
         }
+        // The draft's owner is captured by the model when typing starts
+        // (empty → non-empty) and dropped when the box is emptied; only
+        // those edges publish, not every keystroke.
+        .onChange(of: draftNote.isEmpty) { _, isEmpty in
+            model.noteDraftChanged(isEmpty: isEmpty)
+        }
+    }
+
+    /// Full name + years of whoever the draft is about (the owner once
+    /// typing started, else the person on screen) — "John Robert Latta
+    /// (1835–1911)".
+    private var draftHeaderName: String {
+        if let owner = model.noteDraftOwner {
+            return owner.years.map { "\(owner.name) (\($0))" } ?? owner.name
+        }
+        guard let person = model.selectedPerson else { return "this person" }
+        return person.years.map { "\(person.name) (\($0))" } ?? person.name
+    }
+
+    /// First name + surname for the button — "John Latta".
+    private var draftButtonName: String {
+        if let owner = model.noteDraftOwner { return owner.shortName }
+        guard let id = model.selectedID, let person = model.treePerson(id: id) else { return "this person" }
+        return FamilyTreeNoteDraftOwner.shortName(person)
+    }
+
+    /// Orange line when the selection moved away from the draft's person.
+    private func draftOwnerWarning(_ owner: FamilyTreeNoteDraftOwner) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("This note is about \(owner.name) — you're now viewing \(model.selectedPerson?.name ?? "someone else")")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("Save to \(owner.shortName)") { saveDraftNote() }
+                    .masterOnly()
+                    .controlSize(.small)
+                    .disabled(draftNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Discard") {
+                    draftNote = ""
+                    noteError = nil
+                    model.discardNoteDraft()
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(8)
+        .background(Color.orange.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     // MARK: Said as (pronunciations)
@@ -1684,11 +1765,16 @@ struct FamilyTreeView: View {
         }
     }
 
+    /// Saves on the draft's OWNER (captured when typing started), never on
+    /// whoever is selected now.
     private func saveDraftNote() {
         let text = draftNote.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        // A draft that outlived its owner (tree reloaded) belongs to the
+        // person on screen — the header already says who that is.
+        if model.noteDraftOwner == nil { model.noteDraftChanged(isEmpty: false) }
         do {
-            try model.addNote(text)
+            try model.saveNoteDraft(text)
             draftNote = ""
             noteError = nil
         } catch {

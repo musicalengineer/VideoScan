@@ -346,6 +346,13 @@ final class FamilyTreeLiveModel: ObservableObject {
     let cyberBrainRootURL: URL?
     /// Who is writing notes — the owner name from the archivist settings.
     var noteAuthor: String
+    /// The role guard every CyberBrain write here checks. Production = the
+    /// process-wide center; a test injects its own so it can play a viewer
+    /// without flipping the whole test process into viewer mode.
+    var viewerCenter: ViewerModeCenter = .shared
+    /// Where note corrections write their START / OUTCOME lines. The app's
+    /// one sink (appLog, videoscan.log); tests capture it.
+    var correctionLog: (String) -> Void = { line in appLog.write(line) }
     /// What the voice says for a word with no person-level entry (file +
     /// shipped layers). A PROVIDER, not a value: it is called in
     /// refreshSelectedNotes() so a file-level telling ("say Latta as
@@ -1281,6 +1288,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         loadState = .unavailable
         notesResolver = nil
         selectedNotes = []
+        selectedCorrections = []
+        noteDraftOwner = nil
         anchors = []
         anchorsCaption = nil
         lineOptions = []
@@ -1679,17 +1688,22 @@ final class FamilyTreeLiveModel: ObservableObject {
         }
     }
 
-    /// Save one note about the selected person through the same writer
+    /// Save one note about ONE NAMED tree person through the same writer
     /// Hallie's telling mode uses (atomic rename + backups/), then refresh
     /// the pane from the archive the writer handed back — no re-read.
     /// Throws the writer's error so the view can show it verbatim.
-    func addNote(_ text: String, kind: CyberBrainItem.Kind = .note, date: Date = Date()) throws {
+    ///
+    /// The person is a parameter, never `selectedID` (2026-09-29): the
+    /// selection can change between typing and saving, and reading it at
+    /// save time put John Robert Latta's passage on his father.
+    func addNote(_ text: String, about personID: String,
+                 kind: CyberBrainItem.Kind = .note, date: Date = Date()) throws {
         // Remote viewer (Phase 1): the CyberBrain is the master's; synced, never written here.
-        try ViewerWriteGuard.check("FamilyTreeLiveModel.addNote")
+        try ViewerWriteGuard.check("FamilyTreeLiveModel.addNote", center: viewerCenter)
         guard let root = cyberBrainRootURL else {
             throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
         }
-        guard let graph, let id = selectedID, let person = graph.people[id] else {
+        guard let graph, let person = graph.people[personID] else {
             throw CyberBrainWriter.WriteError.emptySubject
         }
         let testimony = CyberBrainWriter.Testimony(
@@ -1704,6 +1718,204 @@ final class FamilyTreeLiveModel: ObservableObject {
         let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
         notesGeneration &+= 1
         applyBrain(index: try CyberBrainIndex(archive: receipt.archive), status: nil)
+    }
+
+    // MARK: Note draft owner (2026-09-29)
+
+    /// Who the note being typed is ABOUT — captured when typing starts and
+    /// kept until it is saved or discarded, whatever the selection does
+    /// afterwards. (9/29: a draft kept across a selection change was saved
+    /// on whoever was selected at SAVE time — the father got the son's
+    /// Find a Grave passage.) Published only on start/clear, never per
+    /// keystroke; the text itself stays in the view's @State.
+    @Published private(set) var noteDraftOwner: FamilyTreeNoteDraftOwner?
+
+    /// The editor reports every change; only the empty ↔ non-empty edges
+    /// matter. Non-empty with no owner yet → the selected person owns it.
+    func noteDraftChanged(isEmpty: Bool) {
+        if isEmpty {
+            if noteDraftOwner != nil { noteDraftOwner = nil }
+            return
+        }
+        guard noteDraftOwner == nil, let id = selectedID, let graph,
+              let person = graph.people[id] else { return }
+        noteDraftOwner = FamilyTreeNoteDraftOwner(person: person)
+    }
+
+    /// True when the draft is about someone other than the person on screen
+    /// — the view shows "This note is about X — you're now viewing Y".
+    var noteDraftIsForAnotherPerson: Bool {
+        guard let owner = noteDraftOwner else { return false }
+        return owner.personID != selectedID
+    }
+
+    /// Save the draft on the person it is ABOUT, then forget the owner.
+    func saveNoteDraft(_ text: String, kind: CyberBrainItem.Kind = .note, date: Date = Date()) throws {
+        guard let owner = noteDraftOwner else { throw CyberBrainWriter.WriteError.emptySubject }
+        try addNote(text, about: owner.personID, kind: kind, date: date)
+        noteDraftOwner = nil
+    }
+
+    func discardNoteDraft() {
+        noteDraftOwner = nil
+    }
+
+    // MARK: Note corrections (2026-09-29)
+    //
+    // "Take back, reword, or move one note about one person — nothing is
+    // ever erased; the old text stays in the file, hidden unless Rick asks
+    // to see corrections." The rules live in VideoScanCore
+    // (CyberBrainWriter.correct); this layer adds the viewer guard, the
+    // tree-side checks (the row is still about the person it was read for,
+    // the move target is in the tree) and the START / OUTCOME audit lines.
+
+    /// "Show corrections" on the notes pane. Off by default; one switch
+    /// per window (this model), not per person.
+    @Published var showsNoteCorrections = false {
+        didSet { if showsNoteCorrections != oldValue { refreshSelectedNotes() } }
+    }
+    /// Removed / moved-away notes about the selected person (with their
+    /// own earlier wordings), newest first. Empty unless the switch is on.
+    @Published private(set) var selectedCorrections: [FamilyTreeNoteCorrectionLine] = []
+
+    @discardableResult
+    func removeNote(_ note: FamilyTreeNote, reason: CyberBrainCorrection.Reason,
+                    detail: String? = nil, date: Date = Date()) throws -> CyberBrainWriter.CorrectionReceipt {
+        try correctNote(note, verb: "remove", operation: .remove(reason: reason, detail: detail), date: date)
+    }
+
+    @discardableResult
+    func editNote(_ note: FamilyTreeNote, newText: String,
+                  date: Date = Date()) throws -> CyberBrainWriter.CorrectionReceipt {
+        try correctNote(note, verb: "edit", operation: .edit(newText: newText), date: date)
+    }
+
+    /// Move a note to the tree person `targetTreePersonID` (a GEDCOM
+    /// pointer). The target must be in the installed tree.
+    @discardableResult
+    func moveNote(_ note: FamilyTreeNote, toTreePerson targetTreePersonID: String,
+                  date: Date = Date()) throws -> CyberBrainWriter.CorrectionReceipt {
+        let target = graph?.people[targetTreePersonID]
+        let moveTarget = CyberBrainWriter.NoteCorrection.MoveTarget(
+            name: target?.name ?? "", gedcomPersonID: target == nil ? "" : targetTreePersonID,
+            aliases: target?.alternateNames ?? [])
+        return try correctNote(note, verb: "move", operation: .move(to: moveTarget), date: date,
+                               targetLabel: target.map { "\($0.name) (\($0.id))" } ?? "missing (\(targetTreePersonID))")
+    }
+
+    /// People a note could be moved to, by the tree's own ranked name
+    /// search, each with birth–death years so two John Lattas can be told
+    /// apart. Called when the picker's query changes (never in `body`);
+    /// bounded to `limit` rows.
+    func moveCandidates(matching query: String, excluding treePersonID: String,
+                        limit: Int = 30) -> [FamilyTreePersonSummary] {
+        let needle = query.trimmingCharacters(in: .whitespaces)
+        guard !needle.isEmpty, let graph, isLive else { return [] }
+        var out: [FamilyTreePersonSummary] = []
+        if let search = nameSearch {
+            let result = search.search(needle, overlay: searchOverlay(graph: graph, search: search))
+            for hit in result.hits {
+                let person = summariesInOrder[Int(hit.row)]
+                guard person.id != treePersonID, !isSuppressedRecord(person.id) else { continue }
+                out.append(person)
+                if out.count >= limit { break }
+            }
+            return out
+        }
+        // No search table (never expected once the bundle carries it):
+        // a bounded substring scan.
+        let folded = needle.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        for person in summariesInOrder where person.id != treePersonID {
+            if person.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+                .contains(folded) {
+                out.append(person)
+                if out.count >= limit { break }
+            }
+        }
+        return out
+    }
+
+    /// The one path every correction takes: log START, refuse before any
+    /// write, hand the request to the durable core writer, refresh the
+    /// pane from the archive it returns, log OUTCOME (old → new, the file,
+    /// the backup and how to revert). Every outcome is named: success,
+    /// refused (file untouched), failed (file untouched — the core writes
+    /// by atomic rename or not at all).
+    private func correctNote(
+        _ note: FamilyTreeNote, verb: String,
+        operation: CyberBrainWriter.NoteCorrection.Operation, date: Date,
+        targetLabel: String? = nil
+    ) throws -> CyberBrainWriter.CorrectionReceipt {
+        let treeName = graph?.people[note.treePersonID]?.name ?? note.treePersonID
+        let subject = "item=\(note.id) about \(treeName) (\(note.treePersonID))"
+        let tag = "[family-tree-notes]"
+        correctionLog("\(tag) START \(verb) \(subject)"
+                      + (targetLabel.map { " → \($0)" } ?? ""))
+        do {
+            // Remote viewer: the CyberBrain is the master's; never written here.
+            try ViewerWriteGuard.check("FamilyTreeLiveModel.\(verb)Note", center: viewerCenter)
+            guard let root = cyberBrainRootURL else {
+                throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
+            }
+            // The row must still stand for the person it was read for: the
+            // tree record exists and the resolver maps it to this brain
+            // person. A menu opened on one card never corrects another's.
+            guard let resolver = notesResolver, graph?.people[note.treePersonID] != nil,
+                  resolver.cyberBrainPeople(forGedcomID: note.treePersonID)
+                    .contains(where: { $0.id == note.cyberBrainPersonID }) else {
+                throw CyberBrainWriter.CorrectionRefusal.notAboutViewedPerson(note.id, treeName)
+            }
+            if case .move(let target) = operation, target.gedcomPersonID.isEmpty {
+                throw CyberBrainWriter.CorrectionRefusal.targetMissing
+            }
+            let receipt = try CyberBrainWriter.correct(
+                .init(itemID: note.id, viewedPersonID: note.cyberBrainPersonID,
+                      operation: operation, by: noteAuthor, date: date),
+                rootURL: root)
+            let file = root.appendingPathComponent(CyberBrainLoader.defaultFilename).path
+            correctionLog("\(tag) OUTCOME success \(verb) \(subject): "
+                          + Self.correctionChange(receipt)
+                          + "; file \(file)"
+                          + (receipt.backupURL.map { "; backup \($0.path) — to revert, copy it over the file" } ?? ""))
+            notesGeneration &+= 1
+            if let index = try? CyberBrainIndex(archive: receipt.archive) {
+                applyBrain(index: index, status: nil)
+            } else {
+                loadCyberBrainNow()
+            }
+            return receipt
+        } catch let refusal as CyberBrainWriter.CorrectionRefusal {
+            correctionLog("\(tag) OUTCOME refused \(verb) \(subject): \(refusal.localizedDescription); file unchanged")
+            throw refusal
+        } catch let refusal as ViewerWriteGuard.RefusedError {
+            correctionLog("\(tag) OUTCOME refused \(verb) \(subject): viewer mode; file unchanged")
+            throw refusal
+        } catch {
+            correctionLog("\(tag) OUTCOME failed \(verb) \(subject): \(error.localizedDescription); file unchanged")
+            throw error
+        }
+    }
+
+    /// "status active → retracted (wrong person)" and friends, with quoted
+    /// text cut to 80 characters so a log line stays one line.
+    nonisolated static func correctionChange(_ receipt: CyberBrainWriter.CorrectionReceipt) -> String {
+        func quoted(_ text: String) -> String {
+            let flat = text.replacingOccurrences(of: "\n", with: " ")
+            return "\"" + (flat.count > 80 ? String(flat.prefix(79)) + "…" : flat) + "\""
+        }
+        let old = receipt.archive.people.lazy.flatMap(\.items).first { $0.id == receipt.itemID }
+        let why = old?.correction.map { FamilyTreeNoteCorrectionLine.reasonText($0) } ?? "?"
+        switch receipt.action {
+        case .removed:
+            return "status active → retracted (\(why)); text kept \(quoted(receipt.oldText))"
+        case .edited:
+            return "text \(quoted(receipt.oldText)) → \(quoted(receipt.newText ?? "")); "
+                + "\(receipt.itemID) superseded by \(receipt.newItemID ?? "?")"
+        case .moved:
+            return "person \(receipt.fromPersonID) → \(receipt.toPersonID ?? "?")"
+                + " (\(receipt.toPersonName ?? "?")\(receipt.createdTargetPerson ? ", new record" : ""));"
+                + " \(receipt.itemID) retracted, copy \(receipt.newItemID ?? "?"); text \(quoted(receipt.oldText))"
+        }
     }
 
     /// The live tree record behind a card, for Research Person's
@@ -1762,6 +1974,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     private func refreshSelectedNotes() {
         guard let id = selectedID, isLive, let person = graph?.people[id] else {
             if !selectedNotes.isEmpty { selectedNotes = [] }
+            if !selectedCorrections.isEmpty { selectedCorrections = [] }
             if !selectedPronunciations.isEmpty { selectedPronunciations = [] }
             return
         }
@@ -1772,9 +1985,24 @@ final class FamilyTreeLiveModel: ObservableObject {
             fallback: pronunciationFallback())
         guard let resolver = notesResolver else {
             if !selectedNotes.isEmpty { selectedNotes = [] }
+            if !selectedCorrections.isEmpty { selectedCorrections = [] }
             return
         }
-        selectedNotes = resolver.notes(forGedcomID: id)
+        var notes = resolver.notes(forGedcomID: id)
+        guard showsNoteCorrections else {
+            selectedNotes = notes
+            if !selectedCorrections.isEmpty { selectedCorrections = [] }
+            return
+        }
+        // Corrections view: earlier wordings under their current note,
+        // removed / moved notes in their own list. O(items about this
+        // person), once per selection — never in `body`.
+        let corrections = resolver.corrections(forGedcomID: id)
+        for i in notes.indices {
+            notes[i].earlierVersions = corrections.earlierByItemID[notes[i].id] ?? []
+        }
+        selectedNotes = notes
+        selectedCorrections = corrections.retracted
     }
 
     /// "Said as" for one word of the selected person's name, kept on their

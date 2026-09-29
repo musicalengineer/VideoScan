@@ -120,7 +120,7 @@ struct RemoteViewerReadOnlySensorTests {
         let tree = FamilyTreeLiveModel(
             originalsDirectory: root.appendingPathComponent("originals"),
             cyberBrainRootURL: root.appendingPathComponent("cyberbrain"))
-        #expect(throws: ViewerWriteGuard.RefusedError.self) { try tree.addNote("Dad was a Marine.") }
+        #expect(throws: ViewerWriteGuard.RefusedError.self) { try tree.addNote("Dad was a Marine.", about: "@I1@") }
         #expect(throws: ViewerWriteGuard.RefusedError.self) {
             try tree.recordTestimony(Self.testimony)
         }
@@ -332,7 +332,7 @@ struct RemoteViewerReadOnlySensorTests {
         let tree = FamilyTreeLiveModel(
             originalsDirectory: originals, cyberBrainRootURL: treeBrain)
         tree.install(graph: graph)
-        try tree.addNote("Master note")
+        try tree.addNote("Master note", about: tree.selectedID ?? "")
         _ = try tree.recordTestimony(Self.testimony)
         let selectedID = try #require(tree.selectedID)
         let selected = try #require(graph.people[selectedID])
