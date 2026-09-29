@@ -139,6 +139,57 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContentFixityRemountReproTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ContentFixityRemountReproTests"
+      ],
+      "tests": [
+        "aRemountThatOnlyChangesTheDeviceNumberKeepsTheDigestCurrent"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContentFixityVolumeIdentityTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ContentFixityVolumeIdentityRuleTests",
+        "ContentFixityVolumeIdentityDiskTests",
+        "ContentFixityVolumeIdentityCodableTests",
+        "ContentFixityVolumeIdentitySeamTests",
+        "ContentFixityVolumeIdentityScaleTests"
+      ],
+      "tests": [
+        "atomicSaveViaRenameIsStale",
+        "captureCarriesTheRealVolumeUUID",
+        "captureCostUnderBudget",
+        "cloneRenamedOverTheOriginalIsStale",
+        "descriptorAndPathUUIDsAgree",
+        "differentDiskIsStaleEvenWithAReusedDeviceNumber",
+        "hundredThousandComparisonsUnderBudget",
+        "inodeReuseOrAnyChangedFieldIsStale",
+        "legacyCatalogJSONIsUntrusted",
+        "legacyStampIsUntrustedOnAnyMount",
+        "newStampRemountSameVolumeNewDeviceIsFresh",
+        "oldCatalogJSONDecodesWithoutAUUIDAndReencodesTheSameKeys",
+        "overrideIsScopedToTheTaskAndNeverLeaks",
+        "preCtimeOrOtherAlgorithmNeverVerifies",
+        "restoreWithPreservedTimesIsStale",
+        "resumeRuleIsDeviceBlindOnlyForLegacyPlans",
+        "sameInstantHardLinkCheckUsesDeviceAndInode",
+        "sameOperationNeedsDeviceAndUUIDAgreement",
+        "sameSizeRewriteWithMtimePutBackIsStale",
+        "swappedDiskAtTheSamePathIsStale",
+        "symlinkRetargetIsStaleAndARaceRefuses",
+        "unreadableFileGetsAnUnboundStamp",
+        "uuidNotResolvableNowIsNeverAWildcard",
+        "uuidRoundTripsAndIsNormalized"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CrossProcessCacheLockTests.swift",
       "stage": "unit",
       "suites": [
@@ -8990,6 +9041,39 @@
         "parseDefaultsAndOverrides",
         "parseRejectsBadInput",
         "wedgedClipIsAbandonedAsNil"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FixityStampVolumeIdentityTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FixityStampVolumeIdentityTests"
+      ],
+      "tests": [
+        "aChangedDigestIsClaimedStoredOnlyAfterTheAck",
+        "aChangedDigestIsNotClaimedStoredWhenTheSaveFails",
+        "aFailedFinalSaveIsUndoneAndARetryRebindsBoth",
+        "aFailedSaveIsSurfacedAndNothingClaimsStored",
+        "aFifoNeverBlocksTheRehash",
+        "archiveAngelAndFootageTreatARemountAsFreshAndAnotherDiskAsStale",
+        "candidateScanScalesToAHundredThousandRecords",
+        "checkpointsAreAcknowledgedSaves",
+        "deleteDuplicatesCountsARemountedSiblingButNotAnotherDisk",
+        "jobBindsTheVolumeAndIsResumableByConstruction",
+        "jobPauseGivesWayAndResumeFinishes",
+        "jobRefusesOnAReadOnlyCatalogAndAnAbsentVolume",
+        "legacyStampIsUntrustedEverywhereUntilRebound",
+        "noStoredStampIsComparedByDeviceNumberOutsideTheOneComparison",
+        "rehashBindsWithMatchingDigestAndUUID",
+        "rehashRefusesWithoutAVolumeUUIDAndReportsOfflineAndStop",
+        "remountDuringTheReadRefuses",
+        "resumeAndQuarantineIdentityHonourTheVolumeUUID",
+        "rollbackLeavesARecordSomeoneElseChanged",
+        "storedKeeperFixityStandsInForTheReadAcrossARemount",
+        "symlinkRetargetNeverLendsTheOldDigest",
+        "writeBackIsCompareAndSet"
       ]
     },
     {
@@ -21490,6 +21574,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContentFixityVolumeIdentityTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CrossProcessCacheLockTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -22503,6 +22591,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/FindSimilarFootageJobTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/FixityStampVolumeIdentityTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -23668,6 +23760,10 @@
       "blocked": [
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AdoptionSafetyRegressionTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContentFixityRemountReproTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
