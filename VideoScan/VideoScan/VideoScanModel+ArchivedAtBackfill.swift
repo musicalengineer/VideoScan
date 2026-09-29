@@ -31,7 +31,7 @@ enum ArchivedAtBackfill {
         let isoFractional = ISO8601DateFormatter()
         isoFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         var out: [UUID: Date] = [:]
-        for line in text.split(separator: "\n").dropFirst() {
+        for line in ArchiveIndexText.lines(text).dropFirst() {   // header (CRLF-safe)
             let f = ArchiveManifestCSV.fields(ofLine: String(line))
             guard f.count >= 12, let id = UUID(uuidString: f[6]),
                   let d = iso.date(from: f[0]) ?? isoFractional.date(from: f[0]) else { continue }
