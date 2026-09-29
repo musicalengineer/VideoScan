@@ -19,7 +19,8 @@
 //   • A whole row whose path escapes the archive root (a poisoned manifest)
 //     refuses the whole job BEFORE any flag changes.
 //   • A short / malformed row is SKIPPED AND REPORTED (codex r1 #5, Rick's
-//     ruling): its text is never used as a path.
+//     ruling): its text is never used as a path, and the run is not the
+//     one-time completion while one remains (codex #14).
 //   • Rows outside the media buckets (00_Index, 40_Family_Tree) are skipped
 //     and listed — never locked.
 //
@@ -266,14 +267,20 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
     }
 
     /// Why a finished run is NOT the one-time completion (the marker is not
-    /// written, the menu item stays): a failed or busy file; or a manifest
+    /// written, the menu item stays): a failed or busy file; a manifest
     /// with data rows of which none could be planned (codex r2 #3 — a
-    /// parse that saw nothing must never claim every file is locked). nil =
-    /// complete. Pure.
+    /// parse that saw nothing must never claim every file is locked); or
+    /// ANY malformed row (codex #14 — the file it names may be unlocked,
+    /// and the marker would hide the retry after Rick repairs the row).
+    /// Non-media rows and duplicates are intentional exclusions and do not
+    /// hold completion back. nil = complete. Pure.
     nonisolated static func notCompleteReason(totals t: Totals, plan: Plan, summary: String) -> String? {
         if t.failed > 0 || t.busy > 0 { return summary }
         if plan.relPaths.isEmpty && plan.dataRows > 0 {
             return "\(summary) — the manifest lists \(plan.dataRows) row(s) but none could be planned; not marked complete (check the manifest by hand)"
+        }
+        if plan.malformedRows > 0 {
+            return "\(summary) — \(plan.malformedRows) manifest row(s) could not be read, so the file(s) they name may still be unlocked; not marked complete (repair the row(s), then run again)"
         }
         return nil
     }
@@ -299,9 +306,13 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
         let skipped: [(row: String, why: String)]
         /// Non-empty data lines the manifest held (header excluded).
         let dataRows: Int
+        /// Of those, rows that were not a whole manifest row (a subset of
+        /// `skipped`) — each holds completion back.
+        let malformedRows: Int
 
         static func == (a: Plan, b: Plan) -> Bool {
-            a.relPaths == b.relPaths && a.skipped.map(\.row) == b.skipped.map(\.row) && a.dataRows == b.dataRows
+            a.relPaths == b.relPaths && a.skipped.map(\.row) == b.skipped.map(\.row)
+                && a.dataRows == b.dataRows && a.malformedRows == b.malformedRows
         }
     }
 
@@ -334,6 +345,7 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
         var media: [String] = []
         var skipped: [(row: String, why: String)] = []
         var dataRows = 0
+        var malformedRows = 0
         // CRLF is ONE Character in Swift (a grapheme cluster), so splitting
         // on "\n" alone never separates CRLF records (codex r2 #3) — split
         // on either terminator. (C++ analogy: iterating Characters is like
@@ -345,6 +357,7 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
             dataRows += 1
             let f = ArchiveManifestCSV.fields(ofLine: raw)
             guard f.count >= ArchiveManifestCSV.columnCountLegacy, !f[ArchiveManifestCSV.relPathColumn].isEmpty else {
+                malformedRows += 1
                 skipped.append(("manifest line \(i + 1)",
                                 "not a whole manifest row (\(f.count) field(s)) — skipped, nothing touched; check the manifest by hand"))
                 continue
@@ -361,7 +374,7 @@ final class ArchiveLockJob: @MainActor MediaFileOperationJob {
                 skipped.append((rel, "not in a media bucket (10_Photos / 20_Audio / 30_Video / 50_Documents) — never locked"))
             }
         }
-        return .success(Plan(relPaths: media, skipped: skipped, dataRows: dataRows))
+        return .success(Plan(relPaths: media, skipped: skipped, dataRows: dataRows, malformedRows: malformedRows))
     }
 
     /// One chunk of flag changes, off the main actor.

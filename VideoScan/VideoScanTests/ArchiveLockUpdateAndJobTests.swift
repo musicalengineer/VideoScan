@@ -353,6 +353,53 @@ struct ArchiveLockJobTests {
         #expect(a.model.archiveLockCatchUpDone)
     }
 
+    @Test("codex #14 P1: a PARTLY malformed manifest locks the valid rows and reports the bad one, but never writes the one-time marker; repaired, the rerun locks both and completes")
+    func partialMalformedManifestKeepsCatchUpAvailable() async throws {
+        let (a, rels) = try archive("job_partial_malformed", files: 1)
+        defer { a.sb.cleanup() }
+        // b.mov exists in the archive, unlocked, but its manifest row is truncated.
+        let b = "30_Video/1990-1999/1993/1993-xx-xx_B.mov"
+        try FileManager.default.createDirectory(at: a.url(b).deletingLastPathComponent(), withIntermediateDirectories: true)
+        try MasterArchiveTestSupport.writeBlob(at: a.url(b), bytes: 500, seed: 301)
+        let good = try String(contentsOf: a.sb.manifestURL, encoding: .utf8)
+        try Data((good + "2026-09-28T00:00:00Z,\(b),00\n").utf8).write(to: a.sb.manifestURL)
+
+        let first = await run(a.model)
+        #expect(!first.wasRefused, "\(first.state)")
+        #expect(first.totals.changed == 1 && first.totals.skipped == 1, "\(first.totals)")
+        #expect(first.problems.contains { $0.kind == .skipped && $0.detail.contains("not a whole manifest row") })
+        for rel in rels { #expect(MasterArchiveTestSupport.isLocked(a.url(rel).path), "\(rel)") }
+        #expect(!MasterArchiveTestSupport.isLocked(a.url(b).path), "the malformed row's file is never touched")
+        #expect(!a.model.archiveLockCatchUpDone,
+                "an unresolved malformed row means a listed file may be unlocked — the one-time item must stay")
+        guard case .failed(let why) = first.state else { Issue.record("expected not-complete, got \(first.state)"); return }
+        #expect(why.contains("could not be read"), "\(why)")
+
+        // Rick repairs the row; the rerun locks b.mov and only then completes.
+        let repaired = good + "2026-09-28T00:00:00Z,\(b),00,500,/x,t,\(UUID()),\(UUID()),,,,3\n"
+        try Data(repaired.utf8).write(to: a.sb.manifestURL)
+        let second = await run(a.model)
+        guard case .finished = second.state else { Issue.record("\(second.state)"); return }
+        for rel in rels + [b] { #expect(MasterArchiveTestSupport.isLocked(a.url(rel).path), "\(rel)") }
+        #expect(a.model.archiveLockCatchUpDone)
+    }
+
+    @Test("codex #14 P1 boundary: intentional exclusions (non-media rows, duplicate rows) do NOT hold back completion")
+    func nonMediaAndDuplicateRowsStillComplete() async throws {
+        let (a, rels) = try archive("job_exclusions", files: 1)
+        defer { a.sb.cleanup() }
+        let good = try String(contentsOf: a.sb.manifestURL, encoding: .utf8)
+        let dataLines = good.split(separator: "\n").dropFirst()
+        let duplicate = dataLines.first.map { String($0) + "\n" } ?? ""
+        let nonMedia = "2026-09-28T00:00:00Z,40_Family_Tree/tree.ged,00,1,/x,t,\(UUID()),\(UUID()),,,,3\n"
+        try Data((good + duplicate + nonMedia).utf8).write(to: a.sb.manifestURL)
+        let job = await run(a.model)
+        guard case .finished = job.state else { Issue.record("\(job.state)"); return }
+        #expect(job.totals.skipped == 1, "the non-media row is listed: \(job.totals)")
+        for rel in rels { #expect(MasterArchiveTestSupport.isLocked(a.url(rel).path)) }
+        #expect(a.model.archiveLockCatchUpDone)
+    }
+
     @Test("scale: 100k manifest rows, stub flag setter, OFF the main actor, within a load-aware budget")
     func scale100k() async throws {
         let a = try UpdateFixture.make("job_scale", relPath: "30_Video/1980-1989/1984/1984-xx-xx_A.mov", recordDate: "1984-xx-xx")
