@@ -42,10 +42,17 @@ def test_verdict_a_good_voice_with_app_fallbacks_is_not_ok():
     assert lane.verdict({"hallie_voice_status": "regressed"}, {"hallie_voice_fallbacks": 3})["hallie_voice_status"] == "regressed"
 
 
-def test_worker_env_mirrors_the_app_filter():
-    env = lane.worker_env({"MTL_DEBUG_LAYER": "1", "MTL_SHADER_VALIDATION": "1", "METAL_DEVICE_WRAPPER_TYPE": "1",
-                           "METAL_DEBUG_ERROR_MODE": "0", "MTL_HUD_ENABLED": "1", "HOME": "/h"})
-    assert env == {"MTL_HUD_ENABLED": "1", "HOME": "/h"}
+def test_worker_env_mirrors_the_app_allowlist():
+    env = lane.worker_env({"MTL_DEBUG_LAYER": "1", "DYLD_INSERT_LIBRARIES": "/x", "CA_DEBUG_TRANSACTIONS": "1",
+                           "HOME": "/h", "TMPDIR": "/t/", "LANG": "en_US.UTF-8"})
+    assert env == {"HOME": "/h", "TMPDIR": "/t/", "LANG": "en_US.UTF-8"}
+
+
+def test_the_python_allowlist_is_the_swift_allowlist():
+    import re
+    swift = (ROOT / "VideoScan/VideoScan/HallieNeuralSpeech.swift").read_text()
+    block = swift[swift.index("workerEnvironmentKeys"):swift.index("]", swift.index("workerEnvironmentKeys"))]
+    assert set(re.findall(r'"([A-Za-z_]+)"', block)) == lane.WORKER_ENV_KEYS
 
 
 def test_missing_engine_is_not_run_never_green(tmp_path):

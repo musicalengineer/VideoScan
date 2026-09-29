@@ -42,12 +42,15 @@ REFERENCE = REPO / "tests" / "fixtures" / "voice" / "hallie_bella_reference.json
 APP_LOG = Path.home() / "Library" / "Logs" / "VideoScan" / "videoscan.log"
 STATE = Path.home() / "Library" / "Logs" / "VideoScan" / "nightly-hallie-voice.state.json"
 FALLBACK_MARK = "[hallie-voice] neural voice unavailable"
-DEBUG_PREFIXES = ("MTL_DEBUG", "MTL_SHADER_VALIDATION", "METAL_DEVICE_WRAPPER", "METAL_DEBUG")
+WORKER_ENV_KEYS = {"HOME", "TMPDIR", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
 
 
 def worker_env(parent: dict[str, str]) -> dict[str, str]:
-    """Mirror of HallieNeuralSpeech.workerEnvironment (Swift)."""
-    return {k: v for k, v in parent.items() if not k.startswith(DEBUG_PREFIXES)}
+    """Mirror of HallieNeuralSpeech.workerEnvironment (Swift): an allowlist."""
+    import tempfile
+    env = {k: v for k, v in parent.items() if k in WORKER_ENV_KEYS}
+    env.setdefault("TMPDIR", tempfile.gettempdir() + "/")
+    return env
 
 
 def check_voice(engine: Path, reference: dict) -> dict:

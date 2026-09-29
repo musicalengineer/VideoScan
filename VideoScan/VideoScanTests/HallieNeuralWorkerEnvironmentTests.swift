@@ -8,26 +8,34 @@ import Testing
 /// ("setBytes … bytes argument cannot be nil", exit 6) — Hallie fell back to
 /// Apple speech. Reproduced by hand: the same engine and text exit -6 with
 /// MTL_DEBUG_LAYER=1 and write the WAV without it.
-@Suite("Hallie neural voice — the engine never inherits Metal debug switches")
+@Suite("Hallie neural voice — the engine gets an allowlisted environment, never Xcode's debug switches")
 struct HallieNeuralWorkerEnvironmentTests {
 
-    @Test func metalDebugSwitchesAreDroppedEverythingElseKept() {
+    /// The variables Xcode 27 really injected into the running app on
+    /// 2026-09-29 (a sample of the ~30): none may reach the engine.
+    @Test func onlyTheAllowlistReachesTheEngine() {
         let parent = [
-            "MTL_DEBUG_LAYER": "1",
-            "MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS": "0",
-            "MTL_SHADER_VALIDATION": "1",
-            "METAL_DEVICE_WRAPPER_TYPE": "1",
-            "METAL_DEBUG_ERROR_MODE": "0",
-            "HOME": "/Users/test", "PATH": "/usr/bin", "TMPDIR": "/tmp/x",
-            "MTL_HUD_ENABLED": "1",          // not a debug switch — kept
+            "MTL_DEBUG_LAYER": "1", "MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS": "0",
+            "DYLD_INSERT_LIBRARIES": "/Applications/Xcode.app/…/libViewDebuggerSupport.dylib",
+            "DYLD_FRAMEWORK_PATH": "/x", "DYLD_LIBRARY_PATH": "/x",
+            "CA_ASSERT_MAIN_THREAD_TRANSACTIONS": "1", "CA_DEBUG_TRANSACTIONS": "1",
+            "COREAI_CAPTURE_ENABLED": "1", "LLVM_PROFILE_FILE": "/x", "MallocNanoZone": "0",
+            "SQLITE_ENABLE_THREAD_ASSERTIONS": "1", "NSUnbufferedIO": "YES",
+            "OS_LOG_DT_HOOK_MODE": "0x07", "SWIFT_BACKTRACE": "enable=no",
+            "__XCODE_BUILT_PRODUCTS_DIR_PATHS": "/x", "__XPC_DYLD_LIBRARY_PATH": "/x",
+            "HOME": "/Users/test", "PATH": "/usr/bin", "TMPDIR": "/tmp/x/", "LANG": "en_US.UTF-8",
+            "USER": "test", "__CF_USER_TEXT_ENCODING": "0x1F5:0x0:0x0",
         ]
         let env = HallieNeuralSpeech.workerEnvironment(parent)
-        #expect(env == ["HOME": "/Users/test", "PATH": "/usr/bin", "TMPDIR": "/tmp/x", "MTL_HUD_ENABLED": "1"])
+        #expect(env == ["HOME": "/Users/test", "PATH": "/usr/bin", "TMPDIR": "/tmp/x/", "LANG": "en_US.UTF-8",
+                        "USER": "test", "__CF_USER_TEXT_ENCODING": "0x1F5:0x0:0x0"])
     }
 
-    @Test func aCleanEnvironmentPassesThroughUnchanged() {
-        let parent = ["HOME": "/Users/test", "LANG": "en_US.UTF-8"]
-        #expect(HallieNeuralSpeech.workerEnvironment(parent) == parent)
+    @Test func aMissingTmpdirGetsTheSystemOne() {
+        let env = HallieNeuralSpeech.workerEnvironment(["HOME": "/Users/test"])
+        #expect(env["HOME"] == "/Users/test")
+        #expect(env["TMPDIR"] == NSTemporaryDirectory())
+        #expect(env.count == 2)
     }
 
     /// SENSOR: every engine launch in HallieNeuralSpeech.swift sets its

@@ -62,21 +62,30 @@ enum HallieNeuralSpeech {
             .appendingPathComponent(directoryName, isDirectory: true)
     }
 
-    /// The voice engine's environment: ours, less Metal's DEBUG switches.
-    /// Launched from Xcode the app carries `MTL_DEBUG_LAYER=1` (the
-    /// scheme's "Metal API Validation"), a child process inherits it, and
-    /// on macOS 27 / Xcode 27 the validation layer ABORTS the engine on a
-    /// harmless zero-length `setBytes` — so every sentence fell back to
-    /// Apple speech (2026-09-29: "Hallie's voice regressed after the
-    /// upgrade"). Validating an ML worker gains nothing; the app's own
-    /// Metal use keeps whatever the scheme asked for. Pure.
+    /// The voice engine's environment: an ALLOWLIST, not ours minus a few.
+    /// Launched from Xcode the app carries ~30 debug variables — the scheme's
+    /// Metal API Validation (`MTL_DEBUG_LAYER=1`), `DYLD_INSERT_LIBRARIES`
+    /// (debugger support libraries loaded into ANY child), Core Animation
+    /// assertions, profiling hooks. A child inherits them all; on macOS 27 /
+    /// Xcode 27 the Metal validation layer ABORTED the engine on a harmless
+    /// zero-length `setBytes`, so every sentence fell back to Apple speech
+    /// (2026-09-29: "Hallie's voice regressed after the upgrade"). The first
+    /// fix removed the Metal switches only; Copilot's review of PR #226
+    /// pointed out that a blocklist misses the next injected knob — so the
+    /// engine now gets only what it needs. Verified 2026-09-29: with exactly
+    /// these variables it renders the reference sentence at timbre 1.0000.
+    /// A missing TMPDIR falls back to the system temp directory. Pure.
+    nonisolated static let workerEnvironmentKeys: Set<String> = [
+        "HOME", "TMPDIR", "PATH", "USER", "LOGNAME",
+        "LANG", "LC_ALL", "LC_CTYPE", "__CF_USER_TEXT_ENCODING",
+    ]
+
     nonisolated static func workerEnvironment(
         _ environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [String: String] {
-        environment.filter { key, _ in
-            !(key.hasPrefix("MTL_DEBUG") || key.hasPrefix("MTL_SHADER_VALIDATION")
-              || key.hasPrefix("METAL_DEVICE_WRAPPER") || key.hasPrefix("METAL_DEBUG"))
-        }
+        var env = environment.filter { workerEnvironmentKeys.contains($0.key) }
+        if env["TMPDIR"] == nil { env["TMPDIR"] = NSTemporaryDirectory() }
+        return env
     }
 
     static var isInstalled: Bool {

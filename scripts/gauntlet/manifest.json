@@ -10906,9 +10906,9 @@
         "HallieNeuralWorkerEnvironmentTests"
       ],
       "tests": [
-        "aCleanEnvironmentPassesThroughUnchanged",
+        "aMissingTmpdirGetsTheSystemOne",
         "everyEngineLaunchUsesTheFilteredEnvironment",
-        "metalDebugSwitchesAreDroppedEverythingElseKept"
+        "onlyTheAllowlistReachesTheEngine"
       ],
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
     },
@@ -21044,8 +21044,9 @@
         "test_missing_engine_is_not_run_never_green",
         "test_no_log_and_no_state_is_zero_not_an_error",
         "test_the_lane_never_raises_and_only_writes_voice_keys",
+        "test_the_python_allowlist_is_the_swift_allowlist",
         "test_verdict_a_good_voice_with_app_fallbacks_is_not_ok",
-        "test_worker_env_mirrors_the_app_filter"
+        "test_worker_env_mirrors_the_app_allowlist"
       ],
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit"
     },

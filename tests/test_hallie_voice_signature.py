@@ -42,8 +42,8 @@ def _render(voice: str, out_dir: Path, env: dict | None = None) -> subprocess.Co
 
 def _clean_env() -> dict:
     # What the app now hands the engine (HallieNeuralSpeech.workerEnvironment).
-    return {k: v for k, v in os.environ.items()
-            if not k.startswith(("MTL_DEBUG", "MTL_SHADER_VALIDATION", "METAL_DEVICE_WRAPPER", "METAL_DEBUG"))}
+    import nightly_hallie_voice
+    return nightly_hallie_voice.worker_env(dict(os.environ))
 
 
 def test_signature_of_the_stored_reference_is_stable():
