@@ -372,5 +372,32 @@ def test_slug_rules(script):
     assert script.unit_key("IRL", "county", script.strip_county_prefix("County Cork")) == "irl-cork"
 
 
+def test_slug_parity_with_swift_on_undecomposable_letters(script):
+    """This script is the PRODUCER of the keys; Swift's FamilyMapKey.slug
+    must give byte-identical answers (FamilyMapKeyTests pins the same
+    list).  Letters with no NFKD decomposition — ß, ø, ł, đ, æ — break a
+    word; they are never expanded to ss / o / l / d / ae (QA round 2,
+    2026-09-29: Swift's diacritic folding gave 'strasse' for 'Straße')."""
+    parity = [
+        ("Straße", "stra-e"),
+        ("Straße Nord", "stra-e-nord"),
+        ("ß", ""),
+        ("Łódź", "odz"),
+        ("Ørsted", "rsted"),
+        ("Đakovo", "akovo"),
+        ("Bornholm Ø", "bornholm"),
+        ("Søndre Strømfjord", "s-ndre-str-mfjord"),
+        ("Æbletoft", "bletoft"),
+        ("Œuvre", "uvre"),
+        ("Ħamrun", "amrun"),
+        ("İstanbul", "istanbul"),
+        ("ﬁne", "fine"),
+        ("Ａｌｐｈａ", "alpha"),
+        ("Ǆ", "dz"),
+    ]
+    for name, expected in parity:
+        assert script.slug(name) == expected, name
+
+
 def test_script_self_test_passes(script):
     assert script.self_test() == 0

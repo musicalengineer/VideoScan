@@ -289,7 +289,8 @@ struct FamilyTreeMapView: View {
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             ForEach(Array(c.unplaced.enumerated()), id: \.offset) { _, m in
-                memberRow(m, note: FamilyMapModel.placeNote(recordedPlace: m.recordedPlace, fromFamilyNotes: false)
+                memberRow(m, note: FamilyMapModel.placeNote(recordedPlace: m.recordedPlace,
+                                                            fromFamilyNotes: model.isRecordedFromFamilyNotes(m.id))
                              ?? "no recorded place")
             }
             let rest = c.totals.unresolved - c.unplaced.count

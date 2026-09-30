@@ -31,11 +31,17 @@
 //      whatever text WAS recorded (tree first), so "Berlin, Germany" reads
 //      as "recorded but off the map", not as "no recorded place".
 // Each person carries a `PlaceSource` (tree / family / none) so the panel
-// can say "place from the family's notes". The CyberBrain index is read
-// through the tree's own `FamilyTreeNotesResolver` (the object
-// FamilyTreeLiveModel already built — linked people first, then name
-// matches), injected by the sheet; nil in tests → tree only. NOTHING HERE
-// EVER WRITES CYBERBRAIN (a source sensor in FamilyMapModelTests pins it).
+// can say "place from the family's notes" — and `familyRecordedIDs` says
+// whose RECORDED text (placed or not) was the family's, so "Not on the map"
+// never prints "recorded as Berlin" when the tree recorded nothing. The
+// CyberBrain index is read through the tree's own `FamilyTreeNotesResolver`
+// (the object FamilyTreeLiveModel already built — linked people first,
+// then name matches), injected by the sheet; nil in tests → tree only.
+// PRIVACY: the map is a family-facing surface (Donna and the relatives see
+// it), so a note is read only when visible at `privacyCeiling` (= .family):
+// a `.private` birth event never places anyone and never reaches the
+// panel. NOTHING HERE EVER WRITES CYBERBRAIN (a source sensor in
+// FamilyMapModelTests pins it).
 //
 // THE MASK. `TreeWalkHighlight.mask` returns ALL-FALSE for an empty
 // selection ("no highlight" on the fan). Handed to the tally, all-false
@@ -119,6 +125,10 @@ final class FamilyMapModel: ObservableObject {
         /// The ids placed from the family's notes — a handful, kept as a set
         /// so a member row can be tagged by id in O(1).
         let familyPlacedIDs: Set<String>
+        /// The ids whose RECORDED place text came from the family's notes,
+        /// placed or not (⊇ `familyPlacedIDs`): the tree was blank and the
+        /// note is what "Not on the map" shows.
+        let familyRecordedIDs: Set<String>
     }
 
     /// How one unit is painted: the dominant line's colour at an opacity
@@ -160,6 +170,12 @@ final class FamilyMapModel: ObservableObject {
     nonisolated static let labelLimit = 12
     /// How many of the people not on the map the panel lists.
     nonisolated static let unplacedLimit = 25
+    /// The most private a family note may be and still place someone on
+    /// this family-facing map. `.family` (QA round 2, 2026-09-29): Donna
+    /// and the relatives see the map, so a `.private` item never places
+    /// anyone. Rick can raise this to `.private` for an owner-only view
+    /// later — a design decision noted for the morning, not taken here.
+    nonisolated static let privacyCeiling: CyberBrainItem.Privacy = .family
 
     let inputs: Inputs
     let units: FamilyMapUnits
@@ -170,9 +186,11 @@ final class FamilyMapModel: ObservableObject {
     @Published private(set) var yearCeiling: Int?
     @Published private(set) var selectedKey: String?
     /// The last tally problem, if any (a mask length mismatch would be a
-    /// programming error; it is shown, never swallowed).
+    /// programming error; it is shown AND logged, never swallowed).
     @Published private(set) var problem: String?
-    private var generation = 0
+    /// How many tallies have been started (the "ignore a stale reply"
+    /// sequence number). Readable so a test can pin "bind tallies once".
+    private(set) var generation = 0
     private var highlightSubscription: AnyCancellable?
 
     init(inputs: Inputs, units: FamilyMapUnits, displayNames: [String]) {
@@ -220,13 +238,16 @@ final class FamilyMapModel: ObservableObject {
 
     /// The family's recorded birthplace for one tree record: the first
     /// ACTIVE life event of any CyberBrain person standing for the record
-    /// that says born / birth and carries a place. Read-only; disputed
-    /// items are passed over (a disputed birthplace must not quietly place
-    /// someone). O(items about the person).
+    /// that says born / birth, carries a place, and is visible at the
+    /// map's privacy ceiling. Read-only; disputed items are passed over (a
+    /// disputed birthplace must not quietly place someone); a `.private`
+    /// item is passed over too (the map is family-facing). O(items about
+    /// the person).
     nonisolated static func familyBirthPlace(gedcomID: String, in knowledge: FamilyTreeNotesResolver) -> String? {
         for person in knowledge.cyberBrainPeople(forGedcomID: gedcomID) {
             for item in knowledge.index.allActiveItems(for: person.id)
-            where item.kind == .event && item.confidence != .disputed && isBirthEvent(item) {
+            where item.kind == .event && item.confidence != .disputed
+                && item.privacy.isVisible(at: privacyCeiling) && isBirthEvent(item) {
                 if let place = item.place, FamilyMapTally.hasText(place) { return place }
             }
         }
@@ -253,6 +274,7 @@ final class FamilyMapModel: ObservableObject {
         var recorded = [String?](repeating: nil, count: ids.count)
         var sources = [PlaceSource](repeating: .none, count: ids.count)
         var familyPlaced = Set<String>()
+        var familyRecorded = Set<String>()
         for o in visited where o >= 0 && o < birthPlaces.count {
             let tree = birthPlaces[o]
             let family: String? = familyPlaces.flatMap { o < $0.count ? $0[o] : nil }
@@ -260,12 +282,18 @@ final class FamilyMapModel: ObservableObject {
             // the family's note; the first that places the person wins.
             for (candidate, source) in [(tree, PlaceSource.tree), (family, PlaceSource.family)] {
                 guard let candidate, FamilyMapTally.hasText(candidate) else { continue }
-                if recorded[o] == nil { recorded[o] = candidate }   // what WAS recorded, tree first
+                if recorded[o] == nil {                                // what WAS recorded, tree first
+                    recorded[o] = candidate
+                    if source == .family { familyRecorded.insert(ids[o]) }
+                }
                 if let hit = BirthplaceUnitResolver.resolve(candidate) {
                     unitKeys[o] = hit.unitKey
                     recorded[o] = candidate
                     sources[o] = source
-                    if source == .family { familyPlaced.insert(ids[o]) }
+                    if source == .family {
+                        familyPlaced.insert(ids[o])
+                        familyRecorded.insert(ids[o])
+                    }
                     break
                 }
             }
@@ -274,17 +302,26 @@ final class FamilyMapModel: ObservableObject {
                                            birthYears: birthYears, generations: generations, lines: lines,
                                            unitKeys: unitKeys, recordedPlaces: recorded)
         return Inputs(people: people, visited: visited, surnameKeys: surnameKeys, regions: regions,
-                      placeSources: sources, familyPlacedIDs: familyPlaced)
+                      placeSources: sources, familyPlacedIDs: familyPlaced, familyRecordedIDs: familyRecorded)
     }
 
     /// Was this person placed from the family's notes rather than the tree?
     func isPlacedFromFamilyNotes(_ id: String) -> Bool { inputs.familyPlacedIDs.contains(id) }
 
+    /// Is the place text shown for this person the family's note (the tree
+    /// recorded nothing)? True for everyone placed by the notes AND for the
+    /// unplaced whose only recorded text is a note the map could not read.
+    func isRecordedFromFamilyNotes(_ id: String) -> Bool { inputs.familyRecordedIDs.contains(id) }
+
     // MARK: Following the Highlight checks
 
     /// Mirror the Highlight panel's checks: the map filters exactly as the
     /// fan highlights. Subscribed once; the model recomputes even while the
-    /// fan is showing, so a return to the map is already current.
+    /// fan is showing, so a return to the map is already current. A
+    /// `@Published` publisher REPLAYS its current value on subscription, so
+    /// binding is itself the first tally — the caller must not `apply` the
+    /// same selection again afterwards (it did, once: two tallies of every
+    /// walk; QA round 2).
     func bind(to highlighter: TreeWalkHighlighter) {
         highlightSubscription = highlighter.$selection
             .removeDuplicates()
@@ -326,13 +363,18 @@ final class FamilyMapModel: ObservableObject {
                 if let key = self.selectedKey, c.counts[key] == nil { self.selectedKey = nil }
             } else {
                 self.problem = outcome.1
+                // Counts only (a TallyError names column lengths), never a person.
+                appLog.write("Family map: tally failed — \(outcome.1 ?? "unknown error")")
             }
         }
     }
 
-    /// The published bundle for one tally result: shades, the top labels,
-    /// the camera box around every shaded unit, and the unplaced list.
-    /// O(units with a count).
+    /// The published bundle for one tally result: shades, the top labels
+    /// (each on its unit's `labelAnchor` — a country outline's on its
+    /// principal piece), the camera box (the fine counted units; the
+    /// country outlines only when nothing finer is counted — see
+    /// `FamilyMapUnits.coverage`), and the unplaced list. O(units with a
+    /// count).
     nonisolated static func computed(from r: FamilyMapTally.Result, units: FamilyMapUnits) -> Computed {
         var c = Computed()
         c.counts = r.counts
@@ -350,9 +392,9 @@ final class FamilyMapModel: ObservableObject {
             .prefix(labelLimit)
             .compactMap { key, u -> Label? in
                 guard let unit = units.unit(forKey: key) else { return nil }
-                let centre = unit.cameraBox.center
+                let anchor = unit.labelAnchor
                 return Label(key: key, name: unit.name, count: u.people,
-                             latitude: centre.latitude, longitude: centre.longitude)
+                             latitude: anchor.latitude, longitude: anchor.longitude)
             }
         c.cameraBox = units.coverage(for: r.counts.keys)
         return c

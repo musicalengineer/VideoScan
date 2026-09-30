@@ -284,12 +284,15 @@ struct FamilyTreeWalkSheet: View {
                                                           familyKnowledge: familyKnowledge)
                 guard !Task.isCancelled else { return }
                 let map = FamilyMapModel(inputs: inputs, units: units, displayNames: names)
+                // bind replays the highlighter's current selection, so it IS
+                // the first tally; a second `apply` here counted twice.
                 map.bind(to: highlighter)
-                map.apply(selection: highlighter.selection, yearCeiling: nil)
                 mapModel = map
                 stage = .map(animator, highlighter, map)
             } catch {
                 mapProblem = "The map could not be shown: \(error)"
+                // A decode / missing-resource error: no names in it.
+                appLog.write("Family map: could not be shown — \(error)")
             }
         }
     }
