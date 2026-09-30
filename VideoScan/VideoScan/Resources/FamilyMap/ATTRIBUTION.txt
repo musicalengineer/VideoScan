@@ -1,0 +1,29 @@
+Family Map border data — sources and licences
+
+This mapping made use of data provided by the Historic County Borders Project.
+https://www.county-borders.co.uk
+
+  Historic counties of England, Scotland, Wales and Northern Ireland:
+  Historic County Borders Project (Historic Counties Trust), UK Definition A,
+  WGS84, "Simplified" shapefile release, downloaded from
+  https://www.county-borders.co.uk/UKDefinitionA_WG84_Simplified.zip
+  The data are provided free of charge for all personal, educational,
+  non-commercial and commercial use; the Trust asks for the acknowledgement
+  above.  Based on the Historic Counties Standard
+  (https://historiccountiestrust.co.uk/Historic_Counties_Standard.pdf).
+
+Made with Natural Earth. Free vector and raster map data @ naturalearthdata.com
+(public domain).
+
+  US states + District of Columbia, Canadian provinces and territories:
+  https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_1_states_provinces.geojson
+  Counties of Ireland (folded to the 26 traditional counties):
+  https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces.geojson
+  Country outlines (England, Scotland, Wales, Northern Ireland, Ireland,
+  United States, Canada):
+  https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_map_subunits.geojson
+
+All layers were simplified (Douglas–Peucker, 0.01° for the historic
+counties, 0.005° for Ireland, 0.02° for the Natural Earth 1:50m layers)
+and rounded to 6 decimal places by scripts/build_family_map_units.py.
+Borders are approximate and for family-history illustration only.
