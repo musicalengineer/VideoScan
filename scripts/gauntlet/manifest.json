@@ -21024,6 +21024,31 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_family_map_pipeline_regressions.py",
+      "stage": "unit",
+      "suites": [
+        "test_family_map_pipeline_regressions.py"
+      ],
+      "tests": [
+        "test_build_features_is_byte_stable_sorted_and_nonmutating",
+        "test_build_pipeline_is_offline_isolated_and_reproducible",
+        "test_build_rejects_colliding_normalized_names",
+        "test_bundled_holes_have_excluded_interior_witnesses",
+        "test_bundled_rings_have_no_proper_edge_crossings",
+        "test_crossing_sensor_distinguishes_crossing_contact_and_collinearity",
+        "test_dissolve_adjacent_units_removes_seam_and_keeps_hole",
+        "test_dissolve_corner_touch_keeps_two_simple_shells",
+        "test_dissolve_nested_island_stays_filled_inside_parent_hole",
+        "test_dissolve_unclosed_edges_reports_failure_and_retains_originals",
+        "test_fallback_keeps_every_unit_even_when_all_its_pieces_collapse",
+        "test_simplification_fallback_keeps_original_hole",
+        "test_simplification_keeps_surviving_hole_and_does_not_mutate_input",
+        "test_tiny_hole_can_be_dropped_without_losing_surviving_shell"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_find_person.py",
       "stage": "unit",
       "suites": [
@@ -23913,6 +23938,10 @@
         },
         {
           "name": "tests/test_family_map_units.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_family_map_pipeline_regressions.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
