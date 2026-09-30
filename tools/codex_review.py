@@ -6,6 +6,9 @@
         [--timeout 1800]
     python3 tools/codex_review.py close --title "⌘O" --closed-by <sha> [--note "..."]
     python3 tools/codex_review.py status
+    python3 tools/codex_review.py track --title "Map stage 1" --range a..b [--doc …] [--message-id N]
+        (a review codex runs interactively via the channel — shows on the status line)
+    python3 tools/codex_review.py verdict --title "Map stage 1" --verdict fix --findings 3 [--credits …]
 
 Phases, each written to the state file the menu-bar monitor reads:
     briefed  -> brief validated, "started" message posted to codex on the channel
@@ -418,8 +421,54 @@ def status_lines(cycles: list[dict], now: datetime | None = None) -> list[str]:
 
 # ---------------------------------------------------------------- CLI
 
+def track_cycle(title: str, rng: str, doc: str | None, message_id: int | None) -> int:
+    """Register a review that codex runs INTERACTIVELY (Rick's own codex
+    session, driven by team-channel messages) so the status line and the
+    menu-bar monitor show it like a `codex exec` cycle (2026-09-29: three
+    Family Map handoffs went through the channel and the line stayed empty).
+    Phase `briefed` until `verdict`/`close`; the colour then says how long
+    codex has had it."""
+    cycle = new_cycle(title, rng, doc or "")
+    if message_id is not None:
+        update_cycle(cycle["id"], messageIDs=[message_id])
+    print(f"#{cycle['id']} {title} ({rng}): tracking (briefed)")
+    return 0
+
+
+def record_verdict(title: str, verdict: str, findings: int, credits: str | None) -> int:
+    """Record a verdict codex posted on the channel: `fixing` when there is
+    anything to close, `closed` when a merge verdict carries no findings."""
+    matches = [c for c in load_cycles() if c.get("title") == title]
+    if not matches:
+        print(f"codex_review: no cycle titled {title!r}", file=sys.stderr)
+        return 2
+    cycle = max(matches, key=lambda c: c.get("id", 0))
+    done = findings == 0 and verdict.lower().startswith("merge")
+    update_cycle(cycle["id"], phase="closed" if done else "fixing", verdict=verdict,
+                 findings=findings, credits=credits,
+                 **({"closedBy": "verdict"} if done else {}))
+    print(f"#{cycle['id']} {title}: {verdict}/{findings}" + (" (closed)" if done else " (fixing)"))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["track"]:
+        parser = argparse.ArgumentParser(prog="codex_review.py track")
+        parser.add_argument("--title", required=True)
+        parser.add_argument("--range", required=True, dest="rng")
+        parser.add_argument("--doc")
+        parser.add_argument("--message-id", type=int)
+        args = parser.parse_args(argv[1:])
+        return track_cycle(args.title, args.rng, args.doc, args.message_id)
+    if argv[:1] == ["verdict"]:
+        parser = argparse.ArgumentParser(prog="codex_review.py verdict")
+        parser.add_argument("--title", required=True)
+        parser.add_argument("--verdict", required=True)
+        parser.add_argument("--findings", required=True, type=int)
+        parser.add_argument("--credits")
+        args = parser.parse_args(argv[1:])
+        return record_verdict(args.title, args.verdict, args.findings, args.credits)
     if argv[:1] == ["status"]:
         lines = status_lines(load_cycles())
         print("\n".join(lines) if lines else "(no review cycles)")

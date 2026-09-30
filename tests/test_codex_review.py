@@ -241,3 +241,24 @@ def test_channel_posts_are_off_by_default(env, monkeypatch):
     assert code == 0 and cycle["phase"] == "closed"
     db = env / "channel.sqlite3"
     assert not db.exists() or channel_rows(env) == []
+
+
+def test_track_registers_a_channel_driven_cycle_and_verdict_moves_it(env, capsys):
+    """2026-09-29: three channel-driven map reviews never reached the status
+    line. `track` registers one as `briefed`; `verdict` moves it to fixing
+    (findings) or closed (merge/0); `close` then works as for exec cycles."""
+    assert codex_review.main(["track", "--title", "Map stage 1", "--range", "1ad0dd3a..2875900b",
+                              "--doc", "docs/x.md", "--message-id", "1776"]) == 0
+    cycles = codex_review.load_cycles()
+    assert cycles[-1]["phase"] == "briefed" and cycles[-1]["messageIDs"] == [1776]
+    assert cycles[-1]["pid"] is None
+    assert codex_review.main(["verdict", "--title", "Map stage 1", "--verdict", "fix", "--findings", "3"]) == 0
+    assert codex_review.load_cycles()[-1]["phase"] == "fixing"
+    assert codex_review.load_cycles()[-1]["findings"] == 3
+    assert codex_review.main(["track", "--title", "Map stage 0", "--range", "9e7f3b31..1ad0dd3a"]) == 0
+    assert codex_review.main(["verdict", "--title", "Map stage 0", "--verdict", "merge", "--findings", "0"]) == 0
+    assert codex_review.load_cycles()[-1]["phase"] == "closed"
+    assert codex_review.main(["verdict", "--title", "nope", "--verdict", "fix", "--findings", "1"]) == 2
+    assert codex_review.main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "Map stage 1" in out and "fixing" in out
