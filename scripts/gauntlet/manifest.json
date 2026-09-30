@@ -504,6 +504,19 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapBundledDataTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapBundledDataTests"
+      ],
+      "tests": [
+        "everyResolverKeyIsABundledUnitAndViceVersa",
+        "realPlacesLandInTheRightBundledUnit"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapKeyTests.swift",
       "stage": "unit",
       "suites": [
@@ -22079,6 +22092,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityTextTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapBundledDataTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {

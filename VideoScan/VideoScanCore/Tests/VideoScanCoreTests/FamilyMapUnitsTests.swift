@@ -218,8 +218,10 @@ struct FamilyMapUnitsTests {
         let sea = C(latitude: 5, longitude: 17)
         #expect(units.unit(nearest: sea) == nil)
         #expect(units.unit(nearest: sea, withinDegrees: 1.9) == nil)
-        #expect(units.unit(nearest: sea, withinDegrees: 2.5)?.key == "eng")
-        #expect(units.unit(nearest: sea, withinDegrees: 4)?.key == "eng", "nearest, not merely within")
+        #expect(units.unit(nearest: sea, withinDegrees: 2.5)?.key == "eng", "only the outline is within reach")
+        // A county beats a nearer COUNTRY outline once it is within reach:
+        // the outlines are coarser than the counties (Halifax, 2026-09-29).
+        #expect(units.unit(nearest: sea, withinDegrees: 4)?.key == "eng-beta", "finer unit preferred over the nearer outline")
     }
 
     @Test func nearestTiesGoToTheKey() throws {

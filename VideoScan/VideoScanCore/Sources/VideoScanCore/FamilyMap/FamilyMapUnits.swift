@@ -385,13 +385,20 @@ public struct FamilyMapUnits: Sendable {
     /// click on a coarse coastline. Only for `unit(containing:) == nil`.
     /// Nil beyond `withinDegrees` (0.15° ≈ 10–17 km). Ties go to the key.
     public func unit(nearest p: FamilyMap.Coordinate, withinDegrees tolerance: Double = 0.15) -> Unit? {
-        var best: (index: Int, distance: Double)?
-        for i in units.indices {
-            guard let d = units[i].boundaryDistance(to: p, within: tolerance) else { continue }
-            if let current = best, !(d < current.distance || (d == current.distance && units[i].key < units[current.index].key)) { continue }
-            best = (i, d)
+        // A county / state / province first; a COUNTRY outline only when no
+        // finer unit is within reach. The outlines come from a coarser source
+        // than the counties, so off a coast the country's edge is often the
+        // nearer one and would have won every coastal click (Halifax, 2026-09-29).
+        func best(where keep: (Unit) -> Bool) -> Unit? {
+            var best: (index: Int, distance: Double)?
+            for i in units.indices where keep(units[i]) {
+                guard let d = units[i].boundaryDistance(to: p, within: tolerance) else { continue }
+                if let current = best, !(d < current.distance || (d == current.distance && units[i].key < units[current.index].key)) { continue }
+                best = (i, d)
+            }
+            return best.map { units[$0.index] }
         }
-        return best.map { units[$0.index] }
+        return best { $0.kind != .country } ?? best { $0.kind == .country }
     }
 
     /// The camera box around every listed unit that exists. Nil when none

@@ -101,7 +101,7 @@ struct FamilyMapResolverTests {
         Row("Angus, Scotland", "sct-angus"),
         Row("Haddingtonshire, Scotland", "sct-east-lothian"),
         Row("Linlithgowshire, Scotland", "sct-west-lothian"),
-        Row("Elginshire, Scotland", "sct-moray"),
+        Row("Elginshire, Scotland", "sct-morayshire"),
         Row("Argyllshire, Scotland", "sct-argyllshire"),
         Row("Argyll, Scotland", "sct-argyllshire"),
         Row("Inverness-shire, Scotland", "sct-inverness-shire"),
