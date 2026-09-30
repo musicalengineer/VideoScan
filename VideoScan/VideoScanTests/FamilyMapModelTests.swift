@@ -292,7 +292,7 @@ struct FamilyMapModelTests {
         #expect(m.selectedKey == nil)
     }
 
-    @Test func shadesLabelsCameraAndPanelLinesArePinned() {
+    @Test func shadesLabelsCameraAndPanelLinesArePinned() throws {
         typealias M = FamilyMapModel
         // Opacity: a log ramp from the floor (1 person) to the ceiling (the peak).
         #expect(M.opacity(count: 0, peak: 10) == 0)
@@ -322,13 +322,13 @@ struct FamilyMapModelTests {
         let world = FamilyTreeMapView.cameraRegion(for: .init(minLatitude: -80, maxLatitude: 80, minLongitude: -179, maxLongitude: 179))
         #expect(world.latitudeDelta == 170 && world.longitudeDelta == 340)
         // The count line: a county names its country; a country outline says what is missing.
-        let york = syntheticUnits.unit(forKey: "eng-yorkshire")!
+        let york = try #require(syntheticUnits.unit(forKey: "eng-yorkshire"))
+        let england = try #require(syntheticUnits.unit(forKey: "eng"))
+        let usa = try #require(syntheticUnits.unit(forKey: "usa"))
         #expect(FamilyTreeMapView.countLine(unit: york, count: 42) == "42 people born in Yorkshire, England")
         #expect(FamilyTreeMapView.countLine(unit: york, count: 1) == "1 person born in Yorkshire, England")
-        #expect(FamilyTreeMapView.countLine(unit: syntheticUnits.unit(forKey: "eng")!, count: 7)
-                == "7 people born in England, county not recorded")
-        #expect(FamilyTreeMapView.countLine(unit: syntheticUnits.unit(forKey: "usa")!, count: 7)
-                == "7 people born in United States, state not recorded")
+        #expect(FamilyTreeMapView.countLine(unit: england, count: 7) == "7 people born in England, county not recorded")
+        #expect(FamilyTreeMapView.countLine(unit: usa, count: 7) == "7 people born in United States, state not recorded")
         // A synthetic unit set gets one stable fingerprint (the MKPolygon cache key).
         #expect(FamilyMapShapes.fingerprint(syntheticUnits) == FamilyMapShapes.fingerprint(syntheticUnits))
         #expect(FamilyMapShapes.fingerprint(syntheticUnits) == "5/eng/usa-massachusetts/20")
