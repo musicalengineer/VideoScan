@@ -185,3 +185,38 @@ Read, no additional findings: the privacy ceiling in `FamilyMapModel`;
 The render sensor's two post-selection gates correctly use awake time.
 Claude's supplied Core/app suite results were not independently rerun; no
 app/test host/UI or media operations. Six-file pinned review only.
+
+### Closed (re-check) — r4, branch `fix/family-map-codex-r4`, fix commit `2068ee7a`
+
+All three findings fixed red-first in `2068ee7a`. The invariant is
+unchanged: a note places a person only when it asserts THEIR OWN birth,
+and anything ambiguous stays unplaced. `isOwnBirthEvent` is still the one
+decision behind both the map and the #229 card flags
+(`familyBirthPlace` → `place(tree:family:)`).
+
+| # | Finding | Fix | Pinning test |
+|---|---------|-----|--------------|
+| 1 | P2: the "Birth…" opener and the unanchored pronoun rule accept other people's births | "Birth" / "Her birth" openers are refused when the first sentence goes on with of / to / for / her / his / their or 's. "Born…" is refused when it names a relative after her / his / their. "She / he was born" counts only at the start, or after one "(the eldest) daughter / son / child of …," appositive (`leadingPronounBornPattern`). | `FamilyMapNotesAdversarialTests.onlyTheSubjectsOwnBirthIsABirthEvent` (codex's two sentences + "Birth record for Ann…", "Birth certificate of her son John…", "Born the same year as her brother…"); `recheckSentencesThroughTheActualLookup` (both sentences → nil through `familyBirthPlace`, GEDCOM and name linkage, archive unchanged) |
+| 2 | P2: one shared given name accepts a conflicting identity | Every token of the leading name run must be one of the person's own name tokens (canonical + any alias, surname and initials included; `ownNameTokens`), and at least one must be a given name (`nameRunIsOnly`). | same two tests: "Mary Ellen Ronan / Mary Ellen O'Connor / Mary Christina Ronan / Mary E. O'Connor / Daniel O'Connor was born…" → not hers; canonical, "Mary C. O'Connor", "Mamie", "Mamie O'Connor, born 1904" and the certificate shape → hers (lookup places Mary in both link forms) |
+| 3 | P3: synchronous selection escapes the render ceiling | Step 6 times `select(unitKey:)` (5 keys + the identical re-select) and `select(coordinate:)` (5) on `SuspendingClock` and gates each worst case at the same load-aware 170 ms Debug ceiling. The two post-selection pump gates are kept. | `FamilyMapRenderSensorTests.theBundledMapAtTheRealTreeSize` (on-screen steps, opt-in); headless `selectionItselfIsGatedNotOnlyThePump` (source pin on the shape) and `worstSecondsIsTheLongestDuration` |
+
+Documented false negatives, pinned as `false` rows so any change is
+deliberate: "Mary moved to Cork, where she was born." (a pronoun after any
+other opening) and "Mrs Mary O'Connor was born in Cork." (an honorific
+outside her names). As before: "Grandma was born in Cork." (an unlisted
+nickname). Also refused, though not pinned: a "Born …" note that mentions
+"her father" or similar.
+
+Evidence (Debug, own derivedData): RED 17 issues (11 of 37 sentence rows,
+6 of 10 lookup cases, all negatives; every positive already passed).
+GREEN: Core `--filter FamilyMap` 61 tests / 9 suites. App by suite:
+FamilyMapModelTests, FamilyMapNotesAdversarialTests,
+FamilyMapAdversarialAppTests, FamilyTreeBirthFlagTests and
+FamilyMapRenderSensorTests, 44 tests (19 + 3 + 5 + 14 + 3). With
+FamilyTreeWalkAppTests, FamilyTreeCardActionTests and
+FamilyTreeNotesResolverTests, 73 tests / 8 suites. FamilyTreeLiveModelTests:
+37 tests / 7 suites. Render sensor on-screen steps 5–8 were not run (no UI on
+the M4). Live archive, read-only, IDs only: 18 people, 2 active, undisputed,
+family-visible events with a place; 1 event accepted (the 2026-09-29 certificate event)
+placing 1 person, both before and after — no live change. Manifest: 3 tests
+registered, performance floor 55 → 57, validator 0 errors.
