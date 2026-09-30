@@ -75,8 +75,12 @@ jobs:
           brew install ffmpeg || true
           ffmpeg -version | head -1
 
-      # `run` uses bash -eo pipefail, so tee cannot mask a failure.
+      # `shell: bash` is explicit on purpose: GitHub's implicit default is
+      # `bash -e {0}` (NO pipefail), so `… | tee` would return tee's 0 and
+      # hide a failing `swift test`. An explicit `shell: bash` runs
+      # `bash --noprofile --norc -eo pipefail {0}`. (codex 2026-09-30, P2.)
       - name: swift test
+        shell: bash
         run: swift test --package-path VideoScan/VideoScanCore 2>&1 | tee core-tests.log
 
       - name: Upload log
