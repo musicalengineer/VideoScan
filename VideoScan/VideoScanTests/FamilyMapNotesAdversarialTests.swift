@@ -54,14 +54,13 @@ struct FamilyMapNotesAdversarialTests {
                 id: "source.synthetic", type: .officialRecord, title: "Synthetic event record")])
         let knowledge = FamilyTreeNotesResolver(index: try CyberBrainIndex(archive: archive), graph: graph)
         let attached = try #require(knowledge.cyberBrainPeople(forGedcomID: "@I7@").first,
-                                   "the fixture must attach by \(linkedByGEDCOM ? "GEDCOM ID" : "name")")
+                                   "the fixture must attach by the requested link form")
         #expect(attached.id == "person.mary")
         #expect(knowledge.cyberBrainPeople(forGedcomID: "@I7@").count == 1)
 
         let birthplace = FamilyMapModel.familyBirthPlace(gedcomID: "@I7@", in: knowledge)
         #expect(birthplace == row.expectedBirthplace,
-                "\(row.text) [\(row.privacy), \(linkedByGEDCOM ? "GEDCOM ID" : "name")] " +
-                "placed Mary at \(birthplace ?? "nil"), expected \(row.expectedBirthplace ?? "nil")")
+                "only the person's own visible birth should supply a birthplace")
         #expect(knowledge.index.archive == archive, "birthplace lookup must leave family notes unchanged")
     }
 }
