@@ -72,10 +72,28 @@
 #       behind hard deadlines. Timeout rows take precedence over ordinary
 #       return codes and zero-test discovery, so metrics publication remains
 #       mandatory even when a removable-volume read wedges in the kernel.
+#
+#   2026-09-30 (release-r1):
+#     - The nightly builds RELEASE (Rick's ruling 2026-09-29 21:00: production
+#       parity for the 2 AM run; rapid dev and day testing stay Debug). Same
+#       flags as the gauntlet (scripts/gauntlet/Runner.swift): -configuration
+#       Release, ENABLE_TESTABILITY=YES so @testable imports resolve, arm64.
+#       NIGHTLY_CONFIGURATION is the ONE place the configuration lives; every
+#       products path derives from it and every published row carries it as
+#       an additive `configuration` field (the gauntlet rows use the same key).
+#     - Build watchdog 3,600 s -> 5,400 s (see the note at the value).
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-09-29-hallie-voice-r1"
+NIGHTLY_SCRIPT_VERSION="2026-09-30-release-r1"
+# THE build configuration for the whole nightly lane (Rick, 2026-09-29 21:00:
+# the nightly builds Release for production parity; Debug stays for rapid dev
+# and day testing). Build, test, coverage, the person evaluator and the Hallie
+# replay all derive their paths from this one value — never spell
+# Build/Products/<name> by hand. Row builders read it as
+# ${NIGHTLY_CONFIGURATION:-unknown} so a harness that sources them in isolation
+# under set -u still publishes valid JSON.
+NIGHTLY_CONFIGURATION="Release"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -96,7 +114,13 @@ HALLIE_VOICE_JSON='{"hallie_voice_status":"not-run"}'
 # uncommitted Package.resolved bump swift-collections 1.5.1→1.6.0 / swift-jinja
 # 2.3.6→2.5.0 forcing package rebuilds; test-target growth). Evidence: codex
 # #1322/#1323. The watchdog still catches a hung build.
-NIGHTLY_BUILD_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_BUILD_TIMEOUT_SECONDS:-3600}"
+# 2026-09-30 (release-r1): 5,400 s. The Release build is whole-module, and the
+# Debug build already took 2,764 s on 9/30 (2,151 s on 9/29) in the warm cache;
+# the gauntlet's COLD Release build of app+tests was ~1,740 s. The first Release
+# night rebuilds the cache from scratch. 3,600 s left no headroom for a normal
+# Release build; the watchdog still catches a hung one. Worst case (two builds
+# at the limit + tests at the limit + Hallie) ends before 08:00.
+NIGHTLY_BUILD_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_BUILD_TIMEOUT_SECONDS:-5400}"
 NIGHTLY_TEST_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_TEST_TIMEOUT_SECONDS:-7200}"
 NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS="${VIDEOSCAN_NIGHTLY_TERM_GRACE_SECONDS:-10}"
 NIGHTLY_WATCHDOG_DID_TIMEOUT=false
@@ -354,10 +378,11 @@ make_current_test_result_row() {
     if [ "${CRASHED_NAMES_JSON:-[]}" != "[]" ]; then
         crashed_field=",\"crashed_names\":${CRASHED_NAMES_JSON}"
     fi
-    printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":%d,"failed":%d,"skipped":%d,"total":%d,"elapsed_s":%.3f,"status":"%s","reason":"%s","nightly_script_v":"%s","failed_names":%s%s}' \
+    printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":%d,"failed":%d,"skipped":%d,"total":%d,"elapsed_s":%.3f,"status":"%s","reason":"%s","nightly_script_v":"%s","configuration":"%s","failed_names":%s%s}' \
         "$ts" "$HOST" "$BRANCH" "$COMMIT" "$COMMIT_DATE" "$DIRTY" \
         "$PASSED" "$FAILED" "$SKIPPED" "$TOTAL" \
         "$ELAPSED" "$STATUS" "$REASON" "$NIGHTLY_SCRIPT_VERSION" \
+        "${NIGHTLY_CONFIGURATION:-unknown}" \
         "$FAILED_NAMES_JSON" "${cov_field}${crashed_field}"
 }
 
@@ -378,6 +403,13 @@ record_timed_out_test_result() {
 # Optional post-test work is kept behind orchestrate_post_test_result so the
 # actual timeout branch can be exercised without invoking xccov or the live
 # person evaluator. Neither command is part of the durable-row critical path.
+#
+# Coverage under Release (2026-09-30): -enableCodeCoverage YES instruments the
+# optimised build (-profile-generate / -profile-coverage-mapping do not depend
+# on ENABLE_TESTABILITY), so xccov still reports "Logic-only coverage". But
+# inlining and dead-code elimination move the region counts, so the
+# coverage_logic_pct series STEPS on the switch night (last Debug night 9/30:
+# 67.078%). Compare Release nights with Release nights.
 collect_optional_post_test_metrics() {
     COV_LOGIC="null"
     if [ -d /tmp/nightly-results.xcresult ]; then
@@ -409,7 +441,11 @@ collect_optional_post_test_metrics() {
     fi
     log "Logic-only coverage: ${COV_LOGIC}%"
 
-    PERSON_EVAL_APP="$NIGHTLY_DD/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan"
+    # The one derived path (NIGHTLY_APP_BINARY, set beside NIGHTLY_DD) feeds
+    # the person evaluator and the Hallie replay, whose row field
+    # hallie_replay_binary therefore shows Build/Products/$NIGHTLY_CONFIGURATION.
+    PERSON_EVAL_APP="$NIGHTLY_APP_BINARY"
+    log "App binary ($NIGHTLY_CONFIGURATION): $PERSON_EVAL_APP"
     refresh_person_metrics "$PERSON_EVAL_APP"
     refresh_hallie_replay "$PERSON_EVAL_APP"
     refresh_hallie_voice
@@ -683,8 +719,9 @@ make_status_row() {
     local branch="${6:-main}"
     local ts
     ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-    printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":0,"failed":0,"skipped":0,"total":0,"elapsed_s":0,"status":"%s","reason":"%s","nightly_script_v":"%s"}' \
-        "$ts" "$HOST" "$branch" "$commit" "$commit_date" "$dirty" "$status" "$reason" "$NIGHTLY_SCRIPT_VERSION"
+    printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":0,"failed":0,"skipped":0,"total":0,"elapsed_s":0,"status":"%s","reason":"%s","nightly_script_v":"%s","configuration":"%s"}' \
+        "$ts" "$HOST" "$branch" "$commit" "$commit_date" "$dirty" "$status" "$reason" "$NIGHTLY_SCRIPT_VERSION" \
+        "${NIGHTLY_CONFIGURATION:-unknown}"
 }
 
 # ── Branch + dirty-tree handling (NEW POLICY 2026-06-14) ────────────
@@ -734,7 +771,22 @@ refresh_person_metrics
 # (nightly false failure 2026-06-23). A stable cache dir avoids that, and a
 # clean-and-retry-once guards against any residual module-cache corruption.
 NIGHTLY_DD="${HOME}/Library/Caches/videoscan-nightly-dd"
+# Every product path derives from NIGHTLY_CONFIGURATION here, in one place.
+NIGHTLY_PRODUCTS_DIR="$NIGHTLY_DD/Build/Products/$NIGHTLY_CONFIGURATION"
+NIGHTLY_APP_BINARY="$NIGHTLY_PRODUCTS_DIR/VideoScan.app/Contents/MacOS/VideoScan"
+# A configuration switch (Debug -> Release, 2026-09-30) leaves the cache full of
+# the other configuration's objects, which the new one cannot reuse: wipe once
+# and build clean rather than carry gigabytes of dead Debug products and a
+# stale Debug binary beside the live one. After the first Release night the
+# Release products exist and this never fires again.
+if [ -d "$NIGHTLY_DD/Build/Products" ] && [ ! -d "$NIGHTLY_PRODUCTS_DIR" ]; then
+    log "DerivedData has no $NIGHTLY_CONFIGURATION products (configuration changed) — wiping $NIGHTLY_DD for a clean $NIGHTLY_CONFIGURATION build"
+    rm -rf "$NIGHTLY_DD"
+fi
 
+# Same shape as the gauntlet build (scripts/gauntlet/Runner.swift, 2026-09-27):
+# Release + ENABLE_TESTABILITY=YES (so @testable imports resolve in an
+# optimised build) + arm64, with coverage on top for the dashboard.
 run_nightly_build() {
     local build_log="/tmp/nightly-build-output.log"
     run_with_process_group_watchdog \
@@ -744,10 +796,11 @@ run_nightly_build() {
         xcodebuild build-for-testing \
         -project VideoScan/VideoScan.xcodeproj \
         -scheme VideoScan \
-        -configuration Debug \
-        -destination 'platform=macOS' \
+        -configuration "$NIGHTLY_CONFIGURATION" \
+        -destination 'platform=macOS,arch=arm64' \
         -derivedDataPath "$NIGHTLY_DD" \
         -enableCodeCoverage YES \
+        ENABLE_TESTABILITY=YES \
         CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS= \
         -quiet
     local rc=$?
@@ -755,7 +808,7 @@ run_nightly_build() {
     return "$rc"
 }
 
-log "Building..."
+log "Building ($NIGHTLY_CONFIGURATION, ENABLE_TESTABILITY=YES, arm64, coverage on)..."
 BUILD_START=$(date +%s)
 run_nightly_build
 BUILD_RC=$?
@@ -789,7 +842,7 @@ log "Build done in $((BUILD_END - BUILD_START))s"
 
 # ── Test ────────────────────────────────────────────────────────────
 rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
-log "Running ALL tests with coverage..."
+log "Running ALL tests ($NIGHTLY_CONFIGURATION) with coverage..."
 log "  (VideoScanUITests target skipped: all its tests are plan-skipped, and the"
 log "   locked-screen launchd session can't enable automation mode — see 2026-07-07-r1)"
 TEST_START=$(date +%s)
@@ -802,12 +855,13 @@ run_with_process_group_watchdog \
     xcodebuild test-without-building \
     -project VideoScan/VideoScan.xcodeproj \
     -scheme VideoScan \
-    -configuration Debug \
-    -destination 'platform=macOS' \
+    -configuration "$NIGHTLY_CONFIGURATION" \
+    -destination 'platform=macOS,arch=arm64' \
     -derivedDataPath "$NIGHTLY_DD" \
     -enableCodeCoverage YES \
     -resultBundlePath /tmp/nightly-results.xcresult \
     -skip-testing:VideoScanUITests \
+    ENABLE_TESTABILITY=YES \
     CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS=
 TEST_RC=$?
 TEST_TIMED_OUT=$NIGHTLY_WATCHDOG_DID_TIMEOUT

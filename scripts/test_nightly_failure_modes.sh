@@ -284,17 +284,40 @@ MAKE_LIB="$SANDBOX/make_lib.sh"
 {
     echo "HOST=\"TestHost\""
     echo "NIGHTLY_SCRIPT_VERSION=\"test\""
+    echo "NIGHTLY_CONFIGURATION=\"Release\""
     awk '/^make_status_row\(\) \{/,/^}$/' "$SCRIPT_DIR/nightly_local_tests.sh"
 } > "$MAKE_LIB"
 
+# 2026-09-30 (release-r1): every row also carries the build configuration.
 for reason in "off-main:feature/foo" "dirty-tree:scripts/x.sh,VideoScan/y.swift" "ahead-of-origin:5" "build-rc:65" "ui-runner-hung" "zero-tests-ran:test-rc=70" "failed-tests:12" "unexpected:weird thing"; do
     out=$(bash -c "source $MAKE_LIB; make_status_row failed \"$reason\" true abcd123 2026-06-13 main")
-    if echo "$out" | python3 -m json.tool > /dev/null 2>&1; then
-        pass "valid JSON for reason='$reason'"
+    if echo "$out" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("configuration") == "Release" else 1)' 2>/dev/null; then
+        pass "valid JSON with configuration=Release for reason='$reason'"
     else
-        fail "INVALID JSON for reason='$reason': $out"
+        fail "INVALID JSON or missing configuration for reason='$reason': $out"
     fi
 done
+
+# ───────────────────────────────────────────────────────────────────
+# Test 7b: a row builder sourced WITHOUT NIGHTLY_CONFIGURATION under set -u
+# (exactly how this harness and any future extractor use it) must still emit
+# valid JSON — configuration "unknown", never an unbound-variable abort that
+# would lose the night's row.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 7b: make_status_row without NIGHTLY_CONFIGURATION under set -u =="
+MAKE_LIB_NOCFG="$SANDBOX/make_lib_nocfg.sh"
+{
+    echo "HOST=\"TestHost\""
+    echo "NIGHTLY_SCRIPT_VERSION=\"test\""
+    awk '/^make_status_row\(\) \{/,/^}$/' "$SCRIPT_DIR/nightly_local_tests.sh"
+} > "$MAKE_LIB_NOCFG"
+NOCFG_OUT=$(bash -c "set -u; source $MAKE_LIB_NOCFG; make_status_row failed build-rc:65 true abcd123 2026-06-13 main" 2>/dev/null)
+if echo "$NOCFG_OUT" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("configuration") == "unknown" else 1)' 2>/dev/null; then
+    pass "unset NIGHTLY_CONFIGURATION publishes configuration=unknown under set -u"
+else
+    fail "unset NIGHTLY_CONFIGURATION broke the row under set -u: '$NOCFG_OUT'"
+fi
 
 # ───────────────────────────────────────────────────────────────────
 # Test 8: parse_test_counts — fixture-driven count + failed_names check.
@@ -837,6 +860,7 @@ OPTIONAL_WORK_FILE="$SANDBOX/timeout-optional-work-ran"
     STATUS="failed"
     REASON="test-timeout:7s"
     NIGHTLY_SCRIPT_VERSION="test"
+    NIGHTLY_CONFIGURATION="Release"
     FAILED_NAMES_JSON='["heldSensor()"]'
     COV_LOGIC="91.2"
     PERSON_METRICS_JSON='{"person_eval_status":"not-configured","person_eval_readiness_pct":0,"person_eval_readiness_band":"red"}'
@@ -859,11 +883,12 @@ print("|".join([
     row["status"], row["reason"], str(row["passed"]), str(row["failed"]),
     str(row["skipped"]), str(row["total"]), str(row.get("coverage_logic_pct")),
     row["person_eval_status"], str(row["person_eval_readiness_pct"]),
+    row["configuration"],
 ]))
 PY
 )
 if [ "$TIMEOUT_PUBLISH_RC" -eq 0 ] &&
-   [ "$TIMEOUT_ROW_SUMMARY" = "failed|test-timeout:7s|4|1|2|7|None|not-configured|0" ] &&
+   [ "$TIMEOUT_ROW_SUMMARY" = "failed|test-timeout:7s|4|1|2|7|None|not-configured|0|Release" ] &&
    [ ! -e "$OPTIONAL_WORK_FILE" ]; then
     pass "timeout row retains partial counts/readiness and bypasses coverage + live evaluator"
 else
