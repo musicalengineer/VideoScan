@@ -148,6 +148,8 @@ final class TreeWalkHighlighter: ObservableObject {
 /// The checklists and the match list (the side panel, once the replay ends).
 struct TreeWalkHighlightPanel: View {
     @ObservedObject var highlighter: TreeWalkHighlighter
+    /// The Family Map (GH #227) from the places heading; nil hides the link.
+    var onShowMap: (() -> Void)? = nil
 
     var body: some View {
         let h = highlighter
@@ -165,7 +167,14 @@ struct TreeWalkHighlightPanel: View {
                 .font(.system(size: 12)).foregroundStyle(h.selection.isEmpty ? .secondary : .primary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Where they were born").font(.system(size: 12, weight: .semibold)).padding(.top, 4)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Where they were born").font(.system(size: 12, weight: .semibold))
+                Spacer(minLength: 6)
+                if let onShowMap {
+                    Button("Show on map") { onShowMap() }.controlSize(.mini)
+                }
+            }
+            .padding(.top, 4)
             ForEach(h.inputs.facets.regions) { f in
                 checkbox(f, isOn: h.isOn(region: f.key)) { h.setRegion(f.key, on: $0) }
             }

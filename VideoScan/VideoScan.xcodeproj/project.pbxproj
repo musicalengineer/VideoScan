@@ -13,6 +13,7 @@
 		FACE000000000000000000B1 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A1 /* MLXVLM */; };
 		FACE000000000000000000B2 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A2 /* MLXLMCommon */; };
 		FACE000000000000000000B3 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A3 /* MLX */; };
+		C0DE0000000000000000B010 /* MapKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000E010 /* MapKit.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -36,6 +37,7 @@
 		0DC193282F676647006295E7 /* VideoScan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VideoScan.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		0DC193352F676648006295E7 /* VideoScanTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VideoScanTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0DC1933F2F676648006295E7 /* VideoScanUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VideoScanUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0DE0000000000000000E010 /* MapKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MapKit.framework; path = System/Library/Frameworks/MapKit.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -65,6 +67,7 @@
 				FACE000000000000000000B2 /* MLXLMCommon in Frameworks */,
 				FACE000000000000000000B3 /* MLX in Frameworks */,
 				C0DE0000000000000000B000 /* VideoScanCore in Frameworks */,
+				C0DE0000000000000000B010 /* MapKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -94,7 +97,16 @@
 				0DC193382F676648006295E7 /* VideoScanTests */,
 				0DC193422F676648006295E7 /* VideoScanUITests */,
 				0DC193292F676647006295E7 /* Products */,
+				C0DE0000000000000000E000 /* Frameworks */,
 			);
+			sourceTree = "<group>";
+		};
+		C0DE0000000000000000E000 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				C0DE0000000000000000E010 /* MapKit.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		0DC193292F676647006295E7 /* Products */ = {

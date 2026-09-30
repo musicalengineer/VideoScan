@@ -8493,6 +8493,28 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyMapModelTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapModelTests"
+      ],
+      "tests": [
+        "aClickSelectsTheUnitUnderItOrTheNearestCoastAndOnlyOneWithACount",
+        "aSurnameCheckNarrowsAndAnEmptySelectionCountsEveryoneAgain",
+        "buildingTheInputsFor40kPeopleStaysUnderBudget",
+        "shadesLabelsCameraAndPanelLinesArePinned",
+        "theAboutWindowCreditsTheBorderData",
+        "theBundledBorderFileIsInTheBuiltApp",
+        "theLastOfTwoRapidChangesWins",
+        "theMapViewNeverResolvesOrTalliesInABody",
+        "theModelAndTheViewReadNoAppSupportAndNoNetwork",
+        "theModelFollowsTheHighlighterChecks",
+        "theWalkedPeopleResolveToUnitsAndTheTotalsReconcile"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FamilyMusicTests.swift",
       "stage": "unit",
       "suites": [
@@ -14199,6 +14221,17 @@
         "signedPrefixesLegacyLinesOnceAndLeavesSelfDescribingText",
         "singleLineIsSigned",
         "vocabularyIsFixed"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MapKitLinkSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "MapKitLinkSensorTests"
+      ],
+      "tests": [
+        "theAppLoadsMapKitSoTheFamilyMapCanFindMKMapView"
       ]
     },
     {
@@ -23036,6 +23069,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/FamilyMapModelTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/FamilyMusicTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -24032,7 +24069,7 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2060,
+      "expected_floor": 2061,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -24190,6 +24227,7 @@
         "VideoScanTests/MKVDossierPipelineTests",
         "VideoScanTests/MachineNoteAuthorTests",
         "VideoScanTests/MachineNoteWriterTests",
+        "VideoScanTests/MapKitLinkSensorTests",
         "VideoScanTests/MediaBytesTests",
         "VideoScanTests/MediaDispositionRawValueContractTests",
         "VideoScanTests/MediaFileOperationsWindowOpenerTests",

@@ -1072,6 +1072,10 @@ struct AboutView: View {
     private static let localCollagePath =
         NSHomeDirectory() + "/dev/VideoScan/assets/app_photos/about_collage.png"
 
+    /// The Family Map's border-data credits (Resources/FamilyMap/ATTRIBUTION.txt).
+    static let familyMapAttribution =
+        "Family map: This mapping made use of data provided by the Historic County Borders Project. Made with Natural Earth."
+
     private var collage: Image {
         if let local = NSImage(contentsOfFile: Self.localCollagePath) {
             return Image(nsImage: local)
@@ -1134,6 +1138,15 @@ struct AboutView: View {
                             Text("PolyForm Noncommercial 1.0.0 · Not for sale")
                                 .font(.system(.caption2, design: .monospaced))
                                 .foregroundStyle(.tertiary)
+                            // Family Map borders (GH #227) — the acknowledgement
+                            // the Historic Counties Trust asks for, and Natural
+                            // Earth's. Full sources: Resources/FamilyMap/ATTRIBUTION.txt.
+                            Text(AboutView.familyMapAttribution)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.top, 4)
                         }
                         Spacer()
                     }

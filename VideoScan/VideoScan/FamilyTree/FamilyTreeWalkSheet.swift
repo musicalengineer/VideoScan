@@ -2,7 +2,7 @@
 // "Walk Tree…" (Rick 2026-09-27). One sheet, one state machine — never a
 // sheet that opens another (the chained-sheet antipattern):
 //
-//   setup ──Walk──▶ walking ──▶ watching (the fan) ──▶ Done
+//   setup ──Walk──▶ walking ──▶ watching (the fan) ◀──▶ map ──▶ Done
 //
 // No background walk (Rick 2026-09-27): the analysis takes ~50 ms, and
 // FamilyTreeWalkCenter re-walks silently whenever decorations go stale.
@@ -15,17 +15,25 @@
 // away; the Highlight checks keep a deep walk readable). A tree with no
 // home people and nobody selected says so instead of guessing.
 //
+// MAP (GH #227, Rick 2026-09-29): once the replay has finished, "Show on
+// map" (beside Done, and from the Highlight panel's places) swaps the fan
+// for the Family Map — the same walk, the same Highlight checks, shaded by
+// birthplace. "Back to the fan" restores `.watching` with the SAME animator
+// and highlighter: the walk is never re-run and the fan is exactly as it
+// was. The map model is built once per walk (off-main) and kept, so the
+// second "Show on map" is instant.
+//
 // SIZE (Rick 2026-09-27: "it doesn't fit"). A macOS sheet takes its
 // content's size and is NOT clipped to the window it hangs from, so the
 // old fixed 600-pt fan + counters + summary ran off both sides of the
-// Family Tree window. Now, while walking and watching, the sheet is the
-// host window's size less an inset (`watchingSize`), never smaller than
-// 640 × 520 (fits a 13" laptop) nor larger than 1,800 × 1,200 (Donna
-// 2026-09-29: "a bigger window" — a big display should get a big fan).
-// Inside it the fan scales to the space left of a fixed 320-pt side panel,
-// and the highlight checks and summary scroll in that panel. The fan's
-// canvas is laid out at the size it will be SHOWN (`fanSide`), so a big
-// window gets crisp dots rather than a small bitmap scaled up.
+// Family Tree window. Now, while walking, watching and on the map, the
+// sheet is the host window's size less an inset (`watchingSize`), never
+// smaller than 640 × 520 (fits a 13" laptop) nor larger than 1,800 × 1,200
+// (Donna 2026-09-29: "a bigger window" — a big display should get a big
+// fan). Inside it the fan scales to the space left of a fixed 320-pt side
+// panel, and the highlight checks and summary scroll in that panel. The
+// fan's canvas is laid out at the size it will be SHOWN (`fanSide`), so a
+// big window gets crisp dots rather than a small bitmap scaled up.
 //
 // (For Rick: `hostSize` is measured by the presenting view with
 // `onGeometryChange` — think of it as a resize callback that stores the
@@ -45,6 +53,7 @@ struct FamilyTreeWalkSheet: View {
         case setup
         case walking(String)
         case watching(TreeWalkAnimator, TreeWalkHighlighter)
+        case map(TreeWalkAnimator, TreeWalkHighlighter, FamilyMapModel)
         case failed(String)
     }
 
@@ -52,6 +61,11 @@ struct FamilyTreeWalkSheet: View {
     @State private var startChoice = "default"
     @State private var depth = 7          // 0 = all
     @State private var walkTask: Task<Void, Never>?
+    /// The finished walk, kept for the map (built from it once).
+    @State private var walkResult: TreeWalk.Result?
+    @State private var mapModel: FamilyMapModel?
+    @State private var mapTask: Task<Void, Never>?
+    @State private var mapProblem: String?
 
     static let minimumWatchingSize = CGSize(width: 640, height: 520)
     static let maximumWatchingSize = CGSize(width: 1_800, height: 1_200)
@@ -79,7 +93,7 @@ struct FamilyTreeWalkSheet: View {
 
     private var isLarge: Bool {
         switch stage {
-        case .walking, .watching: return true
+        case .walking, .watching, .map: return true
         case .setup, .failed: return false
         }
     }
@@ -88,7 +102,7 @@ struct FamilyTreeWalkSheet: View {
         let size = Self.watchingSize(host: hostSize)
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label("Walk the Family Tree", systemImage: "figure.walk.circle")
+                Label(title, systemImage: titleSymbol)
                     .font(.title3.weight(.semibold))
                 Spacer()
             }
@@ -101,26 +115,52 @@ struct FamilyTreeWalkSheet: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .watching(let animator, let highlighter):
-                TreeWalkAnimationView(animator: animator, highlighter: highlighter)
+                TreeWalkAnimationView(animator: animator, highlighter: highlighter,
+                                      onShowMap: { showMap(animator, highlighter) })
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .map(let animator, let highlighter, let map):
+                FamilyTreeMapView(model: map, highlighter: highlighter,
+                                  onBack: { stage = .watching(animator, highlighter) })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed(let why):
                 Text(why).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
             HStack {
+                if let mapProblem {
+                    Text(mapProblem).font(.system(size: 11)).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Spacer()
-                if case .setup = stage {
+                switch stage {
+                case .setup:
                     Button("Cancel", role: .cancel) { onClose() }.keyboardShortcut(.cancelAction)
                     Button("Walk") { walkInForeground() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(starts.isEmpty)
-                } else {
+                case .watching(let animator, let highlighter):
+                    ShowOnMapButton(animator: animator, busy: mapTask != nil) { showMap(animator, highlighter) }
+                    Button("Done") { close() }.keyboardShortcut(.defaultAction)
+                case .map(let animator, let highlighter, _):
+                    Button("Back to the fan") { stage = .watching(animator, highlighter) }
+                    Button("Done") { close() }.keyboardShortcut(.defaultAction)
+                case .walking, .failed:
                     Button("Done") { close() }.keyboardShortcut(.defaultAction)
                 }
             }
         }
         .padding(20)
         .frame(width: isLarge ? size.width : 520, height: isLarge ? size.height : nil)
-        .onDisappear { walkTask?.cancel() }
+        .onDisappear { walkTask?.cancel(); mapTask?.cancel() }
+    }
+
+    private var title: String {
+        if case .map = stage { return "Where the Family Was Born" }
+        return "Walk the Family Tree"
+    }
+
+    private var titleSymbol: String {
+        if case .map = stage { return "map.circle" }
+        return "figure.walk.circle"
     }
 
     // MARK: Setup
@@ -177,7 +217,7 @@ struct FamilyTreeWalkSheet: View {
                 .font(.system(size: 12)).foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
-            Text("Decorates everyone with their line, generations, age at death and birth region, and runs the consistency checks. Reads the tree only. The decorations (decorations.json) are kept up to date automatically; only an All-generations walk from the home people replaces them — a shorter walk, or one from someone else, is for watching only. The analysis itself takes moments; the fan then replays it at a pace you choose, so you can watch.")
+            Text("Decorates everyone with their line, generations, age at death and birth region, and runs the consistency checks. Reads the tree only. The decorations (decorations.json) are kept up to date automatically; only an All-generations walk from the home people replaces them — a shorter walk, or one from someone else, is for watching only. The analysis itself takes moments; the fan then replays it at a pace you choose, so you can watch. When it finishes, Show on map shades the places they were born.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -198,6 +238,9 @@ struct FamilyTreeWalkSheet: View {
         guard let graph else { return }
         let options = options, names = displayNames
         stage = .walking("Analysing \(graph.people.count.formatted()) people…")
+        walkResult = nil
+        mapModel = nil
+        mapProblem = nil
         walkTask = Task { @MainActor in
             let result = await center.run(graph: graph, options: options, mode: .foreground,
                                           displayNames: names) { event in
@@ -211,14 +254,67 @@ struct FamilyTreeWalkSheet: View {
             let layout = await TreeWalkAnimator.prepare(result, size: CGSize(width: side, height: side))
             let inputs = await TreeWalkHighlighter.prepare(result: result, graph: graph, layout: layout)
             let animator = TreeWalkAnimator(layout: layout, summary: result.summary, displayNames: names)
+            walkResult = result
             stage = .watching(animator, TreeWalkHighlighter(inputs: inputs))
             animator.start()
         }
     }
 
+    // MARK: The map
+
+    /// Build the map model once per walk (bundled borders once per process,
+    /// the birthplaces resolved once off-main), then switch stages. A
+    /// second call while the first is still building is ignored.
+    private func showMap(_ animator: TreeWalkAnimator, _ highlighter: TreeWalkHighlighter) {
+        if let mapModel {
+            stage = .map(animator, highlighter, mapModel)
+            return
+        }
+        guard mapTask == nil, let result = walkResult, let graph else { return }
+        mapProblem = nil
+        let names = animator.displayNames
+        mapTask = Task { @MainActor in
+            defer { mapTask = nil }
+            do {
+                let units = try await FamilyMapUnitsCache.shared.units()
+                let inputs = await FamilyMapModel.prepare(result: result, graph: graph, highlight: highlighter.inputs)
+                guard !Task.isCancelled else { return }
+                let map = FamilyMapModel(inputs: inputs, units: units, displayNames: names)
+                map.bind(to: highlighter)
+                map.apply(selection: highlighter.selection, yearCeiling: nil)
+                mapModel = map
+                stage = .map(animator, highlighter, map)
+            } catch {
+                mapProblem = "The map could not be shown: \(error)"
+            }
+        }
+    }
+
     private func close() {
         walkTask?.cancel()
-        if case .watching(let animator, _) = stage { animator.stop() }
+        mapTask?.cancel()
+        switch stage {
+        case .watching(let animator, _), .map(let animator, _, _): animator.stop()
+        default: break
+        }
         onClose()
+    }
+}
+
+/// "Show on map", enabled once the replay has finished. Its own view so it
+/// observes the animator's frame; the sheet holds the animator in an enum
+/// payload and would not otherwise re-render when the replay ends.
+struct ShowOnMapButton: View {
+    @ObservedObject var animator: TreeWalkAnimator
+    var busy = false
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if busy { ProgressView().controlSize(.small) }
+            Button("Show on map") { action() }
+                .disabled(!animator.frame.finished || busy)
+                .help(animator.frame.finished ? "Shade the places they were born" : "Available when the replay finishes")
+        }
     }
 }

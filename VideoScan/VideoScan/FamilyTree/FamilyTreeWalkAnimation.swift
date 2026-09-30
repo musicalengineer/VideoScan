@@ -326,6 +326,8 @@ struct TreeWalkAnimationView: View {
     /// Surname / place highlight (Donna 2026-09-29); drawn once the replay
     /// has ended.
     @ObservedObject var highlighter: TreeWalkHighlighter
+    /// "Show on map" from the Highlight panel's places (GH #227); nil hides it.
+    var onShowMap: (() -> Void)? = nil
 
     static let sidePanelWidth: CGFloat = 320
     /// How much of the trail shows through while a highlight is on.
@@ -409,7 +411,7 @@ struct TreeWalkAnimationView: View {
                 Divider()
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 12) {
-                        TreeWalkHighlightPanel(highlighter: highlighter)
+                        TreeWalkHighlightPanel(highlighter: highlighter, onShowMap: onShowMap)
                             .padding(10)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.07)))
