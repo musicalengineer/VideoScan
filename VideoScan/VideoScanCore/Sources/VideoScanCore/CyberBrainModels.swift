@@ -370,13 +370,42 @@ public struct CyberBrainAnswerPlan: Codable, Sendable, Equatable {
         public let text: String
         public let evidenceIDs: [String]
         public let confidence: CyberBrainItem.Confidence
+        /// Set on a family-tree fact (birth, death, parents, spouse,
+        /// children) so the spoken telling can group them into natural
+        /// sentences and name the source ONCE (Rick 2026-09-29, Donna's
+        /// demo: "The imported family tree records…" before every fact
+        /// "sounds so mechanistic and repetitive"). `text` stays the
+        /// self-contained evidence sentence the source view and the
+        /// composition verifier read. Nil for every other claim; optional,
+        /// so plans encoded before this field decode unchanged.
+        public let treeFact: TreeFact?
 
         public init(id: String, text: String, evidenceIDs: [String],
-                    confidence: CyberBrainItem.Confidence) {
+                    confidence: CyberBrainItem.Confidence, treeFact: TreeFact? = nil) {
             self.id = id
             self.text = text
             self.evidenceIDs = evidenceIDs
             self.confidence = confidence
+            self.treeFact = treeFact
+        }
+    }
+
+    /// One family-tree fact in a form the telling can phrase.
+    public struct TreeFact: Codable, Sendable, Equatable {
+        public enum Kind: String, Codable, Sendable { case birth, death, parents, spouse, children }
+        public let kind: Kind
+        /// The date as the tree records it (birth / death).
+        public let date: String?
+        /// The people named (parents / spouse / children), in order.
+        public let names: [String]
+        /// The subject's recorded sex ("M" / "F" / "") — only for pronouns.
+        public let subjectSex: String
+
+        public init(kind: Kind, date: String? = nil, names: [String] = [], subjectSex: String) {
+            self.kind = kind
+            self.date = date
+            self.names = names
+            self.subjectSex = subjectSex
         }
     }
 

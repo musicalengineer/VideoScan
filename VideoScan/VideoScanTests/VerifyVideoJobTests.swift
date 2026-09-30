@@ -333,8 +333,9 @@ struct VerifyVideoMenuSensorTests {
 
     @Test func labelHasNoEllipsisLikeVerifyAudio() throws {
         let s = try tableSource()
-        #expect(s.contains("\"Verify Video\")"))
-        #expect(s.contains("\"Verify Audio\")"))
+        // Since e8e15c5c the verb reaches the label through CatalogVerifyMenuPlan.
+        #expect(s.contains("verb: \"Verify Video\""))
+        #expect(s.contains("verb: \"Verify Audio\""))
         #expect(!s.contains("Verify Video…") && !s.contains("Verify Audio…"),
                 "macOS: '…' only when a dialog opens first — both verbs start a job directly")
     }
