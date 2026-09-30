@@ -20945,6 +20945,39 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_family_map_units.py",
+      "stage": "unit",
+      "suites": [
+        "test_family_map_units.py"
+      ],
+      "tests": [
+        "test_attribution_carries_required_acknowledgement",
+        "test_coordinates_in_range_six_decimals_and_sane_bbox",
+        "test_documented_source_spellings_are_still_the_source_spellings",
+        "test_douglas_peucker_reference_polyline",
+        "test_every_country_has_exactly_one_outline",
+        "test_files_exist_and_size_ceiling",
+        "test_halifax_waterfront_is_a_known_source_gap",
+        "test_ireland_names_have_no_county_prefix",
+        "test_keys_unique_sorted_and_follow_the_rule",
+        "test_kind_matches_country",
+        "test_layer_counts",
+        "test_pieces_never_straddle_the_antimeridian",
+        "test_probe_point_lands_in_expected_unit",
+        "test_probe_points_land_in_their_country_outline",
+        "test_properties_in_allowed_sets",
+        "test_script_self_test_passes",
+        "test_simplify_ring_keeps_closure_and_drops_islets",
+        "test_single_unit_counties_are_not_split",
+        "test_slug_rules",
+        "test_synthetic_county_spellings_resolve_to_keys",
+        "test_usa_outline_has_far_aleutian_pieces_east_of_antimeridian",
+        "test_valid_geojson_feature_collection"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_find_person.py",
       "stage": "unit",
       "suites": [
@@ -23822,6 +23855,10 @@
         },
         {
           "name": "tests/test_face_recognize_units.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_family_map_units.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
