@@ -388,7 +388,7 @@ public struct FamilyMapUnits: Sendable {
             }
         }
         var best: Int?
-        for i in candidates where (keys == nil || keys!.contains(units[i].key)) && units[i].contains(p) {
+        for i in candidates where listed(i, in: keys) && units[i].contains(p) {
             guard let current = best else { best = i; continue }
             let a = units[i].bbox.area, b = units[current].bbox.area
             if a < b || (a == b && units[i].key < units[current].key) { best = i }
@@ -408,7 +408,7 @@ public struct FamilyMapUnits: Sendable {
         // nearer one and would have won every coastal click (Halifax, 2026-09-29).
         func best(where keep: (Unit) -> Bool) -> Unit? {
             var best: (index: Int, distance: Double)?
-            for i in units.indices where (keys == nil || keys!.contains(units[i].key)) && keep(units[i]) {
+            for i in units.indices where listed(i, in: keys) && keep(units[i]) {
                 guard let d = units[i].boundaryDistance(to: p, within: tolerance) else { continue }
                 if let current = best, !(d < current.distance || (d == current.distance && units[i].key < units[current.index].key)) { continue }
                 best = (i, d)
@@ -416,6 +416,12 @@ public struct FamilyMapUnits: Sendable {
             return best.map { units[$0.index] }
         }
         return best { $0.kind != .country } ?? best { $0.kind == .country }
+    }
+
+    /// Is unit `i` in the `among:` filter? nil = no filter.
+    @inline(__always) private func listed(_ i: Int, in keys: Set<String>?) -> Bool {
+        guard let keys else { return true }
+        return keys.contains(units[i].key)
     }
 
     /// The camera box around every listed unit that exists. Nil when none

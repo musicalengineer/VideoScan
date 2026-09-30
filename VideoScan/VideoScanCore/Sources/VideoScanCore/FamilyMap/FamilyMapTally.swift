@@ -2,12 +2,15 @@
 // Per-unit counts for the family map (GH #227 design §4): how many of the
 // walked ancestors were born in each unit, split by line (Rick's / Donna's
 // / both), the top surnames, and the people themselves nearest generation
-// first for the side panel.
+// first for the side panel — plus, since the follow-up round (2026-09-29),
+// WHO IS NOT ON THE MAP and why.
 //
 // INPUT is the walk's flat per-person columns (parallel arrays over the
-// same ordinals the fan and the Highlight use) plus one more column the
-// app computes ONCE per walk with `BirthplaceUnitResolver`: the unit key
-// per person. This pass never touches a place string.
+// same ordinals the fan and the Highlight use) plus two more the app
+// computes ONCE per walk: the unit key per person (from
+// `BirthplaceUnitResolver`) and the recorded place text that key came from
+// (the tree's birthplace, or the family's own notes when the tree is
+// blank). This pass never touches a place string except to carry it.
 //
 // WHO IS COUNTED. The `visited` ordinals, optionally filtered by
 //   • `mask` — the Highlight match mask, PARALLEL TO `visited`. nil means
@@ -21,13 +24,22 @@
 // Each person is counted once even if an ordinal is listed twice (the walk
 // never does that; a bitmap makes it true anyway).
 //
+// NOT ON THE MAP. A considered person with no unit key is `unresolved`.
+// Two honest reasons, told apart in `Totals`: a recorded place the map
+// does not cover ("Berlin, Germany" — `unsupported`), and no recorded
+// place at all (`unresolved - unsupported`). `Result.unplaced` lists them
+// nearest generation first, capped by `unplacedLimit`, each with the text
+// that was recorded so the panel can say "recorded as Berlin, Germany"
+// rather than the misleading "no recorded place" (codex #1782, stage 2 F2).
+//
 // COST. `People.init` interns the unit keys and the folded surnames to
 // small integers ONCE per walk (that is where the String hashing lives).
 // `counts` is then one O(visited) integer pass, then per unit: surnames
 // ranked (O(s log s), s = distinct surnames in that unit), the spelling
 // census over the top surnames only, and members ordered nearest
 // generation first by a counting sort with only the generations that
-// make the cut string-sorted. 40k people in ~10 ms at -Onone; measured in
+// make the cut string-sorted. The unplaced list is one more such sort over
+// the unresolved ordinals. 40k people in ~10 ms at -Onone; measured in
 // FamilyMapTallyTests. It is the year slider's hot path. Never in a
 // SwiftUI body.
 //
@@ -53,6 +65,10 @@ public enum FamilyMapTally {
         public let lines: [TreeWalk.Line]
         /// `BirthplaceUnitResolver.resolve(place)?.unitKey`, per person.
         public let unitKeys: [String?]
+        /// The place text the unit key was resolved FROM (or that failed to
+        /// resolve): the tree's birthplace, or the family's note. nil when
+        /// nothing was recorded anywhere. Carried to `Member.recordedPlace`.
+        public let recordedPlaces: [String?]
 
         // Interned once here: the tally pass compares integers only.
         let unitIDs: [Int32]          // -1 = no unit
@@ -61,8 +77,11 @@ public enum FamilyMapTally {
         let surnameTable: [String]    // id → folded surname key
 
         /// `surnameKeys` nil = fold them here, once, at construction.
+        /// `recordedPlaces` nil = nothing recorded for anyone (older callers
+        /// and the tally's own tests).
         public init(ids: [String], names: [String], surnames: [String], surnameKeys: [String]? = nil,
-                    birthYears: [Int?], generations: [Int?], lines: [TreeWalk.Line], unitKeys: [String?]) {
+                    birthYears: [Int?], generations: [Int?], lines: [TreeWalk.Line], unitKeys: [String?],
+                    recordedPlaces: [String?]? = nil) {
             self.ids = ids
             self.names = names
             self.surnames = surnames
@@ -72,6 +91,7 @@ public enum FamilyMapTally {
             self.generations = generations
             self.lines = lines
             self.unitKeys = unitKeys
+            self.recordedPlaces = recordedPlaces ?? [String?](repeating: nil, count: ids.count)
 
             var unitIndex: [String: Int32] = [:]
             var units: [String] = []
@@ -111,6 +131,19 @@ public enum FamilyMapTally {
         public let birthYear: Int?
         public let generation: Int?
         public let line: TreeWalk.Line
+        /// The place as it was recorded ("Massachusetts Bay Colony",
+        /// "Lothian, Scotland", "Berlin, Germany"); nil when nothing was.
+        public let recordedPlace: String?
+
+        public init(id: String, name: String, birthYear: Int?, generation: Int?, line: TreeWalk.Line,
+                    recordedPlace: String? = nil) {
+            self.id = id
+            self.name = name
+            self.birthYear = birthYear
+            self.generation = generation
+            self.line = line
+            self.recordedPlace = recordedPlace
+        }
     }
 
     public struct SurnameCount: Sendable, Equatable {
@@ -137,12 +170,38 @@ public enum FamilyMapTally {
         public let resolved: Int
         /// …of which only to a country outline.
         public let countryOnly: Int
+        /// considered − resolved: not on the map, for either reason below.
         public let unresolved: Int
+        /// …of the unresolved, those WITH a recorded place the map does not
+        /// cover (Berlin, Germany). The rest have no recorded place at all.
+        public let unsupported: Int
+
+        public init(considered: Int, resolved: Int, countryOnly: Int, unresolved: Int, unsupported: Int = 0) {
+            self.considered = considered
+            self.resolved = resolved
+            self.countryOnly = countryOnly
+            self.unresolved = unresolved
+            self.unsupported = unsupported
+        }
+
+        /// The unresolved people who recorded nothing at all.
+        public var noRecordedPlace: Int { unresolved - unsupported }
     }
 
     public struct Result: Sendable, Equatable {
         public let counts: [String: UnitCount]
         public let totals: Totals
+        /// The considered people with no unit, nearest generation first
+        /// (same order as a unit's members). ≤ unplacedLimit; the totals
+        /// carry the full count.
+        public let unplaced: [Member]
+
+        public init(counts: [String: UnitCount], totals: Totals, unplaced: [Member] = []) {
+            self.counts = counts
+            self.totals = totals
+            self.unplaced = unplaced
+        }
+
         public static let empty = Result(counts: [:], totals: Totals(considered: 0, resolved: 0, countryOnly: 0, unresolved: 0))
     }
 
@@ -161,12 +220,13 @@ public enum FamilyMapTally {
     // MARK: - The pass
 
     public static func counts(people: People, visited: [Int], mask: [Bool]? = nil, yearCeiling: Int? = nil,
-                              memberLimit: Int = 200, surnameLimit: Int = 10) throws -> Result {
+                              memberLimit: Int = 200, surnameLimit: Int = 10, unplacedLimit: Int = 25) throws -> Result {
         let n = people.count
         for (name, count) in [("names", people.names.count), ("surnames", people.surnames.count),
                               ("surnameKeys", people.surnameKeys.count),
                               ("birthYears", people.birthYears.count), ("generations", people.generations.count),
-                              ("lines", people.lines.count), ("unitKeys", people.unitKeys.count)] where count != n {
+                              ("lines", people.lines.count), ("unitKeys", people.unitKeys.count),
+                              ("recordedPlaces", people.recordedPlaces.count)] where count != n {
             throw TallyError.columnLengthMismatch(column: name, count: count, expected: n)
         }
         if let mask, mask.count != visited.count {
@@ -175,7 +235,8 @@ public enum FamilyMapTally {
 
         var seen = [Bool](repeating: false, count: n)
         var ordinalsByUnit = [[Int]](repeating: [], count: people.unitTable.count)
-        var considered = 0, resolved = 0, countryOnly = 0
+        var unplacedOrdinals: [Int] = []
+        var considered = 0, resolved = 0, countryOnly = 0, unsupported = 0
         for (i, o) in visited.enumerated() {
             guard o >= 0, o < n, !seen[o] else { continue }
             if let mask, !mask[i] { continue }
@@ -185,7 +246,11 @@ public enum FamilyMapTally {
             seen[o] = true
             considered += 1
             let id = people.unitIDs[o]
-            guard id >= 0 else { continue }
+            guard id >= 0 else {
+                unplacedOrdinals.append(o)
+                if hasText(people.recordedPlaces[o]) { unsupported += 1 }
+                continue
+            }
             resolved += 1
             ordinalsByUnit[Int(id)].append(o)
         }
@@ -198,8 +263,16 @@ public enum FamilyMapTally {
             counts[key] = unitCount(people: people, ordinals: ordinals, memberLimit: memberLimit,
                                     surnameLimit: surnameLimit, scratch: &scratch)
         }
-        return Result(counts: counts, totals: Totals(considered: considered, resolved: resolved,
-                                                     countryOnly: countryOnly, unresolved: considered - resolved))
+        let totals = Totals(considered: considered, resolved: resolved, countryOnly: countryOnly,
+                            unresolved: considered - resolved, unsupported: unsupported)
+        return Result(counts: counts, totals: totals,
+                      unplaced: nearestMembers(people: people, ordinals: unplacedOrdinals, limit: unplacedLimit))
+    }
+
+    /// A recorded place is one with at least one non-blank character.
+    @inline(__always) static func hasText(_ s: String?) -> Bool {
+        guard let s else { return false }
+        return s.utf8.contains { $0 != 0x20 && $0 != 0x09 && $0 != 0x0A && $0 != 0x0D }
     }
 
     /// Dense per-surname-id counters, reused across units and reset via
@@ -318,7 +391,8 @@ public enum FamilyMapTally {
             }
             for o in sorted where out.count < limit {
                 out.append(Member(id: people.ids[o], name: people.names[o], birthYear: people.birthYears[o],
-                                  generation: people.generations[o], line: people.lines[o]))
+                                  generation: people.generations[o], line: people.lines[o],
+                                  recordedPlace: people.recordedPlaces[o]))
             }
         }
         return out
