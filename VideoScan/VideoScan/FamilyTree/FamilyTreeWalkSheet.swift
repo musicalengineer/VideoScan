@@ -273,11 +273,15 @@ struct FamilyTreeWalkSheet: View {
         guard mapTask == nil, let result = walkResult, let graph else { return }
         mapProblem = nil
         let names = animator.displayNames
+        // The family's own knowledge fills the tree's gaps (Rick 2026-09-29):
+        // the CyberBrain the tree already loaded, read-only; nil = tree only.
+        let familyKnowledge = model.walkFamilyKnowledge
         mapTask = Task { @MainActor in
             defer { mapTask = nil }
             do {
                 let units = try await FamilyMapUnitsCache.shared.units()
-                let inputs = await FamilyMapModel.prepare(result: result, graph: graph, highlight: highlighter.inputs)
+                let inputs = await FamilyMapModel.prepare(result: result, graph: graph, highlight: highlighter.inputs,
+                                                          familyKnowledge: familyKnowledge)
                 guard !Task.isCancelled else { return }
                 let map = FamilyMapModel(inputs: inputs, units: units, displayNames: names)
                 map.bind(to: highlighter)

@@ -270,7 +270,9 @@ public enum FamilyMapTally {
     }
 
     /// A recorded place is one with at least one non-blank character.
-    @inline(__always) static func hasText(_ s: String?) -> Bool {
+    /// Public because the app applies the same test when choosing between
+    /// the tree's place and the family's note.
+    @inline(__always) public static func hasText(_ s: String?) -> Bool {
         guard let s else { return false }
         return s.utf8.contains { $0 != 0x20 && $0 != 0x09 && $0 != 0x0A && $0 != 0x0D }
     }

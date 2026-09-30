@@ -19,6 +19,24 @@
 //     generation counter makes the last change win when two overlap — the
 //     same pattern as `TreeWalkHighlighter.recompute`.
 //
+// WHERE A PERSON'S PLACE COMES FROM (Rick 2026-09-29 23:05 — his
+// grandmother Mary Christina O'Connor, @I7@ / G89Q-34N, has no birthplace
+// in the pulled tree but her Cork birth certificate is in the archive and
+// CyberBrain carries the birth event with a `place`):
+//   1. the tree's `birthPlace`, if the resolver can place it;
+//   2. else the family's own knowledge: the person's ACTIVE `lifeEvents`
+//      item that says born / birth and carries a non-empty `place`,
+//      resolved through the same resolver;
+//   3. else nothing — the person is listed under "Not on the map" with
+//      whatever text WAS recorded (tree first), so "Berlin, Germany" reads
+//      as "recorded but off the map", not as "no recorded place".
+// Each person carries a `PlaceSource` (tree / family / none) so the panel
+// can say "place from the family's notes". The CyberBrain index is read
+// through the tree's own `FamilyTreeNotesResolver` (the object
+// FamilyTreeLiveModel already built — linked people first, then name
+// matches), injected by the sheet; nil in tests → tree only. NOTHING HERE
+// EVER WRITES CYBERBRAIN (a source sensor in FamilyMapModelTests pins it).
+//
 // THE MASK. `TreeWalkHighlight.mask` returns ALL-FALSE for an empty
 // selection ("no highlight" on the fan). Handed to the tally, all-false
 // would honestly count nobody, so an empty selection is passed as nil —
@@ -29,7 +47,7 @@
 // is counted in eng-yorkshire and NOT in eng; the country outline's count
 // is only the people whose record names the country and nothing finer
 // ("England"). So a map that shades Yorkshire 661 and England 1,200 says
-// "1,200 more Englishmen, county unknown" — and the totals line spells it
+// "1,200 more Englishmen, county unresolved" — and the totals line spells it
 // out ("K country-only"). The tally already keys each person to exactly one
 // unit; this file never adds a person to a second one.
 //
@@ -78,6 +96,16 @@ actor FamilyMapUnitsCache {
 @MainActor
 final class FamilyMapModel: ObservableObject {
 
+    /// Where a person's map place came from.
+    enum PlaceSource: Sendable, Equatable {
+        /// The tree's recorded birthplace.
+        case tree
+        /// The family's own notes (a CyberBrain birth event with a place).
+        case family
+        /// Neither placed them.
+        case none
+    }
+
     /// Everything a recompute reads, built once per walk off-main.
     struct Inputs: Sendable {
         let people: FamilyMapTally.People
@@ -86,6 +114,11 @@ final class FamilyMapModel: ObservableObject {
         /// Parallel to `people.ids` (the Highlight's folded keys / regions).
         let surnameKeys: [String]
         let regions: [BirthplaceClassifier.BirthRegion]
+        /// Parallel to `people.ids`: where each person's place came from.
+        let placeSources: [PlaceSource]
+        /// The ids placed from the family's notes — a handful, kept as a set
+        /// so a member row can be tagged by id in O(1).
+        let familyPlacedIDs: Set<String>
     }
 
     /// How one unit is painted: the dominant line's colour at an opacity
@@ -114,6 +147,9 @@ final class FamilyMapModel: ObservableObject {
         var shades: [String: Shade] = [:]
         var labels: [Label] = []
         var cameraBox: FamilyMap.BoundingBox?
+        /// The considered people the map could not place, nearest
+        /// generation first (≤ `unplacedLimit`; the totals hold the count).
+        var unplaced: [FamilyMapTally.Member] = []
     }
 
     /// Fill opacity range for a shaded unit (design §4: 0.35…0.85).
@@ -122,6 +158,8 @@ final class FamilyMapModel: ObservableObject {
     nonisolated static let maximumOpacity = 0.85
     /// How many units get a name-and-count label.
     nonisolated static let labelLimit = 12
+    /// How many of the people not on the map the panel lists.
+    nonisolated static let unplacedLimit = 25
 
     let inputs: Inputs
     let units: FamilyMapUnits
@@ -145,12 +183,14 @@ final class FamilyMapModel: ObservableObject {
 
     // MARK: Building the inputs (once per walk, off-main)
 
-    /// The columns for `inputs(…)`, gathered from the walk and the graph
-    /// OFF the main actor. `highlight` is the Highlight panel's inputs for
-    /// the same walk (its visited ordinals, folded surnames and regions are
-    /// reused, not recomputed).
+    /// The columns for `inputs(…)`, gathered from the walk, the graph and
+    /// — when the tree has a CyberBrain beside it — the family's notes, OFF
+    /// the main actor. `highlight` is the Highlight panel's inputs for the
+    /// same walk (its visited ordinals, folded surnames and regions are
+    /// reused, not recomputed). `familyKnowledge` nil = tree only.
     nonisolated static func prepare(result: TreeWalk.Result, graph: GedcomFamilyGraph,
-                                    highlight: TreeWalkHighlighter.Inputs) async -> Inputs {
+                                    highlight: TreeWalkHighlighter.Inputs,
+                                    familyKnowledge: FamilyTreeNotesResolver? = nil) async -> Inputs {
         await Task.detached(priority: .userInitiated) {
             let n = result.ids.count
             var generations = [Int?](repeating: nil, count: n)
@@ -160,35 +200,85 @@ final class FamilyMapModel: ObservableObject {
             }
             var surnames = [String](repeating: "", count: n)
             var places = [String?](repeating: nil, count: n)
+            var familyPlaces = [String?](repeating: nil, count: n)
             for o in highlight.visited where o >= 0 && o < n {
                 let person = graph.people[result.ids[o]]
                 surnames[o] = person?.surname ?? ""
                 places[o] = person?.birthPlace
+                if let familyKnowledge {
+                    familyPlaces[o] = familyBirthPlace(gedcomID: result.ids[o], in: familyKnowledge)
+                }
             }
             return inputs(ids: result.ids, names: result.names, surnames: surnames,
                           surnameKeys: highlight.surnameKeys, birthPlaces: places,
+                          familyPlaces: familyKnowledge == nil ? nil : familyPlaces,
                           birthYears: highlight.birthYears, generations: generations,
                           lines: result.decorations.map(\.line), visited: highlight.visited,
                           regions: highlight.regions)
         }.value
     }
 
-    /// The pure form: resolves every VISITED birthplace once and packs the
-    /// columns. Columns are parallel to `ids`; `visited` lists ordinals.
+    /// The family's recorded birthplace for one tree record: the first
+    /// ACTIVE life event of any CyberBrain person standing for the record
+    /// that says born / birth and carries a place. Read-only; disputed
+    /// items are passed over (a disputed birthplace must not quietly place
+    /// someone). O(items about the person).
+    nonisolated static func familyBirthPlace(gedcomID: String, in knowledge: FamilyTreeNotesResolver) -> String? {
+        for person in knowledge.cyberBrainPeople(forGedcomID: gedcomID) {
+            for item in knowledge.index.allActiveItems(for: person.id)
+            where item.kind == .event && item.confidence != .disputed && isBirthEvent(item) {
+                if let place = item.place, FamilyMapTally.hasText(place) { return place }
+            }
+        }
+        return nil
+    }
+
+    /// Does a life event describe a birth? Its text says "born" or "birth"
+    /// as a word (case-insensitive) — "Osborne" and "birthday" do not count.
+    nonisolated static func isBirthEvent(_ item: CyberBrainItem) -> Bool {
+        item.text.range(of: #"\b(born|birth)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// The pure form: resolves every VISITED person's place once and packs
+    /// the columns. Columns are parallel to `ids`; `visited` lists
+    /// ordinals. The tree's `birthPlaces` win when they resolve; a
+    /// `familyPlaces` entry (nil = no family knowledge) is tried only then.
     /// Synchronous and actor-free so a scale test can time it directly.
     nonisolated static func inputs(ids: [String], names: [String], surnames: [String], surnameKeys: [String],
-                                   birthPlaces: [String?], birthYears: [Int?], generations: [Int?],
+                                   birthPlaces: [String?], familyPlaces: [String?]? = nil,
+                                   birthYears: [Int?], generations: [Int?],
                                    lines: [TreeWalk.Line], visited: [Int],
                                    regions: [BirthplaceClassifier.BirthRegion]) -> Inputs {
         var unitKeys = [String?](repeating: nil, count: ids.count)
+        var recorded = [String?](repeating: nil, count: ids.count)
+        var sources = [PlaceSource](repeating: .none, count: ids.count)
+        var familyPlaced = Set<String>()
         for o in visited where o >= 0 && o < birthPlaces.count {
-            unitKeys[o] = BirthplaceUnitResolver.resolve(birthPlaces[o])?.unitKey
+            let tree = birthPlaces[o]
+            let family: String? = familyPlaces.flatMap { o < $0.count ? $0[o] : nil }
+            // ONE resolver call site (a sensor pins it): tree first, then
+            // the family's note; the first that places the person wins.
+            for (candidate, source) in [(tree, PlaceSource.tree), (family, PlaceSource.family)] {
+                guard let candidate, FamilyMapTally.hasText(candidate) else { continue }
+                if recorded[o] == nil { recorded[o] = candidate }   // what WAS recorded, tree first
+                if let hit = BirthplaceUnitResolver.resolve(candidate) {
+                    unitKeys[o] = hit.unitKey
+                    recorded[o] = candidate
+                    sources[o] = source
+                    if source == .family { familyPlaced.insert(ids[o]) }
+                    break
+                }
+            }
         }
         let people = FamilyMapTally.People(ids: ids, names: names, surnames: surnames, surnameKeys: surnameKeys,
                                            birthYears: birthYears, generations: generations, lines: lines,
-                                           unitKeys: unitKeys)
-        return Inputs(people: people, visited: visited, surnameKeys: surnameKeys, regions: regions)
+                                           unitKeys: unitKeys, recordedPlaces: recorded)
+        return Inputs(people: people, visited: visited, surnameKeys: surnameKeys, regions: regions,
+                      placeSources: sources, familyPlacedIDs: familyPlaced)
     }
+
+    /// Was this person placed from the family's notes rather than the tree?
+    func isPlacedFromFamilyNotes(_ id: String) -> Bool { inputs.familyPlacedIDs.contains(id) }
 
     // MARK: Following the Highlight checks
 
@@ -222,7 +312,8 @@ final class FamilyMapModel: ObservableObject {
                                              surnameKeys: inputs.surnameKeys, regions: inputs.regions)
                 do {
                     let r = try FamilyMapTally.counts(people: inputs.people, visited: inputs.visited,
-                                                      mask: mask, yearCeiling: yearCeiling)
+                                                      mask: mask, yearCeiling: yearCeiling,
+                                                      unplacedLimit: Self.unplacedLimit)
                     return (Self.computed(from: r, units: units), nil)
                 } catch {
                     return (nil, "\(error)")
@@ -240,11 +331,13 @@ final class FamilyMapModel: ObservableObject {
     }
 
     /// The published bundle for one tally result: shades, the top labels,
-    /// and the camera box around every shaded unit. O(units with a count).
+    /// the camera box around every shaded unit, and the unplaced list.
+    /// O(units with a count).
     nonisolated static func computed(from r: FamilyMapTally.Result, units: FamilyMapUnits) -> Computed {
         var c = Computed()
         c.counts = r.counts
         c.totals = r.totals
+        c.unplaced = r.unplaced
         let peak = r.counts.values.map(\.people).max() ?? 0
         var shades: [String: Shade] = [:]
         shades.reserveCapacity(r.counts.count)
@@ -318,13 +411,40 @@ final class FamilyMapModel: ObservableObject {
     var selectedUnit: FamilyMapUnits.Unit? { selectedKey.flatMap(units.unit(forKey:)) }
     var selectedCount: FamilyMapTally.UnitCount? { selectedKey.flatMap { computed.counts[$0] } }
 
-    /// "412 of 1,024 people placed; 37 country-only; 58 with no recorded place"
+    // MARK: Panel text
+
+    /// "412 of 1,024 people placed; 37 country-only; 58 with no recorded
+    /// place; 12 recorded but off the map" — a zero part is left out, so a
+    /// Berlin birth is never described as unrecorded (codex #1782, F2).
     nonisolated static func totalsLine(_ t: FamilyMapTally.Totals) -> String {
-        totalsLine(considered: t.considered, resolved: t.resolved, countryOnly: t.countryOnly, unresolved: t.unresolved)
+        totalsLine(considered: t.considered, resolved: t.resolved, countryOnly: t.countryOnly,
+                   unresolved: t.unresolved, unsupported: t.unsupported)
     }
 
-    nonisolated static func totalsLine(considered: Int, resolved: Int, countryOnly: Int, unresolved: Int) -> String {
-        let placed = "\(resolved.formatted()) of \(considered.formatted()) \(considered == 1 ? "person" : "people") placed"
-        return placed + "; \(countryOnly.formatted()) country-only; \(unresolved.formatted()) with no recorded place"
+    nonisolated static func totalsLine(considered: Int, resolved: Int, countryOnly: Int, unresolved: Int,
+                                       unsupported: Int = 0) -> String {
+        var line = "\(resolved.formatted()) of \(considered.formatted()) \(considered == 1 ? "person" : "people") placed"
+        if countryOnly > 0 { line += "; \(countryOnly.formatted()) country-only" }
+        let noPlace = unresolved - unsupported
+        if noPlace > 0 { line += "; \(noPlace.formatted()) with no recorded place" }
+        if unsupported > 0 { line += "; \(unsupported.formatted()) recorded but off the map" }
+        return line
+    }
+
+    /// The second line under "Not on the map": why, in plain words.
+    /// "2 with no recorded place · 1 recorded but off the map"; "" when
+    /// everyone is placed.
+    nonisolated static func notOnTheMapLine(_ t: FamilyMapTally.Totals) -> String {
+        var parts: [String] = []
+        if t.noRecordedPlace > 0 { parts.append("\(t.noRecordedPlace.formatted()) with no recorded place") }
+        if t.unsupported > 0 { parts.append("\(t.unsupported.formatted()) recorded but off the map") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// What a member row says under the name: where the place came from
+    /// and what was recorded. nil when nothing was recorded.
+    nonisolated static func placeNote(recordedPlace: String?, fromFamilyNotes: Bool) -> String? {
+        guard let recordedPlace, FamilyMapTally.hasText(recordedPlace) else { return nil }
+        return fromFamilyNotes ? "from the family's notes: \(recordedPlace)" : "recorded as \(recordedPlace)"
     }
 }
