@@ -518,6 +518,22 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapFlagTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapFlagTests"
+      ],
+      "tests": [
+        "countyAndCountryOnlyKeysMapToTheSameCountry",
+        "everyCountryHasItsFlag",
+        "flagsAreWellFormedEmojiSequences",
+        "resolverHitsFlyTheMapsFlag",
+        "unresolvedAndOffMapKeysHaveNoFlag"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapKeyTests.swift",
       "stage": "unit",
       "suites": [
@@ -8804,6 +8820,30 @@
         "explicitChoicesIgnoreTheSystemAndSystemFollowsIt",
         "lightPaletteInvertsTheInkSoOverlaysAndConnectorsStayVisible",
         "paletteFollowsTheResolvedScheme"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeBirthFlagTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeBirthFlagTests"
+      ],
+      "tests": [
+        "aNewTreeNeverShowsTheOldTreesFlags",
+        "aPhotoGetsTheBadgeAndNoPhotoGetsThePlaceholder",
+        "aPrivateOrDisputedNoteNeverFlagsAnyone",
+        "building100kPeopleStaysUnderBudget",
+        "everyCountryCountryOnlyAndOffMapFromTheTree",
+        "noRealStreetAddressInTheseTests",
+        "noTreeMeansNoFlags",
+        "theCardAndTheMapAgreePersonForPerson",
+        "theFamilysNotesFlagSomeoneTheTreeCouldNot",
+        "theLiveModelBuildsOncePerBindAndCardsOnlyLookUp",
+        "theLiveModelPicksUpTheFamilysNotesThroughTheSamePath",
+        "theTreeWinsWhenBothResolveAndTheNoteOnlyFillsAGap",
+        "viewsOnlyLookUpAndTheBuilderSharesTheMapsDecision"
       ]
     },
     {
@@ -21667,6 +21707,7 @@
         "test_dashboard_has_honest_missing_and_stale_states",
         "test_every_nightly_publication_path_merges_person_fields",
         "test_morning_digest_rejects_stale_and_non_main_rows",
+        "test_nightly_builds_release_from_one_configuration_and_publishes_it",
         "test_nightly_collector_version_and_fallback_expose_cycle_sensor"
       ]
     },
@@ -22266,6 +22307,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapBundledDataTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapFlagTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -23226,6 +23271,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/FamilyTreeAppearanceTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/FamilyTreeBirthFlagTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

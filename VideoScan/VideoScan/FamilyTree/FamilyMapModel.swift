@@ -303,6 +303,41 @@ final class FamilyMapModel: ObservableObject {
         return FamilyIdentityText.tokens(String(text[run])).contains { $0.count >= 2 && given.contains($0) }
     }
 
+    /// What ONE person's two candidate places decide: the unit hit (nil
+    /// when neither resolves), the text that was recorded (tree first —
+    /// what "Not on the map" shows), where the hit came from, and whether
+    /// that recorded text was the family's note rather than the tree's.
+    struct Placement: Sendable, Equatable {
+        let hit: BirthplaceUnitResolver.Hit?
+        let recorded: String?
+        let source: PlaceSource
+        let recordedFromFamilyNotes: Bool
+    }
+
+    /// THE decision the map and the card flags (#229) share — the ONE
+    /// resolver call site in this file (a sensor pins it): the tree's
+    /// place first, then the family's note; the first that resolves wins.
+    /// `recorded` is the first candidate with text (tree first) until a
+    /// candidate resolves, when it becomes that one — so a tree text the
+    /// map cannot read is shown as recorded, but a resolving family note
+    /// takes over both the place and the "recorded as" text.
+    nonisolated static func place(tree: String?, family: String?) -> Placement {
+        var recorded: String?
+        var recordedFromFamily = false
+        for (candidate, source) in [(tree, PlaceSource.tree), (family, PlaceSource.family)] {
+            guard let candidate, FamilyMapTally.hasText(candidate) else { continue }
+            if recorded == nil {                                       // what WAS recorded, tree first
+                recorded = candidate
+                recordedFromFamily = source == .family
+            }
+            if let hit = BirthplaceUnitResolver.resolve(candidate) {
+                return Placement(hit: hit, recorded: candidate, source: source,
+                                 recordedFromFamilyNotes: source == .family)
+            }
+        }
+        return Placement(hit: nil, recorded: recorded, source: .none, recordedFromFamilyNotes: recordedFromFamily)
+    }
+
     /// The person's given-name tokens: every name (canonical + aliases)
     /// minus its last token (the surname) — a one-word alias ("Mamie") is
     /// kept whole. Initials and other one-letter tokens are dropped.
@@ -338,26 +373,14 @@ final class FamilyMapModel: ObservableObject {
         var familyPlaced = Set<String>()
         var familyRecorded = Set<String>()
         for o in visited where o >= 0 && o < birthPlaces.count {
-            let tree = birthPlaces[o]
             let family: String? = familyPlaces.flatMap { o < $0.count ? $0[o] : nil }
-            // ONE resolver call site (a sensor pins it): tree first, then
-            // the family's note; the first that places the person wins.
-            for (candidate, source) in [(tree, PlaceSource.tree), (family, PlaceSource.family)] {
-                guard let candidate, FamilyMapTally.hasText(candidate) else { continue }
-                if recorded[o] == nil {                                // what WAS recorded, tree first
-                    recorded[o] = candidate
-                    if source == .family { familyRecorded.insert(ids[o]) }
-                }
-                if let hit = BirthplaceUnitResolver.resolve(candidate) {
-                    unitKeys[o] = hit.unitKey
-                    recorded[o] = candidate
-                    sources[o] = source
-                    if source == .family {
-                        familyPlaced.insert(ids[o])
-                        familyRecorded.insert(ids[o])
-                    }
-                    break
-                }
+            let p = place(tree: birthPlaces[o], family: family)
+            recorded[o] = p.recorded
+            if p.recordedFromFamilyNotes { familyRecorded.insert(ids[o]) }
+            if let hit = p.hit {
+                unitKeys[o] = hit.unitKey
+                sources[o] = p.source
+                if p.source == .family { familyPlaced.insert(ids[o]) }
             }
         }
         let people = FamilyMapTally.People(ids: ids, names: names, surnames: surnames, surnameKeys: surnameKeys,

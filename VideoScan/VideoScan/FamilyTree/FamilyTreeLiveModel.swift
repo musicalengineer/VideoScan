@@ -1106,6 +1106,9 @@ final class FamilyTreeLiveModel: ObservableObject {
             photoOverrideSources.removeAll()
             installedSourceKey = sourceKey
             clearDocumentsCache()
+            // GEDCOM ids are local to a file: until this tree's own build
+            // lands, show no flags rather than the previous tree's (QA #229 P3-1).
+            clearBirthCountries()
         }
         graph = newGraph
         // Walk Tree decorations follow the tree (Rick 2026-09-27): a silent,
@@ -1287,6 +1290,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         needsRecompile = []
         loadState = .unavailable
         notesResolver = nil
+        scheduleBirthCountriesBuild()                           // no tree → no flags (#229)
         selectedNotes = []
         selectedCorrections = []
         noteDraftOwner = nil
@@ -1948,6 +1952,8 @@ final class FamilyTreeLiveModel: ObservableObject {
             notesResolver = FamilyTreeNotesResolver(index: index, graph: graph)
         }
         refreshSelectedNotes()
+        // The family's notes can place someone the tree could not (#229).
+        scheduleBirthCountriesBuild()
     }
 
     /// The graph changed under an already-loaded brain: rebuild the
@@ -1957,6 +1963,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         notesResolver = nil
         guard let index = brainIndex, let graph else {
             refreshSelectedNotes()
+            scheduleBirthCountriesBuild()                       // tree only, no notes (#229)
             return
         }
         notesGeneration &+= 1
@@ -1968,6 +1975,68 @@ final class FamilyTreeLiveModel: ObservableObject {
             guard let self, generation == self.notesGeneration else { return }
             self.notesResolver = resolver
             self.refreshSelectedNotes()
+            self.scheduleBirthCountriesBuild()                  // tree + notes (#229)
+        }
+    }
+
+    // MARK: Birth-country flags (GH #229)
+
+    /// Every flagged person of the installed tree, keyed by id — built ONCE
+    /// per (tree, family notes) pair, off the main actor, by
+    /// `scheduleBirthCountriesBuild`. A card does one dictionary lookup
+    /// (`birthFlag(for:)`); nothing here runs per card or in a body.
+    @Published private(set) var birthCountries = FamilyTreeBirthCountries.empty
+    /// How many builds have been APPLIED (a superseded build is dropped and
+    /// not counted). Readable so a sensor can pin "one per bind, never per
+    /// card" — the same shape as FamilyMapModel.generation.
+    private(set) var birthCountryBuilds = 0
+    /// The "ignore a stale reply" sequence number (≈ the usual generation
+    /// counter: a build that started before a newer tree or brain arrived
+    /// is thrown away when it lands).
+    private var birthCountriesGeneration = 0
+
+    /// Drop the current flags and invalidate any build in flight.
+    private func clearBirthCountries() {
+        birthCountriesGeneration &+= 1
+        if birthCountries != .empty { birthCountries = .empty }
+    }
+    /// The in-flight build, so a test can `await` its value instead of
+    /// polling; nil when nothing is building.
+    private(set) var birthCountriesTask: Task<Void, Never>?
+
+    /// The card's flag for one person: one dictionary hit, nil when the
+    /// map would not place them either.
+    func birthFlag(for personID: String) -> FamilyTreeBirthFlag? {
+        birthCountries.flags[personID]
+    }
+
+    /// (Re)build the flags for the installed tree with whatever family
+    /// knowledge is loaded now. Called from the two places the inputs
+    /// change — the tree (through the notes-resolver rebuild every install
+    /// runs) and the brain (`applyBrain`). Off-main at utility priority:
+    /// ~2 µs per place, so the real 39k tree is a few hundred ms in Debug
+    /// and never on the UI thread; the cards fill in a moment after the
+    /// tree appears. The demo tree (no graph) has no flags.
+    private func scheduleBirthCountriesBuild() {
+        birthCountriesGeneration &+= 1
+        let generation = birthCountriesGeneration
+        guard let graph else {
+            birthCountriesTask = nil
+            if !birthCountries.flags.isEmpty || birthCountries.peopleCount != 0 {
+                birthCountries = .empty
+            }
+            return
+        }
+        let knowledge = notesResolver
+        birthCountriesTask = Task { [weak self] in
+            let built = await Task.detached(priority: .utility) {
+                FamilyTreeBirthCountries.build(graph: graph, knowledge: knowledge)
+            }.value
+            guard let self, generation == self.birthCountriesGeneration else { return }
+            self.birthCountryBuilds &+= 1
+            self.birthCountries = built
+            self.birthCountriesTask = nil
+            appLog.write("Family Tree: \(built.summaryLine)")
         }
     }
 
