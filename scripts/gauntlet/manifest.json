@@ -504,6 +504,101 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapBundledDataTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapBundledDataTests"
+      ],
+      "tests": [
+        "everyResolverKeyIsABundledUnitAndViceVersa",
+        "realPlacesLandInTheRightBundledUnit"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapKeyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapKeyTests"
+      ],
+      "tests": [
+        "aBlankNameIsTheCountryUnit",
+        "boundingBoxUnionContainsAndArea",
+        "countryOfKeyReadsThePrefix",
+        "countryUnitKindsAndLabels",
+        "slugMatchesTheDocumentedExamples",
+        "unitKeyIsCountryDashSlugAndDropsCountyForIreland"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapResolverTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapResolverTests"
+      ],
+      "tests": [
+        "everyEmittableKeyIsWellFormedAndTheRequiredSetIsStable",
+        "everySpellingResolvesToItsUnit",
+        "fortyThousandPlacesUnderBudget",
+        "hitCarriesTheDecidingComponentAndTheCallerKeepsTheRaw",
+        "normalisationFoldsCaseDotsDiacriticsAndStrayMarks",
+        "theRightmostCountryConstrainsTheCounty",
+        "unrecognisedAndOffMapPlacesAreNil"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapTallyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapTallyTests"
+      ],
+      "tests": [
+        "aMaskOfTheWrongLengthIsRefused",
+        "columnsOfTheWrongLengthAreRefused",
+        "duplicateAndOutOfRangeOrdinalsAreCountedOnceOrSkipped",
+        "fortyThousandPeopleUnderBudget",
+        "memberLimitCapsTheListButNotTheCount",
+        "membersComeNearestGenerationFirstThenSurnameNameId",
+        "nilMaskCountsEveryoneAndAllFalseCountsNobody",
+        "sumsAddUpToTheResolvedPeople",
+        "theHighlightMaskFiltersTheMapAsItHighlightsTheFan",
+        "topSurnamesAreMostCommonFirstWithStableTiesAndTheCommonestSpelling",
+        "yearCeilingKeepsBirthsUpToTheYearAndDropsUnknownYears"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapUnitsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapUnitsTests"
+      ],
+      "tests": [
+        "aConcavePolygonIsHandledByEvenOdd",
+        "aPointJustOffACoastResolvesToTheAdjacentUnitAndMidOceanIsNil",
+        "aPointOnABorderIsInsideAndTiesAreDeterministic",
+        "aThirdCoordinateAndAnOpenRingAreTolerated",
+        "bandIndexedRelationMatchesTheReferenceScan",
+        "cameraBoxIgnoresFarEasternPiecesOfAWesternUnit",
+        "coverageIsTheUnionOfTheListedUnitsThatExist",
+        "decodesEveryFeatureWithItsPropertiesAndGeometry",
+        "decodingIsPureAndReadsNoFiles",
+        "insideHoleEnclaveBorderSeaAndIsland",
+        "keyNameMismatchesAreRecordedNotRefused",
+        "nearestTiesGoToTheKey",
+        "refusesEveryContractViolation",
+        "thousandLookupsOverTwoHundredUnitsUnderBudget"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyNameNormalizerTests.swift",
       "stage": "unit",
       "suites": [
@@ -21997,6 +22092,26 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityTextTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapBundledDataTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapKeyTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapResolverTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapTallyTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapUnitsTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
