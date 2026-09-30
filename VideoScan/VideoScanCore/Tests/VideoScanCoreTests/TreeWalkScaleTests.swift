@@ -47,7 +47,22 @@ struct TreeWalkScaleTests {
         let r = try #require(result)
         let ceiling = TimingBudget.loadAwareDebugCeiling(Self.budget)
         print("[walk-scale] 100k: \(elapsed) total; walk \(String(format: "%.0f", r.summary.walkMilliseconds)) ms, checks \(String(format: "%.0f", r.summary.checksMilliseconds)) ms; visited \(r.visitedCount), estimated counts \(r.summary.estimatedAncestorCounts), checks \(r.checks.count), progress events \(progress) (\(TimingBudget.loadDescription()))")
-        #expect(elapsed < ceiling, "100k walk took \(elapsed), ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
+        // On a GitHub-hosted runner (3 cores, the whole package suite in
+        // parallel) wall clock measures waiting for a core, not this code:
+        // 2026-09-30 the same commit logged 9.1 s and 46.4 s total with the
+        // walk's own work at ~1.2 s both times. There, gate on the work the
+        // walk measures itself and keep wall clock only as a hang guard.
+        // Everywhere else (the M4 nightly, dev machines) the full wall-clock
+        // budget stands.
+        let hosted = TimingBudget.hostedRunnerFactor(environment: ProcessInfo.processInfo.environment) > 1
+        if hosted {
+            let workMs = r.summary.walkMilliseconds + r.summary.checksMilliseconds
+            let workCeilingMs = TimingBudget.seconds(ceiling) * 1_000
+            #expect(workMs < workCeilingMs, "100k walk+checks work \(workMs) ms, ceiling \(workCeilingMs) ms")
+            #expect(elapsed < ceiling * 5, "100k walk hang guard: \(elapsed) (\(TimingBudget.loadDescription()))")
+        } else {
+            #expect(elapsed < ceiling, "100k walk took \(elapsed), ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
+        }
         #expect(r.decorations.count == graph.people.count)
         #expect(r.visitedCount > 10_000)
         #expect(progress == r.visitedCount / 1_000)

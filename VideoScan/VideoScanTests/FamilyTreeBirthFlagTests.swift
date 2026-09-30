@@ -374,10 +374,25 @@ struct FamilyTreeBirthFlagTests {
                                  "England", "Fife, Scotland", "Cardiff, Glamorgan, Wales", nil, "Berlin, Germany",
                                  "Halifax, Nova Scotia, Canada", "Cork, Ireland", "Providence, Rhode Island", "Lowell Mass. U.S.A.",
                                  "Perth, WA, Australia", "United States", "Co. Antrim, Northern Ireland", "Toronto, Ontario, Canada"]
-        let ids = (0..<n).map { "@I\($0)@" }
-        let treePlaces = (0..<n).map { places[$0 % places.count] }
-        // Every 5th unrecorded person has a family note (Cork).
-        let familyPlaces: [String?] = (0..<n).map { $0 % places.count == 5 && ($0 / places.count) % 5 == 0 ? "Cork, Ireland" : nil }
+        // Built with plain loops: Xcode 26.3 (CI) cannot type-check the
+        // one-line map/ternary closures in reasonable time (same trap as
+        // FamilyMapRenderSensorTests, 6d7d4f3f).
+        let count = places.count
+        var ids: [String] = []
+        var treePlaces: [String?] = []
+        var familyPlaces: [String?] = []
+        ids.reserveCapacity(n)
+        treePlaces.reserveCapacity(n)
+        familyPlaces.reserveCapacity(n)
+        for i in 0..<n {
+            ids.append("@I" + String(i) + "@")
+            treePlaces.append(places[i % count])
+            // Every 5th unrecorded person has a family note (Cork).
+            let unrecordedSlot: Bool = i % count == 5
+            let everyFifth: Bool = (i / count) % 5 == 0
+            let note: String? = (unrecordedSlot && everyFifth) ? "Cork, Ireland" : nil
+            familyPlaces.append(note)
+        }
 
         var built: FamilyTreeBirthCountries?
         var wall: Duration = .zero
@@ -393,8 +408,10 @@ struct FamilyTreeBirthFlagTests {
         // Correctness at scale: 12 of 15 spellings resolve (nil, Germany,
         // Australia do not); the notes add the Cork people.
         let resolving: Set<Int> = [0, 1, 2, 3, 4, 7, 8, 9, 10, 12, 13, 14]
-        let fromTree = (0..<n).reduce(0) { $0 + (resolving.contains($1 % places.count) ? 1 : 0) }
-        let fromNotes = familyPlaces.reduce(0) { $0 + ($1 == nil ? 0 : 1) }
+        var fromTree = 0
+        for i in 0..<n where resolving.contains(i % count) { fromTree += 1 }
+        var fromNotes = 0
+        for note in familyPlaces where note != nil { fromNotes += 1 }
         let b = try #require(built)
         #expect(b.peopleCount == n)
         #expect(b.treeCount == fromTree && b.notesCount == fromNotes, "\(b.treeCount) tree, \(b.notesCount) notes")

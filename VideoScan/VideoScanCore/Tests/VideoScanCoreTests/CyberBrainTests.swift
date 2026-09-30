@@ -485,8 +485,12 @@ struct CyberBrainTests {
 
         #expect(evidence.count == 12)
         #expect(evidence.first?.id == "item.000000")
-        #expect(elapsed < .seconds(3),
-                "100k CyberBrain item index+query exceeded 3 seconds: \(elapsed)")
+        // The project's timing helper, like its peers: ×3 on GitHub-hosted
+        // runners, ×1.5 when a Debug host is busy (CI 2026-09-30: 3.68 s at
+        // load 11 on 3 cores against a flat 3 s).
+        let ceiling = TimingBudget.loadAwareDebugCeiling(.seconds(3))
+        #expect(elapsed < ceiling,
+                "100k CyberBrain item index+query took \(elapsed), ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
     }
 
     private func temporaryRoot() throws -> URL {
