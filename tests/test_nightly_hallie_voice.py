@@ -50,7 +50,7 @@ def test_worker_env_mirrors_the_app_allowlist():
 
 def test_the_python_allowlist_is_the_swift_allowlist():
     import re
-    swift = (ROOT / "VideoScan/VideoScan/HallieNeuralSpeech.swift").read_text()
+    swift = next((ROOT / "VideoScan/VideoScan").rglob("HallieNeuralSpeech.swift")).read_text()
     block = swift[swift.index("workerEnvironmentKeys"):swift.index("]", swift.index("workerEnvironmentKeys"))]
     assert set(re.findall(r'"([A-Za-z_]+)"', block)) == lane.WORKER_ENV_KEYS
 
