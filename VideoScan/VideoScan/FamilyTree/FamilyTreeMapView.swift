@@ -72,6 +72,8 @@ enum FamilyMapShapes {
     }
 
     private static var cache: [String: [Piece]] = [:]
+    /// The same pieces grouped by unit key, for the selected unit's outline.
+    private static var byKeyCache: [String: [String: [Piece]]] = [:]
 
     /// A cheap identity for a unit set: the bundled file always yields the
     /// same string; two different synthetic sets in one test process almost
@@ -85,6 +87,7 @@ enum FamilyMapShapes {
         let id = fingerprint(units)
         if let cached = cache[id] { return cached }
         var out: [Piece] = []
+        var byKey: [String: [Piece]] = [:]
         for unit in units.units {
             for (i, polygon) in unit.polygons.enumerated() {
                 let holes = polygon.holes.map { ring -> MKPolygon in
@@ -93,11 +96,23 @@ enum FamilyMapShapes {
                 }
                 let outer = polygon.outer.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
                 let shape = MKPolygon(coordinates: outer, count: outer.count, interiorPolygons: holes.isEmpty ? nil : holes)
-                out.append(Piece(id: "\(unit.key)#\(i)", key: unit.key, polygon: shape))
+                let piece = Piece(id: "\(unit.key)#\(i)", key: unit.key, polygon: shape)
+                out.append(piece)
+                byKey[unit.key, default: []].append(piece)
             }
         }
         cache[id] = out
+        byKeyCache[id] = byKey
         return out
+    }
+
+    /// The pieces of ONE unit (empty for nil or an unknown key), from the
+    /// same cache — O(1) after the first `pieces(for:)`.
+    static func pieces(for units: FamilyMapUnits, key: String?) -> [Piece] {
+        guard let key else { return [] }
+        let id = fingerprint(units)
+        if byKeyCache[id] == nil { _ = pieces(for: units) }
+        return byKeyCache[id]?[key] ?? []
     }
 }
 
@@ -132,6 +147,11 @@ struct FamilyTreeMapView: View {
     @State private var position: MapCameraPosition = .automatic
     @State private var fitted = false
 
+    /// Test probe (FamilyMapRenderSensorTests): called once per evaluation
+    /// of the map content with the number of polygon pieces declared. nil
+    /// in production; a static closure costs one nil check per body.
+    nonisolated(unsafe) static var mapContentProbe: ((Int) -> Void)?
+
     var body: some View {
         let _ = mapKitLinkAnchor()
         HStack(alignment: .top, spacing: 16) {
@@ -149,18 +169,27 @@ struct FamilyTreeMapView: View {
 
     // MARK: The map
 
+    /// Measured 2026-09-29 (FamilyMapRenderSensorTests, 907 pieces): when
+    /// ANY element of a `ForEach` of MapPolygons changes style, MapKit's
+    /// SwiftUI layer removes and re-adds EVERY overlay in that ForEach
+    /// (~400 ms on the main thread in Debug, whichever element changed;
+    /// an unchanged re-evaluation costs ~2 ms). So the 907 shaded pieces
+    /// depend on the shades ONLY, and the selected unit's outline is its
+    /// own ForEach of that unit's few pieces, drawn on top: a click
+    /// touches 1–10 overlays, not 907. A change of Highlight checks still
+    /// re-shades, and that one rebuild is the price of new colours.
     private var map: some View {
         let pieces = FamilyMapShapes.pieces(for: model.units)
+        let selectedPieces = FamilyMapShapes.pieces(for: model.units, key: model.selectedKey)
         let shades = model.computed.shades
-        let selected = model.selectedKey
+        Self.mapContentProbe?(pieces.count)
         return MapReader { proxy in
             Map(position: $position, interactionModes: .all) {
-                ForEach(pieces) { piece in
-                    let shade = shades[piece.key]
-                    let isSelected = piece.key == selected
+                ShadedPieces(pieces: pieces, shades: shades)
+                ForEach(selectedPieces) { piece in
                     MapPolygon(piece.polygon)
-                        .foregroundStyle(shade.map { TreeWalkPalette.color($0.line).opacity($0.opacity) } ?? Color.clear)
-                        .stroke(isSelected ? Color.white : Color.white.opacity(0.55), lineWidth: isSelected ? 2.5 : 0.7)
+                        .foregroundStyle(Color.clear)
+                        .stroke(Color.white, lineWidth: 2.5)
                 }
                 ForEach(model.computed.labels) { label in
                     Annotation(label.name, coordinate: CLLocationCoordinate2D(latitude: label.latitude, longitude: label.longitude),
@@ -178,6 +207,32 @@ struct FamilyTreeMapView: View {
             .onTapGesture { point in
                 guard let c = proxy.convert(point, from: .local) else { return }
                 model.select(coordinate: FamilyMap.Coordinate(latitude: c.latitude, longitude: c.longitude))
+            }
+        }
+    }
+
+    /// The 907 shaded pieces as ONE map-content value whose inputs are the
+    /// cached pieces array and the published shades dictionary. Neither
+    /// changes on a click, so SwiftUI can skip this body (and MapKit's
+    /// per-item diff of it) and touch only the selection ForEach. `==` is
+    /// by storage identity + shade equality: the pieces array is the same
+    /// buffer for the life of the process (FamilyMapShapes).
+    private struct ShadedPieces: MapContent, Equatable {
+        let pieces: [FamilyMapShapes.Piece]
+        let shades: [String: FamilyMapModel.Shade]
+
+        static func == (a: ShadedPieces, b: ShadedPieces) -> Bool {
+            a.pieces.count == b.pieces.count
+                && a.pieces.withUnsafeBufferPointer { pa in b.pieces.withUnsafeBufferPointer { pb in pa.baseAddress == pb.baseAddress } }
+                && a.shades == b.shades
+        }
+
+        var body: some MapContent {
+            ForEach(pieces) { piece in
+                let shade = shades[piece.key]
+                MapPolygon(piece.polygon)
+                    .foregroundStyle(shade.map { TreeWalkPalette.color($0.line).opacity($0.opacity) } ?? Color.clear)
+                    .stroke(Color.white.opacity(0.55), lineWidth: 0.7)
             }
         }
     }

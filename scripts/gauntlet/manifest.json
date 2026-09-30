@@ -8559,6 +8559,7 @@
         "aRealWalkMixFramesTheAtlanticNotThePacific",
         "aSurnameCheckNarrowsAndAnEmptySelectionCountsEveryoneAgain",
         "anUnplacedFamilyNoteIsToldApartFromTheTreesText",
+        "buildingAndTallying100kPeopleStaysUnderBudget",
         "buildingTheInputsFor40kPeopleStaysUnderBudget",
         "onlyCountryOnlyCountsStillGetASensibleCamera",
         "shadesLabelsCameraAndPanelLinesArePinned",
@@ -19051,6 +19052,17 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/StressTests/FamilyMapRenderSensorTests.swift",
+      "stage": "performance",
+      "suites": [
+        "FamilyMapRenderSensorTests"
+      ],
+      "tests": [
+        "theBundledMapAtTheRealTreeSize"
+      ]
+    },
+    {
       "blocked_reason": "Fixture stress resolves persisted Donna,Ma POI profiles and reference photos; isolated fixture profile adapter pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/StressTests/FixtureMediaStressTests.swift",
@@ -24729,7 +24741,7 @@
         "VIDEOSCAN_PERF_RESULTS": "{run_dir}/generated-media-perf.txt",
         "VIDEOSCAN_PERF_TIME_LIMIT_MIN": "10"
       },
-      "expected_floor": 54,
+      "expected_floor": 55,
       "name": "performance",
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -24742,6 +24754,7 @@
         "VideoScanTests/CatalogOpenScaleTests",
         "VideoScanTests/CatalogPerfMemoTests",
         "VideoScanTests/ElapsedTimerPauseTests",
+        "VideoScanTests/FamilyMapRenderSensorTests",
         "VideoScanTests/GeneratedMediaPerformanceTests",
         "VideoScanTests/HallieSuperlativeScopeRulingsTests",
         "VideoScanTests/HallieSuperlativeScopeScaleTests",
