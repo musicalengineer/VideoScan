@@ -63,12 +63,15 @@ struct FamilyMapRenderSensorTests {
     /// 2 ms, i.e. real work rather than the 1 ms timeout).
     @discardableResult
     static func pump(seconds: TimeInterval) -> (worst: TimeInterval, busy: TimeInterval) {
-        let end = Date().addingTimeInterval(seconds)
+        // Time spent with the machine asleep is not a main-thread stall.
+        // Keep runloop deadlines in Date's domain, but measure awake time.
+        let clock = SuspendingClock()
+        let end = clock.now.advanced(by: .seconds(seconds))
         var worst: TimeInterval = 0, busy: TimeInterval = 0
-        while Date() < end {
-            let t0 = CFAbsoluteTimeGetCurrent()
+        while clock.now < end {
+            let t0 = clock.now
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.001))
-            let dt = CFAbsoluteTimeGetCurrent() - t0
+            let dt = TimingBudget.seconds(t0.duration(to: clock.now))
             worst = max(worst, dt)
             if dt > 0.002 { busy += dt }
         }
@@ -337,5 +340,6 @@ struct FamilyMapRenderSensorTests {
         // frames at 60 Hz (Debug, load-aware).
         let stallCeiling = TimingBudget.seconds(PerformanceLane.loadAwareDebugCeiling(.milliseconds(170)))
         #expect((clickWorst.max() ?? 0) < stallCeiling, "a click stalled the main thread \(Self.ms(clickWorst.max() ?? 0)) (\(PerformanceLane.loadDescription()))")
+        #expect((coordWorst.max() ?? 0) < stallCeiling, "a coordinate click stalled the main thread \(Self.ms(coordWorst.max() ?? 0)) (\(PerformanceLane.loadDescription()))")
     }
 }

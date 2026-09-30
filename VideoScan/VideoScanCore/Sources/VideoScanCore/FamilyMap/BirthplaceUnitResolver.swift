@@ -110,7 +110,9 @@ public enum BirthplaceUnitResolver {
     /// The unit a recorded place shades, or nil when nothing on the map
     /// was recognised (blank, a town alone, Germany, "Europe").
     public static func resolve(_ raw: String?) -> Hit? {
-        guard let raw, !raw.utf8.isEmpty else { return nil }
+        // Blank is `FamilyMapTally.hasText`'s blank (Unicode White_Space),
+        // the same test the tally applies — one definition, not two.
+        guard let raw, FamilyMapTally.hasText(raw) else { return nil }
         // Work on the string's own UTF-8 bytes: no Substring, no String
         // per component, no index arithmetic — a byte pointer and ranges.
         // (C++: `const char*` + offsets over the original buffer.)

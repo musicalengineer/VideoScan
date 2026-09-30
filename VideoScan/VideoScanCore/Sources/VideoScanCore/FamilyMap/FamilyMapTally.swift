@@ -269,12 +269,24 @@ public enum FamilyMapTally {
                       unplaced: nearestMembers(people: people, ordinals: unplacedOrdinals, limit: unplacedLimit))
     }
 
-    /// A recorded place is one with at least one non-blank character.
-    /// Public because the app applies the same test when choosing between
-    /// the tree's place and the family's note.
-    @inline(__always) public static func hasText(_ s: String?) -> Bool {
+    /// A recorded place is one with at least one non-blank character,
+    /// blank meaning Unicode White_Space: space, tab, newline, NBSP
+    /// (U+00A0), em-space (U+2003) and the rest. THE one definition of
+    /// blank for the map (codex #227 follow-up, P3: a place that was
+    /// nothing but an NBSP counted as "unsupported", not "no recorded
+    /// place"). The app's tree-vs-note choice and
+    /// `BirthplaceUnitResolver.resolve` both call it, so a place the
+    /// resolver refuses as blank is never counted as recorded here.
+    /// ASCII fast path over the UTF-8 bytes; the first byte ≥ 0x80 hands
+    /// over to the scalar property (C++: a byte loop with an `iswspace`
+    /// fallback).
+    public static func hasText(_ s: String?) -> Bool {
         guard let s else { return false }
-        return s.utf8.contains { $0 != 0x20 && $0 != 0x09 && $0 != 0x0A && $0 != 0x0D }
+        for b in s.utf8 {
+            if b >= 0x80 { return s.unicodeScalars.contains { !$0.properties.isWhitespace } }
+            if b != 0x20 && !(0x09...0x0D).contains(b) { return true }
+        }
+        return false
     }
 
     /// Dense per-surname-id counters, reused across units and reset via
