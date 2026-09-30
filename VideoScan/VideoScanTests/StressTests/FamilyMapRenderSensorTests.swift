@@ -123,14 +123,25 @@ struct FamilyMapRenderSensorTests {
         let family = ["Breen", "Lamb", "Latta", "McGill", "Hudson", "Stone", "Hill", "Adams", "Alden", "Bradford",
                       "Brewster", "Standish", "Winslow", "Howland", "Warren", "Fuller", "Cooke", "Allerton", "Chilton",
                       "Eaton", "Hopkins", "Mullins", "Priest", "Rogers", "Soule", "Tilley", "White", "Billington"]
-        let surnames = (0..<n).map { family[($0 * 7919) % family.count] + ($0 % 97 == 0 ? " " : "") }
-        let ids = (0..<n).map { "@I\($0)@" }
-        let names = (0..<n).map { "Person \($0)" }
+        // Typed step by step: the one-line closures with a ternary inside a
+        // string concatenation made Xcode 26.3's type-checker give up
+        // ("unable to type-check this expression in reasonable time",
+        // CI red on f6bdbd10) — Xcode 27 compiled them.
+        let surnames: [String] = (0..<n).map { i -> String in
+            let base: String = family[(i * 7919) % family.count]
+            let trailingSpace: String = (i % 97 == 0) ? " " : ""
+            return base + trailingSpace
+        }
+        let ids: [String] = (0..<n).map { i -> String in "@I\(i)@" }
+        let names: [String] = (0..<n).map { i -> String in "Person \(i)" }
         let keys = TreeWalkHighlight.surnameKeys(surnames)
         let places = syntheticPlaces(units: units, n: n)
-        let years = (0..<n).map { $0 % 11 == 0 ? nil : Optional(1500 + $0 % 400) }
-        let generations = (0..<n).map { Optional($0 % 20) }
-        let lines = (0..<n).map { TreeWalk.Line.allCases[$0 % 3] }
+        let years: [Int?] = (0..<n).map { i -> Int? in
+            if i % 11 == 0 { return nil }
+            return 1500 + i % 400
+        }
+        let generations: [Int?] = (0..<n).map { i -> Int? in i % 20 }
+        let lines: [TreeWalk.Line] = (0..<n).map { i -> TreeWalk.Line in TreeWalk.Line.allCases[i % 3] }
         let allRegions = BirthplaceClassifier.BirthRegion.allCases
         let regions = (0..<n).map { allRegions[$0 % allRegions.count] }
         let visited = Array(0..<n)
