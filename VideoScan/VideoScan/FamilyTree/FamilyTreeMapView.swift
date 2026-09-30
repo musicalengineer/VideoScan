@@ -15,12 +15,24 @@
 // with 600. The twelve busiest units carry a name-and-count label. The
 // camera opens on the box around every shaded unit; "Fit" brings it back.
 //
-// COST (no O(people) work in any view body): the counts, shades, labels
-// and camera box are computed off-main by `FamilyMapModel` and published
-// together; this body reads dictionaries by key. The MKPolygons for the
-// bundled units are built once per process (`FamilyMapShapes`, ~1 MB for
-// ~60k vertices) and reused by every walk. A click is one point-in-polygon
-// lookup over ≤ 189 bounding boxes.
+// THE SIDE PANEL. With a region selected: its count line, the line chips,
+// the top surnames and the people nearest generation first — each with
+// what was recorded ("recorded as Massachusetts Bay Colony", the approved
+// colonial tooltip) or, when the tree was blank and the family's notes
+// placed them, "from the family's notes: Cork, Ireland". With NOTHING
+// selected: the totals, the busiest regions, and "Not on the map" — the
+// people the map could not place, nearest generation first, split
+// honestly into "no recorded place" and "recorded but off the map"
+// (Berlin, Germany). A country outline's count line says "county
+// unresolved", never "not recorded": "Lothian, Scotland" WAS recorded.
+//
+// COST (no O(people) work in any view body): the counts, shades, labels,
+// camera box and the unplaced list are computed off-main by
+// `FamilyMapModel` and published together; this body reads dictionaries by
+// key and lists that are already capped. The MKPolygons for the bundled
+// units are built once per process (`FamilyMapShapes`, ~1 MB for ~60k
+// vertices) and reused by every walk. A click is a few point-in-polygon
+// lookups over ≤ 189 bounding boxes.
 //
 // LINKING. `Map` lives in the `_MapKit_SwiftUI` overlay; on macOS 27 an
 // `import AVKit` alone did not link AVKit itself and `VideoPlayer` aborted
@@ -219,6 +231,7 @@ struct FamilyTreeMapView: View {
                         selectedUnit(unit, count)
                     } else {
                         busiest(c.labels)
+                        notOnTheMap(c)
                     }
                 }
                 .padding(10)
@@ -264,6 +277,29 @@ struct FamilyTreeMapView: View {
         }
     }
 
+    /// "Not on the map": the people the map could not place, nearest
+    /// generation first, with what WAS recorded. Nothing when everyone is
+    /// placed. The list is already capped by the model (`unplacedLimit`);
+    /// the totals give the rest.
+    @ViewBuilder private func notOnTheMap(_ c: FamilyMapModel.Computed) -> some View {
+        if c.totals.unresolved > 0 {
+            Divider().padding(.vertical, 4)
+            Text("Not on the map").font(.system(size: 12, weight: .semibold))
+            Text(FamilyMapModel.notOnTheMapLine(c.totals))
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(c.unplaced.enumerated()), id: \.offset) { _, m in
+                memberRow(m, note: FamilyMapModel.placeNote(recordedPlace: m.recordedPlace, fromFamilyNotes: false)
+                             ?? "no recorded place")
+            }
+            let rest = c.totals.unresolved - c.unplaced.count
+            if rest > 0 {
+                Text("and \(rest.formatted()) more, further back")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        }
+    }
+
     @ViewBuilder private func selectedUnit(_ unit: FamilyMapUnits.Unit, _ count: FamilyMapTally.UnitCount) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(unit.name).font(.system(size: 14, weight: .semibold))
@@ -301,22 +337,42 @@ struct FamilyTreeMapView: View {
                  ? "The nearest \(count.members.count) of \(count.people.formatted())" : "Who they are")
                 .font(.system(size: 12, weight: .semibold))
             ForEach(Array(count.members.enumerated()), id: \.offset) { _, m in
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Circle().fill(TreeWalkPalette.color(m.line)).frame(width: 6, height: 6)
-                    Text(m.name.isEmpty ? m.id : m.name).font(.system(size: 12))
-                    Spacer(minLength: 6)
-                    Text(m.birthYear.map { "b. \($0)" } ?? "").font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Text(m.generation.map { "gen \($0)" } ?? "").font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
+                memberRow(m, note: FamilyMapModel.placeNote(recordedPlace: m.recordedPlace,
+                                                            fromFamilyNotes: model.isPlacedFromFamilyNotes(m.id)))
             }
         }
     }
 
-    /// "42 born in Yorkshire, England" — or, for a country outline, the
-    /// honest "county not recorded" so the outline is never read as the
-    /// whole country's total (people with a county shade the county only).
+    /// One person: line dot, name, birth year, generation, and under it the
+    /// recorded place ("recorded as Massachusetts Bay Colony" / "from the
+    /// family's notes: Cork, Ireland" / "no recorded place"). The same text
+    /// is the row's tooltip, for a long place that wraps.
+    @ViewBuilder private func memberRow(_ m: FamilyMapTally.Member, note: String?) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Circle().fill(TreeWalkPalette.color(m.line)).frame(width: 6, height: 6)
+                Text(m.name.isEmpty ? m.id : m.name).font(.system(size: 12))
+                Spacer(minLength: 6)
+                Text(m.birthYear.map { "b. \($0)" } ?? "").font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Text(m.generation.map { "gen \($0)" } ?? "").font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            if let note {
+                Text(note).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .padding(.leading, 12)
+            }
+        }
+        .help(note ?? "")
+    }
+
+    /// "42 people born in Yorkshire, England" — or, for a country outline,
+    /// the honest "county unresolved": the place WAS recorded ("Lothian,
+    /// Scotland", "New England"), the map just cannot pin one county /
+    /// state to it, so the outline is never read as the whole country's
+    /// total (people with a county shade the county only). The member rows
+    /// say what was recorded.
     static func countLine(unit: FamilyMapUnits.Unit, count: Int) -> String {
         let people = "\(count.formatted()) \(count == 1 ? "person" : "people")"
         if unit.kind == .country {
@@ -326,7 +382,7 @@ struct FamilyTreeMapView: View {
             case .province: finer = "province"
             default: finer = "county"
             }
-            return "\(people) born in \(unit.name), \(finer) not recorded"
+            return "\(people) born in \(unit.name), \(finer) unresolved"
         }
         return "\(people) born in \(unit.name), \(unit.country.label)"
     }

@@ -232,6 +232,48 @@ struct FamilyMapUnitsTests {
         #expect(units.unit(nearest: p)?.key == "usa-twin-a")
     }
 
+    /// `among:` restricts both lookups to the listed keys (codex #1782,
+    /// stage 2 F1): the map asks over the COUNTED units, so a click in an
+    /// empty county reaches the counted outline around it, and the nearest
+    /// fallback never answers with an uncounted unit.
+    @Test func amongRestrictsContainingAndNearestToTheListedKeys() throws {
+        let units = try Self.units()
+        let inAlpha = C(latitude: 2, longitude: 2)                 // Alpha (county) inside England
+        #expect(units.unit(containing: inAlpha)?.key == "eng-alpha")
+        #expect(units.unit(containing: inAlpha, among: ["eng"])?.key == "eng", "the county is not listed: the outline answers")
+        #expect(units.unit(containing: inAlpha, among: ["eng-beta"]) == nil, "nothing listed contains it")
+        #expect(units.unit(containing: inAlpha, among: [])  == nil)
+        #expect(units.unit(containing: inAlpha, among: nil)?.key == "eng-alpha", "nil = everything")
+        // Off Beta's island: the nearest is Beta unless Beta is not listed.
+        let offshore = C(latitude: 1, longitude: 42.1)
+        #expect(units.unit(nearest: offshore)?.key == "eng-beta")
+        #expect(units.unit(nearest: offshore, among: ["eng-beta"])?.key == "eng-beta")
+        #expect(units.unit(nearest: offshore, among: ["eng-alpha", "sct-enclave"]) == nil)
+        // The twins tie: listing only B makes B the answer.
+        let twins = C(latitude: 50.5, longitude: 101.1)
+        #expect(units.unit(nearest: twins, among: ["usa-twin-b"])?.key == "usa-twin-b")
+    }
+
+    /// The boolean refusal (FamilyMapUnitsAdversarialTests) must not take
+    /// genuine zeros and ones with it: Greenwich and the equator are real.
+    @Test func numericZerosAndOnesStillDecodeAsCoordinates() throws {
+        let object: [String: Any] = ["type": "FeatureCollection", "features": [
+            Self.feature(key: "eng-o", name: "O", country: "ENG", kind: "county",
+                         geometry: ["type": "Polygon", "coordinates": [Self.square(lon0: 0, lat0: 0, lon1: 1, lat1: 1)]]),
+        ]]
+        let units = try FamilyMapUnits(geoJSON: Self.data(object))
+        #expect(units.unit(containing: C(latitude: 0.5, longitude: 0.5))?.key == "eng-o")
+        #expect(units.unit(forKey: "eng-o")?.bbox == FamilyMap.BoundingBox(minLatitude: 0, maxLatitude: 1, minLongitude: 0, maxLongitude: 1))
+        // Integer JSON literals ("[0, 0]") are numbers too — only true / false are refused.
+        let literal = Data(#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"key":"eng-i","name":"I","country":"ENG","kind":"county"},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]}}]}"#.utf8)
+        #expect(try FamilyMapUnits(geoJSON: literal).count == 1)
+        #expect(FamilyMapUnits.number(true) == nil)
+        #expect(FamilyMapUnits.number(NSNumber(value: false)) == nil)
+        #expect(FamilyMapUnits.number(NSNumber(value: 1)) == 1)
+        #expect(FamilyMapUnits.number(0) == 0)
+        #expect(FamilyMapUnits.number("1") == nil)
+    }
+
     // MARK: Coverage (camera)
 
     /// The latitude-band index must give exactly the reference answer —

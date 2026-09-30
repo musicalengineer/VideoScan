@@ -2115,6 +2115,10 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// The installed graph for the Family Tree Walk; nil for the demo tree.
     /// Read-only — a value copy (copy-on-write, no records are copied).
     var walkGraph: GedcomFamilyGraph? { isLive ? graph : nil }
+    /// The tree's CyberBrain, already resolved to tree records, for the
+    /// Family Map's "place from the family's notes" (read-only). nil until
+    /// a brain is loaded and the resolver is built.
+    var walkFamilyKnowledge: FamilyTreeNotesResolver? { isLive ? notesResolver : nil }
 
     /// Bookmarked people in sidebar order, for the Walk sheet's quick list.
     var walkBookmarkedPeople: [FamilyTreePersonSummary] { bookmarkedPeopleInOrder }

@@ -80,6 +80,53 @@ struct FamilyMapTallyTests {
         #expect(m2 == m)
     }
 
+    /// Who is NOT on the map, and why (follow-up round 1, codex #1782 stage
+    /// 2 F2 + F3): the unresolved are listed nearest generation first with
+    /// the text that was recorded; a recorded-but-off-the-map place
+    /// (Berlin) is told apart from no place at all; and every member
+    /// carries the recorded text so the panel can say "recorded as
+    /// Massachusetts Bay Colony".
+    @Test func theUnplacedAreListedNearestFirstWithTheirRecordedTextAndTheReason() throws {
+        let people = T.People(
+            ids: ["a", "b", "c", "d", "e", "f"],
+            names: ["Ann", "Bob", "Cal", "Dan", "Eve", "Fay"],
+            surnames: ["Breen", "Breen", "Latta", "Latta", "Smith", "Smith"],
+            birthYears: [1700, 1900, nil, 1850, 1650, 1750],
+            generations: [3, 1, nil, 2, 1, 2],
+            lines: [.first, .first, .second, .second, .first, .second],
+            unitKeys: ["usa-massachusetts", nil, nil, "sct", nil, nil],
+            recordedPlaces: ["Shrewsbury, Massachusetts Bay Colony", "Berlin, Germany", nil, "Lothian, Scotland", "   ", "Europe"])
+        let r = try T.counts(people: people, visited: [0, 1, 2, 3, 4, 5])
+        #expect(r.totals == T.Totals(considered: 6, resolved: 2, countryOnly: 1, unresolved: 4, unsupported: 2),
+                "Berlin and Europe were recorded; Cal's nil and Eve's blank were not")
+        #expect(r.totals.noRecordedPlace == 2)
+        // Nearest generation first (1: Bob, Eve by surname; 2: Fay; unknown last: Cal).
+        #expect(r.unplaced.map(\.id) == ["b", "e", "f", "c"])
+        #expect(r.unplaced.first == T.Member(id: "b", name: "Bob", birthYear: 1900, generation: 1, line: .first,
+                                             recordedPlace: "Berlin, Germany"))
+        #expect(r.unplaced[1].recordedPlace == "   ", "carried verbatim; the tally only judged it blank")
+        #expect(r.unplaced[3].recordedPlace == nil)
+        // Members keep the recorded text too — the colonial tooltip.
+        #expect(r.counts["usa-massachusetts"]?.members.first?.recordedPlace == "Shrewsbury, Massachusetts Bay Colony")
+        #expect(r.counts["sct"]?.members.first?.recordedPlace == "Lothian, Scotland")
+        // The limit caps the list, never the totals.
+        let capped = try T.counts(people: people, visited: [0, 1, 2, 3, 4, 5], unplacedLimit: 2)
+        #expect(capped.unplaced.map(\.id) == ["b", "e"])
+        #expect(capped.totals.unresolved == 4)
+        #expect(try T.counts(people: people, visited: [0, 1, 2, 3, 4, 5], unplacedLimit: 0).unplaced.isEmpty)
+        // The mask and the ceiling apply to the unplaced as to everyone.
+        let masked = try T.counts(people: people, visited: [0, 1, 2, 3, 4, 5], mask: [true, false, true, true, true, true])
+        #expect(masked.unplaced.map(\.id) == ["e", "f", "c"])
+        #expect(masked.totals.unsupported == 1)
+        let early = try T.counts(people: people, visited: [0, 1, 2, 3, 4, 5], yearCeiling: 1700)
+        #expect(early.unplaced.map(\.id) == ["e"], "1650 only; Cal has no year")
+        // Without a recordedPlaces column nothing was recorded: all "no place".
+        let bare = try T.counts(people: Self.people, visited: Self.all)
+        #expect(bare.totals.unsupported == 0 && bare.unplaced.map(\.id) == ["I5"])
+        #expect(bare.unplaced.first?.recordedPlace == nil)
+        #expect(T.Result.empty.unplaced.isEmpty)
+    }
+
     @Test func memberLimitCapsTheListButNotTheCount() throws {
         let r = try T.counts(people: Self.people, visited: Self.all, memberLimit: 2)
         let york = try #require(r.counts["eng-yorkshire"])
@@ -120,6 +167,12 @@ struct FamilyMapTallyTests {
                                birthYears: [nil, nil], generations: [0, 0], lines: [.first, .first], unitKeys: ["eng", "eng"])
         #expect(throws: T.TallyError.columnLengthMismatch(column: "surnameKeys", count: 1, expected: 2)) {
             try T.counts(people: badKeys, visited: [0, 1])
+        }
+        let badPlaces = T.People(ids: ["a", "b"], names: ["A", "B"], surnames: ["A", "B"], birthYears: [nil, nil],
+                                 generations: [0, 0], lines: [.first, .first], unitKeys: ["eng", "eng"],
+                                 recordedPlaces: ["England"])
+        #expect(throws: T.TallyError.columnLengthMismatch(column: "recordedPlaces", count: 1, expected: 2)) {
+            try T.counts(people: badPlaces, visited: [0, 1])
         }
     }
 

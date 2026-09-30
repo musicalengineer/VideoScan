@@ -176,7 +176,22 @@ struct FamilyMapModelTests {
         #expect(m.computed.counts["eng"]?.members.map(\.name) == ["Eileen Latta"])
         #expect(m.computed.counts["eng-yorkshire"]?.byLine == [.first: 1])
         #expect(m.computed.counts["sct-fife"]?.byLine == [.second: 1])
-        #expect(FamilyMapModel.totalsLine(t) == "4 of 6 people placed; 1 country-only; 2 with no recorded place")
+        #expect(t.unsupported == 1, "Karl's Berlin was recorded; Donna recorded nothing")
+        #expect(FamilyMapModel.totalsLine(t) == "4 of 6 people placed; 1 country-only; 1 with no recorded place; 1 recorded but off the map")
+        // Not on the map, nearest generation first: Donna (a start, gen 0)
+        // before Karl (gen 2), each with what was recorded.
+        #expect(m.computed.unplaced.map(\.name) == ["Donna Hudson", "Karl Latta"])
+        #expect(m.computed.unplaced.map(\.recordedPlace) == [nil, "Berlin, Germany"])
+        #expect(m.computed.unplaced.map(\.generation) == [0, 2])
+        #expect(FamilyMapModel.notOnTheMapLine(t) == "1 with no recorded place · 1 recorded but off the map")
+        // Every placed person carries the recorded text (the colonial tooltip).
+        #expect(m.computed.counts["eng-yorkshire"]?.members.first?.recordedPlace == "Sheffield, Yorkshire, England")
+        #expect(m.computed.counts["usa-massachusetts"]?.members.first?.recordedPlace == "Boston, Massachusetts")
+        // Tree only (no family knowledge was injected): every place is the tree's.
+        func source(_ id: String) -> FamilyMapModel.PlaceSource? { r.ordinal(of: id).map { m.inputs.placeSources[$0] } }
+        #expect(source("@I1@") == .tree && source("@I3@") == .tree && source("@I4@") == .tree && source("@I7@") == .tree)
+        #expect(source("@I2@") == FamilyMapModel.PlaceSource.none && source("@I8@") == FamilyMapModel.PlaceSource.none)
+        #expect(m.inputs.familyPlacedIDs.isEmpty)
 
         // Shades: every unit with a count, opacity in the documented range,
         // tinted by its line; labels are the busiest first, by name on ties.
@@ -257,30 +272,65 @@ struct FamilyMapModelTests {
         #expect(m.selection.surnames == ["breen"])
     }
 
-    @Test func aClickSelectsTheUnitUnderItOrTheNearestCoastAndOnlyOneWithACount() async throws {
-        let (m, _, _, _) = try await mapModel(for: placedRoots)
+    /// A click is decided over the COUNTED units in four steps (codex #1782,
+    /// stage 2 F1): (a) the finest counted fine unit containing the point;
+    /// (b) else the nearest counted fine unit within tolerance; (c) else
+    /// the counted country containing it; (d) else no change. Synthetic
+    /// units and a synthetic tally (the pure `inputs`), no walk.
+    @Test func aClickIsDecidedOverTheCountedUnitsInFourSteps() async throws {
+        // Kent is a county nobody was born in; "United States" has no
+        // country-only person — both are uncounted outlines on the map.
+        let units = FamilyMapUnits(units: syntheticUnits.units + [
+            square("eng-kent", "Kent", .england, .county, lat: 51...51.5, lon: 0.5...1.5),
+        ])
+        let places: [String?] = ["England", "Sheffield, Yorkshire, England", "Fife, Scotland", "Boston, Massachusetts"]
+        let n = places.count
+        let surnames = ["Latta", "Breen", "Hudson", "Breen"]
+        let inputs = FamilyMapModel.inputs(
+            ids: (0..<n).map { "@P\($0)@" }, names: ["Eileen", "Richard", "Hudson", "Rick"], surnames: surnames,
+            surnameKeys: TreeWalkHighlight.surnameKeys(surnames), birthPlaces: places,
+            birthYears: [1931, 1929, nil, 1959], generations: [1, 1, 1, 0],
+            lines: [.first, .first, .second, .first], visited: Array(0..<n),
+            regions: [.england, .england, .scotland, .newEngland])
+        let m = FamilyMapModel(inputs: inputs, units: units, displayNames: ["Rick", "Donna"])
         m.apply(selection: .init(), yearCeiling: nil)
-        try await waitUntil { m.computed.totals.considered == 6 }
+        try await waitUntil { m.computed.totals.considered == n }
+        #expect(Set(m.computed.counts.keys) == ["eng", "eng-yorkshire", "sct-fife", "usa-massachusetts"])
 
-        m.select(coordinate: .init(latitude: 54, longitude: -1))           // inside Yorkshire (and England)
-        #expect(m.selectedKey == "eng-yorkshire", "the smaller box wins the overlap")
+        // (a) inside Yorkshire AND England, both counted: the county.
+        m.select(coordinate: .init(latitude: 54, longitude: -1))
+        #expect(m.selectedKey == "eng-yorkshire", "the finest counted unit containing the point")
         #expect(m.selectedUnit?.name == "Yorkshire")
         #expect(m.selectedCount?.people == 1)
 
-        m.select(coordinate: .init(latitude: 51, longitude: -1))           // England, outside Yorkshire
+        // (b) inside England, 0.05° south of Yorkshire's edge: the county
+        // beats the outline that contains the point (a coarse coastline).
+        m.select(coordinate: .init(latitude: 52.95, longitude: -1))
+        #expect(m.selectedKey == "eng-yorkshire", "the nearest counted fine unit within tolerance")
+        m.select(coordinate: .init(latitude: 56.55, longitude: -3))        // just off Fife's north coast, in no unit
+        #expect(m.selectedKey == "sct-fife")
+
+        // (c) inside EMPTY Kent: the counted country around it, not nothing.
+        m.select(coordinate: .init(latitude: 51.2, longitude: 1))
+        #expect(m.selectedKey == "eng", "an uncounted county never blocks the counted outline under it")
+        m.select(coordinate: .init(latitude: 51, longitude: -1))           // plain England, far from any county
         #expect(m.selectedKey == "eng")
 
-        m.select(coordinate: .init(latitude: 40, longitude: -100))         // the US outline: no count → nothing
-        #expect(m.selectedKey == nil)
-
-        m.select(coordinate: .init(latitude: 56.55, longitude: -3))        // just off Fife's north coast
-        #expect(m.selectedKey == "sct-fife", "the nearest-boundary fallback")
-
+        // (d) nothing counted under or near the point: the selection stays.
+        m.select(unitKey: "sct-fife")
+        m.select(coordinate: .init(latitude: 40, longitude: -100))         // the uncounted US outline
+        #expect(m.selectedKey == "sct-fife", "no change")
         m.select(coordinate: .init(latitude: 0, longitude: 0))             // open sea
-        #expect(m.selectedKey == nil)
+        #expect(m.selectedKey == "sct-fife", "no change")
+        m.select(unitKey: nil)
+        m.select(coordinate: .init(latitude: 0, longitude: 0))
+        #expect(m.selectedKey == nil, "still nothing")
 
+        // By key: only a counted unit can be selected.
         m.select(unitKey: "usa-massachusetts")
         #expect(m.selectedKey == "usa-massachusetts")
+        m.select(unitKey: "eng-kent")
+        #expect(m.selectedKey == nil, "no count → nothing to say")
         m.select(unitKey: "no-such-unit")
         #expect(m.selectedKey == nil)
 
@@ -308,11 +358,24 @@ struct FamilyMapModelTests {
         #expect(M.dominantLine([.first: 2, .second: 1, .both: 2]) == .both)
         #expect(M.dominantLine([.none: 4]) == .none)
         #expect(M.dominantLine([:]) == .none)
-        // The totals line, singular and plural.
+        // The totals line, singular and plural; a zero part is left out, and
+        // a recorded-but-off-the-map birth is never "no recorded place".
         #expect(M.totalsLine(considered: 1, resolved: 1, countryOnly: 0, unresolved: 0)
-                == "1 of 1 person placed; 0 country-only; 0 with no recorded place")
+                == "1 of 1 person placed")
         #expect(M.totalsLine(considered: 39_249, resolved: 24_500, countryOnly: 20_284, unresolved: 14_749)
                 == "24,500 of 39,249 people placed; 20,284 country-only; 14,749 with no recorded place")
+        #expect(M.totalsLine(considered: 39_249, resolved: 24_500, countryOnly: 20_284, unresolved: 14_749, unsupported: 825)
+                == "24,500 of 39,249 people placed; 20,284 country-only; 13,924 with no recorded place; 825 recorded but off the map")
+        #expect(M.totalsLine(considered: 1, resolved: 0, countryOnly: 0, unresolved: 1, unsupported: 1)
+                == "0 of 1 person placed; 1 recorded but off the map")
+        #expect(M.notOnTheMapLine(.init(considered: 3, resolved: 1, countryOnly: 0, unresolved: 2, unsupported: 2))
+                == "2 recorded but off the map")
+        #expect(M.notOnTheMapLine(.init(considered: 3, resolved: 3, countryOnly: 0, unresolved: 0)).isEmpty)
+        // The member note: what was recorded, and whose record it was.
+        #expect(M.placeNote(recordedPlace: "Massachusetts Bay Colony", fromFamilyNotes: false) == "recorded as Massachusetts Bay Colony")
+        #expect(M.placeNote(recordedPlace: "Cork, Ireland", fromFamilyNotes: true) == "from the family's notes: Cork, Ireland")
+        #expect(M.placeNote(recordedPlace: nil, fromFamilyNotes: false) == nil)
+        #expect(M.placeNote(recordedPlace: "  ", fromFamilyNotes: true) == nil)
         // The camera region: padded, never tighter than 0.6°, never wider than the world.
         let box = FamilyMap.BoundingBox(minLatitude: 50, maxLatitude: 58, minLongitude: -8, maxLongitude: 2)
         let r = FamilyTreeMapView.cameraRegion(for: box)
@@ -321,17 +384,166 @@ struct FamilyMapModelTests {
         #expect(tiny.latitudeDelta == 0.6 && tiny.longitudeDelta == 1.25)
         let world = FamilyTreeMapView.cameraRegion(for: .init(minLatitude: -80, maxLatitude: 80, minLongitude: -179, maxLongitude: 179))
         #expect(world.latitudeDelta == 170 && world.longitudeDelta == 340)
-        // The count line: a county names its country; a country outline says what is missing.
+        // The count line: a county names its country; a country outline says
+        // the county is UNRESOLVED — "Lothian, Scotland" was recorded, the
+        // map just cannot pin one county to it (codex #1782, stage 2 F2).
         let york = try #require(syntheticUnits.unit(forKey: "eng-yorkshire"))
         let england = try #require(syntheticUnits.unit(forKey: "eng"))
         let usa = try #require(syntheticUnits.unit(forKey: "usa"))
         #expect(FamilyTreeMapView.countLine(unit: york, count: 42) == "42 people born in Yorkshire, England")
         #expect(FamilyTreeMapView.countLine(unit: york, count: 1) == "1 person born in Yorkshire, England")
-        #expect(FamilyTreeMapView.countLine(unit: england, count: 7) == "7 people born in England, county not recorded")
-        #expect(FamilyTreeMapView.countLine(unit: usa, count: 7) == "7 people born in United States, state not recorded")
+        #expect(FamilyTreeMapView.countLine(unit: england, count: 7) == "7 people born in England, county unresolved")
+        #expect(FamilyTreeMapView.countLine(unit: usa, count: 7) == "7 people born in United States, state unresolved")
+        #expect(!FamilyTreeMapView.countLine(unit: england, count: 7).contains("not recorded"))
         // A synthetic unit set gets one stable fingerprint (the MKPolygon cache key).
         #expect(FamilyMapShapes.fingerprint(syntheticUnits) == FamilyMapShapes.fingerprint(syntheticUnits))
         #expect(FamilyMapShapes.fingerprint(syntheticUnits) == "5/eng/usa-massachusetts/20")
+    }
+
+    // MARK: The family's notes fill the tree's gaps (Rick 2026-09-29 23:05)
+
+    /// Mary Christina O'Connor (@I7@ in the real tree) has no birthplace in
+    /// the pulled tree, but her birth certificate is in the archive and
+    /// CyberBrain carries the birth event with a place. Here: a synthetic
+    /// tree with a blank grandmother and a synthetic CyberBrain (never the
+    /// real one) — the family's ACTIVE birth event places her; the tree
+    /// wins whenever it resolves; a retracted note, an anecdote and a
+    /// disputed claim never place anyone; and nothing is written.
+    @Test func theFamilysNotesFillATreeGapButNeverOverrideTheTree() async throws {
+        let gedcom = """
+        0 HEAD
+        1 _VS_MERGED Y
+        1 _VS_ROOT @I1@
+        0 @I1@ INDI
+        1 NAME Richard Harding /Breen/ Jr
+        1 SEX M
+        1 BIRT
+        2 PLAC Boston, Massachusetts
+        1 FAMC @F1@
+        0 @I3@ INDI
+        1 NAME Richard Harding /Breen/ Sr
+        1 SEX M
+        1 BIRT
+        2 PLAC Fife, Scotland
+        1 FAMC @F3@
+        1 FAMS @F1@
+        0 @I4@ INDI
+        1 NAME Eileen /Latta/
+        1 SEX F
+        1 BIRT
+        2 PLAC Berlin, Germany
+        1 FAMS @F1@
+        0 @I7@ INDI
+        1 NAME Mary Christina /O'Connor/
+        1 SEX F
+        1 BIRT
+        2 DATE 23 DEC 1904
+        1 FAMS @F3@
+        0 @I9@ INDI
+        1 NAME Patrick /O'Connor/
+        1 SEX M
+        1 FAMC @F4@
+        1 FAMS @F3@
+        0 @I10@ INDI
+        1 NAME Daniel /O'Connor/
+        1 SEX M
+        1 FAMS @F4@
+        0 @F1@ FAM
+        1 HUSB @I3@
+        1 WIFE @I4@
+        1 CHIL @I1@
+        0 @F3@ FAM
+        1 HUSB @I9@
+        1 WIFE @I7@
+        1 CHIL @I3@
+        0 @F4@ FAM
+        1 HUSB @I10@
+        1 CHIL @I9@
+        0 TRLR
+        """
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        func item(_ id: String, _ kind: CyberBrainItem.Kind, _ text: String, person: String, place: String?,
+                  confidence: CyberBrainItem.Confidence = .confirmed, status: CyberBrainItem.Status = .active,
+                  disputes: [String] = [], correction: CyberBrainCorrection? = nil) -> CyberBrainItem {
+            CyberBrainItem(id: id, kind: kind, text: text, subjectPersonIDs: [person], place: place,
+                           sourceIDs: ["source.bc"], confidence: confidence, privacy: .family, status: status,
+                           disputesItemIDs: disputes, createdAt: now, updatedAt: now, correction: correction)
+        }
+        let archive = CyberBrainArchive(archiveID: "test.map", displayName: "Test", people: [
+            // Mary: linked by GEDCOM id. A retracted (wrong) birth note, an
+            // anecdote that says "born", then the active birth event.
+            CyberBrainPerson(id: "person.mary", gedcomPersonID: "@I7@", canonicalName: "Mary Christina O'Connor",
+                             anecdotes: [item("anec.mary", .anecdote, "She was born a storyteller, they said in Boston.", person: "person.mary", place: "Boston, Massachusetts")],
+                             lifeEvents: [
+                                item("event.mary.wrong", .event, "Born in Dublin.", person: "person.mary", place: "Dublin, Ireland",
+                                     status: .retracted,
+                                     correction: .init(action: .removed, reason: .wrongInformation, at: now, by: "Rick")),
+                                item("event.mary.birth", .event, "Born 23 December 1904 at 34 Fullers Lane, Cork; birth certificate in the archive.",
+                                     person: "person.mary", place: "Cork, Ireland"),
+                             ]),
+            // Richard Sr: the tree says Fife; the family's note says Cork. The tree wins.
+            CyberBrainPerson(id: "person.richard", gedcomPersonID: "@I3@", canonicalName: "Richard Harding Breen Sr",
+                             lifeEvents: [item("event.richard.birth", .event, "Born in Cork, the family says.", person: "person.richard", place: "Cork, Ireland")]),
+            // Eileen: the tree's Berlin is off the map; the family's note places her.
+            CyberBrainPerson(id: "person.eileen", gedcomPersonID: "@I4@", canonicalName: "Eileen Latta",
+                             lifeEvents: [item("event.eileen.birth", .event, "Her birth was registered in Yorkshire.", person: "person.eileen", place: "Leeds, Yorkshire, England")]),
+            // Patrick: matched by NAME (no GEDCOM link); a disputed birthplace
+            // never places anyone (its counter-claim is a note with no place).
+            CyberBrainPerson(id: "person.patrick", canonicalName: "Patrick O'Connor",
+                             lifeEvents: [item("event.patrick.birth", .event, "Born in Kerry — or Cork; the family disagrees.",
+                                               person: "person.patrick", place: "Kerry, Ireland", confidence: .disputed,
+                                               disputes: ["note.patrick.counter"])],
+                             notes: [item("note.patrick.counter", .note, "Uncle Dan always said Cork, not Kerry.", person: "person.patrick", place: nil)]),
+            // Daniel: a life event with a place that is NOT a birth.
+            CyberBrainPerson(id: "person.daniel", gedcomPersonID: "@I10@", canonicalName: "Daniel O'Connor",
+                             lifeEvents: [item("event.daniel.died", .event, "Died at home in Skibbereen.", person: "person.daniel", place: "Skibbereen, Cork, Ireland")]),
+        ], sources: [CyberBrainSource(id: "source.bc", type: .officialRecord, title: "Birth certificate, Cork 1904")])
+        let index = try CyberBrainIndex(archive: archive)
+        let g = GedcomFamilyGraph(gedcomText: gedcom)
+        let knowledge = FamilyTreeNotesResolver(index: index, graph: g)
+        #expect(knowledge.cyberBrainPeople(forGedcomID: "@I9@").map(\.id) == ["person.patrick"], "Patrick is attached by name")
+
+        // The pure helper: which note places whom.
+        #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I7@", in: knowledge) == "Cork, Ireland", "the active birth event, not the retracted one or the anecdote")
+        #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I9@", in: knowledge) == nil, "disputed")
+        #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I10@", in: knowledge) == nil, "a death is not a birth")
+        #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I1@", in: knowledge) == nil, "no notes at all")
+        #expect(FamilyMapModel.isBirthEvent(item("x", .event, "Married Jane Osborne at Birthdale.", person: "p", place: nil)) == false, "whole words only")
+        #expect(FamilyMapModel.isBirthEvent(item("x", .event, "BIRTH registered late.", person: "p", place: nil)))
+
+        // Through the real pipeline with the knowledge injected.
+        let r = try TreeWalk.walk(g, options: .init(starts: ["@I1@"]))
+        let layout = await TreeWalkAnimator.prepare(r, size: CGSize(width: 600, height: 600))
+        let highlight = await TreeWalkHighlighter.prepare(result: r, graph: g, layout: layout)
+        let inputs = await FamilyMapModel.prepare(result: r, graph: g, highlight: highlight, familyKnowledge: knowledge)
+        func key(_ id: String) -> String? { r.ordinal(of: id).flatMap { inputs.people.unitKeys[$0] } }
+        func source(_ id: String) -> FamilyMapModel.PlaceSource? { r.ordinal(of: id).map { inputs.placeSources[$0] } }
+        func recorded(_ id: String) -> String? { r.ordinal(of: id).flatMap { inputs.people.recordedPlaces[$0] } }
+        #expect(key("@I7@") == "irl-cork" && source("@I7@") == .family && recorded("@I7@") == "Cork, Ireland", "Mary: the family's note fills the gap")
+        #expect(key("@I3@") == "sct-fife" && source("@I3@") == .tree && recorded("@I3@") == "Fife, Scotland", "the tree wins when it resolves")
+        #expect(key("@I4@") == "eng-yorkshire" && source("@I4@") == .family, "Berlin is off the map; the family's note places her")
+        #expect(recorded("@I4@") == "Leeds, Yorkshire, England", "the text that placed her")
+        #expect(key("@I1@") == "usa-massachusetts" && source("@I1@") == .tree)
+        #expect(key("@I9@") == nil && source("@I9@") == FamilyMapModel.PlaceSource.none && recorded("@I9@") == nil, "disputed: not placed, nothing recorded")
+        #expect(key("@I10@") == nil && recorded("@I10@") == nil)
+        #expect(inputs.familyPlacedIDs == ["@I7@", "@I4@"])
+
+        let m = FamilyMapModel(inputs: inputs, units: syntheticUnits, displayNames: ["Rick"])
+        #expect(m.isPlacedFromFamilyNotes("@I7@") && !m.isPlacedFromFamilyNotes("@I3@"))
+        m.apply(selection: .init(), yearCeiling: nil)
+        try await waitUntil { m.computed.totals.considered == r.visitedCount }
+        #expect(fields(m.computed.totals) == [6, 4, 0, 2])
+        #expect(m.computed.totals.unsupported == 0, "Patrick and Daniel recorded nothing the map could read")
+        #expect(m.computed.counts["irl-cork"]?.members.map(\.name) == ["Mary Christina O'Connor"])
+        #expect(m.computed.unplaced.map(\.name) == ["Patrick O'Connor", "Daniel O'Connor"])
+
+        // Without the knowledge the same walk leaves Mary and Eileen off the map.
+        let bare = await FamilyMapModel.prepare(result: r, graph: g, highlight: highlight, familyKnowledge: nil)
+        #expect(r.ordinal(of: "@I7@").flatMap { bare.people.unitKeys[$0] } == nil)
+        #expect(r.ordinal(of: "@I4@").flatMap { bare.people.recordedPlaces[$0] } == "Berlin, Germany", "recorded but off the map")
+        #expect(bare.familyPlacedIDs.isEmpty)
+        // Read-only: the archive the index was built from is untouched.
+        #expect(index.archive == archive)
     }
 
     // MARK: Scale — 40k people, every birthplace resolved once, < 300 ms
@@ -400,6 +612,13 @@ struct FamilyMapModelTests {
         // The only file that may touch the bundle is the cache, by resource name.
         let model = try SourceTree.appSource(named: "FamilyMapModel.swift")
         #expect(model.contains("Bundle.main.url(forResource: \"family-map-units\", withExtension: \"geojson\")"))
+        // The family's notes are READ; the map never writes CyberBrain.
+        for forbidden in ["CyberBrainWriter", "CyberBrainLoader", "FamilyTreeNotesStorage", "record(", "write("] {
+            #expect(!model.contains(forbidden), "FamilyMapModel.swift must not use \(forbidden)")
+        }
+        let sheet = try SourceTree.appSource(named: "FamilyTreeWalkSheet.swift")
+        #expect(sheet.contains("familyKnowledge: familyKnowledge"), "the sheet hands the map the tree's own resolver")
+        #expect(!sheet.contains("CyberBrainWriter"))
         let view = try SourceTree.appSource(named: "FamilyTreeMapView.swift")
         #expect(!view.contains("Bundle.main"), "the view is handed its units; it never loads them")
     }
