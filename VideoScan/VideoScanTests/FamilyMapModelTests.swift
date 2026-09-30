@@ -257,30 +257,65 @@ struct FamilyMapModelTests {
         #expect(m.selection.surnames == ["breen"])
     }
 
-    @Test func aClickSelectsTheUnitUnderItOrTheNearestCoastAndOnlyOneWithACount() async throws {
-        let (m, _, _, _) = try await mapModel(for: placedRoots)
+    /// A click is decided over the COUNTED units in four steps (codex #1782,
+    /// stage 2 F1): (a) the finest counted fine unit containing the point;
+    /// (b) else the nearest counted fine unit within tolerance; (c) else
+    /// the counted country containing it; (d) else no change. Synthetic
+    /// units and a synthetic tally (the pure `inputs`), no walk.
+    @Test func aClickIsDecidedOverTheCountedUnitsInFourSteps() async throws {
+        // Kent is a county nobody was born in; "United States" has no
+        // country-only person — both are uncounted outlines on the map.
+        let units = FamilyMapUnits(units: syntheticUnits.units + [
+            square("eng-kent", "Kent", .england, .county, lat: 51...51.5, lon: 0.5...1.5),
+        ])
+        let places: [String?] = ["England", "Sheffield, Yorkshire, England", "Fife, Scotland", "Boston, Massachusetts"]
+        let n = places.count
+        let surnames = ["Latta", "Breen", "Hudson", "Breen"]
+        let inputs = FamilyMapModel.inputs(
+            ids: (0..<n).map { "@P\($0)@" }, names: ["Eileen", "Richard", "Hudson", "Rick"], surnames: surnames,
+            surnameKeys: TreeWalkHighlight.surnameKeys(surnames), birthPlaces: places,
+            birthYears: [1931, 1929, nil, 1959], generations: [1, 1, 1, 0],
+            lines: [.first, .first, .second, .first], visited: Array(0..<n),
+            regions: [.england, .england, .scotland, .newEngland])
+        let m = FamilyMapModel(inputs: inputs, units: units, displayNames: ["Rick", "Donna"])
         m.apply(selection: .init(), yearCeiling: nil)
-        try await waitUntil { m.computed.totals.considered == 6 }
+        try await waitUntil { m.computed.totals.considered == n }
+        #expect(Set(m.computed.counts.keys) == ["eng", "eng-yorkshire", "sct-fife", "usa-massachusetts"])
 
-        m.select(coordinate: .init(latitude: 54, longitude: -1))           // inside Yorkshire (and England)
-        #expect(m.selectedKey == "eng-yorkshire", "the smaller box wins the overlap")
+        // (a) inside Yorkshire AND England, both counted: the county.
+        m.select(coordinate: .init(latitude: 54, longitude: -1))
+        #expect(m.selectedKey == "eng-yorkshire", "the finest counted unit containing the point")
         #expect(m.selectedUnit?.name == "Yorkshire")
         #expect(m.selectedCount?.people == 1)
 
-        m.select(coordinate: .init(latitude: 51, longitude: -1))           // England, outside Yorkshire
+        // (b) inside England, 0.05° south of Yorkshire's edge: the county
+        // beats the outline that contains the point (a coarse coastline).
+        m.select(coordinate: .init(latitude: 52.95, longitude: -1))
+        #expect(m.selectedKey == "eng-yorkshire", "the nearest counted fine unit within tolerance")
+        m.select(coordinate: .init(latitude: 56.55, longitude: -3))        // just off Fife's north coast, in no unit
+        #expect(m.selectedKey == "sct-fife")
+
+        // (c) inside EMPTY Kent: the counted country around it, not nothing.
+        m.select(coordinate: .init(latitude: 51.2, longitude: 1))
+        #expect(m.selectedKey == "eng", "an uncounted county never blocks the counted outline under it")
+        m.select(coordinate: .init(latitude: 51, longitude: -1))           // plain England, far from any county
         #expect(m.selectedKey == "eng")
 
-        m.select(coordinate: .init(latitude: 40, longitude: -100))         // the US outline: no count → nothing
-        #expect(m.selectedKey == nil)
-
-        m.select(coordinate: .init(latitude: 56.55, longitude: -3))        // just off Fife's north coast
-        #expect(m.selectedKey == "sct-fife", "the nearest-boundary fallback")
-
+        // (d) nothing counted under or near the point: the selection stays.
+        m.select(unitKey: "sct-fife")
+        m.select(coordinate: .init(latitude: 40, longitude: -100))         // the uncounted US outline
+        #expect(m.selectedKey == "sct-fife", "no change")
         m.select(coordinate: .init(latitude: 0, longitude: 0))             // open sea
-        #expect(m.selectedKey == nil)
+        #expect(m.selectedKey == "sct-fife", "no change")
+        m.select(unitKey: nil)
+        m.select(coordinate: .init(latitude: 0, longitude: 0))
+        #expect(m.selectedKey == nil, "still nothing")
 
+        // By key: only a counted unit can be selected.
         m.select(unitKey: "usa-massachusetts")
         #expect(m.selectedKey == "usa-massachusetts")
+        m.select(unitKey: "eng-kent")
+        #expect(m.selectedKey == nil, "no count → nothing to say")
         m.select(unitKey: "no-such-unit")
         #expect(m.selectedKey == nil)
 

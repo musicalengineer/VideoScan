@@ -329,9 +329,12 @@ public struct FamilyMapUnits: Sendable {
         var ring: [FamilyMap.Coordinate] = []
         ring.reserveCapacity(positions.count)
         for any in positions {
-            // [lon, lat] — a third element (elevation) is ignored.
+            // [lon, lat] — a third element (elevation) is ignored. A JSON
+            // boolean arrives as an NSNumber too (kCFBooleanTrue reads as
+            // 1.0); it is refused, never a coordinate (codex #1782, stage 1
+            // F3). Real zeros (Greenwich, the equator) stay valid.
             guard let pair = any as? [Any], pair.count >= 2,
-                  let lon = (pair[0] as? NSNumber)?.doubleValue, let lat = (pair[1] as? NSNumber)?.doubleValue else {
+                  let lon = Self.number(pair[0]), let lat = Self.number(pair[1]) else {
                 throw DecodeError.badGeometry(feature: i, reason: "position is not [lon, lat]")
             }
             guard lat >= -90, lat <= 90, lon >= -180, lon <= 180 else {
@@ -343,13 +346,25 @@ public struct FamilyMapUnits: Sendable {
         return ring
     }
 
+    /// A JSON number as Double; nil for a boolean (JSONSerialization hands
+    /// both back as NSNumber — `as? Bool` would also accept a genuine 0 or
+    /// 1, so the CoreFoundation type is checked instead) or anything else.
+    static func number(_ value: Any) -> Double? {
+        guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
+        return n.doubleValue
+    }
+
     // MARK: - Lookup
 
     /// The unit under a point, or nil in the sea. Ties (a point on a
     /// shared border, or inside an enclave) go to the smaller bounding
-    /// box, then the smaller key. O(units) bbox tests + ray casts over the
-    /// few candidates.
-    public func unit(containing p: FamilyMap.Coordinate) -> Unit? {
+    /// box, then the smaller key — so with a county and its country both
+    /// in play the county wins. O(units) bbox tests + ray casts over the
+    /// few candidates. `among` restricts the answer to those keys (nil =
+    /// every unit): the map asks over the units that have a count, so a
+    /// click inside an EMPTY county can fall through to the counted
+    /// country around it (codex #1782 (3)).
+    public func unit(containing p: FamilyMap.Coordinate, among keys: Set<String>? = nil) -> Unit? {
         // Raw pointers, latitude columns first: at -Onone a buffer
         // subscript is a bounds-checked call, and most units fail on
         // latitude after two loads.
@@ -373,7 +388,7 @@ public struct FamilyMapUnits: Sendable {
             }
         }
         var best: Int?
-        for i in candidates where units[i].contains(p) {
+        for i in candidates where (keys == nil || keys!.contains(units[i].key)) && units[i].contains(p) {
             guard let current = best else { best = i; continue }
             let a = units[i].bbox.area, b = units[current].bbox.area
             if a < b || (a == b && units[i].key < units[current].key) { best = i }
@@ -384,14 +399,16 @@ public struct FamilyMapUnits: Sendable {
     /// The unit whose boundary is nearest a point that is in no unit — a
     /// click on a coarse coastline. Only for `unit(containing:) == nil`.
     /// Nil beyond `withinDegrees` (0.15° ≈ 10–17 km). Ties go to the key.
-    public func unit(nearest p: FamilyMap.Coordinate, withinDegrees tolerance: Double = 0.15) -> Unit? {
+    /// `among` restricts the candidates as in `unit(containing:among:)`.
+    public func unit(nearest p: FamilyMap.Coordinate, withinDegrees tolerance: Double = 0.15,
+                     among keys: Set<String>? = nil) -> Unit? {
         // A county / state / province first; a COUNTRY outline only when no
         // finer unit is within reach. The outlines come from a coarser source
         // than the counties, so off a coast the country's edge is often the
         // nearer one and would have won every coastal click (Halifax, 2026-09-29).
         func best(where keep: (Unit) -> Bool) -> Unit? {
             var best: (index: Int, distance: Double)?
-            for i in units.indices where keep(units[i]) {
+            for i in units.indices where (keys == nil || keys!.contains(units[i].key)) && keep(units[i]) {
                 guard let d = units[i].boundaryDistance(to: p, within: tolerance) else { continue }
                 if let current = best, !(d < current.distance || (d == current.distance && units[i].key < units[current.index].key)) { continue }
                 best = (i, d)

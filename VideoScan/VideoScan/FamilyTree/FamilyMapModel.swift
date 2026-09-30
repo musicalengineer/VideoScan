@@ -287,12 +287,27 @@ final class FamilyMapModel: ObservableObject {
 
     // MARK: Selecting a unit
 
-    /// A click on the map: the unit under the point, else the nearest
-    /// boundary (a coarse coastline), else nothing. Only a unit with a
-    /// count can be selected — an empty county has nothing to say.
+    /// A click on the map, decided over the COUNTED units only (an empty
+    /// county has nothing to say, so it never blocks what is under or
+    /// beside it — codex #1782, stage 2 F1):
+    ///   (a) the finest counted county / state / province containing the
+    ///       point;
+    ///   (b) else the nearest counted fine unit within the coastal tolerance
+    ///       (Natural Earth's outlines are coarser than the counties, so a
+    ///       waterfront click is often "inside the country, outside every
+    ///       county" — Halifax; the probe (45.774, -63.102));
+    ///   (c) else the counted country outline containing the point;
+    ///   (d) else the selection is left as it was.
     func select(coordinate: FamilyMap.Coordinate) {
-        let hit = units.unit(containing: coordinate) ?? units.unit(nearest: coordinate)
-        select(unitKey: hit?.key)
+        var fine = Set<String>(), countries = Set<String>()
+        for key in computed.counts.keys {
+            if FamilyMapKey.isCountryKey(key) { countries.insert(key) } else { fine.insert(key) }
+        }
+        let hit = units.unit(containing: coordinate, among: fine)
+            ?? units.unit(nearest: coordinate, among: fine)
+            ?? units.unit(containing: coordinate, among: countries)
+        guard let hit else { return }
+        select(unitKey: hit.key)
     }
 
     func select(unitKey: String?) {
