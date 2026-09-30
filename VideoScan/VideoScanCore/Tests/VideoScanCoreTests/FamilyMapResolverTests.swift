@@ -259,6 +259,55 @@ struct FamilyMapResolverTests {
         #expect(R.resolve("Boston, MA, England")?.unitKey == "eng", "postal codes need a US search set")
     }
 
+    /// Codex #1782 (1): "County Middlesex" / "Suffolk County" / "Co. Essex"
+    /// alone resolved while the bare name honestly refused. Ambiguity must
+    /// survive decoration: the County / Co. wrapping is stripped BEFORE the
+    /// ambiguity check, so a decorated name behaves exactly like the bare
+    /// one — nil alone, the unit with a country to its right.
+    @Test func decorationDoesNotDefeatTheAmbiguityRule() {
+        for place in ["County Middlesex", "Middlesex County", "Suffolk County", "Co. Essex", "Co Essex",
+                      "Windsor, Essex County", "County Durham", "Perth County", "Co. Antrim", "Antrim County",
+                      "Salem, Essex County"] {
+            #expect(R.resolve(place) == nil, "\(place) → \(R.resolve(place)?.unitKey ?? "nil")")
+        }
+        #expect(R.resolve("County Middlesex, England")?.unitKey == "eng-middlesex")
+        #expect(R.resolve("Suffolk County, England")?.unitKey == "eng-suffolk")
+        #expect(R.resolve("Co. Essex, England")?.unitKey == "eng-essex")
+        #expect(R.resolve("County Durham, England")?.unitKey == "eng-durham")
+        #expect(R.resolve("Windsor, Essex County, Ontario, Canada")?.unitKey == "can-ontario")
+        #expect(R.resolve("Salem, Essex County, Massachusetts")?.unitKey == "usa-massachusetts")
+        #expect(R.resolve("Co. Antrim, Ireland")?.unitKey == "nir-antrim")
+        #expect(R.resolve("Perth County, Scotland")?.unitKey == "sct-perthshire")
+        // "-shire" is a spelling, never a decoration: the shire form of an
+        // ambiguous bare name is unmistakable on its own.
+        #expect(R.resolve("Somersetshire")?.unitKey == "eng-somerset")
+        #expect(R.resolve("Yorkshire")?.unitKey == "eng-yorkshire")
+        #expect(R.undecorated("county middlesex") == "middlesex")
+        #expect(R.undecorated("middlesex county") == "middlesex")
+        #expect(R.undecorated("co essex") == "essex")
+        #expect(R.undecorated("somersetshire") == "somersetshire")
+        #expect(R.undecorated("county") == "county", "the word alone is not a decoration of nothing")
+    }
+
+    /// Codex #1782 (2): a foreign token to the LEFT of a supported country
+    /// used to stop the scan ("France, England" → nil). The contract: the
+    /// rightmost recognised supported country wins; foreign tokens to its
+    /// left cannot be units of it and are skipped; the scan goes on
+    /// leftward for a unit of the established country.
+    @Test func theRightmostSupportedCountryWinsOverAForeignTokenToItsLeft() throws {
+        let france = try #require(R.resolve("France, England"))
+        #expect(france.unitKey == "eng" && france.isCountryOnly)
+        #expect(R.resolve("Quebec, France, Canada")?.unitKey == "can-quebec")
+        #expect(R.resolve("Sheffield, Yorkshire, Germany, England")?.unitKey == "eng-yorkshire")
+        #expect(R.resolve("Boston, Massachusetts, Prussia, United States")?.unitKey == "usa-massachusetts")
+        // With no supported country to its right a foreign country still
+        // ends the search: "Perth, WA, Australia" is never Washington.
+        #expect(R.resolve("Perth, WA, Australia") == nil)
+        #expect(R.resolve("Yorkshire, Germany") == nil)
+        #expect(R.resolve("England, Germany") == nil, "the rightmost recognised country is Germany")
+        #expect(R.resolve("France, United Kingdom") == nil, "a coarse name is not a country")
+    }
+
     @Test func hitCarriesTheDecidingComponentAndTheCallerKeepsTheRaw() throws {
         let raw = "Shrewsbury, Worcester, Massachusetts Bay Colony, British Colonial America"
         let hit = try #require(R.resolve(raw))

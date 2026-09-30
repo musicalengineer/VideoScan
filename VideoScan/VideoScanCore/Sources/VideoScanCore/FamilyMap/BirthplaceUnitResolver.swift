@@ -11,7 +11,10 @@
 //      one ("United Kingdom", "Great Britain") only narrows it to the
 //      four home nations. A recognised country OUTSIDE the map (Australia,
 //      Germany, "Russia") ends the search with nil — "Perth, WA, Australia"
-//      must never land on Washington State.
+//      must never land on Washington State. The RIGHTMOST recognised
+//      supported country wins: a foreign token to its LEFT cannot be a
+//      unit of it and is skipped ("France, England" → England, country
+//      only; "Quebec, France, Canada" → Quebec). Codex #1782 (2).
 //   2. Keep scanning left for the finest recognised UNIT of that country.
 //      The first unit hit wins: units are written coarse-to-fine going
 //      left, so the rightmost unit is the county / state, and the riding /
@@ -24,7 +27,11 @@
 // "Massachusetts" — but NOT "Middlesex", "Suffolk", "Essex", "Perth" or
 // "Antrim", which are also counties or towns of New England, Ontario or
 // Michigan. Those need the country to their right; without it the answer
-// is honestly nil rather than a guess.
+// is honestly nil rather than a guess. Decoration does not change that:
+// "County Middlesex", "Suffolk County" and "Co. Essex" are checked with
+// the wrapping stripped (`undecorated`), so they refuse exactly as the
+// bare name does (codex #1782 (1)). "-shire" is a spelling, not a
+// decoration — "Somersetshire" stands alone.
 //
 // A COMPONENT ("Lowell Mass. U.S.A.") is tried whole, then as phrases of
 // up to four whitespace tokens from the right — the same idea as
@@ -270,7 +277,8 @@ public enum BirthplaceUnitResolver {
             case .unit(let unitCountry, _, let unitKey):
                 if let searches {
                     guard searches.contains(unitCountry) else { return nil }
-                } else if ambiguousWithoutCountry.contains(key) {
+                } else if ambiguousWithoutCountry.contains(BirthplaceUnitResolver.undecorated(key)) {
+                    // "County Middlesex" is as ambiguous as "Middlesex".
                     return nil
                 }
                 return Hit(unitKey: unitKey, country: unitCountry, kind: unitCountry.unitKind, matchedComponent: text(range))
@@ -285,7 +293,11 @@ public enum BirthplaceUnitResolver {
                 if searches == nil { searches = set }
                 return nil
             case .foreign:
-                stopped = true
+                // A foreign country ends the search ONLY while no supported
+                // country stands to its right. Once one is established the
+                // token cannot be a unit of it and is skipped: "Quebec,
+                // France, Canada" is still Quebec (codex #1782 (2)).
+                if country == nil { stopped = true }
                 return nil
             }
         }
@@ -324,6 +336,17 @@ public enum BirthplaceUnitResolver {
     }
 
     static let homeNations: Set<FamilyMap.Country> = [.england, .scotland, .wales, .northernIreland]
+
+    /// A normalised key with its "County " / "Co " prefix or " County"
+    /// suffix removed — what the ambiguity rule looks at, so "County
+    /// Middlesex" is as ambiguous as "Middlesex" (codex #1782 (1)). The
+    /// "-shire" suffix is NOT a decoration: "Somersetshire" names one place.
+    static func undecorated(_ key: String) -> String {
+        if key.hasPrefix("county "), key.utf8.count > 7 { return String(key.dropFirst(7)) }
+        if key.hasPrefix("co "), key.utf8.count > 3 { return String(key.dropFirst(3)) }
+        if key.hasSuffix(" county"), key.utf8.count > 7 { return String(key.dropLast(7)) }
+        return key
+    }
 
     /// Canadian two-letter codes. With the country known any case goes
     /// ("nb"); bare, the code must be upper-case or Capitalised ("Nb" is in
