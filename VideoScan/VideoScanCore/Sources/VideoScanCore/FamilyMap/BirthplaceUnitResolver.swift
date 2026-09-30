@@ -109,46 +109,19 @@ public enum BirthplaceUnitResolver {
         // (C++: `const char*` + offsets over the original buffer.)
         var text = raw
         if !text.isContiguousUTF8 { text.makeContiguousUTF8() }
-        return text.utf8.withContiguousStorageIfAvailable { bytes -> Hit? in
-            guard let base = bytes.baseAddress else { return nil }
+        let result: Hit?? = text.utf8.withContiguousStorageIfAvailable { bytes -> Hit? in
             var scan = Scan(bytes: bytes)
             var hasComma = false
             var i = 0
-            while i < bytes.count { if base[i] == 0x2C { hasComma = true; break }; i += 1 }
-            if hasComma {
-                // Right to left, one comma part at a time.
-                var end = bytes.count
-                i = bytes.count
-                while i > 0 {
-                    i -= 1
-                    if base[i] == 0x2C {
-                        if let hit = scan.consume(range: (i + 1)..<end) { return hit }
-                        if scan.stopped { return nil }
-                        end = i
-                    }
-                }
-                if let hit = scan.consume(range: 0..<end) { return hit }
-                if scan.stopped { return nil }
-            } else {
-                // The classifier's period rule ("Quebec. Canada"): usually
-                // one part; otherwise locate each part's bytes in order.
-                let parts = BirthplaceClassifier.periodComponents(of: raw)
-                var ranges: [Range<Int>] = []
-                if parts.count <= 1 {
-                    ranges = [0..<bytes.count]
-                } else {
-                    var from = 0
-                    for part in parts {
-                        if let r = find(Array(part.utf8), in: bytes, from: from) { ranges.append(r); from = r.upperBound }
-                    }
-                }
-                for r in ranges.reversed() {
-                    if let hit = scan.consume(range: r) { return hit }
-                    if scan.stopped { return nil }
-                }
+            while i < bytes.count { if bytes[i] == 0x2C { hasComma = true; break }; i += 1 }
+            let outcome = hasComma ? scan.scanCommaParts() : scan.scanPeriodParts(of: raw)
+            switch outcome {
+            case .hit(let hit): return hit
+            case .stopped: return nil
+            case .exhausted: return scan.countryOnlyHit
             }
-            return scan.countryOnlyHit
-        } ?? nil
+        }
+        return result.flatMap { $0 }
     }
 
     /// Every key the resolver can produce — the border file must carry
@@ -195,8 +168,51 @@ public enum BirthplaceUnitResolver {
             return Hit(unitKey: country.key, country: country, kind: .country, matchedComponent: text(countryRange))
         }
 
+        /// The recorded text of a byte range. These are a String's own
+        /// UTF-8 bytes cut at ASCII commas and spaces, so the decode is
+        /// lossless (the lint rule is aimed at Data of unknown encoding).
         func text(_ r: Range<Int>) -> String {
+            // swiftlint:disable:next optional_data_string_conversion
             String(decoding: UnsafeBufferPointer(rebasing: bytes[r]), as: UTF8.self)
+        }
+
+        enum Outcome { case hit(Hit), stopped, exhausted }
+
+        /// Right to left, one comma part at a time.
+        mutating func scanCommaParts() -> Outcome {
+            var end = bytes.count
+            var i = bytes.count
+            while i > 0 {
+                i -= 1
+                if bytes[i] == 0x2C {
+                    if let hit = consume(range: (i + 1)..<end) { return .hit(hit) }
+                    if stopped { return .stopped }
+                    end = i
+                }
+            }
+            if let hit = consume(range: 0..<end) { return .hit(hit) }
+            return stopped ? .stopped : .exhausted
+        }
+
+        /// No comma: the classifier's period rule ("Quebec. Canada") —
+        /// usually one part; otherwise each part's bytes are located in
+        /// order and scanned right to left.
+        mutating func scanPeriodParts(of raw: String) -> Outcome {
+            let parts = BirthplaceClassifier.periodComponents(of: raw)
+            var ranges: [Range<Int>] = []
+            if parts.count <= 1 {
+                ranges = [0..<bytes.count]
+            } else {
+                var from = 0
+                for part in parts {
+                    if let r = find(Array(part.utf8), in: bytes, from: from) { ranges.append(r); from = r.upperBound }
+                }
+            }
+            for r in ranges.reversed() {
+                if let hit = consume(range: r) { return .hit(hit) }
+                if stopped { return .stopped }
+            }
+            return .exhausted
         }
 
         /// One comma component, whole first, then phrases of up to four
@@ -291,7 +307,7 @@ public enum BirthplaceUnitResolver {
             // can be one, so the Character walk is skipped otherwise.
             if range.count <= 6 {
                 let recorded = text(range)
-                let usAllowed = searches == nil || searches!.contains(.unitedStates)
+                let usAllowed = searches?.contains(.unitedStates) ?? true
                 if usAllowed, BirthplaceClassifier.usAbbreviation(recorded) {
                     let letters = recorded.filter { $0.isLetter }.uppercased()
                     if let name = USStateCodes.names[letters] {

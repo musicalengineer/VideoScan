@@ -236,7 +236,7 @@ struct FamilyMapUnitsTests {
     /// inside, boundary and outside — on a dense grid, on every vertex and
     /// on every edge midpoint of a 300-vertex ring, a concave U and a
     /// square with a hole.
-    @Test func bandIndexedRelationMatchesTheReferenceScan() {
+    @Test func bandIndexedRelationMatchesTheReferenceScan() throws {
         var rings: [[C]] = []
         rings.append((0..<300).map { k in
             let a = Double(k) / 300 * 2 * .pi
@@ -258,7 +258,7 @@ struct FamilyMapUnitsTests {
                 let j = i == 0 ? ring.count - 1 : i - 1
                 points.append(C(latitude: (ring[i].latitude + ring[j].latitude) / 2, longitude: (ring[i].longitude + ring[j].longitude) / 2))
             }
-            let box = FamilyMap.BoundingBox(around: ring)!
+            let box = try #require(FamilyMap.BoundingBox(around: ring))
             for a in 0...40 {
                 for b in 0...40 {
                     points.append(C(latitude: box.minLatitude - 0.5 + (box.maxLatitude - box.minLatitude + 1) * Double(a) / 40,

@@ -280,8 +280,8 @@ struct FamilyMapResolverTests {
         #expect(R.normalizedKey("Queen's County") == "queen's county")
         #expect(R.normalizedKey("Québec") == "quebec")
         #expect(R.normalizedKey("Ynys Môn") == "ynys mon")
-        #expect(R.normalizedKey("") == "")
-        #expect(R.normalizedKey("...") == "")
+        #expect(R.normalizedKey("").isEmpty)
+        #expect(R.normalizedKey("...").isEmpty)
         // The ASCII fast path and the Foundation path agree (on component
         // text — commas were split off before either runs).
         for s in ["Massachusetts Bay Colony", "Co. Antrim", "N.Y.", "  East   Lothian ", "St. Louis Mo.", "(Wales)"] {
