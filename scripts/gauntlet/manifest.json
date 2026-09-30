@@ -1521,6 +1521,23 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/TreeWalkHighlightTests.swift",
+      "stage": "unit",
+      "suites": [
+        "TreeWalkHighlightTests"
+      ],
+      "tests": [
+        "facetsCountOnlyVisitedPeopleAndFoldSpellings",
+        "labelIsTheMostCommonSpelling",
+        "orWithinAGroupAndAcrossGroups",
+        "outOfRangeOrdinalsNeverMatchOrCrash",
+        "scaleHundredThousandPeopleWellUnderBudget",
+        "surnameLimitCapsTheListButNotTheDistinctCount"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/TreeWalkRealTreeReport.swift",
       "stage": "unit",
       "suites": [
@@ -9048,7 +9065,9 @@
         "everyNodeSettlesIntoItsLineColourWhenTheReplayEnds",
         "freshDecorationsMeanNoWalkAndNoLine",
         "staleDecorationsGetOneSilentWalkWithTheReasonLogged",
+        "surnameAndPlaceChecksLightTheMatches",
         "theFanFitsItsCanvasAtEveryDepth",
+        "theFanIsLaidOutAtTheSizeItIsShown",
         "theFanPutsRickLeftAndDonnaRight",
         "theModelHasNoWalkCenterInTheTestHost",
         "thePaceNoteSeparatesTheAnalysisFromTheReplay",
@@ -11007,6 +11026,20 @@
         "testResidencyBudgetIsBounded",
         "testThreeChunksFinishOnTheLastCompletion"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieNeuralWorkerEnvironmentTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HallieNeuralWorkerEnvironmentTests"
+      ],
+      "tests": [
+        "aMissingTmpdirGetsTheSystemOne",
+        "everyEngineLaunchUsesTheFilteredEnvironment",
+        "onlyTheAllowlistReachesTheEngine"
+      ],
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
     },
     {
       "kind": "xcode",
@@ -21000,6 +21033,23 @@
       ]
     },
     {
+      "kind": "python",
+      "path": "tests/test_hallie_voice_signature.py",
+      "stage": "unit",
+      "suites": [
+        "test_hallie_voice_signature.py"
+      ],
+      "tests": [
+        "test_a_slower_render_is_caught",
+        "test_another_kokoro_voice_is_caught",
+        "test_apple_speech_is_not_hallie",
+        "test_live_hallie_still_sounds_like_the_reference",
+        "test_signature_of_the_stored_reference_is_stable",
+        "test_the_engine_dies_under_metal_debug_so_the_app_must_strip_it"
+      ],
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit"
+    },
+    {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_label_queue_to_manifest.py",
@@ -21110,6 +21160,25 @@
         "test_speech_implies_live_and_is_forwarded_to_both_lanes",
         "test_unknown_yellow_is_not_reported_as_zero"
       ]
+    },
+    {
+      "kind": "python",
+      "path": "tests/test_nightly_hallie_voice.py",
+      "stage": "unit",
+      "suites": [
+        "test_nightly_hallie_voice.py"
+      ],
+      "tests": [
+        "test_a_rotated_log_is_read_from_the_start",
+        "test_fallbacks_are_counted_only_since_the_last_run",
+        "test_missing_engine_is_not_run_never_green",
+        "test_no_log_and_no_state_is_zero_not_an_error",
+        "test_the_lane_never_raises_and_only_writes_voice_keys",
+        "test_the_python_allowlist_is_the_swift_allowlist",
+        "test_verdict_a_good_voice_with_app_fallbacks_is_not_ok",
+        "test_worker_env_mirrors_the_app_allowlist"
+      ],
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit"
     },
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
@@ -22004,6 +22073,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/TreeStatisticsTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/TreeWalkHighlightTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -23579,6 +23652,10 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "tests/test_hallie_voice_signature.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "tests/test_label_queue_to_manifest.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
@@ -23588,6 +23665,10 @@
         },
         {
           "name": "tests/test_migrate_people_folders.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_nightly_hallie_voice.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -24024,6 +24105,10 @@
         {
           "name": "VideoScan/VideoScanTests/ExternalMediaRegressionTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/HallieNeuralWorkerEnvironmentTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/LoaderRecoveryRegressionTests.swift",

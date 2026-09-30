@@ -96,6 +96,17 @@ private func twoStartPedigree(depth: Int, lopsided: Bool = false) -> GedcomFamil
     return GedcomFamilyGraph(gedcomText: (out + fams + ["0 TRLR"]).joined(separator: "\n"))
 }
 
+/// Poll a main-actor condition (the highlighter publishes after an off-main
+/// hop); fails after ~2 s rather than hanging.
+@MainActor
+private func waitUntil(_ condition: () -> Bool) async throws {
+    for _ in 0..<200 {
+        if condition() { return }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    Issue.record("condition not met within 2 s")
+}
+
 @MainActor
 private func scratchCenter() -> (FamilyTreeWalkCenter, URL) {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ftwalk-\(UUID().uuidString)")
@@ -204,7 +215,7 @@ struct FamilyTreeWalkAppTests {
         let laptop13 = CGSize(width: 1_280, height: 740)          // full-screen window, 1280×800 display
         let s = FamilyTreeWalkSheet.watchingSize(host: laptop13)
         #expect(s.width <= laptop13.width && s.height <= laptop13.height)
-        #expect(s == CGSize(width: 1_100, height: 692))
+        #expect(s == CGSize(width: 1_232, height: 692))
         let small = CGSize(width: 800, height: 600)
         #expect(FamilyTreeWalkSheet.watchingSize(host: small) == CGSize(width: 752, height: 552))
         let studio = CGSize(width: 3_000, height: 1_600)
@@ -215,6 +226,45 @@ struct FamilyTreeWalkAppTests {
         // The minimum still holds the side panel and a usable fan.
         let inner = FamilyTreeWalkSheet.minimumWatchingSize.width - 40
         #expect(inner - TreeWalkAnimationView.sidePanelWidth - 16 >= TreeWalkAnimationView.minimumFan)
+    }
+
+    /// Donna 2026-09-29 ("a bigger window"): the fan is laid out at the size
+    /// it is shown, never below the old 600, so a big display gets crisp dots.
+    @Test func theFanIsLaidOutAtTheSizeItIsShown() {
+        let big = FamilyTreeWalkSheet.fanSide(for: FamilyTreeWalkSheet.maximumWatchingSize)
+        #expect(big == 1_070, "1,200 tall less title and buttons")
+        #expect(FamilyTreeWalkSheet.fanSide(for: FamilyTreeWalkSheet.minimumWatchingSize) == 600)
+        let laptop = FamilyTreeWalkSheet.fanSide(for: CGSize(width: 1_232, height: 692))
+        #expect(laptop == 600, "a laptop keeps the old canvas; the view scales it")
+    }
+
+    /// Donna 2026-09-29: check a surname or a place and the matches light
+    /// up; the checklists count only the people on the fan.
+    @Test func surnameAndPlaceChecksLightTheMatches() async throws {
+        let g = twoStartPedigree(depth: 3)
+        let r = try TreeWalk.walk(g, options: .init(starts: ["@R0@", "@D0@"], maxGenerations: 3))
+        let layout = await TreeWalkAnimator.prepare(r, size: CGSize(width: 600, height: 600))
+        let inputs = await TreeWalkHighlighter.prepare(result: r, graph: g, layout: layout)
+        #expect(inputs.facets.surnames.map(\.label).sorted() == ["D", "R"])
+        #expect(inputs.facets.surnames.map(\.count) == [15, 15])
+        let h = TreeWalkHighlighter(inputs: inputs)
+        #expect(h.lit.isEmpty && h.matchCount == 0, "nothing checked, nothing lit")
+
+        h.setSurname("d", on: true)
+        try await waitUntil { h.matchCount == 15 }
+        #expect(h.lit.count == 15 && h.matches.count == 15)
+        #expect(h.lit.allSatisfy { g.people[r.ids[Int($0.ordinal)]]?.surname == "D" }, "only Donna's side")
+
+        // AND across groups: no one in the fixture has a recorded birthplace.
+        h.setRegion(BirthplaceClassifier.BirthRegion.england.rawValue, on: true)
+        try await waitUntil { h.matchCount == 0 }
+        h.setRegion(BirthplaceClassifier.BirthRegion.england.rawValue, on: false)
+        h.setRegion(BirthplaceClassifier.BirthRegion.unknown.rawValue, on: true)
+        try await waitUntil { h.matchCount == 15 }
+
+        h.clear()
+        try await waitUntil { h.matchCount == 0 }
+        #expect(h.selection.isEmpty && h.lit.isEmpty)
     }
 
     /// Manager 2026-09-27: a 45 s replay of a 50 ms analysis must not look
