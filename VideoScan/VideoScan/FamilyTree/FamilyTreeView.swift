@@ -1160,7 +1160,9 @@ struct FamilyTreeView: View {
                 onUndoFamilySearchRefresh: {
                     if let target = model.personRefreshTarget(for: card.person.id) { undoPersonRefresh(target) }
                 },
-                familySearchRefreshSummary: refreshCenter.summary(for: card.person.familySearchID)
+                familySearchRefreshSummary: refreshCenter.summary(for: card.person.familySearchID),
+                // One dictionary lookup on the model (#229) — never a resolve here.
+                birthFlag: model.birthFlag(for: card.person.id)
             )
     }
 
