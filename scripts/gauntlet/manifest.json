@@ -202,6 +202,44 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainCorrectionTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CyberBrainCorrectionOperationTests",
+        "CyberBrainCorrectionDurableTests",
+        "CyberBrainCorrectionLoaderTests",
+        "CyberBrainCorrectionHallieTests",
+        "CyberBrainCorrectionScaleTests",
+        "CyberBrainCorrectionIsolationTests",
+        "CyberBrainCorrectionWritePathSensorTests"
+      ],
+      "tests": [
+        "aCorrectedItemCannotBeCorrectedAgain",
+        "aCorruptArchiveIsNeverReplaced",
+        "aFileWithoutCorrectionsReEncodesByteIdentically",
+        "aMissingArchiveIsRefusedWithoutCreatingAnything",
+        "aSuccessfulCorrectionIsAtomicWithABackupOfTheOldFile",
+        "aSymlinkedRootIsRefused",
+        "anUnknownKeyInsideACorrectionFailsClosed",
+        "correctionsWriteOnlyThroughTheDurableSave",
+        "editRefusesEmptyOrUnchangedWords",
+        "editSupersedesWithANewItemCarryingEverythingButTheWords",
+        "everyCorrectedArchiveLoadsBack",
+        "everyRefusalLeavesTheFileByteIdentical",
+        "malformedCorrectionsAreRejected",
+        "moveCreatesTheLinkedSonAndKeepsTheOriginalDay",
+        "moveUsesTheExistingLinkedPersonAndNeverMergesJrSr",
+        "oneCorrectionInATenThousandItemArchive",
+        "refusalsNameTheReason",
+        "removeRetractsTheItemAndKeepsItsText",
+        "removeWithOtherNeedsAReasonAndKeepsItShort",
+        "removedMovedAndSupersededTextIsInvisibleAndTheResultIsVisible",
+        "removingASharedCaptionRetractsItForEveryone"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainPlannerGedcomIDTests.swift",
       "stage": "unit",
       "suites": [
@@ -8857,6 +8895,30 @@
         "sharedModelInitIsNotTheInjectedSeam",
         "warmAppearanceRefreshesNotesWrittenElsewhere",
         "warmReturnAtArchiveScaleDoesNotEnterLoader"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeNoteCorrectionTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeNoteDraftOwnerTests",
+        "FamilyTreeNoteCorrectionModelTests",
+        "FamilyTreeNoteCorrectionIsolationTests",
+        "FamilyTreeNoteCorrectionSensorTests"
+      ],
+      "tests": [
+        "aDraftIsSavedOnThePersonItWasStartedFor",
+        "aMovedNoteShowsWhereItWent",
+        "aStaleRowIsRefusedWhenTheFileChangedUnderThePane",
+        "addNoteNeverReadsTheSelection",
+        "emptyingTheDraftForgetsTheOwnerAndTheNextDraftTakesTheNewSelection",
+        "everyCorrectionGoesThroughTheDurableWriter",
+        "moveCandidatesCarryYearsAndLeaveOutThePersonBeingViewed",
+        "moveTakesTheNoteOffTheFatherAndPutsItOnTheSon",
+        "refusalsLeaveTheFileByteIdentical",
+        "removeAndEditAndTheCorrectionsView",
+        "withoutABrainDirectoryNothingIsReadOrWritten"
       ]
     },
     {
@@ -21835,6 +21897,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainCorrectionTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainPlannerGedcomIDTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -23767,7 +23833,7 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2043,
+      "expected_floor": 2054,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -23888,6 +23954,10 @@
         "VideoScanTests/FamilyTreeLaunchBundleTests",
         "VideoScanTests/FamilyTreeLifeSummaryModelTests",
         "VideoScanTests/FamilyTreeLifeSummaryTests",
+        "VideoScanTests/FamilyTreeNoteCorrectionIsolationTests",
+        "VideoScanTests/FamilyTreeNoteCorrectionModelTests",
+        "VideoScanTests/FamilyTreeNoteCorrectionSensorTests",
+        "VideoScanTests/FamilyTreeNoteDraftOwnerTests",
         "VideoScanTests/FamilyTreePersonMetadataTests",
         "VideoScanTests/FamilyTreeResearchLinksIrishPlaceTests",
         "VideoScanTests/FamilyTreeResearchLinksTests",

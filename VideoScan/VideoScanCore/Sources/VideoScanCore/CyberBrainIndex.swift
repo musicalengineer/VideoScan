@@ -17,6 +17,12 @@ public struct CyberBrainIndex: Sendable {
     private let peopleByLookupToken: [String: [String]]
     private let sourcesByID: [String: CyberBrainSource]
     private let activeItemsByPersonID: [String: [CyberBrainItem]]
+    /// Everything NOT current about a person — retracted, superseded, or
+    /// active-but-replaced — for the Family Tree's "Show corrections".
+    /// Hallie never reads this (every answer path goes through
+    /// `activeItemsByPersonID`).
+    private let hiddenItemsByPersonID: [String: [CyberBrainItem]]
+    private let itemsByID: [String: CyberBrainItem]
     /// GEDCOM pointer → CyberBrain person ids that declare it (normally one).
     private let peopleByGedcomID: [String: [String]]
 
@@ -58,15 +64,23 @@ public struct CyberBrainIndex: Sendable {
             item.status == .active ? item.supersedesItemID : nil
         })
         var items: [String: [CyberBrainItem]] = [:]
-        for item in allItems
-            where item.status == .active && !superseded.contains(item.id) {
+        var hidden: [String: [CyberBrainItem]] = [:]
+        for item in allItems {
+            let current = item.status == .active && !superseded.contains(item.id)
             for personID in item.subjectPersonIDs {
-                items[personID, default: []].append(item)
+                if current {
+                    items[personID, default: []].append(item)
+                } else {
+                    hidden[personID, default: []].append(item)
+                }
             }
         }
         self.activeItemsByPersonID = items.mapValues {
             $0.sorted(by: Self.itemPrecedes)
         }
+        self.hiddenItemsByPersonID = hidden
+        // The validator already proved ids are unique across the archive.
+        self.itemsByID = Dictionary(uniqueKeysWithValues: allItems.map { ($0.id, $0) })
 
         // The token covers every persisted field, including references and
         // source metadata. Cache invalidation does not rely on an editor
@@ -131,6 +145,16 @@ public struct CyberBrainIndex: Sendable {
         activeItemsByPersonID[personID] ?? []
     }
     public func source(id: String) -> CyberBrainSource? { sourcesByID[id] }
+
+    /// Any item by id, whatever its status. O(1).
+    public func item(id: String) -> CyberBrainItem? { itemsByID[id] }
+
+    /// The items about a person that are NOT current — taken back, moved
+    /// away, or replaced by a newer wording — in file order. For the
+    /// owner's "Show corrections" view only; never evidence.
+    public func hiddenItems(for personID: String) -> [CyberBrainItem] {
+        hiddenItemsByPersonID[personID] ?? []
+    }
 
     public func evidence(
         for personID: String,

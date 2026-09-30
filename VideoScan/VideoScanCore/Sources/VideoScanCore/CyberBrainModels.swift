@@ -140,6 +140,14 @@ public struct CyberBrainItem: Codable, Sendable, Equatable, Identifiable {
     /// written before this field decode unchanged and re-encode
     /// byte-identically.
     public let service: CyberBrainServiceRecord?
+    /// Why this item stopped being current, when a person corrected it in
+    /// the Family Tree (Rick 2026-09-29, "forensic genealogy — something in
+    /// between": never hard-delete; a wrong note stays in the file, hidden
+    /// unless you ask to see corrections). Only on a non-active item; the
+    /// validator pins which status goes with which action. Optional and
+    /// omitted when nil, like `service`: files written before this field
+    /// decode unchanged and re-encode byte-identically.
+    public let correction: CyberBrainCorrection?
 
     public init(
         id: String,
@@ -156,7 +164,8 @@ public struct CyberBrainItem: Codable, Sendable, Equatable, Identifiable {
         disputesItemIDs: [String] = [],
         createdAt: Date,
         updatedAt: Date,
-        service: CyberBrainServiceRecord? = nil
+        service: CyberBrainServiceRecord? = nil,
+        correction: CyberBrainCorrection? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -173,6 +182,68 @@ public struct CyberBrainItem: Codable, Sendable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.service = service
+        self.correction = correction
+    }
+
+    /// Copy with a new status, update time and correction; every other
+    /// field is carried over unchanged. Swift structs are values, so this
+    /// is the C++ "copy, then set three members" on a const object.
+    public func withCorrection(
+        status: Status, updatedAt: Date, correction: CyberBrainCorrection?
+    ) -> CyberBrainItem {
+        CyberBrainItem(
+            id: id, kind: kind, text: text, subjectPersonIDs: subjectPersonIDs,
+            eventDate: eventDate, place: place, sourceIDs: sourceIDs,
+            confidence: confidence, privacy: privacy, status: status,
+            supersedesItemID: supersedesItemID, disputesItemIDs: disputesItemIDs,
+            createdAt: createdAt, updatedAt: updatedAt, service: service,
+            correction: correction)
+    }
+}
+
+/// How and why a person took back, reworded or moved one item (the Family
+/// Tree's "correct a family note", 2026-09-29). The old text is never
+/// erased: the item stays in the file with a non-active status and this
+/// record beside it, so "what did we used to say, and who changed it,
+/// when, and why" always has an answer.
+public struct CyberBrainCorrection: Codable, Sendable, Equatable {
+    public enum Action: String, Codable, Sendable, CaseIterable {
+        /// Taken back. The item is `retracted`.
+        case removed
+        /// Reworded. The item is `superseded` by a newer item that names it
+        /// in `supersedesItemID` (same subjects).
+        case edited
+        /// Put on the right person. The item is `retracted` here and a copy
+        /// lives on `movedToPersonID` as `movedToItemID`.
+        case moved
+    }
+
+    public enum Reason: String, Codable, Sendable, CaseIterable {
+        case wrongPerson, wrongInformation, duplicate, other
+    }
+
+    /// The longest `detail` the file accepts — a sentence, not an essay.
+    public static let maximumDetailLength = 280
+
+    public let action: Action
+    public let reason: Reason
+    /// Free text, mostly for `other` ("Find a Grave had the wrong son").
+    public let detail: String?
+    public let at: Date
+    /// Who made the correction (the owner name from the archivist settings).
+    public let by: String
+    public let movedToPersonID: String?
+    public let movedToItemID: String?
+
+    public init(action: Action, reason: Reason, detail: String? = nil, at: Date, by: String,
+                movedToPersonID: String? = nil, movedToItemID: String? = nil) {
+        self.action = action
+        self.reason = reason
+        self.detail = detail
+        self.at = at
+        self.by = by
+        self.movedToPersonID = movedToPersonID
+        self.movedToItemID = movedToItemID
     }
 }
 

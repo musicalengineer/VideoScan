@@ -168,7 +168,16 @@ public enum CyberBrainValidator {
         peopleByID: [String: CyberBrainPerson],
         sourcesByID: [String: CyberBrainSource]
     ) throws {
+        // Ids some other item names as its predecessor — an `edited`
+        // correction is only true when one of these points at it. Built
+        // once: O(items), not O(items²).
+        let supersededIDs = Set(itemsByID.values.compactMap(\.supersedesItemID))
         for item in itemsByID.values {
+            if let correction = item.correction {
+                try validateCorrection(
+                    correction, on: item, itemsByID: itemsByID,
+                    peopleByID: peopleByID, supersededIDs: supersededIDs)
+            }
             for personID in item.subjectPersonIDs where peopleByID[personID] == nil {
                 throw CyberBrainError.danglingReference(personID)
             }
@@ -177,6 +186,58 @@ public enum CyberBrainValidator {
             }
             try validateSupersession(item, itemsByID: itemsByID)
             try validateDispute(item, itemsByID: itemsByID)
+        }
+    }
+
+    /// A correction must tell the truth about the item it rides on
+    /// (2026-09-29). Each action has exactly one status, and the pointers a
+    /// move leaves behind must land on a real item about the new person —
+    /// otherwise "Moved to John Robert Latta" could point at nothing.
+    private static func validateCorrection(
+        _ correction: CyberBrainCorrection,
+        on item: CyberBrainItem,
+        itemsByID: [String: CyberBrainItem],
+        peopleByID: [String: CyberBrainPerson],
+        supersededIDs: Set<String>
+    ) throws {
+        func invalid(_ why: String) -> CyberBrainError {
+            .invalidField("correction on \(item.id): \(why)")
+        }
+        guard item.status != .active else { throw invalid("an active item cannot carry a correction") }
+        try requireText(correction.by, "correction.by")
+        if let detail = correction.detail {
+            try requireText(detail, "correction.detail")
+            guard detail.count <= CyberBrainCorrection.maximumDetailLength else {
+                throw invalid("detail is longer than \(CyberBrainCorrection.maximumDetailLength) characters")
+            }
+        }
+        switch correction.action {
+        case .removed, .edited:
+            guard correction.movedToPersonID == nil, correction.movedToItemID == nil else {
+                throw invalid("only a move names where the item went")
+            }
+            if correction.action == .removed {
+                guard item.status == .retracted else { throw invalid("a removed item must be retracted") }
+            } else {
+                guard item.status == .superseded else { throw invalid("an edited item must be superseded") }
+                guard supersededIDs.contains(item.id) else {
+                    throw invalid("an edited item needs a newer item that supersedes it")
+                }
+            }
+        case .moved:
+            guard item.status == .retracted else { throw invalid("a moved item must be retracted") }
+            guard correction.reason == .wrongPerson else { throw invalid("a move is always for the wrong person") }
+            guard let personID = correction.movedToPersonID, peopleByID[personID] != nil else {
+                throw CyberBrainError.danglingReference(correction.movedToPersonID ?? "movedToPersonID")
+            }
+            guard let targetID = correction.movedToItemID, targetID != item.id,
+                  let target = itemsByID[targetID] else {
+                throw CyberBrainError.danglingReference(correction.movedToItemID ?? "movedToItemID")
+            }
+            guard target.subjectPersonIDs.contains(personID),
+                  !item.subjectPersonIDs.contains(personID) else {
+                throw invalid("the moved copy must be about the new person, and the new person someone else")
+            }
         }
     }
 
@@ -392,13 +453,19 @@ public struct CyberBrainLoader: Sendable {
                                               "eventDate", "place", "sourceIDs",
                                               "confidence", "privacy", "status",
                                               "supersedesItemID", "disputesItemIDs",
-                                              "createdAt", "updatedAt", "service"],
+                                              "createdAt", "updatedAt", "service",
+                                              "correction"],
                               at: "\(key)[\(itemIndex)]")
                     if let date = item["eventDate"] as? [String: Any] {
                         try knownDate(date, at: "\(key)[\(itemIndex)].eventDate")
                     }
                     if let service = item["service"] as? [String: Any] {
                         try knownService(service, at: "\(key)[\(itemIndex)].service")
+                    }
+                    if let correction = item["correction"] as? [String: Any] {
+                        try known(correction, allowed: ["action", "reason", "detail", "at", "by",
+                                                        "movedToPersonID", "movedToItemID"],
+                                  at: "\(key)[\(itemIndex)].correction")
                     }
                 }
             }

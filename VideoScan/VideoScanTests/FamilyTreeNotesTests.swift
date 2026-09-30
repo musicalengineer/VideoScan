@@ -169,7 +169,7 @@ struct FamilyTreeNotesRoundTripTests {
         #expect(model.notesStatus?.contains("not been told") == true)
 
         model.select("@I3@")
-        try model.addNote("Grew up in Braintree; Berklee 2004.", date: aug26)
+        try model.addNote("Grew up in Braintree; Berklee 2004.", about: "@I3@", date: aug26)
 
         // Pane refreshed from the writer's receipt, no reload.
         #expect(model.selectedNotes.count == 1)
@@ -203,7 +203,7 @@ struct FamilyTreeNotesRoundTripTests {
         // Second note on the same person reuses the record (no duplicate
         // person) and the previous file went to backups/.
         model.select("@I3@")
-        try model.addNote("Second note.", date: aug26)
+        try model.addNote("Second note.", about: "@I3@", date: aug26)
         let again = try CyberBrainLoader(rootURL: root).load()
         #expect(again.people.filter { $0.gedcomPersonID == "@I3@" }.count == 1)
         #expect(again.people.first { $0.gedcomPersonID == "@I3@" }?.notes.count == 2)
@@ -232,7 +232,7 @@ struct FamilyTreeNotesRoundTripTests {
 
         // A tree note about the same record links the EXISTING "Dad Breen"
         // person (pointer set) rather than creating a second one.
-        try model.addNote("Marine, Pacific theater.", date: aug26)
+        try model.addNote("Marine, Pacific theater.", about: "@I1@", date: aug26)
         let reloaded = try CyberBrainLoader(rootURL: root).load()
         #expect(reloaded.people.count == 1)
         #expect(reloaded.people[0].gedcomPersonID == "@I1@")
@@ -274,7 +274,7 @@ struct FamilyTreeNotesRoundTripTests {
         model.select("@I1@")
         #expect(model.selectedNotes.isEmpty)
         #expect(model.notesStatus?.contains("configured") == true)
-        #expect(throws: CyberBrainWriter.WriteError.self) { try model.addNote("x") }
+        #expect(throws: CyberBrainWriter.WriteError.self) { try model.addNote("x", about: "@I1@") }
     }
 
     @Test func emptyNoteIsRefusedAndLeavesTheFileAlone() throws {
@@ -282,7 +282,7 @@ struct FamilyTreeNotesRoundTripTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let model = model(root: root)
         model.select("@I1@")
-        #expect(throws: CyberBrainWriter.WriteError.emptyText) { try model.addNote("   \n") }
+        #expect(throws: CyberBrainWriter.WriteError.emptyText) { try model.addNote("   \n", about: "@I1@") }
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("cyberbrain.json").path))
     }
 }
