@@ -111,7 +111,7 @@ private func brainArchive(maryPrivacy: CyberBrainItem.Privacy = .family,
                                       place: nil, sourceIDs: ["source.bc"], confidence: .uncertain, privacy: .family,
                                       status: .active, disputesItemIDs: [], createdAt: now, updatedAt: now, correction: nil)
     let birth = CyberBrainItem(id: "event.mary.birth", kind: .event,
-                               text: "Born 23 December 1904 at 34 Fullers Lane, Cork.", subjectPersonIDs: ["person.mary"],
+                               text: "Born 1 January 1900 at 1 Example Lane, Cork.", subjectPersonIDs: ["person.mary"],
                                place: "Cork, Ireland", sourceIDs: ["source.bc"], confidence: maryConfidence,
                                privacy: maryPrivacy, status: .active,
                                disputesItemIDs: maryConfidence == .disputed ? [counterClaim.id] : [],
@@ -317,6 +317,37 @@ struct FamilyTreeBirthFlagTests {
         let mary = try #require(model.birthFlag(for: "@I10@"))
         #expect(mary.country == .ireland && mary.fromFamilyNotes)
         #expect(model.birthCountries.notesCount == 1 && model.birthCountries.flaggedCount == 8)
+    }
+
+    /// QA #229 P3-1: GEDCOM ids are local to a file — a different tree's
+    /// @I1@ is a different person. Until the new tree's build lands the
+    /// cards must show no flag, never the previous tree's.
+    @Test func aNewTreeNeverShowsTheOldTreesFlags() async throws {
+        // Two different tree FILES (the live model tells trees apart by
+        // directory + file name + modification time; a re-pulled file gets
+        // a new time and may renumber its ids).
+        let model = FamilyTreeLiveModel(originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
+        var first = flagsGraph()
+        first.sourceDirectory = "/nonexistent/trees"
+        first.sourceFileName = "first.ged"
+        model.install(graph: first)
+        if let task = model.birthCountriesTask { await task.value }
+        #expect(model.birthFlag(for: "@I1@")?.country == .england)
+        var second = GedcomFamilyGraph(gedcomText:
+            "0 HEAD\n1 _VS_MERGED Y\n1 _VS_ROOT @I1@\n0 @I1@ INDI\n1 NAME Hans /Other/\n1 SEX M\n1 BIRT\n2 PLAC Berlin, Germany\n0 TRLR")
+        second.sourceDirectory = "/nonexistent/trees"
+        second.sourceFileName = "second.ged"
+        model.install(graph: second)
+        #expect(model.birthFlag(for: "@I1@") == nil, "the old tree's England flag on the new tree's @I1@")
+        if let task = model.birthCountriesTask { await task.value }
+        #expect(model.birthFlag(for: "@I1@") == nil, "Berlin is off the map")
+    }
+
+    /// Public repo: no real street address in these fixtures (policy of
+    /// the #227 codex follow-up merge a29d5403; QA #229 P1).
+    @Test func noRealStreetAddressInTheseTests() throws {
+        let source = try String(contentsOfFile: #filePath, encoding: .utf8)
+        #expect(!source.contains("Fullers" + " Lane"))
     }
 
     @Test func noTreeMeansNoFlags() async throws {

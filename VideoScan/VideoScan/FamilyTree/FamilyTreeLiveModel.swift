@@ -1106,6 +1106,9 @@ final class FamilyTreeLiveModel: ObservableObject {
             photoOverrideSources.removeAll()
             installedSourceKey = sourceKey
             clearDocumentsCache()
+            // GEDCOM ids are local to a file: until this tree's own build
+            // lands, show no flags rather than the previous tree's (QA #229 P3-1).
+            clearBirthCountries()
         }
         graph = newGraph
         // Walk Tree decorations follow the tree (Rick 2026-09-27): a silent,
@@ -1991,6 +1994,12 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// counter: a build that started before a newer tree or brain arrived
     /// is thrown away when it lands).
     private var birthCountriesGeneration = 0
+
+    /// Drop the current flags and invalidate any build in flight.
+    private func clearBirthCountries() {
+        birthCountriesGeneration &+= 1
+        if birthCountries != .empty { birthCountries = .empty }
+    }
     /// The in-flight build, so a test can `await` its value instead of
     /// polling; nil when nothing is building.
     private(set) var birthCountriesTask: Task<Void, Never>?

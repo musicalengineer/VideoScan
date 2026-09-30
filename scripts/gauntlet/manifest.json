@@ -8831,10 +8831,12 @@
         "FamilyTreeBirthFlagTests"
       ],
       "tests": [
+        "aNewTreeNeverShowsTheOldTreesFlags",
         "aPhotoGetsTheBadgeAndNoPhotoGetsThePlaceholder",
         "aPrivateOrDisputedNoteNeverFlagsAnyone",
         "building100kPeopleStaysUnderBudget",
         "everyCountryCountryOnlyAndOffMapFromTheTree",
+        "noRealStreetAddressInTheseTests",
         "noTreeMeansNoFlags",
         "theCardAndTheMapAgreePersonForPerson",
         "theFamilysNotesFlagSomeoneTheTreeCouldNot",
