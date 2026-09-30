@@ -138,3 +138,10 @@ agent only ever produces *issues*, never edits the owner's branch. By
 - **Metric:** CI green; battery failures each classified (flake / environment / real); verified-defect list ranked; Hallie strict ≥ 41 clean and advisory named vs 343/399.
 - **Stop rule:** no features (Refile deferred by Rick); fixes only for verified defects, each red→green on its own branch; nothing on the Manager escalation list merges overnight; stop by 09:00 ET.
 - **Machines:** M4 free tonight per Rick (no UI automation); builds/tests on ricksm5.
+
+## 2026-09-29 → 30 — Family map (#227), stages 0–2
+- **Owner:** Claude (Fable, overnight lead). **Reviewer:** codex (channel #1770), adversarial review + a test-only lane `test/family-map-codex`; never edits production.
+- **Scope:** (0) `scripts/build_family_map_units.py` + bundled `family-map-units.geojson` (Historic County Borders + Natural Earth, ≤ 1.5 MB, attribution); (1) Core `BirthplaceUnitResolver` / `FamilyMapUnits` (decoder + point-in-polygon) / `FamilyMapTally`, MapKit-free; (2) `FamilyTreeMapView` + walk-sheet `.map` stage + explicit MapKit link + link sensor. Design: docs/family_map_design_2026-09-29.md.
+- **Metric:** every stage green (Swift Testing by suite; pytest; gauntlet inventory 0 errors); resolve rate on the real tree's place strings reported (target ≥ 90% of England/Scotland/Wales/US strings to a county/state); codex findings closed by a pinning test or declined in writing; stages merged to main when green.
+- **Stop rule:** no stage 3 (time slider) tonight; no UI automation on the M4 (Rick's spot test + Donna in the morning); nothing deleted; the 2 AM nightly runs on main with the checkout left on main — merges happen between nightly runs, not during. If MapKit linking misbehaves on macOS 27 the way AVKit did, stop at stage 1 and report.
+- **Morning brief leads with:** CI/nightly/static-analysis status; the map's state (what Rick can click); codex findings open/closed; the resolve rate.
