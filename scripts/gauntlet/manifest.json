@@ -652,6 +652,18 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapWhitespaceAdversarialTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapWhitespaceAdversarialTests"
+      ],
+      "tests": [
+        "unicodeWhitespaceIsNotARecordedBirthplace"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyNameNormalizerTests.swift",
       "stage": "unit",
       "suites": [
@@ -8587,6 +8599,19 @@
         "theModelAndTheViewReadNoAppSupportAndNoNetwork",
         "theModelFollowsTheHighlighterChecks",
         "theWalkedPeopleResolveToUnitsAndTheTotalsReconcile"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyMapNotesAdversarialTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapNotesAdversarialTests"
+      ],
+      "tests": [
+        "onlyThePersonsOwnVisibleBirthPlacesThem",
+        "onlyTheSubjectsOwnBirthIsABirthEvent"
       ]
     },
     {
@@ -22310,6 +22335,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapWhitespaceAdversarialTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyNameNormalizerTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -23211,6 +23240,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/FamilyMapModelTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/FamilyMapNotesAdversarialTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

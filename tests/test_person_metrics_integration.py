@@ -75,6 +75,46 @@ class PersonMetricsIntegrationSensors(unittest.TestCase):
                       "the version is defined but never published in the row")
         self.assertIn('"poi_cycle_stream_status":"collector-failed"', script)
 
+    def test_nightly_builds_release_from_one_configuration_and_publishes_it(self):
+        """Rick, 2026-09-29 21:00: the 2 AM nightly builds RELEASE (production
+        parity); rapid dev and day testing stay Debug.
+
+        The contract: every xcodebuild in the lane takes its configuration
+        from the one NIGHTLY_CONFIGURATION value, nothing spells
+        Build/Products/<name> by hand, the build passes ENABLE_TESTABILITY=YES
+        so @testable imports resolve in an optimised build, and every row
+        shape carries the configuration (additive field; the gauntlet rows use
+        the same key). A stale "-configuration Debug" or "Products/Debug"
+        anywhere in the script is the regression this pins.
+        """
+        script = (ROOT / "scripts/nightly_local_tests.sh").read_text()
+        code = [l for l in script.splitlines() if not l.lstrip().startswith("#")]
+        self.assertIn('NIGHTLY_CONFIGURATION="Release"', script)
+        self.assertEqual([l for l in code if "-configuration Debug" in l], [])
+        self.assertEqual([l for l in code if "Products/Debug" in l], [])
+        invocations = [l for l in code if "-configuration " in l]
+        self.assertTrue(invocations, "no xcodebuild -configuration lines found")
+        self.assertEqual(
+            [l for l in invocations if '"$NIGHTLY_CONFIGURATION"' not in l], [],
+            "an xcodebuild does not read NIGHTLY_CONFIGURATION",
+        )
+        products = [l for l in code if "Build/Products/" in l]
+        self.assertTrue(products, "no derived products path found")
+        self.assertEqual(
+            [l for l in products if "$NIGHTLY_CONFIGURATION" not in l], [],
+            "a products path is spelled by hand instead of derived",
+        )
+
+        def body(fn):
+            start = script.index(fn + "() {")
+            return script[start:script.index("\n}\n", start)]
+
+        self.assertIn("ENABLE_TESTABILITY=YES", body("run_nightly_build"))
+        for fn in ("make_status_row", "make_current_test_result_row"):
+            self.assertIn('"configuration":"%s"', body(fn), f"{fn} row lacks configuration")
+            self.assertIn("${NIGHTLY_CONFIGURATION:-unknown}", body(fn),
+                          f"{fn} would abort under set -u when sourced alone")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -563,7 +563,7 @@ struct FamilyMapModelTests {
                                 item("event.mary.wrong", .event, "Born in Dublin.", person: "person.mary", place: "Dublin, Ireland",
                                      status: .retracted,
                                      correction: .init(action: .removed, reason: .wrongInformation, at: now, by: "Rick")),
-                                item("event.mary.birth", .event, "Born 23 December 1904 at 34 Fullers Lane, Cork; birth certificate in the archive.",
+                                item("event.mary.birth", .event, "Born 1 January 1900 at 1 Example Lane, Cork; birth certificate in the archive.",
                                      person: "person.mary", place: "Cork, Ireland"),
                              ]),
             // Richard Sr: the tree says Fife; the family's note says Cork. The tree wins.
@@ -593,8 +593,9 @@ struct FamilyMapModelTests {
         #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I9@", in: knowledge) == nil, "disputed")
         #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I10@", in: knowledge) == nil, "a death is not a birth")
         #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I1@", in: knowledge) == nil, "no notes at all")
-        #expect(FamilyMapModel.isBirthEvent(item("x", .event, "Married Jane Osborne at Birthdale.", person: "p", place: nil)) == false, "whole words only")
-        #expect(FamilyMapModel.isBirthEvent(item("x", .event, "BIRTH registered late.", person: "p", place: nil)))
+        let anyone = CyberBrainPerson(id: "p", canonicalName: "Test Person")
+        #expect(FamilyMapModel.isOwnBirthEvent(item("x", .event, "Married Jane Osborne at Birthdale.", person: "p", place: nil), of: anyone) == false, "whole words only")
+        #expect(FamilyMapModel.isOwnBirthEvent(item("x", .event, "BIRTH registered late.", person: "p", place: nil), of: anyone))
 
         // Through the real pipeline with the knowledge injected.
         let r = try TreeWalk.walk(g, options: .init(starts: ["@I1@"]))
@@ -659,7 +660,7 @@ struct FamilyMapModelTests {
         let now = Date(timeIntervalSince1970: 1_790_000_000)
         func knowledge(privacy: CyberBrainItem.Privacy) throws -> FamilyTreeNotesResolver {
             let item = CyberBrainItem(id: "event.mary.birth", kind: .event,
-                                      text: "Born 23 December 1904 at 34 Fullers Lane, Cork.", subjectPersonIDs: ["person.mary"],
+                                      text: "Born 1 January 1900 at 1 Example Lane, Cork.", subjectPersonIDs: ["person.mary"],
                                       place: "Cork, Ireland", sourceIDs: ["source.bc"], confidence: .confirmed, privacy: privacy,
                                       status: .active, disputesItemIDs: [], createdAt: now, updatedAt: now, correction: nil)
             let archive = CyberBrainArchive(archiveID: "test.map.privacy", displayName: "Test", people: [
@@ -707,7 +708,7 @@ struct FamilyMapModelTests {
         let now = Date(timeIntervalSince1970: 1_790_000_000)
         func knowledge(privacy: CyberBrainItem.Privacy) throws -> FamilyTreeNotesResolver {
             let item = CyberBrainItem(id: "event.mary.birth", kind: .event,
-                                      text: "Born 23 December 1904 at 34 Fullers Lane, Cork.", subjectPersonIDs: ["person.mary"],
+                                      text: "Born 1 January 1900 at 1 Example Lane, Cork.", subjectPersonIDs: ["person.mary"],
                                       place: "Cork, Ireland", sourceIDs: ["source.bc"], confidence: .confirmed, privacy: privacy,
                                       status: .active, disputesItemIDs: [], createdAt: now, updatedAt: now, correction: nil)
             let archive = CyberBrainArchive(archiveID: "test.map.privacy", displayName: "Test", people: [

@@ -125,3 +125,16 @@ Nightly flags (#1791–1792), answered separately in mailbox #1795–1796:
 
 The nightly model's UNREVIEWED label concerns its own coverage. The four
 unrelated commits were not independently rereviewed in this scoped pass.
+
+## Closed (Claude, 2026-09-30, branch `fix/family-map-codex-r3`)
+
+| # | Finding | Fixing commit | Pinning test |
+|---|---------|---------------|--------------|
+| 1 | P2: another person's birth became the ancestor's birthplace | `e5c3746e`: `FamilyMapModel.isOwnBirthEvent(_:of:)` replaces `isBirthEvent`. It rejects "birth of/to", "gave birth" and "<relative> [Name] was/were born". It accepts "Born…"/"Birth…"/"Her/His birth…" at the start, "she/he was born", or a leading run of Names that includes one of the subject's given names (the surname is excluded) followed by "was born" or ", born". Anything ambiguous is left unplaced. | `FamilyMapNotesAdversarialTests.onlyThePersonsOwnVisibleBirthPlacesThem` (codex, 8 cases) + `onlyTheSubjectsOwnBirthIsABirthEvent` (19 sentences, incl. the live 2026-09-29 Cork certificate event → true, "Daniel O'Connor was born" on Mary → false) |
+| 2 | P3: Unicode whitespace counted as an unsupported birthplace | `e5c3746e`: `FamilyMapTally.hasText` now treats Unicode White_Space as blank, and `BirthplaceUnitResolver.resolve` uses the same helper | `FamilyMapWhitespaceAdversarialTests.unicodeWhitespaceIsNotARecordedBirthplace` (codex, NBSP + em-space) |
+| 3 | P3: render sensor never gated coordinate clicks | codex's `47507d10` (test-only; SuspendingClock + 170 ms gate on both click paths) | `FamilyMapRenderSensorTests`. It compiles and its headless steps pass. The on-screen steps 5–8 were not run on the M4 (no UI automation) |
+
+Red before (Debug): Core FamilyMap 56 tests / 8 suites, 4 issues (Unicode test only); app `FamilyMapNotesAdversarialTests` 1 test (8 cases), 4 issues (the four counterexamples).
+Green after (Debug): Core FamilyMap 56 tests / 8 suites, 0 issues; app FamilyMapModel + NotesAdversarial + AdversarialApp + RenderSensor (headless) + MapKitLinkSensor = 28 tests / 5 suites, 0 issues. Gauntlet `inventory.swift --validate`: 0 errors.
+
+Known false negatives (these are left unplaced on purpose and pinned): nicknames the archive does not list ("Grandma was born in Cork"), surname-only forms ("Mrs O'Connor was born"), and lower-case particles inside the name run ("Mary de Burgh was born").

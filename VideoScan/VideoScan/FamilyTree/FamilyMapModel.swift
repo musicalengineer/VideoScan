@@ -238,26 +238,69 @@ final class FamilyMapModel: ObservableObject {
 
     /// The family's recorded birthplace for one tree record: the first
     /// ACTIVE life event of any CyberBrain person standing for the record
-    /// that says born / birth, carries a place, and is visible at the
-    /// map's privacy ceiling. Read-only; disputed items are passed over (a
-    /// disputed birthplace must not quietly place someone); a `.private`
-    /// item is passed over too (the map is family-facing). O(items about
-    /// the person).
+    /// that asserts THAT PERSON'S OWN birth (`isOwnBirthEvent`), carries a
+    /// place, and is visible at the map's privacy ceiling. Read-only;
+    /// disputed items are passed over (a disputed birthplace must not
+    /// quietly place someone); a `.private` item is passed over too (the
+    /// map is family-facing). O(items about the person).
     nonisolated static func familyBirthPlace(gedcomID: String, in knowledge: FamilyTreeNotesResolver) -> String? {
         for person in knowledge.cyberBrainPeople(forGedcomID: gedcomID) {
             for item in knowledge.index.allActiveItems(for: person.id)
             where item.kind == .event && item.confidence != .disputed
-                && item.privacy.isVisible(at: privacyCeiling) && isBirthEvent(item) {
+                && item.privacy.isVisible(at: privacyCeiling) && isOwnBirthEvent(item, of: person) {
                 if let place = item.place, FamilyMapTally.hasText(place) { return place }
             }
         }
         return nil
     }
 
-    /// Does a life event describe a birth? Its text says "born" or "birth"
-    /// as a word (case-insensitive) — "Osborne" and "birthday" do not count.
-    nonisolated static func isBirthEvent(_ item: CyberBrainItem) -> Bool {
-        item.text.range(of: #"\b(born|birth)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+    /// Does a life event assert the SUBJECT'S OWN birth? (codex #227
+    /// follow-up, P2: "Moved to Boston after the birth of her daughter" is
+    /// an event ABOUT Mary whose birth is somebody else's — Boston must
+    /// not become Mary's birthplace.) A CyberBrain event is free text;
+    /// `CyberBrainItem` has no structured "birth" kind (Hallie's
+    /// `TreeFact.Kind.birth` lives on the telling, not on stored items),
+    /// so this reads the sentence the way the writers write it.
+    ///
+    /// Rejected first, whatever else the text says:
+    ///   - "birth of …", "gave birth", "birth to …" — a birth that belongs
+    ///     to someone else;
+    ///   - a relative noun (daughter, son, child, twins, brother, …),
+    ///     optionally followed by a Name, then "was / were born".
+    /// Accepted (any one):
+    ///   1. the text BEGINS "Born …" / "Birth …" ("Born in Cork.",
+    ///      "BIRTH registered late.");
+    ///   2. it BEGINS "His / Her birth …" (a life event about the person,
+    ///      opening with her own birth: "Her birth was registered in
+    ///      Yorkshire.");
+    ///   3. "she / he was born" anywhere;
+    ///   4. it BEGINS with a run of capitalised Names then "was / is
+    ///      born" (or ", born"), and one of those Names is one of the
+    ///      person's own GIVEN names (canonical name or alias, token-wise,
+    ///      the surname excluded — a relative shares it): "Mary Christina
+    ///      O'Connor was born on 1 January 1900 at 1 Example Lane,
+    ///      Cork …" — the shape of the 2026-09-29 birth-certificate
+    ///      event. "Daniel O'Connor was born in Cork" on Mary's record
+    ///      is her father's name, not hers; ambiguous stays unplaced.
+    /// Anything else — "Married Jane Osborne at Birthdale", "(The tree
+    /// gives her birth as August 1903)" inside a death event — is not her
+    /// birth. Known false negatives, by design: a nickname the archive
+    /// does not list ("Grandma was born in Cork"), a surname-only form
+    /// ("Mrs O'Connor was born"), a lower-case particle in the name run
+    /// ("Mary de Burgh was born").
+    nonisolated static func isOwnBirthEvent(_ item: CyberBrainItem, of person: CyberBrainPerson) -> Bool {
+        let text = item.text
+        let ci: String.CompareOptions = [.regularExpression, .caseInsensitive]
+        let cs: String.CompareOptions = [.regularExpression]
+        // Someone else's birth, in any wording → never the subject's.
+        if text.range(of: #"\bbirths?\s+(?:of|to)\b|\bgave\s+birth\b"#, options: ci) != nil { return false }
+        if text.range(of: Self.relativeBornPattern, options: cs) != nil { return false }
+        // The subject's own birth, in the writers' shapes.
+        if text.range(of: #"^\W*(?:born|birth|his\s+birth|her\s+birth)\b"#, options: ci) != nil { return true }
+        if text.range(of: #"\b(?:she|he)\s+was\s+born\b"#, options: ci) != nil { return true }
+        guard let run = text.range(of: #"^\W*(?:\p{Lu}\S*\s+){1,6}?(?=(?:was\s+|is\s+)?born\b)"#, options: cs) else { return false }
+        let given = Set(givenNameTokens(person))
+        return FamilyIdentityText.tokens(String(text[run])).contains { $0.count >= 2 && given.contains($0) }
     }
 
     /// What ONE person's two candidate places decide: the unit hit (nil
@@ -294,6 +337,25 @@ final class FamilyMapModel: ObservableObject {
         }
         return Placement(hit: nil, recorded: recorded, source: .none, recordedFromFamilyNotes: recordedFromFamily)
     }
+
+    /// The person's given-name tokens: every name (canonical + aliases)
+    /// minus its last token (the surname) — a one-word alias ("Mamie") is
+    /// kept whole. Initials and other one-letter tokens are dropped.
+    nonisolated static func givenNameTokens(_ person: CyberBrainPerson) -> [String] {
+        ([person.canonicalName] + person.aliases).flatMap { name -> [String] in
+            let tokens = FamilyIdentityText.tokens(name)
+            return (tokens.count > 1 ? Array(tokens.dropLast()) : tokens).filter { $0.count >= 2 }
+        }
+    }
+
+    /// "her daughter was born", "his son John Patrick was born", "the
+    /// twins were born" — a relative, at most three capitalised name
+    /// tokens, then was / were born. Case-sensitive so the optional Names
+    /// are real Names: "Daughter of Daniel, she was born in Cork" does not
+    /// match ("of" is no Name), and rule 3 then accepts it.
+    nonisolated private static let relativeBornPattern =
+        #"\b(?i:daughters?|sons?|child|children|baby|babies|twins?|grandsons?|granddaughters?|grandchild|grandchildren|"# +
+        #"brothers?|sisters?|nieces?|nephews?|cousins?|wife|husband|mother|father|parents?)\s+(?:\p{Lu}\S*\s+){0,3}(?:was|were|is|are)\s+born\b"#
 
     /// The pure form: resolves every VISITED person's place once and packs
     /// the columns. Columns are parallel to `ids`; `visited` lists

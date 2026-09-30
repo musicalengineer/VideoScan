@@ -149,7 +149,7 @@ So:
 ## Build mode policy
 
 - **Debug** for rapid dev iteration — Rick's solo edit/build/run loops AND paired RD sessions with Claude. Incremental compiles are 5–15s instead of ~3 min. Default when in doubt.
-- **Release** for: (1) automated tests where production parity matters (TestDriver Smoke/Diagnostic, CI, perf baselines), (2) manual demo / family-facing runs, (3) bugs that only reproduce under the optimizer.
+- **Release** for: (1) automated tests where production parity matters (TestDriver Smoke/Diagnostic, CI, perf baselines, the gauntlet, and the 2 AM nightly on the M4 — Rick's ruling 2026-09-29), (2) manual demo / family-facing runs, (3) bugs that only reproduce under the optimizer.
 - Build-settings notes: Debug's `ONLY_ACTIVE_ARCH` should be `YES` (M1/M4 → arm64 only). Release keeps `SWIFT_COMPILATION_MODE = wholemodule` — that's the right call for production but is why Release rebuilds are slow on a one-line change.
 - Adopted 2026-05-23 after a slow-Xcode investigation. Supersedes the prior "always Release" practice.
 
