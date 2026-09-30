@@ -534,18 +534,36 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapResolverAdversarialTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapResolverAdversarialTests"
+      ],
+      "tests": [
+        "countryMismatchDoesNotGuessAnOverseasCounty",
+        "decoratedAmbiguousCountiesRequireCountry",
+        "explicitCountryStillResolvesDecoratedNames",
+        "rightmostSupportedCountrySurvivesEarlierForeignComponent",
+        "rightmostUnsupportedCountryStopsEarlierMapNames"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapResolverTests.swift",
       "stage": "unit",
       "suites": [
         "FamilyMapResolverTests"
       ],
       "tests": [
+        "decorationDoesNotDefeatTheAmbiguityRule",
         "everyEmittableKeyIsWellFormedAndTheRequiredSetIsStable",
         "everySpellingResolvesToItsUnit",
         "fortyThousandPlacesUnderBudget",
         "hitCarriesTheDecidingComponentAndTheCallerKeepsTheRaw",
         "normalisationFoldsCaseDotsDiacriticsAndStrayMarks",
         "theRightmostCountryConstrainsTheCounty",
+        "theRightmostSupportedCountryWinsOverAForeignTokenToItsLeft",
         "unrecognisedAndOffMapPlacesAreNil"
       ]
     },
@@ -567,8 +585,21 @@
         "nilMaskCountsEveryoneAndAllFalseCountsNobody",
         "sumsAddUpToTheResolvedPeople",
         "theHighlightMaskFiltersTheMapAsItHighlightsTheFan",
+        "theUnplacedAreListedNearestFirstWithTheirRecordedTextAndTheReason",
         "topSurnamesAreMostCommonFirstWithStableTiesAndTheCommonestSpelling",
         "yearCeilingKeepsBirthsUpToTheYearAndDropsUnknownYears"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapUnitsAdversarialTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapUnitsAdversarialTests"
+      ],
+      "tests": [
+        "booleanCoordinatesAreRefusedRatherThanTurnedIntoZeroAndOne"
       ]
     },
     {
@@ -584,6 +615,7 @@
         "aPointJustOffACoastResolvesToTheAdjacentUnitAndMidOceanIsNil",
         "aPointOnABorderIsInsideAndTiesAreDeterministic",
         "aThirdCoordinateAndAnOpenRingAreTolerated",
+        "amongRestrictsContainingAndNearestToTheListedKeys",
         "bandIndexedRelationMatchesTheReferenceScan",
         "cameraBoxIgnoresFarEasternPiecesOfAWesternUnit",
         "coverageIsTheUnionOfTheListedUnitsThatExist",
@@ -592,6 +624,7 @@
         "insideHoleEnclaveBorderSeaAndIsland",
         "keyNameMismatchesAreRecordedNotRefused",
         "nearestTiesGoToTheKey",
+        "numericZerosAndOnesStillDecodeAsCoordinates",
         "refusesEveryContractViolation",
         "thousandLookupsOverTwoHundredUnitsUnderBudget"
       ]
@@ -8493,18 +8526,35 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyMapAdversarialAppTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapAdversarialAppTests"
+      ],
+      "tests": [
+        "aCoarseOutlineDoesNotSuppressTheCountedCoastalCountyFallback",
+        "aCountedCountyWinsWhenCountryAndCountyBothHavePeople",
+        "aRecordedCoarseRegionIsNotDescribedAsUnrecorded",
+        "clickingAnUncountedCountySelectsTheShadedCountryBelowIt",
+        "unsupportedRecordedPlacesAreNotDescribedAsMissingRecords"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FamilyMapModelTests.swift",
       "stage": "unit",
       "suites": [
         "FamilyMapModelTests"
       ],
       "tests": [
-        "aClickSelectsTheUnitUnderItOrTheNearestCoastAndOnlyOneWithACount",
+        "aClickIsDecidedOverTheCountedUnitsInFourSteps",
         "aSurnameCheckNarrowsAndAnEmptySelectionCountsEveryoneAgain",
         "buildingTheInputsFor40kPeopleStaysUnderBudget",
         "shadesLabelsCameraAndPanelLinesArePinned",
         "theAboutWindowCreditsTheBorderData",
         "theBundledBorderFileIsInTheBuiltApp",
+        "theFamilysNotesFillATreeGapButNeverOverrideTheTree",
         "theLastOfTwoRapidChangesWins",
         "theMapViewNeverResolvesOrTalliesInABody",
         "theModelAndTheViewReadNoAppSupportAndNoNetwork",
@@ -11225,6 +11275,7 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieNeuralWorkerEnvironmentTests.swift",
       "stage": "regression",
@@ -11235,8 +11286,7 @@
         "aMissingTmpdirGetsTheSystemOne",
         "everyEngineLaunchUsesTheFilteredEnvironment",
         "onlyTheAllowlistReachesTheEngine"
-      ],
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+      ]
     },
     {
       "kind": "xcode",
@@ -20893,7 +20943,8 @@
         "test_state_file_is_atomic_and_capped_at_twenty",
         "test_status_prints_last_five",
         "test_stdin_is_dev_null_even_when_caller_holds_a_pipe_open",
-        "test_timeout_kills_codex_and_fails"
+        "test_timeout_kills_codex_and_fails",
+        "test_track_registers_a_channel_driven_cycle_and_verdict_moves_it"
       ]
     },
     {
@@ -20991,6 +21042,31 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_family_map_pipeline_regressions.py",
+      "stage": "unit",
+      "suites": [
+        "test_family_map_pipeline_regressions.py"
+      ],
+      "tests": [
+        "test_build_features_is_byte_stable_sorted_and_nonmutating",
+        "test_build_pipeline_is_offline_isolated_and_reproducible",
+        "test_build_rejects_colliding_normalized_names",
+        "test_bundled_holes_have_excluded_interior_witnesses",
+        "test_bundled_rings_have_no_proper_edge_crossings",
+        "test_crossing_sensor_distinguishes_crossing_contact_and_collinearity",
+        "test_dissolve_adjacent_units_removes_seam_and_keeps_hole",
+        "test_dissolve_corner_touch_keeps_two_simple_shells",
+        "test_dissolve_nested_island_stays_filled_inside_parent_hole",
+        "test_dissolve_unclosed_edges_reports_failure_and_retains_originals",
+        "test_fallback_keeps_every_unit_even_when_all_its_pieces_collapse",
+        "test_simplification_fallback_keeps_original_hole",
+        "test_simplification_keeps_surviving_hole_and_does_not_mutate_input",
+        "test_tiny_hole_can_be_dropped_without_losing_surviving_shell"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_family_map_units.py",
       "stage": "unit",
       "suites": [
@@ -21024,26 +21100,14 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
-      "path": "tests/test_family_map_pipeline_regressions.py",
+      "path": "tests/test_family_map_write_gate.py",
       "stage": "unit",
       "suites": [
-        "test_family_map_pipeline_regressions.py"
+        "test_family_map_write_gate.py"
       ],
       "tests": [
-        "test_build_features_is_byte_stable_sorted_and_nonmutating",
-        "test_build_pipeline_is_offline_isolated_and_reproducible",
-        "test_build_rejects_colliding_normalized_names",
-        "test_bundled_holes_have_excluded_interior_witnesses",
-        "test_bundled_rings_have_no_proper_edge_crossings",
-        "test_crossing_sensor_distinguishes_crossing_contact_and_collinearity",
-        "test_dissolve_adjacent_units_removes_seam_and_keeps_hole",
-        "test_dissolve_corner_touch_keeps_two_simple_shells",
-        "test_dissolve_nested_island_stays_filled_inside_parent_hole",
-        "test_dissolve_unclosed_edges_reports_failure_and_retains_originals",
-        "test_fallback_keeps_every_unit_even_when_all_its_pieces_collapse",
-        "test_simplification_fallback_keeps_original_hole",
-        "test_simplification_keeps_surviving_hole_and_does_not_mutate_input",
-        "test_tiny_hole_can_be_dropped_without_losing_surviving_shell"
+        "test_an_unrepairable_source_ring_cannot_overwrite_existing_assets",
+        "test_report_is_nonzero_for_crossings_and_zero_for_a_simple_ring"
       ]
     },
     {
@@ -21302,6 +21366,7 @@
       ]
     },
     {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_hallie_voice_signature.py",
       "stage": "unit",
@@ -21315,8 +21380,7 @@
         "test_live_hallie_still_sounds_like_the_reference",
         "test_signature_of_the_stored_reference_is_stable",
         "test_the_engine_dies_under_metal_debug_so_the_app_must_strip_it"
-      ],
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit"
+      ]
     },
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
@@ -21431,6 +21495,7 @@
       ]
     },
     {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_nightly_hallie_voice.py",
       "stage": "unit",
@@ -21446,8 +21511,7 @@
         "test_the_python_allowlist_is_the_swift_allowlist",
         "test_verdict_a_good_voice_with_app_fallbacks_is_not_ok",
         "test_worker_env_mirrors_the_app_allowlist"
-      ],
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit"
+      ]
     },
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
@@ -22161,11 +22225,19 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapResolverAdversarialTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapResolverTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapTallyTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapUnitsAdversarialTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -23069,6 +23141,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/FamilyMapAdversarialAppTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/FamilyMapModelTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -23937,11 +24013,15 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "tests/test_family_map_pipeline_regressions.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "tests/test_family_map_units.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "tests/test_family_map_pipeline_regressions.py",
+          "name": "tests/test_family_map_write_gate.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
