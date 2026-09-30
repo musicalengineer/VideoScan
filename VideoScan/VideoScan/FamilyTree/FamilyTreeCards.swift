@@ -197,12 +197,8 @@ struct FamilyTreePersonCard: View {
                             .frame(width: 58, height: 58)
                             .clipShape(Circle())
                     } else if let assetPerson = card.assetPerson {
-                        // The asset portrait decides for itself once its
-                        // photo lookup lands: flag as portrait or as badge.
                         FamilyAssetPortrait(person: assetPerson, profile: portraitProfile,
-                                            revision: photoRevision, accent: accent, flag: birthFlag)
-                    } else if let birthFlag {
-                        FamilyTreeBirthFlagPlaceholder(flag: birthFlag, accent: accent)
+                                            revision: photoRevision, accent: accent)
                     } else {
                         Circle()
                             .fill(accent.opacity(0.22))
@@ -382,9 +378,6 @@ struct FamilyAssetPortrait: View {
     let profile: POIProfile?
     let revision: Int
     let accent: Color
-    /// The birth-country flag (GH #229), drawn as the portrait while no
-    /// photo is found and as a corner badge once one is.
-    var flag: FamilyTreeBirthFlag? = nil
     @State private var image: NSImage?
 
     /// What the `.task` keys on: the person, what the bridged profile
@@ -405,10 +398,6 @@ struct FamilyAssetPortrait: View {
         Group {
             if let image {
                 Image(nsImage: image).resizable().scaledToFill()
-            } else if let flag {
-                // No photo → the flag IS the portrait (#229). Same slot,
-                // same accent disc as the other placeholders.
-                FamilyTreeBirthFlagPlaceholder(flag: flag, accent: accent)
             } else {
                 Circle().fill(accent.opacity(0.22))
             }

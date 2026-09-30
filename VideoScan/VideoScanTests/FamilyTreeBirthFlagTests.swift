@@ -268,9 +268,7 @@ struct FamilyTreeBirthFlagTests {
 
     // MARK: Logic — the view-model decision
 
-    @Test func aPhotoGetsTheBadgeAndNoPhotoGetsThePlaceholder() {
-        #expect(FamilyTreeBirthFlag.presentation(hasPhoto: true) == .badge)
-        #expect(FamilyTreeBirthFlag.presentation(hasPhoto: false) == .placeholder)
+    @Test func theTooltipSaysWhereAndUnderWhichFlag() {
         #expect(FamilyTreeBirthFlag.tooltip(recordedPlace: "Cork, Ireland", fromFamilyNotes: false)
                 == "Born in Cork, Ireland · shown under today's flag")
         #expect(FamilyTreeBirthFlag.tooltip(recordedPlace: "Cork, Ireland", fromFamilyNotes: true)
@@ -446,7 +444,7 @@ struct FamilyTreeBirthFlagTests {
         let view = try SourceTree.appSource(named: "FamilyTreeView.swift")
         #expect(view.contains("birthFlag: model.birthFlag(for: card.person.id)"), "the card gets its flag by one lookup")
         let cards = try SourceTree.appSource(named: "FamilyTreeCards.swift")
-        #expect(cards.contains("FamilyTreeBirthFlagPlaceholder(flag: birthFlag, accent: accent)"), "no photo → the flag is the portrait")
+        #expect(!cards.contains("FamilyTreeBirthFlagPlaceholder"), "KISS: the flag is never the portrait")
         #expect(cards.contains("FamilyTreeBirthFlagBadge(flag: birthFlag)"), "every flagged card → the header flag")
 
         let builder = try SourceTree.appSource(named: "FamilyTreeBirthCountries.swift")

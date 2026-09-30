@@ -63,18 +63,6 @@ struct FamilyTreeBirthFlag: Equatable, Sendable {
             ? "Born in \(recordedPlace) (from the family's notes) · shown under today's flag"
             : "Born in \(recordedPlace) · shown under today's flag"
     }
-
-    /// How the card draws the flag: no photo → the flag IS the portrait
-    /// (large, centred in the photo slot, every generation); a photo → a
-    /// small badge in the portrait's corner.
-    enum Presentation: Equatable, Sendable {
-        case placeholder
-        case badge
-    }
-
-    static func presentation(hasPhoto: Bool) -> Presentation {
-        hasPhoto ? .badge : .placeholder
-    }
 }
 
 /// Every flagged person of one installed tree, keyed by GEDCOM id, plus
