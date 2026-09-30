@@ -138,3 +138,50 @@ Red before (Debug): Core FamilyMap 56 tests / 8 suites, 4 issues (Unicode test o
 Green after (Debug): Core FamilyMap 56 tests / 8 suites, 0 issues; app FamilyMapModel + NotesAdversarial + AdversarialApp + RenderSensor (headless) + MapKitLinkSensor = 28 tests / 5 suites, 0 issues. Gauntlet `inventory.swift --validate`: 0 errors.
 
 Known false negatives (these are left unplaced on purpose and pinned): nicknames the archive does not list ("Grandma was born in Cork"), surname-only forms ("Mrs O'Connor was born"), and lower-case particles inside the name run ("Mary de Burgh was born").
+
+## Codex re-check of #1819 — `81a0b2c6..a29d5403`
+
+Credits spent: unavailable | Finding count: 3
+Verdict: fix
+
+1. **P2 — Opening words and pronouns still attribute another person's birth.**
+   `FamilyTree/FamilyMapModel.swift:299–300`: on Mary's event,
+   “Birth certificate for her daughter records Boston.” and
+   “Ellen O'Connor moved to Boston, where she was born.” both return true.
+   The former passes the opening `Birth` branch; the latter passes the
+   unrestricted pronoun branch. With an active confirmed `.family` event
+   and Boston place, the lookup consequently returns Boston for Mary.
+   **Pin:** add both sentences to the actual lookup test under both linkage
+   forms, requiring nil and archive immutability; retain own-birth positives.
+
+2. **P2 — A shared given name accepts an explicitly conflicting identity.**
+   `FamilyTree/FamilyMapModel.swift:301–303`: “Mary Ellen Ronan was born in
+   Boston.” qualifies for Mary Christina O'Connor because one name token,
+   `Mary`, matches. Explicit conflicting names must not establish identity.
+   **Pin:** require this event to leave Mary unplaced, with canonical-name
+   and listed-alias positive controls.
+
+3. **P3 — Synchronous selection work escapes the render sensor ceiling.**
+   `StressTests/FamilyMapRenderSensorTests.swift:290–291,309–313,341–343`:
+   selection runs before `pump`; only the later pump maxima are gated.
+   Coordinate selection duration is logged, never asserted; key selection
+   duration is not collected. A synchronous selection exceeding 170 ms
+   could therefore pass both assertions. **Pin:** measure and gate each
+   selection itself with `SuspendingClock`, retaining the post-selection
+   pump gates. Source-confirmed sensor gap; no app latency defect asserted.
+
+Validation: exact extracted own-birth and `hasText` helpers ran headlessly
+with explicit minimal item/person/tokenizer dependencies. Findings 1's
+branches return before the tokenizer; finding 2 was reproduced with the
+disclosed ASCII tokenizer stub and remains source-confirmed for the complete
+app. Original daughter-birth negatives and own-birth positives passed.
+The brief's parenthetical “Mary O'Connor (her aunt) was born” example returns
+false in this helper; it is not a reproduced defect. NBSP/em-space and other
+Unicode blank controls passed. Artifacts: `/private/tmp/videoscan-review-1819/`.
+
+Read, no additional findings: the privacy ceiling in `FamilyMapModel`;
+`FamilyMapTally` and `BirthplaceUnitResolver` shared blank definition;
+`FamilyMapNotesAdversarialTests` and `FamilyMapWhitespaceAdversarialTests`.
+The render sensor's two post-selection gates correctly use awake time.
+Claude's supplied Core/app suite results were not independently rerun; no
+app/test host/UI or media operations. Six-file pinned review only.
