@@ -346,8 +346,11 @@ struct FamilyTreeBirthFlagTests {
     /// Public repo: no real street address in these fixtures (policy of
     /// the #227 codex follow-up merge a29d5403; QA #229 P1).
     @Test func noRealStreetAddressInTheseTests() throws {
+        // Any "<number> <Name> Lane/Street/Road/…" other than the neutral
+        // "1 Example Lane" is treated as a real address.
         let source = try String(contentsOfFile: #filePath, encoding: .utf8)
-        #expect(!source.contains("Fullers" + " Lane"))
+        let street = try Regex(#"\b\d+[A-Za-z]?\s+(?!Example\b)(?:\p{Lu}[\p{L}'’-]+\s+){1,3}(?:Lane|Street|St\.|Road|Rd\.|Place|Terrace|Row|Square|Avenue)\b"#)
+        #expect(source.firstMatch(of: street) == nil, "public repo: no real street address in test fixtures")
     }
 
     @Test func noTreeMeansNoFlags() async throws {
