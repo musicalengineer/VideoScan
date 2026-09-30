@@ -593,8 +593,9 @@ struct FamilyMapModelTests {
         #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I9@", in: knowledge) == nil, "disputed")
         #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I10@", in: knowledge) == nil, "a death is not a birth")
         #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I1@", in: knowledge) == nil, "no notes at all")
-        #expect(FamilyMapModel.isBirthEvent(item("x", .event, "Married Jane Osborne at Birthdale.", person: "p", place: nil)) == false, "whole words only")
-        #expect(FamilyMapModel.isBirthEvent(item("x", .event, "BIRTH registered late.", person: "p", place: nil)))
+        let anyone = CyberBrainPerson(id: "p", canonicalName: "Test Person")
+        #expect(FamilyMapModel.isOwnBirthEvent(item("x", .event, "Married Jane Osborne at Birthdale.", person: "p", place: nil), of: anyone) == false, "whole words only")
+        #expect(FamilyMapModel.isOwnBirthEvent(item("x", .event, "BIRTH registered late.", person: "p", place: nil), of: anyone))
 
         // Through the real pipeline with the knowledge injected.
         let r = try TreeWalk.walk(g, options: .init(starts: ["@I1@"]))
