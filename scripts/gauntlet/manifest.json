@@ -8611,7 +8611,8 @@
       ],
       "tests": [
         "onlyThePersonsOwnVisibleBirthPlacesThem",
-        "onlyTheSubjectsOwnBirthIsABirthEvent"
+        "onlyTheSubjectsOwnBirthIsABirthEvent",
+        "recheckSentencesThroughTheActualLookup"
       ]
     },
     {
@@ -19125,7 +19126,9 @@
         "FamilyMapRenderSensorTests"
       ],
       "tests": [
-        "theBundledMapAtTheRealTreeSize"
+        "selectionItselfIsGatedNotOnlyThePump",
+        "theBundledMapAtTheRealTreeSize",
+        "worstSecondsIsTheLongestDuration"
       ]
     },
     {
@@ -24824,7 +24827,7 @@
         "VIDEOSCAN_PERF_RESULTS": "{run_dir}/generated-media-perf.txt",
         "VIDEOSCAN_PERF_TIME_LIMIT_MIN": "10"
       },
-      "expected_floor": 55,
+      "expected_floor": 57,
       "name": "performance",
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

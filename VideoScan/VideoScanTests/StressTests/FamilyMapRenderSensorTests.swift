@@ -276,6 +276,12 @@ struct FamilyMapRenderSensorTests {
         let countedFine = c.counts.keys.filter { !FamilyMapKey.isCountryKey($0) }.sorted()
         #expect(countedFine.count > 50, "the synthetic mix should shade most fine units, got \(countedFine.count)")
         var clickWorst: [TimeInterval] = [], clickBusy: [TimeInterval] = [], clickEvals: [Int] = []
+        // The selection call ITSELF is synchronous main-thread work that
+        // runs before `pump` starts counting (codex re-check F3), so it is
+        // timed on its own — awake time, like `pump`, so a sleeping Mac
+        // cannot fail it.
+        let awake = SuspendingClock()
+        var keySelect: [Duration] = []
         // Three keys from the START of the (key-sorted) piece list and two
         // from the END: if MapKit rebuilds every overlay after the first
         // changed one, the late keys are cheap and the early ones are not.
@@ -287,18 +293,21 @@ struct FamilyMapRenderSensorTests {
         let clickKeys = Array(countedFine.prefix(3)) + Array(countedFine.suffix(2))
         for key in clickKeys {
             probe.reset()
-            model.select(unitKey: key)
+            let sel = awake.measure { model.select(unitKey: key) }
+            keySelect.append(sel)
             let p = Self.pump(seconds: 0.5)
             clickWorst.append(p.worst)
             clickBusy.append(p.busy)
             clickEvals.append(probe.evaluations)
         }
-        Self.log("6a click by key ×5 \(clickKeys.map { "\($0)@\(pieceIndex[$0] ?? -1)" }): worst slice \(clickWorst.map(Self.ms).joined(separator: ", ")); busy \(clickBusy.map(Self.ms).joined(separator: ", ")); content evaluations \(clickEvals)")
+        let keySelectText: String = keySelect.map { (d: Duration) -> String in Self.ms(d) }.joined(separator: ", ")
+        Self.log("6a click by key ×5 \(clickKeys.map { "\($0)@\(pieceIndex[$0] ?? -1)" }): select(unitKey:) \(keySelectText); worst slice \(clickWorst.map(Self.ms).joined(separator: ", ")); busy \(clickBusy.map(Self.ms).joined(separator: ", ")); content evaluations \(clickEvals)")
         // The same key again: `selectedKey` is assigned the SAME value, so
         // objectWillChange fires and the body re-runs with IDENTICAL map
         // content — the cost of re-declaring 907 unchanged polygons.
         probe.reset()
-        model.select(unitKey: clickKeys[clickKeys.count - 1])
+        let sameSelect = awake.measure { model.select(unitKey: clickKeys[clickKeys.count - 1]) }
+        keySelect.append(sameSelect)
         let same = Self.pump(seconds: 0.5)
         Self.log("6a' identical content re-evaluation: worst slice \(Self.ms(same.worst)), busy \(Self.ms(same.busy)); content evaluations \(probe.evaluations)")
         var coordWorst: [TimeInterval] = [], coordSelect: [Duration] = [], coordEvals: [Int] = [], picked: [String] = []
@@ -306,7 +315,7 @@ struct FamilyMapRenderSensorTests {
             let unit = try #require(u.unit(forKey: key))
             let centre = unit.cameraBox.center
             probe.reset()
-            let sel = clock.measure { model.select(coordinate: centre) }
+            let sel = awake.measure { model.select(coordinate: centre) }
             coordSelect.append(sel)
             picked.append(model.selectedKey ?? "-")
             let p = Self.pump(seconds: 0.5)
@@ -341,5 +350,52 @@ struct FamilyMapRenderSensorTests {
         let stallCeiling = TimingBudget.seconds(PerformanceLane.loadAwareDebugCeiling(.milliseconds(170)))
         #expect((clickWorst.max() ?? 0) < stallCeiling, "a click stalled the main thread \(Self.ms(clickWorst.max() ?? 0)) (\(PerformanceLane.loadDescription()))")
         #expect((coordWorst.max() ?? 0) < stallCeiling, "a coordinate click stalled the main thread \(Self.ms(coordWorst.max() ?? 0)) (\(PerformanceLane.loadDescription()))")
+        // The same ceiling on the selection call itself (codex re-check F3).
+        let keySelectWorst: TimeInterval = Self.worstSeconds(keySelect)
+        let coordSelectWorst: TimeInterval = Self.worstSeconds(coordSelect)
+        #expect(keySelectWorst < stallCeiling, "select(unitKey:) itself took \(Self.ms(keySelectWorst)) (\(PerformanceLane.loadDescription()))")
+        #expect(coordSelectWorst < stallCeiling, "select(coordinate:) itself took \(Self.ms(coordSelectWorst)) (\(PerformanceLane.loadDescription()))")
+    }
+
+    /// The longest of a set of measured durations, in seconds (0 when empty).
+    static func worstSeconds(_ durations: [Duration]) -> TimeInterval {
+        var worst: TimeInterval = 0
+        for d in durations {
+            let s = TimingBudget.seconds(d)
+            if s > worst { worst = s }
+        }
+        return worst
+    }
+
+    // MARK: - Headless pins (always run; no window)
+
+    /// codex re-check F3: the on-screen step 6 must gate the synchronous
+    /// selection calls themselves, not only the pump after them. Step 6
+    /// only runs on screen, so this reads its own source and pins the
+    /// shape — awake-time measurement of both selections, and a gate on
+    /// each. The needles are built from pieces so this test's own text
+    /// cannot satisfy them.
+    @Test func selectionItselfIsGatedNotOnlyThePump() throws {
+        let source = try String(contentsOfFile: #filePath, encoding: .utf8)
+        let stepStart = try #require(source.range(of: "// 6" + ". Clicks"))
+        let stepEnd = try #require(source.range(of: "// 7" + ". A change of checks"))
+        let step6 = String(source[stepStart.upperBound..<stepEnd.lowerBound])
+        #expect(step6.contains("let awake = " + "SuspendingClock()"), "selections are timed on awake time")
+        #expect(step6.contains("awake.measure { model." + "select(unitKey: key) }"), "each key selection is measured")
+        #expect(step6.contains("awake.measure { model." + "select(coordinate: centre) }"), "each coordinate selection is measured")
+        let gateStart = try #require(source.range(of: "// Coarse ceiling" + ": a click"))
+        let gate = String(source[gateStart.upperBound...])
+        #expect(gate.contains("#expect(keySelectWorst" + " < stallCeiling"), "key selection duration is gated")
+        #expect(gate.contains("#expect(coordSelectWorst" + " < stallCeiling"), "coordinate selection duration is gated")
+        #expect(gate.contains("#expect((clickWorst.max() ?? 0)" + " < stallCeiling"), "the post-selection pump gate stays")
+        #expect(gate.contains("#expect((coordWorst.max() ?? 0)" + " < stallCeiling"), "the post-selection coordinate pump gate stays")
+    }
+
+    /// `worstSeconds` is what the gates compare — pinned headlessly.
+    @Test func worstSecondsIsTheLongestDuration() {
+        let none: [Duration] = []
+        #expect(Self.worstSeconds(none) == 0)
+        let some: [Duration] = [.milliseconds(12), .milliseconds(240), .milliseconds(3)]
+        #expect(abs(Self.worstSeconds(some) - 0.240) < 0.000_001)
     }
 }
