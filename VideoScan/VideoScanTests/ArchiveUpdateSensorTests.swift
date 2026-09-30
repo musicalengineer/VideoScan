@@ -18,8 +18,9 @@ struct ArchiveUpdateSensorTests {
             .appendingPathComponent("VideoScan")
     }
 
+    /// By NAME anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
     private static func source(_ name: String) throws -> String {
-        try String(contentsOf: appDir.appendingPathComponent(name), encoding: .utf8)
+        try SourceTree.appSource(named: name)
     }
 
     /// Non-comment lines only.
@@ -43,12 +44,12 @@ struct ArchiveUpdateSensorTests {
 
     @Test("the archive write exception is granted in exactly ONE place: the model's Update")
     func oneGrantSite() throws {
-        #expect(try Self.sites(of: "ArchiveRefileAuthorization.grant(") == ["VideoScanModel+ArchiveUpdate.swift": 1])
+        #expect(try Self.sites(of: "ArchiveRefileAuthorization.grant(") == ["Archive/VideoScanModel+ArchiveUpdate.swift": 1])
     }
 
     @Test("the refile engine runs from exactly ONE place, and only with a grant it re-checks")
     func oneEngineCallSite() throws {
-        #expect(try Self.sites(of: "ArchiveRefileEngine.execute(") == ["VideoScanModel+ArchiveUpdate.swift": 1])
+        #expect(try Self.sites(of: "ArchiveRefileEngine.execute(") == ["Archive/VideoScanModel+ArchiveUpdate.swift": 1])
         let engine = Self.code(try Self.source("ArchiveRefile.swift"))
         #expect(engine.contains("authorization: ArchiveRefileAuthorization,"), "execute requires the grant")
         #expect(engine.contains("guard authorization.covers(rootPath: root, fromRelPath: from, toRelPath: to) else {"))
@@ -93,16 +94,16 @@ struct ArchiveUpdateSensorTests {
     @Test("ONE index-write lock: every 00_Index appender and the whole-file rewrite hold it (codex review #1)")
     func everyIndexWriterHoldsTheLock() throws {
         let lockSites = try Self.sites(of: "ArchiveIndexLock.withExclusive(")
-        #expect(lockSites == ["MasterArchive.swift": 1, "ArchivePromoteEngine.swift": 1,
-                              "ArchivePromoteDecisions.swift": 1, "VideoScanModel+BackupAttestations.swift": 1,
-                              "ArchiveIndexRename.swift": 1,
+        #expect(lockSites == ["Archive/MasterArchive.swift": 1, "Archive/ArchivePromoteEngine.swift": 1,
+                              "Archive/ArchivePromoteDecisions.swift": 1, "Archive/VideoScanModel+BackupAttestations.swift": 1,
+                              "Archive/ArchiveIndexRename.swift": 1,
                               // Not a writer: the one-time lock catch-up holds it per file so it
                               // can never flag a file mid-Update (codex r1 #1 on promote-dates-and-lock).
-                              "ArchiveLockJob.swift": 1], "\(lockSites)")
+                              "Archive/ArchiveLockJob.swift": 1], "\(lockSites)")
         // An index append is `appendDurable(fd:` — exactly the four above.
         let appends = try Self.sites(of: "ArchivePromoteEngine.appendDurable(fd:")
-        #expect(appends == ["MasterArchive.swift": 1, "ArchivePromoteEngine.swift": 1,
-                            "ArchivePromoteDecisions.swift": 1, "VideoScanModel+BackupAttestations.swift": 1],
+        #expect(appends == ["Archive/MasterArchive.swift": 1, "Archive/ArchivePromoteEngine.swift": 1,
+                            "Archive/ArchivePromoteDecisions.swift": 1, "Archive/VideoScanModel+BackupAttestations.swift": 1],
                 "a new 00_Index appender must take ArchiveIndexLock: \(appends)")
     }
 

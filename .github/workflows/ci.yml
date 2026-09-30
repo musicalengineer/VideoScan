@@ -171,7 +171,7 @@ jobs:
           START=$(date +%s)
           # ── Hang watchdog (fix/ci-red-4, run 36214064340) ──
           # The test host prints TEST_HOST_HEARTBEAT every 10 s from its main
-          # run loop (VideoScan/main.swift). No heartbeat for 180 s means the
+          # run loop (VideoScan/App/main.swift). No heartbeat for 180 s means the
           # main thread is blocked or spinning: `sample` the host so the log
           # names the stack, then once more 5 min later (identical stack =
           # blocked, moving = spinning). Diagnostic only: never kills, writes

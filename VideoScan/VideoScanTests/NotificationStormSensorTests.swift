@@ -74,18 +74,15 @@ struct NotificationStormSensorTests {
     }
 
     @Test func everyVideoScanModelBlockObserverIsOwnedByItsBag() throws {
-        let appDir = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()            // VideoScanTests/
-            .deletingLastPathComponent()            // VideoScan/ (project dir)
-            .appendingPathComponent("VideoScan")
-        let files = try FileManager.default.contentsOfDirectory(atPath: appDir.path)
+        // Recursive over the feature folders (2026-09-29) — SourceTree.appSources.
+        let files = SourceTree.appSources.map(\.url.lastPathComponent)
             .filter { $0.hasPrefix("VideoScanModel") && $0.hasSuffix(".swift") }
             .sorted()
         #expect(files.count > 10, "sensor found \(files.count) VideoScanModel*.swift files — did the sources move? Update the path deliberately.")
 
         var totalRegistrations = 0
         for name in files {
-            let source = try String(contentsOf: appDir.appendingPathComponent(name), encoding: .utf8)
+            let source = try SourceTree.appSource(named: name)
             let registrations = occurrences(of: "addObserver(", in: source)
             let owned = occurrences(of: "notificationObservers.add(", in: source)
             totalRegistrations += registrations

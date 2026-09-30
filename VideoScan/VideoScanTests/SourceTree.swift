@@ -49,6 +49,70 @@ enum SourceTree {
         }
         return String(full.dropFirst(prefix.count))
     }
+
+    // MARK: - App sources by NAME (2026-09-29 source-folder reorg)
+    //
+    // The app sources live in feature folders (Archive/, Hallie/Voice/, …;
+    // see docs/source_layout.md). A sensor that hard-codes
+    // "VideoScan/Foo.swift" breaks — or, worse, reads nothing — the next
+    // time a file moves. Look the file up by NAME instead: the name is
+    // unique across the app tree, so a move cannot change the answer.
+
+    /// `VideoScan/VideoScan` — the app target's synchronized source root.
+    static let appSourceRoot: URL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()        // VideoScanTests/
+        .deletingLastPathComponent()        // VideoScan/ (project dir)
+        .appendingPathComponent("VideoScan", isDirectory: true)
+
+    struct NotFound: Error, CustomStringConvertible {
+        let name: String
+        let matches: [String]
+        var description: String {
+            "SourceTree: \(matches.count) app sources named \(name) (want exactly 1): \(matches)"
+        }
+    }
+
+    /// Every .swift file under the app root, recursively, keyed by its path
+    /// relative to that root ("Archive/ArchiveRefile.swift"). Built once —
+    /// `static let` is lazily initialized and thread-safe (≈ a C++ function-
+    /// local static).
+    static let appSources: [(relative: String, url: URL)] = {
+        guard let walk = FileManager.default.enumerator(at: appSourceRoot, includingPropertiesForKeys: nil)
+        else { return [] }
+        var out: [(String, URL)] = []
+        let base = canonicalPath(appSourceRoot) + "/"
+        for case let url as URL in walk where url.pathExtension == "swift" {
+            let full = canonicalPath(url)
+            guard full.hasPrefix(base) else { continue }
+            out.append((String(full.dropFirst(base.count)), url))
+        }
+        return out.sorted { $0.0 < $1.0 }
+    }()
+
+    /// The ONE app source file called `name` ("ArchiveRefile.swift"), found
+    /// anywhere under `VideoScan/VideoScan`. `name` may carry a folder
+    /// suffix ("ArchiveAngel/Prepare/ArchiveAngelPlan.swift") to pin a file
+    /// more tightly. nil — and a recorded Issue, so a sensor can never pass
+    /// by reading nothing — when zero or several files match.
+    static func appSourceURL(named name: String,
+                             sourceLocation: SourceLocation = #_sourceLocation) -> URL? {
+        let hits = appSources.filter { $0.relative == name || $0.relative.hasSuffix("/" + name) }
+        guard hits.count == 1 else {
+            Issue.record("\(NotFound(name: name, matches: hits.map(\.relative)))", sourceLocation: sourceLocation)
+            return nil
+        }
+        return hits[0].url
+    }
+
+    /// The text of the ONE app source file called `name` (see
+    /// `appSourceURL(named:)`); throws when it is missing or ambiguous.
+    static func appSource(named name: String,
+                          sourceLocation: SourceLocation = #_sourceLocation) throws -> String {
+        guard let url = appSourceURL(named: name, sourceLocation: sourceLocation) else {
+            throw NotFound(name: name, matches: [])
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
 }
 
 // MARK: - The helper's own sensor (runs from any checkout location)
@@ -75,6 +139,29 @@ struct SourceTreeTests {
         #expect(naive != "Sub/A.swift" || walked.first?.path.hasPrefix("/tmp/") == true,
                 "fixture: the enumerator is expected to return the /private spelling")
         #expect(walked.first.flatMap { SourceTree.relativePath($0, under: root) } == "Sub/A.swift")
+    }
+
+    @Test func appSourcesAreFoundByNameInsideTheirFeatureFolder() throws {
+        #expect(SourceTree.appSources.count > 600, "the index must see the whole app tree")
+        let url = try #require(SourceTree.appSourceURL(named: "ArchiveRefile.swift"))
+        #expect(url.path.hasSuffix("/VideoScan/Archive/ArchiveRefile.swift"))
+        // A folder suffix pins a file more tightly.
+        #expect(SourceTree.appSourceURL(named: "ArchiveAngel/Prepare/ArchiveAngelJob.swift") != nil)
+        #expect(try SourceTree.appSource(named: "main.swift").contains("VideoScanApp.main()"))
+    }
+
+    /// Lookup by name is only well-defined while names are unique. A second
+    /// file with an existing name must be renamed, not hidden in a folder.
+    @Test func everyAppSourceNameIsUnique() {
+        let names = SourceTree.appSources.map { ($0.relative as NSString).lastPathComponent }
+        let dupes = Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys.sorted()
+        #expect(dupes.isEmpty, "duplicate app source names: \(dupes)")
+    }
+
+    @Test func aMissingAppSourceIsRefusedLoudly() {
+        withKnownIssue("appSourceURL records an Issue when no file has the name") {
+            #expect(SourceTree.appSourceURL(named: "NoSuchFile-\(UUID().uuidString).swift") == nil)
+        }
     }
 
     @Test func aFileOutsideTheRootIsRefusedLoudly() {

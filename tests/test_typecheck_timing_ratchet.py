@@ -39,17 +39,19 @@ def warn(file_name, line, col, message):
     return f"{RUNNER_PREFIX}/{file_name}:{line}:{col}: warning: {message}"
 
 
-# Verbatim lines from run 34750465600 (nightly, main, 2026-09-13).
+# Verbatim lines from run 34750465600 (nightly, main, 2026-09-13); only the
+# file paths are re-homed into the 2026-09-29 feature folders (docs/source_layout.md)
+# so the committed baseline — remapped the same way — still grandfathers them.
 REAL_LOG_SAMPLE = [
-    f"{RUNNER_PREFIX}/HallieLineageAnswer+CommonAncestor.swift:93:17: warning: "
+    f"{RUNNER_PREFIX}/Hallie/HallieLineageAnswer+CommonAncestor.swift:93:17: warning: "
     "static method 'commonAncestor(_:_:request:context:)' took 254ms to type-check (limit: 100ms)",
-    f"{RUNNER_PREFIX}/HalliePronunciationHint.swift:471:9: warning: "
+    f"{RUNNER_PREFIX}/Hallie/Voice/HalliePronunciationHint.swift:471:9: warning: "
     "expression took 311ms to type-check (limit: 100ms)",
-    f"{RUNNER_PREFIX}/HalliePronunciationHint.swift:473:9: warning: "
+    f"{RUNNER_PREFIX}/Hallie/Voice/HalliePronunciationHint.swift:473:9: warning: "
     "expression took 301ms to type-check (limit: 100ms)",
-    f"{RUNNER_PREFIX}/MediaDistribution.swift:379:22: warning: "
+    f"{RUNNER_PREFIX}/Media/MediaDistribution.swift:379:22: warning: "
     "expression took 770ms to type-check (limit: 100ms)",
-    f"{RUNNER_PREFIX}/CatalogContent+Table.swift:181:9: warning: "
+    f"{RUNNER_PREFIX}/Catalog/CatalogContent+Table.swift:181:9: warning: "
     "getter for property 'tableWithCatalogTriggers' took 17311ms to type-check (limit: 100ms)",
 ]
 
@@ -318,10 +320,10 @@ class TestAgainstRealNightlyOutput(unittest.TestCase):
         table = tc.parse_log(REAL_LOG_SAMPLE, WORKSPACE)
         identities = set(table)
         self.assertIn(
-            "VideoScan/VideoScan/CatalogContent+Table.swift::"
+            "VideoScan/VideoScan/Catalog/CatalogContent+Table.swift::"
             "getter for property 'tableWithCatalogTriggers'", identities)
         self.assertIn(
-            "VideoScan/VideoScan/HallieLineageAnswer+CommonAncestor.swift::"
+            "VideoScan/VideoScan/Hallie/HallieLineageAnswer+CommonAncestor.swift::"
             "static method 'commonAncestor(_:_:request:context:)'", identities)
         # The two HalliePronunciationHint expressions folded into one entry.
         self.assertEqual(len(identities), 4)

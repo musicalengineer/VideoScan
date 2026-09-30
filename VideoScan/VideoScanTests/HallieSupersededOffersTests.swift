@@ -326,14 +326,12 @@ struct HallieSupersededOffersTests {
     /// SENSOR: the window hands the sink's Subject (id included) to the
     /// pure retire, and the commit compares Subjects, not bare names.
     @Test func theWindowAndCommitCompareSubjectsNotNames() throws {
-        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("VideoScan")
-        let commit = try String(contentsOf: dir.appendingPathComponent("HallieResponseCommit.swift"), encoding: .utf8)
+        let commit = try SourceTree.appSource(named: "HallieResponseCommit.swift")
         #expect(commit.contains("var retireSupersededOffers: (HallieSupersededOffers.Subject) -> Void"))
         #expect(commit.contains("subject.isDifferentPerson(from: previousSubject ?? .init(name: \"\"))"))
         #expect(!commit.contains("PersonResolver.normalize(subject) != PersonResolver.normalize(previousSubject"),
                 "the name-only comparison is gone")
-        let window = try String(contentsOf: dir.appendingPathComponent("ArchivistChatWindow.swift"), encoding: .utf8)
+        let window = try SourceTree.appSource(named: "ArchivistChatWindow.swift")
         #expect(window.contains("messages = HallieSupersededOffers.retire(in: messages, keeping: subject)"))
     }
 }

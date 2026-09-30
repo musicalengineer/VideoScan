@@ -505,31 +505,31 @@ struct ArchiveVolumeProtectionSourceSensor {
     /// `excludingMasterArchiveFiles` / `bulkDeleteRefusal` first; then
     /// update this list.
     static let reviewed: [String: Int] = [
-        "VideoScan/AdaFaceEngine.swift": 1, "VideoScan/ArcFaceEngine.swift": 1,
+        "VideoScan/People/AdaFaceEngine.swift": 1, "VideoScan/People/ArcFaceEngine.swift": 1,
         "VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift": 1, "VideoScan/ArchiveAngel/Prepare/ArchiveAngelPlan.swift": 2,
-        "VideoScan/ArchivePromoteEngine.swift": 3, "VideoScan/AudioTranscriber.swift": 1,
-        "VideoScan/ArchiveIndexRename.swift": 3,   // 2026-09-25: only 00_Index/.rename_backups/<stamp> folders (refused-rename cleanup + keep-newest-20 prune) — never media or index files. 2026-09-27 (codex review of GH #204): +1 `abandon` — a backup folder THIS process just claimed and failed to finish; prune now removes only real dirs carrying our complete marker. 2026-09-27 (codex re-review #1): −2 — the refused-rename cleanup removes only its own folder, under the lock, and never the `.rename_backups/` folder itself
-        "VideoScan/BalanceAudioJob.swift": 1, "VideoScan/BundleExporter.swift": 1,
-        "VideoScan/BundleImporter.swift": 2, "VideoScan/CaptionRunner.swift": 2,
-        "VideoScan/CatalogStore.swift": 1, "VideoScan/CatalogSync.swift": 3,
-        "VideoScan/CatalogWriteError.swift": 1, "VideoScan/CleanupJob.swift": 4,
+        "VideoScan/Archive/ArchivePromoteEngine.swift": 3, "VideoScan/Media/AudioTranscriber.swift": 1,
+        "VideoScan/Archive/ArchiveIndexRename.swift": 3,   // 2026-09-25: only 00_Index/.rename_backups/<stamp> folders (refused-rename cleanup + keep-newest-20 prune) — never media or index files. 2026-09-27 (codex review of GH #204): +1 `abandon` — a backup folder THIS process just claimed and failed to finish; prune now removes only real dirs carrying our complete marker. 2026-09-27 (codex re-review #1): −2 — the refused-rename cleanup removes only its own folder, under the lock, and never the `.rename_backups/` folder itself
+        "VideoScan/MediaOps/BalanceAudioJob.swift": 1, "VideoScan/App/BundleExporter.swift": 1,
+        "VideoScan/App/BundleImporter.swift": 2, "VideoScan/Media/CaptionRunner.swift": 2,
+        "VideoScan/Catalog/CatalogStore.swift": 1, "VideoScan/Catalog/CatalogSync.swift": 3,
+        "VideoScan/Catalog/CatalogWriteError.swift": 1, "VideoScan/MediaOps/CleanupJob.swift": 4,
         // CombineOutputPublish.swift: 2 → 1 (fix/one-partial-registry,
         // 2026-09-22) → 0 (codex #1642, 2026-09-23): the placeholder
         // fallback and its unlink are gone; the no-clobber rename lives in
         // ExclusivePublish (PartialFileNaming.swift) and removePartial
         // delegates to PartialFileNaming.remove.
-        "VideoScan/CouplePortrait.swift": 2,
+        "VideoScan/FamilyTree/CouplePortrait.swift": 2,
         // trashItem (Replace, the user's choice, never on the archive volume).
         // 2 → 1 (fix/one-partial-registry, 2026-09-22): the stale-partial
         // sweep's removeItem moved to the ONE shared sweep in
         // PartialFileNaming.swift.
-        "VideoScan/DerivativeOutputPublish.swift": 1,
-        "VideoScan/FamilyAssetStore.swift": 2,
-        "VideoScan/FamilySearchPullCoordinator.swift": 6, "VideoScan/FindPersonJob.swift": 1,
-        "VideoScan/HallieNeuralSpeech.swift": 7, "VideoScan/HalliePhotoImport.swift": 1,
-        "VideoScan/HalliePronunciationLexicon.swift": 1, "VideoScan/HallieWebPoster.swift": 3,
-        "VideoScan/HallieWebProxy.swift": 3, "VideoScan/IdentifyFamilyModel.swift": 1,
-        "VideoScan/MediaPersonLinks.swift": 1,   // a method named unlink(personID:) — no file
+        "VideoScan/MediaOps/DerivativeOutputPublish.swift": 1,
+        "VideoScan/FamilyTree/FamilyAssetStore.swift": 2,
+        "VideoScan/FamilyTree/FamilySearchPullCoordinator.swift": 6, "VideoScan/People/FindPersonJob.swift": 1,
+        "VideoScan/Hallie/Voice/HallieNeuralSpeech.swift": 7, "VideoScan/Hallie/HalliePhotoImport.swift": 1,
+        "VideoScan/Hallie/Voice/HalliePronunciationLexicon.swift": 1, "VideoScan/Hallie/Web/HallieWebPoster.swift": 3,
+        "VideoScan/Hallie/Web/HallieWebProxy.swift": 3, "VideoScan/People/IdentifyFamilyModel.swift": 1,
+        "VideoScan/Media/MediaPersonLinks.swift": 1,   // a method named unlink(personID:) — no file
         // NEW 1 (fix/one-partial-registry, 2026-09-22): the ONE removal of
         // `<stem>.<8 hex>.vs-partial.<ext>` files — unlink(2), so a directory
         // is refused (QA 3) — behind remove()'s is-a-partial name guard AND
@@ -544,30 +544,30 @@ struct ArchiveVolumeProtectionSourceSensor {
         //  - ExclusivePublish.publishByLink: after link(2) gave OUR file its
         //    published name, drops the old partial name — only while lstat
         //    shows the same dev+ino (the data stays under the new name).
-        "VideoScan/PartialFileNaming.swift": 3,
-        "VideoScan/POIProfileFileStore.swift": 2, "VideoScan/POIStorage.swift": 1,
-        "VideoScan/PerceptualFingerprinter.swift": 1, "VideoScan/PersonEditSheet.swift": 1,
-        "VideoScan/PersonFinderCompilation.swift": 7, "VideoScan/RebuildAudioJob.swift": 1,
-        "VideoScan/RecipeGenderAgeGate.swift": 1,
+        "VideoScan/MediaOps/PartialFileNaming.swift": 3,
+        "VideoScan/People/POIProfileFileStore.swift": 2, "VideoScan/People/POIStorage.swift": 1,
+        "VideoScan/Media/PerceptualFingerprinter.swift": 1, "VideoScan/People/PersonEditSheet.swift": 1,
+        "VideoScan/People/PersonFinderCompilation.swift": 7, "VideoScan/MediaOps/RebuildAudioJob.swift": 1,
+        "VideoScan/People/RecipeGenderAgeGate.swift": 1,
         // 8 → 5 (2026-09-22): the output-name pre-delete, the replacing
         // publish and the delete-on-collision are gone; what remains
         // removes this run's own partial after a stall / cancel / failure.
-        "VideoScan/ReformatJob.swift": 5,
-        "VideoScan/RelocateEngine.swift": 1, "VideoScan/RescueFileCopier.swift": 3,
-        "VideoScan/ReviewThumbnailRenderer.swift": 1, "VideoScan/ScanCheckpoint.swift": 1,
-        "VideoScan/ScanJobsStorage.swift": 2, "VideoScan/SignatureVerification.swift": 2,
+        "VideoScan/MediaOps/ReformatJob.swift": 5,
+        "VideoScan/MediaOps/RelocateEngine.swift": 1, "VideoScan/MediaOps/RescueFileCopier.swift": 3,
+        "VideoScan/Media/ReviewThumbnailRenderer.swift": 1, "VideoScan/Volumes/ScanCheckpoint.swift": 1,
+        "VideoScan/Volumes/ScanJobsStorage.swift": 2, "VideoScan/MediaOps/SignatureVerification.swift": 2,
         // 7 → 4 (2026-09-22): no pre-delete of the output name or of a
         // fixed-name partial. 4 → 0 (fix/one-partial-registry, same day):
         // this run's own reserved partial is removed through
         // PartialFileNaming.remove (name-guarded, logged, releases the
         // reservation) — see PartialRegistryCrossJobTests.
-        "VideoScan/TrimJob.swift": 1,
+        "VideoScan/MediaOps/TrimJob.swift": 1,
         // 3 → 1 (2026-09-22, fix/combine-never-overwrites): the final-name
         // removals on failure / verify failure are gone (partials go through
         // CombineOutputPublish.removePartial); the one left removes this
         // pair's own freshly created `VS_<uuid>` staging dir.
-        "VideoScan/VideoScanModel+Combine.swift": 1, "VideoScan/VideoScanModel+JunkDelete.swift": 2,
-        "VideoScan/VideoScanModel+ProbeEngine.swift": 1, "VideoScan/VideoScanModel+Workbench.swift": 1,
+        "VideoScan/MediaOps/VideoScanModel+Combine.swift": 1, "VideoScan/MediaOps/VideoScanModel+JunkDelete.swift": 2,
+        "VideoScan/Media/VideoScanModel+ProbeEngine.swift": 1, "VideoScan/Catalog/VideoScanModel+Workbench.swift": 1,
         "VideoScanCore/AtomicFilePublish.swift": 2, "VideoScanCore/CyberBrainWriter.swift": 3,
         "VideoScanCore/FFmpegFrameRip.swift": 1, "VideoScanCore/FamilyGraphCompiledStore.swift": 5,
         "VideoScanCore/PreviewDiskCache.swift": 4,
@@ -580,9 +580,9 @@ struct ArchiveVolumeProtectionSourceSensor {
     /// `moveItem(` on a line that names a trash folder — a hand-rolled
     /// "delete" that the removal regex above cannot see.
     static let reviewedTrashMoves: [String: Reviewed] = [
-        "VideoScan/BundleImporter.swift": Reviewed(count: 1, reason:
+        "VideoScan/App/BundleImporter.swift": Reviewed(count: 1, reason:
             "a POI bundle import moves the EXISTING POI folder aside into the POI trash dir (never rm -rf) before swapping the new one in; POI data under App Support, never catalog media"),
-        "VideoScan/POIStorage.swift": Reviewed(count: 1, reason:
+        "VideoScan/People/POIStorage.swift": Reviewed(count: 1, reason:
             "restores a POI folder FROM the POI trash (the undo direction); POI data under App Support, not media"),
     ]
 
@@ -598,11 +598,11 @@ struct ArchiveVolumeProtectionSourceSensor {
         // writer in that window was overwritten. No publish path renames
         // over anything now: ExclusivePublish uses RENAME_EXCL, link(2), or
         // refuses.
-        "VideoScan/MediaLedger.swift": Reviewed(count: 1, reason:
+        "VideoScan/Archive/MediaLedger.swift": Reviewed(count: 1, reason:
             "publishes the ledger's own index mirror from its own partial (dirfd-relative); app data"),
-        "VideoScan/POIStorage.swift": Reviewed(count: 1, reason:
+        "VideoScan/People/POIStorage.swift": Reviewed(count: 1, reason:
             "swaps a POI folder symlink to a fresh temp link; the link is app data, the target is untouched"),
-        "VideoScan/RescueFileCopier.swift": Reviewed(count: 1, reason:
+        "VideoScan/MediaOps/RescueFileCopier.swift": Reviewed(count: 1, reason:
             "repairs a KNOWN-INCOMPLETE earlier rescue copy (previousSize != nil) by renaming the verified partial over it; a fresh destination uses RENAME_EXCL"),
         "VideoScanCore/AtomicFilePublish.swift": Reviewed(count: 1, reason:
             "the app-wide atomic save for sidecars/stores (never RENAME_SWAP); callers publish app data, not catalogued media"),
@@ -617,44 +617,40 @@ struct ArchiveVolumeProtectionSourceSensor {
     /// cannot appear unreviewed. Refile's two are the ONE audited exception
     /// (ArchiveRefileAuthorization) — see ArchiveUpdateSensorTests.
     static let reviewedNoClobberRenames: [String: Reviewed] = [
-        "VideoScan/ArchivePromoteEngine.swift": Reviewed(count: 1, reason:
+        "VideoScan/Archive/ArchivePromoteEngine.swift": Reviewed(count: 1, reason:
             "Promote's publish: its own verified `.partial` → the final archive name, dirfd-relative; ADDS a file, never replaces"),
-        "VideoScan/ArchiveRefile.swift": Reviewed(count: 2, reason:
+        "VideoScan/Archive/ArchiveRefile.swift": Reviewed(count: 2, reason:
             "Update… / Refile engine (Rick 2026-09-27): the ONE in-archive move — same volume, dirfd-relative, only while holding an ArchiveRefileAuthorization that covers exactly this move — and its rename BACK on any failure"),
-        "VideoScan/PartialFileNaming.swift": Reviewed(count: 1, reason:
+        "VideoScan/MediaOps/PartialFileNaming.swift": Reviewed(count: 1, reason:
             "ExclusivePublish: a job's own `.vs-partial` → its final output name (Combine / Transcode / Reformat), outside the archive"),
-        "VideoScan/POIStorage.swift": Reviewed(count: 2, reason:
+        "VideoScan/People/POIStorage.swift": Reviewed(count: 2, reason:
             "POI folder moves under App Support (never media)"),
-        "VideoScan/RescueFileCopier.swift": Reviewed(count: 1, reason:
+        "VideoScan/MediaOps/RescueFileCopier.swift": Reviewed(count: 1, reason:
             "a verified rescue partial → a FRESH destination name (the known-incomplete repair case is the clobbering one above)"),
     ]
 
     /// `"-y"` — ffmpeg's "overwrite the output without asking".
     static let reviewedFFmpegOverwrites: [String: Reviewed] = [
-        "VideoScan/AllFramesRipper.swift": Reviewed(count: 1, reason: "frames into its own fresh temp folder"),
-        "VideoScan/BalanceAudioJob.swift": Reviewed(count: 1, reason: "writes its own .vs-partial; published with a non-clobbering moveItem + re-uniquify"),
-        "VideoScan/CaptionRunner.swift": Reviewed(count: 1, reason: "a frame PNG in its own temp folder"),
-        "VideoScan/CleanupFFmpegEngine.swift": Reviewed(count: 1, reason: "renders into the job's scratch dir; CleanupJob publishes non-clobbering"),
-        "VideoScan/CombineEngine.swift": Reviewed(count: 1, reason:
+        "VideoScan/Media/AllFramesRipper.swift": Reviewed(count: 1, reason: "frames into its own fresh temp folder"),
+        "VideoScan/MediaOps/BalanceAudioJob.swift": Reviewed(count: 1, reason: "writes its own .vs-partial; published with a non-clobbering moveItem + re-uniquify"),
+        "VideoScan/Media/CaptionRunner.swift": Reviewed(count: 1, reason: "a frame PNG in its own temp folder"),
+        "VideoScan/MediaOps/CleanupFFmpegEngine.swift": Reviewed(count: 1, reason: "renders into the job's scratch dir; CleanupJob publishes non-clobbering"),
+        "VideoScan/MediaOps/CombineEngine.swift": Reviewed(count: 1, reason:
             "writes ONLY this run's O_EXCL-reserved `<stem>.<8 hex>.vs-partial.mov` (runMuxAndVerify passes partialURL, never the final name); -y just lets ffmpeg open the 0-byte reservation. Published by CombineOutputPublish with RENAME_EXCL (fix/combine-never-overwrites, 2026-09-22)"),
-        "VideoScan/HallieWebPoster.swift": Reviewed(count: 1, reason: "poster frame in Hallie's own cache"),
-        "VideoScan/HallieWebProxy.swift": Reviewed(count: 1, reason: "proxy clip in Hallie's own cache"),
-        "VideoScan/PerceptualFingerprinter.swift": Reviewed(count: 1, reason: "its own temp output"),
-        "VideoScan/PersonFinderCompilation.swift": Reviewed(count: 3, reason: "clips / concat / chapters in the compilation's own output folder, named by the job"),
-        "VideoScan/RebuildAudioJob.swift": Reviewed(count: 1, reason: "writes its own .vs-partial; published with a non-clobbering moveItem + re-uniquify"),
-        "VideoScan/ReformatJob.swift": Reviewed(count: 1, reason: "writes its own timestamped .vs-partial; published with RENAME_EXCL"),
-        "VideoScan/ReviewThumbnailRenderer.swift": Reviewed(count: 1, reason: "a thumbnail PNG in its own temp"),
-        "VideoScan/TranscodeJob+Args.swift": Reviewed(count: 3, reason: "writes ONLY this run's O_EXCL-reserved `<stem>.<8 hex>.vs-partial.<ext>` (TranscodeJob passes the reserved partialPath, never the final name); -y just lets ffmpeg open the 0-byte reservation. Published by DerivativeOutputPublish with RENAME_EXCL (fix/one-partial-registry, 2026-09-22)"),
-        "VideoScan/TrimEngine.swift": Reviewed(count: 1, reason: "writes its own partial; TrimJob publishes non-clobbering"),
+        "VideoScan/Hallie/Web/HallieWebPoster.swift": Reviewed(count: 1, reason: "poster frame in Hallie's own cache"),
+        "VideoScan/Hallie/Web/HallieWebProxy.swift": Reviewed(count: 1, reason: "proxy clip in Hallie's own cache"),
+        "VideoScan/Media/PerceptualFingerprinter.swift": Reviewed(count: 1, reason: "its own temp output"),
+        "VideoScan/People/PersonFinderCompilation.swift": Reviewed(count: 3, reason: "clips / concat / chapters in the compilation's own output folder, named by the job"),
+        "VideoScan/MediaOps/RebuildAudioJob.swift": Reviewed(count: 1, reason: "writes its own .vs-partial; published with a non-clobbering moveItem + re-uniquify"),
+        "VideoScan/MediaOps/ReformatJob.swift": Reviewed(count: 1, reason: "writes its own timestamped .vs-partial; published with RENAME_EXCL"),
+        "VideoScan/Media/ReviewThumbnailRenderer.swift": Reviewed(count: 1, reason: "a thumbnail PNG in its own temp"),
+        "VideoScan/MediaOps/TranscodeJob+Args.swift": Reviewed(count: 3, reason: "writes ONLY this run's O_EXCL-reserved `<stem>.<8 hex>.vs-partial.<ext>` (TranscodeJob passes the reserved partialPath, never the final name); -y just lets ffmpeg open the 0-byte reservation. Published by DerivativeOutputPublish with RENAME_EXCL (fix/one-partial-registry, 2026-09-22)"),
+        "VideoScan/MediaOps/TrimEngine.swift": Reviewed(count: 1, reason: "writes its own partial; TrimJob publishes non-clobbering"),
         "VideoScanCore/FFmpegFrameRip.swift": Reviewed(count: 1, reason: "a frame PNG in its own temp"),
     ]
 
     private static var projectDir: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-    }
-
-    private static func source(_ rel: String) throws -> String {
-        try String(contentsOf: projectDir.appendingPathComponent(rel), encoding: .utf8)
     }
 
     /// `text` without its comment lines (so an explainer mentioning a call
@@ -762,31 +758,31 @@ struct ArchiveVolumeProtectionSourceSensor {
     }
 
     @Test func theCatalogFileRemoversGoThroughTheOneRule() throws {
-        let junk = try Self.source("VideoScan/VideoScanModel+JunkDelete.swift")
+        let junk = try SourceTree.appSource(named: "VideoScanModel+JunkDelete.swift")
         #expect(junk.contains("let records = excludingMasterArchiveFiles(requested, verb: \"Delete Confirmed Junk\")"))
         #expect(junk.contains("archiveVolume.verdictAtRemoval(path: path, probe: uuidProbe)"),
                 "the removal-time re-check sits in the detached pass")
-        let bench = try Self.source("VideoScan/VideoScanModel+Workbench.swift")
+        let bench = try SourceTree.appSource(named: "VideoScanModel+Workbench.swift")
         #expect(bench.contains("let recs = excludingMasterArchiveFiles(requested, verb: \"Discard\")"))
-        let dups = try Self.source("VideoScan/VideoScanModel+Duplicates.swift")
+        let dups = try SourceTree.appSource(named: "VideoScanModel+Duplicates.swift")
         #expect(dups.contains("switch bulkDeleteRefusal(rec, volume: archiveVolume)"),
                 "authorizeDuplicateDeletion asks the one rule live")
         #expect(dups.contains("var targets = excludingMasterArchiveFiles(selection.targets, verb: \"Delete Duplicates\")"))
-        let job = try Self.source("VideoScan/DeleteDuplicatesJob.swift")
+        let job = try SourceTree.appSource(named: "DeleteDuplicatesJob.swift")
         #expect(job.components(separatedBy: "model.authorizeDuplicateDeletion(").count - 1 >= 2,
                 "dispatch AND resume re-check authorize every pair")
-        let prune = try Self.source("VideoScan/VideoScanModel+PruneApply.swift")
+        let prune = try SourceTree.appSource(named: "VideoScanModel+PruneApply.swift")
         #expect(prune.contains("if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume)"))
-        let selection = try Self.source("VideoScan/VideoScanModel+TrashSelection.swift")
+        let selection = try SourceTree.appSource(named: "VideoScanModel+TrashSelection.swift")
         #expect(selection.contains("self.bulkDeleteRefusal($0, volume: archiveVolume) != nil"))
         // 2026-09-22 follow-ups: the Delete Duplicates pair carries the
         // removal-time volume re-check; Transcode never deletes first.
         #expect(job.contains("archiveCheck: model.archiveRemovalCheck()"),
                 "every Delete Duplicates pair carries the file's-own-volume re-check")
-        let transcode = try Self.source("VideoScan/TranscodeJob.swift")
+        let transcode = try SourceTree.appSource(named: "TranscodeJob.swift")
         #expect(!transcode.contains("removeItem(atPath: outputPath)"), "Transcode never clears its output name first")
         #expect(!transcode.contains("ReformatJob.atomicPublish"), "Transcode publishes through DerivativeOutputPublish")
-        let publish = try Self.source("VideoScan/DerivativeOutputPublish.swift")
+        let publish = try SourceTree.appSource(named: "DerivativeOutputPublish.swift")
         let sweep = try #require(publish.range(of: "static func sweepStalePartials("))
         #expect(!publish.contains("removeItem("),
                 "no removeItem here: a replaced file only ever goes to the Trash")
@@ -805,7 +801,7 @@ struct ArchiveVolumeProtectionSourceSensor {
     /// …AndPlaceholder (codex #1642, 2026-09-23): there is no placeholder
     /// and no rename over anything any more.
     @Test func combineOnlyEverRemovesItsOwnPartialsAndNeverRenamesOverAName() throws {
-        let publish = try Self.source("VideoScan/CombineOutputPublish.swift")
+        let publish = try SourceTree.appSource(named: "CombineOutputPublish.swift")
         // removePartial: its own name guard, then the ONE shared removal
         // (fix/one-partial-registry, 2026-09-22) — no removeItem of its own.
         let removePartial = try #require(publish.range(of: "static func removePartial("))
@@ -829,7 +825,7 @@ struct ArchiveVolumeProtectionSourceSensor {
         // — exactly one unlink of a partial, behind remove()'s name guard
         // (QA 3, 2026-09-22) and its protection guard (codex #1642); the
         // sweep skips live AND protected partials and removes via remove().
-        let shared = try Self.source("VideoScan/PartialFileNaming.swift")
+        let shared = try SourceTree.appSource(named: "PartialFileNaming.swift")
         let sharedRemove = try #require(shared.range(of: "static func remove(_ url: URL) throws {"))
         let sharedGuard = try #require(shared.range(of: "guard isPartialName(url.lastPathComponent) else {",
                                                     range: sharedRemove.upperBound..<shared.endIndex))
@@ -869,13 +865,13 @@ struct ArchiveVolumeProtectionSourceSensor {
         #expect(dropSource.lowerBound > identity.upperBound && identity.lowerBound > eexist.upperBound)
         // The model: ffmpeg writes the reserved partial; failures remove the
         // partial, never the output name.
-        let model = try Self.source("VideoScan/VideoScanModel+Combine.swift")
+        let model = try SourceTree.appSource(named: "VideoScanModel+Combine.swift")
         #expect(model.contains("outputPath: partialURL.path,"), "ffmpeg writes the partial, never outURL")
         #expect(!model.contains("removeItem(at: outURL)") && !model.contains("removeItem(atPath: outURL"))
         #expect(model.contains("let tempDir = tempBase.appendingPathComponent(\"VS_\\(UUID().uuidString)\")"),
                 "the one removeItem in the model removes a staging dir this pair just created")
-        for text in [publish, model, try Self.source("VideoScan/CombineEngine.swift"),
-                     try Self.source("VideoScan/PartialFileNaming.swift")] {
+        for text in [publish, model, try SourceTree.appSource(named: "CombineEngine.swift"),
+                     try SourceTree.appSource(named: "PartialFileNaming.swift")] {
             #expect(!text.contains("RENAME_SWAP)") && !text.contains("replaceItemAt(")
                     && !text.contains("replaceItem(at:"))
         }

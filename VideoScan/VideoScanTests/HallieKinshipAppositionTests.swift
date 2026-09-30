@@ -247,13 +247,16 @@ struct HallieKinshipAppositionTests {
 
     /// Sensor: no graph-executor prose constant is a validation sentence.
     @Test func noGuardSentenceIsAProseConstant() throws {
-        let testsDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        let sources = testsDir.deletingLastPathComponent().appendingPathComponent("VideoScan")
-        let files = try FileManager.default.contentsOfDirectory(atPath: sources.path)
-            .filter { $0.hasPrefix("ArchivistGraphExecutor") || $0.hasPrefix("HallieTurnExecutor") || $0.hasPrefix("HallieKinship") }
+        // Recursive over the feature folders (2026-09-29): a one-level listing
+        // of VideoScan/VideoScan would now find nothing and pass silently.
+        let files = SourceTree.appSources.map(\.url)
+            .filter { let n = $0.lastPathComponent
+                      return n.hasPrefix("ArchivistGraphExecutor") || n.hasPrefix("HallieTurnExecutor") || n.hasPrefix("HallieKinship") }
+        #expect(!files.isEmpty, "the sensor must read the executor sources")
         let banned = ["must identify", "must specify", "needs a person's name", "needs two people", "must name exactly"]
-        for file in files {
-            let text = try String(contentsOf: sources.appendingPathComponent(file), encoding: .utf8)
+        for url in files {
+            let file = url.lastPathComponent
+            let text = try String(contentsOf: url, encoding: .utf8)
             for line in text.split(separator: "\n") where line.contains("prose:") || line.contains("text:") {
                 for phrase in banned {
                     #expect(!line.contains(phrase), "\(file): \(line)")

@@ -319,10 +319,7 @@ struct VerifyVideoScaleTests {
 struct VerifyVideoMenuSensorTests {
 
     private func tableSource() throws -> String {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan/CatalogContent+Table.swift")
-        return try String(contentsOf: url, encoding: .utf8)
+        try SourceTree.appSource(named: "CatalogContent+Table.swift")
     }
 
     @Test func verifyVideoSitsRightAfterVerifyAudio() throws {

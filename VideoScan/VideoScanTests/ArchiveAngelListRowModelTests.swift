@@ -230,9 +230,8 @@ struct ArchiveAngelListRowScaleTests {
 struct ArchiveAngelListSeniorSensorTests {
 
     private func source(_ relative: String) throws -> String {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan").appendingPathComponent(relative)
-        return try String(contentsOf: url, encoding: .utf8)
+        // By NAME (or folder/NAME) anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
+        try SourceTree.appSource(named: relative)
     }
 
     @Test func tenRowsAPage() {

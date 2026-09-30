@@ -443,8 +443,7 @@ struct ArchiveUpdateSingleEditorTests {
 
     @Test("sensor: the sheet is only opened through the claim, and released on disappear (Update / Cancel / Done / window close)")
     func everyClosePathReleases() throws {
-        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("VideoScan")
-        let view = try String(contentsOf: dir.appendingPathComponent("ArchiveView.swift"), encoding: .utf8)
+        let view = try SourceTree.appSource(named: "ArchiveView.swift")
         #expect(view.contains("await model.openArchiveUpdate(recordID: id)"))
         #expect(!view.contains("makeArchiveUpdatePreview("), "never open a sheet without the claim")
         #expect(view.contains(".onDisappear { model.closeArchiveUpdate(preview) }"))

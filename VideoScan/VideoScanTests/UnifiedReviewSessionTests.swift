@@ -341,11 +341,7 @@ struct UnifiedReviewSessionTests {
     /// points (menu item + badge) wired. Fails loudly if the People file
     /// moves; update the path deliberately, not by deleting the test.
     @Test func sensor_confirmMenuItemStaysRemoved_reviewEntryStaysWired() throws {
-        let peopleFile = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()            // VideoScanTests/
-            .deletingLastPathComponent()            // VideoScan/ (project dir)
-            .appendingPathComponent("VideoScan/PersonFinderView+People.swift")
-        let source = try String(contentsOf: peopleFile, encoding: .utf8)
+        let source = try SourceTree.appSource(named: "PersonFinderView+People.swift")
 
         // The removed item must not come back…
         #expect(!source.contains("Button(\"Confirm \\(profile.name)"),
@@ -378,16 +374,12 @@ struct UnifiedReviewSessionTests {
         // is about "the sheet", so the scan reads the whole family and
         // concatenates it — a guard moved to a sibling file is still
         // wired, but a guard DELETED still fails the sensor.
-        let sheetDir = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()            // VideoScanTests/
-            .deletingLastPathComponent()            // VideoScan/ (project dir)
-            .appendingPathComponent("VideoScan")
         let sheetFiles = ["ConfirmPersonSheet.swift",
                           "ConfirmPersonSheet+Holdout.swift",
                           "ConfirmPersonSheet+HoldoutNavigation.swift",
                           "ConfirmPersonSheet+Candidates.swift"]
         let source = try sheetFiles
-            .map { try String(contentsOf: sheetDir.appendingPathComponent($0), encoding: .utf8) }
+            .map { try SourceTree.appSource(named: $0) }
             .joined(separator: "\n")
 
         // (a) Holdout answers consult the custody router before writing.

@@ -42,16 +42,10 @@ struct HallieNeuralWorkerEnvironmentTests {
     /// environment through workerEnvironment() — a new launch site that
     /// forgets would silently bring the Apple-speech fallback back.
     @Test func everyEngineLaunchUsesTheFilteredEnvironment() throws {
-        let source = try String(contentsOf: Self.sourceURL("VideoScan/HallieNeuralSpeech.swift"), encoding: .utf8)
+        let source = try SourceTree.appSource(named: "HallieNeuralSpeech.swift")
         let launches = source.components(separatedBy: "Process()").count - 1
         let filtered = source.components(separatedBy: "process.environment = HallieNeuralSpeech.workerEnvironment()").count - 1
         #expect(launches >= 2, "expected the worker and the legacy helper launches")
         #expect(filtered == launches, "\(launches) Process() launches, \(filtered) with the filtered environment")
-    }
-
-    private static func sourceURL(_ relative: String) -> URL {
-        // …/VideoScan/VideoScanTests/<this file> → …/VideoScan/<relative>
-        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(relative)
     }
 }

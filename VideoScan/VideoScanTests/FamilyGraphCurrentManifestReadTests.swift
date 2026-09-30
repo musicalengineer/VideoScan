@@ -179,10 +179,8 @@ struct FamilyGraphCurrentManifestReadTests {
     // MARK: - 5. Sensor: the main-actor coordinator reads manifests only
 
     @Test func pullCoordinatorNeverDecodesTheGraphForAManifest() throws {
-        let source = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan/FamilySearchPullCoordinator.swift")
-        let text = try String(contentsOf: source, encoding: .utf8)
+        // By NAME anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
+        let text = try SourceTree.appSource(named: "FamilySearchPullCoordinator.swift")
         #expect(!text.contains("loadCurrent()?.manifest"))
         #expect(text.contains("loadCurrentManifest()"))
     }

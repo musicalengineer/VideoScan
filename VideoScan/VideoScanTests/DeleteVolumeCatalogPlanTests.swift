@@ -367,19 +367,10 @@ struct DeleteVolumeCatalogPlanTests {
 
     // MARK: - 7. Source sensors + prompt text
 
-    private var repoRoot: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-    }
-
-    private func source(_ rel: String) throws -> String {
-        try String(contentsOf: repoRoot.appendingPathComponent(rel), encoding: .utf8)
-    }
+    // App sources are found by NAME (SourceTree.appSource, feature folders 2026-09-29).
 
     @Test func contentViewAlertAppliesTheCarriedPlan() throws {
-        let cv = try source("VideoScan/VideoScan/ContentView.swift")
+        let cv = try SourceTree.appSource(named: "ContentView.swift")
         #expect(cv.contains("presenting: deleteVolumeCatalogPrompt"),
                 "the alert must present the carried prompt, not a bare target")
         #expect(cv.contains("confirmDeleteVolumeCatalog(prompt)"))
@@ -387,7 +378,7 @@ struct DeleteVolumeCatalogPlanTests {
                 "the alert must never read the coalesced projection for its count")
         // Only the plan-taking overload may be called from view code; the
         // one-arg live entry is for the unconfirmed bulk paths.
-        let pane = try source("VideoScan/VideoScan/CatalogView+ScanTargetsPane.swift")
+        let pane = try SourceTree.appSource(named: "CatalogView+ScanTargetsPane.swift")
         #expect(pane.contains("model.deleteCatalogForTarget(prompt.target, plan: prompt.plan)"))
         #expect(pane.contains("model.planTargetRemoval(for: target)"))
         #expect(!cv.contains("model.deleteCatalogForTarget(target)"),
@@ -395,8 +386,8 @@ struct DeleteVolumeCatalogPlanTests {
     }
 
     @Test func bothDeleteGesturesRouteThroughThePlanningPresenter() throws {
-        let pane = try source("VideoScan/VideoScan/CatalogView+ScanTargetsPane.swift")
-        let table = try source("VideoScan/VideoScan/CatalogView+VolumeTable.swift")
+        let pane = try SourceTree.appSource(named: "CatalogView+ScanTargetsPane.swift")
+        let table = try SourceTree.appSource(named: "CatalogView+VolumeTable.swift")
         #expect(pane.contains("presentDeleteVolumeCatalog(for: target)"), "Catalog Options › Delete row")
         #expect(table.contains("presentDeleteVolumeCatalog(for: first)"), "volume context menu › Delete Catalog (single)")
         for stale in ["deleteVolumeCatalogTarget", "showDeleteVolumeCatalogConfirm"] {
