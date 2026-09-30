@@ -242,12 +242,17 @@ struct FamilyMapModelTests {
     }
 
     /// The model follows the Highlight panel's checks through `bind(to:)`,
-    /// so a return from the fan to the map is already current.
+    /// so a return from the fan to the map is already current. Binding
+    /// replays the current selection, so it is the ONE tally the sheet
+    /// needs — a second explicit `apply` would count everyone twice (QA
+    /// round 2 nit).
     @Test func theModelFollowsTheHighlighterChecks() async throws {
         let (m, h, _, _) = try await mapModel(for: placedRoots)
+        #expect(m.generation == 0)
         m.bind(to: h)
-        m.apply(selection: h.selection, yearCeiling: nil)
+        #expect(m.generation == 1, "bind tallies once; no second apply is needed")
         try await waitUntil { m.computed.totals.considered == 6 }
+        #expect(m.generation == 1, "and nothing tallied a second time")
         h.setSurname("hudson", on: true)
         try await waitUntil { m.computed.totals.considered == 2 }
         #expect(m.computed.counts.keys.sorted() == ["sct-fife"], "Donna has no place; her father is in Fife")
@@ -403,6 +408,83 @@ struct FamilyMapModelTests {
         #expect(FamilyMapShapes.fingerprint(syntheticUnits) == "5/eng/usa-massachusetts/20")
     }
 
+    // MARK: The camera (QA round 2, 2026-09-29) — over the BUNDLED file
+
+    /// The committed border file, read from the repo by path (as
+    /// FamilyMapBundledDataTests does) — never the app bundle, never App
+    /// Support. The camera tests need the real `usa` outline: 123 pieces
+    /// from the western Aleutians across the antimeridian to 71°N.
+    private static func bundledUnits() throws -> FamilyMapUnits {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan/Resources/FamilyMap/family-map-units.geojson")
+        return try FamilyMapUnits(geoJSON: try Data(contentsOf: url))
+    }
+
+    private static func computed(unitKeys: [String?], recorded: [String], units: FamilyMapUnits) throws -> FamilyMapModel.Computed {
+        let n = unitKeys.count
+        let people = FamilyMapTally.People(ids: (0..<n).map { "@P\($0)@" }, names: (0..<n).map { "P\($0)" },
+                                           surnames: (0..<n).map { "S\($0)" },
+                                           birthYears: [Int?](repeating: nil, count: n), generations: [Int?](repeating: 1, count: n),
+                                           lines: [TreeWalk.Line](repeating: .first, count: n),
+                                           unitKeys: unitKeys, recordedPlaces: recorded)
+        return FamilyMapModel.computed(from: try FamilyMapTally.counts(people: people, visited: Array(0..<n)), units: units)
+    }
+
+    /// QA's red test: one Yorkshire birth and one "New England" birth
+    /// (country-only `usa`). Before the fix the camera box was the union of
+    /// Yorkshire and the whole US outline — Aleutians to Yorkshire, 223° ×
+    /// 66° — and the "United States" label sat at the union centre, in
+    /// Oregon. Now the fine counted unit frames the map alone, and the
+    /// outline's label is on its principal piece.
+    @Test func aCountryOnlyCountDoesNotOpenTheCameraOnAHemisphere() throws {
+        let units = try Self.bundledUnits()
+        let people = FamilyMapTally.People(ids: ["a", "b"], names: ["A", "B"], surnames: ["X", "Y"],
+                                           birthYears: [nil, nil], generations: [1, 1], lines: [.first, .first],
+                                           unitKeys: ["eng-yorkshire", "usa"], recordedPlaces: ["Sheffield, Yorkshire, England", "New England"])
+        let c = FamilyMapModel.computed(from: try FamilyMapTally.counts(people: people, visited: [0, 1]), units: units)
+        let box = try #require(c.cameraBox)
+        #expect(box.maxLongitude - box.minLongitude < 10, "Aleutians→Yorkshire: \(box)")
+        #expect(box.maxLatitude - box.minLatitude < 5, "\(box)")
+        #expect(box == units.unit(forKey: "eng-yorkshire")?.cameraBox, "Yorkshire alone frames the map")
+        let usa = try #require(c.labels.first { $0.key == "usa" })
+        #expect(usa.latitude < 45 && usa.longitude > -100, "label in Oregon at (\(usa.latitude), \(usa.longitude))")
+        #expect(usa.latitude > 30 && usa.longitude < -90, "the middle of the lower 48: (\(usa.latitude), \(usa.longitude))")
+        #expect(c.counts["usa"]?.people == 1, "the country-only person is still counted")
+    }
+
+    /// Only country-only counts (nothing finer): the camera still has
+    /// somewhere sensible to go — the principal piece of each outline, not
+    /// the union of every island.
+    @Test func onlyCountryOnlyCountsStillGetASensibleCamera() throws {
+        let units = try Self.bundledUnits()
+        let usaOnly = try Self.computed(unitKeys: ["usa", "usa"], recorded: ["New England", "USA"], units: units)
+        let box = try #require(usaOnly.cameraBox)
+        #expect(box == units.unit(forKey: "usa")?.principalBox, "the contiguous US: \(box)")
+        #expect(box.minLongitude > -126 && box.maxLongitude < -66 && box.minLatitude > 24 && box.maxLatitude < 50, "\(box)")
+        // Two countries, both country-only: the union of their principal pieces.
+        let both = try Self.computed(unitKeys: ["usa", "eng"], recorded: ["USA", "England"], units: units)
+        let atlantic = try #require(both.cameraBox)
+        #expect(atlantic.minLongitude > -126 && atlantic.maxLongitude < 3 && atlantic.maxLatitude < 57, "lower 48 to England: \(atlantic)")
+    }
+
+    /// A real walk's mix — Yorkshire, Massachusetts and ~800 "New England"
+    /// country-only births — frames Yorkshire…Massachusetts: the Atlantic,
+    /// about 70° wide. That is expected and fine. The Aleutians are not.
+    @Test func aRealWalkMixFramesTheAtlanticNotThePacific() throws {
+        let units = try Self.bundledUnits()
+        var keys: [String?] = ["eng-yorkshire", "usa-massachusetts"]
+        var recorded = ["Sheffield, Yorkshire, England", "Boston, Massachusetts"]
+        for _ in 0..<800 { keys.append("usa"); recorded.append("New England") }
+        let c = try Self.computed(unitKeys: keys, recorded: recorded, units: units)
+        let box = try #require(c.cameraBox)
+        let width = box.maxLongitude - box.minLongitude
+        #expect(width > 60 && width < 80, "Yorkshire to Massachusetts, ~70°: \(box)")
+        #expect(box.minLongitude > -75 && box.maxLongitude < 1, "\(box)")
+        #expect(box.minLatitude > 41 && box.maxLatitude < 55.5, "\(box)")
+        #expect(c.totals.countryOnly == 800)
+        #expect(c.labels.first?.key == "usa", "the busiest unit is still the outline")
+    }
+
     // MARK: The family's notes fill the tree's gaps (Rick 2026-09-29 23:05)
 
     /// Mary Christina O'Connor (@I7@ in the real tree) has no birthplace in
@@ -549,6 +631,136 @@ struct FamilyMapModelTests {
         #expect(index.archive == archive)
     }
 
+    /// PRIVACY CEILING (QA round 2, 2026-09-29). The map is a family-facing
+    /// surface — Donna and the relatives see it — so a family note places
+    /// someone only when its privacy is visible at `.family`: a `.private`
+    /// birth event never places anyone and never reaches the panel. Rick
+    /// can raise the ceiling later (`FamilyMapModel.privacyCeiling`; design
+    /// decision noted for the morning); the twin below pins that `.family`
+    /// DOES place.
+    @Test func aPrivateBirthNoteNeverPlacesAnyone() throws {
+        let gedcom = """
+        0 HEAD
+        1 _VS_MERGED Y
+        1 _VS_ROOT @I1@
+        0 @I1@ INDI
+        1 NAME Richard Harding /Breen/ Jr
+        1 SEX M
+        1 FAMC @F1@
+        0 @I7@ INDI
+        1 NAME Mary Christina /O'Connor/
+        1 SEX F
+        1 FAMS @F1@
+        0 @F1@ FAM
+        1 WIFE @I7@
+        1 CHIL @I1@
+        0 TRLR
+        """
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        func knowledge(privacy: CyberBrainItem.Privacy) throws -> FamilyTreeNotesResolver {
+            let item = CyberBrainItem(id: "event.mary.birth", kind: .event,
+                                      text: "Born 23 December 1904 at 34 Fullers Lane, Cork.", subjectPersonIDs: ["person.mary"],
+                                      place: "Cork, Ireland", sourceIDs: ["source.bc"], confidence: .confirmed, privacy: privacy,
+                                      status: .active, disputesItemIDs: [], createdAt: now, updatedAt: now, correction: nil)
+            let archive = CyberBrainArchive(archiveID: "test.map.privacy", displayName: "Test", people: [
+                CyberBrainPerson(id: "person.mary", gedcomPersonID: "@I7@", canonicalName: "Mary Christina O'Connor", lifeEvents: [item]),
+            ], sources: [CyberBrainSource(id: "source.bc", type: .officialRecord, title: "Birth certificate, Cork 1904")])
+            return FamilyTreeNotesResolver(index: try CyberBrainIndex(archive: archive), graph: GedcomFamilyGraph(gedcomText: gedcom))
+        }
+        #expect(FamilyMapModel.privacyCeiling == .family)
+        let k = try knowledge(privacy: .private)
+        #expect(k.cyberBrainPeople(forGedcomID: "@I7@").count == 1, "she IS linked; the item is just private")
+        #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I7@", in: k) == nil, "a private note never places anyone")
+        // Through the pipeline: not placed, nothing recorded, not in the panel.
+        let g = GedcomFamilyGraph(gedcomText: gedcom)
+        let r = try TreeWalk.walk(g, options: .init(starts: ["@I1@"]))
+        let inputs = FamilyMapModel.inputs(ids: r.ids, names: r.names, surnames: r.ids.map { _ in "" },
+                                           surnameKeys: r.ids.map { _ in "" },
+                                           birthPlaces: r.ids.map { _ in nil },
+                                           familyPlaces: r.ids.map { FamilyMapModel.familyBirthPlace(gedcomID: $0, in: k) },
+                                           birthYears: r.ids.map { _ in nil }, generations: r.ids.map { _ in 0 },
+                                           lines: r.ids.map { _ in .first }, visited: Array(r.ids.indices),
+                                           regions: r.ids.map { _ in .unknown })
+        let o = try #require(r.ordinal(of: "@I7@"))
+        #expect(inputs.people.unitKeys[o] == nil && inputs.people.recordedPlaces[o] == nil)
+        #expect(inputs.familyPlacedIDs.isEmpty && inputs.familyRecordedIDs.isEmpty)
+    }
+
+    @Test func aFamilyVisibleBirthNoteDoesPlace() throws {
+        let gedcom = """
+        0 HEAD
+        1 _VS_MERGED Y
+        1 _VS_ROOT @I1@
+        0 @I1@ INDI
+        1 NAME Richard Harding /Breen/ Jr
+        1 SEX M
+        1 FAMC @F1@
+        0 @I7@ INDI
+        1 NAME Mary Christina /O'Connor/
+        1 SEX F
+        1 FAMS @F1@
+        0 @F1@ FAM
+        1 WIFE @I7@
+        1 CHIL @I1@
+        0 TRLR
+        """
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        func knowledge(privacy: CyberBrainItem.Privacy) throws -> FamilyTreeNotesResolver {
+            let item = CyberBrainItem(id: "event.mary.birth", kind: .event,
+                                      text: "Born 23 December 1904 at 34 Fullers Lane, Cork.", subjectPersonIDs: ["person.mary"],
+                                      place: "Cork, Ireland", sourceIDs: ["source.bc"], confidence: .confirmed, privacy: privacy,
+                                      status: .active, disputesItemIDs: [], createdAt: now, updatedAt: now, correction: nil)
+            let archive = CyberBrainArchive(archiveID: "test.map.privacy", displayName: "Test", people: [
+                CyberBrainPerson(id: "person.mary", gedcomPersonID: "@I7@", canonicalName: "Mary Christina O'Connor", lifeEvents: [item]),
+            ], sources: [CyberBrainSource(id: "source.bc", type: .officialRecord, title: "Birth certificate, Cork 1904")])
+            return FamilyTreeNotesResolver(index: try CyberBrainIndex(archive: archive), graph: GedcomFamilyGraph(gedcomText: gedcom))
+        }
+        #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I7@", in: try knowledge(privacy: .family)) == "Cork, Ireland")
+        #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I7@", in: try knowledge(privacy: .public)) == "Cork, Ireland",
+                "public is visible at the family ceiling too")
+    }
+
+    /// "Not on the map" says WHOSE text failed to resolve (QA round 2): a
+    /// family note the map could not read is "from the family's notes:
+    /// Berlin, Germany", never "recorded as Berlin" when the TREE recorded
+    /// nothing. The tree's own text stays "recorded as …".
+    @Test func anUnplacedFamilyNoteIsToldApartFromTheTreesText() throws {
+        // 0: tree blank, family note off the map → the family's text, unplaced.
+        // 1: tree off the map, no family note → the tree's text, unplaced.
+        // 2: tree off the map, family note off the map → the tree's text (tree first).
+        // 3: tree blank, family note resolves → placed from the family's notes.
+        // 4: tree resolves → placed from the tree; the family note is never read.
+        let ids = ["@A@", "@B@", "@C@", "@D@", "@E@"]
+        let inputs = FamilyMapModel.inputs(
+            ids: ids, names: ["A", "B", "C", "D", "E"], surnames: ["", "", "", "", ""], surnameKeys: ["", "", "", "", ""],
+            birthPlaces: [nil, "Berlin, Germany", "Paris, France", "   ", "Fife, Scotland"],
+            familyPlaces: ["Berlin, Germany", nil, "Rome, Italy", "Cork, Ireland", "Cork, Ireland"],
+            birthYears: [nil, nil, nil, nil, nil], generations: [1, 1, 1, 1, 1],
+            lines: [.first, .first, .first, .first, .first], visited: [0, 1, 2, 3, 4],
+            regions: [.unknown, .unknown, .unknown, .unknown, .unknown])
+        #expect(inputs.people.unitKeys == [nil, nil, nil, "irl-cork", "sct-fife"])
+        #expect(inputs.people.recordedPlaces == ["Berlin, Germany", "Berlin, Germany", "Paris, France", "Cork, Ireland", "Fife, Scotland"])
+        #expect(inputs.familyRecordedIDs == ["@A@", "@D@"], "whose recorded text came from the family's notes")
+        #expect(inputs.familyPlacedIDs == ["@D@"], "…and who was actually placed by them")
+        let m = FamilyMapModel(inputs: inputs, units: syntheticUnits, displayNames: ["Rick"])
+        #expect(m.isRecordedFromFamilyNotes("@A@") && !m.isPlacedFromFamilyNotes("@A@"))
+        #expect(!m.isRecordedFromFamilyNotes("@B@") && !m.isRecordedFromFamilyNotes("@C@"))
+        #expect(m.isRecordedFromFamilyNotes("@D@") && m.isPlacedFromFamilyNotes("@D@"))
+        #expect(!m.isRecordedFromFamilyNotes("@E@"))
+        // The row text the panel shows for each unplaced person.
+        func note(_ id: String) -> String? {
+            let o = ids.firstIndex(of: id)!
+            return FamilyMapModel.placeNote(recordedPlace: inputs.people.recordedPlaces[o], fromFamilyNotes: m.isRecordedFromFamilyNotes(id))
+        }
+        #expect(note("@A@") == "from the family's notes: Berlin, Germany")
+        #expect(note("@B@") == "recorded as Berlin, Germany")
+        #expect(note("@C@") == "recorded as Paris, France")
+        // And the view asks the model, not a constant `false`, for the unplaced rows.
+        let view = try SourceTree.appSource(named: "FamilyTreeMapView.swift")
+        #expect(view.contains("fromFamilyNotes: model.isRecordedFromFamilyNotes(m.id)"), "the unplaced row names its source")
+        #expect(!view.contains("fromFamilyNotes: false"))
+    }
+
     // MARK: Scale — 40k people, every birthplace resolved once, < 300 ms
 
     @Test func buildingTheInputsFor40kPeopleStaysUnderBudget() throws {
@@ -682,13 +894,23 @@ struct FamilyMapModelTests {
         // The only file that may touch the bundle is the cache, by resource name.
         let model = try SourceTree.appSource(named: "FamilyMapModel.swift")
         #expect(model.contains("Bundle.main.url(forResource: \"family-map-units\", withExtension: \"geojson\")"))
-        // The family's notes are READ; the map never writes CyberBrain.
+        // The family's notes are READ; the map never writes CyberBrain. The
+        // only `write(` allowed is the app log line (counts, never names).
+        let scrubbed = model.replacingOccurrences(of: "appLog.write(", with: "")
         for forbidden in ["CyberBrainWriter", "CyberBrainLoader", "FamilyTreeNotesStorage", "record(", "write("] {
-            #expect(!model.contains(forbidden), "FamilyMapModel.swift must not use \(forbidden)")
+            #expect(!scrubbed.contains(forbidden), "FamilyMapModel.swift must not use \(forbidden)")
         }
+        // The family's notes are read at the FAMILY privacy ceiling, never
+        // through the owner-only `allActiveItems` alone (QA round 2).
+        #expect(model.contains("isVisible(at: privacyCeiling)"), "the privacy ceiling gates the family's notes")
+        // Errors are logged, not only shown (QA round 2): one line each,
+        // "Family map: …", through the app's log sink.
+        #expect(model.contains("appLog.write(\"Family map: "), "a tally failure reaches the log")
         let sheet = try SourceTree.appSource(named: "FamilyTreeWalkSheet.swift")
+        #expect(sheet.contains("appLog.write(\"Family map: "), "a failure to show the map reaches the log")
         #expect(sheet.contains("familyKnowledge: familyKnowledge"), "the sheet hands the map the tree's own resolver")
         #expect(!sheet.contains("CyberBrainWriter"))
+        #expect(!sheet.contains("map.apply("), "bind(to:) is the sheet's one tally; no second apply")
         let view = try SourceTree.appSource(named: "FamilyTreeMapView.swift")
         #expect(!view.contains("Bundle.main"), "the view is handed its units; it never loads them")
     }

@@ -510,6 +510,7 @@
         "FamilyMapBundledDataTests"
       ],
       "tests": [
+        "countryOutlinesFrameTheirPrincipalPiece",
         "everyResolverKeyIsABundledUnitAndViceVersa",
         "realPlacesLandInTheRightBundledUnit"
       ]
@@ -527,6 +528,7 @@
         "boundingBoxUnionContainsAndArea",
         "countryOfKeyReadsThePrefix",
         "countryUnitKindsAndLabels",
+        "slugAgreesWithThePythonBuilderOnUndecomposableLetters",
         "slugMatchesTheDocumentedExamples",
         "unitKeyIsCountryDashSlugAndDropsCountyForIreland"
       ]
@@ -612,6 +614,7 @@
       ],
       "tests": [
         "aConcavePolygonIsHandledByEvenOdd",
+        "aCountryOutlinesCameraAndLabelComeFromItsPrincipalPiece",
         "aPointJustOffACoastResolvesToTheAdjacentUnitAndMidOceanIsNil",
         "aPointOnABorderIsInsideAndTiesAreDeterministic",
         "aThirdCoordinateAndAnOpenRingAreTolerated",
@@ -619,6 +622,7 @@
         "bandIndexedRelationMatchesTheReferenceScan",
         "cameraBoxIgnoresFarEasternPiecesOfAWesternUnit",
         "coverageIsTheUnionOfTheListedUnitsThatExist",
+        "coveragePrefersTheFineUnitsAndFallsBackToTheCountryOutlines",
         "decodesEveryFeatureWithItsPropertiesAndGeometry",
         "decodingIsPureAndReadsNoFiles",
         "insideHoleEnclaveBorderSeaAndIsland",
@@ -21103,6 +21107,7 @@
         "test_script_self_test_passes",
         "test_simplify_ring_keeps_closure_and_drops_islets",
         "test_single_unit_counties_are_not_split",
+        "test_slug_parity_with_swift_on_undecomposable_letters",
         "test_slug_rules",
         "test_synthetic_county_spellings_resolve_to_keys",
         "test_usa_outline_has_far_aleutian_pieces_east_of_antimeridian",

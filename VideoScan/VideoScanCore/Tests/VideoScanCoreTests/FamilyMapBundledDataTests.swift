@@ -29,6 +29,37 @@ struct FamilyMapBundledDataTests {
         #expect(units.keyNameMismatches.isEmpty, "\(units.keyNameMismatches)")
     }
 
+    /// The country outlines frame their PRINCIPAL piece (QA round 2,
+    /// 2026-09-29): `usa` is 123 pieces whose union runs from the western
+    /// Aleutians (−178°) across the antimeridian (+180°) and up to 71°N; the
+    /// principal piece is the contiguous US. `can` reaches 83°N through the
+    /// Arctic islands; its principal piece is the mainland. `eng` and `irl`
+    /// are one island plus an islet, so the principal piece IS the outline.
+    @Test func countryOutlinesFrameTheirPrincipalPiece() throws {
+        guard let data = try? Data(contentsOf: Self.fileURL) else { return }
+        let units = try FamilyMapUnits(geoJSON: data)
+        let usa = try #require(units.unit(forKey: "usa"))
+        #expect(usa.polygons.count > 50, "many pieces: \(usa.polygons.count)")
+        #expect(usa.bbox.maxLongitude > 150 && usa.bbox.minLongitude < -170, "the union crosses the antimeridian")
+        let lower48 = usa.principalBox
+        #expect(lower48.minLatitude > 24 && lower48.maxLatitude < 50 && lower48.minLongitude > -126 && lower48.maxLongitude < -66,
+                "the contiguous US: \(lower48)")
+        #expect(usa.cameraBox == lower48)
+        #expect(usa.labelAnchor.latitude < 45 && usa.labelAnchor.longitude > -100 && usa.labelAnchor.longitude < -90,
+                "the label sits in the middle of the country, not in Oregon: \(usa.labelAnchor)")
+        let can = try #require(units.unit(forKey: "can"))
+        #expect(can.bbox.maxLatitude > 80, "the union reaches the Arctic islands")
+        #expect(can.principalBox.maxLatitude < 75 && can.principalBox.minLongitude > -142 && can.principalBox.maxLongitude < -50,
+                "the mainland: \(can.principalBox)")
+        #expect(can.cameraBox == can.principalBox)
+        for key in ["eng", "irl"] {
+            let u = try #require(units.unit(forKey: key))
+            #expect(u.principalBox.area > 0.9 * u.bbox.area, "\(key): the main island is the outline (\(u.polygons.count) pieces)")
+        }
+        let sct = try #require(units.unit(forKey: "sct"))
+        #expect(sct.principalBox.maxLatitude < 59.5 && sct.bbox.maxLatitude > 60, "Scotland's camera is the mainland, not Shetland")
+    }
+
     @Test func realPlacesLandInTheRightBundledUnit() throws {
         guard let data = try? Data(contentsOf: Self.fileURL) else { return }
         let units = try FamilyMapUnits(geoJSON: data)
