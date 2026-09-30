@@ -266,6 +266,23 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainTreeTellingTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "CyberBrainTreeTellingTests"
+      ],
+      "tests": [
+        "aPlanEncodedBeforeTreeFactsStillDecodes",
+        "aYearIsNeverReadAsADayAndQualifiedDatesStayVerbatim",
+        "johnRobertLattaReadsLikeAPerson",
+        "pronounsFollowTheRecordedSexAndFallBackToTheName",
+        "theComposedBiographySaysFamilyTreeOnce",
+        "withNoDatesTheFirstFactCarriesTheAttribution"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainWriterPronunciationGuardTests.swift",
       "stage": "unit",
       "suites": [
@@ -24250,6 +24267,10 @@
     },
     {
       "blocked": [
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainTreeTellingTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
         {
           "name": "VideoScan/VideoScanTests/HallieAmpersandRoundTripTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"

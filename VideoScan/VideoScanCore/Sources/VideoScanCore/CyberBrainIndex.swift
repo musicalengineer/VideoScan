@@ -500,31 +500,35 @@ public enum CyberBrainBiographyPlanner {
         citations: inout [String: CyberBrainAnswerPlan.Citation]
     ) {
         let sourceID = "gedcom:\(person.id)"
-        func claim(_ id: String, _ text: String) -> CyberBrainAnswerPlan.Claim {
+        func claim(_ id: String, _ text: String,
+                   _ fact: CyberBrainAnswerPlan.TreeFact) -> CyberBrainAnswerPlan.Claim {
             .init(
                 id: id, text: text, evidenceIDs: [sourceID],
-                confidence: gedcomFactConfidence)
+                confidence: gedcomFactConfidence, treeFact: fact)
         }
         if let birth = person.birthDate {
             claims.append(claim(
                 "\(sourceID):birth",
-                "The imported family tree records \(birth) as \(displayName)'s birth date."))
+                "The imported family tree records \(birth) as \(displayName)'s birth date.",
+                .init(kind: .birth, date: birth, subjectSex: person.sex)))
         }
         if let death = person.deathDate {
             claims.append(claim(
                 "\(sourceID):death",
-                "The imported family tree records \(death) as \(displayName)'s death date."))
+                "The imported family tree records \(death) as \(displayName)'s death date.",
+                .init(kind: .death, date: death, subjectSex: person.sex)))
         }
-        let relationships: [(GedcomFamilyGraph.Relation, String)] = [
-            (.parents, "parents"), (.spouse, "spouse"), (.children, "children"),
+        let relationships: [(GedcomFamilyGraph.Relation, String, CyberBrainAnswerPlan.TreeFact.Kind)] = [
+            (.parents, "parents", .parents), (.spouse, "spouse", .spouse), (.children, "children", .children),
         ]
-        for (relation, label) in relationships {
+        for (relation, label, kind) in relationships {
             let names = ArchivistBiographyPolicy.orderedPeople(
                 graph.relatives(relation, of: person)).map(\.name)
             if !names.isEmpty {
                 claims.append(claim(
                     "\(sourceID):\(label)",
-                    "The imported family tree records \(displayName)'s \(label) as \(names.joined(separator: ", "))."))
+                    "The imported family tree records \(displayName)'s \(label) as \(names.joined(separator: ", ")).",
+                    .init(kind: kind, names: names, subjectSex: person.sex)))
             }
         }
         if !claims.filter({ $0.evidenceIDs.contains(sourceID) }).isEmpty {
@@ -549,7 +553,20 @@ public enum CyberBrainDeterministicComposer {
                 ? "The family archive preserves more than one account of \(plan.subject), so I won't collapse them into a single version."
                 : "Here is what the family archive currently supports about \(plan.subject)."
             var paragraphs = [opening]
-            paragraphs.append(contentsOf: plan.claims.map(\.text))
+            // Family-tree facts are told together, with the source named
+            // once; everything else (family notes, testimony) follows in
+            // its own words.
+            let treeFacts = plan.claims.compactMap(\.treeFact)
+            let others = plan.claims.filter { $0.treeFact == nil }.map(\.text)
+            if !treeFacts.isEmpty {
+                paragraphs.append(CyberBrainTreeTelling.sentences(treeFacts, subject: plan.subject))
+                if let first = others.first {
+                    paragraphs.append("The family's notes add: " + first)
+                    paragraphs.append(contentsOf: others.dropFirst())
+                }
+            } else {
+                paragraphs.append(contentsOf: others)
+            }
             paragraphs.append(contentsOf: plan.uncertaintyStatements)
             if !plan.sourceCitations.isEmpty {
                 let count = plan.sourceCitations.count
@@ -560,5 +577,90 @@ public enum CyberBrainDeterministicComposer {
             }
             return paragraphs.joined(separator: " ")
         }
+    }
+}
+
+/// The spoken telling of a person's family-tree facts: one attribution,
+/// grouped facts, pronouns from the recorded sex (the name when unknown).
+/// "According to the family tree, John Robert Latta was born on 11
+/// September 1835 and died on 30 June 1898. His parents were John C. Latta
+/// and Priscilla Eldridge Shaw. He married Cathrine Black Ralston. His
+/// children were …" Pure; nothing is added that the facts do not say.
+public enum CyberBrainTreeTelling {
+    public static func sentences(_ facts: [CyberBrainAnswerPlan.TreeFact], subject: String) -> String {
+        guard let sex = facts.first?.subjectSex else { return "" }
+        let (he, his) = pronouns(sex, subject: subject)
+        func fact(_ kind: CyberBrainAnswerPlan.TreeFact.Kind) -> CyberBrainAnswerPlan.TreeFact? {
+            facts.first { $0.kind == kind }
+        }
+        var out: [String] = []
+        var life: [String] = []
+        if let born = fact(.birth)?.date { life.append("was born \(onOrIn(born))") }
+        if let died = fact(.death)?.date { life.append("died \(onOrIn(died))") }
+        let lead = "According to the family tree, \(subject)"
+        if !life.isEmpty {
+            out.append("\(lead) \(life.joined(separator: " and ")).")
+        }
+        let opener: (String) -> String = { sentence in
+            // The first sentence carries the attribution when no dates did.
+            out.isEmpty ? "According to the family tree, " + lowercasedFirst(sentence) : sentence
+        }
+        if let parents = fact(.parents)?.names, !parents.isEmpty {
+            out.append(opener(parents.count == 1
+                ? "\(his) recorded parent was \(parents[0])."
+                : "\(his) parents were \(list(parents))."))
+        }
+        if let spouses = fact(.spouse)?.names, !spouses.isEmpty {
+            out.append(opener("\(he) married \(list(spouses))."))
+        }
+        if let children = fact(.children)?.names, !children.isEmpty {
+            out.append(opener(children.count == 1
+                ? "\(his) child was \(children[0])."
+                : "\(his) children were \(list(children))."))
+        }
+        return out.joined(separator: " ")
+    }
+
+    static func pronouns(_ sex: String, subject: String) -> (String, String) {
+        switch sex.uppercased() {
+        case "M": return ("He", "His")
+        case "F": return ("She", "Her")
+        default: return (subject, subject + "'s")
+        }
+    }
+
+    /// "on 11 September 1835" for a day, "in 1835" / "in MAR 1835" for a
+    /// month or year. A qualified date ("ABT 1944", "BEF 1900", "BET 1830
+    /// AND 1835") is told VERBATIM with no preposition — the telling never
+    /// re-interprets a recorded value (CyberBrainTests pins exact evidence),
+    /// and a year is never read as a day.
+    static func onOrIn(_ date: String) -> String {
+        let trimmed = date.trimmingCharacters(in: .whitespaces)
+        let firstToken = trimmed.split(separator: " ").first.map(String.init) ?? ""
+        if firstToken.contains(where: \.isLetter) {
+            let months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+            let isMonth = months.contains { firstToken.uppercased().hasPrefix($0) }
+            return isMonth ? "in " + trimmed : trimmed
+        }
+        let startsWithDay = Int(firstToken).map { (1...31).contains($0) && firstToken.count <= 2 } ?? false
+        return (startsWithDay ? "on " : "in ") + trimmed
+    }
+
+    static func list(_ names: [String]) -> String {
+        switch names.count {
+        case 0: return ""
+        case 1: return names[0]
+        case 2: return "\(names[0]) and \(names[1])"
+        default: return names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+        }
+    }
+
+    static func lowercasedFirst(_ s: String) -> String {
+        // "His parents…" → "his parents…" after the attribution; a name
+        // (no pronoun) keeps its capital.
+        for p in ["His ", "Her ", "He ", "She "] where s.hasPrefix(p) {
+            return p.lowercased() + s.dropFirst(p.count)
+        }
+        return s
     }
 }
