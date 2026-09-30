@@ -9411,6 +9411,24 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FootageGroupSheetTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FootageGroupSheetSourceSensorTests",
+        "FootageGroupSheetVisibleMembersTests",
+        "FootageGroupSheetScaleTests"
+      ],
+      "tests": [
+        "boundary",
+        "hugeIdenticalGroup",
+        "largeGroupKeepsAnchor",
+        "memberListIsLazy",
+        "membersNotComputedInBody",
+        "smallGroupShowsAll"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FootageGroupingTests.swift",
@@ -23833,7 +23851,7 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2054,
+      "expected_floor": 2060,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -23969,6 +23987,9 @@
         "VideoScanTests/FindPersonProgressLoggingTests",
         "VideoScanTests/FindTagCLITests",
         "VideoScanTests/FingerprintEncodingTests",
+        "VideoScanTests/FootageGroupSheetScaleTests",
+        "VideoScanTests/FootageGroupSheetSourceSensorTests",
+        "VideoScanTests/FootageGroupSheetVisibleMembersTests",
         "VideoScanTests/FormattingExtendedTests",
         "VideoScanTests/FormattingTests",
         "VideoScanTests/GedcomLookupConcurrencyTests",

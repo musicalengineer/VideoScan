@@ -9,7 +9,10 @@
 // sheet shows the new grouping. No dates are written (Phase 1).
 //
 // The member list is computed in `.task` / `.onChange` (one O(records)
-// filter), never in `body`.
+// filter), never in `body`. Rows are built lazily (LazyVStack) and only the
+// first `initialVisibleMembers` are shown until "Show all N": Identical-byte
+// merges are exempt from the grouping cap, so a group has no hard size bound
+// (Copilot review 2026-09-29, #1).
 
 import AppKit
 import SwiftUI
@@ -32,6 +35,24 @@ struct FootageGroupSheet: View {
     @State private var members: [VideoRecord] = []
     @State private var separated: [VideoRecord] = []
     @State private var runRequested = false
+    @State private var showAllMembers = false
+
+    /// Rows shown before "Show all N". Typical groups are a handful of files;
+    /// only byte-identical copies can push a group past the 64 cap.
+    static let initialVisibleMembers = 200
+
+    /// The rows to build: the first `initialVisibleMembers` (likely original
+    /// first), plus the anchor file if it ranks below the cut — the file the
+    /// person right-clicked is always on screen. O(visible), never O(records).
+    static func visibleMembers(_ members: [VideoRecord], anchorID: UUID, showAll: Bool) -> [VideoRecord] {
+        guard !showAll, members.count > initialVisibleMembers else { return members }
+        var shown = Array(members.prefix(initialVisibleMembers))
+        if !shown.contains(where: { $0.id == anchorID }),
+           let anchor = members.first(where: { $0.id == anchorID }) {
+            shown.append(anchor)
+        }
+        return shown
+    }
 
     private var anchor: VideoRecord? { model.record(forID: request.recordID) }
 
@@ -41,12 +62,17 @@ struct FootageGroupSheet: View {
             Divider()
             if members.count > 1 {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(members, id: \.id) { rec in
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(Self.visibleMembers(members, anchorID: request.recordID, showAll: showAllMembers),
+                                id: \.id) { rec in
                             FootageMemberRow(record: rec, anchorID: request.recordID,
                                              decision: anchor?.footageDecision(about: rec.id),
                                              onDecide: { decide($0, other: rec.id) })
                             Divider()
+                        }
+                        if !showAllMembers, members.count > Self.initialVisibleMembers {
+                            Button("Show all \(members.count)") { showAllMembers = true }
+                                .help("This group is large; the first \(Self.initialVisibleMembers) files are shown.")
                         }
                     }
                 }
