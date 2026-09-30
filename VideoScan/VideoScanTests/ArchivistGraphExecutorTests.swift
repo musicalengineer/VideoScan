@@ -811,11 +811,7 @@ struct ArchivistGraphExecutorTests {
     /// only as deterministic values. Adding a translator dependency or call
     /// to this production component intentionally breaks this test for review.
     @Test func executorSourceHasNoTranslatorDependencyOrCall() throws {
-        let sourceURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("VideoScan/ArchivistGraphExecutor.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let source = try SourceTree.appSource(named: "ArchivistGraphExecutor.swift")
 
         #expect(!source.contains("NLQueryTranslating"))
         #expect(!source.contains("OllamaQueryTranslator"))

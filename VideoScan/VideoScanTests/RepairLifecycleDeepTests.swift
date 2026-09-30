@@ -463,13 +463,9 @@ struct SupersededVisibilityAuditTests {
     ]
 
     @Test func allEightDocumentedCallSitesRouteThroughPfActiveRecords() throws {
-        let appSources = URL(fileURLWithPath: #filePath)   // …/VideoScanTests/this
-            .deletingLastPathComponent()                    // …/VideoScanTests
-            .deletingLastPathComponent()                    // …/VideoScan (project dir)
-            .appendingPathComponent("VideoScan")            // …/VideoScan/VideoScan
         for site in Self.auditedCallSites {
-            let url = appSources.appendingPathComponent(site.file)
-            let source = try #require(try? String(contentsOf: url, encoding: .utf8),
+            // By NAME anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
+            let source = try #require(try? SourceTree.appSource(named: site.file),
                                       "\(site.file) missing — the pfActiveRecords visibility audit list is stale; re-audit and update this sensor")
             let count = source.components(separatedBy: "pfActiveRecords(").count - 1
             #expect(count >= site.minCount,

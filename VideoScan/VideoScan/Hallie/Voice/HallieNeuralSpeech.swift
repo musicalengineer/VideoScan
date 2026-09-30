@@ -62,6 +62,32 @@ enum HallieNeuralSpeech {
             .appendingPathComponent(directoryName, isDirectory: true)
     }
 
+    /// The voice engine's environment: an ALLOWLIST, not ours minus a few.
+    /// Launched from Xcode the app carries ~30 debug variables — the scheme's
+    /// Metal API Validation (`MTL_DEBUG_LAYER=1`), `DYLD_INSERT_LIBRARIES`
+    /// (debugger support libraries loaded into ANY child), Core Animation
+    /// assertions, profiling hooks. A child inherits them all; on macOS 27 /
+    /// Xcode 27 the Metal validation layer ABORTED the engine on a harmless
+    /// zero-length `setBytes`, so every sentence fell back to Apple speech
+    /// (2026-09-29: "Hallie's voice regressed after the upgrade"). The first
+    /// fix removed the Metal switches only; Copilot's review of PR #226
+    /// pointed out that a blocklist misses the next injected knob — so the
+    /// engine now gets only what it needs. Verified 2026-09-29: with exactly
+    /// these variables it renders the reference sentence at timbre 1.0000.
+    /// A missing TMPDIR falls back to the system temp directory. Pure.
+    nonisolated static let workerEnvironmentKeys: Set<String> = [
+        "HOME", "TMPDIR", "PATH", "USER", "LOGNAME",
+        "LANG", "LC_ALL", "LC_CTYPE", "__CF_USER_TEXT_ENCODING",
+    ]
+
+    nonisolated static func workerEnvironment(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var env = environment.filter { workerEnvironmentKeys.contains($0.key) }
+        if env["TMPDIR"] == nil { env["TMPDIR"] = NSTemporaryDirectory() }
+        return env
+    }
+
     static var isInstalled: Bool {
         let directory = installationDirectory
         let executable = directory.appendingPathComponent(executableName).path
@@ -513,6 +539,7 @@ actor HallieNeuralSpeechWorker {
             "--voices", installationDirectory.appendingPathComponent(HallieNeuralSpeech.voicesName).path,
         ]
         process.currentDirectoryURL = installationDirectory
+        process.environment = HallieNeuralSpeech.workerEnvironment()
         process.standardInput = inputPipe
         process.standardOutput = outputPipe
         process.standardError = errorPipe
@@ -660,6 +687,7 @@ final class HallieNeuralSpeechJob: @unchecked Sendable {
                     "--text", self.text,
                 ]
                 process.currentDirectoryURL = install
+                process.environment = HallieNeuralSpeech.workerEnvironment()
                 process.standardOutput = stdout
                 process.standardError = stderr
 

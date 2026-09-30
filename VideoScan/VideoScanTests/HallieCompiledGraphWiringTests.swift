@@ -170,17 +170,15 @@ struct HallieCompiledGraphWiringTests {
     /// the shared cache with a store. Skipped when the sources are not
     /// beside the test (e.g. a bundle-only run).
     @Test func hallieEntryPointsUseTheSharedCacheWithAStore() throws {
-        let appSources = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan", isDirectory: true)
         let files: [(String, String)] = [
             ("HallieAppTurnCoordinator.swift", "store: .app"),
             ("ArchivistChatWindow.swift", "store: .app"),
             ("HallieShellCLI.swift", "store: .production"),
         ]
         for (name, storeArgument) in files {
-            let url = appSources.appendingPathComponent(name)
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            // By NAME anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
+            guard let url = SourceTree.appSourceURL(named: name),
+                  let text = try? String(contentsOf: url, encoding: .utf8) else {
                 throw SkipTestError(reason: "\(name) not beside the test sources")
             }
             #expect(!text.contains(".snapshot().loadFamilyGraph()"),

@@ -348,10 +348,9 @@ struct FamilyTreeNoteCorrectionIsolationTests {
 @Suite("Family tree note correction — sensors")
 struct FamilyTreeNoteCorrectionSensorTests {
 
+    // By NAME, wherever the file lives (folder reorg 69b616f1).
     private static func source(_ name: String) throws -> String {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan/\(name)")
-        return try String(contentsOf: url, encoding: .utf8)
+        try SourceTree.appSource(named: name)
     }
 
     /// The body of `func <name>(` up to the next line that closes a

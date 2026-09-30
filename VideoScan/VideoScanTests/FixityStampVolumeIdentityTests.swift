@@ -523,20 +523,20 @@ struct FixityStampVolumeIdentityTests {
     @Test func noStoredStampIsComparedByDeviceNumberOutsideTheOneComparison() throws {
         let reviewed: [String: Int] = [
             // fd opened for hashing vs the stat taken just before (QA round 3).
-            "VideoScan/SignatureVerification.swift": 1,
+            "VideoScan/MediaOps/SignatureVerification.swift": 1,
             // fd vs name identity inside one publish step.
-            "VideoScan/ArchivePromoteEngine.swift": 1,
+            "VideoScan/Archive/ArchivePromoteEngine.swift": 1,
             // Refile (from main, 9/27): fd/dirfd vs the identity sourceCheck
             // took in THIS op's prepare — never a stored stamp. A remount
             // mid-op fails safe (refused / put back / "not found by identity").
-            "VideoScan/ArchiveRefile.swift": 3,
+            "VideoScan/Archive/ArchiveRefile.swift": 3,
             // partial-file registry: lstat now vs the stat of the same op.
-            "VideoScan/PartialFileNaming.swift": 1,
+            "VideoScan/MediaOps/PartialFileNaming.swift": 1,
             // hard-link de-dup keys from stats of ONE gather pass.
-            "VideoScan/DeleteDuplicatesPlan.swift": 1,
-            "VideoScan/DeleteDuplicatesSiblingProof.swift": 1,
+            "VideoScan/MediaOps/DeleteDuplicatesPlan.swift": 1,
+            "VideoScan/MediaOps/DeleteDuplicatesSiblingProof.swift": 1,
             // names which identity field moved, for the log line only.
-            "VideoScan/FixityRebind.swift": 1,
+            "VideoScan/Archive/FixityRebind.swift": 1,
         ]
         let pattern = try NSRegularExpression(pattern:
             #"(\.device\s*[!=]=)|([!=]=\s*[\w.()]*\.device\b)|(st_dev\)?\s*[!=]=)|([!=]=\s*[\w.()]*st_dev\b)|(\\\(\w+\.device\))"#)
@@ -557,15 +557,14 @@ struct FixityStampVolumeIdentityTests {
         }
         #expect(found == reviewed, "device-number comparisons changed: \(found.sorted { $0.key < $1.key })")
         // The consumers really use the one comparison.
-        let job = try String(contentsOf: Self.projectDir.appendingPathComponent("VideoScan/DeleteDuplicatesJob.swift"), encoding: .utf8)
+        let job = try SourceTree.appSource(named: "DeleteDuplicatesJob.swift")
         #expect(job.contains("recorded.describesSameFile(now: current, changeTime: .mustMatch, volume: .resumeAcrossRemount)"))
-        let check = try String(contentsOf: Self.projectDir.appendingPathComponent(
-            "VideoScan/ArchiveAngel/Promote/ArchiveAngelFixityCheck.swift"), encoding: .utf8)
+        let check = try SourceTree.appSource(named: "ArchiveAngel/Promote/ArchiveAngelFixityCheck.swift")
         #expect(check.contains("p.fixity.describesFileNow(FileIdentityStamp.capture(path: p.path))"))
         // Terabytes of reads are Rick's decision: nothing starts the job at
         // launch or on mount (codex #1707), and no stat-only upgrade exists.
-        for rel in ["VideoScan/VideoScanApp.swift", "VideoScan/VideoScanModel+VolumeLifecycle.swift", "VideoScan/VideoScanModel.swift"] {
-            let text = try String(contentsOf: Self.projectDir.appendingPathComponent(rel), encoding: .utf8)
+        for rel in ["VideoScanApp.swift", "VideoScanModel+VolumeLifecycle.swift", "VideoScanModel.swift"] {
+            let text = try SourceTree.appSource(named: rel)
             #expect(!text.contains("startBindFixityToVolume") && !text.contains("FixityStampUpgrade"), "\(rel)")
         }
         let core = try String(contentsOf: Self.projectDir.appendingPathComponent(

@@ -69,8 +69,9 @@ struct ArchivePaneLayoutTests {
             .appendingPathComponent("VideoScan")
     }
 
+    /// By NAME (or folder/NAME) anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
     private func source(_ file: String) throws -> String {
-        try String(contentsOf: appSourceDir.appendingPathComponent(file), encoding: .utf8)
+        try SourceTree.appSource(named: file)
     }
 
     /// The strip is placed exactly once, and inside the bounded region.

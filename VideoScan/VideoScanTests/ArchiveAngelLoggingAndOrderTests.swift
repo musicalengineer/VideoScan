@@ -59,17 +59,16 @@ struct ArchiveAngelLoggingAndOrderTests {
     /// Sensor: the job and the promoter each have ONE log verb and no
     /// silent plan save.
     @Test func sensorOneLogVerbAndNoSwallowedSaves() throws {
-        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan")
+        // By NAME (or folder/NAME) anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
         for file in ["ArchiveAngel/Prepare/ArchiveAngelJob.swift", "ArchiveAngel/Promote/ArchiveAngelPromoter.swift",
                      "ArchiveAngel/UI/ArchiveAngelReviewSheet.swift", "ArchiveAngel/UI/ArchiveAngelReadyDisclosure.swift",
                      "ArchiveView.swift", "ArchiveAngel/Prepare/ArchiveAngelPlan.swift"] {
-            let src = try String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8)
+            let src = try SourceTree.appSource(named: file)
             #expect(!src.contains("try? ArchiveAngelPlanStore.save("), "\(file): a swallowed plan save")
             #expect(!src.contains("try? save(plan)"), "\(file): a swallowed plan save")
             #expect(!src.contains("try? await Self.savePlanOffMain"), "\(file): a swallowed plan save")
         }
-        let job = try String(contentsOf: dir.appendingPathComponent("ArchiveAngel/Prepare/ArchiveAngelJob.swift"), encoding: .utf8)
+        let job = try SourceTree.appSource(named: "ArchiveAngel/Prepare/ArchiveAngelJob.swift")
         #expect(!job.contains("model.log("), "every job line goes through note()")
     }
 

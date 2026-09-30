@@ -339,9 +339,15 @@ enum CopyFamilyAssessor {
             var damaged: Bool
             var durationOff: Bool
             var derivedFromSig: String?       // provenance INSIDE the family
-            var hasExternalLineage: Bool      // derivedFrom set but points outside
+            /// Every member says it was derived from something, and at least
+            /// one names a record that is NOT in this family (purged from the
+            /// catalog, or outside the walked family). Such a copy is not a
+            /// provable lineage root: its parent existed once and is gone.
+            /// A group that also holds a member with no derivedFrom at all
+            /// is not flagged — that member is itself an unlineaged copy.
+            var hasExternalLineage: Bool
         }
-        var drafts: [Draft] = order.map { sig in
+        let drafts: [Draft] = order.map { sig in
             let members = groups[sig]!
             let rep = members[0]
             let cls = codecClass(videoCodec: rep.videoCodec, audioCodec: rep.audioCodec,
@@ -356,14 +362,20 @@ enum CopyFamilyAssessor {
                     else if idToSig[d] == nil { external = true }
                 }
             }
+            let everyMemberDerived = members.allSatisfy { $0.derivedFrom != nil }
             return Draft(sig: sig, members: members, cls: cls, damaged: damaged,
-                         durationOff: durationOff, derivedFromSig: derivedSig, hasExternalLineage: external)
+                         durationOff: durationOff, derivedFromSig: derivedSig,
+                         hasExternalLineage: external && everyMemberDerived)
         }
 
         // Rule 2/3 — choose the original representation.
         let healthy = drafts.indices.filter { !drafts[$0].damaged && !drafts[$0].durationOff }
         let lineageRoots = healthy.filter { drafts[$0].derivedFromSig == nil }
-        let natives = lineageRoots.filter { drafts[$0].cls == .native }
+        // A native copy derived from a record that is no longer in the
+        // catalog is NOT "not derived from any other copy" — it cannot be
+        // proven original (stage-0 triage R3, 2026-09-29), so it drops to
+        // the presumed-original election below.
+        let natives = lineageRoots.filter { drafts[$0].cls == .native && !drafts[$0].hasExternalLineage }
         var originalIndex: Int? = nil
         var originalRole: CopyRole = .originalSource
         var originalReason = ""
@@ -389,8 +401,16 @@ enum CopyFamilyAssessor {
             }
             originalIndex = ranked.first
             originalRole = .presumedOriginal
-            originalReason = "No native acquisition encoding in this family; this is the lineage root with the best evidence (others derive from it, lossless, or earliest stamp). Confirm before treating it as the master."
+            if let r = ranked.first, drafts[r].hasExternalLineage {
+                originalReason = "Derived from a file no longer in the catalog, so it cannot be proven to be the original; it is the copy with the best remaining evidence. Confirm before treating it as the master."
+            } else {
+                originalReason = "No native acquisition encoding in this family; this is the lineage root with the best evidence (others derive from it, lossless, or earliest stamp). Confirm before treating it as the master."
+            }
             out.cautions.append("The original generation cannot be confirmed from metadata alone — the recommended copy is presumed, not proven.")
+        }
+
+        for d in drafts where d.hasExternalLineage {
+            out.cautions.append("\(d.sig): derived from a file no longer in the catalog — its source cannot be checked.")
         }
 
         // Build representations with roles.

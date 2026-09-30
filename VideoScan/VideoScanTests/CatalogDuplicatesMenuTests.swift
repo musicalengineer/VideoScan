@@ -85,10 +85,8 @@ struct CatalogDuplicatesMenuLogicTests {
 struct CatalogDuplicatesMenuStructureTests {
 
     private func appSource(_ file: String) throws -> String {
-        let dir = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan")
-        return try String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8)
+        // By NAME anywhere under VideoScan/VideoScan (feature folders, 2026-09-29).
+        try SourceTree.appSource(named: file)
     }
 
     /// Code only — comment lines stripped, so the header's explanation of
@@ -177,10 +175,7 @@ struct CatalogDuplicatesMenuIsolationTests {
     /// The main window injects the non-observing reference next to the
     /// observed one — without it every Delete Duplicates start is refused.
     @Test func appInjectsTheReference() throws {
-        let dir = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("VideoScan")
-        let app = try String(contentsOf: dir.appendingPathComponent("VideoScanApp.swift"), encoding: .utf8)
+        let app = try SourceTree.appSource(named: "VideoScanApp.swift")
         #expect(app.contains(".environment(\\.mediaFileOperationsCenterReference, fileOpsCenter)"))
     }
 }

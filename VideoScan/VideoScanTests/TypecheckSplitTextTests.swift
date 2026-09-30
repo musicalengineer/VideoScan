@@ -72,6 +72,45 @@ struct TypecheckSplitTextTests {
         #expect(!r.instances.contains { $0.id == r.recommendedInstanceID }, "the old lookup agreed")
     }
 
+    // MARK: Delete Duplicates entry row (stage-0 R2, 2026-09-29)
+
+    @Test("Delete Duplicates entry row strings — tier help, keeper, status help, size")
+    func deleteDuplicatesEntryRowStrings() {
+        let base = DeleteDuplicatesPlan.Entry(id: UUID(), path: "/Volumes/SanDisk/a.mov", filename: "a.mov",
+                                              sizeBytes: 1_234_567, keeperID: UUID(),
+                                              keeperPath: "/Volumes/LaCie/k.mov", keeperFilename: "k.mov",
+                                              keeperStamp: nil)
+        var variants: [DeleteDuplicatesPlan.Entry] = []
+        for reason in [nil, "three or more copies"] as [String?] {
+            for remaining in [nil, 3] as [Int?] {
+                for keeper in ["", "/Volumes/LaCie/k.mov"] {
+                    for note in ["", "digest mismatch"] {
+                        var e = base
+                        e.tierReason = reason; e.remainingVerifiedCopies = remaining
+                        e.keeperPath = keeper; e.note = note
+                        variants.append(e)
+                    }
+                }
+            }
+        }
+        for entry in variants {
+            let chipLabel = DeleteDuplicatesDetailView.chip(entry).label
+            // The pre-split inline expressions, verbatim.
+            let tierOracle: String = entry.tierReason.map { r in
+                entry.remainingVerifiedCopies.map { "\(r) (\($0) verified copies remain)" } ?? r
+            } ?? "Decided when the file is reached"
+            let keeperOracle: String = entry.keeperPath.isEmpty ? "—" : "\(entry.keeperVolumeName): \(entry.keeperFilename)"
+            let statusOracle: String = entry.note.isEmpty ? chipLabel : entry.note
+            #expect(DeleteDuplicatesEntryRow.tierHelp(entry) == tierOracle)
+            #expect(DeleteDuplicatesEntryRow.keeperText(entry) == keeperOracle)
+            #expect(DeleteDuplicatesEntryRow.statusHelp(entry, chipLabel: chipLabel) == statusOracle)
+            #expect(DeleteDuplicatesEntryRow.sizeText(entry)
+                    == ByteCountFormatter.string(fromByteCount: entry.sizeBytes, countStyle: .file))
+            #expect(DeleteDuplicatesEntryRow.accessibilityText(entry, chipLabel: chipLabel)
+                    == "\(entry.filename): \(chipLabel)")
+        }
+    }
+
     // MARK: Empty states (MFO detail rows)
 
     @Test("Delete Duplicates and Archive Angel detail empty-state text")

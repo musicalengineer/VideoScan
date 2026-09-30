@@ -358,6 +358,40 @@ public struct FamilyGraphCompiledStore {
         return findings
     }
 
+    /// THE MANIFEST THE POINTER NAMES — a pure read (stage-0 triage R1,
+    /// 2026-09-29). For callers that want the counts and source names of
+    /// the tree in use (the FamilySearch pull sheet, the merge's
+    /// fail-closed baseline) and run on the main actor. `loadCurrent()` is
+    /// the wrong tool there: it hashes every source, decodes the whole
+    /// graph (~39k people), and may REPOINT to the previous generation —
+    /// a beachball and a disk write for a read.
+    ///
+    /// Reads two small files: `current.json` and the current generation's
+    /// `manifest.json`. Never decodes the artifact, never hashes a source,
+    /// never takes the lock, never writes, never logs.
+    ///
+    /// Returns the current generation's manifest when the pointer exists,
+    /// matches the running schema/codec/index versions, names a manifest
+    /// that verified clean, and that manifest's source keys equal the
+    /// pointer's. Nil otherwise.
+    ///
+    /// DELIBERATELY NOT CHECKED, and what that means for a caller:
+    ///   - The artifact may not decode. A full load would then roll back to
+    ///     `previous`; this read still reports `current`, because it
+    ///     describes what the pointer SAYS, and rolling back is a write
+    ///     this read must never make. The next real load does the rollback.
+    ///   - A source may have changed or vanished on disk. A full load would
+    ///     refuse the generation; this read still reports it. The merge
+    ///     guard wants exactly that: a compiled tree with more sources than
+    ///     the loader could see must make the merge FAIL CLOSED, not
+    ///     disappear from view.
+    public func loadCurrentManifest() -> Manifest? {
+        guard let pointer = readPointer(), Self.versionsMatch(pointer),
+              let manifest = readManifest(pointer.current), manifest.verification.isEmpty,
+              manifest.sources.map(\.key) == pointer.sourceKeys else { return nil }
+        return manifest
+    }
+
     public func loadCurrent() -> (graph: GedcomFamilyGraph, manifest: Manifest)? {
         guard let pointer = readPointer() else { return nil }
         guard Self.versionsMatch(pointer) else {

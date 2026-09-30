@@ -75,7 +75,7 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-09-12-hallie-replay-r6"
+NIGHTLY_SCRIPT_VERSION="2026-09-29-hallie-voice-r1"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -88,6 +88,7 @@ PERSON_METRICS_JSON='{"person_eval_status":"not-configured","person_eval_reason"
 # hallie testbed"). Every row carries it, so a night where the replay never
 # ran says "not-run" in the row rather than showing nothing at all.
 HALLIE_REPLAY_JSON='{"hallie_replay_status":"not-run","hallie_strict_status":"not-run","hallie_advisory_status":"not-run"}'
+HALLIE_VOICE_JSON='{"hallie_voice_status":"not-run"}'
 # 2026-09-11: the clean DEBUG build of the test target took 1,645 s on the M4 on
 # 9/10 and was killed at 1,800 s on 9/11 (M1 too, same tree) — the night published
 # ZERO tests. 3,600 s is MITIGATION so a build within normal variance cannot trip
@@ -319,7 +320,7 @@ refresh_person_metrics() {
 # Merge additive person fields into any normal/failure nightly JSON row. Python
 # owns JSON escaping so private dataset names cannot corrupt the public JSONL.
 with_person_metrics() {
-    BASE_ROW="$1" PERSON_ROW="$PERSON_METRICS_JSON" HALLIE_ROW="${HALLIE_REPLAY_JSON:-}" python3 -c '
+    BASE_ROW="$1" PERSON_ROW="$PERSON_METRICS_JSON" HALLIE_ROW="${HALLIE_REPLAY_JSON:-}" VOICE_ROW="${HALLIE_VOICE_JSON:-}" python3 -c '
 import json, os
 base = json.loads(os.environ["BASE_ROW"])
 base.update(json.loads(os.environ["PERSON_ROW"]))
@@ -332,6 +333,9 @@ hallie = json.loads(os.environ["HALLIE_ROW"] or "{}")
 for key in ("status", "reason", "passed", "failed", "skipped", "total"):
     hallie.pop(key, None)
 base.update(hallie)
+# The Hallie VOICE lane (2026-09-29): only its own hallie_voice_* keys.
+voice = json.loads(os.environ.get("VOICE_ROW") or "{}")
+base.update({k: v for k, v in voice.items() if k.startswith("hallie_voice_")})
 print(json.dumps(base, separators=(",", ":")))
 '
 }
@@ -408,6 +412,28 @@ collect_optional_post_test_metrics() {
     PERSON_EVAL_APP="$NIGHTLY_DD/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan"
     refresh_person_metrics "$PERSON_EVAL_APP"
     refresh_hallie_replay "$PERSON_EVAL_APP"
+    refresh_hallie_voice
+}
+
+# Hallie's VOICE (Rick 2026-09-29: "what is the point of a regression test if
+# we don't run it automatically"). After the macOS 27 / Xcode 27 upgrade she
+# silently fell back to Apple speech. The lane renders the reference sentence
+# with the installed Kokoro engine, compares its signature with the stored
+# recording, and counts app fallbacks logged since the last night; anything
+# wrong posts a red team-channel message. Adds hallie_voice_* fields only.
+refresh_hallie_voice() {
+    local out="/tmp/nightly-hallie-voice.json"
+    rm -f "$out"
+    run_with_process_group_watchdog 600 "$NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS" \
+        "$LOGFILE.hallie-voice" \
+        "$REPO/venv/bin/python" "$REPO/scripts/nightly_hallie_voice.py" --out "$out"
+    if [ -s "$out" ] && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$out" 2>/dev/null; then
+        HALLIE_VOICE_JSON=$(cat "$out")
+    else
+        HALLIE_VOICE_JSON='{"hallie_voice_status":"incomplete","hallie_voice_reason":"no-artifact"}'
+    fi
+    log "Hallie voice: $(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("hallie_voice_status"), d.get("hallie_voice_similarity", ""), "fallbacks", d.get("hallie_voice_fallbacks", "?"))' "$HALLIE_VOICE_JSON")"
+    return 0
 }
 
 # Replay Rick's recorded Hallie questions through the freshly built app and
