@@ -3,8 +3,9 @@
 //   • No photo → `FamilyTreeBirthFlagPlaceholder`: the flag IS the portrait,
 //     large and centred in the 58-pt photo slot, for every generation (the
 //     deep ancestors are exactly the ones without photos).
-//   • A photo → `FamilyTreeBirthFlagBadge`: a 14-pt flag in the portrait's
-//     lower-right corner on a thin material so it reads on any photo.
+//   • Every flagged card → `FamilyTreeBirthFlagBadge`: a 14-pt flag centred
+//     in the card's header row, between the sex glyph and the refresh/root
+//     chips (Rick 2026-09-30; on the photo it covered faces).
 // Both are emoji Text at a fixed size — no bundled image assets — with the
 // country as the accessibility label and the "shown under today's flag"
 // tooltip. Neither view computes anything: the flag arrives as a value
@@ -38,11 +39,10 @@ struct FamilyTreeBirthFlagBadge: View {
     let flag: FamilyTreeBirthFlag
 
     var body: some View {
+        // Sits on the card's own background in the header row, so no
+        // material backing is needed (it had one while it sat on photos).
         Text(flag.emoji)
             .font(.system(size: 14))
-            .padding(2)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
-            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.black.opacity(0.25), lineWidth: 0.5))
             .help(flag.tooltip)
             .accessibilityLabel(flag.accessibilityLabel)
             .accessibilityIdentifier("tree.person.flagBadge")

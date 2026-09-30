@@ -353,6 +353,16 @@ struct FamilyTreeBirthFlagTests {
         #expect(source.firstMatch(of: street) == nil, "public repo: no real street address in test fixtures")
     }
 
+    /// Rick 2026-09-30: the flag lives in the card's header row, never on
+    /// the photo (a badge there covered faces). Source sensor: the badge is
+    /// drawn exactly once in the cards file, and not by the portrait.
+    @Test func theFlagSitsInTheHeaderNotOnThePhoto() throws {
+        let cards = try SourceTree.appSource(named: "FamilyTreeCards.swift")
+        let uses = cards.components(separatedBy: "FamilyTreeBirthFlagBadge(").count - 1
+        #expect(uses == 1, "one header badge per card, found \(uses)")
+        #expect(!cards.contains("image != nil, let flag"), "the portrait no longer draws a badge on the photo")
+    }
+
     @Test func noTreeMeansNoFlags() async throws {
         let model = FamilyTreeLiveModel(originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
         model.install(graph: flagsGraph())
@@ -437,8 +447,7 @@ struct FamilyTreeBirthFlagTests {
         #expect(view.contains("birthFlag: model.birthFlag(for: card.person.id)"), "the card gets its flag by one lookup")
         let cards = try SourceTree.appSource(named: "FamilyTreeCards.swift")
         #expect(cards.contains("FamilyTreeBirthFlagPlaceholder(flag: birthFlag, accent: accent)"), "no photo → the flag is the portrait")
-        #expect(cards.contains("FamilyTreeBirthFlagBadge(flag: birthFlag)"), "a photo → the corner badge")
-        #expect(cards.contains("FamilyTreeBirthFlagBadge(flag: flag)"), "the asset portrait badges once its photo lands")
+        #expect(cards.contains("FamilyTreeBirthFlagBadge(flag: birthFlag)"), "every flagged card → the header flag")
 
         let builder = try SourceTree.appSource(named: "FamilyTreeBirthCountries.swift")
         #expect(!builder.contains("BirthplaceUnitResolver.resolve("), "the builder never resolves on its own")

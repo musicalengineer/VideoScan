@@ -181,6 +181,13 @@ struct FamilyTreePersonCard: View {
                             .foregroundStyle(.cyan)
                     }
                 }
+                // Birth-country flag, top-centre between the sex glyph and
+                // the refresh/root chips (Rick 2026-09-30): the card's four
+                // corners are taken (sex · refresh · documents · bookmark)
+                // and a badge on the photo covered faces.
+                .overlay {
+                    if let birthFlag { FamilyTreeBirthFlagBadge(flag: birthFlag) }
+                }
 
                 ZStack {
                     if let photo = card.photo {
@@ -189,9 +196,6 @@ struct FamilyTreePersonCard: View {
                             .scaledToFill()
                             .frame(width: 58, height: 58)
                             .clipShape(Circle())
-                            .overlay(alignment: .bottomTrailing) {
-                                if let birthFlag { FamilyTreeBirthFlagBadge(flag: birthFlag) }
-                            }
                     } else if let assetPerson = card.assetPerson {
                         // The asset portrait decides for itself once its
                         // photo lookup lands: flag as portrait or as badge.
@@ -411,10 +415,6 @@ struct FamilyAssetPortrait: View {
         }
         .frame(width: 58, height: 58)
         .clipShape(Circle())
-        .overlay(alignment: .bottomTrailing) {
-            // A photo → the small corner badge (#229).
-            if image != nil, let flag { FamilyTreeBirthFlagBadge(flag: flag) }
-        }
         .task(id: key) {
             let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
             let bridged = profile

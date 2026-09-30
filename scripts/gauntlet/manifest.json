@@ -8840,6 +8840,7 @@
         "noTreeMeansNoFlags",
         "theCardAndTheMapAgreePersonForPerson",
         "theFamilysNotesFlagSomeoneTheTreeCouldNot",
+        "theFlagSitsInTheHeaderNotOnThePhoto",
         "theLiveModelBuildsOncePerBindAndCardsOnlyLookUp",
         "theLiveModelPicksUpTheFamilysNotesThroughTheSamePath",
         "theTreeWinsWhenBothResolveAndTheNoteOnlyFillsAGap",
