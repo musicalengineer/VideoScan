@@ -10,10 +10,10 @@
 		C0DE0000000000000000B000 /* VideoScanCore in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE0000000000000000A000 /* VideoScanCore */; };
 		C0DE0000000000000000B001 /* VideoScanCore in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE0000000000000000A001 /* VideoScanCore */; };
 		C0DE0000000000000000B002 /* VideoScanCore in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE0000000000000000A002 /* VideoScanCore */; };
+		C0DE0000000000000000B010 /* MapKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000E010 /* MapKit.framework */; };
 		FACE000000000000000000B1 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A1 /* MLXVLM */; };
 		FACE000000000000000000B2 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A2 /* MLXLMCommon */; };
 		FACE000000000000000000B3 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A3 /* MLX */; };
-		C0DE0000000000000000B010 /* MapKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000E010 /* MapKit.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -101,14 +101,6 @@
 			);
 			sourceTree = "<group>";
 		};
-		C0DE0000000000000000E000 /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				C0DE0000000000000000E010 /* MapKit.framework */,
-			);
-			name = Frameworks;
-			sourceTree = "<group>";
-		};
 		0DC193292F676647006295E7 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -117,6 +109,14 @@
 				0DC1933F2F676648006295E7 /* VideoScanUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		C0DE0000000000000000E000 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				C0DE0000000000000000E010 /* MapKit.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
