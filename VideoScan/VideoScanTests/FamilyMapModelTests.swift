@@ -11,7 +11,10 @@
 //               a count; shades, labels, the camera region and the panel
 //               lines are pinned.
 //   Scale     — building the inputs for 40k people (every birthplace
-//               resolved once) stays under 300 ms in Debug, load-aware.
+//               resolved once) stays under 300 ms in Debug, load-aware;
+//               100k people (2.5× the real tree) build + tally under a
+//               thread-CPU budget (GH #208). The bundled map at the real
+//               tree's size, on screen, is FamilyMapRenderSensorTests.
 //   Isolation — synthetic units only (never the bundle from here); the
 //               model and the view read no App Support and no network.
 //   Sensor    — `FamilyTreeMapView` never resolves or tallies in a body;
@@ -597,6 +600,73 @@ struct FamilyMapModelTests {
         #expect(c.labels.count == 4, "only the units the synthetic border set knows get a label: eng, eng-yorkshire, sct-fife, usa-massachusetts")
         #expect(c.labels.map(\.key).sorted() == ["eng", "eng-yorkshire", "sct-fife", "usa-massachusetts"])
         #expect(c.counts.count == 8, "every resolved key is tallied even when the border set lacks it (Boston and Lowell share usa-massachusetts)")
+    }
+
+    // MARK: Scale — 100k people (2.5× the real tree), thread CPU time (GH #208)
+
+    /// The whole model build at 100k: every place resolved once, the
+    /// columns packed and interned, then one tally and the published
+    /// bundle. CPU time of the calling thread, so a busy host stretches
+    /// the wall clock without failing this; the budgets are ~3× the
+    /// quiet Debug measurement (2026-09-29, M4 Max: inputs ≈ 190 ms,
+    /// tally ≈ 45 ms). O(people) is the contract — a regression to
+    /// O(people × units) or a per-person allocation storm trips it.
+    @Test func buildingAndTallying100kPeopleStaysUnderBudget() throws {
+        let n = 100_000
+        let places: [String?] = ["Sheffield, Yorkshire, England", "Boston, Suffolk, Massachusetts Bay Colony, British Colonial America",
+                                 "England", "Fife, Scotland", "Cardiff, Glamorgan, Wales", nil, "Berlin, Germany",
+                                 "Halifax, Nova Scotia, Canada", "Cork, Ireland", "Providence, Rhode Island", "Lowell Mass. U.S.A.",
+                                 "Perth, WA, Australia", "United States", "Co. Antrim, Northern Ireland", "Toronto, Ontario, Canada"]
+        let family = ["Breen", "Lamb", "Latta", "McGill", "Hudson", "Stone", "Hill", "Adams", "Alden", "Bradford",
+                      "Brewster", "Standish", "Winslow", "Howland", "Warren", "Fuller", "Cooke", "Allerton", "Chilton",
+                      "Eaton", "Hopkins", "Mullins", "Priest", "Rogers", "Soule", "Tilley", "White", "Billington"]
+        let surnames = (0..<n).map { family[($0 * 7919) % family.count] }
+        let ids = (0..<n).map { "@I\($0)@" }
+        let names = (0..<n).map { "P\($0)" }
+        let keys = TreeWalkHighlight.surnameKeys(surnames)
+        let birthPlaces = (0..<n).map { places[$0 % places.count] }
+        let years = (0..<n).map { $0 % 11 == 0 ? nil : Optional(1500 + $0 % 400) }
+        let generations = (0..<n).map { Optional($0 % 24) }
+        let lines = (0..<n).map { TreeWalk.Line.allCases[$0 % 3] }
+        let regions = [BirthplaceClassifier.BirthRegion](repeating: .unknown, count: n)
+        let visited = Array(0..<n)
+
+        var inputs: FamilyMapModel.Inputs?
+        var inputsWall: Duration = .zero
+        let inputsCPU = PerformanceLane.measureThreadCPUTime {
+            inputsWall = ContinuousClock().measure {
+                inputs = FamilyMapModel.inputs(ids: ids, names: names, surnames: surnames, surnameKeys: keys,
+                                               birthPlaces: birthPlaces, birthYears: years, generations: generations,
+                                               lines: lines, visited: visited, regions: regions)
+            }
+        }
+        let built = try #require(inputs)
+        var result: FamilyMapTally.Result?
+        var computed: FamilyMapModel.Computed?
+        let tallyCPU = PerformanceLane.measureThreadCPUTime {
+            result = try? FamilyMapTally.counts(people: built.people, visited: visited, unplacedLimit: FamilyMapModel.unplacedLimit)
+            computed = result.map { FamilyMapModel.computed(from: $0, units: syntheticUnits) }
+        }
+        print("[family-map] 100k inputs: cpu \(inputsCPU), wall \(inputsWall); tally+computed: cpu \(tallyCPU) (\(PerformanceLane.loadDescription()))")
+        #expect(inputsCPU < PerformanceLane.loadAwareDebugCeiling(.milliseconds(600)),
+                "100k inputs took \(inputsCPU) cpu / \(inputsWall) wall (\(PerformanceLane.loadDescription()))")
+        #expect(tallyCPU < PerformanceLane.loadAwareDebugCeiling(.milliseconds(150)),
+                "100k tally took \(tallyCPU) cpu (\(PerformanceLane.loadDescription()))")
+
+        // Correctness at scale: 12 of the 15 spellings resolve (nil, Germany
+        // and Australia do not), 100,000 is not a multiple of 15.
+        let resolving: Set<Int> = [0, 1, 2, 3, 4, 7, 8, 9, 10, 12, 13, 14]
+        let expected = (0..<n).reduce(0) { $0 + (resolving.contains($1 % places.count) ? 1 : 0) }
+        let r = try #require(result)
+        #expect(built.people.count == n)
+        #expect(r.totals.considered == n && r.totals.resolved == expected, "\(r.totals.resolved) resolved, expected \(expected)")
+        #expect(r.totals.unsupported == (0..<n).reduce(0) { $0 + ([6, 11].contains($1 % places.count) ? 1 : 0) })
+        #expect(r.counts.count == 11, "eng-yorkshire, usa-massachusetts, eng, sct-fife, wls-glamorgan, can-nova-scotia, irl-cork, usa-rhode-island, usa, nir-antrim, can-ontario")
+        let c = try #require(computed)
+        #expect(c.shades.count == r.counts.count)
+        #expect(c.labels.map(\.key).sorted() == ["eng", "eng-yorkshire", "sct-fife", "usa", "usa-massachusetts"],
+                "only the synthetic border set's units get a label")
+        #expect(c.unplaced.count == FamilyMapModel.unplacedLimit)
     }
 
     // MARK: Isolation — no App Support, no network; synthetic units only
