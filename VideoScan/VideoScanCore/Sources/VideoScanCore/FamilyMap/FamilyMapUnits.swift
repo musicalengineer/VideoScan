@@ -149,13 +149,33 @@ public struct FamilyMapUnits: Sendable {
         public let polygons: [Polygon]
         /// The union of every piece — the containment prefilter.
         public let bbox: FamilyMap.BoundingBox
-        /// Where the camera should look: the union of the pieces, EXCEPT
-        /// that pieces east of +150° are ignored when the unit also has
-        /// pieces in the western hemisphere. Alaska's Aleutian tail sits
-        /// at 172…180° as separate pieces; a camera box that included it
-        /// would span the whole Pacific.
+        /// Where the camera should look.
+        ///   • A COUNTRY outline: its principal piece alone (`principalBox`).
+        ///     The bundled `usa` is 123 pieces from the western Aleutians
+        ///     (−178°) across the antimeridian to 71°N; `can` reaches 83°N
+        ///     through the Arctic islands. A union box opened the map on a
+        ///     hemisphere whenever anyone was "born in New England" (QA
+        ///     round 2, 2026-09-29). The contiguous US, the mainland, is
+        ///     what a country-only count means to a viewer.
+        ///   • A county / state / province: the union of its pieces, EXCEPT
+        ///     that pieces east of +150° are ignored when the unit also has
+        ///     pieces in the western hemisphere (Alaska's Aleutian tail at
+        ///     172…180°). Michigan's two peninsulas both stay in frame.
         public let cameraBox: FamilyMap.BoundingBox
+        /// The box of the PRINCIPAL piece — the largest by bounding-box
+        /// area (the contiguous US, mainland Britain, Canada's mainland);
+        /// ties go to the first piece. What a country outline is "at".
+        public let principalBox: FamilyMap.BoundingBox
         public var id: String { key }
+
+        /// The centre of the principal piece.
+        public var principalCentroid: FamilyMap.Coordinate { principalBox.center }
+
+        /// Where a name-and-count label sits: a country outline's label on
+        /// its principal piece (the union centre of the US is in Oregon —
+        /// QA round 2, 2026-09-29), a county / state / province on the
+        /// centre of its camera box.
+        public var labelAnchor: FamilyMap.Coordinate { kind == .country ? principalCentroid : cameraBox.center }
 
         public init(key: String, name: String, country: FamilyMap.Country, kind: FamilyMap.UnitKind, polygons: [Polygon]) {
             self.key = key
@@ -165,13 +185,22 @@ public struct FamilyMapUnits: Sendable {
             self.polygons = polygons
             let empty = FamilyMap.BoundingBox(minLatitude: 0, maxLatitude: 0, minLongitude: 0, maxLongitude: 0)
             var box = polygons.first?.bbox ?? empty
-            for p in polygons.dropFirst() { box = box.union(p.bbox) }
+            var principal = polygons.first?.bbox ?? empty
+            for p in polygons.dropFirst() {
+                box = box.union(p.bbox)
+                if p.bbox.area > principal.area { principal = p.bbox }
+            }
             self.bbox = box
-            let hasWestern = polygons.contains { $0.bbox.maxLongitude < 0 }
-            let forCamera = hasWestern ? polygons.filter { $0.bbox.minLongitude <= 150 } : polygons
-            var camera = forCamera.first?.bbox ?? box
-            for p in forCamera.dropFirst() { camera = camera.union(p.bbox) }
-            self.cameraBox = camera
+            self.principalBox = principal
+            if kind == .country {
+                self.cameraBox = principal
+            } else {
+                let hasWestern = polygons.contains { $0.bbox.maxLongitude < 0 }
+                let forCamera = hasWestern ? polygons.filter { $0.bbox.minLongitude <= 150 } : polygons
+                var camera = forCamera.first?.bbox ?? box
+                for p in forCamera.dropFirst() { camera = camera.union(p.bbox) }
+                self.cameraBox = camera
+            }
         }
 
         /// Boundary-inclusive containment across every piece.
@@ -424,15 +453,25 @@ public struct FamilyMapUnits: Sendable {
         return keys.contains(units[i].key)
     }
 
-    /// The camera box around every listed unit that exists. Nil when none
-    /// of the keys is a unit.
+    /// The camera box around the listed units that exist: the union of the
+    /// FINE units' camera boxes (county / state / province) whenever any
+    /// is listed; the country outlines' (principal-piece) boxes only when
+    /// nothing finer is. On a real walk ~800 "New England" births are
+    /// country-only `usa`; the counties are the map that matters, and the
+    /// outline around them must not widen the frame to a hemisphere (QA
+    /// round 2, 2026-09-29). Nil when none of the keys is a unit.
     public func coverage(for keys: some Sequence<String>) -> FamilyMap.BoundingBox? {
-        var box: FamilyMap.BoundingBox?
+        var fine: FamilyMap.BoundingBox?
+        var countries: FamilyMap.BoundingBox?
         for key in keys {
             guard let u = unit(forKey: key) else { continue }
-            box = box.map { $0.union(u.cameraBox) } ?? u.cameraBox
+            if u.kind == .country {
+                countries = countries.map { $0.union(u.cameraBox) } ?? u.cameraBox
+            } else {
+                fine = fine.map { $0.union(u.cameraBox) } ?? u.cameraBox
+            }
         }
-        return box
+        return fine ?? countries
     }
 
     // MARK: - Geometry

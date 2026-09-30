@@ -134,23 +134,35 @@ public enum FamilyMap {
 
 public enum FamilyMapKey {
 
-    /// The slug of a unit name. THE RULE (the Python builder implements the
-    /// same one, character for character):
-    ///   1. strip diacritics (NFKD, drop combining marks: "Québec" → "Quebec",
-    ///      "Ynys Môn" → "Ynys Mon");
+    /// The slug of a unit name. THE RULE — the Python builder
+    /// (scripts/build_family_map_units.py `slug`) is the PRODUCER of the
+    /// keys, and this is its algorithm step for step:
+    ///   1. NFKD-decompose ("Québec" → "Que" + combining acute + "bec";
+    ///      "ﬁ" → "fi"; fullwidth "Ａ" → "A");
     ///   2. lower-case;
-    ///   3. every maximal run of characters that is not an ASCII letter or
-    ///      digit becomes ONE "-" (space, apostrophe, hyphen, period, and any
-    ///      letter that has no ASCII base such as "ø" or "ß");
-    ///   4. drop leading and trailing "-".
+    ///   3. drop every combining mark (Unicode canonical combining class ≠ 0
+    ///      — Python's `unicodedata.combining(c)`), so the accents go:
+    ///      "Ynys Môn" → "ynys mon";
+    ///   4. every maximal run of characters that is not an ASCII letter or
+    ///      digit becomes ONE "-": space, apostrophe, hyphen, period, AND any
+    ///      letter that has no decomposition — "ß", "ø", "ł", "đ", "æ" are
+    ///      word breaks, never "ss" / "o" / "l" / "d" / "ae";
+    ///   5. no leading or trailing "-".
     /// "East Lothian" → "east-lothian"; "Inverness-shire" → "inverness-shire";
-    /// "St. John's" → "st-john-s"; "Ross and Cromarty" → "ross-and-cromarty".
+    /// "St. John's" → "st-john-s"; "Ross and Cromarty" → "ross-and-cromarty";
+    /// "Straße" → "stra-e"; "Ørsted" → "rsted". FamilyMapKeyTests and the
+    /// script's pytest pin the same examples. (Until 2026-09-29 this used
+    /// Foundation's diacritic-insensitive folding, which expands ß to "ss"
+    /// and strips ø to "o" — a key the builder never writes.)
     public static func slug(_ name: String) -> String {
-        let folded = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+        let lowered = name.decomposedStringWithCompatibilityMapping.lowercased()
         var out = ""
-        out.reserveCapacity(folded.utf8.count)
+        out.reserveCapacity(lowered.utf8.count)
         var pendingDash = false
-        for scalar in folded.unicodeScalars {
+        for scalar in lowered.unicodeScalars {
+            // A combining mark (ccc ≠ 0) is neither a letter nor a break:
+            // it is simply gone, as in the builder.
+            if scalar.properties.canonicalCombiningClass != .notReordered { continue }
             let v = scalar.value
             let isASCIIAlphanumeric = (v >= 0x61 && v <= 0x7A) || (v >= 0x30 && v <= 0x39)
             if isASCIIAlphanumeric {

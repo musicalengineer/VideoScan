@@ -1,15 +1,23 @@
 // FamilyMapKeyTests.swift
 // SENSOR for the one rule that joins the bundled border file to the
-// resolver (GH #227 Stage 1). scripts/build_family_map_units.py implements
-// the same slug:
+// resolver (GH #227 Stage 1). scripts/build_family_map_units.py is the
+// PRODUCER of the keys and implements the slug as:
 //
 //     def slug(name):
-//         s = unicodedata.normalize("NFKD", name)
-//         s = "".join(c for c in s if not unicodedata.combining(c)).lower()
-//         return re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+//         words, current = [], []
+//         for ch in unicodedata.normalize("NFKD", name).lower():
+//             if unicodedata.combining(ch): continue
+//             if ch.isascii() and ch.isalnum(): current.append(ch)
+//             elif current: words.append("".join(current)); current = []
+//         if current: words.append("".join(current))
+//         return "-".join(words)
 //
-// and its pytest pins the same examples. If either side changes, both
-// tests must change together.
+// and its pytest (tests/test_family_map_units.py::test_slug_rules) pins the
+// same examples, including the letters with NO decomposition — ß, ø, ł, đ —
+// which break a word rather than becoming ss / o / l / d (QA round 2,
+// 2026-09-29: Swift's `folding(.diacriticInsensitive)` gave "strasse" where
+// Python gives "stra-e"). If either side changes, both tests must change
+// together.
 
 import Foundation
 import Testing
@@ -41,6 +49,33 @@ struct FamilyMapKeyTests {
         ]
         for (name, expected) in examples {
             #expect(FamilyMapKey.slug(name) == expected, "slug(\(name))")
+        }
+    }
+
+    /// Letters with no NFKD decomposition are word breaks, exactly as the
+    /// Python builder has them (its outputs, verbatim, 2026-09-29). Not
+    /// "strasse", not "orsted", not "lodz".
+    @Test func slugAgreesWithThePythonBuilderOnUndecomposableLetters() {
+        let parity: [(String, String)] = [
+            ("Straße", "stra-e"),
+            ("Straße Nord", "stra-e-nord"),
+            ("ß", ""),
+            ("Łódź", "odz"),
+            ("Ørsted", "rsted"),
+            ("Đakovo", "akovo"),
+            ("Bornholm Ø", "bornholm"),
+            ("Søndre Strømfjord", "s-ndre-str-mfjord"),
+            ("Æbletoft", "bletoft"),
+            ("Œuvre", "uvre"),
+            ("Ħamrun", "amrun"),
+            ("İstanbul", "istanbul"),          // NFKD: I + combining dot; the dot is dropped
+            ("ﬁne", "fine"),                   // the ﬁ ligature has a compatibility decomposition
+            ("Ａｌｐｈａ", "alpha"),             // fullwidth letters decompose to ASCII
+            ("Ǆ", "dz"),
+            ("Dún Laoghaire–Rathdown", "dun-laoghaire-rathdown"),
+        ]
+        for (name, expected) in parity {
+            #expect(FamilyMapKey.slug(name) == expected, "slug(\(name)) — Python gives \(expected)")
         }
     }
 

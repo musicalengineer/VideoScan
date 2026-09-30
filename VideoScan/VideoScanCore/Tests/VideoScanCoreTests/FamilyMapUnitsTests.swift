@@ -330,6 +330,58 @@ struct FamilyMapUnitsTests {
         #expect(units.coverage(for: Set(["usa-twin-b"]))?.minLongitude == 100)
     }
 
+    /// A country-only count must not widen the camera past the counties
+    /// (QA round 2, 2026-09-29: ~838 "New England" births resolve to `usa`
+    /// on every real walk and the union opened on a hemisphere). The camera
+    /// is the FINE counted units whenever any exist; a country outline
+    /// joins only when nothing finer is counted.
+    @Test func coveragePrefersTheFineUnitsAndFallsBackToTheCountryOutlines() throws {
+        let units = try Self.units()
+        let alpha = try #require(units.unit(forKey: "eng-alpha"))
+        let england = try #require(units.unit(forKey: "eng"))
+        #expect(units.coverage(for: ["eng", "eng-alpha"]) == alpha.cameraBox, "the county, not the outline around it")
+        #expect(units.coverage(for: ["eng-alpha", "eng"]) == alpha.cameraBox, "order does not matter")
+        #expect(units.coverage(for: ["eng"]) == england.cameraBox, "only the country counted: its outline frames the map")
+        #expect(units.coverage(for: ["eng", "nowhere"]) == england.cameraBox)
+        #expect(units.coverage(for: ["eng", "usa-twin-a"])?.minLongitude == 100, "a state elsewhere still wins over the outline")
+    }
+
+    /// The largest piece (by bounding-box area) is the PRINCIPAL piece — the
+    /// contiguous US, mainland Britain — and a country outline's camera box
+    /// and label anchor come from it, never from the union of every island.
+    /// A county / state keeps the union camera (Michigan has two peninsulas).
+    @Test func aCountryOutlinesCameraAndLabelComeFromItsPrincipalPiece() {
+        let mainland = FamilyMapUnits.Polygon(outer: [C(latitude: 25, longitude: -125), C(latitude: 25, longitude: -67),
+                                                     C(latitude: 49, longitude: -67), C(latitude: 49, longitude: -125)])
+        let island = FamilyMapUnits.Polygon(outer: [C(latitude: 19, longitude: -160), C(latitude: 19, longitude: -155),
+                                                   C(latitude: 22, longitude: -155), C(latitude: 22, longitude: -160)])
+        let north = FamilyMapUnits.Polygon(outer: [C(latitude: 55, longitude: -168), C(latitude: 55, longitude: -130),
+                                                  C(latitude: 71, longitude: -130), C(latitude: 71, longitude: -168)])
+        let country = FamilyMapUnits.Unit(key: "usa", name: "United States", country: .unitedStates, kind: .country,
+                                          polygons: [island, north, mainland])   // the principal piece is not first
+        #expect(country.principalBox == mainland.bbox)
+        #expect(country.principalCentroid == C(latitude: 37, longitude: -96))
+        #expect(country.cameraBox == mainland.bbox, "a country outline's camera is its principal piece")
+        #expect(country.labelAnchor == country.principalCentroid)
+        #expect(country.bbox.minLatitude == 19 && country.bbox.maxLatitude == 71, "containment still covers every piece")
+        #expect(country.contains(C(latitude: 20, longitude: -157)), "the island still answers clicks")
+        // The same pieces as a STATE: the union camera (minus far-eastern
+        // pieces) and the union centre, as before.
+        let state = FamilyMapUnits.Unit(key: "usa-x", name: "X", country: .unitedStates, kind: .state,
+                                        polygons: [island, north, mainland])
+        #expect(state.principalBox == mainland.bbox)
+        #expect(state.cameraBox == state.bbox)
+        #expect(state.labelAnchor == state.cameraBox.center)
+        // A single-piece unit: principal == bbox == camera.
+        let one = FamilyMapUnits.Unit(key: "irl", name: "Ireland", country: .ireland, kind: .country, polygons: [island])
+        #expect(one.principalBox == one.bbox && one.cameraBox == one.bbox)
+        // Equal areas: the first piece is the principal (deterministic).
+        let twin = FamilyMapUnits.Polygon(outer: [C(latitude: 0, longitude: 0), C(latitude: 0, longitude: 5), C(latitude: 3, longitude: 5), C(latitude: 3, longitude: 0)])
+        let twin2 = FamilyMapUnits.Polygon(outer: [C(latitude: 10, longitude: 10), C(latitude: 10, longitude: 15), C(latitude: 13, longitude: 15), C(latitude: 13, longitude: 10)])
+        let tie = FamilyMapUnits.Unit(key: "eng", name: "England", country: .england, kind: .country, polygons: [twin, twin2])
+        #expect(tie.principalBox == twin.bbox)
+    }
+
     /// Alaska: pieces west of −130° plus Aleutian pieces at 172…180°. The
     /// containment box spans both; the camera box ignores the far-eastern
     /// pieces so the camera does not open on the whole Pacific.
