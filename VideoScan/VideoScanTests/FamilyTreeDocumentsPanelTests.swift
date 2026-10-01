@@ -67,12 +67,16 @@ struct FamilyTreeDocumentsPanelTests {
     @Test func groupsFollowTheKindOrderAndKeepNewestFirst() {
         let rows = [row(.other, "Other-3.pdf", added: 30), row(.census, "CEN-1.pdf", added: 29),
                     row(.birth, "BC-2.pdf", added: 28), row(.military, "MIL-1.pdf", added: 27),
+                    row(.dna, "DNA-1.png", added: 26.5),
                     row(.birth, "BC-1.pdf", added: 26), row(.death, "DC-1.pdf", added: 25)]
         let groups = PersonDocumentsResearch.grouped(rows)
-        #expect(groups.map(\.kind) == [.birth, .death, .military, .census, .other], "no Marriage group: none filed")
+        #expect(groups.map(\.kind) == [.birth, .death, .military, .census, .dna, .other],
+                "no Marriage group: none filed")
         #expect(groups.first?.rows.map(\.document.filename) == ["BC-2.pdf", "BC-1.pdf"])
         #expect(PersonDocumentsResearch.displayOrder(rows).map(\.document.filename)
-                == ["BC-2.pdf", "BC-1.pdf", "DC-1.pdf", "MIL-1.pdf", "CEN-1.pdf", "Other-3.pdf"])
+                == ["BC-2.pdf", "BC-1.pdf", "DC-1.pdf", "MIL-1.pdf", "CEN-1.pdf", "DNA-1.png", "Other-3.pdf"])
+        #expect(PersonDocumentKind.dna.inlineName == "DNA result")
+        #expect(PersonDocumentKind.birth.inlineName == "birth certificate")
         #expect(PersonDocumentsResearch.grouped([]).isEmpty)
     }
 

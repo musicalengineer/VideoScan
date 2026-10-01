@@ -25,7 +25,9 @@
 // PRIVACY: an item is shown only for someone who has passed on
 // (LifeStatus.privacyVerdict) or is in the inner circle (the home people,
 // their spouses and children). Everyone else is dropped before anything of
-// theirs is read.
+// theirs is read. A PRIVATE document kind (DNA — the screenshots name
+// living matches; `PersonDocumentKind.isPrivate`) is never listed, for
+// anyone, and nothing here ever sends a document's contents anywhere.
 //
 // COST AND MEMORY (all off the main actor): one listing of People/ (capped
 // at `maxFoldersConsidered` entries) and one stat per FamilySearch-keyed
@@ -101,8 +103,9 @@ struct FamilyMemoryContext {
     }
 }
 
-/// A source of memories. Implementations must be cheap to construct and
-/// must bound their own I/O (see the header).
+/// A source of memories. Implementations must be cheap to construct, must
+/// bound their own I/O (see the header), and must never surface a private
+/// document kind (`PersonDocumentKind.isPrivate`, DNA).
 protocol FamilyMemoryProvider {
     /// At most `limit` items, newest first, for people `context.mayShow`.
     func memories(in context: FamilyMemoryContext, limit: Int) -> [FamilyMemory]
@@ -183,7 +186,9 @@ struct RecentDocumentsMemoryProvider: FamilyMemoryProvider {
         var out: [FamilyMemory] = []
         for entry in recent.prefix(maxSidecarsRead) {
             let documents = store.documents(inPersonFolder: entry.folder, for: FamilyAssetPerson(entry.person))
-            for document in documents where document.addedAt >= cutoff {
+            // DNA (private by default) is never a memory — not even its
+            // kind and date (2026-10-01).
+            for document in documents where document.addedAt >= cutoff && !document.kind.isPrivate {
                 out.append(FamilyMemory(
                     id: "document.\(document.id.uuidString)", kind: .document, personID: entry.person.id,
                     title: "\(document.kind.displayName) filed for \(entry.person.name)",

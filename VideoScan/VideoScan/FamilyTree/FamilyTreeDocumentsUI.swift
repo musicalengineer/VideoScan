@@ -9,7 +9,9 @@
 //     too large) is shown in the sheet in plain words.
 //   • FamilyTreeDocumentsPanel — the "Documents" section of the inspector,
 //     a person-records list (Rick, 2026-10-01): rows grouped Birth, Death,
-//     Marriage, Military, Census, Other; each with a Quick Look thumbnail
+//     Marriage, Military, Census, DNA, Other (a DNA row carries a lock
+//     badge: private by default, see PersonDocumentKind.isPrivate); each
+//     with a Quick Look thumbnail
 //     (or the kind's symbol), the record's year and source site when it was
 //     filed through Record Finder, date added, original name and note.
 //     Clicking a row opens Quick Look with ALL the person's documents, so
@@ -90,11 +92,20 @@ struct FamilyDocumentAddSheet: View {
                     .accessibilityIdentifier("tree.documents.error")
             }
 
-            Text("Filed as \(kind.displayName.lowercased()) beside \(target.personName)’s photos "
+            Text("Filed as \(kind.inlineName) beside \(target.personName)’s photos "
                  + "(People/…/Documents). Your GEDCOM is never changed.")
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if kind.isPrivate {
+                Label("Private: DNA results name living relatives. Kept out of memories, never sent to "
+                      + "Hallie automatically, never published.", systemImage: "lock.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("tree.documents.privateNote")
+            }
 
             HStack {
                 Spacer()
@@ -109,9 +120,9 @@ struct FamilyDocumentAddSheet: View {
             }
         }
         .padding(20)
-        // Six kinds since 2026-10-01 (Military, Census): wide enough that
-        // the segmented picker never truncates a label.
-        .frame(width: 520)
+        // Seven kinds since 2026-10-01 (Military, Census, DNA): wide enough
+        // that the segmented picker never truncates a label.
+        .frame(width: 560)
     }
 
     private func chooseFile() {
@@ -290,7 +301,7 @@ struct FamilyTreeDocumentsPanel: View {
         // that is shown while the optional is non-nil and hands the value
         // to its buttons. The value is the whole row, owner included.
         .confirmationDialog(
-            "Remove \(removeCandidate?.document.kind.displayName.lowercased() ?? "document")?",
+            "Remove \(removeCandidate?.document.kind.inlineName ?? "document")?",
             isPresented: Binding(get: { removeCandidate != nil },
                                  set: { if !$0 { removeCandidate = nil } }),
             presenting: removeCandidate
@@ -331,6 +342,17 @@ struct FamilyTreeDocumentsPanel: View {
                 HStack(spacing: 6) {
                     Text(document.kind.displayName)
                         .font(.system(size: 12, weight: .semibold))
+                    if document.kind.isPrivate {
+                        // DNA (2026-10-01): names living matches. Never in
+                        // memories, never sent to Hallie automatically,
+                        // never publishable (GH #244).
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .help("Private — DNA results name living relatives. Never shared, never published.")
+                            .accessibilityLabel("Private")
+                            .accessibilityIdentifier("tree.documents.privateBadge")
+                    }
                     if let year = details?.year {
                         Text(year)
                             .font(.system(size: 12, weight: .semibold).monospacedDigit())

@@ -488,11 +488,13 @@ struct FamilyDocumentStoreTests {
         #expect(rows[0]["kind"] as? String == "BC")
         #expect(rows[0]["id"] as? String == doc.id.uuidString)
         #expect((rows[0]["addedAt"] as? String)?.contains("T") == true) // ISO-8601
-        // MIL and CEN added 2026-10-01 (additive); the four original codes
-        // never change.
-        #expect(Set(PersonDocumentKind.allCases.map(\.rawValue)) == ["BC", "DC", "MC", "MIL", "CEN", "Other"])
-        #expect(PersonDocumentKind.allCases == [.birth, .death, .marriage, .military, .census, .other],
+        // MIL, CEN and DNA added 2026-10-01 (additive); the four original
+        // codes never change.
+        #expect(Set(PersonDocumentKind.allCases.map(\.rawValue)) == ["BC", "DC", "MC", "MIL", "CEN", "DNA", "Other"])
+        #expect(PersonDocumentKind.allCases == [.birth, .death, .marriage, .military, .census, .dna, .other],
                 "declaration order is the inspector's group order")
+        // DNA screenshots name living matches: the one private-by-default kind.
+        #expect(PersonDocumentKind.allCases.filter(\.isPrivate) == [.dna])
 
         // Round trip through the app's decoder: identical row.
         let decoded = try FamilyAssetStore.sidecarDecoder.decode(

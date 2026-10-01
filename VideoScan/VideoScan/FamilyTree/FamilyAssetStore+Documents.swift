@@ -12,8 +12,9 @@
 //     People/<…>/Documents/documents.json          ← the sidecar (the "database")
 //     People/<…>/Documents/.trash/<file>            ← removed files, never rm'd
 //
-// KIND is the short code Rick used (BC / DC / MC / Other; MIL and CEN for
-// military and census records since 2026-10-01). The sidecar is
+// KIND is the short code Rick used (BC / DC / MC / Other; MIL, CEN and DNA
+// for military, census and DNA records since 2026-10-01 — DNA is private by
+// default, see `PersonDocumentKind.isPrivate`). The sidecar is
 // an array of `PersonDocument`, written atomically through
 // `AtomicFilePublish` like every other sidecar in the app. The person's
 // folder is the same one photos go to — the FamilySearch-ID folder when
@@ -50,18 +51,33 @@ private let documentLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "t
 /// they must never be renamed (a rename would orphan every existing entry).
 ///
 /// Declaration order is the inspector's group order (Birth, Death,
-/// Marriage, Military, Census, Other). MIL and CEN were added 2026-10-01
-/// (additive: every sidecar written before still decodes). A code this
-/// build does not know — written by a NEWER build — is read as `.other`
-/// and written back unchanged (`PersonDocument.unrecognizedKindCode`), so
-/// an older build never damages a newer list.
+/// Marriage, Military, Census, DNA, Other). MIL, CEN and DNA were added
+/// 2026-10-01 (additive: every sidecar written before still decodes). A
+/// code this build does not know — written by a NEWER build — is read as
+/// `.other` and written back unchanged
+/// (`PersonDocument.unrecognizedKindCode`), so an older build never
+/// damages a newer list.
 enum PersonDocumentKind: String, Codable, CaseIterable, Sendable {
     case birth = "BC"
     case death = "DC"
     case marriage = "MC"
     case military = "MIL"
     case census = "CEN"
+    /// DNA results — usually Ancestry screenshots, which name LIVING
+    /// matches. PRIVATE by default (`isPrivate`).
+    case dna = "DNA"
     case other = "Other"
+
+    /// True for a kind whose contents are private by default (Rick,
+    /// 2026-10-01: DNA screenshots list living matches by name). A private
+    /// document:
+    ///   • is never listed by "Show me some memories…" (FamilyTreeMemories);
+    ///   • is never sent to Hallie / the CyberBrain automatically — any
+    ///     future automatic reader of person documents must skip it;
+    ///   • carries a lock badge in the inspector's Documents panel;
+    ///   • is NEVER publishable — GH #244 (future public web access) must
+    ///     exclude it whatever else is shared.
+    var isPrivate: Bool { self == .dna }
 
     /// "Birth certificate" — the log line and the detail panel.
     var displayName: String {
@@ -71,8 +87,15 @@ enum PersonDocumentKind: String, Codable, CaseIterable, Sendable {
         case .marriage: return "Marriage certificate"
         case .military: return "Military record"
         case .census: return "Census record"
+        case .dna: return "DNA result"
         case .other: return "Other document"
         }
+    }
+
+    /// "birth certificate", "DNA result" — the display name inside a
+    /// sentence (an acronym keeps its capitals).
+    var inlineName: String {
+        self == .dna ? displayName : displayName.lowercased()
     }
 
     /// "Birth" — the segmented picker in the Add sheet and the inspector's
@@ -84,6 +107,7 @@ enum PersonDocumentKind: String, Codable, CaseIterable, Sendable {
         case .marriage: return "Marriage"
         case .military: return "Military"
         case .census: return "Census"
+        case .dna: return "DNA"
         case .other: return "Other"
         }
     }
@@ -96,6 +120,7 @@ enum PersonDocumentKind: String, Codable, CaseIterable, Sendable {
         case .marriage: return "heart"
         case .military: return "shield"
         case .census: return "list.bullet.rectangle"
+        case .dna: return "person.line.dotted.person"
         case .other: return "doc.text"
         }
     }

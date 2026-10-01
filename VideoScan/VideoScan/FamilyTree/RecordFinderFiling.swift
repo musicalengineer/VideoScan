@@ -506,7 +506,7 @@ struct RecordFinderFiler {
             return .failure(Refusal(
                 code: "duplicate-document",
                 message: "This exact file is already filed for \(assetPerson.name) as \(existing.filename) "
-                    + "(\(existing.kind.displayName.lowercased()), added \(FamilyTreeNote.shortDate(existing.addedAt)))."))
+                    + "(\(existing.kind.inlineName), added \(FamilyTreeNote.shortDate(existing.addedAt)))."))
         }
         // The dossier must be readable — a damaged one is never replaced.
         let prior: ResearchDossier?

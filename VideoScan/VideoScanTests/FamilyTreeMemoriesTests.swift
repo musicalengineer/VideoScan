@@ -243,6 +243,24 @@ struct FamilyTreeMemoriesTests {
         #expect(FamilyMemories.gather([Leaky()], in: context(sb)).isEmpty)
     }
 
+    // Pin (2026-10-01): DNA results are private by default — their
+    // screenshots name living matches — so they are never a memory, for a
+    // deceased person or the inner circle alike, while a certificate filed
+    // beside them still is.
+    @Test func dnaDocumentsAreNeverListedAsMemories() throws {
+        var sb = try sandbox()
+        defer { try? fileManager.removeItem(at: sb.base) }
+        try file(&sb, "@I4@", kind: .dna, daysAgo: 1)       // deceased father
+        try file(&sb, "@I2@", kind: .dna, daysAgo: 1.5)     // living partner, inner circle
+        #expect(RecentDocumentsMemoryProvider().memories(in: context(sb), limit: 5).isEmpty)
+        #expect(FamilyMemories.gather(FamilyMemories.defaultProviders(), in: context(sb)).isEmpty)
+
+        try file(&sb, "@I4@", kind: .death, daysAgo: 2)
+        let items = FamilyMemories.gather(FamilyMemories.defaultProviders(), in: context(sb))
+        #expect(items.map(\.title) == ["Death certificate filed for Father Testowner"])
+        #expect(!items.contains { $0.title.contains("DNA") })
+    }
+
     @Test func anOldListIsNeverOpenedEvenIfItHoldsARecentRow() throws {
         var sb = try sandbox()
         defer { try? fileManager.removeItem(at: sb.base) }
