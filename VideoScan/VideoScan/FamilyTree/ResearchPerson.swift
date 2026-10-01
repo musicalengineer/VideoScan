@@ -341,6 +341,28 @@ enum ResearchVerdict: String, Codable, Sendable, CaseIterable, Equatable {
     }
 }
 
+/// How a screening source judged whether a finding is ABOUT this person
+/// (bug 2026-10-01; Rick's ruling the same day: keep near-misses for
+/// serendipity, but rank them below the likely matches and say why).
+/// Advisory only — it never sets a verdict, and nothing reaches Hallie
+/// without Rick's explicit Confirm.
+struct ResearchScreening: Codable, Equatable, Sendable {
+    enum Outcome: String, Codable, Sendable {
+        case likelyMatch
+        case nearMiss
+    }
+    let outcome: Outcome
+    /// Plain words for the pane: "likely match", "a film", "surname only",
+    /// "different era — born 1725", "couldn't be checked", …
+    let reason: String
+
+    static let likely = ResearchScreening(outcome: .likelyMatch, reason: "likely match")
+    static func nearMiss(_ reason: String) -> ResearchScreening {
+        ResearchScreening(outcome: .nearMiss, reason: reason)
+    }
+    var isNearMiss: Bool { outcome == .nearMiss }
+}
+
 /// One thing a source returned. Evidence, never a fact: it carries where it
 /// came from, when it was fetched, and Rick's verdict.
 struct ResearchFinding: Identifiable, Equatable, Sendable, Codable {
@@ -369,6 +391,15 @@ struct ResearchFinding: Identifiable, Equatable, Sendable, Codable {
     /// told must never be cut (QA 2026-10-01 P1-1). Optional, so dossiers
     /// saved before today still decode.
     var fullText: String?
+    /// Set by a source that screens its hits (Wikipedia / Wikidata): a
+    /// likely match, or a near-miss with its reason. Nil for sources that do
+    /// not screen. Optional, so dossiers saved before 2026-10-01 still
+    /// decode; a re-run replaces it with the fresh judgement.
+    var screening: ResearchScreening?
+
+    /// True for a hit the source judged probably not this person. The pane
+    /// lists these in a separate, collapsed group below the findings.
+    var isNearMiss: Bool { screening?.isNearMiss == true }
 
     static let maxExcerptLength = 600
 
@@ -378,7 +409,7 @@ struct ResearchFinding: Identifiable, Equatable, Sendable, Codable {
     init(source: ResearchSourceKind, title: String, date: String?, excerpt: String,
          url: String, retrievedAt: Date, verdict: ResearchVerdict = .unreviewed,
          lore: String = "", toldItemID: String? = nil, documentPath: String? = nil,
-         idSeed: String? = nil, fullText: String? = nil) {
+         idSeed: String? = nil, fullText: String? = nil, screening: ResearchScreening? = nil) {
         self.id = Self.makeID(source: source, url: idSeed ?? url)
         self.source = source
         self.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -393,6 +424,7 @@ struct ResearchFinding: Identifiable, Equatable, Sendable, Codable {
         self.documentPath = documentPath
         let whole = fullText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         self.fullText = whole.isEmpty ? nil : whole
+        self.screening = screening
     }
 
     static func makeID(source: ResearchSourceKind, url: String) -> String {
@@ -498,8 +530,29 @@ struct ResearchDossier: Equatable, Sendable, Codable {
         findings[at].toldItemID = itemID
     }
 
-    /// Confirmed and not yet told — what "Tell Hallie" will write.
+    /// Confirmed and not yet told — what "Tell Hallie" will write. A
+    /// near-miss is here only if Rick confirmed it himself, like any other
+    /// finding; screening never sets a verdict.
     var untoldConfirmed: [ResearchFinding] {
         findings.filter { $0.verdict == .confirmed && $0.toldItemID == nil }
+    }
+
+    /// The pane's "Also turned up — probably not this person" group: hits a
+    /// source screened as near-misses that Rick has not promoted (by
+    /// marking them Confirmed or Plausible). Search order.
+    var nearMissFindings: [ResearchFinding] {
+        findings.filter(Self.isInNearMissGroup)
+    }
+
+    /// Everything else, likely matches first (Rick 2026-10-01), otherwise
+    /// in dossier order.
+    var mainFindings: [ResearchFinding] {
+        let main = findings.filter { !Self.isInNearMissGroup($0) }
+        let likely = main.filter { $0.screening?.outcome == .likelyMatch }
+        return likely + main.filter { $0.screening?.outcome != .likelyMatch }
+    }
+
+    static func isInNearMissGroup(_ finding: ResearchFinding) -> Bool {
+        finding.isNearMiss && (finding.verdict == .unreviewed || finding.verdict == .wrong)
     }
 }
