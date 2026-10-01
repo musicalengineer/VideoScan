@@ -248,6 +248,7 @@ final class FamilyTreeLiveModel: ObservableObject {
                 focusMissNotice = nil
                 searchTextSetByMiss = false
                 refilter()
+                focusFamilySearchIDQuery()
             }
         }
     }
@@ -1495,6 +1496,17 @@ final class FamilyTreeLiveModel: ObservableObject {
         searchTextSetByMiss = false
     }
 
+    /// The search text is a FamilySearch ID that one (unsuppressed) record
+    /// carries: focus that person, as if the row had been clicked. Called
+    /// after the search text changes; a no-op for any other text.
+    private func focusFamilySearchIDQuery() {
+        guard isLive, let graph,
+              let person = FamilyTreeFamilySearchIDQuery.match(searchText, in: graph),
+              !isSuppressedRecord(person.id) else { return }
+        appLog.write("Family Tree: search by FamilySearch ID focused \(person.id)")
+        _ = focus(onID: person.id)
+    }
+
     private func revealOutsideBookmarkScope(_ personID: String) {
         if showsBookmarkedPeopleOnly && !bookmarks.contains(personID) {
             showsBookmarkedPeopleOnly = false
@@ -2727,6 +2739,15 @@ final class FamilyTreeLiveModel: ObservableObject {
             return
         }
         if let graph, isLive {
+            // A FamilySearch ID ("KCGS-M89", any case) lists exactly the
+            // record that carries it (Rick 2026-10-01). An ID-shaped query
+            // nobody carries falls through to the name search ("Anne-Mar").
+            // O(1): the graph's FamilySearch-ID index.
+            if let person = FamilyTreeFamilySearchIDQuery.match(needle, in: graph),
+               !isSuppressedRecord(person.id) {
+                filteredPeople = [Self.summary(person)]
+                return
+            }
             // Ranked token / fuzzy search (FamilyTreeNameSearch, 2026-09-26):
             // every typed token must prefix-match a name token (any order,
             // apostrophes and case folded), with a bounded-edit-distance

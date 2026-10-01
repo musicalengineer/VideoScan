@@ -806,7 +806,7 @@ struct FamilyTreeView: View {
             .labelsHidden()
             .accessibilityIdentifier("ft.peopleScope")
 
-            TextField("Search names — partial or approximate is fine", text: $model.searchText)
+            TextField("Search names or a FamilySearch ID (ABCD-123)", text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
                 .focused($searchFocused)
                 // Return picks the first match; ↑/↓ walk the list without
