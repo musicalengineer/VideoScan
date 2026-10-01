@@ -54,10 +54,22 @@ public struct TreeWalkDate: Sendable, Equatable {
         guard let raw, let interval = GedcomYearInterval.parse(raw), let year = interval.anchor else { return nil }
         switch interval.qualifier {
         case .exact:
-            let tokens = raw.uppercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
-            if let m = tokens.lazy.compactMap({ monthNames.firstIndex(of: $0) }).first {
+            // "/" does not split a word, so a dual year stays whole
+            // ("1930/31"): splitting on it made the "31" a day of the month
+            // (generated-input F8). The day is the word next to the month —
+            // before it as GEDCOM writes it ("4 MAR 1959"), or after it
+            // ("MAR 4 1959") — never any other short number in the text.
+            let words = raw.uppercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "/" }).map(String.init)
+            if let mi = words.firstIndex(where: { monthNames.contains($0) }),
+               let m = monthNames.firstIndex(of: words[mi]) {
                 let month = year * 12 + m
-                let day = tokens.first(where: { $0.count <= 2 && (Int($0).map { (1...31).contains($0) } ?? false) }).flatMap { Int($0) }
+                func dayWord(_ i: Int) -> Int? {
+                    guard words.indices.contains(i), words[i].count <= 2, let d = Int(words[i]),
+                          (1...31).contains(d) else { return nil }
+                    return d
+                }
+                let day = dayWord(mi - 1) ?? dayWord(mi + 1)
                 return TreeWalkDate(lowerMonth: month, upperMonth: month,
                                     precision: day == nil ? .month : .day, year: year, day: day)
             }
@@ -109,8 +121,14 @@ public struct AgeAtDeath: Sendable, Codable, Equatable {
         // Completed years: floor(months / 12). Shortest possible life is
         // dLo − bHi months (born as late, died as early as recorded).
         func completed(_ months: Int) -> Int { Int((Double(months) / 12).rounded(.down)) }
-        let lo = completed(dLo - bHi)
+        var lo = completed(dLo - bHi)
         let hi = completed(dHi - bLo)
+        // A birth and death in the same year, either year-only, make the
+        // shortest life NEGATIVE ("1838"–"1838" spoke "-1–0"): nobody dies
+        // before being born, so the floor is 0 (generated-input F7). Only
+        // when the dates CAN agree — a death wholly before the birth is a
+        // contradiction the tree-walk checks report, left as computed.
+        if hi >= 0 { lo = max(lo, 0) }
         return AgeAtDeath(minYears: min(lo, hi), maxYears: max(lo, hi))
     }
 }

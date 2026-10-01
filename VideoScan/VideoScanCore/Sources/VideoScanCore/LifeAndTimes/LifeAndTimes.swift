@@ -186,10 +186,14 @@ public enum LifeAndTimes {
                 if let doubt = jobs.compactMap(\.ambiguity).first { out.append("(\(doubt).)") }
             }
             for s in service {
-                let age = s.ageAtStart.map { "\($0.spoken) \(s.startPhrase)" } ?? "of military age during \(s.warName)"
+                // No provable age (a birth that leaves the person possibly
+                // not yet born — "BEF 1947" for 1941, generated-input F10):
+                // the age window only says service was POSSIBLE, so say so.
+                let age = s.ageAtStart.map { "was \($0.spoken) \(s.startPhrase)" }
+                    ?? "may have been of military age during \(s.warName)"
                 let where_ = s.regions.isEmpty ? "" : ", with ties to \(LifeAndTimes.listPhrase(s.regions.map(\.label)))"
                 let lead = s.strength == .strong ? "a strong lead" : "a possible lead"
-                out.append("\(name) was \(age)\(where_) — \(lead) for service records, not yet checked.")
+                out.append("\(name) \(age)\(where_) — \(lead) for service records, not yet checked.")
             }
             if !recordedMilitary.isEmpty {
                 out.append("The tree records military service for \(name): \(recordedMilitary.joined(separator: "; ")).")
