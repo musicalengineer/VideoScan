@@ -30,9 +30,17 @@ enum SurnameGenerator {
         if onset == "Mc" || onset == "Mac" || onset.hasPrefix("O") {
             onset += g.pick(["D", "G", "K", "T", "B"])          // McD…, MacG…, O'K…
         }
-        var s = onset + g.pick(middles) + (g.chance(0.4) ? g.pick(middles) : "") + g.pick(endings)
-        if g.chance(0.1) { s = s.uppercased() } else if g.chance(0.1) { s = s.lowercased() }
+        var s = recase(onset + g.pick(middles) + (g.chance(0.4) ? g.pick(middles) : "") + g.pick(endings),
+                       percent: 10, &g)
         if g.chance(0.1) { s = " " + s + "\t" }
+        return s
+    }
+
+    /// As written, ALL CAPS or all lower case — `percent` % each.
+    static func recase(_ s: String, percent: Int, _ g: inout SeededGenerator) -> String {
+        let roll = g.int(0...99)
+        if roll < percent { return s.uppercased() }
+        if roll < 2 * percent { return s.lowercased() }
         return s
     }
 
@@ -42,8 +50,7 @@ enum SurnameGenerator {
 
     /// "Ó Shúilleabháin", "NÍ BHRIAIN", "mac giolla phádraig", NFD forms.
     static func irish(_ g: inout SeededGenerator) -> String {
-        var s = g.pick(irishPrefixes) + " " + g.pick(lenitedStems)
-        if g.chance(0.15) { s = s.uppercased() } else if g.chance(0.15) { s = s.lowercased() }
+        var s = recase(g.pick(irishPrefixes) + " " + g.pick(lenitedStems), percent: 15, &g)
         // macOS file names and pasted text often arrive DECOMPOSED (NFD):
         // "O" + U+0301 rather than "Ó".
         if g.chance(0.3) { s = s.decomposedStringWithCanonicalMapping }

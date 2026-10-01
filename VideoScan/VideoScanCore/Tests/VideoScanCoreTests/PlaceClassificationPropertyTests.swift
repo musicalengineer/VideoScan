@@ -227,7 +227,7 @@ enum PlaceGenerator {
 
     static func usPlace(_ g: inout SeededGenerator) -> GeneratedPlace {
         let p = g.pick(PlaceVocabulary.usPlaces)
-        let state = PlaceVocabulary.states[p.state]!
+        guard let state = PlaceVocabulary.states[p.state] else { preconditionFailure("vocabulary: no state \(p.state)") }
         let stateText = g.pick(state.forms)
         let country = g.pick(PlaceVocabulary.usCountryForms)
         let county: String = {
@@ -345,8 +345,9 @@ enum PlaceOracle {
     static func usNeverIsles(_ reader: PlaceReader, _ p: GeneratedPlace) -> String? {
         switch reader {
         case .classify:
-            let c = BirthplaceClassifier.classify(p.text).country
-            return c == BirthplaceClassifier.unitedKingdom || c == "Ireland" ? "classify.country = \(c!)" : nil
+            guard let c = BirthplaceClassifier.classify(p.text).country,
+                  c == BirthplaceClassifier.unitedKingdom || c == "Ireland" else { return nil }
+            return "classify.country = \(c)"
         case .region:
             let r = BirthplaceClassifier.region(p.text)
             return islesRegions.contains(r) ? "region = \(r)" : nil

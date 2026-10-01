@@ -108,18 +108,27 @@ enum GedcomGenerator {
             GenPerson(id: "@I\(i)@", given: g.pick(givens), surname: g.chance(0.85) ? g.pick(surnames) : nil,
                       sex: g.pick(["M", "F", "", "U"]))
         }
-        for i in people.indices {
-            if g.chance(0.8) { people[i].birthDate = date(&g) }
-            if g.chance(0.6) { people[i].birthPlace = g.pick(places) }
-            if g.chance(0.5) { people[i].deathDate = date(&g) }
-            if g.chance(0.3) { people[i].deathPlace = g.pick(places) }
-            for _ in 0..<g.int(0...2) { people[i].notes.append(GenNote(text: noteText(&g), asRecord: g.chance(0.3))) }
-            if g.chance(0.3) { people[i].occupation = noteText(&g, maxWords: 6).replacingOccurrences(of: "\n", with: " ") }
-        }
-        // Families wired at random from the same pool: cycles (a person
-        // their own parent, two people each other's parent) arise naturally
-        // and are also forced now and then.
-        let familyCount = g.int(0...max(1, n / 2 + 1))
+        for i in people.indices { fillFacts(&people[i], &g) }
+        let families = wireFamilies(&people, &g)
+        if g.chance(0.1) { people[0].famc.append("@F999@") }                             // dangling
+        return GenTree(people: people, families: families, noiseSeed: g.next(), splitSeed: g.next(),
+                       duplicateRecord: g.chance(0.1))
+    }
+
+    static func fillFacts(_ p: inout GenPerson, _ g: inout SeededGenerator) {
+        if g.chance(0.8) { p.birthDate = date(&g) }
+        if g.chance(0.6) { p.birthPlace = g.pick(places) }
+        if g.chance(0.5) { p.deathDate = date(&g) }
+        if g.chance(0.3) { p.deathPlace = g.pick(places) }
+        for _ in 0..<g.int(0...2) { p.notes.append(GenNote(text: noteText(&g), asRecord: g.chance(0.3))) }
+        if g.chance(0.3) { p.occupation = noteText(&g, maxWords: 6).replacingOccurrences(of: "\n", with: " ") }
+    }
+
+    /// Families wired at random from the same pool: cycles (a person their
+    /// own parent, two people each other's parent) arise naturally and are
+    /// also forced now and then. Person pointers: mostly reciprocal.
+    static func wireFamilies(_ people: inout [GenPerson], _ g: inout SeededGenerator) -> [GenFamily] {
+        let familyCount = g.int(0...max(1, people.count / 2 + 1))
         var families: [GenFamily] = []
         for f in 0..<familyCount {
             var fam = GenFamily(id: "@F\(f + 1)@")
@@ -135,7 +144,6 @@ enum GedcomGenerator {
             families[0].husband = a; families[0].children.append(b)
             families[1].husband = b; families[1].children.append(a)
         }
-        // Person pointers: mostly reciprocal, sometimes dangling.
         for fam in families {
             for spouse in [fam.husband, fam.wife].compactMap({ $0 }) {
                 if let i = people.firstIndex(where: { $0.id == spouse }), g.chance(0.9) { people[i].fams.append(fam.id) }
@@ -144,17 +152,41 @@ enum GedcomGenerator {
                 if let i = people.firstIndex(where: { $0.id == child }), g.chance(0.9) { people[i].famc.append(fam.id) }
             }
         }
-        if g.chance(0.1) { people[0].famc.append("@F999@") }                             // dangling
-        return GenTree(people: people, families: families, noiseSeed: g.next(), splitSeed: g.next(),
-                       duplicateRecord: g.chance(0.1))
+        return families
     }
 
     // MARK: Rendering
 
-    struct RenderOptions {
-        var lineEnding = "\n"
-        var noise = false
-        var indent = false
+    /// Inline notes split with CONC / CONT; record notes as a pointer, the
+    /// text kept in `records` for a `0 @N…@ NOTE` record at the end.
+    static func appendNotes(of p: GenPerson, into out: inout [String], records: inout [String: String],
+                            _ split: inout SeededGenerator) {
+        for (k, note) in p.notes.enumerated() {
+            if note.asRecord {
+                let rid = "@N\(p.id.filter(\.isNumber))_\(k)@"
+                records[rid] = note.text
+                out.append("1 NOTE \(rid)")
+            } else {
+                appendSplit(note.text, tag: "NOTE", level: 1, cont: true, into: &out, &split)
+            }
+        }
+    }
+
+    /// BIRT / DEAT blocks; with noise, a source citation under BIRT.
+    static func vitalLines(_ p: GenPerson, noise: Bool, _ noiseG: inout SeededGenerator) -> [String] {
+        var out: [String] = []
+        if p.birthDate != nil || p.birthPlace != nil {
+            out.append("1 BIRT")
+            if let d = p.birthDate { out.append("2 DATE \(d)") }
+            if let pl = p.birthPlace { out.append("2 PLAC \(pl)") }
+            if noise, noiseG.chance(0.3) { out += ["2 SOUR @S1@", "3 PAGE p. 4"] }
+        }
+        if p.deathDate != nil || p.deathPlace != nil {
+            out.append("1 DEAT")
+            if let d = p.deathDate { out.append("2 DATE \(d)") }
+            if let pl = p.deathPlace { out.append("2 PLAC \(pl)") }
+        }
+        return out
     }
 
     /// The tree as GEDCOM lines (no line endings yet).
@@ -189,28 +221,10 @@ enum GedcomGenerator {
             out.append("1 NAME \(p.given)\(surname)")
             noiseBlock()
             if !p.sex.isEmpty { out.append("1 SEX \(p.sex)") }
-            if p.birthDate != nil || p.birthPlace != nil {
-                out.append("1 BIRT")
-                if let d = p.birthDate { out.append("2 DATE \(d)") }
-                if let pl = p.birthPlace { out.append("2 PLAC \(pl)") }
-                if noise, noiseG.chance(0.3) { out.append("2 SOUR @S1@"); out.append("3 PAGE p. 4") }
-            }
-            if p.deathDate != nil || p.deathPlace != nil {
-                out.append("1 DEAT")
-                if let d = p.deathDate { out.append("2 DATE \(d)") }
-                if let pl = p.deathPlace { out.append("2 PLAC \(pl)") }
-            }
+            out += vitalLines(p, noise: noise, &noiseG)
             noiseBlock()
             if let occu = p.occupation { appendSplit(occu, tag: "OCCU", level: 1, cont: false, into: &out, &split) }
-            for (k, note) in p.notes.enumerated() {
-                if note.asRecord {
-                    let rid = "@N\(p.id.filter(\.isNumber))_\(k)@"
-                    records[rid] = note.text
-                    out.append("1 NOTE \(rid)")
-                } else {
-                    appendSplit(note.text, tag: "NOTE", level: 1, cont: true, into: &out, &split)
-                }
-            }
+            appendNotes(of: p, into: &out, records: &records, &split)
             for f in p.famc { out.append("1 FAMC \(f)") }
             for f in p.fams { out.append("1 FAMS \(f)") }
             noiseBlock()
@@ -500,7 +514,7 @@ struct GedcomParserPropertyTests {
     /// Best of three — the least-disturbed run on a loaded machine.
     static func bestOf3(_ body: () -> Void) -> Duration {
         let clock = ContinuousClock()
-        return (0..<3).map { _ in clock.measure(body) }.min()!
+        return (0..<3).map { _ in clock.measure(body) }.min() ?? .zero
     }
 
     @Test("G2 at scale: a 1 MB NOTE in ~80k CONC/CONT lines reads back exactly, in linear time")
