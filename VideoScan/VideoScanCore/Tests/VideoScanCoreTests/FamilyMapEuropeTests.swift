@@ -137,7 +137,7 @@ struct FamilyMapEuropeTests {
         ("Stuttgart, Württemberg", "deu-baden-wurttemberg"),
 
         // ---- Netherlands ---------------------------------------------------
-        ("Netherlands", "nld"), ("Nederland", "nld"), ("Holland", "nld"),
+        ("Netherlands", "nld"), ("Nederland", "nld"), ("Holland, Netherlands", "nld"),  // bare "Holland" is nil (Holland, MI)
         ("Noord-Brabant, Nederland", "nld-north-brabant"),
         ("North Brabant, Netherlands", "nld-north-brabant"),
         ("Bergen Op Zoom (Noord-Brabant) Nl", "nld-north-brabant"),
@@ -196,7 +196,7 @@ struct FamilyMapEuropeTests {
         "Königsberg, East Prussia",
         "Stettin, Pomerania",
         // A shared or ambiguous name with no country to its right.
-        "Limburg", "Paris", "Berlin", "Hanover", "Lot", "Nord", "Vienne", "Savoy", "Anjou", "Centre", "Baden",
+        "Limburg", "Holland", "Flanders", "Paris", "Berlin", "Hanover", "Lot", "Nord", "Vienne", "Savoy", "Anjou", "Centre", "Baden",
         // Off the map.
         "Warsaw, Poland", "Europe", "Western Europe, Europe", "Fort-de-France, Martinique",
     ])

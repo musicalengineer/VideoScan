@@ -154,6 +154,7 @@ public enum BirthplaceUnitResolver {
             switch token {
             case .unit(_, _, let key): keys.insert(key)
             case .alternatives(let options): options.forEach(collect)
+            case .today(let inner): collect(inner)
             default: break
             }
         }
@@ -167,12 +168,21 @@ public enum BirthplaceUnitResolver {
     /// words: "ENGLAND OR Wales or France", "Paris or Lyon, France". Not an
     /// alternative: "Portland, OR" (the state code alone in its part),
     /// "Portland OR USA" (upper-case OR followed only by the US), "Côte d
-    /// Or" (the "d" before it). One pass over the bytes; the word walk runs
-    /// only for a part that contains an "or" at all.
+    /// Or" (the "d" before it). A cheap byte scan first: unless an "o"/"O"
+    /// is directly followed by "r"/"R" somewhere, nothing is split into
+    /// words at all (most places — "Yorkshire" does pass the scan and pays
+    /// for the word walk, which finds no standalone "or").
     static func offersAlternatives(_ bytes: UnsafeBufferPointer<UInt8>) -> Bool {
+        let n = bytes.count
+        var j = 0
+        var sawOr = false
+        while j + 1 < n {
+            if bytes[j] | 0x20 == 0x6F, bytes[j + 1] | 0x20 == 0x72 { sawOr = true; break }
+            j += 1
+        }
+        guard sawOr else { return false }
         var start = 0
         var i = 0
-        let n = bytes.count
         while i <= n {
             if i == n || bytes[i] == 0x2C {
                 if partOffersAlternatives(bytes, start..<i) { return true }
@@ -235,6 +245,34 @@ public enum BirthplaceUnitResolver {
         /// the one established to the right; without one the units are
         /// ambiguous and only the non-unit options (a country) apply.
         indirect case alternatives([Token])
+        /// A historic subregion placed where its ground is TODAY, whatever
+        /// country is written to its right (Manager ruling 2026-09-30, the
+        /// card's "today's flag" policy): "Strasbourg, Alsace, Germany" →
+        /// Grand Est; "Trieste, Austria" → Italy. The inner token is a
+        /// `.unit` (shaded) or a `.country` (country-only).
+        indirect case today(Token)
+        /// Ground that is in NO mapped country today (East Prussia,
+        /// Silesia, Bohemia …): ends the scan with nil even when Germany /
+        /// Prussia / Austria stands to its right — unless the established
+        /// country is in `except` ("Galicia, Spain" is Spain's Galicia).
+        case outside(except: Set<FamilyMap.Country>)
+    }
+
+    /// Words that make the next name a NEW-WORLD namesake: "New Bavaria",
+    /// "Nieuw Nederland", "Nueva España", "Neu Braunfels". A European unit
+    /// or country right after one of them is never placed in Europe.
+    static let newWorldPrefixes: Set<String> = ["new", "nieuw", "nieuwe", "nueva", "nuevo", "nouvelle", "nouveau",
+                                                "neu", "neue", "nova"]
+
+    /// Does this token place anyone in Western Europe?
+    static func isEuropean(_ token: Token) -> Bool {
+        switch token {
+        case .unit(let c, _, _), .country(let c, _): return c.isWesternEurope
+        case .alternatives(let options): return options.contains(where: isEuropean)
+        case .today(let inner): return isEuropean(inner)
+        case .coarse(let set): return set.contains { $0.isWesternEurope }
+        case .foreign, .outside: return false
+        }
     }
 
     /// The state of one right-to-left pass over a place's bytes. Lives
@@ -330,6 +368,15 @@ public enum BirthplaceUnitResolver {
                     let phrase = tokens[end - length].lowerBound..<tokens[end - 1].upperBound
                     let k = key(phrase)
                     if let token = classify(key: k, range: phrase, wholeComponent: phrase == r) {
+                        // "New Bavaria", "Nieuw Nederland": a European name
+                        // after "New" is a New-World namesake — not this
+                        // phrase, and not the "New" either (QA P1-B).
+                        let before = end - length - 1
+                        if before >= 0, isEuropean(token), newWorldPrefixes.contains(key(tokens[before])) {
+                            end = before
+                            matched = true
+                            break
+                        }
                         if let hit = apply(token, key: k, range: phrase) { return hit }
                         if stopped { return nil }
                         end -= length
@@ -401,6 +448,23 @@ public enum BirthplaceUnitResolver {
                     if stopped { return nil }
                 }
                 return nil
+            case .today(let inner):
+                // Where the ground is today, whatever is written to the
+                // right — but a name that needs its country ("Nice") still
+                // needs SOME country to its right.
+                if searches == nil, ambiguousWithoutCountry.contains(BirthplaceUnitResolver.undecorated(key)) { return nil }
+                switch inner {
+                case .unit(let c, _, let unitKey):
+                    return Hit(unitKey: unitKey, country: c, kind: c.unitKind, matchedComponent: text(range))
+                case .country(let c, _):
+                    return Hit(unitKey: c.key, country: c, kind: .country, matchedComponent: text(range))
+                default:
+                    return nil
+                }
+            case .outside(let except):
+                if let country, except.contains(country) { return nil }
+                stopped = true
+                return nil
             }
         }
 
@@ -418,12 +482,12 @@ public enum BirthplaceUnitResolver {
             if key.hasSuffix("-shire"), let token = tables[String(key.dropLast(6))], case .unit = token { return token }
             // Two-letter postal codes ("MA", "N.Y.", "Ma." — never "ma"):
             // the classifier's case rule, then Canada's. Only short text
-            // can be one, so the Character walk is skipped otherwise. With
-            // no country known, a Canadian code counts only as a WHOLE
-            // comma part ("Saint John, Nb"): inside a longer part it is as
-            // likely another country's code — "Bergen Op Zoom
-            // (Noord-Brabant) Nl" is the Netherlands, not Newfoundland
-            // (2026-09-30, a real tree string).
+            // can be one, so the Character walk is skipped otherwise.
+            // "Halifax NS", "Toronto ON", "Charlottetown PEI" place as they
+            // always did. The ONE exception (QA P1-A): with no country
+            // known, Newfoundland's NL / NF counts only as a whole comma
+            // part — inside a longer part "Nl" is the Netherlands' code:
+            // "Bergen Op Zoom (Noord-Brabant) Nl" (a real tree string).
             if range.count <= 6 {
                 let recorded = text(range)
                 let usAllowed = searches?.contains(.unitedStates) ?? true
@@ -434,8 +498,11 @@ public enum BirthplaceUnitResolver {
                     }
                 }
                 let canadaKnown = searches == [.canada]
-                if canadaKnown || (searches == nil && wholeComponent), let name = canadianCode(recorded, countryKnown: canadaKnown) {
-                    return .unit(.canada, name: name, key: FamilyMapKey.unitKey(country: .canada, name: name))
+                if canadaKnown || searches == nil, let name = canadianCode(recorded, countryKnown: canadaKnown) {
+                    let newfoundlandInsideAPart = name == "Newfoundland and Labrador" && !canadaKnown && !wholeComponent
+                    if !newfoundlandInsideAPart {
+                        return .unit(.canada, name: name, key: FamilyMapKey.unitKey(country: .canada, name: name))
+                    }
                 }
             }
             return nil
@@ -798,8 +865,12 @@ public enum BirthplaceUnitResolver {
         for u in europeUnits { unit(u.country, u.name, u.aliases + u.needsCountry) }
         for (region, departements) in franceDepartements { unit(.france, region, departements) }
         for (c, aliases) in europeCountries { country(c, aliases) }
-        for alias in europeForeign { put(alias, .foreign) }
         for (alias, token) in europeSharedTokens() { put(alias, token) }
+        // After the units, so these meanings win over a plain alias.
+        for (alias, except) in europeOutside { put(alias, .outside(except: except)) }
+        for (alias, token) in europeTodayTokens() { put(alias, token) }
+        for (alias, c) in europeCoarse { put(alias, .coarse([c])) }
+        for (alias, token) in newWorldColonyTokens() { put(alias, token) }
 
         // ---- The classifier's vocabulary, where the map has no entry ------
         func merge(_ key: String, _ token: Token) { if t[key] == nil { t[key] = token } }

@@ -51,6 +51,14 @@ struct FamilyMapResolverAdversarialTests {
         ResolvedCase(place: "France, England", unitKey: "eng"),
         ResolvedCase(place: "Yorkshire, France, England", unitKey: "eng-yorkshire"),
         ResolvedCase(place: "Quebec, France, Canada", unitKey: "can-quebec"),
+        // Restored pins (QA P2-E, 2026-09-30). Until the Western Europe
+        // stage France was off the map and these were nil. France is a
+        // supported country now, so it is the RIGHTMOST recognised country
+        // and wins; England / Canada to its left are skipped like any
+        // country token, and Yorkshire / Quebec are no units of France —
+        // an honest country-only France for a contradictory record.
+        ResolvedCase(place: "Yorkshire, England, France", unitKey: "fra"),
+        ResolvedCase(place: "Quebec, Canada, France", unitKey: "fra"),
     ])
     func rightmostSupportedCountrySurvivesEarlierForeignComponent(_ row: ResolvedCase) {
         let hit = Resolver.resolve(row.place)

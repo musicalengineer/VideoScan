@@ -150,18 +150,41 @@ rate floor on the synthetic county list; the GeoJSON size ceiling).
 - **Judgment calls.** Prussia / German Empire → Germany, country-only
   unless a Land resolves (today's flag, like colonial births under 🇺🇸; the
   tooltip keeps "Prussia"). Rhineland → Germany country-only (it spans
-  three Länder). Holland → Netherlands country-only. Flanders / Wallonia →
-  Belgium country-only. Limburg and Luxembourg are decided by the country
-  to their right. Holy Roman Empire, East/West Prussia, Pomerania, Silesia
-  stay off the map.
+  three Länder). "Holland, Netherlands" → Netherlands country-only.
+  Vlaanderen / Wallonia → Belgium country-only. Limburg and Luxembourg are
+  decided by the country to their right. Holy Roman Empire and
+  Austria-Hungary stay off the map.
+- **Today's ground wins (Manager ruling after QA, 2026-09-30).** A historic
+  subregion is placed where it is TODAY, whatever country is written to
+  its right: "Strasbourg, Alsace, Germany" → Grand Est; "Trieste, Austria",
+  "Bozen, South Tyrol, Austria" → Italy; "Nice, Sardinia" → Provence-Alpes-
+  Côte d'Azur. Ground in no mapped country today (East/West Prussia,
+  Danzig, Königsberg, Posen, Silesia, Pomerania/Stettin, Bohemia/Prague,
+  Moravia, Galicia/Lemberg) is unplaced even with Germany / Prussia /
+  Austria to its right. The card tooltip and map row still say what was
+  recorded.
+- **New-World namesakes** are never European: "New Bavaria", "New Holland,
+  Lancaster", "Nueva España" are not Bavaria / the Netherlands / Spain; New
+  Netherland and New Sweden are country-only USA, New Amsterdam is New
+  York.
 - **Refusals.** "England or Wales or France" (any "x or y") is refused;
-  départements and town-like names ("Paris", "Berlin", "Hanover", "Lot")
-  need their country to the right.
-- **Camera.** Trees without Europe frame exactly as before; a European
-  country adds its fine units, or its outline when nothing finer is
-  counted.
-- **Click.** The coastal-tolerance step no longer crosses into a counted
-  outline of another country (a land border is not a coastline).
+  départements and town-like names ("Paris", "Berlin", "Hanover", "Lot",
+  "Nice", "Zeeland", "Antwerp", "Friesland") need their country to the
+  right; bare "Holland", "Flanders", "Piedmont" are unplaced (Michigan,
+  New Jersey, the Carolinas).
+- **Camera — for Rick to confirm.** Trees without Europe frame exactly as
+  before. A European country adds its counted fine units, or its OUTLINE
+  when nothing finer is counted — so one "Italy" birth beside Yorkshire
+  widens the opening frame to include Italy. (The original seven never let
+  an outline widen the frame once a county was counted; Europe is treated
+  differently because its outlines are compact.)
+- **Click — for Rick to confirm.** The coastal-tolerance step (pick the
+  nearest counted county within 0.15° when a click lands on a coarse
+  coastline) no longer crosses into a counted outline of ANOTHER country:
+  a click just inside counted Belgium picks Belgium, not the French région
+  5 km away. This also applies to the original seven, but only where
+  another country's outline has a count (e.g. a click inside a counted
+  Scotland outline near the English border).
 
 ## 7. Open decisions (Rick)
 

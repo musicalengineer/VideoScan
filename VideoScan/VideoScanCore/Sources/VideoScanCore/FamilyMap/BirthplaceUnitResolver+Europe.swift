@@ -27,36 +27,51 @@
 //     Spain and Portugal as country outlines only.
 //
 // JUDGMENT CALLS (also in the stage report for Rick)
-//   • Prussia, the German Empire, the Holy-Roman-free "Deutschland" forms →
-//     GERMANY, country-only unless a Land resolves to their left — the same
-//     "today's flag" policy as a colonial birth under 🇺🇸. "Stettin,
-//     Pomerania, Prussia" therefore shades Germany although Stettin is
-//     Szczecin today: the string only says Prussia. East / West Prussia and
-//     Posen are NOT Germany today and are recognised as off-map.
+//   • Prussia, the German Empire, "Deutschland" → GERMANY, country-only
+//     unless a Land resolves to their left — the same "today's flag" policy
+//     as a colonial birth under 🇺🇸.
+//   • TODAY'S GROUND WINS (Manager ruling 2026-09-30): a historic
+//     subregion is placed where it is today, whatever country is written
+//     to its right. "Strasbourg, Alsace, Germany" → Grand Est; "Trieste,
+//     Austria" / "Bozen, South Tyrol, Austria" → Italy; "Nice, Sardinia" →
+//     Provence-Alpes-Côte d'Azur (`europeTodayTokens`). Ground in no mapped
+//     country today — East / West Prussia, Danzig, Königsberg, Posen,
+//     Silesia, Pomerania / Stettin, Bohemia / Prague, Moravia, Galicia /
+//     Lemberg — is nil even with Germany, Prussia or Austria to its right
+//     (`europeOutside`). Bare "Prussia" stays Germany; bare "Austria"
+//     stays Austria.
+//   • NEW-WORLD NAMESAKES are never European: a European name right after
+//     "New" / "Nieuw" / "Nueva" / "Nouvelle" / "Neu" is skipped ("New
+//     Bavaria, Ohio"), and the colonies are named outright (New Netherland
+//     and New Sweden → USA; New Amsterdam → New York; New Spain and New
+//     Holland → off the map) (`newWorldColonyTokens`).
 //   • "Rhineland" / the Rhine Province spans North Rhine-Westphalia,
 //     Rhineland-Palatinate and Saarland → Germany, country-only.
 //     "Palatinate" / "Pfalz" → Rhineland-Palatinate; "Upper Palatinate" →
 //     Bavaria; "Westphalia" → North Rhine-Westphalia; "Hanover",
 //     "Oldenburg", "Brunswick", "East Frisia" → Lower Saxony; "Württemberg",
 //     "Baden" → Baden-Württemberg; "Franconia" → Bavaria.
-//   • "Holland" is the two Holland provinces → Netherlands, country-only.
-//     "Brabant" alone (the old duchy: North Brabant AND Belgium) is not a
-//     unit; "Flanders" / "Vlaanderen" / "Wallonia" → Belgium, country-only
-//     (a region, not a province — like Ulster for Ireland). "French
-//     Flanders" → Hauts-de-France.
+//   • "Holland" is the two Holland provinces → Netherlands, country-only —
+//     but bare "Holland" is nil (Holland, Michigan); likewise bare
+//     "Flanders" (New Jersey) and "Piedmont" (the Carolinas)
+//     (`europeCoarse`). "Brabant" alone (the old duchy: North Brabant AND
+//     Belgium) is not a unit; "Vlaanderen" / "Wallonia" → Belgium,
+//     country-only (a region, not a province — like Ulster for Ireland).
+//     "French Flanders" → Hauts-de-France.
 //   • "Limburg" is a province of BOTH the Netherlands and Belgium, and
 //     "Luxembourg" is a country AND a Belgian province: each resolves only
 //     with the country to its right ("Limburg" alone is nil; "Luxembourg"
 //     alone is the country).
-//   • The Holy Roman Empire, Austria-Hungary, Bohemia, Silesia stay
-//     recognised-but-off-the-map (BirthplaceClassifier): they span today's
-//     borders, so the resolver refuses rather than guesses.
+//   • The Holy Roman Empire and Austria-Hungary stay recognised-but-off-the-
+//     map (BirthplaceClassifier): they span today's borders, so the resolver
+//     refuses rather than guesses.
 //
 // NAMES THAT NEED A COUNTRY. A département ("Lot", "Var", "Nord", "Jura"),
 // a Land whose name is also a town in North America ("Berlin", "Hamburg",
 // "Bremen", "Hanover", "Mecklenburg", "Brandenburg", "Oldenburg"), "Paris"
-// (Texas, Maine, Ontario), "Anjou" (a Montréal borough), "Centre", "Berry",
-// "Baden", "Zealand" (Denmark's island and the Dutch province) — each is
+// (Texas, Maine, Ontario), "Nice", "Savoy", "Anjou" (a Montréal borough),
+// "Centre", "Berry", "Baden", "Zeeland" / "Zealand", "Friesland", "Antwerp"
+// (all also North American or Danish places) — each is
 // accepted ONLY with a country to its right, exactly like "Middlesex"
 // (`europeNeedsCountry` is merged into `ambiguousWithoutCountry`).
 //
@@ -94,7 +109,7 @@ extension BirthplaceUnitResolver {
     static let franceRegions: [EuropeUnit] = [
         EuropeUnit(.france, "Auvergne-Rhône-Alpes",
                    ["Auvergne-Rhone-Alpes", "Rhône-Alpes", "Rhone-Alpes", "Auvergne", "Dauphiné", "Dauphine",
-                    "Lyonnais", "Bourbonnais", "Forez", "Vivarais", "Beaujolais", "Duchy of Savoy"],
+                    "Lyonnais", "Bourbonnais", "Forez", "Vivarais", "Beaujolais"],
                    // Savoy is also a town in Berkshire County, Massachusetts.
                    needsCountry: ["Savoy"]),
         EuropeUnit(.france, "Bourgogne-Franche-Comté",
@@ -106,9 +121,9 @@ extension BirthplaceUnitResolver {
                    needsCountry: ["Centre", "Berry", "Region Centre"]),
         EuropeUnit(.france, "Corsica", ["Corse"]),
         EuropeUnit(.france, "Grand Est",
-                   ["Grand-Est", "Alsace", "Lorraine", "Champagne-Ardenne", "Champagne-Ardennes", "Champagne",
-                    "Alsace-Lorraine", "Alsace-Champagne-Ardenne-Lorraine", "Elsass", "Lothringen",
-                    "Elsass-Lothringen", "Duchy of Lorraine"]),
+                   // Alsace and Lorraine are `europeToday` names (German 1871–1918).
+                   ["Grand-Est", "Champagne-Ardenne", "Champagne-Ardennes", "Champagne",
+                    "Alsace-Champagne-Ardenne-Lorraine"]),
         EuropeUnit(.france, "Hauts-de-France",
                    ["Hauts de France", "Nord-Pas-de-Calais", "Nord-Pas de Calais", "Picardie", "Picardy",
                     "Nord-Pas-de-Calais-Picardie", "Artois", "French Flanders", "Flandre française",
@@ -133,8 +148,10 @@ extension BirthplaceUnitResolver {
                    needsCountry: ["Anjou", "Loire-Inférieure", "Loire-Inferieure"]),
         EuropeUnit(.france, "Provence-Alpes-Côte d'Azur",
                    ["Provence-Alpes-Côte-d'Azur", "Provence-Alpes-Cote d'Azur", "Provence-Alpes-Cote-d'Azur",
-                    "PACA", "Provence", "Côte d'Azur", "Cote d'Azur", "Comtat Venaissin", "County of Nice"],
-                   needsCountry: ["Basses-Alpes"]),
+                    "PACA", "Provence", "Côte d'Azur", "Cote d'Azur", "Comtat Venaissin"],
+                   // Nice is a `europeToday` name (Sardinian until 1860) and a
+                   // town name: it needs a country to its right.
+                   needsCountry: ["Basses-Alpes", "Nice", "Nizza"]),
     ]
 
     /// The 96 metropolitan départements, by région (generated from the same
@@ -212,7 +229,9 @@ extension BirthplaceUnitResolver {
     static let dutchProvinces: [EuropeUnit] = [
         EuropeUnit(.netherlands, "Drenthe"),
         EuropeUnit(.netherlands, "Flevoland"),
-        EuropeUnit(.netherlands, "Friesland", ["Fryslân", "Fryslan", "Vriesland"]),
+        // Friesland, Zeeland and Antwerp are also North American places
+        // (QA P2-D): alone they need their country.
+        EuropeUnit(.netherlands, "Friesland", ["Fryslân", "Fryslan", "Vriesland"], needsCountry: ["Friesland"]),
         EuropeUnit(.netherlands, "Gelderland", ["Guelders", "Gelre", "Guelderland"]),
         EuropeUnit(.netherlands, "Groningen"),
         EuropeUnit(.netherlands, "North Brabant", ["Noord-Brabant", "Noordbrabant", "North-Brabant"]),
@@ -220,13 +239,13 @@ extension BirthplaceUnitResolver {
         EuropeUnit(.netherlands, "Overijssel", ["Overyssel"]),
         EuropeUnit(.netherlands, "South Holland", ["Zuid-Holland", "Zuidholland", "South-Holland"]),
         EuropeUnit(.netherlands, "Utrecht"),
-        EuropeUnit(.netherlands, "Zeeland", needsCountry: ["Zealand"]),
+        EuropeUnit(.netherlands, "Zeeland", needsCountry: ["Zeeland", "Zealand"]),
     ]
 
     // MARK: Belgium — 10 provinces + Brussels (Limburg and Luxembourg are shared, below)
 
     static let belgianProvinces: [EuropeUnit] = [
-        EuropeUnit(.belgium, "Antwerp", ["Antwerpen", "Anvers", "Province of Antwerp"]),
+        EuropeUnit(.belgium, "Antwerp", ["Antwerpen", "Anvers", "Province of Antwerp"], needsCountry: ["Antwerp"]),
         EuropeUnit(.belgium, "East Flanders", ["Oost-Vlaanderen", "Oostvlaanderen", "Flandre-Orientale",
                                                "Flandre orientale", "East-Flanders"]),
         EuropeUnit(.belgium, "West Flanders", ["West-Vlaanderen", "Westvlaanderen", "Flandre-Occidentale",
@@ -255,10 +274,10 @@ extension BirthplaceUnitResolver {
                     "Prussia", "Preussen", "Preußen", "Kingdom of Prussia", "Free State of Prussia",
                     "Rhineland", "Rheinland", "Rhine Province", "Rheinprovinz", "Prussian Rhine Province",
                     "German Confederation"]),
-        (.netherlands, ["Netherlands", "The Netherlands", "Nederland", "Holland", "Pays-Bas", "Niederlande",
+        (.netherlands, ["Netherlands", "The Netherlands", "Nederland", "Pays-Bas", "Niederlande",
                         "Kingdom of the Netherlands", "Dutch Republic", "United Provinces", "Batavian Republic"]),
         (.belgium, ["Belgium", "België", "Belgie", "Belgique", "Belgien", "Kingdom of Belgium",
-                    "Flanders", "Vlaanderen", "Flandre", "County of Flanders", "Flemish Region",
+                    "Vlaanderen", "Flandre", "County of Flanders", "Flemish Region",
                     "Wallonia", "Wallonie", "Wallonië", "Walloon Region", "Spanish Netherlands", "Austrian Netherlands"]),
         (.luxembourg, ["Grand Duchy of Luxembourg", "Lëtzebuerg", "Letzebuerg"]),
         (.switzerland, ["Switzerland", "Schweiz", "Suisse", "Svizzera", "Helvetia", "Swiss Confederation"]),
@@ -271,12 +290,95 @@ extension BirthplaceUnitResolver {
         (.portugal, ["Portugal", "Kingdom of Portugal"]),
     ]
 
-    /// Names whose ground is NOT in any mapped country today, or spans
-    /// several: recognised, and they end the scan like Australia does.
-    static let europeForeign: [String] = [
-        "East Prussia", "West Prussia", "Ostpreussen", "Ostpreußen", "Westpreussen", "Westpreußen",
-        "Posen", "Province of Posen", "Grand Duchy of Posen",
+    // MARK: Where the ground is TODAY (Manager ruling 2026-09-30, QA P1-C)
+
+    /// Ground that is in NO mapped country today. Each ends the scan with
+    /// nil EVEN with Germany / Prussia / Austria written to its right:
+    /// "Königsberg, East Prussia, Germany" is Kaliningrad, "Prague, Bohemia,
+    /// Austria" is Czechia. `except`: the countries where the same name
+    /// is a different, mapped place ("Galicia, Spain"). Cities are listed
+    /// only where the record usually stops at the city ("Posen, Prussia");
+    /// a Land to their right still wins first ("Königsberg, Bayern" is the
+    /// Bavarian town).
+    static let europeOutside: [(alias: String, except: Set<FamilyMap.Country>)] = [
+        ("East Prussia", []), ("West Prussia", []), ("Ostpreussen", []), ("Ostpreußen", []),
+        ("Westpreussen", []), ("Westpreußen", []), ("Province of Posen", []), ("Grand Duchy of Posen", []),
+        ("Posen", []), ("Danzig", []), ("Free City of Danzig", []), ("Königsberg", []), ("Koenigsberg", []),
+        ("Konigsberg", []), ("Memel", []), ("Memelland", []),
+        ("Silesia", []), ("Schlesien", []), ("Upper Silesia", []), ("Lower Silesia", []), ("Breslau", []),
+        ("Pomerania", []), ("Pommern", []), ("Farther Pomerania", []), ("Hinterpommern", []), ("Stettin", []),
+        ("Bohemia", []), ("Böhmen", []), ("Prague", []), ("Prag", []), ("Praha", []), ("Moravia", []), ("Mähren", []),
+        ("Galicia", [.spain]), ("Galizien", []), ("Lemberg", []), ("Lwów", []), ("Lwow", []),
     ]
+
+    /// Historic subregions placed where they are TODAY, whatever country is
+    /// written to their right: Alsace-Lorraine (German 1871–1918) → Grand
+    /// Est; Nice and Savoy (Sardinian until 1860) → France; South Tyrol,
+    /// Trentino and Trieste (Austrian until 1918) → Italy; North Schleswig
+    /// (Prussian 1864–1920) → Denmark; Eupen-Malmedy → Belgium; Swedish
+    /// Pomerania → Mecklenburg-Vorpommern. The card's tooltip still says
+    /// what was recorded.
+    static func europeTodayTokens() -> [(alias: String, token: Token)] {
+        func unit(_ c: FamilyMap.Country, _ name: String) -> Token {
+            .today(.unit(c, name: name, key: FamilyMapKey.unitKey(country: c, name: name)))
+        }
+        func country(_ c: FamilyMap.Country) -> Token { .today(.country(c, searches: [c])) }
+        var out: [(String, Token)] = []
+        for a in ["Alsace", "Lorraine", "Alsace-Lorraine", "Elsass", "Elsaß", "Lothringen", "Elsass-Lothringen",
+                  "Elsaß-Lothringen", "Reichsland Elsass-Lothringen", "Duchy of Lorraine", "Alsace-Moselle"] {
+            out.append((a, unit(.france, "Grand Est")))
+        }
+        for a in ["Nice", "Nizza", "County of Nice", "Comté de Nice"] {
+            out.append((a, unit(.france, "Provence-Alpes-Côte d'Azur")))
+        }
+        for a in ["Savoy", "Savoie", "Duchy of Savoy"] { out.append((a, unit(.france, "Auvergne-Rhône-Alpes"))) }
+        for a in ["South Tyrol", "Südtirol", "Sudtirol", "Suedtirol", "Alto Adige", "Bozen", "Bolzano", "Trentino",
+                  "Trient", "Trento", "Trieste", "Triest", "Gorizia", "Görz", "Goerz"] {
+            out.append((a, country(.italy)))
+        }
+        for a in ["North Schleswig", "Nordschleswig", "Sønderjylland", "Sonderjylland", "Southern Jutland"] {
+            out.append((a, country(.denmark)))
+        }
+        for a in ["Eupen", "Malmedy", "Eupen-Malmedy"] { out.append((a, country(.belgium))) }
+        out.append(("Swedish Pomerania", unit(.germany, "Mecklenburg-Vorpommern")))
+        return out
+    }
+
+    // MARK: Bare names shared with North America (QA P2-D)
+
+    /// "Holland" (Michigan), "Flanders" (New Jersey), "Piedmont" (the
+    /// Carolinas) alone are nil. With their country to the right they are
+    /// that country, and to the LEFT of them a province of their country
+    /// still places ("Leiden, Zuid-Holland, Holland") — a coarse token
+    /// narrows the search like "United Kingdom" does, and shades nothing
+    /// by itself.
+    static let europeCoarse: [(alias: String, country: FamilyMap.Country)] = [
+        ("Holland", .netherlands), ("Flanders", .belgium), ("Piedmont", .italy),
+    ]
+
+    // MARK: New-World colonies named after Europe (QA P1-B)
+
+    /// Recognised explicitly so their European namesake never matches:
+    /// New Netherland / New Sweden span today's states (country-only USA,
+    /// like "New England"); New Amsterdam, New Utrecht and German Flatts
+    /// are New York; Fort Christina is Wilmington, Delaware; New Spain and
+    /// New Holland (Dutch Brazil, old Australia) are off the map.
+    static func newWorldColonyTokens() -> [(alias: String, token: Token)] {
+        func state(_ name: String) -> Token {
+            .unit(.unitedStates, name: name, key: FamilyMapKey.unitKey(country: .unitedStates, name: name))
+        }
+        let usa = Token.country(.unitedStates, searches: [.unitedStates])
+        return [
+            ("New Sweden", usa), ("New Sweden Colony", usa), ("Nya Sverige", usa),
+            ("Nieuw Nederland", usa), ("Nieuw-Nederland", usa), ("Nieuw Nederlandt", usa),
+            ("New Amsterdam", state("New York")), ("Nieuw Amsterdam", state("New York")),
+            ("New Utrecht", state("New York")), ("Germany Flats", state("New York")),
+            ("German Flats", state("New York")), ("German Flatts", state("New York")),
+            ("Fort Christina", state("Delaware")),
+            ("New Spain", .foreign), ("Nueva España", .foreign), ("Viceroyalty of New Spain", .foreign),
+            ("New Holland", .foreign),
+        ]
+    }
 
     /// Unit names shared by two countries — accepted only when the country
     /// to their right says which ("Limburg, Netherlands" / "Limburg,
