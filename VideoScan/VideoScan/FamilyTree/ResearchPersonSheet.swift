@@ -68,7 +68,8 @@ final class ResearchPersonModel: ObservableObject {
         self.record = record
         // Default: every source, including the record adapters that read
         // this subject's places and years (GH #230 Phase B).
-        self.makeSources = sources ?? { ResearchRunner.sources(fetcher: $0, subject: subject) }
+        // Wikipedia's vetting writes one counts-only line to the same log.
+        self.makeSources = sources ?? { ResearchRunner.sources(fetcher: $0, subject: subject, log: log) }
         self.log = log
         self.now = now
         self.plan = ResearchQueryPlan.build(subject: subject, now: now())
@@ -77,6 +78,9 @@ final class ResearchPersonModel: ObservableObject {
     }
 
     var findings: [ResearchFinding] { dossier.findings }
+    /// The two groups the list shows (≤ 500 findings: a cheap filter).
+    var mainFindings: [ResearchFinding] { dossier.mainFindings }
+    var nearMissFindings: [ResearchFinding] { dossier.nearMissFindings }
     var confirmedUntoldCount: Int { dossier.untoldConfirmed.count }
     var toldCount: Int { dossier.findings.filter { $0.toldItemID != nil }.count }
 
@@ -146,7 +150,10 @@ final class ResearchPersonModel: ObservableObject {
         isRunning = false
         runTask = nil
         let failed = outcomes.filter { $0.failure != nil }.count
-        statusLine = "\(dossier.findings.count) findings from \(outcomes.count - failed) of \(outcomes.count) sources"
+        let nearMisses = dossier.nearMissFindings.count
+        statusLine = "\(dossier.findings.count - nearMisses) findings"
+            + (nearMisses == 0 ? "" : " (+\(nearMisses) also turned up)")
+            + " from \(outcomes.count - failed) of \(outcomes.count) sources"
         log("Research: run finished (\(dossier.findings.count) findings, \(failed) sources failed)")
     }
 
@@ -251,6 +258,8 @@ final class ResearchPersonModel: ObservableObject {
 struct ResearchPersonSheet: View {
     @StateObject private var model: ResearchPersonModel
     let onClose: () -> Void
+    /// "Also turned up — probably not this person" starts collapsed.
+    @State private var showNearMisses = false
 
     init(model: ResearchPersonModel, onClose: @escaping () -> Void) {
         _model = StateObject(wrappedValue: model)
@@ -353,24 +362,55 @@ struct ResearchPersonSheet: View {
                 }
                 .frame(maxWidth: .infinity)
             } else {
-                List(model.findings) { finding in
-                    ResearchFindingRow(
-                        finding: finding,
-                        lore: Binding(
-                            get: { model.loreDrafts[finding.id] ?? finding.lore },
-                            set: { model.editLore($0, for: finding.id) }),
-                        onVerdict: { model.setVerdict($0, for: finding.id) },
-                        onCommitLore: { model.commitLore(for: finding.id) })
-                    .listRowSeparator(.visible)
+                let nearMisses = model.nearMissFindings
+                List {
+                    ForEach(model.mainFindings) { finding in row(finding) }
+                    if !nearMisses.isEmpty {
+                        // Rick 2026-10-01: keep near-misses for serendipity,
+                        // but apart from the findings and folded away.
+                        Section {
+                            if showNearMisses {
+                                ForEach(nearMisses) { finding in row(finding) }
+                            }
+                        } header: {
+                            Button {
+                                showNearMisses.toggle()
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: showNearMisses ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 10, weight: .semibold))
+                                    Text("Also turned up — probably not this person (\(nearMisses.count))")
+                                        .font(.system(size: 12, weight: .semibold))
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Search hits that failed a check: not a person, a different name, a different era, or couldn't be checked. Kept in case one is useful; nothing here goes to Hallie unless you confirm it.")
+                        }
+                    }
                 }
                 .listStyle(.inset)
             }
         }
     }
 
+    private func row(_ finding: ResearchFinding) -> some View {
+        ResearchFindingRow(
+            finding: finding,
+            lore: Binding(
+                get: { model.loreDrafts[finding.id] ?? finding.lore },
+                set: { model.editLore($0, for: finding.id) }),
+            onVerdict: { model.setVerdict($0, for: finding.id) },
+            onCommitLore: { model.commitLore(for: finding.id) })
+        .listRowSeparator(.visible)
+    }
+
     private var footer: some View {
         HStack {
-            Text("\(model.findings.count) findings · \(model.findings.filter { $0.verdict == .confirmed }.count) confirmed · \(model.toldCount) told")
+            Text("\(model.findings.count - model.nearMissFindings.count) findings"
+                 + (model.nearMissFindings.isEmpty ? "" : " · \(model.nearMissFindings.count) also turned up")
+                 + " · \(model.findings.filter { $0.verdict == .confirmed }.count) confirmed · \(model.toldCount) told")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
@@ -399,6 +439,15 @@ private struct ResearchFindingRow: View {
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(badgeColor.opacity(0.25))
                     .clipShape(Capsule())
+                if let screening = finding.screening {
+                    // "Likely match" in green; a near-miss's plain reason
+                    // ("a film", "surname only", …) in grey.
+                    Text(screening.isNearMiss ? screening.reason : "Likely match")
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background((screening.isNearMiss ? Color.gray : Color.green).opacity(0.25))
+                        .clipShape(Capsule())
+                }
                 Text(finding.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 if let date = finding.date {
                     Text(date).font(.system(size: 11)).foregroundStyle(.secondary)
