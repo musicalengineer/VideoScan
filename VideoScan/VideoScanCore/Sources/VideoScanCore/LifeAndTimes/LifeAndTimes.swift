@@ -15,9 +15,13 @@
 //   LifeAndTimes.aggregate(label: "Irish line", people: …, in: ctx) → OccupationAggregate
 //
 // PRIVACY — the living are skipped, by a rule STRICTER than LifeStatus's
-// presumption: anyone with no recorded death whose birth could be less than
-// `livingThresholdYears` (100) years ago — or whose birth is not dated at
-// all — is treated as living, whatever their relatives' dates say. A
+// presumption: anyone with no recorded death whose LATEST possible birth
+// year is after currentYear − 100 — or whose birth is not dated at all — is
+// treated as living, whatever their relatives' dates say. The boundary is
+// the app's own (LifeStatus: born ≤ currentYear − 100 → presumed deceased):
+// in 2026 a birth in 1926 is presumed deceased, 1927 is living. Stricter
+// only in ignoring the relatives rules (3–5) and in reading "ABT 1925" by
+// its latest year (1927 → living). A
 // skipped person produces no facts, no service candidacy, no research
 // request, and no occupation count (they are counted only as "living
 // skipped"). Pinned by the LifeAndTimesPrivacy sensor suite.
@@ -124,6 +128,7 @@ public enum LifeAndTimes {
         guard let birth = GedcomYearInterval.parse(subject.birthDate) else { return true }
         // AFT 1900 (no upper bound) could be yesterday.
         guard let latest = birth.upper else { return true }
+        // `>` matches LifeStatus (born ≤ currentYear − 100 → presumed deceased).
         return latest > currentYear - max(100, thresholdYears)
     }
 
@@ -181,7 +186,7 @@ public enum LifeAndTimes {
                 if let doubt = jobs.compactMap(\.ambiguity).first { out.append("(\(doubt).)") }
             }
             for s in service {
-                let age = s.ageAtStart.map { "\($0.spoken) when \(s.warName) began" } ?? "of military age during \(s.warName)"
+                let age = s.ageAtStart.map { "\($0.spoken) \(s.startPhrase)" } ?? "of military age during \(s.warName)"
                 let where_ = s.regions.isEmpty ? "" : ", with ties to \(LifeAndTimes.listPhrase(s.regions.map(\.label)))"
                 let lead = s.strength == .strong ? "a strong lead" : "a possible lead"
                 out.append("\(name) was \(age)\(where_) — \(lead) for service records, not yet checked.")
@@ -420,12 +425,30 @@ public enum LifeAndTimes {
     /// A "line": the ancestors of `person` up to `generations`, optionally
     /// only those with a recorded place in `region` (birth, residence or
     /// death) — "Rick's Irish line" = ancestors(of: rick, region: .ireland).
+    /// The living are left out unless `includeLiving` (the aggregate asks
+    /// for them only to COUNT them as skipped).
     public static func ancestors(of person: GedcomFamilyGraph.Person, in context: Context,
-                                 generations: Int = 12, region: Region? = nil) -> [GedcomFamilyGraph.Person] {
+                                 generations: Int = 12, region: Region? = nil,
+                                 includeLiving: Bool = false) -> [GedcomFamilyGraph.Person] {
         guard let graph = context.graph else { return [] }
-        let all = graph.ancestorLine(of: person, line: .both, generations: generations).flatMap(\.people)
-        guard let region else { return all }
-        return all.filter { p in presences(of: context.subject(for: p)).contains { region.covers($0.region) } }
+        let options = context.options
+        return graph.ancestorLine(of: person, line: .both, generations: generations).flatMap(\.people).filter { p in
+            let subject = context.subject(for: p)
+            if !includeLiving, isTreatedAsLiving(subject, currentYear: options.currentYear,
+                                                 thresholdYears: options.livingThresholdYears) { return false }
+            guard let region else { return true }
+            return presences(of: subject).contains { region.covers($0.region) }
+        }
+    }
+
+    /// "Rick's Irish line: …" in one call: the line's ancestors (living
+    /// included only so the sentence can say how many were skipped).
+    public static func aggregate(label: String, ancestorsOf person: GedcomFamilyGraph.Person, in context: Context,
+                                 generations: Int = 12, region: Region? = nil) -> OccupationAggregate {
+        aggregate(label: label,
+                  people: ancestors(of: person, in: context, generations: generations, region: region,
+                                    includeLiving: true),
+                  in: context)
     }
 
     // MARK: - Words

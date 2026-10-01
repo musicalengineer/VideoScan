@@ -71,12 +71,21 @@ public struct GedcomLifeDetails: Sendable {
     public init(gedcomText: String) {
         var reader = Reader()
         for raw in gedcomText.split(whereSeparator: \.isNewline) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
+            // Leading whitespace and a stray CR only: a trailing space is
+            // DATA in a value that a CONC continues ("worked as a " +
+            // "compositor"), so it must survive.
+            let line = Self.trimLine(raw)
             let parts = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
             guard parts.count >= 2, let level = Int(parts[0]) else { continue }
             reader.read(level: level, tag: String(parts[1]), rest: parts.count == 3 ? String(parts[2]) : "")
         }
         byPersonID = reader.finish()
+    }
+
+    static func trimLine(_ raw: Substring) -> Substring {
+        var line = raw.drop { $0 == " " || $0 == "\t" || $0 == "\u{feff}" }
+        while let last = line.last, last == "\r" || last == "\n" { line = line.dropLast() }
+        return line
     }
 
     // MARK: - Reader (the state machine)

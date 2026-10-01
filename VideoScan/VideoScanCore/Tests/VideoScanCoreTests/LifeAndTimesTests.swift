@@ -117,6 +117,8 @@ struct LifeAndTimesLivedThroughTests {
 
         let after = try #require(line("great-famine", person(born: "AFT 1833", died: "1901", bornIn: cork, diedIn: cork)))
         #expect(after.ageAtStart?.spoken == "no more than 11")
+        #expect(after.spoken == "was no more than 11 when the Great Famine in Ireland began (1845–1852), if born by then",
+                "the AFT hedge is about being born yet (QA P2-B)")
 
         let between = try #require(line("great-famine", person(born: "BET 1830 AND 1834", died: "1901", bornIn: cork, diedIn: cork)))
         #expect(between.ageAtStart?.spoken == "between 11 and 15")
@@ -377,8 +379,8 @@ struct LifeAndTimesOccupationTests {
     }
 
     @Test func artsWritingAndTheProfessions() {
-        #expect(cat("Printer") == .writing)
-        #expect(cat("Compositor") == .writing)
+        #expect(cat("Printer") == .printTrade, "printers are not writers (QA P3)")
+        #expect(cat("Compositor") == .printTrade)
         #expect(cat("Journalist") == .writing)
         #expect(cat("Author") == .writing)
         #expect(cat("Portrait Painter") == .arts)
@@ -406,7 +408,7 @@ struct LifeAndTimesOccupationTests {
 
     @Test func notesOnlyByExplicitCue() {
         let hits = LT.OccupationClassifier.fromNote("He worked as a compositor for the local paper. His father was a farmer.")
-        #expect(hits.map(\.category) == [.writing])
+        #expect(hits.map(\.category) == [.printTrade])
         #expect(hits.first?.evidence == .note)
         #expect(LT.OccupationClassifier.fromNote("His father was a farmer.").isEmpty)
         #expect(LT.OccupationClassifier.fromNote("Occupation: teacher; later retired").first?.category == .professions)
@@ -495,7 +497,7 @@ struct LifeAndTimesDetailsTests {
         let p = try #require(graph.people["@I1@"])
         let f = try #require(LT.facts(for: p, in: ctx))
         #expect(f.occupations.map(\.category).contains(.labourer))
-        #expect(f.occupations.map(\.category).contains(.writing))
+        #expect(f.occupations.map(\.category).contains(.printTrade))
         #expect(f.recordedMilitary == ["Private in a fictional regiment 1862"])
         #expect(f.regions == [.unitedStates, .ireland])
         #expect(f.service.contains { $0.warID == "us-civil-war" && $0.strength == .strong })
@@ -557,8 +559,14 @@ struct LifeAndTimesPrivacyTests {
         }
         let scan = LT.serviceScan(subjects: people, options: year2026)
         leaked += scan.candidates.filter { living.contains($0.personID) }.count
+        // The research queue and the aggregates too (QA P3).
+        leaked += LT.researchQueue(subjects: people, options: year2026).filter { living.contains($0.personID) }.count
         #expect(leaked == 0)
         #expect(scan.counts.skippedLiving == living.count)
+        let livingOnly = people.filter { living.contains($0.id) }
+        let agg = LT.aggregate(label: "living", subjects: livingOnly, options: year2026)
+        #expect(agg.considered == 0 && agg.withOccupation == 0 && agg.counts.isEmpty)
+        #expect(agg.skippedLiving == livingOnly.count)
     }
 }
 

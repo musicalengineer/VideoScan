@@ -93,7 +93,7 @@ extension LifeAndTimes {
         }
 
         var label: String { regions.map(\.label).joined(separator: "/") + " \(startYear)–\(endYear)" }
-        func covers(_ r: Region) -> Bool { regions.contains { $0.covers(r) } }
+        func covers(_ r: Region) -> Bool { r.touched(by: regions, in: startYear) }
     }
 
     public struct ServiceWar: Sendable, Codable, Equatable, Identifiable {
@@ -175,6 +175,11 @@ extension LifeAndTimes {
         public let strength: CandidateStrength
         /// Age when the (earliest matching) theatre's war began / ended.
         public let ageAtStart: QualifiedAge?
+        /// What `ageAtStart` is measured at, as words: "when the Second World
+        /// War began (1939)" or, when the matching theatre opened later,
+        /// "when the United States entered the Second World War (1941)"
+        /// (QA P1-B — never re-date the start of the war).
+        public let startPhrase: String
         public let ageAtEnd: QualifiedAge?
         public let regions: [Region]
         public let targets: [ResearchTarget]
@@ -251,6 +256,7 @@ extension LifeAndTimes {
         }
 
         let military = recordedMilitary(subject, during: war)
+        let startPhrase = Self.startPhrase(war: war, theatre: first.theatre)
         let ageAtStart = QualifiedAge.at(first.theatre.startYear, birth: lifespan.birth)
         let ageAtEnd = QualifiedAge.at(min(first.theatre.endYear, lifespan.deathHigh), birth: lifespan.birth)
         let strong = !military.isEmpty || matches.contains { $0.strongAge && $0.strongPlace }
@@ -263,12 +269,27 @@ extension LifeAndTimes {
             for p in presences where m.theatre.covers(p.region) && !regions.contains(p.region) { regions.append(p.region) }
             for t in m.theatre.targets where !targets.contains(t) { targets.append(t) }
         }
-        let reasons = serviceReasons(sex: sex, lifespan: lifespan, war: war, first: first, matches: matches,
+        let reasons = serviceReasons(sex: sex, lifespan: lifespan, war: war, startPhrase: startPhrase,
+                                     first: first, matches: matches,
                                      ageAtStart: ageAtStart, ageAtEnd: ageAtEnd, military: military, strong: strong)
         return .success(ServiceCandidate(
             personID: subject.id, name: subject.name, warID: war.id, warName: war.name,
-            strength: strong ? .strong : .possible, ageAtStart: ageAtStart, ageAtEnd: ageAtEnd,
+            strength: strong ? .strong : .possible, ageAtStart: ageAtStart, startPhrase: startPhrase,
+            ageAtEnd: ageAtEnd,
             regions: regions, targets: targets, reasons: reasons, recordedMilitary: military))
+    }
+
+    /// The war's own start: the earliest theatre or the timeline row.
+    static func warStartYear(_ war: ServiceWar) -> Int {
+        let theatres = war.theatres.map(\.startYear).min() ?? Int.max
+        return min(theatres, LifeAndTimes.event(id: war.id)?.startYear ?? Int.max)
+    }
+
+    static func startPhrase(war: ServiceWar, theatre: Theatre) -> String {
+        if theatre.startYear > warStartYear(war), let who = theatre.regions.first {
+            return "when \(who.label) entered \(war.name) (\(theatre.startYear))"
+        }
+        return "when \(war.name) began (\(theatre.startYear))"
     }
 
     /// Nil when no year of the theatre can put them in the band while
@@ -297,12 +318,13 @@ extension LifeAndTimes {
     }
 
     /// The plain reasoning lines, in order: sex, age, death, place, tree.
-    static func serviceReasons(sex: String, lifespan: Lifespan, war: ServiceWar, first: TheatreMatch,
+    static func serviceReasons(sex: String, lifespan: Lifespan, war: ServiceWar, startPhrase: String,
+                               first: TheatreMatch,
                                matches: [TheatreMatch], ageAtStart: QualifiedAge?, ageAtEnd: QualifiedAge?,
                                military: [String], strong: Bool) -> [String] {
         var reasons = [sex == "M" ? "male, as recorded" : "female, as recorded"]
         var ageLine = "born \(lifespan.birth.spoken)"
-        if let a = ageAtStart { ageLine += " → \(a.spoken) when \(war.name) began (\(first.theatre.startYear))" }
+        if let a = ageAtStart { ageLine += " → \(a.spoken) \(startPhrase)" }
         if let a = ageAtEnd, first.theatre.endYear != first.theatre.startYear {
             ageLine += ", \(a.spoken) at its end (\(min(first.theatre.endYear, lifespan.deathHigh)))"
         }

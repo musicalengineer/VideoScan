@@ -256,15 +256,40 @@ extension LifeAndTimes {
         public static func < (a: Certainty, b: Certainty) -> Bool { a.rank < b.rank }
     }
 
+    /// Where the life meets the event. "During" is said ONLY when the
+    /// date is strictly inside the span (QA P2-A): a birth in 1939 is "born
+    /// in 1939, the year the Second World War began", never "born during"
+    /// it — the war began on 1 September. We hold no event day/month, so
+    /// an edge year is always spoken as the year.
     public enum LifeMoment: String, Sendable, Codable, Equatable {
-        /// Born within the event's years.
+        /// Born strictly inside the event's years.
         case bornDuring
-        /// Died within the event's years.
+        /// Born in the first / last year of a multi-year event, or in the
+        /// year of a one-year event (exact birth year).
+        case bornInStartYear, bornInEndYear, bornInEventYear
+        /// The birth may fall at or after the start (an ABT/BET/AFT birth
+        /// that straddles it): no age is spoken (QA P2-B).
+        case bornAround
+        /// Died strictly inside the event's years.
         case diedDuring
+        case diedInStartYear, diedInEndYear, diedInEventYear
         /// Alive before it began and after it ended (proven).
         case livedThrough
         /// Alive for part of it.
         case aliveDuring
+
+        var isBirth: Bool {
+            switch self {
+            case .bornDuring, .bornInStartYear, .bornInEndYear, .bornInEventYear: return true
+            default: return false
+            }
+        }
+        var isDeath: Bool {
+            switch self {
+            case .diedDuring, .diedInStartYear, .diedInEndYear, .diedInEventYear: return true
+            default: return false
+            }
+        }
     }
 
     /// One "lived through" line.
@@ -275,9 +300,12 @@ extension LifeAndTimes {
         public let years: String
         public let kind: EventKind
         public let moment: LifeMoment
+        /// The birth or death year an edge moment speaks ("born in 1939").
+        public var momentYear: Int?
         public let certainty: Certainty
         public let relevance: PlaceRelevance
-        /// Age when the event began (nil when born during it).
+        /// Age when the event began. Nil whenever the birth may not precede
+        /// the start (born during / around it).
         public let ageAtStart: QualifiedAge?
         /// Age when a multi-year event ended (nil for one-year events, or
         /// when they died during it).
@@ -286,29 +314,35 @@ extension LifeAndTimes {
         public let placeReason: String?
         /// Ranking score (higher = more interesting). Stored for audit.
         public let score: Int
+        /// The birth was open-ended ("AFT 1833"): the age is an upper bound
+        /// and being BORN by then is what is uncertain.
+        public var birthOpenAfter = false
 
         /// The predicate, without the subject: "was about 12 when the Great
         /// Famine in Ireland began (1845–1852)". Hallie prefixes the name.
         public var spoken: String {
             let single = !years.contains("–")
+            let y = momentYear.map(String.init) ?? years
             switch moment {
-            case .bornDuring:
-                return "was born during \(eventPhrase) (\(years))"
-            case .diedDuring:
-                // Never implies a cause: "died while", not "died of".
-                return single
-                    ? "died in the year of \(eventPhrase) (\(years))"
-                    : "died while \(eventPhrase) was under way (\(years))"
+            case .bornDuring: return "was born during \(eventPhrase) (\(years))"
+            case .bornInStartYear: return "was born in \(y), the year \(eventPhrase) began"
+            case .bornInEndYear: return "was born in \(y), the year \(eventPhrase) ended"
+            case .bornInEventYear: return "was born in \(y), the year of \(eventPhrase)"
+            case .bornAround:
+                return single ? "was born around the time of \(eventPhrase) (\(years))"
+                              : "was born around the time \(eventPhrase) began (\(years))"
+            // Never implies a cause: "died while", not "died of".
+            case .diedDuring: return "died while \(eventPhrase) was under way (\(years))"
+            case .diedInStartYear: return "died in \(y), the year \(eventPhrase) began"
+            case .diedInEndYear: return "died in \(y), the year \(eventPhrase) ended"
+            case .diedInEventYear: return "died in \(y), the year of \(eventPhrase)"
             case .livedThrough, .aliveDuring:
                 guard let age = ageAtStart else { return "lived through \(eventPhrase) (\(years))" }
-                if certainty == .possible {
-                    return single
-                        ? "would have been \(age.spoken) at the time of \(eventPhrase) (\(years)), if still living"
-                        : "would have been \(age.spoken) when \(eventPhrase) began (\(years)), if still living"
-                }
-                return single
-                    ? "was \(age.spoken) at the time of \(eventPhrase) (\(years))"
-                    : "was \(age.spoken) when \(eventPhrase) began (\(years))"
+                let when = single ? "at the time of \(eventPhrase) (\(years))" : "when \(eventPhrase) began (\(years))"
+                // AFT births: the hedge is about being BORN yet (QA P2-B).
+                if birthOpenAfter { return "was \(age.spoken) \(when), if born by then" }
+                if certainty == .possible { return "would have been \(age.spoken) \(when), if still living" }
+                return "was \(age.spoken) \(when)"
             }
         }
 
@@ -346,65 +380,99 @@ extension LifeAndTimes {
         }
     }
 
+    /// The birth's moment relative to the event, or nil when the birth is
+    /// PROVEN before the start (then the age is spoken).
+    static func birthMoment(_ birth: DatedYear, event: HistoricalEvent) -> (LifeMoment, Int?)? {
+        let s = event.startYear, e = event.endYear
+        guard let upper = birth.upper else {
+            // Open-ended (AFT): born after the start → around it; else the
+            // age is an upper bound, hedged on being born (see spoken).
+            return (birth.lower ?? Int.min) > s ? (.bornAround, nil) : nil
+        }
+        guard upper >= s else { return nil }
+        if let lower = birth.lower, lower == upper {
+            if lower > s && lower < e { return (.bornDuring, nil) }
+            if s == e { return (.bornInEventYear, lower) }
+            if lower == s { return (.bornInStartYear, lower) }
+            if lower == e { return (.bornInEndYear, lower) }
+        } else if let lower = birth.lower, lower > s, upper < e {
+            return (.bornDuring, nil)
+        }
+        return (.bornAround, nil)
+    }
+
+    /// Died strictly inside, or in an edge year (exact year only).
+    static func deathMoment(_ death: DatedYear?, event: HistoricalEvent) -> (LifeMoment, Int?)? {
+        guard let death, let dl = death.lower, let du = death.upper else { return nil }
+        let s = event.startYear, e = event.endYear
+        if dl > s && du < e { return (.diedDuring, nil) }
+        guard dl == du else { return nil }
+        if s == e, dl == s { return (.diedInEventYear, dl) }
+        if dl == s { return (.diedInStartYear, dl) }
+        if dl == e { return (.diedInEndYear, dl) }
+        return nil
+    }
+
     static func line(for event: HistoricalEvent, lifespan: Lifespan, presences: [Presence],
                      anchors: PresenceAnchors? = nil, sex: String) -> LivedThroughLine? {
         let s = event.startYear, e = event.endYear
-        let bLo = lifespan.birthLow, bHi = lifespan.birthHigh
-        let dHi = lifespan.deathHigh
         // Possible overlap at all?
-        guard max(s, bLo) <= min(e, dHi) else { return nil }
+        guard max(s, lifespan.birthLow) <= min(e, lifespan.deathHigh) else { return nil }
 
-        // Born/died "during" only on REAL bounds, never the fallbacks.
-        var bornDuring = false
-        if let bl = lifespan.birth.lower, let bu = lifespan.birth.upper { bornDuring = bl >= s && bu <= e }
-        var diedDuring = false
-        if let d = lifespan.death, let dl = d.lower, let du = d.upper { diedDuring = dl >= s && du <= e }
-
+        let born = birthMoment(lifespan.birth, event: event)
+        let died = deathMoment(lifespan.death, event: event)
         let certainty = Self.certainty(event: event, lifespan: lifespan,
-                                       bornDuring: bornDuring, diedDuring: diedDuring)
+                                       atBirthOrDeath: (born.map { $0.0 != .bornAround } ?? false) || died != nil)
 
-        let moment: LifeMoment
-        if bornDuring { moment = .bornDuring }
-        else if diedDuring { moment = .diedDuring }
-        else if let dLo = lifespan.deathLow, bHi < s, dLo > e { moment = .livedThrough }
-        else { moment = .aliveDuring }
+        var moment: LifeMoment = .aliveDuring
+        var momentYear: Int?
+        if let (m, y) = born { moment = m; momentYear = y }
+        else if let (m, y) = died { moment = m; momentYear = y }
+        else if let dLo = lifespan.deathLow, lifespan.birthHigh < s, dLo > e { moment = .livedThrough }
 
-        let ageAtStart = bornDuring ? nil : QualifiedAge.at(s, birth: lifespan.birth)
-        let ageAtEnd: QualifiedAge? = (event.isSingleYear || diedDuring) ? nil : QualifiedAge.at(e, birth: lifespan.birth)
+        // No age unless the birth is proven before the start (or open-ended
+        // AFT, spoken as an upper bound "if born by then").
+        let ageAtStart = born == nil ? QualifiedAge.at(s, birth: lifespan.birth) : nil
+        let ageAtEnd: QualifiedAge? = (event.isSingleYear || moment.isDeath || born != nil
+                                       || (lifespan.birth.upper ?? Int.max) >= e)
+            ? nil : QualifiedAge.at(e, birth: lifespan.birth)
 
         guard let (relevance, reason) = placeRelevance(of: event, presences: presences,
                                                        anchors: anchors ?? PresenceAnchors(presences),
-                                                       lifespan: lifespan, ageAtStart: ageAtStart) else {
+                                                       lifespan: lifespan, ageAtStart: ageAtStart,
+                                                       bornAtOrAfterStart: born != nil) else {
             return nil
         }
 
         let score = Self.score(event: event, certainty: certainty, relevance: relevance, moment: moment,
                                ageAtStart: ageAtStart, ageAtEnd: ageAtEnd, sex: sex)
-        return LivedThroughLine(eventID: event.id, eventName: event.name, eventPhrase: event.phrase,
-                                years: event.yearsLabel, kind: event.kind, moment: moment,
-                                certainty: certainty, relevance: relevance, ageAtStart: ageAtStart,
-                                ageAtEnd: ageAtEnd, placeReason: reason, score: score)
+        var line = LivedThroughLine(eventID: event.id, eventName: event.name, eventPhrase: event.phrase,
+                                    years: event.yearsLabel, kind: event.kind, moment: moment,
+                                    momentYear: momentYear, certainty: certainty, relevance: relevance,
+                                    ageAtStart: ageAtStart, ageAtEnd: ageAtEnd, placeReason: reason, score: score)
+        line.birthOpenAfter = lifespan.birth.upper == nil && ageAtStart != nil
+        return line
     }
 
-    static func certainty(event: HistoricalEvent, lifespan: Lifespan,
-                          bornDuring: Bool, diedDuring: Bool) -> Certainty {
+    static func certainty(event: HistoricalEvent, lifespan: Lifespan, atBirthOrDeath: Bool) -> Certainty {
         let s = event.startYear, e = event.endYear, bHi = lifespan.birthHigh
         guard lifespan.birth.upper != nil else { return .possible }
         if let dLo = lifespan.deathLow {
             if max(s, bHi + 1) <= min(e, dLo - 1) { return .certain }
-            return bornDuring || diedDuring ? .likely : .possible
+            return atBirthOrDeath ? .likely : .possible
         }
         // No proven death year (presumed deceased, "Deceased", or
         // "BEF 1900"): alive past birth is not proven, but an event early
         // in life is likely (and never past a recorded bound).
-        if bornDuring { return .likely }
+        if atBirthOrDeath { return .likely }
         if bHi < s, s - bHi <= 60, s <= lifespan.deathHigh { return .likely }
         return .possible
     }
 
     /// Nil when a regional event touched none of the person's places.
     static func placeRelevance(of event: HistoricalEvent, presences: [Presence], anchors: PresenceAnchors,
-                               lifespan: Lifespan, ageAtStart: QualifiedAge?) -> (PlaceRelevance, String?)? {
+                               lifespan: Lifespan, ageAtStart: QualifiedAge?,
+                               bornAtOrAfterStart: Bool = false) -> (PlaceRelevance, String?)? {
         // World scope: every presence "touches", so a regional reason would
         // be noise ("born in Ireland" for the moon landing).
         if event.isWorldwide { return (.world, nil) }
@@ -428,8 +496,8 @@ extension LifeAndTimes {
                     consider(deathRegion == nil ? .likely : .lived, "born in \(p.region.label)")
                 } else if let age = ageAtStart, (age.high ?? age.nominal) <= 15 {
                     consider(.likely, "born in \(p.region.label)")
-                } else if ageAtStart == nil {
-                    consider(.likely, "born in \(p.region.label)")   // born during it
+                } else if bornAtOrAfterStart {
+                    consider(.likely, "born in \(p.region.label)")   // born during / around it
                 } else {
                     consider(.maybe, "born in \(p.region.label)")
                 }
@@ -446,42 +514,57 @@ extension LifeAndTimes {
         return best
     }
 
+    /// Interest score: the event's weight plus four bonuses, each its own
+    /// helper (place, certainty, the birth/death moment, the age).
     static func score(event: HistoricalEvent, certainty: Certainty, relevance: PlaceRelevance,
                       moment: LifeMoment, ageAtStart: QualifiedAge?, ageAtEnd: QualifiedAge?,
                       sex: String) -> Int {
-        var score = event.weight * 10
-        switch relevance {
-        case .lived: score += 25
-        case .likely: score += 18
-        case .maybe: score += 8
-        case .world: score += 6
+        let era = event.endYear - event.startYear > 20   // background, not an event
+        return event.weight * 10
+            + relevanceBonus(relevance)
+            + certaintyBonus(certainty)
+            + momentBonus(moment, kind: event.kind, era: era)
+            + ageBonus(ageAtStart, ageAtEnd: ageAtEnd, kind: event.kind, sex: sex)
+            - (era ? 15 : 0)
+    }
+
+    static func relevanceBonus(_ r: PlaceRelevance) -> Int {
+        switch r {
+        case .lived: return 25
+        case .likely: return 18
+        case .maybe: return 8
+        case .world: return 6
         }
-        switch certainty {
-        case .certain: score += 10
-        case .likely: score += 6
-        case .possible: score -= 8
+    }
+
+    static func certaintyBonus(_ c: Certainty) -> Int {
+        switch c {
+        case .certain: return 10
+        case .likely: return 6
+        case .possible: return -8
         }
-        let hard: Set<EventKind> = [.war, .famine, .epidemic, .disaster]
-        // A long era (an emigration wave, a reign) is background: being
-        // born or dying "during" it is not a story.
-        let era = event.endYear - event.startYear > 20
-        switch moment {
-        case .bornDuring where !era: score += hard.contains(event.kind) ? 10 : 6
-        case .diedDuring where !era: score += hard.contains(event.kind) ? 12 : 4
-        default: break
+    }
+
+    /// Born or died in a hard time is a story; in a long era it is not.
+    static func momentBonus(_ m: LifeMoment, kind: EventKind, era: Bool) -> Int {
+        guard !era else { return 0 }
+        let hard = kind == .war || kind == .famine || kind == .epidemic || kind == .disaster
+        if m.isBirth { return hard ? 10 : 6 }
+        if m.isDeath { return hard ? 12 : 4 }
+        return 0
+    }
+
+    /// Young enough to remember it; of fighting age in a war (men, as recorded).
+    static func ageBonus(_ age: QualifiedAge?, ageAtEnd: QualifiedAge?, kind: EventKind, sex: String) -> Int {
+        guard let age else { return 0 }
+        var bonus = 0
+        if (5...30).contains(age.nominal) { bonus += 6 }
+        if age.nominal > 80 { bonus -= 6 }
+        if kind == .war, sex.uppercased() == "M" {
+            let end = ageAtEnd ?? age
+            if (age.low ?? age.nominal) <= 45, (end.high ?? end.nominal) >= 18 { bonus += 12 }
         }
-        if let age = ageAtStart {
-            let a = age.nominal
-            if (5...30).contains(a) { score += 6 }      // remembered it / lived it as a young person
-            if a > 80 { score -= 6 }
-            if event.kind == .war, sex.uppercased() == "M" {
-                let hi = (ageAtEnd ?? age).high ?? (ageAtEnd ?? age).nominal
-                let lo = age.low ?? age.nominal
-                if lo <= 45, hi >= 18 { score += 12 }  // of fighting age during it
-            }
-        }
-        if era { score -= 15 }  // background, not an event
-        return score
+        return bonus
     }
 
     /// The handful of best lines, in date order.

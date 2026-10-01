@@ -22,7 +22,16 @@
 // "husbandman", "cordwainer", "victualler", "ostler" …).
 //
 // Ambiguities are recorded, not guessed: a bare "painter" in a census is
-// usually a house painter (trades) and says "could be an artist".
+// usually a house painter (trades) and says "could be an artist"; a bare
+// "steward" or "pilot" is not classified at all until qualified ("ship's
+// steward", "river pilot"); "private" is a soldier only on its own or
+// before a unit ("Private, 2nd Battalion"), never in "Private Nurse".
+//
+// SPOKEN WORDS (QA P1-A, 2026-10-01): every phrase speaks ITSELF — a
+// butcher is "a butcher", a midwife "a midwife". Only abbreviations and
+// plurals are expanded ("ag lab" → "agricultural labourer", "serv" →
+// "servant"). The rule's GROUP ("food trades", "medicine") is a key for
+// grouping and is never spoken.
 //
 // Pure, table-driven; the table is built once (lazy static). C++ readers:
 // think `static const std::vector<Rule>` plus a token-trie-free linear scan
@@ -42,6 +51,7 @@ extension LifeAndTimes {
         case professions
         case arts
         case writing
+        case printTrade
         case business
         case maritime
         case government
@@ -64,7 +74,8 @@ extension LifeAndTimes {
             case .clergy: return "clergy"
             case .professions: return "professions (law, medicine, teaching)"
             case .arts: return "arts (painting, music, stage)"
-            case .writing: return "writing and the print trade"
+            case .writing: return "writing and journalism"
+            case .printTrade: return "the print trade"
             case .business: return "business and trade"
             case .maritime: return "the sea"
             case .government: return "government and public service"
@@ -85,7 +96,8 @@ extension LifeAndTimes {
             case .clergy: return ("clergyman", "clergy")
             case .professions: return ("professional", "professionals")
             case .arts: return ("artist or performer", "artists and performers")
-            case .writing: return ("writer or printer", "writers and printers")
+            case .writing: return ("writer", "writers")
+            case .printTrade: return ("in the print trade", "in the print trade")
             case .business: return ("in business", "in business")
             case .maritime: return ("seafarer", "seafarers")
             case .government: return ("in public service", "in public service")
@@ -108,9 +120,12 @@ extension LifeAndTimes {
         /// The text as recorded (or the note fragment).
         public let raw: String
         public let category: OccupationCategory
-        /// The canonical term the matched phrase stands for ("agricultural
-        /// labourer" for "Ag Lab"); nil when unknown.
+        /// The words to SPEAK for the matched phrase: the phrase itself
+        /// ("butcher", "midwife"), with only abbreviations and plurals
+        /// expanded ("agricultural labourer" for "Ag Lab"); nil when unknown.
         public let term: String?
+        /// The rule's grouping key ("food trades", "medicine"). Never spoken.
+        public let group: String?
         /// Sub-kind inside a category: "law", "medicine", "teaching",
         /// "agricultural", "print trade" …
         public let detail: String?
@@ -121,11 +136,13 @@ extension LifeAndTimes {
         public let ambiguity: String?
         public let date: String?
 
-        public init(raw: String, category: OccupationCategory, term: String?, detail: String?,
-                    evidence: OccupationEvidence, retired: Bool, ambiguity: String?, date: String? = nil) {
+        public init(raw: String, category: OccupationCategory, term: String?, group: String? = nil,
+                    detail: String?, evidence: OccupationEvidence, retired: Bool, ambiguity: String?,
+                    date: String? = nil) {
             self.raw = raw
             self.category = category
             self.term = term
+            self.group = group
             self.detail = detail
             self.evidence = evidence
             self.retired = retired
@@ -144,7 +161,10 @@ extension LifeAndTimes {
         struct Rule {
             let tokens: [String]
             let category: OccupationCategory
-            let term: String
+            /// What to say for THIS phrase (see header).
+            let spoken: String
+            /// Grouping key; never spoken.
+            let group: String
             let detail: String?
             let ambiguity: String?
         }
@@ -166,6 +186,7 @@ extension LifeAndTimes {
             for position in tokens.indices {
                 guard let candidates = rulesByFirstToken[tokens[position]] else { continue }
                 for rule in candidates where tokens[position...].starts(with: rule.tokens) {
+                    if rule.tokens == ["private"], !privateIsARank(tokens, at: position) { continue }
                     guard let b = best else { best = (rule, position); continue }
                     let key = (rule.tokens.count, rule.category == .status ? 0 : 1, -position)
                     let bestKey = (b.rule.tokens.count, b.rule.category == .status ? 0 : 1, -b.position)
@@ -180,9 +201,28 @@ extension LifeAndTimes {
                 return ClassifiedOccupation(raw: raw, category: .unknown, term: nil, detail: nil,
                                             evidence: evidence, retired: false, ambiguity: nil, date: date)
             }
-            return ClassifiedOccupation(raw: raw, category: rule.category, term: rule.term, detail: rule.detail,
-                                        evidence: evidence, retired: retired && rule.category != .status,
+            return ClassifiedOccupation(raw: raw, category: rule.category, term: rule.spoken, group: rule.group,
+                                        detail: rule.detail, evidence: evidence,
+                                        retired: retired && rule.category != .status,
                                         ambiguity: rule.ambiguity, date: date)
+        }
+
+        /// Words that may follow a soldier's rank ("Private, 2nd Battalion",
+        /// "Pte 4th Regt"). Ordinal suffixes survive tokenising as "nd"/"th".
+        static let unitWords: Set<String> = [
+            "st", "nd", "rd", "th", "regiment", "regt", "battalion", "bn", "batt", "company", "coy", "co",
+            "infantry", "rifles", "foot", "fusiliers", "guards", "artillery", "cavalry", "dragoons", "hussars",
+            "lancers", "army", "militia", "volunteers", "vols", "corps", "brigade", "division", "in", "of",
+            "royal", "us", "usa", "british", "light", "highlanders", "rgt", "no",
+        ]
+
+        /// "private" is a rank only on its own (digits are dropped by the
+        /// tokenizer, so "Private 1234" is alone) or before a unit word —
+        /// never as an adjective ("Private Nurse", "Private Tutor").
+        static func privateIsARank(_ tokens: [String], at position: Int) -> Bool {
+            let next = position + 1
+            guard next < tokens.count else { return true }
+            return unitWords.contains(tokens[next])
         }
 
         /// Explicit occupation cues in a note → classified fragments. Only
@@ -238,11 +278,11 @@ extension LifeAndTimes {
 
         static let rules: [Rule] = {
             var r: [Rule] = []
-            func add(_ category: OccupationCategory, _ term: String, _ phrases: [String],
+            func add(_ category: OccupationCategory, _ group: String, _ phrases: [String],
                      detail: String? = nil, ambiguity: String? = nil) {
                 for p in phrases {
                     r.append(Rule(tokens: p.split(separator: " ").map(String.init), category: category,
-                                  term: term, detail: detail, ambiguity: ambiguity))
+                                  spoken: spokenForm(p), group: group, detail: detail, ambiguity: ambiguity))
                 }
             }
             // Status words — not occupations.
@@ -294,7 +334,9 @@ extension LifeAndTimes {
                                     "milliner", "needlewoman", "upholsterer", "hatter", "glover"])
             add(.trades, "weaver", ["weaver", "handloom weaver", "spinner", "cotton spinner", "flax spinner",
                                     "wool comber", "woolcomber", "fuller", "dyer", "linen weaver",
-                                    "silk weaver", "lace maker", "knitter", "carder"], detail: "textile")
+                                    "silk weaver", "lace maker", "knitter", "carder", "calico printer",
+                                    "cotton printer", "textile printer", "block printer", "print works"],
+                detail: "textile")
             add(.trades, "cooper", ["cooper", "wheelwright", "cartwright", "wainwright", "millwright",
                                     "turner", "chair maker", "basket maker", "rope maker", "ropemaker",
                                     "sailmaker", "sail maker", "coachbuilder", "coach builder", "shipwright",
@@ -319,7 +361,8 @@ extension LifeAndTimes {
                                      "agriculturalist", "landholder", "tenant farmer", "rancher",
                                      "farm manager", "farm bailiff", "bailiff", "market gardener",
                                      "gardener", "nurseryman", "smallholder", "farmers son", "farmer s son",
-                                     "farmers daughter", "fruit grower", "orchardist", "planter s son"])
+                                     "farmers daughter", "fruit grower", "orchardist", "planter s son",
+                                     "land steward", "estate steward"])
             // Domestic service.
             add(.domesticService, "servant", ["servant", "serv", "servt", "svt", "domestic", "domestic servant",
                                               "dom serv", "gen serv", "general servant", "maid", "housemaid",
@@ -340,10 +383,11 @@ extension LifeAndTimes {
                                        "us army", "british army", "infantry", "cavalry", "officer in the army",
                                        "drummer", "bombardier", "quartermaster"])
             add(.military, "sailor (navy)", ["royal navy", "navy", "naval officer", "us navy", "bluejacket",
-                                             "able seaman royal navy", "petty officer", "midshipman"],
+                                             "able seaman royal navy", "petty officer", "midshipman", "naval steward"],
                 detail: "navy")
             // Clergy.
-            add(.clergy, "clergyman", ["clergyman", "clergy", "clerk in holy orders", "minister", "priest",
+            add(.clergy, "clergyman", ["clergyman", "clergy", "clerk in holy orders", "clk in holy orders",
+                                       "clerk in orders", "minister", "priest",
                                        "vicar", "rector", "curate", "pastor", "reverend", "rev", "deacon",
                                        "nun", "religious sister", "sister of mercy", "preacher",
                                        "missionary", "bishop", "chaplain", "parson", "evangelist", "monk",
@@ -365,7 +409,9 @@ extension LifeAndTimes {
                 detail: "teaching")
             add(.professions, "engineer", ["engineer", "civil engineer", "architect", "surveyor", "land surveyor",
                                            "accountant", "chartered accountant", "chemist", "scientist",
-                                           "draughtsman", "draftsman", "actuary", "librarian"], detail: "other")
+                                           "draughtsman", "draftsman", "actuary", "librarian", "lab assistant",
+                                           "laboratory assistant", "lab technician", "laboratory technician",
+                                           "laboratory worker"], detail: "other")
             // Arts.
             add(.arts, "artist", ["artist", "portrait painter", "landscape painter", "painter artist",
                                   "artist painter", "painter in oils", "fine artist", "sculptor", "illustrator",
@@ -384,10 +430,10 @@ extension LifeAndTimes {
             add(.writing, "journalist", ["journalist", "reporter", "editor", "newspaper editor",
                                          "newspaper reporter", "correspondent", "columnist", "newspaperman",
                                          "news editor", "sub editor"], detail: "journalism")
-            add(.writing, "printer", ["printer", "compositor", "typesetter", "type setter", "pressman",
+            add(.printTrade, "print trade", ["printer", "compositor", "typesetter", "type setter", "pressman",
                                       "printer s apprentice", "printers apprentice", "bookbinder",
                                       "book binder", "publisher", "stereotyper", "linotype operator",
-                                      "proof reader", "proofreader"], detail: "print trade")
+                                      "proof reader", "proofreader", "printer and publisher"], detail: "print trade")
             // Business and trade.
             add(.business, "merchant", ["merchant", "shopkeeper", "shop keeper", "storekeeper", "store keeper",
                                         "grocer", "draper", "linen draper", "haberdasher", "ironmonger merchant",
@@ -402,14 +448,17 @@ extension LifeAndTimes {
                                         "hotel keeper", "hotelkeeper", "tavern keeper", "saloon keeper",
                                         "saloonkeeper", "bartender", "barman", "barmaid", "spirit dealer",
                                         "clerk", "bookkeeper", "book keeper", "cashier", "office clerk",
-                                        "commercial clerk", "secretary", "typist", "stenographer"])
+                                        "commercial clerk", "secretary", "typist", "stenographer", "principal clerk",
+                                        "chief clerk", "head clerk", "clk"])
             // Maritime.
             add(.maritime, "mariner", ["mariner", "master mariner", "sailor", "seaman", "seafarer", "able seaman",
                                        "ordinary seaman", "sea captain", "ship master", "shipmaster",
                                        "master of vessel", "ship s mate", "mate", "boatman", "waterman",
                                        "lighterman", "bargeman", "whaler", "whaleman", "fisherman",
-                                       "fishermen", "fisher", "pilot", "harbour pilot", "harbor pilot",
-                                       "ferryman", "deckhand", "deck hand", "ship steward", "steward"])
+                                       "fishermen", "fisher", "harbour pilot", "harbor pilot", "river pilot",
+                                       "sea pilot", "marine pilot", "branch pilot", "ship pilot",
+                                       "ferryman", "deckhand", "deck hand", "ship steward", "ship s steward",
+                                       "ships steward", "steamship steward", "cabin steward"])
             // Government and public service.
             add(.government, "public servant", ["postman", "postmaster", "postmistress", "letter carrier",
                                                 "mail carrier", "post office clerk", "policeman", "police officer",
@@ -425,6 +474,32 @@ extension LifeAndTimes {
                                                 "lighthouse keeper", "relieving officer"])
             return r
         }()
+
+        /// Abbreviations and plurals → the words to say. Everything else
+        /// speaks as written (with "farmer s son" → "farmer's son").
+        static let expansions: [String: String] = [
+            "ag lab": "agricultural labourer", "ag labourer": "agricultural labourer",
+            "ag laborer": "agricultural laborer", "agr lab": "agricultural labourer",
+            "agric lab": "agricultural labourer", "farm lab": "farm labourer",
+            "lab": "labourer", "labr": "labourer", "gen lab": "general labourer",
+            "labourers": "labourer", "laborers": "laborer", "farmers": "farmer", "fishermen": "fisherman",
+            "serv": "servant", "servt": "servant", "svt": "servant", "dom serv": "domestic servant",
+            "gen serv": "general servant", "shoemkr": "shoemaker", "carp": "carpenter",
+            "blksmith": "blacksmith", "pte": "private", "cpl": "corporal", "sgt": "sergeant",
+            "lieut": "lieutenant", "lt": "lieutenant", "col": "colonel", "rev": "reverend",
+            "dr": "doctor", "md": "physician", "spr": "spinster", "wid": "widow", "esq": "esquire",
+            "gent": "gentleman", "clk in holy orders": "clerk in holy orders", "clk": "clerk",
+            "us army": "US Army", "us navy": "US Navy", "ladys maid": "lady's maid",
+            "farmers son": "farmer's son", "farmers daughter": "farmer's daughter",
+            "printers apprentice": "printer's apprentice", "ships carpenter": "ship's carpenter",
+            "ships steward": "ship's steward", "ship steward": "ship's steward",
+            "ship pilot": "ship's pilot",
+        ]
+
+        static func spokenForm(_ phrase: String) -> String {
+            if let e = expansions[phrase] { return e }
+            return phrase.replacingOccurrences(of: " s ", with: "'s ")
+        }
     }
 
     /// Classify everything one subject records: OCCU values first, then

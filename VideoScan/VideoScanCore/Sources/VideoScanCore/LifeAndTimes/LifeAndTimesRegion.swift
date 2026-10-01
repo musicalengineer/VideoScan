@@ -28,6 +28,9 @@ extension LifeAndTimes {
         case unitedStates
         case canada
         case ireland
+        /// Belfast and the six counties. Part of Ireland for events before
+        /// 1922; part of the United Kingdom for events from 1921 on.
+        case northernIreland
         case england
         case scotland
         case wales
@@ -51,6 +54,7 @@ extension LifeAndTimes {
             case .unitedStates: return "the United States"
             case .canada: return "Canada"
             case .ireland: return "Ireland"
+            case .northernIreland: return "Northern Ireland"
             case .england: return "England"
             case .scotland: return "Scotland"
             case .wales: return "Wales"
@@ -71,13 +75,42 @@ extension LifeAndTimes {
             case .world: return true
             case .europe: return place.isEuropean
             case .britain: return place == .england || place == .scotland || place == .wales
+            case .ireland: return place == .northernIreland   // the island, for lines and filters
             default: return false
+            }
+        }
+
+        static let greatBritain: Set<Region> = [.england, .scotland, .wales, .britain]
+
+        /// Did an event scoped to `scope`, starting in `year`, touch a person
+        /// recorded in `self`? Beyond `covers`:
+        ///   • a place recorded only as "United Kingdom" (`.britain`) is
+        ///     touched by any England/Scotland/Wales-scoped event;
+        ///   • Northern Ireland is touched by Ireland-scoped events that began
+        ///     before 1922 (the Famine, the Rising) and by UK-scoped events
+        ///     from 1921 on (the Blitz era, 1941 Belfast) — not by the Irish
+        ///     Free State's own later events.
+        public func touched(by scope: [Region], in year: Int) -> Bool {
+            switch self {
+            case .britain:
+                return scope.contains { $0 == .world || $0 == .europe || Self.greatBritain.contains($0) }
+            case .northernIreland:
+                return scope.contains { r in
+                    switch r {
+                    case .world, .europe, .northernIreland: return true
+                    case .ireland: return year < 1922
+                    case .england, .scotland, .wales, .britain: return year >= 1921
+                    default: return false
+                    }
+                }
+            default:
+                return scope.contains { $0.covers(self) }
             }
         }
 
         var isEuropean: Bool {
             switch self {
-            case .europe, .britain, .ireland, .england, .scotland, .wales,
+            case .europe, .britain, .ireland, .northernIreland, .england, .scotland, .wales,
                  .france, .germany, .italy, .netherlands, .otherEurope: return true
             default: return false
             }
@@ -89,6 +122,25 @@ extension LifeAndTimes {
     /// Massachusetts, USA" → .unitedStates; "Lyon, France" → .france.
     public static func region(ofPlace raw: String?) -> Region? {
         guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let base = baseRegion(raw)
+        // Belfast / the six counties, only when the place is otherwise Irish,
+        // British or unplaced ("Antrim, New Hampshire" stays American).
+        if base == nil || base == .ireland || base == .britain, isNorthernIrish(raw) { return .northernIreland }
+        return base
+    }
+
+    static let northernIrishMarkers: Set<String> = [
+        "northern ireland", "ni", "belfast", "antrim", "co antrim", "county antrim", "armagh", "co armagh",
+        "county armagh", "co down", "county down", "fermanagh", "co fermanagh", "county fermanagh",
+        "londonderry", "co londonderry", "county londonderry", "derry", "co derry", "county derry",
+        "tyrone", "co tyrone", "county tyrone", "ulster northern ireland",
+    ]
+
+    static func isNorthernIrish(_ raw: String) -> Bool {
+        raw.split(separator: ",").contains { northernIrishMarkers.contains(BirthplaceClassifier.normalize(String($0))) }
+    }
+
+    static func baseRegion(_ raw: String) -> Region? {
         switch BirthplaceClassifier.region(raw) {
         case .newEngland, .restOfUS, .unitedStatesUnspecified: return .unitedStates
         case .england: return .england

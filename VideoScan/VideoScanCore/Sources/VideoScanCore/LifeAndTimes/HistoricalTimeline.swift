@@ -79,8 +79,9 @@ extension LifeAndTimes {
         /// "1845–1852" or "1912".
         public var yearsLabel: String { isSingleYear ? "\(startYear)" : "\(startYear)–\(endYear)" }
 
-        /// True when the event touched someone in `place`.
-        public func touches(_ place: Region) -> Bool { regions.contains { $0.covers(place) } }
+        /// True when the event touched someone in `place` — time-aware for
+        /// Northern Ireland (see `Region.touched(by:in:)`).
+        public func touches(_ place: Region) -> Bool { place.touched(by: regions, in: startYear) }
         public var isWorldwide: Bool { regions.contains(.world) }
     }
 
@@ -106,7 +107,7 @@ enum HistoricalTimeline {
         "declaration-of-independence": "american-revolution", "loyalist-exodus": "american-revolution",
         "famine-emigration": "great-famine",
         "emancipation-proclamation": "us-civil-war", "lincoln-assassination": "us-civil-war",
-        "lusitania": "ww1", "pearl-harbor": "ww2", "the-blitz": "ww2",
+        "lusitania": "ww1", "pearl-harbor": "ww2", "the-blitz": "ww2", "belfast-blitz": "ww2",
         "dust-bowl": "great-depression",
     ]
 
@@ -121,9 +122,9 @@ enum HistoricalTimeline {
         E(id: "thirty-years-war", name: "Thirty Years' War", phrase: "the Thirty Years' War", startYear: 1618, endYear: 1648,
           regions: [.germany], kind: .war, weight: 3, source: "Britannica, 'Thirty Years' War'"),
         E(id: "mayflower", name: "Mayflower voyage", phrase: "the Mayflower's voyage to Plymouth", startYear: 1620, endYear: 1620,
-          regions: [.unitedStates, .england], kind: .migration, weight: 5, source: "Bradford, 'Of Plymouth Plantation'; Britannica, 'Mayflower'"),
+          regions: [.unitedStates], kind: .migration, weight: 5, source: "Bradford, 'Of Plymouth Plantation'; Britannica, 'Mayflower'"),
         E(id: "puritan-great-migration", name: "Puritan Great Migration", phrase: "the Puritan Great Migration to New England", startYear: 1630, endYear: 1640,
-          regions: [.unitedStates, .england], kind: .migration, weight: 4, source: "Anderson, 'The Great Migration' (NEHGS)"),
+          regions: [.unitedStates], kind: .migration, weight: 4, source: "Anderson, 'The Great Migration' (NEHGS)"),
         E(id: "english-civil-war", name: "English Civil Wars", phrase: "the English Civil Wars", startYear: 1642, endYear: 1651,
           regions: ukAndIreland, kind: .war, weight: 3, source: "Britannica, 'English Civil Wars'"),
         E(id: "cromwell-ireland", name: "Cromwellian conquest of Ireland", phrase: "Cromwell's conquest of Ireland", startYear: 1649, endYear: 1653,
@@ -144,7 +145,7 @@ enum HistoricalTimeline {
         E(id: "act-of-union-1707", name: "Act of Union (Scotland)", phrase: "the union of Scotland and England", startYear: 1707, endYear: 1707,
           regions: [.scotland, .england], kind: .politics, weight: 3, source: "UK Parliament, 'Union with Scotland Act 1706/1707'"),
         E(id: "ulster-scots-migration", name: "Ulster-Scots migration", phrase: "the great Ulster-Scots migration to America", startYear: 1717, endYear: 1775,
-          regions: [.ireland, .scotland, .unitedStates], kind: .migration, weight: 3, source: "Library of Congress, 'Scots-Irish' immigration"),
+          regions: [.ireland, .northernIreland, .unitedStates], kind: .migration, weight: 3, source: "Library of Congress, 'Scots-Irish' immigration"),
         E(id: "boston-smallpox-1721", name: "Boston smallpox epidemic", phrase: "the Boston smallpox epidemic", startYear: 1721, endYear: 1721,
           regions: [.unitedStates], kind: .epidemic, weight: 3, source: "Harvard Library, 'Contagion: Smallpox in Boston 1721'"),
         E(id: "irish-famine-1740", name: "Irish famine of 1740–41", phrase: "the 'Year of the Slaughter' famine in Ireland", startYear: 1740, endYear: 1741,
@@ -184,19 +185,19 @@ enum HistoricalTimeline {
           regions: [.unitedStates, .canada, .england, .scotland, .wales, .ireland, .france, .germany], kind: .disaster, weight: 3, source: "Britannica, 'Year Without a Summer' (Tambora eruption 1815)"),
         E(id: "lowell-mills", name: "Lowell mills", phrase: "the opening of the Lowell mills, America's first planned mill town", startYear: 1823, endYear: 1823,
           regions: [.unitedStates], kind: .invention, weight: 2, source: "National Park Service, Lowell National Historical Park"),
-        E(id: "stockton-darlington", name: "First passenger railway", phrase: "the first public steam railway (Stockton and Darlington)", startYear: 1825, endYear: 1825,
+        E(id: "stockton-darlington", name: "First public steam railway", phrase: "the first public steam railway (Stockton and Darlington)", startYear: 1825, endYear: 1825,
           regions: uk, kind: .invention, weight: 3, source: "Science Museum Group, 'Stockton & Darlington Railway'"),
         E(id: "erie-canal", name: "Erie Canal opens", phrase: "the opening of the Erie Canal", startYear: 1825, endYear: 1825,
           regions: [.unitedStates], kind: .invention, weight: 2, source: "New York State Canal Corporation history"),
         E(id: "cholera-1832", name: "Cholera of 1832", phrase: "the cholera epidemic of 1832", startYear: 1832, endYear: 1832,
           regions: [.england, .scotland, .wales, .ireland, .unitedStates, .canada, .france], kind: .epidemic, weight: 3, source: "Britannica, 'cholera' (second pandemic)"),
         E(id: "slavery-abolition-act", name: "Slavery Abolition Act", phrase: "the abolition of slavery across the British Empire", startYear: 1833, endYear: 1833,
-          regions: uk + [.canada], kind: .politics, weight: 2, source: "UK Parliament, 'Slavery Abolition Act 1833'"),
+          regions: ukAndIreland + [.canada], kind: .politics, weight: 2, source: "UK Parliament, 'Slavery Abolition Act 1833'"),
         E(id: "victoria-reign", name: "Queen Victoria's reign", phrase: "Queen Victoria's reign", startYear: 1837, endYear: 1901,
           regions: ukAndIreland + [.canada], kind: .politics, weight: 2, source: "Royal Collection Trust, 'Queen Victoria'"),
         E(id: "night-of-big-wind", name: "Night of the Big Wind", phrase: "the Night of the Big Wind in Ireland", startYear: 1839, endYear: 1839,
           regions: [.ireland], kind: .disaster, weight: 3, source: "Met Éireann, 'The Night of the Big Wind, 6–7 January 1839'"),
-        E(id: "morse-telegraph", name: "First telegraph message", phrase: "the first long-distance telegraph message", startYear: 1844, endYear: 1844,
+        E(id: "morse-telegraph", name: "Morse's telegraph message", phrase: "Morse's famous 'What hath God wrought' telegraph message", startYear: 1844, endYear: 1844,
           regions: [.unitedStates], kind: .invention, weight: 2, source: "Library of Congress, 'What hath God wrought'"),
         E(id: "great-famine", name: "Great Famine", phrase: "the Great Famine in Ireland", startYear: 1845, endYear: 1852,
           regions: [.ireland], kind: .famine, weight: 5, source: "Britannica, 'Great Famine'; Kinealy, 'This Great Calamity' (1994)"),
@@ -243,7 +244,7 @@ enum HistoricalTimeline {
           regions: [.unitedStates], kind: .disaster, weight: 3, source: "USGS, 'The Great 1906 San Francisco Earthquake'"),
         E(id: "model-t", name: "Model T", phrase: "the arrival of Ford's Model T", startYear: 1908, endYear: 1908,
           regions: [.unitedStates], kind: .invention, weight: 3, source: "The Henry Ford, 'Model T' (Oct 1908)"),
-        E(id: "great-migration-us", name: "Great Migration (US)", phrase: "the Great Migration north", startYear: 1910, endYear: 1970,
+        E(id: "great-migration-us", name: "Great Migration (US)", phrase: "the Great Migration of Black Americans from the South", startYear: 1910, endYear: 1970,
           regions: [.unitedStates], kind: .migration, weight: 2, source: "National Archives, 'The Great Migration'"),
         E(id: "titanic", name: "Titanic", phrase: "the sinking of the Titanic", startYear: 1912, endYear: 1912,
           regions: [.world], kind: .disaster, weight: 4, source: "Encyclopedia Titanica; Britannica, 'Titanic'"),
@@ -254,10 +255,10 @@ enum HistoricalTimeline {
         E(id: "easter-rising", name: "Easter Rising", phrase: "the Easter Rising in Dublin", startYear: 1916, endYear: 1916,
           regions: [.ireland], kind: .war, weight: 5, source: "National Library of Ireland, 'The 1916 Rising'"),
         E(id: "halifax-explosion", name: "Halifax Explosion", phrase: "the Halifax Explosion", startYear: 1917, endYear: 1917,
-          regions: [.canada, .unitedStates], kind: .disaster, weight: 3, source: "Canadian Encyclopedia, 'Halifax Explosion'"),
+          regions: [.canada], kind: .disaster, weight: 3, source: "Canadian Encyclopedia, 'Halifax Explosion'"),
         E(id: "flu-1918", name: "1918 flu", phrase: "the 1918 influenza pandemic", startYear: 1918, endYear: 1920,
           regions: [.world], kind: .epidemic, weight: 5, source: "CDC, '1918 Pandemic (H1N1 virus)'"),
-        E(id: "uk-suffrage-1918", name: "Votes for women (UK)", phrase: "the first votes for women in Britain and Ireland", startYear: 1918, endYear: 1918,
+        E(id: "uk-suffrage-1918", name: "Votes for women (UK)", phrase: "the first votes for women over 30 in parliamentary elections", startYear: 1918, endYear: 1918,
           regions: ukAndIreland, kind: .politics, weight: 3, source: "UK Parliament, 'Representation of the People Act 1918'"),
         E(id: "irish-war-of-independence", name: "Irish War of Independence", phrase: "the Irish War of Independence", startYear: 1919, endYear: 1921,
           regions: [.ireland], kind: .war, weight: 5, source: "National Archives of Ireland; Britannica, 'Anglo-Irish War'"),
@@ -267,7 +268,7 @@ enum HistoricalTimeline {
           regions: [.unitedStates], kind: .economy, weight: 3, source: "National Archives, 18th and 21st Amendments"),
         E(id: "us-suffrage-1920", name: "Votes for women (US)", phrase: "the 19th Amendment giving women the vote", startYear: 1920, endYear: 1920,
           regions: [.unitedStates], kind: .politics, weight: 3, source: "National Archives, '19th Amendment'"),
-        E(id: "first-radio-broadcast", name: "First commercial radio", phrase: "the first commercial radio broadcast", startYear: 1920, endYear: 1920,
+        E(id: "first-radio-broadcast", name: "Early commercial radio", phrase: "one of the first commercial radio broadcasts, from KDKA Pittsburgh", startYear: 1920, endYear: 1920,
           regions: [.unitedStates], kind: .invention, weight: 3, source: "Library of Congress, KDKA Pittsburgh, 2 Nov 1920"),
         E(id: "irish-civil-war", name: "Irish Civil War", phrase: "the Irish Civil War", startYear: 1922, endYear: 1923,
           regions: [.ireland], kind: .war, weight: 4, source: "Britannica, 'Irish Civil War'"),
@@ -279,7 +280,7 @@ enum HistoricalTimeline {
           regions: [.world], kind: .economy, weight: 5, source: "Federal Reserve History, 'The Great Depression'"),
         E(id: "dust-bowl", name: "Dust Bowl", phrase: "the Dust Bowl", startYear: 1930, endYear: 1936,
           regions: [.unitedStates], kind: .disaster, weight: 3, source: "Library of Congress, 'Dust Bowl'"),
-        E(id: "bbc-television", name: "First television service", phrase: "the first regular television service", startYear: 1936, endYear: 1936,
+        E(id: "bbc-television", name: "First television service", phrase: "the first regular high-definition television service", startYear: 1936, endYear: 1936,
           regions: uk, kind: .invention, weight: 2, source: "BBC History, 'BBC Television Service, 2 Nov 1936'"),
         E(id: "hindenburg", name: "Hindenburg disaster", phrase: "the Hindenburg disaster", startYear: 1937, endYear: 1937,
           regions: [.unitedStates, .germany], kind: .disaster, weight: 2, source: "Smithsonian NASM, 'Hindenburg'"),
@@ -289,6 +290,8 @@ enum HistoricalTimeline {
           regions: [.world], kind: .war, weight: 5, source: "Imperial War Museums; National WWII Museum"),
         E(id: "the-blitz", name: "The Blitz", phrase: "the Blitz", startYear: 1940, endYear: 1941,
           regions: uk, kind: .war, weight: 4, source: "Imperial War Museums, 'The Blitz'"),
+        E(id: "belfast-blitz", name: "Belfast Blitz", phrase: "the Belfast Blitz", startYear: 1941, endYear: 1941,
+          regions: [.northernIreland], kind: .war, weight: 4, source: "PRONI / Imperial War Museums, 'The Belfast Blitz' (April–May 1941)"),
         E(id: "pearl-harbor", name: "Pearl Harbor", phrase: "the attack on Pearl Harbor", startYear: 1941, endYear: 1941,
           regions: [.unitedStates], kind: .war, weight: 4, source: "National Archives, 'Pearl Harbor'"),
         E(id: "cocoanut-grove", name: "Cocoanut Grove fire", phrase: "Boston's Cocoanut Grove fire", startYear: 1942, endYear: 1942,
@@ -301,10 +304,14 @@ enum HistoricalTimeline {
           regions: [.world], kind: .invention, weight: 3, source: "NASA History, 'Sputnik'"),
         E(id: "jfk-assassination", name: "Kennedy assassinated", phrase: "President Kennedy's assassination", startYear: 1963, endYear: 1963,
           regions: [.unitedStates, .ireland], kind: .politics, weight: 4, source: "JFK Library, 'November 22, 1963'"),
-        E(id: "vietnam-war", name: "Vietnam War", phrase: "the Vietnam War", startYear: 1964, endYear: 1973,
-          regions: [.unitedStates], kind: .war, weight: 3, source: "National Archives, Vietnam War (US combat 1964–1973)"),
+        // US-scoped, so the row is AMERICA's war (QA P2-C): US combat troops
+        // landed at Da Nang in March 1965; US combat ended with the Paris
+        // Peace Accords in January 1973. The Vietnamese war itself (1955–75)
+        // would need its own row and is not a US family's lived event.
+        E(id: "vietnam-war", name: "America's war in Vietnam", phrase: "America's war in Vietnam", startYear: 1965, endYear: 1973,
+          regions: [.unitedStates], kind: .war, weight: 3, source: "National Archives, 'Vietnam War' (US combat troops 1965 – Paris Peace Accords 1973)"),
         E(id: "the-troubles", name: "The Troubles", phrase: "the Troubles in Northern Ireland", startYear: 1968, endYear: 1998,
-          regions: [.ireland], kind: .war, weight: 3, source: "CAIN Archive, Ulster University"),
+          regions: [.ireland, .northernIreland], kind: .war, weight: 3, source: "CAIN Archive, Ulster University"),
         E(id: "moon-landing", name: "Moon landing", phrase: "the first moon landing", startYear: 1969, endYear: 1969,
           regions: [.world], kind: .invention, weight: 5, source: "NASA, 'Apollo 11'"),
         E(id: "falklands-war", name: "Falklands War", phrase: "the Falklands War", startYear: 1982, endYear: 1982,
