@@ -781,6 +781,11 @@ struct FamilyTreeView: View {
             // at sidebar width. Per-user; see CouplePortrait.swift.
             CouplePortraitView(placement: .familyTree, height: 240)
                 .frame(maxWidth: .infinity)
+            // Person of the Day (2026-10-01): one ancestor a day, chosen in
+            // Core off the main actor; click focuses them in the tree. Draws
+            // nothing until the day's pick is made (a few seconds after the
+            // tree loads) and nothing on the demo tree.
+            PersonOfTheDayCard(model: model)
             // Full-width button on its own row; turns into a live status
             // (spinner / ready / problem) while a download is in flight.
             FamilySearchPullButtonRow(status: pullCenter.status) {

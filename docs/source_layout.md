@@ -58,8 +58,10 @@ labels, recipes, dossiers, Find and Tag, Identify Family, and the People tab.
 
 **FamilyTree/** — the Family Tree tab and walk, GEDCOM loading, FamilySearch
 pull and person refresh, kinship inference and overlays, tree identities,
-family assets and documents, research people and sources, and CyberBrain
-notes.
+family assets and documents, research people and sources, CyberBrain
+notes, and the family-facing extras (Person of the Day, the Roll Call
+credits over the family map). Their pure logic lives in VideoScanCore
+(`PersonOfTheDay*.swift`, `RollCall.swift`).
 
 **Hallie/** — Hallie the archivist: the chat window, question parsers,
 planners, executors, lineage answers, composition, conversation memory and
