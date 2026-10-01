@@ -17,6 +17,15 @@
 // carries: "Cork, Ireland", "Derry, Ireland", "Yorkshire, England". County
 // names are matched as well as countries — plenty of Irish records say only
 // "Co. Mayo".
+//
+// 2026-10-01 (GH #230 Phase A): the per-archive links now come from the
+// Record Finder registry (RecordFinder.swift) — one data entry per archive,
+// pre-filled where the archive's query format has been confirmed. The two
+// stale Irish links were replaced there: www.census.nationalarchives.ie
+// (retired Feb 2025, connection refused) → nationalarchives.ie's census
+// search; civilrecords.irishgenealogy.ie (old host, 403) → the combined
+// irishgenealogy.ie search. This file keeps the region rule, the
+// FamilySearch links (built from an ID, not a template) and the ordering.
 
 import Foundation
 
@@ -31,16 +40,33 @@ public enum FamilyTreeResearchLinks {
         /// True when the URL carries the person's details, false when it
         /// only lands on the archive's search form.
         public let isPrefilled: Bool
+        /// Menu section the link belongs in ("Ireland", "FamilySearch", …).
+        public let group: String
+        /// The Record Finder site this came from; nil for links built in
+        /// code (FamilySearch profile, Chronicling America).
+        public let siteID: String?
         public var id: String { url.absoluteString }
+
+        public init(title: String, url: URL, reason: String, isPrefilled: Bool,
+                    group: String = "", siteID: String? = nil) {
+            self.title = title
+            self.url = url
+            self.reason = reason
+            self.isPrefilled = isPrefilled
+            self.group = group
+            self.siteID = siteID
+        }
     }
 
     public enum Region: String, Sendable, CaseIterable {
-        case ireland, england, unitedStates
+        case ireland, england, wales, scotland, unitedStates
 
         var label: String {
             switch self {
             case .ireland: "Ireland"
             case .england: "England"
+            case .wales: "Wales"
+            case .scotland: "Scotland"
             case .unitedStates: "United States"
             }
         }
@@ -64,6 +90,20 @@ public enum FamilyTreeResearchLinks {
         "dorset", "cheshire", "durham", "northumberland", "london",
     ]
 
+    /// Scotland: the country and the counties/cities records name most.
+    private static let scottishMarkers = [
+        "scotland", "edinburgh", "glasgow", "aberdeen", "dundee", "lanarkshire",
+        "ayrshire", "renfrewshire", "midlothian", "fife", "perthshire",
+        "stirlingshire", "argyll", "inverness", "dumfriesshire", "berwickshire",
+    ]
+
+    /// Wales — "New South Wales" is Australia and is excluded below.
+    private static let welshMarkers = [
+        "wales", "glamorgan", "cardiff", "swansea", "carmarthen", "pembrokeshire",
+        "caernarfon", "carnarvon", "denbigh", "flintshire", "monmouthshire",
+        "anglesey", "merioneth", "cardiganshire", "brecon", "montgomeryshire",
+    ]
+
     private static let usMarkers = [
         "united states", "usa", "u.s.a", "massachusetts", "new york",
         "connecticut", "rhode island", "new hampshire", "vermont", "maine",
@@ -83,23 +123,28 @@ public enum FamilyTreeResearchLinks {
             out.insert(.ireland)
         }
         if englishMarkers.contains(where: { haystack.contains($0) }) { out.insert(.england) }
+        if scottishMarkers.contains(where: { haystack.contains($0) }) { out.insert(.scotland) }
+        let walesless = haystack.replacingOccurrences(of: "new south wales", with: "")
+        if welshMarkers.contains(where: { walesless.contains($0) }) { out.insert(.wales) }
         if usMarkers.contains(where: { haystack.contains($0) }) { out.insert(.unitedStates) }
         return out
     }
 
     /// Everything worth clicking for this person.
     ///
-    /// `isPrefilled: false` links land on the archive's own search form.
-    /// The Irish state sites publish no API and their query parameters have
-    /// not been verified from a real search, so guessing them would produce
-    /// links that land on an error page — worse than landing on the form.
-    /// Verified formats can be added later without changing any caller.
+    /// Order: FamilySearch (it has absorbed many collections), then the
+    /// Record Finder registry — Ireland, UK military, Britain — then the
+    /// United States. `isPrefilled: false` links land on the archive's own
+    /// search form; the registry only pre-fills where the query format was
+    /// confirmed (RecordFinder.Site.verification).
     public static func links(name: String,
                              surname: String?,
                              birthYear: Int?,
                              birthPlace: String?,
                              deathPlace: String?,
-                             familySearchID: String?) -> [Link] {
+                             familySearchID: String?,
+                             deathYear: Int? = nil,
+                             servedInMilitary: Bool = false) -> [Link] {
         var out: [Link] = []
 
         // FamilySearch first, and not for sentimental reasons: it has
@@ -112,70 +157,42 @@ public enum FamilyTreeResearchLinks {
                 out.append(Link(title: "FamilySearch profile",
                                 url: url,
                                 reason: "Sources already attached to \(fsid) — check here before searching elsewhere.",
-                                isPrefilled: true))
+                                isPrefilled: true, group: "FamilySearch"))
             }
             if let url = URL(string: "https://www.familysearch.org/tree/person/sources/\(fsid)") {
                 out.append(Link(title: "FamilySearch attached sources",
                                 url: url,
                                 reason: "Records someone has already linked to this person.",
-                                isPrefilled: true))
+                                isPrefilled: true, group: "FamilySearch"))
             }
         }
 
-        let found = regions(birthPlace: birthPlace, deathPlace: deathPlace)
+        let person = RecordFinder.Person(name: name, surname: surname, birthYear: birthYear,
+                                         deathYear: deathYear, birthPlace: birthPlace,
+                                         deathPlace: deathPlace, servedInMilitary: servedInMilitary)
+        let context = RecordFinder.Context(person)
 
-        if found.contains(.ireland) {
-            // The place that actually MATCHED Ireland, not merely the first
-            // one recorded (found by the local reviewer on 2026-09-01).
-            // `regions` deliberately searches both places — its own comment
-            // says "someone born in Cork and dying in Boston is worth
-            // looking for on both sides of the water" — so taking `.first`
-            // named the wrong side whenever the Irish place was the DEATH
-            // place: a man born in Boston who died in Cork was offered the
-            // Irish census under "Recorded in Boston, Massachusetts."
-            // Reuses the same matcher rather than a second copy of the rule.
-            let where_ = [birthPlace, deathPlace]
-                .compactMap { $0 }
-                .first { regions(birthPlace: $0, deathPlace: nil).contains(.ireland) }
-                ?? "Ireland"
-            out.append(contentsOf: [
-                link("Census of Ireland 1901 / 1911",
-                     "https://www.census.nationalarchives.ie/",
-                     "Recorded in \(where_). The only two surviving full censuses — household returns, occupations and townland, free, with scans of the original page."),
-                link("Irish civil records (birth, marriage, death)",
-                     "https://civilrecords.irishgenealogy.ie/",
-                     "State registration with register images: births to 100 years ago, marriages 75, deaths 50."),
-                link("National Archives genealogy",
-                     "https://genealogy.nationalarchives.ie/",
-                     "Tithe Applotment Books 1823–37, wills and administrations 1858–1922."),
-            ])
-            if let url = familySearchRecordSearch(name: name, surname: surname,
-                                                  birthYear: birthYear, country: "Ireland") {
-                out.append(Link(title: "FamilySearch — Irish records for this name",
-                                url: url,
-                                reason: "The Irish census and civil registration indexes, searched from inside FamilySearch.",
-                                isPrefilled: true))
-            }
+        out.append(contentsOf: RecordFinder.ireland.compactMap { RecordFinder.link(for: $0, in: context) })
+        if context.regions.contains(.ireland),
+           let url = familySearchRecordSearch(name: name, surname: surname,
+                                              birthYear: birthYear, country: "Ireland") {
+            out.append(Link(title: "FamilySearch — Irish records for this name",
+                            url: url,
+                            reason: "The Irish census and civil registration indexes, searched from inside FamilySearch.",
+                            isPrefilled: true, group: "Ireland"))
         }
+        out.append(contentsOf: RecordFinder.military.compactMap { RecordFinder.link(for: $0, in: context) })
+        out.append(contentsOf: RecordFinder.britain.compactMap { RecordFinder.link(for: $0, in: context) })
+        out.append(contentsOf: RecordFinder.burials.compactMap { RecordFinder.link(for: $0, in: context) })
 
-        if found.contains(.england) {
-            out.append(link("The National Archives (UK) Discovery",
-                            "https://discovery.nationalarchives.gov.uk/",
-                            "Recorded in England."))
-        }
-
-        if found.contains(.unitedStates) {
-            out.append(link("Chronicling America",
-                            "https://chroniclingamerica.loc.gov/search/pages/results/",
-                            "Recorded in the United States — Library of Congress newspaper archive."))
+        if context.regions.contains(.unitedStates) {
+            out.append(Link(title: "Chronicling America",
+                            url: URL(string: "https://chroniclingamerica.loc.gov/search/pages/results/")!,   // swiftlint:disable:this force_unwrapping
+                            reason: "Recorded in the United States — Library of Congress newspaper archive.",
+                            isPrefilled: false, group: "United States"))
         }
 
         return out
-    }
-
-    private static func link(_ title: String, _ urlString: String, _ reason: String) -> Link {
-        Link(title: title, url: URL(string: urlString)!,   // swiftlint:disable:this force_unwrapping
-             reason: reason, isPrefilled: false)
     }
 
     /// FamilySearch's record search takes its query in the URL. Best-effort

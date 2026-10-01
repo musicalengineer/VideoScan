@@ -89,13 +89,19 @@ struct FamilyTreeResearchLinksTests {
 
     /// A link that lands on an error page is worse than one that lands on a
     /// search form, so the flag has to be honest about which it is.
+    /// 2026-10-01 (GH #230): the census search's parameters were verified
+    /// live (results page 200, the API returns the rows), so it is now
+    /// pre-filled; the archives whose format is NOT confirmed still land on
+    /// their forms. Synthetic name.
     @Test func onlyVerifiedLinksClaimToBePrefilled() throws {
         let links = FamilyTreeResearchLinks.links(
-            name: "Peter Roynane", surname: "Roynane", birthYear: 1861,
-            birthPlace: "Cork, Ireland", deathPlace: nil, familySearchID: "GVQV-NW3")
-        let census = try #require(links.first { $0.title.contains("Census of Ireland") })
-        #expect(census.isPrefilled == false,
-                "the Irish state sites' query parameters are unverified — the link lands on their form")
+            name: "Honora Fenlane", surname: "Fenlane", birthYear: 1861,
+            birthPlace: "Cork, Ireland", deathPlace: nil, familySearchID: "ABCD-123")
+        let census = try #require(links.first { $0.title == "Census of Ireland 1901 / 1911" })
+        #expect(census.isPrefilled, "verified 2026-10-01")
+        #expect(census.url.absoluteString.contains("surname=Fenlane"))
+        let census1926 = try #require(links.first { $0.title == "Census of Ireland 1926" })
+        #expect(census1926.isPrefilled == false, "1926 query format not pinned yet — lands on the form")
         #expect(links.allSatisfy { $0.url.scheme == "https" })
     }
 
