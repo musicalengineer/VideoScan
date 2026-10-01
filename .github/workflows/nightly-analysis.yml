@@ -1,29 +1,47 @@
 name: Nightly Static Analysis
 
 # Runs every night at 01:00 EDT (05:00 UTC) and is also manually
-# triggerable from the Actions tab. GH-hosted runners are useful here
-# for static/build-derived signal, not for unit-test execution.
+# triggerable from the Actions tab. GitHub-hosted runners only; nothing in
+# this workflow touches the M4.
 #
-# Jobs (run in parallel):
+# Jobs (run in parallel unless noted):
 #   strict-concurrency  — Swift compiler with -strict-concurrency=complete,
 #                         all upcoming features enabled as warnings,
-#                         compile-time perf warnings.
+#                         compile-time perf warnings, and Swift 6.2 strict
+#                         memory safety (SE-0458) as counted warnings when
+#                         the toolchain accepts the flag (probed, not assumed).
 #   codeql              — GitHub CodeQL with security-and-quality
-#                         (the broadest standard suite).
-#   thread-sanitizer    — Disabled on GH-hosted runners. Run TSan on local
-#                         Mac hardware / self-hosted macOS instead.
-#   lint-strict         — SwiftLint --strict + Periphery without retain-public.
+#                         (the broadest standard suite), plus an extraction
+#                         FLOOR: the job fails if CodeQL extracted fewer than
+#                         80% of the app + VideoScanCore Swift sources (#171).
+#   thread-sanitizer    — Disabled (if: false) since 2026-05-12.
+#   sanitizers          — Address Sanitizer and Undefined Behavior Sanitizer
+#                         over the VideoScanTests unit tests (matrix, one leg
+#                         each). Reporting jobs: a sanitizer hit or a failing
+#                         test never fails them; only a broken build, or a
+#                         run in which no test executed, does.
+#   lint-strict         — SwiftLint --strict + Periphery.
 #   source-ratchets     — Build-free source ratchets (pure Python, ubuntu):
 #                         subprocess-injection + check-then-act on removable
 #                         volumes, both against grandfathered baselines in
 #                         ci/baselines/. Fails only on NEW violations.
-#   aggregate           — Collects every count and appends one row to
-#                         metrics/static_analysis.jsonl on the metrics branch.
+#   findings-to-issues  — (after the above) one GitHub issue per finding
+#                         fingerprint: tools/nightly_findings_to_issues.py.
+#                         Writes ONLY on main; any other ref is a dry run.
+#   aggregate           — (last) Collects every count and appends one row to
+#                         metrics/static_analysis.jsonl on the metrics branch,
+#                         and publishes metrics/nightly_findings_latest.json
+#                         for scripts/morning_metrics.sh. Pushes only on main.
 #
 # Findings appear in:
 #   1. Each run's Summary panel (markdown — green or expandable details)
 #   2. Security → Code Scanning (CodeQL alerts, deduped over time)
-#   3. metrics/static_analysis.jsonl (history for the dashboard)
+#   3. GitHub issues labelled `nightly-finding` (+ tool, + High Priority)
+#   4. metrics/static_analysis.jsonl (history for the dashboard)
+#
+# A FINDING NEVER FAILS THIS WORKFLOW. Jobs go red for broken pipelines
+# (build failed, artifact unreadable, gh call failed), for the CodeQL
+# extraction floor, and for the ratchets' NEW-violation gates.
 
 on:
   schedule:
@@ -31,6 +49,15 @@ on:
     # GitHub schedules can drift by minutes under load.
     - cron: '0 5 * * *'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Findings → issues: plan only, write nothing (always on for non-main refs)'
+        type: boolean
+        default: false
+      only:
+        description: 'Comma list of jobs to run (blank = all): strict-concurrency,codeql,sanitizers,lint-strict,lint-warn,source-ratchets'
+        type: string
+        default: ''
 
 permissions:
   contents: write          # needed for the metrics push step
@@ -41,6 +68,7 @@ jobs:
   # -------------------------------------------------------------------
   strict-concurrency:
     name: Swift strict concurrency (max)
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',strict-concurrency,') }}
     runs-on: macos-15
     timeout-minutes: 60
     outputs:
@@ -60,6 +88,12 @@ jobs:
       # instead of sort -u re-counting it whenever the timing jittered.
       warning_count: ${{ steps.count.outputs.concurrency }}
       warning_total: ${{ steps.count.outputs.warnings }}
+      memory_safety_count: ${{ steps.count.outputs.memory_safety }}
+      memory_safety_supported: ${{ steps.memsafe.outputs.supported }}
+      # The findings job keys "is this tool's report complete?" on the BUILD,
+      # not the job: the type-check ratchet below can fail the job on a slow
+      # new function while the warning list is still whole.
+      build_outcome: ${{ steps.build.outcome }}
       typecheck_identities: ${{ steps.typecheck.outputs.typecheck_identities }}
       typecheck_new_slow: ${{ steps.typecheck.outputs.typecheck_new_over_threshold }}
       typecheck_saturated: ${{ steps.typecheck.outputs.typecheck_saturated }}
@@ -91,7 +125,39 @@ jobs:
           xcrun -f metal
           xcrun metal --version 2>&1 | head -1
 
+      # Swift 6.2 strict memory safety (SE-0458): flags every use of an
+      # unsafe construct (UnsafePointer, unowned(unsafe), @unsafe APIs …)
+      # that is not acknowledged with `unsafe`. Warnings only, by design of
+      # the feature, so it is safe to report on. PROBED rather than assumed:
+      # the flag is passed to the build only if this toolchain's swiftc
+      # accepts it. The probe also records whether it really diagnoses an
+      # unsafe use, so a flag that is accepted but inert does not count as
+      # coverage.
+      - name: Probe -strict-memory-safety support
+        id: memsafe
+        run: |
+          printf 'func peek(_ p: UnsafePointer<Int>) -> Int { p.pointee }\n' > memsafe-probe.swift
+          echo "swiftc: $(xcrun swiftc --version 2>&1 | head -1)" | tee memsafe-probe.txt
+          if xcrun swiftc -typecheck -strict-memory-safety memsafe-probe.swift >> memsafe-probe.txt 2>&1; then
+            cat memsafe-probe.txt
+            if tail -n +2 memsafe-probe.txt | grep -qi 'unsafe'; then
+              echo "supported=yes" >> "$GITHUB_OUTPUT"
+            else
+              echo "supported=inert" >> "$GITHUB_OUTPUT"
+              echo "::warning::swiftc accepted -strict-memory-safety but did not diagnose the probe; memory-safety counts will read 0 and are not evidence"
+            fi
+            echo "flag=-strict-memory-safety" >> "$GITHUB_OUTPUT"
+          else
+            cat memsafe-probe.txt
+            echo "supported=no" >> "$GITHUB_OUTPUT"
+            echo "flag=" >> "$GITHUB_OUTPUT"
+            echo "::warning::this toolchain's swiftc rejects -strict-memory-safety; the strict build runs without it"
+          fi
+
       - name: Build with strict concurrency + all upcoming features + perf warnings
+        id: build
+        env:
+          MEMSAFE_FLAG: ${{ steps.memsafe.outputs.flag }}
         run: |
           set -o pipefail
           # Every Swift "upcoming feature" we can flip on as a warning.
@@ -122,6 +188,9 @@ jobs:
           PERF_FLAGS=" -Xfrontend -warn-long-function-bodies=100 -Xfrontend -warn-long-expression-type-checking=100"
           # Concurrency reporting flags.
           CONCUR_FLAGS=" -Xfrontend -warn-concurrency -Xfrontend -enable-actor-data-race-checks"
+          # Strict memory safety, only when the probe above accepted it.
+          MEMSAFE_FLAGS=""
+          if [ -n "$MEMSAFE_FLAG" ]; then MEMSAFE_FLAGS=" $MEMSAFE_FLAG"; fi
 
           xcodebuild build \
             -project VideoScan/VideoScan.xcodeproj \
@@ -133,7 +202,7 @@ jobs:
             EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
             ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
             SWIFT_STRICT_CONCURRENCY=complete \
-            OTHER_SWIFT_FLAGS="\$(inherited)$CONCUR_FLAGS$UPCOMING_FLAGS$PERF_FLAGS" \
+            OTHER_SWIFT_FLAGS="\$(inherited)$CONCUR_FLAGS$UPCOMING_FLAGS$PERF_FLAGS$MEMSAFE_FLAGS" \
             2>&1 | tee strict-concurrency.log
           if grep -q "BUILD FAILED" strict-concurrency.log; then
             echo "::error::Build itself failed (not a warning issue) — see log"
@@ -143,30 +212,49 @@ jobs:
       - name: Count + summarise findings
         id: count
         if: always()
+        env:
+          MEMSAFE_SUPPORTED: ${{ steps.memsafe.outputs.supported }}
         run: |
+          # SE-0458 diagnostics carry the [#StrictMemorySafety] group tag in
+          # Swift 6.2; the phrase alternatives are a fallback in case a
+          # toolchain prints them without the tag. Memory-safety lines are
+          # pulled out FIRST, so they never inflate the concurrency or other
+          # buckets.
+          MS_RE="\[#StrictMemorySafety\]|unsafe constructs|involves unsafe|not marked with 'unsafe'|@unsafe"
+          CONC_RE='(sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable)'
           if [ -f strict-concurrency.log ]; then
             grep -E ': warning: ' strict-concurrency.log | sort -u > all-warnings.txt || true
-            grep -E '(sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable)' all-warnings.txt > concurrency-findings.txt || true
+            grep -E "$MS_RE" all-warnings.txt > memory-safety-findings.txt || true
+            grep -E "$CONC_RE" all-warnings.txt | grep -Ev "$MS_RE" > concurrency-findings.txt || true
             # Match the WARNING TEXT, not the flag name. The old pattern
             # ('warn-long-function-bodies') never appears in compiler output,
             # so this bucket read 0 every night since the job was written.
             grep -E 'took [0-9]+ms to type-check' all-warnings.txt > perf-findings.txt || true
-            grep -Ev '(sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable|took [0-9]+ms to type-check)' all-warnings.txt > other-findings.txt || true
+            grep -Ev '(sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable|took [0-9]+ms to type-check)' all-warnings.txt | grep -Ev "$MS_RE" > other-findings.txt || true
             # The saturated case is an ERROR, not a warning, so it is not in
             # all-warnings.txt. It is the shape that turned CI red on
             # 2026-09-01 (CatalogView.body, 495 lines, compiles on the M4 and
             # not on the runner), so pull it out of the raw log separately.
             grep -E 'unable to type-check this expression in reasonable time' strict-concurrency.log | sort -u > typecheck-saturated.txt || true
           else
-            : > all-warnings.txt; : > concurrency-findings.txt; : > perf-findings.txt; : > other-findings.txt; : > typecheck-saturated.txt
+            : > all-warnings.txt; : > concurrency-findings.txt; : > perf-findings.txt; : > other-findings.txt; : > typecheck-saturated.txt; : > memory-safety-findings.txt
           fi
 
           C_COUNT=$(wc -l < concurrency-findings.txt | tr -d ' ')
           P_COUNT=$(wc -l < perf-findings.txt | tr -d ' ')
           O_COUNT=$(wc -l < other-findings.txt | tr -d ' ')
+          M_COUNT=$(wc -l < memory-safety-findings.txt | tr -d ' ')
           TOTAL=$(wc -l < all-warnings.txt | tr -d ' ')
           echo "warnings=$TOTAL" >> "$GITHUB_OUTPUT"
           echo "concurrency=$C_COUNT" >> "$GITHUB_OUTPUT"
+          # Not a number when the flag was not in effect: a 0 would claim
+          # "no unsafe code", which nobody measured.
+          if [ "$MEMSAFE_SUPPORTED" = "yes" ]; then
+            echo "memory_safety=$M_COUNT" >> "$GITHUB_OUTPUT"
+            M_CELL="$M_COUNT"
+          else
+            M_CELL="n/a (flag ${MEMSAFE_SUPPORTED:-not probed})"
+          fi
 
           {
             echo "## Swift strict concurrency (max)"
@@ -174,11 +262,12 @@ jobs:
             echo "| Category | Count |"
             echo "|---|---:|"
             echo "| Concurrency / Sendable / data race | $C_COUNT |"
+            echo "| Strict memory safety (SE-0458) | $M_CELL |"
             echo "| Compile-time perf (>100ms type check) | $P_COUNT |"
             echo "| Upcoming-feature / other | $O_COUNT |"
             echo "| **Total** | **$TOTAL** |"
             echo ""
-            for label_file in "Concurrency:concurrency-findings.txt" "Perf:perf-findings.txt" "Other:other-findings.txt"; do
+            for label_file in "Concurrency:concurrency-findings.txt" "MemorySafety:memory-safety-findings.txt" "Perf:perf-findings.txt" "Other:other-findings.txt"; do
               label="${label_file%%:*}"
               file="${label_file##*:}"
               n=$(wc -l < "$file" | tr -d ' ')
@@ -230,6 +319,8 @@ jobs:
             strict-concurrency.log
             all-warnings.txt
             concurrency-findings.txt
+            memory-safety-findings.txt
+            memsafe-probe.txt
             perf-findings.txt
             other-findings.txt
             typecheck-saturated.txt
@@ -240,10 +331,17 @@ jobs:
   # -------------------------------------------------------------------
   codeql:
     name: CodeQL (Swift, security-and-quality)
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',codeql,') }}
     runs-on: macos-15
-    timeout-minutes: 60
+    # 120, not 60. On 2026-10-01 (run 36854243185) the extraction build
+    # alone took 49.6 minutes and the job 56.7 — three minutes from a
+    # timeout that would have read as "CodeQL broke".
+    timeout-minutes: 120
     outputs:
       finding_count: ${{ steps.count.outputs.findings }}
+      extracted_files: ${{ steps.coverage.outputs.extracted }}
+      in_scope_files: ${{ steps.coverage.outputs.in_scope }}
+      extraction_errors: ${{ steps.coverage.outputs.extraction_errors }}
 
     steps:
       - name: Checkout
@@ -346,6 +444,26 @@ jobs:
               echo "⚠️ **$COUNT CodeQL findings.** Triage in **Security → Code Scanning**."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # GH #171: "0 alerts" from a scan that extracted 1 file is not
+      # evidence. Count the files CodeQL actually extracted (the per-file
+      # successfully-extracted-files diagnostics in the SARIF) against the
+      # tracked app + VideoScanCore sources, and FAIL below 80%. Fails closed:
+      # a missing SARIF, or one without those diagnostics, fails too. The
+      # status file tells the findings job whether tonight's CodeQL report
+      # was whole. If it was not, CodeQL issues are not counted as "gone".
+      - name: Extraction coverage floor (GH #171)
+        id: coverage
+        if: always()
+        run: |
+          mkdir -p codeql-results
+          set +e
+          python3 scripts/codeql_extraction_floor.py codeql-results/swift.sarif \
+            --floor 0.80 --json-out codeql-results/codeql-coverage.json
+          RC=$?
+          set -e
+          python3 -c "import json,sys; json.dump({'tool':'codeql','complete':sys.argv[1]=='0'}, open('codeql-results/nightly-status-codeql.json','w'))" "$RC"
+          exit $RC
 
       - name: Upload CodeQL SARIF
         if: always()
@@ -471,8 +589,230 @@ jobs:
           retention-days: 30
 
   # -------------------------------------------------------------------
+  # Address Sanitizer and Undefined Behavior Sanitizer (added 2026-10-01).
+  #
+  # Same shape as the TSan job above, but ENABLED, because the GH runner
+  # now runs the unit suite (ci.yml, ~47 min uninstrumented). One matrix
+  # leg per sanitizer:
+  #
+  #   build-for-testing  with the sanitizer on. A failed build FAILS the
+  #                      job (broken pipeline).
+  #   test-without-building over VideoScanTests (VideoScan-CI plan, UI
+  #                      targets excluded). continue-on-error: failing tests,
+  #                      a sanitizer abort, or the step timeout never fail
+  #                      the job.
+  #   swift test --sanitize=address over VideoScanCore (ASan leg only).
+  #                      The package's ~720 tests (fixity, ledger, GEDCOM …)
+  #                      are not in the app scheme.
+  #   count + summarise  SUMMARY / runtime-error lines, failed tests, suites
+  #                      started. FAILS the job only if no suite started AND
+  #                      no sanitizer report exists, i.e. nothing ran.
+  #
+  # Scope, stated plainly so a zero is not over-read:
+  #   * ASan instruments Swift, C and C++. It stops the process at the first
+  #     error, so a night with one ASan hit has not run the tests after it.
+  #     That night is marked INCOMPLETE, so the findings job does not count
+  #     other ASan issues as fixed.
+  #   * UBSan in Xcode is a clang feature: it instruments C, C++ and ObjC
+  #     (our few .c/.m files and C/C++ packages such as mlx-swift's Cmlx),
+  #     NOT Swift. Swift's own overflow and bounds traps already run in
+  #     Debug. So there is no Swift Core leg for UBSan.
+  sanitizers:
+    name: ${{ matrix.label }} (unit tests)
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',sanitizers,') }}
+    runs-on: macos-15
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tool: asan
+            label: Address Sanitizer
+            xcflag: -enableAddressSanitizer
+            spm: address
+            artifact: sanitizer-address
+            pattern: 'SUMMARY: AddressSanitizer: '
+          - tool: ubsan
+            label: Undefined Behavior Sanitizer
+            xcflag: -enableUndefinedBehaviorSanitizer
+            spm: ''
+            artifact: sanitizer-undefined
+            pattern: ': runtime error: '
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 26.x required — the source uses Swift 6.2 isolated conformances.
+      - name: Select Xcode (26.x required)
+        run: scripts/ci_select_xcode.sh
+
+      # Same component download as the other jobs. Unlike them, this build
+      # does NOT exclude *.metal: the tests run the real app host, and
+      # ci.yml's green test build compiles the kernels too.
+      - name: Download Metal Toolchain (mlx-swift kernels)
+        run: |
+          set -o pipefail
+          if ! xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3; then
+            sudo xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3
+          fi
+          sudo xcodebuild -runFirstLaunch 2>&1 | tail -2 || true
+          xcodebuild -checkFirstLaunchStatus 2>&1 | tail -1 || true
+          xcrun -f metal
+
+      # Several unit tests spawn real ffmpeg/ffprobe (as in ci.yml).
+      - name: Install FFmpeg
+        run: |
+          brew install ffmpeg || true
+          ffmpeg -version | head -1
+
+      - name: Build for testing (${{ matrix.label }})
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -project VideoScan/VideoScan.xcodeproj \
+            -scheme VideoScan \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath DerivedData \
+            ${{ matrix.xcflag }} YES \
+            CODE_SIGNING_ALLOWED=NO \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
+            2>&1 | tee build-${{ matrix.tool }}.txt | tail -200
+          if grep -q "BUILD FAILED" build-${{ matrix.tool }}.txt; then
+            echo "::error::${{ matrix.label }} build failed (pipeline, not a finding)"
+            grep 'error:' build-${{ matrix.tool }}.txt | head -20
+            exit 1
+          fi
+
+      - name: Unit tests under ${{ matrix.label }}
+        id: test
+        continue-on-error: true
+        timeout-minutes: 200
+        shell: bash
+        run: |
+          # TEST_RUNNER_ prefix: xcodebuild strips it and hands the variable
+          # to the test host, which uses it for GitHub timing budgets. It
+          # also arms the CI canary, whose expected failure is ignored here.
+          set +e
+          TEST_RUNNER_GITHUB_ACTIONS=true \
+          xcodebuild test-without-building \
+            -project VideoScan/VideoScan.xcodeproj \
+            -scheme VideoScan \
+            -testPlan VideoScan-CI \
+            -only-testing:VideoScanTests \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath DerivedData \
+            ${{ matrix.xcflag }} YES \
+            -enableCodeCoverage NO \
+            -resultBundlePath Sanitizer-${{ matrix.tool }}.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
+            > sanitizer-${{ matrix.tool }}.log 2>&1
+          echo "xcodebuild exit $?" | tee test-exit.txt
+          tail -40 sanitizer-${{ matrix.tool }}.log
+          exit 0
+
+      - name: VideoScanCore package tests under ${{ matrix.label }}
+        id: core
+        if: matrix.spm != ''
+        continue-on-error: true
+        timeout-minutes: 60
+        shell: bash
+        run: |
+          set +e
+          swift test --package-path VideoScan/VideoScanCore --sanitize=${{ matrix.spm }} \
+            > core-sanitizer-${{ matrix.tool }}.log 2>&1
+          echo "swift test exit $?" | tee core-exit.txt
+          tail -40 core-sanitizer-${{ matrix.tool }}.log
+          exit 0
+
+      - name: Count + summarise findings
+        id: count
+        if: always()
+        shell: bash
+        env:
+          TOOL: ${{ matrix.tool }}
+          LABEL: ${{ matrix.label }}
+          PATTERN: ${{ matrix.pattern }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+          CORE_OUTCOME: ${{ steps.core.outcome }}
+        run: |
+          LOG="sanitizer-$TOOL.log"
+          CORE="core-sanitizer-$TOOL.log"
+          touch "$LOG"
+          cat "$LOG" $( [ -f "$CORE" ] && echo "$CORE" ) | grep -F "$PATTERN" | sort -u > sanitizer-findings.txt || true
+          grep -E '^(✘ Test .*failed after|Test Case .*failed)' "$LOG" | grep -v 'mustFail()\|Test run with' | sort -u > failed-tests.txt || true
+          COUNT=$(wc -l < sanitizer-findings.txt | tr -d ' ')
+          FAILED=$(wc -l < failed-tests.txt | tr -d ' ')
+          SUITES=$(grep -cE '^(◇ Suite |Test Suite .*started)' "$LOG" || true)
+          SUITES=${SUITES:-0}
+          # Complete = the unit step ran to the end (no timeout), enough
+          # suites started to be a real run, and, for ASan, nothing aborted
+          # the host early.
+          COMPLETE=false
+          if [ "$TEST_OUTCOME" = "success" ] && [ "$SUITES" -ge 20 ]; then
+            if [ "$TOOL" != "asan" ] || [ "$COUNT" = "0" ]; then COMPLETE=true; fi
+          fi
+          python3 -c "import json,sys; json.dump({'tool':sys.argv[1],'complete':sys.argv[2]=='true','suites_started':int(sys.argv[3]),'reports':int(sys.argv[4]),'failed_tests':int(sys.argv[5]),'test_step':sys.argv[6],'core_step':sys.argv[7]}, open(f'nightly-status-{sys.argv[1]}.json','w'))" \
+            "$TOOL" "$COMPLETE" "$SUITES" "$COUNT" "$FAILED" "${TEST_OUTCOME:-none}" "${CORE_OUTCOME:-skipped}"
+          cat "nightly-status-$TOOL.json"; echo
+
+          {
+            echo "## $LABEL"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|---|---:|"
+            echo "| Sanitizer reports (unique lines) | $COUNT |"
+            echo "| Tests failing under instrumentation (canary excluded) | $FAILED |"
+            echo "| Suites started | $SUITES |"
+            echo "| Unit-test step | ${TEST_OUTCOME:-none} ($(cat test-exit.txt 2>/dev/null || echo 'no exit recorded')) |"
+            echo "| VideoScanCore step | ${CORE_OUTCOME:-skipped} |"
+            echo "| Complete run (counts toward auto-close) | $COMPLETE |"
+            echo ""
+            if [ "$COUNT" != "0" ]; then
+              echo "<details><summary>$LABEL reports ($COUNT)</summary>"
+              echo ""
+              echo '```'
+              head -200 sanitizer-findings.txt
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$SUITES" = "0" ] && [ "$COUNT" = "0" ]; then
+            echo "::error::No test suite started and no sanitizer report: the $LABEL run did not happen (pipeline, not a finding)"
+            exit 1
+          fi
+
+      - name: Upload sanitizer logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            sanitizer-${{ matrix.tool }}.log
+            core-sanitizer-${{ matrix.tool }}.log
+            sanitizer-findings.txt
+            failed-tests.txt
+            nightly-status-${{ matrix.tool }}.json
+          retention-days: 30
+
+      - name: Upload sanitizer result bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-xcresult
+          path: Sanitizer-${{ matrix.tool }}.xcresult
+          retention-days: 7
+
+  # -------------------------------------------------------------------
   lint-strict:
     name: SwiftLint --strict + Periphery aggressive
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',lint-strict,') }}
     runs-on: macos-15
     timeout-minutes: 40
     outputs:
@@ -534,16 +874,30 @@ jobs:
             ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
             -derivedDataPath periphery-dd 2>&1 | tail -300
 
-      - name: Periphery aggressive (no --retain-public)
+      # Fixed 2026-10-01. This step used to call `periphery scan --targets
+      # VideoScan`. Periphery 3.x dropped `--targets` and exits with "Error:
+      # Unknown option '--targets'", so periphery-strict.txt held 3 lines of
+      # usage text and the "Periphery aggressive" count read 0 every night
+      # (run 36854243185). Project, scheme and retain_public: false now come
+      # from .periphery.yml. --skip-build reuses the index from the build
+      # above. The exit code goes into a status file, so the findings job
+      # knows whether tonight's list is whole.
+      - name: Periphery aggressive (retain_public false via .periphery.yml)
         run: |
-          # `--retain-public` is OFF — for a single-app codebase, public API
-          # that nothing inside calls is genuinely unused.
+          set +e
           periphery scan \
-            --project VideoScan/VideoScan.xcodeproj \
-            --schemes VideoScan \
-            --targets VideoScan \
+            --skip-build \
+            --index-store-path periphery-dd/Index.noindex/DataStore \
             --format xcode \
-            > periphery-strict.txt 2>&1 || true
+            > periphery-strict.txt 2>&1
+          RC=$?
+          set -e
+          echo "periphery exit $RC"
+          python3 -c "import json,sys; json.dump({'tool':'periphery','complete':sys.argv[1]=='0'}, open('nightly-status-periphery.json','w'))" "$RC"
+          if [ "$RC" != "0" ]; then
+            head -20 periphery-strict.txt
+            echo "::warning::periphery exited $RC; its findings are not counted as complete tonight"
+          fi
 
       - name: Count + summarise findings
         id: count
@@ -555,7 +909,7 @@ jobs:
           # output ("Invalid format '0'"). Using `|| true` swallows
           # the exit code without re-printing.
           SL=$(grep -c ": warning:\|: error:" swiftlint-strict.txt 2>/dev/null || true)
-          PF=$(grep -c "^/" periphery-strict.txt 2>/dev/null || true)
+          PF=$(grep -c "^/.*: warning: " periphery-strict.txt 2>/dev/null || true)
           SL=${SL:-0}
           PF=${PF:-0}
           echo "swiftlint=$SL" >> "$GITHUB_OUTPUT"
@@ -567,7 +921,7 @@ jobs:
             echo "| Tool | Findings |"
             echo "|---|---:|"
             echo "| SwiftLint --strict | $SL |"
-            echo "| Periphery (no --retain-public) | $PF |"
+            echo "| Periphery (retain_public false) | $PF |"
             echo ""
             if [ "$SL" != "0" ]; then
               echo "<details><summary>SwiftLint findings ($SL)</summary>"
@@ -598,6 +952,7 @@ jobs:
           path: |
             swiftlint-strict.txt
             periphery-strict.txt
+            nightly-status-periphery.json
           retention-days: 30
 
   # -------------------------------------------------------------------
@@ -606,6 +961,7 @@ jobs:
   # build+tests. Never fails the workflow; report is informational only.
   lint-warn:
     name: SwiftLint + Periphery (warn-only)
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',lint-warn,') }}
     runs-on: macos-15
     timeout-minutes: 40
     continue-on-error: true
@@ -706,6 +1062,7 @@ jobs:
   # commit message.
   source-ratchets:
     name: Source ratchets (injection + check-then-act)
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',source-ratchets,') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -754,12 +1111,84 @@ jobs:
           retention-days: 30
 
   # -------------------------------------------------------------------
+  # One GitHub issue per finding fingerprint (Rick, 2026-10-01). Design,
+  # rules and state model: the docstring of tools/nightly_findings_to_issues.py.
+  #
+  # Writes ONLY for the scheduled/dispatched run on main. Any other ref, or
+  # dry_run=true, plans and summarises without touching issues. That is how
+  # the workflow is validated on a branch.
+  #
+  # Each tool's "complete" verdict comes from its job result (or, for the
+  # strict build, the build step's outcome) AND the nightly-status-*.json
+  # its job uploaded. An incomplete tool's issues are never counted as gone.
+  findings-to-issues:
+    name: Findings → GitHub issues
+    needs: [strict-concurrency, codeql, thread-sanitizer, sanitizers, lint-strict]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    outputs:
+      new_high: ${{ steps.file.outputs.new_high }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download analysis artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p artifacts
+          for a in codeql-results strict-concurrency-log tsan-log sanitizer-address sanitizer-undefined lint-strict; do
+            if gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" -n "$a" -D "artifacts/$a"; then
+              echo "downloaded $a"
+            else
+              echo "::notice::artifact $a not present in this run (its job was skipped or failed early)"
+            fi
+          done
+          find artifacts -maxdepth 2 -type f | sort
+
+      - name: File / update / close issues
+        id: file
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY: ${{ (inputs.dry_run || github.ref != 'refs/heads/main') && 'true' || 'false' }}
+        run: |
+          ARGS=()
+          if [ "$DRY" = "true" ]; then ARGS+=(--dry-run); echo "DRY RUN: no issue will be written"; fi
+          python3 tools/nightly_findings_to_issues.py \
+            --artifacts artifacts \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --job-result "codeql=${{ needs.codeql.result }}" \
+            --job-result "strict-concurrency=${{ needs.strict-concurrency.outputs.build_outcome || 'skipped' }}" \
+            --job-result "tsan=${{ needs.thread-sanitizer.result }}" \
+            --job-result "asan=${{ needs.sanitizers.result }}" \
+            --job-result "ubsan=${{ needs.sanitizers.result }}" \
+            --job-result "periphery=${{ needs.lint-strict.result }}" \
+            --summary-out nightly-findings-summary.json \
+            "${ARGS[@]}"
+          python3 -c "import json; s=json.load(open('nightly-findings-summary.json')); print('new_high=%d' % len(s['new_high']))" >> "$GITHUB_OUTPUT"
+
+      - name: Upload findings summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-findings-summary
+          path: nightly-findings-summary.json
+          retention-days: 30
+
+  # -------------------------------------------------------------------
   aggregate:
     name: Aggregate & push to metrics branch
-    needs: [strict-concurrency, codeql, thread-sanitizer, lint-strict, source-ratchets]
+    needs: [strict-concurrency, codeql, thread-sanitizer, sanitizers, lint-strict, source-ratchets, findings-to-issues]
     if: always()
     runs-on: macos-15
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Checkout (full history — need metrics branch)
@@ -768,11 +1197,22 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Build aggregate row + push
+      - name: Fetch findings summary
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: nightly-findings-summary
+          path: findings-summary
+
+      - name: Build aggregate row
         env:
           CONCURRENCY_WARNINGS: ${{ needs.strict-concurrency.outputs.warning_count }}
           STRICT_WARNING_TOTAL: ${{ needs.strict-concurrency.outputs.warning_total }}
+          MEMORY_SAFETY: ${{ needs.strict-concurrency.outputs.memory_safety_count }}
           CODEQL_FINDINGS: ${{ needs.codeql.outputs.finding_count }}
+          CODEQL_EXTRACTED: ${{ needs.codeql.outputs.extracted_files }}
+          CODEQL_IN_SCOPE: ${{ needs.codeql.outputs.in_scope_files }}
+          CODEQL_EXTRACTION_ERRORS: ${{ needs.codeql.outputs.extraction_errors }}
           TSAN_ISSUES: ${{ needs.thread-sanitizer.outputs.issue_count }}
           SWIFTLINT_STRICT: ${{ needs.lint-strict.outputs.swiftlint_count }}
           PERIPHERY_AGGRESSIVE: ${{ needs.lint-strict.outputs.periphery_count }}
@@ -782,26 +1222,68 @@ jobs:
           RATCHET_INJECTION_NEW: ${{ needs.source-ratchets.outputs.injection_new }}
           RATCHET_CHECKTHENACT_NEW: ${{ needs.source-ratchets.outputs.checkthenact_new }}
         run: |
+          # One python step instead of a printf with 13 positional %s: every
+          # value is either an int or null, and a sanitizer/finding count
+          # comes from the findings summary (matrix jobs cannot export
+          # per-leg outputs).
+          python3 - <<'PY'
+          import json, os, datetime
+          def num(k):
+              v = os.environ.get(k, "")
+              try:
+                  return int(v)
+              except ValueError:
+                  return None
+          summ = {}
+          try:
+              summ = json.load(open("findings-summary/nightly-findings-summary.json"))
+          except (OSError, ValueError):
+              pass
+          tools = summ.get("tools", {})
+          def tool_findings(t):
+              r = tools.get(t) or {}
+              return r.get("findings") if r.get("input") else None
+          row = {
+              "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "sha": os.environ["GITHUB_SHA"][:8],
+              "run_kind": "nightly",
+              "concurrency_warnings": num("CONCURRENCY_WARNINGS"),
+              "strict_warning_total": num("STRICT_WARNING_TOTAL"),
+              "memory_safety_warnings": num("MEMORY_SAFETY"),
+              "codeql_findings": num("CODEQL_FINDINGS"),
+              "codeql_extracted_files": num("CODEQL_EXTRACTED"),
+              "codeql_in_scope_files": num("CODEQL_IN_SCOPE"),
+              "codeql_extraction_errors": num("CODEQL_EXTRACTION_ERRORS"),
+              "tsan_issues": num("TSAN_ISSUES"),
+              "asan_issues": tool_findings("asan"),
+              "ubsan_issues": tool_findings("ubsan"),
+              "swiftlint_strict": num("SWIFTLINT_STRICT"),
+              "periphery_aggressive": num("PERIPHERY_AGGRESSIVE"),
+              "typecheck_identities": num("TYPECHECK_IDENTITIES"),
+              "typecheck_new_slow": num("TYPECHECK_NEW_SLOW"),
+              "typecheck_saturated": num("TYPECHECK_SATURATED"),
+              "ratchet_injection_new": num("RATCHET_INJECTION_NEW"),
+              "ratchet_check_then_act_new": num("RATCHET_CHECKTHENACT_NEW"),
+              "nightly_finding_fingerprints": summ.get("fingerprints"),
+              "nightly_findings_new_high": len(summ["new_high"]) if "new_high" in summ else None,
+              "nightly_findings_dry_run": summ.get("dry_run"),
+          }
+          line = json.dumps(row, separators=(",", ":"))
+          print("Row:", line)
+          open("row.json", "w").write(line + "\n")
+          PY
+
+      # Pushes only from main. A branch validation run must not add a row
+      # to the history, nor overwrite the summary the morning digest reads.
+      - name: Push row + findings summary to metrics branch
+        if: github.ref == 'refs/heads/main'
+        run: |
           set -e
           TS="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          SHA="${GITHUB_SHA:0:8}"
-          # typecheck_identities is the column to watch over time: it is a
-          # COUNT OF FUNCTIONS, not a count of log lines, so it no longer
-          # wanders with millisecond jitter.
-          ROW=$(printf '{"ts":"%s","sha":"%s","run_kind":"nightly","concurrency_warnings":%s,"strict_warning_total":%s,"codeql_findings":%s,"tsan_issues":%s,"swiftlint_strict":%s,"periphery_aggressive":%s,"typecheck_identities":%s,"typecheck_new_slow":%s,"typecheck_saturated":%s,"ratchet_injection_new":%s,"ratchet_check_then_act_new":%s}' \
-                "$TS" "$SHA" \
-                "${CONCURRENCY_WARNINGS:-null}" \
-                "${STRICT_WARNING_TOTAL:-null}" \
-                "${CODEQL_FINDINGS:-null}" \
-                "${TSAN_ISSUES:-null}" \
-                "${SWIFTLINT_STRICT:-null}" \
-                "${PERIPHERY_AGGRESSIVE:-null}" \
-                "${TYPECHECK_IDENTITIES:-null}" \
-                "${TYPECHECK_NEW_SLOW:-null}" \
-                "${TYPECHECK_SATURATED:-null}" \
-                "${RATCHET_INJECTION_NEW:-null}" \
-                "${RATCHET_CHECKTHENACT_NEW:-null}")
-          echo "Row: $ROW"
+          cp row.json "$RUNNER_TEMP/row.json"
+          if [ -f findings-summary/nightly-findings-summary.json ]; then
+            cp findings-summary/nightly-findings-summary.json "$RUNNER_TEMP/findings.json"
+          fi
 
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
@@ -818,8 +1300,15 @@ jobs:
 
           mkdir -p metrics
           touch metrics/static_analysis.jsonl
-          echo "$ROW" >> metrics/static_analysis.jsonl
+          cat "$RUNNER_TEMP/row.json" >> metrics/static_analysis.jsonl
           git add metrics/static_analysis.jsonl
+          # The morning digest's 🔴 line reads this file. A dry-run summary
+          # never replaces a real one.
+          if [ -f "$RUNNER_TEMP/findings.json" ] && \
+             python3 -c "import json,sys; sys.exit(0 if not json.load(open(sys.argv[1])).get('dry_run') else 1)" "$RUNNER_TEMP/findings.json"; then
+            cp "$RUNNER_TEMP/findings.json" metrics/nightly_findings_latest.json
+            git add metrics/nightly_findings_latest.json
+          fi
           git commit -m "static analysis nightly $TS" || {
             echo "Nothing to commit"
             exit 0
@@ -830,8 +1319,11 @@ jobs:
         if: always()
         env:
           CONCURRENCY_WARNINGS: ${{ needs.strict-concurrency.outputs.warning_count }}
+          MEMORY_SAFETY: ${{ needs.strict-concurrency.outputs.memory_safety_count }}
+          MEMORY_SAFETY_SUPPORTED: ${{ needs.strict-concurrency.outputs.memory_safety_supported }}
           CODEQL_FINDINGS: ${{ needs.codeql.outputs.finding_count }}
-          TSAN_ISSUES: ${{ needs.thread-sanitizer.outputs.issue_count }}
+          CODEQL_EXTRACTED: ${{ needs.codeql.outputs.extracted_files }}
+          CODEQL_IN_SCOPE: ${{ needs.codeql.outputs.in_scope_files }}
           SWIFTLINT_STRICT: ${{ needs.lint-strict.outputs.swiftlint_count }}
           PERIPHERY_AGGRESSIVE: ${{ needs.lint-strict.outputs.periphery_count }}
           TYPECHECK_IDENTITIES: ${{ needs.strict-concurrency.outputs.typecheck_identities }}
@@ -841,15 +1333,25 @@ jobs:
           RATCHET_INJECTION_BASE: ${{ needs.source-ratchets.outputs.injection_baseline }}
           RATCHET_CTA_NEW: ${{ needs.source-ratchets.outputs.checkthenact_new }}
           RATCHET_CTA_BASE: ${{ needs.source-ratchets.outputs.checkthenact_baseline }}
+          NEW_HIGH: ${{ needs.findings-to-issues.outputs.new_high }}
         run: |
+          ASAN=$(python3 -c "import json; print(json.load(open('row.json'))['asan_issues'])" 2>/dev/null || echo '?')
+          UBSAN=$(python3 -c "import json; print(json.load(open('row.json'))['ubsan_issues'])" 2>/dev/null || echo '?')
           {
             echo "## Nightly static analysis — $(date -u +'%Y-%m-%d')"
             echo ""
+            if [ -n "$NEW_HIGH" ] && [ "$NEW_HIGH" != "0" ]; then
+              echo "🔴 **$NEW_HIGH new high-severity finding(s)** — see the Findings → GitHub issues job."
+              echo ""
+            fi
             echo "| Tool | Findings |"
             echo "|---|---:|"
             echo "| Swift strict concurrency (max) | ${CONCURRENCY_WARNINGS:-?} |"
-            echo "| CodeQL (security-and-quality) | ${CODEQL_FINDINGS:-?} |"
-            echo "| Thread Sanitizer | Mac/self-hosted only |"
+            echo "| Strict memory safety (SE-0458) | ${MEMORY_SAFETY:-n/a (flag ${MEMORY_SAFETY_SUPPORTED:-?})} |"
+            echo "| CodeQL (security-and-quality) | ${CODEQL_FINDINGS:-?} (extracted ${CODEQL_EXTRACTED:-?}/${CODEQL_IN_SCOPE:-?} files) |"
+            echo "| Thread Sanitizer | disabled |"
+            echo "| Address Sanitizer | $ASAN |"
+            echo "| Undefined Behavior Sanitizer | $UBSAN |"
             echo "| SwiftLint --strict | ${SWIFTLINT_STRICT:-?} |"
             echo "| Periphery aggressive | ${PERIPHERY_AGGRESSIVE:-?} |"
             echo ""

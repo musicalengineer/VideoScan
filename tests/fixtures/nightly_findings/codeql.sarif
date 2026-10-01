@@ -1,0 +1,69 @@
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "CodeQL",
+          "rules": [
+            {
+              "id": "swift/cleartext-logging",
+              "defaultConfiguration": {"level": "error"},
+              "properties": {"tags": ["security", "external/cwe/cwe-312"], "security-severity": "7.5"}
+            },
+            {
+              "id": "swift/unused-variable",
+              "defaultConfiguration": {"level": "warning"},
+              "properties": {"tags": ["maintainability"]}
+            },
+            {
+              "id": "swift/redundant-note",
+              "defaultConfiguration": {"level": "note"},
+              "properties": {"tags": ["readability"]}
+            }
+          ]
+        }
+      },
+      "invocations": [
+        {
+          "toolExecutionNotifications": [
+            {"descriptor": {"id": "swift/diagnostics/successfully-extracted-files"},
+             "locations": [{"physicalLocation": {"artifactLocation": {"uri": "VideoScan/VideoScan/App/A.swift"}}}]},
+            {"descriptor": {"id": "swift/diagnostics/successfully-extracted-files"},
+             "locations": [{"physicalLocation": {"artifactLocation": {"uri": "VideoScan/VideoScan/App/B.swift"}}}]},
+            {"descriptor": {"id": "swift/diagnostics/successfully-extracted-files"},
+             "locations": [{"physicalLocation": {"artifactLocation": {"uri": "VideoScan/VideoScanCore/Sources/VideoScanCore/C.swift"}}}]},
+            {"descriptor": {"id": "swift/diagnostics/successfully-extracted-files"},
+             "locations": [{"physicalLocation": {"artifactLocation": {"uri": "VideoScan/VideoScanTests/ATests.swift"}}}]},
+            {"descriptor": {"id": "swift/diagnostics/extraction-errors"},
+             "message": {"text": "Compiler error in B.swift with error message cannot find 'Map' in scope"},
+             "locations": [{"physicalLocation": {"artifactLocation": {"uri": "VideoScan/VideoScan/App/B.swift"}}}]}
+          ]
+        }
+      ],
+      "results": [
+        {
+          "ruleId": "swift/cleartext-logging",
+          "message": {"text": "This operation writes 'line' to a log file. It may contain unencrypted sensitive data from [spouse](1)."},
+          "locations": [{"physicalLocation": {"artifactLocation": {"uri": "VideoScan/VideoScan/App/A.swift"}, "region": {"startLine": 120}}}]
+        },
+        {
+          "ruleId": "swift/cleartext-logging",
+          "message": {"text": "This operation writes 'line' to a log file. It may contain unencrypted sensitive data from [spouse](2)."},
+          "locations": [{"physicalLocation": {"artifactLocation": {"uri": "VideoScan/VideoScan/App/A.swift"}, "region": {"startLine": 188}}}]
+        },
+        {
+          "ruleId": "swift/unused-variable",
+          "message": {"text": "Variable 'tmp' is never used."},
+          "locations": [{"physicalLocation": {"artifactLocation": {"uri": "VideoScan/VideoScan/App/B.swift"}, "region": {"startLine": 9}}}]
+        },
+        {
+          "ruleId": "swift/redundant-note",
+          "level": "note",
+          "message": {"text": "Redundant thing."},
+          "locations": [{"physicalLocation": {"artifactLocation": {"uri": "VideoScan/VideoScan/App/B.swift"}, "region": {"startLine": 30}}}]
+        }
+      ]
+    }
+  ]
+}
