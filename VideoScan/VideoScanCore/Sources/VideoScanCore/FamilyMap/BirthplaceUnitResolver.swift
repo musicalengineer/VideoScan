@@ -162,67 +162,8 @@ public enum BirthplaceUnitResolver {
         return keys
     }()
 
-    // MARK: - Alternatives ("England or Wales")
-
-    /// True when some comma part has the word "or" (any case) BETWEEN two
-    /// words: "ENGLAND OR Wales or France", "Paris or Lyon, France". Not an
-    /// alternative: "Portland, OR" (the state code alone in its part),
-    /// "Portland OR USA" (upper-case OR followed only by the US), "Côte d
-    /// Or" (the "d" before it). A cheap byte scan first: unless an "o"/"O"
-    /// is directly followed by "r"/"R" somewhere, nothing is split into
-    /// words at all (most places — "Yorkshire" does pass the scan and pays
-    /// for the word walk, which finds no standalone "or").
-    static func offersAlternatives(_ bytes: UnsafeBufferPointer<UInt8>) -> Bool {
-        let n = bytes.count
-        var j = 0
-        var sawOr = false
-        while j + 1 < n {
-            if bytes[j] | 0x20 == 0x6F, bytes[j + 1] | 0x20 == 0x72 { sawOr = true; break }
-            j += 1
-        }
-        guard sawOr else { return false }
-        var start = 0
-        var i = 0
-        while i <= n {
-            if i == n || bytes[i] == 0x2C {
-                if partOffersAlternatives(bytes, start..<i) { return true }
-                start = i + 1
-            }
-            i += 1
-        }
-        return false
-    }
-
-    static func partOffersAlternatives(_ bytes: UnsafeBufferPointer<UInt8>, _ r: Range<Int>) -> Bool {
-        // Words = runs of non-space bytes.
-        var words: [Range<Int>] = []
-        var s: Int? = nil
-        var i = r.lowerBound
-        while i < r.upperBound {
-            let space = isSpace(bytes[i])
-            if space, let b = s { words.append(b..<i); s = nil }
-            if !space, s == nil { s = i }
-            i += 1
-        }
-        if let b = s { words.append(b..<r.upperBound) }
-        guard words.count >= 3 else { return false }   // "x or y" needs a word each side
-        for k in 1..<(words.count - 1) {
-            let w = words[k]
-            guard w.count == 2, bytes[w.lowerBound] | 0x20 == 0x6F, bytes[w.lowerBound + 1] | 0x20 == 0x72 else { continue }
-            let previous = words[k - 1]
-            if previous.count == 1, bytes[previous.lowerBound] | 0x20 == 0x64 { continue }   // "Côte d Or"
-            if bytes[w.lowerBound] == 0x4F, bytes[w.lowerBound + 1] == 0x52 {                  // upper-case "OR"
-                let rest = (words[k + 1].lowerBound..<r.upperBound)
-                let tail = asciiKey(rest, in: bytes)
-                if usCountryTails.contains(tail) { continue }                                   // "Portland OR USA"
-            }
-            return true
-        }
-        return false
-    }
-
-    /// What may follow the Oregon code in the same comma part.
-    static let usCountryTails: Set<String> = ["usa", "us", "u s a", "u s", "united states", "united states of america"]
+    // The "or" alternatives check (`offersAlternatives`) is in the extension
+    // at the end of this file.
 
     // MARK: - The scan (one place string)
 
@@ -257,23 +198,8 @@ public enum BirthplaceUnitResolver {
         /// country is in `except` ("Galicia, Spain" is Spain's Galicia).
         case outside(except: Set<FamilyMap.Country>)
     }
-
-    /// Words that make the next name a NEW-WORLD namesake: "New Bavaria",
-    /// "Nieuw Nederland", "Nueva España", "Neu Braunfels". A European unit
-    /// or country right after one of them is never placed in Europe.
-    static let newWorldPrefixes: Set<String> = ["new", "nieuw", "nieuwe", "nueva", "nuevo", "nouvelle", "nouveau",
-                                                "neu", "neue", "nova"]
-
-    /// Does this token place anyone in Western Europe?
-    static func isEuropean(_ token: Token) -> Bool {
-        switch token {
-        case .unit(let c, _, _), .country(let c, _): return c.isWesternEurope
-        case .alternatives(let options): return options.contains(where: isEuropean)
-        case .today(let inner): return isEuropean(inner)
-        case .coarse(let set): return set.contains { $0.isWesternEurope }
-        case .foreign, .outside: return false
-        }
-    }
+    // `newWorldPrefixes` and `isEuropean` (the "New Bavaria" rule) live in
+    // BirthplaceUnitResolver+Europe.swift.
 
     /// The state of one right-to-left pass over a place's bytes. Lives
     /// only inside `withContiguousStorageIfAvailable`; the buffer never
@@ -433,37 +359,45 @@ public enum BirthplaceUnitResolver {
                 if country == nil { stopped = true }
                 return nil
             case .alternatives(let options):
-                // A unit only for the country already established; a
-                // shared name never stands alone ("Limburg" is nil).
-                if let searches {
-                    for option in options {
-                        if case .unit(let c, _, _) = option, searches.contains(c) {
-                            return apply(option, key: key, range: range)
-                        }
-                    }
-                }
-                for option in options {
-                    if case .unit = option { continue }
-                    if let hit = apply(option, key: key, range: range) { return hit }
-                    if stopped { return nil }
-                }
-                return nil
+                return applyAlternatives(options, key: key, range: range)
             case .today(let inner):
-                // Where the ground is today, whatever is written to the
-                // right — but a name that needs its country ("Nice") still
-                // needs SOME country to its right.
-                if searches == nil, ambiguousWithoutCountry.contains(BirthplaceUnitResolver.undecorated(key)) { return nil }
-                switch inner {
-                case .unit(let c, _, let unitKey):
-                    return Hit(unitKey: unitKey, country: c, kind: c.unitKind, matchedComponent: text(range))
-                case .country(let c, _):
-                    return Hit(unitKey: c.key, country: c, kind: .country, matchedComponent: text(range))
-                default:
-                    return nil
-                }
+                return applyToday(inner, key: key, range: range)
             case .outside(let except):
                 if let country, except.contains(country) { return nil }
                 stopped = true
+                return nil
+            }
+        }
+
+        /// A shared name ("Limburg"): a unit only for the country already
+        /// established; never a unit on its own.
+        mutating func applyAlternatives(_ options: [Token], key: String, range: Range<Int>) -> Hit? {
+            if let searches {
+                for option in options {
+                    if case .unit(let c, _, _) = option, searches.contains(c) {
+                        return apply(option, key: key, range: range)
+                    }
+                }
+            }
+            for option in options {
+                if case .unit = option { continue }
+                if let hit = apply(option, key: key, range: range) { return hit }
+                if stopped { return nil }
+            }
+            return nil
+        }
+
+        /// Where the ground is today, whatever is written to the right —
+        /// but a name that needs its country ("Nice") still needs SOME
+        /// country to its right.
+        func applyToday(_ inner: Token, key: String, range: Range<Int>) -> Hit? {
+            if searches == nil, ambiguousWithoutCountry.contains(BirthplaceUnitResolver.undecorated(key)) { return nil }
+            switch inner {
+            case .unit(let c, _, let unitKey):
+                return Hit(unitKey: unitKey, country: c, kind: c.unitKind, matchedComponent: text(range))
+            case .country(let c, _):
+                return Hit(unitKey: c.key, country: c, kind: .country, matchedComponent: text(range))
+            default:
                 return nil
             }
         }
@@ -905,4 +839,71 @@ public enum BirthplaceUnitResolver {
         }
         return t
     }()
+}
+
+// MARK: - Alternatives ("England or Wales")
+
+// An extension (≈ more static members of the same namespace) so the
+// enum body stays within the lint length limit.
+extension BirthplaceUnitResolver {
+
+    /// True when some comma part has the word "or" (any case) BETWEEN two
+    /// words: "ENGLAND OR Wales or France", "Paris or Lyon, France". Not an
+    /// alternative: "Portland, OR" (the state code alone in its part),
+    /// "Portland OR USA" (upper-case OR followed only by the US), "Côte d
+    /// Or" (the "d" before it). A cheap byte scan first: unless an "o"/"O"
+    /// is directly followed by "r"/"R" somewhere, nothing is split into
+    /// words at all (most places — "Yorkshire" does pass the scan and pays
+    /// for the word walk, which finds no standalone "or").
+    static func offersAlternatives(_ bytes: UnsafeBufferPointer<UInt8>) -> Bool {
+        let n = bytes.count
+        var j = 0
+        var sawOr = false
+        while j + 1 < n {
+            if bytes[j] | 0x20 == 0x6F, bytes[j + 1] | 0x20 == 0x72 { sawOr = true; break }
+            j += 1
+        }
+        guard sawOr else { return false }
+        var start = 0
+        var i = 0
+        while i <= n {
+            if i == n || bytes[i] == 0x2C {
+                if partOffersAlternatives(bytes, start..<i) { return true }
+                start = i + 1
+            }
+            i += 1
+        }
+        return false
+    }
+
+    static func partOffersAlternatives(_ bytes: UnsafeBufferPointer<UInt8>, _ r: Range<Int>) -> Bool {
+        // Words = runs of non-space bytes.
+        var words: [Range<Int>] = []
+        var s: Int? = nil
+        var i = r.lowerBound
+        while i < r.upperBound {
+            let space = isSpace(bytes[i])
+            if space, let b = s { words.append(b..<i); s = nil }
+            if !space, s == nil { s = i }
+            i += 1
+        }
+        if let b = s { words.append(b..<r.upperBound) }
+        guard words.count >= 3 else { return false }   // "x or y" needs a word each side
+        for k in 1..<(words.count - 1) {
+            let w = words[k]
+            guard w.count == 2, bytes[w.lowerBound] | 0x20 == 0x6F, bytes[w.lowerBound + 1] | 0x20 == 0x72 else { continue }
+            let previous = words[k - 1]
+            if previous.count == 1, bytes[previous.lowerBound] | 0x20 == 0x64 { continue }   // "Côte d Or"
+            if bytes[w.lowerBound] == 0x4F, bytes[w.lowerBound + 1] == 0x52 {                  // upper-case "OR"
+                let rest = (words[k + 1].lowerBound..<r.upperBound)
+                let tail = asciiKey(rest, in: bytes)
+                if usCountryTails.contains(tail) { continue }                                   // "Portland OR USA"
+            }
+            return true
+        }
+        return false
+    }
+
+    /// What may follow the Oregon code in the same comma part.
+    static let usCountryTails: Set<String> = ["usa", "us", "u s a", "u s", "united states", "united states of america"]
 }

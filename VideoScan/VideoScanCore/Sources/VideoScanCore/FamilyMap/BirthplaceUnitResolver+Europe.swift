@@ -358,6 +358,24 @@ extension BirthplaceUnitResolver {
 
     // MARK: New-World colonies named after Europe (QA P1-B)
 
+    /// Words that make the next name a NEW-WORLD namesake: "New Bavaria",
+    /// "Nieuw Nederland", "Nueva España", "Neu Braunfels". A European unit
+    /// or country right after one of them is never placed in Europe (the
+    /// scan's phrase loop checks the token before each European match).
+    static let newWorldPrefixes: Set<String> = ["new", "nieuw", "nieuwe", "nueva", "nuevo", "nouvelle", "nouveau",
+                                                "neu", "neue", "nova"]
+
+    /// Does this token place anyone in Western Europe?
+    static func isEuropean(_ token: Token) -> Bool {
+        switch token {
+        case .unit(let c, _, _), .country(let c, _): return c.isWesternEurope
+        case .alternatives(let options): return options.contains(where: isEuropean)
+        case .today(let inner): return isEuropean(inner)
+        case .coarse(let set): return set.contains { $0.isWesternEurope }
+        case .foreign, .outside: return false
+        }
+    }
+
     /// Recognised explicitly so their European namesake never matches:
     /// New Netherland / New Sweden span today's states (country-only USA,
     /// like "New England"); New Amsterdam, New Utrecht and German Flatts
