@@ -377,3 +377,114 @@ struct TreeLineStatisticsScaleTests {
         #expect(relation != nil)
     }
 }
+
+// MARK: - QA findings on 989d5a5c (2026-10-01), red-first
+
+@Suite("TreeLineStatisticsQA")
+struct TreeLineStatisticsQATests {
+    typealias P = SyntheticGedcom.Person
+    typealias F = SyntheticGedcom.Family
+
+    /// A 25-generation single line above @G0@ (compiled trees reach 30+).
+    static func deepChainGraph(generations: Int = 25) -> GedcomFamilyGraph {
+        var people: [P] = []
+        var fams: [F] = []
+        for g in 0...generations {
+            people.append(P(id: "@G\(g)@", name: "Gen\(g) /Line/", sex: "M", birth: "\(1960 - 25 * g)"))
+        }
+        for g in 0..<generations {
+            fams.append(F(id: "@F\(g)@", husband: "@G\(g + 1)@", children: ["@G\(g)@"]))
+        }
+        return GedcomFamilyGraph(gedcomText: SyntheticGedcom.text(people, fams))
+    }
+
+    @Test func ourRecordedAncestorsIsTheSamePopulationOnBothStatisticsRoutes() throws {
+        let graph = Self.deepChainGraph()
+        let lines = try #require(TreeLineStatistics.ancestors(of: ["@G0@"], in: graph))
+        let whole = TreeStatistics.count(
+            TreeStatistics.Query(scope: .ancestorsOfAny(["@G0@"], maxGenerations: LineageTrail.generationCap)),
+            in: graph)
+        #expect(lines.members.count == 25)
+        #expect(whole.considered == lines.members.count,
+                "'our N recorded ancestors' must be one N whichever statistics route answers")
+    }
+
+    /// Duplicate partner records (the merged two-root tree is full of them):
+    /// one woman entered twice, same name and birth year.
+    @Test func aDuplicatedPartnerRecordIsNotCalledHalfBlood() throws {
+        let graph = GedcomFamilyGraph(gedcomText: SyntheticGedcom.text([
+            P(id: "@P@", name: "Pa /Root/", sex: "M", birth: "1850"),
+            P(id: "@Q1@", name: "Mary /Smith/", sex: "F", birth: "1852"),
+            P(id: "@Q2@", name: "Mary /Smith/", sex: "F", birth: "1852"),
+            P(id: "@X@", name: "Xan /Root/", sex: "M", birth: "1880"),
+            P(id: "@Y@", name: "Yul /Root/", sex: "M", birth: "1882"),
+            P(id: "@A@", name: "Ann /Root/", sex: "F", birth: "1910"),
+            P(id: "@B@", name: "Bob /Root/", sex: "M", birth: "1912"),
+        ], [
+            F(id: "@F1@", husband: "@P@", wife: "@Q1@", children: ["@X@"]),
+            F(id: "@F2@", husband: "@P@", wife: "@Q2@", children: ["@Y@"]),
+            F(id: "@F3@", husband: "@X@", children: ["@A@"]),
+            F(id: "@F4@", husband: "@Y@", children: ["@B@"]),
+        ]))
+        let r = try #require(graph.bloodRelation(of: "@B@", to: "@A@"))
+        #expect(r.half == nil, "the two partners are indistinguishable records: the tree does not prove half-blood")
+        #expect(r.name == "first cousin")
+    }
+
+    /// The file's own rule: "a meeting with one parent unrecorded on either
+    /// line is not called half (the tree doesn't say)". Siblings by
+    /// separate family records, one with only the shared father recorded.
+    @Test func siblingsWithAnUnrecordedParentAreNotCalledHalf() throws {
+        let graph = GedcomFamilyGraph(gedcomText: SyntheticGedcom.text([
+            P(id: "@P@", name: "Pa /Root/", sex: "M"),
+            P(id: "@Q@", name: "Ma /Root/", sex: "F"),
+            P(id: "@A@", name: "Ann /Root/", sex: "F"),
+            P(id: "@B@", name: "Bob /Root/", sex: "M"),
+        ], [
+            F(id: "@F1@", husband: "@P@", wife: "@Q@", children: ["@A@"]),
+            F(id: "@F2@", husband: "@P@", children: ["@B@"]),
+        ]))
+        let r = try #require(graph.bloodRelation(of: "@B@", to: "@A@"))
+        #expect(!r.name.hasPrefix("half-"), "got \(r.name)")
+    }
+
+    /// Cycles must terminate (green sensor, not a finding).
+    @Test func corruptLoopsTerminate() throws {
+        let graph = GedcomFamilyGraph(gedcomText: SyntheticGedcom.text([
+            P(id: "@A@", name: "Ann /Loop/", sex: "F"),
+            P(id: "@B@", name: "Bob /Loop/", sex: "M"),
+            P(id: "@C@", name: "Cid /Loop/", sex: "M"),
+        ], [
+            F(id: "@F1@", husband: "@B@", children: ["@A@"]),
+            F(id: "@F2@", husband: "@A@", children: ["@B@", "@C@"]),
+            F(id: "@F3@", husband: "@C@", children: ["@C@"]),
+        ]))
+        let pop = try #require(TreeLineStatistics.ancestors(of: ["@A@", "@C@"], in: graph))
+        _ = TreeLineStatistics.deepestLines(pop)
+        _ = graph.bloodRelation(of: "@C@", to: "@A@")
+        _ = graph.relationThroughMarriage(of: "@C@", to: "@A@")
+        #expect(pop.members.count >= 1)
+    }
+
+    /// P3-5: the in-law path takes the CLOSEST link, not the first spouse by
+    /// id. Ada married Wes (Bea's first cousin, id first) and Wyn (Bea's
+    /// sister): Bea is Ada's wife's SISTER.
+    @Test func theClosestMarriageLinkWinsNotTheFirstByID() throws {
+        let graph = GedcomFamilyGraph(gedcomText: SyntheticGedcom.text([
+            P(id: "@G@", name: "Gus /Top/", sex: "M"), P(id: "@H@", name: "Hel /Top/", sex: "F"),
+            P(id: "@P1@", name: "Pat /Top/", sex: "M"), P(id: "@M1@", name: "Meg /One/", sex: "F"),
+            P(id: "@P2@", name: "Pip /Top/", sex: "M"), P(id: "@M2@", name: "May /Two/", sex: "F"),
+            P(id: "@W1@", name: "Wes /Top/", sex: "M"), P(id: "@W2@", name: "Wyn /Top/", sex: "F"),
+            P(id: "@B@", name: "Bea /Top/", sex: "F"), P(id: "@A@", name: "Ada /Out/", sex: "M"),
+        ], [
+            F(id: "@F0@", husband: "@G@", wife: "@H@", children: ["@P1@", "@P2@"]),
+            F(id: "@F1@", husband: "@P1@", wife: "@M1@", children: ["@W1@"]),
+            F(id: "@F2@", husband: "@P2@", wife: "@M2@", children: ["@W2@", "@B@"]),
+            F(id: "@F3@", husband: "@A@", wife: "@W1@"),
+            F(id: "@F4@", husband: "@A@", wife: "@W2@"),
+        ]))
+        let link = try #require(graph.relationThroughMarriage(of: "@B@", to: "@A@"))
+        #expect(link.spouse.id == "@W2@", "got \(link.spouse.name) / \(link.relation.name)")
+        #expect(link.relation.name == "sister")
+    }
+}

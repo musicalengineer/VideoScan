@@ -327,7 +327,7 @@ struct HallieAncestorStatisticsTests {
                 "Rick's 'my ancestors' is both lines (#214)")
         #expect(Q.detect("how many of my own ancestors were born in ireland")?.who == .owner)
         #expect(Q.detect("how many of donna's ancestors were born in ireland")?.who == .person("Donna"))
-        #expect(Q.detect("how many ancestors of donna hudson were born in ireland")?.who == .person("Donna Hudson"))
+        #expect(Q.detect("how many ancestors of beth sample were born in ireland")?.who == .person("Beth Sample"))
         #expect(Q.detect("what was the average age at death of our ancestors") == .ageAtDeath(who: .ours))
         #expect(Q.detect("what is the average age at death on donna's side") == .ageAtDeath(who: .person("Donna")))
         #expect(Q.detect("what is our deepest line") == .deepestLine(who: .ours))
@@ -379,7 +379,7 @@ struct HallieAncestorStatisticsTests {
     @Test func newEnglandVsOldEnglandAcrossBothSides() throws {
         let r = try #require(answer("how many of our ancestors were born in New England vs Old England?"))
         #expect(r.outcome == .answered)
-        #expect(r.prose.hasPrefix("Of our 11 recorded ancestors (your side 8, Beth’s side 4; 1 is on both), 9 have a birthplace I can place."), Comment(rawValue: r.prose))
+        #expect(r.prose.hasPrefix("Of our 11 recorded ancestors (your side 8, Beth’s side 4; 1 is on both), 9 have a birthplace I can place (your side 6 of 8, Beth’s side 4 of 4)."), Comment(rawValue: r.prose))
         #expect(r.prose.contains("New England: 3 (your side 2, Beth’s side 2)."), Comment(rawValue: r.prose))
         #expect(r.prose.contains("Old England: 1 (your side 1, Beth’s side 0)."), Comment(rawValue: r.prose))
         #expect(r.prose.contains("New England outnumbers Old England 3 to 1."), Comment(rawValue: r.prose))
@@ -467,7 +467,7 @@ struct HallieAncestorStatisticsTests {
     @Test func noBloodButAMarriageIsTheInLawPath() throws {
         let r = try #require(answer("how am I related to Nell Niece", tree: kinTree, owner: "Paul Root"))
         #expect(r.outcome == .answered)
-        #expect(r.prose.hasPrefix("Nell Niece isn’t related to you by blood in the tree, but is your wife Sue Wed’s niece."), Comment(rawValue: r.prose))
+        #expect(r.prose.hasPrefix("Nell Niece isn’t related to you by blood in the tree, but she is your wife Sue Wed’s niece."), Comment(rawValue: r.prose))
         // Seth has no parents in the tree, so blood kinship is unknown: the
         // honest decline stands and the marriage is its aside.
         let married = try #require(answer("how am I related to Seth Spouse", tree: kinTree, owner: "Paul Root"))
@@ -479,5 +479,193 @@ struct HallieAncestorStatisticsTests {
     @Test func aPersonTheTreeDoesNotKnowIsNotGuessed() throws {
         let r = answer("how am I related to Zebulon Quackenbush", tree: kinTree, owner: "Paul Root")
         #expect(r == nil || r?.outcome != .answered, Comment(rawValue: r?.prose ?? "nil"))
+    }
+
+    // MARK: QA findings on 989d5a5c (2026-10-01), red-first
+
+    /// P2-4: shapes the earliest / deepest readers cannot hold abstain.
+    @Test func qaConstraintsTheEarliestAndDeepestShapesCannotHoldAbstain() {
+        for q in [
+            "who was our first ancestor to fight in the revolution",
+            "who was the first ancestor to serve in the civil war",
+            "who was our first ancestor to go to college",
+            "who is our earliest ancestor we have a picture of",
+            "who was our first ancestor with a will",
+            "how many generations back does the quill line go",
+            "how many generations back can we go on the lark side",
+            "how many generations back does our line go in ireland",
+            "who is the earliest ancestor of the quill family",
+        ] {
+            #expect(Q.detect(q) == nil, Comment(rawValue: "\(q) → \(String(describing: Q.detect(q)))"))
+        }
+    }
+
+    /// P3-2: a kin or sex word is not a person's name — abstain on both
+    /// statistics routes rather than count "My Mom" or the whole tree.
+    @Test func kinAndSexWordsAreNotReadAsPeople() {
+        for q in ["how many of my mom's ancestors were born in ireland",
+                  "what is my mom's deepest line",
+                  "how many of our female ancestors were born in ireland",
+                  "what was the average age at death of my father's ancestors"] {
+            #expect(Q.detect(q) == nil, Comment(rawValue: "\(q) → \(String(describing: Q.detect(q)))"))
+            #expect(HallieTreeStatisticsQuestion.detect(q) == nil, Comment(rawValue: "whole-tree route: \(q)"))
+        }
+    }
+
+    /// P3-3: two records of one spouse are ONE spouse; a spouse who is the
+    /// tree's home person wins over an ex.
+    @Test func partnerSelectionIgnoresDuplicateRecordsAndPrefersTheHomeRoot() throws {
+        let dup = """
+        0 HEAD
+        0 @O@ INDI
+        1 NAME Ole /Dup/
+        1 SEX M
+        1 FAMC @FP@
+        1 FAMS @F1@
+        1 FAMS @F2@
+        0 @PA@ INDI
+        1 NAME Pa /Dup/
+        1 SEX M
+        1 FAMS @FP@
+        0 @S1@ INDI
+        1 NAME Ina /Same/
+        1 SEX F
+        1 BIRT
+        2 DATE 1950
+        1 FAMS @F1@
+        0 @S2@ INDI
+        1 NAME Ina /Same/
+        1 SEX F
+        1 BIRT
+        2 DATE 1950
+        1 FAMS @F2@
+        0 @FP@ FAM
+        1 HUSB @PA@
+        1 CHIL @O@
+        0 @F1@ FAM
+        1 HUSB @O@
+        1 WIFE @S1@
+        0 @F2@ FAM
+        1 HUSB @O@
+        1 WIFE @S2@
+        0 TRLR
+        """
+        let r = try #require(answer("what is our deepest line", tree: dup, owner: "Ole Dup"))
+        #expect(r.basisLine.contains("Ina Same, your spouse"), Comment(rawValue: r.basisLine))
+        let ex = """
+        0 HEAD
+        1 _VS_ROOT @R@
+        0 @O@ INDI
+        1 NAME Ole /Wed/
+        1 SEX M
+        1 FAMC @FP@
+        1 FAMS @F1@
+        1 FAMS @F2@
+        0 @PA@ INDI
+        1 NAME Pa /Wed/
+        1 SEX M
+        1 FAMS @FP@
+        0 @E@ INDI
+        1 NAME Eve /Ex/
+        1 SEX F
+        1 FAMS @F1@
+        0 @R@ INDI
+        1 NAME Rae /Root/
+        1 SEX F
+        1 FAMS @F2@
+        0 @FP@ FAM
+        1 HUSB @PA@
+        1 CHIL @O@
+        0 @F1@ FAM
+        1 HUSB @O@
+        1 WIFE @E@
+        0 @F2@ FAM
+        1 HUSB @O@
+        1 WIFE @R@
+        0 TRLR
+        """
+        let r2 = try #require(answer("what is our deepest line", tree: ex, owner: "Ole Wed"))
+        #expect(r2.basisLine.contains("Rae Root"), Comment(rawValue: r2.basisLine))
+    }
+
+    /// P3-4: a BEF / AFT birth is "before" / "after", never "around".
+    @Test func boundedBirthDatesSayBeforeOrAfter() throws {
+        let tree = """
+        0 HEAD
+        0 @K@ INDI
+        1 NAME Kim /Bound/
+        1 SEX F
+        1 FAMC @F@
+        0 @L@ INDI
+        1 NAME Lou /Bound/
+        1 SEX M
+        1 BIRT
+        2 DATE BEF 1700
+        1 FAMS @F@
+        0 @V@ INDI
+        1 NAME Liv /Bound/
+        1 SEX F
+        1 BIRT
+        2 DATE AFT 1720
+        1 FAMS @F@
+        0 @F@ FAM
+        1 HUSB @L@
+        1 WIFE @V@
+        1 CHIL @K@
+        0 TRLR
+        """
+        let r = try #require(answer("who is the earliest ancestor in my family tree", tree: tree, owner: "Kim Bound"))
+        #expect(r.prose.contains("is Lou Bound, born before 1700"), Comment(rawValue: r.prose))
+        #expect(!r.prose.contains("around"), Comment(rawValue: r.prose))
+    }
+
+    /// P3-5: the marriage answer has a pronoun ("he is married to …").
+    @Test func theMarriageAnswerHasAPronoun() throws {
+        let tree = """
+        0 HEAD
+        0 @A@ INDI
+        1 NAME Ari /Out/
+        1 SEX M
+        1 FAMC @FA@
+        0 @AP@ INDI
+        1 NAME Abe /Out/
+        1 SEX M
+        1 FAMS @FA@
+        0 @B@ INDI
+        1 NAME Bo /In/
+        1 SEX M
+        1 FAMC @FB@
+        1 FAMS @FS@
+        0 @BP@ INDI
+        1 NAME Bud /In/
+        1 SEX M
+        1 FAMS @FB@
+        0 @D@ INDI
+        1 NAME Dee /Out/
+        1 SEX F
+        1 FAMC @FA@
+        1 FAMS @FD@
+        0 @C@ INDI
+        1 NAME Cy /Out/
+        1 SEX F
+        1 FAMC @FD@
+        1 FAMS @FS@
+        0 @FA@ FAM
+        1 HUSB @AP@
+        1 CHIL @A@
+        1 CHIL @D@
+        0 @FD@ FAM
+        1 WIFE @D@
+        1 CHIL @C@
+        0 @FB@ FAM
+        1 HUSB @BP@
+        1 CHIL @B@
+        0 @FS@ FAM
+        1 HUSB @B@
+        1 WIFE @C@
+        0 TRLR
+        """
+        let r = try #require(answer("how am I related to Bo In", tree: tree, owner: "Ari Out"))
+        #expect(r.prose.hasPrefix("Bo In isn’t related to you by blood in the tree, but he is married to your niece, Cy Out."), Comment(rawValue: r.prose))
     }
 }

@@ -5,11 +5,11 @@
 // denominator, because every figure arrives with one.
 //
 //   "how many of our ancestors were born in New England vs Old England?"
-//   → "Of our 13,406 recorded ancestors (your side 7,012, Donna's side
-//      6,488; 94 are on both), 11,920 have a birthplace I can place. New
-//      England: 2,140 (your side 1,500, Donna's side 680). Old England: …
-//      1,486 have no birthplace I can place, so they aren't counted either
-//      way."
+//   → (synthetic test tree) "Of our 11 recorded ancestors (your side 8,
+//      Beth's side 4; 1 is on both), 9 have a birthplace I can place (your
+//      side 6 of 8, Beth's side 4 of 4). New England: 3 (your side 2,
+//      Beth's side 2). Old England: 1 … 2 have no birthplace I can place,
+//      so they aren't counted either way."
 //
 // "Our" = the owner and the owner's partner (the tree's spouse, or the
 // merged tree's other home person — the Family Tree walk's second start).
@@ -32,14 +32,14 @@ extension HallieLineageAnswer {
 
         var isOurs: Bool { people.count > 1 }
 
-        /// "your" for the owner, "Donna's" for anyone else.
+        /// "your" for the owner, "Beth's" for anyone else.
         func possessive(_ i: Int) -> String {
             people[i].id == ownerID ? "your"
                 : HallieLineageQuestion.possessive(FamilyTreeLiveModel.firstGivenName(people[i]))
         }
-        /// "your side" / "Donna's side".
+        /// "your side" / "Beth's side".
         func side(_ i: Int) -> String { possessive(i) + " side" }
-        /// "our" / "your" / "Donna Hudson's" — whose ancestors, collectively.
+        /// "our" / "your" / "Beth Sample's" — whose ancestors, collectively.
         var whose: String {
             if isOurs { return "our" }
             return people[0].id == ownerID ? "your" : HallieLineageQuestion.possessive(people[0].name)
@@ -111,10 +111,18 @@ extension HallieLineageAnswer {
     /// of those, the owner's line alone — and the note says why.
     static func ancestorPartner(of owner: GedcomFamilyGraph.Person,
                                 graph: GedcomFamilyGraph) -> (person: GedcomFamilyGraph.Person?, note: String) {
-        let spouses = graph.relatives(.spouse, of: owner).filter { !graph.isHidden($0.id) }
+        // Two records of one spouse are ONE spouse (QA P3-3: merged trees
+        // carry duplicates) — keep the first by id of each look-alike group.
+        var spouses: [GedcomFamilyGraph.Person] = []
+        for s in graph.relatives(.spouse, of: owner).filter({ !graph.isHidden($0.id) }).sorted(by: { $0.id < $1.id })
+        where !spouses.contains(where: { GedcomFamilyGraph.likelySamePerson($0, s) }) {
+            spouses.append(s)
+        }
         let otherRoots = graph.roots.filter { $0.id != owner.id && !graph.isHidden($0.id) }
         let ownerIsRoot = graph.roots.contains { $0.id == owner.id }
-        if ownerIsRoot, let both = otherRoots.first(where: { r in spouses.contains { $0.id == r.id } }) {
+        // A spouse who is a home person of the tree wins over any other
+        // (an ex, a first marriage) — whether or not the owner is one too.
+        if let both = spouses.first(where: { s in otherRoots.contains { $0.id == s.id } }) {
             return (both, "“Our” = you and \(both.name), your spouse and the tree’s other home person.")
         }
         if spouses.count == 1 {
@@ -124,7 +132,7 @@ extension HallieLineageAnswer {
             return (otherRoots[0], "“Our” = you and \(otherRoots[0].name), the tree’s other home person.")
         }
         if spouses.count > 1 {
-            return (nil, "The tree records \(spouses.count) spouses for you, so “our” was counted as your line only — name one (“Donna’s ancestors”) for theirs.")
+            return (nil, "The tree records \(spouses.count) spouses for you, so “our” was counted as your line only — name one (“\(FamilyTreeLiveModel.firstGivenName(spouses[0]))’s ancestors”) for theirs.")
         }
         return (nil, "The tree records no spouse for you, so “our” was counted as your line only.")
     }
@@ -229,7 +237,14 @@ extension HallieLineageAnswer {
             sentences.append("Of the \(spoken(r.considered)), \(spoken(r.placed)) \(r.placed == 1 ? "has" : "have") a birthplace I can place; " + tail)
             return sentences.joined(separator: " ")
         }
-        sentences.append("Of \(pop), \(spoken(r.placed)) \(r.placed == 1 ? "has" : "have") a birthplace I can place.")
+        // Coverage per side too (QA P3-4): a side whose birthplaces are
+        // mostly unrecorded must not hide inside the union's figure.
+        let placedPerSide = sides.isOurs
+            ? " (" + r.placedPerSide.indices.map {
+                "\(sides.side($0)) \(spoken(r.placedPerSide[$0])) of \(spoken(r.consideredPerSide[$0]))"
+            }.joined(separator: ", ") + ")"
+            : ""
+        sentences.append("Of \(pop), \(spoken(r.placed)) \(r.placed == 1 ? "has" : "have") a birthplace I can place\(placedPerSide).")
         for (i, row) in r.rows.enumerated() {
             sentences.append("\(labels[i]): \(spoken(row.total))\(perSideCounts(row.perSide, sides)).")
         }
@@ -342,7 +357,19 @@ extension HallieLineageAnswer {
         func born(_ m: TreeLineStatistics.Member) -> String {
             switch m.birthPrecision {
             case .approximate?: return "born about \(m.birthYear ?? year)"
-            case .bounded?: return "born around \(m.birthYear ?? year) (the record gives a range)"
+            case .bounded?:
+                // BEF / AFT / BET as the record says them (QA P3-4).
+                let y = m.birthYear ?? year
+                guard let interval = GedcomYearInterval.parse(graph.people[m.id]?.birthDate ?? "") else {
+                    return "born \(y) (the record gives a range)"
+                }
+                switch interval.qualifier {
+                case .before: return "born before \(y)"
+                case .after: return "born after \(y)"
+                default:
+                    if let lo = interval.lower, let hi = interval.upper { return "born between \(lo) and \(hi)" }
+                    return "born \(y) (the record gives a range)"
+                }
             default: return "born \(m.birthYear ?? year)"
             }
         }

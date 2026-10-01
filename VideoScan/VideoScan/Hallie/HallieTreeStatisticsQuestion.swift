@@ -76,6 +76,11 @@ enum HallieTreeStatisticsQuestion: Equatable, Sendable {
         // A constraint we cannot represent means we do not answer. Checked
         // BEFORE building a query so a partial answer can never escape.
         guard q.firstMatch(of: unsupportedConstraint) == nil else { return nil }
+        // "how many of my mom's ancestors …", "how many women in the tree …":
+        // a kin or sex constraint this engine cannot hold — abstain rather
+        // than count the whole tree (QA P3-2, 2026-10-01).
+        guard q.replacingOccurrences(of: "’", with: "'")
+                .firstMatch(of: HallieAncestorStatisticsQuestion.kinOrSexScope) == nil else { return nil }
 
         // "my maternal ancestors" names a side the scope cannot hold: abstain
         // rather than silently answer for the whole tree (codex #1180).

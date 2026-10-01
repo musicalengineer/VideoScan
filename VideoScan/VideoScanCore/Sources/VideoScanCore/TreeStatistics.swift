@@ -32,7 +32,9 @@ public enum TreeStatistics {
         case descendants(of: String, maxGenerations: Int)
         /// The UNION of several people's ancestors, each person once — "our
         /// ancestors" = the owner's line and the partner's line (GH #214).
-        /// A person on both lines is counted once.
+        /// A person on both lines is counted once. The population is
+        /// TreeLineStatistics.ancestors (uncapped, hidden excluded);
+        /// `maxGenerations` is NOT applied — see `population`.
         case ancestorsOfAny([String], maxGenerations: Int)
     }
 
@@ -206,17 +208,15 @@ public enum TreeStatistics {
             guard let root = graph.people[id] else { return [] }
             return graph.ancestorLine(of: root, line: .both, generations: maxGenerations)
                 .flatMap(\.people)
-        case .ancestorsOfAny(let ids, let maxGenerations):
-            var seen = Set<String>()
-            var out: [GedcomFamilyGraph.Person] = []
-            for id in ids {
-                guard let root = graph.people[id] else { continue }
-                for person in graph.ancestorLine(of: root, line: .both, generations: maxGenerations)
-                    .flatMap(\.people) where seen.insert(person.id).inserted {
-                    out.append(person)
-                }
-            }
-            return out
+        case .ancestorsOfAny(let ids, _):
+            // EXACTLY TreeLineStatistics' population — every generation,
+            // hidden records left out — so "our N recorded ancestors" is one
+            // N whichever statistics route answers (QA P2-1, 2026-10-01: a
+            // 20-generation cap here reported a smaller N on Rick's 30+-
+            // generation lines and read as complete). `maxGenerations` is
+            // not applied for this scope.
+            guard let lines = TreeLineStatistics.ancestors(of: ids, in: graph) else { return [] }
+            return lines.members.compactMap { graph.people[$0.id] }
         case .descendants(let id, let maxGenerations):
             guard let root = graph.people[id] else { return [] }
             var seen: Set<String> = [root.id]

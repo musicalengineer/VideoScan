@@ -81,17 +81,43 @@ extension GedcomFamilyGraph {
     }
 
     /// Nil = full blood (the meeting is a couple), or the tree doesn't say
-    /// (a line with only the one parent recorded).
+    /// (a line with only the one parent recorded, or two partner records
+    /// that look like the same person entered twice).
     public func halfBlood(_ meeting: AncestralMeeting) -> HalfBlood? {
         guard meeting.ancestors.count == 1, meeting.pathA.count > 1, meeting.pathB.count > 1 else { return nil }
         let ancestor = meeting.ancestors[0]
         let childA = meeting.pathA[1], childB = meeting.pathB[1]
-        guard childA.id != childB.id else { return nil }
-        let otherA = relatives(.parents, of: childA).filter { $0.id != ancestor.id }
-        let otherB = relatives(.parents, of: childB).filter { $0.id != ancestor.id }
+        guard childA.id != childB.id,
+              let partners = provenDifferentPartners(
+                  relatives(.parents, of: childA).filter { $0.id != ancestor.id },
+                  relatives(.parents, of: childB).filter { $0.id != ancestor.id }) else { return nil }
+        return HalfBlood(ancestor: ancestor, partnerOnA: partners.a, partnerOnB: partners.b)
+    }
+
+    /// The tree PROVES two different partners only when each side records
+    /// one, no record is on both sides, and no pair looks like one person
+    /// entered twice (QA P2-2, 2026-10-01: merged trees are full of
+    /// duplicate "Mary Smith, b. 1852" records). Nil = the tree doesn't say.
+    func provenDifferentPartners(_ otherA: [Person], _ otherB: [Person]) -> (a: Person, b: Person)? {
         guard let pa = otherA.first, let pb = otherB.first,
               Set(otherA.map(\.id)).isDisjoint(with: otherB.map(\.id)) else { return nil }
-        return HalfBlood(ancestor: ancestor, partnerOnA: pa, partnerOnB: pb)
+        for x in otherA {
+            for y in otherB where Self.likelySamePerson(x, y) { return nil }
+        }
+        return (pa, pb)
+    }
+
+    /// Same normalized name, and birth years that do not contradict it
+    /// (either unrecorded, or within two years).
+    public static func likelySamePerson(_ x: Person, _ y: Person) -> Bool {
+        func norm(_ s: String) -> String {
+            s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+                .replacingOccurrences(of: "/", with: " ")
+                .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        }
+        guard norm(x.name) == norm(y.name) else { return false }
+        guard let bx = x.birthYear, let by = y.birthYear else { return true }
+        return abs(bx - by) <= 2
     }
 
     // MARK: - One pair
@@ -106,6 +132,9 @@ extension GedcomFamilyGraph {
         public let half: HalfBlood?
         /// Every separate line the two share (pedigree collapse: > 1).
         public let separateLines: Int
+        /// Links between the two along the nearest line (parent 1, sibling
+        /// 2, first cousin 4 …) — how the in-law path picks the closest.
+        public let distance: Int
     }
 
     /// B's blood relationship to A — direct lines and siblings from the
@@ -120,20 +149,26 @@ extension GedcomFamilyGraph {
                 let bIsParent = relatives(.parents, of: a).contains { $0.id == bID }
                 let name = bIsParent ? Self.generationLabel(generations: 1, sex: b.sex)
                                      : Self.descendantLabel(generations: 1, sex: b.sex)
-                return BloodRelation(name: name, meeting: nil, half: nil, separateLines: 1)
+                return BloodRelation(name: name, meeting: nil, half: nil, separateLines: 1, distance: 1)
             case .ancestorDescendant:
                 // The path ends at B either way; which way it runs is
                 // whether B is among A's ancestors.
                 let bIsAncestor = AncestorIndex(graph: self, descendantID: aID).path(from: bID) != nil
                 let name = bIsAncestor ? Self.generationLabel(generations: depth, sex: b.sex)
                                        : Self.descendantLabel(generations: depth, sex: b.sex)
-                return BloodRelation(name: name, meeting: nil, half: nil, separateLines: 1)
-            case .siblings:
-                return BloodRelation(name: Self.relationshipName(depthA: 1, depthB: 1, sexOfB: b.sex) ?? "sibling",
-                                     meeting: nil, half: nil, separateLines: 1)
-            case .halfSiblings:
-                return BloodRelation(name: Self.relationshipName(depthA: 1, depthB: 1, sexOfB: b.sex, half: true) ?? "half-sibling",
-                                     meeting: nil, half: nil, separateLines: 1)
+                return BloodRelation(name: name, meeting: nil, half: nil, separateLines: 1, distance: depth)
+            case .siblings, .halfSiblings:
+                // directRelation calls one shared parent "half"; the tree
+                // only PROVES it when each records a different other parent
+                // (QA P2-3) — otherwise they are siblings, half not known.
+                let parentsA = relatives(.parents, of: a), parentsB = relatives(.parents, of: b)
+                let shared = Set(parentsA.map(\.id)).intersection(parentsB.map(\.id))
+                let half = direct.kind == .halfSiblings && provenDifferentPartners(
+                    parentsA.filter { !shared.contains($0.id) },
+                    parentsB.filter { !shared.contains($0.id) }) != nil
+                let name = Self.relationshipName(depthA: 1, depthB: 1, sexOfB: b.sex, half: half)
+                    ?? (half ? "half-sibling" : "sibling")
+                return BloodRelation(name: name, meeting: nil, half: nil, separateLines: 1, distance: 2)
             case .samePerson:
                 return nil
             case .spouses, .parentInLaw, .siblingInLaw:
@@ -144,7 +179,8 @@ extension GedcomFamilyGraph {
         let half = halfBlood(nearest)
         guard let name = Self.relationshipName(depthA: nearest.depthA, depthB: nearest.depthB,
                                                sexOfB: b.sex, half: half != nil) else { return nil }
-        return BloodRelation(name: name, meeting: nearest, half: half, separateLines: ancestry.meetings.count)
+        return BloodRelation(name: name, meeting: nearest, half: half, separateLines: ancestry.meetings.count,
+                             distance: nearest.depthA + nearest.depthB)
     }
 
     /// B related to A only through a marriage.
@@ -163,21 +199,23 @@ extension GedcomFamilyGraph {
         public let relation: BloodRelation
     }
 
-    /// The in-law path, only for pairs with NO blood link. A's spouses
-    /// first, then B's; spouses in id order; the first that connects wins.
+    /// The in-law path, only for pairs with NO blood link. Every spouse of
+    /// A and of B is tried; the CLOSEST blood link wins (QA P3-5: the first
+    /// spouse by id gave "wife's first cousin" where "wife's sister" was
+    /// recorded). Ties: A's spouses before B's, then id order.
     public func relationThroughMarriage(of bID: String, to aID: String) -> MarriageRelation? {
         guard aID != bID, let a = people[aID], let b = people[bID] else { return nil }
+        var best: MarriageRelation?
+        func consider(_ m: MarriageRelation) {
+            if best.map({ m.relation.distance < $0.relation.distance }) ?? true { best = m }
+        }
         for s in relatives(.spouse, of: a).sorted(by: { $0.id < $1.id }) where s.id != bID {
-            if let r = bloodRelation(of: bID, to: s.id) {
-                return MarriageRelation(via: .spouseOfA, spouse: s, relation: r)
-            }
+            if let r = bloodRelation(of: bID, to: s.id) { consider(MarriageRelation(via: .spouseOfA, spouse: s, relation: r)) }
         }
         for t in relatives(.spouse, of: b).sorted(by: { $0.id < $1.id }) where t.id != aID {
-            if let r = bloodRelation(of: t.id, to: aID) {
-                return MarriageRelation(via: .spouseOfB, spouse: t, relation: r)
-            }
+            if let r = bloodRelation(of: t.id, to: aID) { consider(MarriageRelation(via: .spouseOfB, spouse: t, relation: r)) }
         }
-        return nil
+        return best
     }
 
     /// "husband" / "wife" / "spouse" for a spouse's sex.

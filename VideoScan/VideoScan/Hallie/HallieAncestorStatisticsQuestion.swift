@@ -64,8 +64,20 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
     private static let ageAtDeathWords = /\bage\s+at\s+death\b|\bage\s+(?:when|that|they)\s+(?:they\s+)?died\b|\blife\s*spans?\b|\bhow\s+long\s+did\b.*\blive\b|\bdied\s+at\s+what\s+age\b|\bwhat\s+age\s+did\b.*\bdie\b/
     private static let ancestorNoun = /\b(?:ancestors?|ancestry|forebears?|forefathers?|lines?|sides?|lineage)\b/
     /// A constraint none of these shapes can hold → abstain.
-    private static let unsupported = /\bmarried\b|\bspouse\b|\bchildren\b|\bsons?\b|\bdaughters?\b|\bsurname\b|\bnamed\b|\bcalled\b|\bphotos?\b|\bvideos?\b|\balive\b|\bliving\b|\bdeceased\b|\bmaternal\b|\bpaternal\b|\bmother'?s\s+(?:side|line)\b|\bfather'?s\s+(?:side|line)\b|\boutside\b|\babroad\b|\boverseas\b|\bforeign\b|\beurope\b|\basia\b|\bafrica\b|\bcentury\b|\bcenturies\b|\bdecades?\b|\bper\s+generation\b|\bby\s+generation\b/
+    private static let unsupported = /\bmarried\b|\bspouse\b|\bchildren\b|\bsons?\b|\bdaughters?\b|\bsurname\b|\bnamed\b|\bcalled\b|\bphotos?\b|\bvideos?\b|\bpic(?:ture)?s?\b|\bimages?\b|\bportraits?\b|\balive\b|\bliving\b|\bdeceased\b|\bmaternal\b|\bpaternal\b|\bmother'?s\s+(?:side|line)\b|\bfather'?s\s+(?:side|line)\b|\boutside\b|\babroad\b|\boverseas\b|\bforeign\b|\beurope\b|\basia\b|\bafrica\b|\bcentury\b|\bcenturies\b|\bdecades?\b|\bper\s+generation\b|\bby\s+generation\b/
     private static let anyYear = /\b\d{3,4}s?\b/
+    /// A kin or sex word in the scope ("my mom's line", "our female
+    /// ancestors") is a constraint, not a person's name (QA P3-2): both
+    /// statistics recognizers abstain rather than count "My Mom" or the
+    /// whole tree. Shared with HallieTreeStatisticsQuestion.
+    static let kinOrSexScope = /\b(?:female|male|women|men|woman|man)\b|\b(?:mom|mum|mommy|mother|dad|daddy|father|grand\w+|wife|husband|aunt|uncle|cousin|brother|sister|nephew|niece|son|daughter)(?:'s|s'|s)\b/
+    /// "the quill line", "on the lark side", "the quill family": a scope
+    /// this reader cannot resolve to a person (QA P2-4) — never "ours".
+    private static let unreadFamilyScope = /\bthe\s+[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*)?\s+(?:family|line|side|clan|branch|lineage)\b/
+    /// "in Ireland", "in the civil war" … — a place or event filter the
+    /// earliest / deepest shapes cannot hold. "in my/our/the family tree"
+    /// and "in donna's tree" are scope, not filters.
+    private static let inFilter = /\bin\s+(?!(?:my|our|the\s+(?:family\s+)?tree\b|this|his|her|their)\b)(?![a-z.'-]+'s?\s)[a-z]+/
 
     // MARK: - Recognition
 
@@ -75,7 +87,8 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
         let q = question.lowercased()
             .replacingOccurrences(of: "’", with: "'")
             .trimmingCharacters(in: CharacterSet(charactersIn: " ?.!"))
-        guard q.firstMatch(of: unsupported) == nil else { return nil }
+        guard q.firstMatch(of: unsupported) == nil,
+              q.firstMatch(of: kinOrSexScope) == nil else { return nil }
 
         if let earliest = earliestAncestor(q) { return earliest }
         if let deepest = deepestLine(q) { return deepest }
@@ -95,9 +108,22 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
               // Ireland", "… in England": an immigration or place question,
               // not a ranking of the whole line.
               q.firstMatch(of: /\b(?:came|come|comes|arrive\w*|immigra\w*|emigra\w*|settle\w*|moved?|lived?|from)\b/) == nil,
-              q.firstMatch(of: /\bin\s+(?!(?:my|our|the|this|his|her|their)\b)(?![a-z.'-]+'s?\s)[a-z]+/) == nil
+              q.firstMatch(of: inFilter) == nil,
+              // "first ancestor TO fight / to serve", "… WITH a will", "…
+              // (that) WE have …", "… WHO …": a qualified ancestor, not the
+              // earliest of the line (QA P2-4).
+              q.firstMatch(of: /\bancestors?\s+(?:to|with|we|i|you|that|who|whom|which|whose)\b/) == nil,
+              let who = scopeOrOurs(q)
         else { return nil }
-        return .earliest(who: who(in: q, allowTree: true) ?? .ours)
+        return .earliest(who: who)
+    }
+
+    /// The scope, defaulting to ours — but NIL when the sentence names a
+    /// family line this reader could not resolve ("the quill line", "on the
+    /// lark side"), which must never be answered as ours (QA P2-4).
+    private static func scopeOrOurs(_ q: String) -> Who? {
+        if let w = who(in: q, allowTree: true) { return w }
+        return q.firstMatch(of: unreadFamilyScope) == nil ? .ours : nil
     }
 
     /// "how deep is our deepest line" / "how many generations back does our
@@ -109,8 +135,10 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
             || q.firstMatch(of: /\bhow\s+many\s+generations\s+(?:does|do)\s+(?:our|my|the|[a-z']+'s?)\s+(?:family\s+tree|tree|line|lines|ancestry)\s+(?:have|cover|span)\b/) != nil
         guard asks,
               q.firstMatch(of: /\bborn\b|\bbirth|\buntil\b|\btill\b|\bbefore\b|\bafter\b|\bto\s+(?:the\s+)?[a-z]+\s*$/) == nil,
-              q.firstMatch(of: anyYear) == nil else { return nil }
-        return .deepestLine(who: who(in: q, allowTree: true) ?? .ours)
+              q.firstMatch(of: anyYear) == nil,
+              q.firstMatch(of: inFilter) == nil,   // "… does our line go in Ireland"
+              let who = scopeOrOurs(q) else { return nil }
+        return .deepestLine(who: who)
     }
 
     /// "average age at death of our ancestors" / "oldest age at death on
@@ -184,7 +212,9 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
             }
         }
         // "donna's deepest line" / "donna's ancestors" with no preposition.
-        if let m = q.firstMatch(of: /\b([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,3}?)'s?\s+(?:own\s+)?(?:ancestors?|ancestry|forebears?|lines?|sides?|lineage|deepest|earliest|first|oldest|longest|family\s+tree|tree)\b/),
+        // A REAL possessive only: with the "'s" optional, "the lark side"
+        // and "our female ancestors" were read as people (QA P2-4 / P3-2).
+        if let m = q.firstMatch(of: /\b([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,3}?)(?:'s|s')\s+(?:own\s+)?(?:ancestors?|ancestry|forebears?|lines?|sides?|lineage|deepest|earliest|first|oldest|longest|family\s+tree|tree)\b/),
            let name = HallieLineageQuestion.scopeName(String(m.1)), !isOwnerWord(name) {
             return .person(name)
         }

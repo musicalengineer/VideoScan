@@ -1070,7 +1070,9 @@ extension HallieTurnExecutor {
             //     is never paired with b's person;
             //   • a's retry offer survives only when b asks nothing of its
             //     own — a bare "yes" must answer the last question asked.
-            subjectLifeStatus: b.catalogPersonName != nil ? b.subjectLifeStatus : (b.subjectLifeStatus ?? a.subjectLifeStatus),
+            // Strictly the side whose person the join names (QA P3-1): b's
+            // verdict without a person of its own is not a's subject's.
+            subjectLifeStatus: b.catalogPersonName != nil ? b.subjectLifeStatus : a.subjectLifeStatus,
             refinableQuery: b.refinableQuery ?? a.refinableQuery,
             retryOffer: b.retryOffer ?? (b.clarification == nil ? a.retryOffer : nil),
             mode: b.mode ?? a.mode,

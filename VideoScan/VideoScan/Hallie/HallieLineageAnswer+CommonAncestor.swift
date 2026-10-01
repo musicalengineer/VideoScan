@@ -256,7 +256,15 @@ extension HallieLineageAnswer {
         let xName = xIsOwner ? "you" : x.name
         let tail = marriageLinkClause(link, x: x, y: y, xIsOwner: xIsOwner)
             .replacingOccurrences(of: y.name + " ", with: "", options: .anchored)
-        var prose = "\(y.name) isn’t related to \(xName) by blood in the tree, but \(tail)."
+        // "… but she is your wife Sue’s niece" (QA P3-5): a subject for the
+        // second clause; "they are" when the record carries no sex.
+        let subject: String
+        switch y.sex.uppercased() {
+        case "M": subject = "he " + tail
+        case "F": subject = "she " + tail
+        default: subject = "they " + (tail.hasPrefix("is ") ? "are " + tail.dropFirst(3) : tail)
+        }
+        var prose = "\(y.name) isn’t related to \(xName) by blood in the tree, but \(subject)."
         if let meeting = link.relation.meeting {
             let names = meeting.ancestors.map(\.name).joined(separator: " and ")
             prose += " That blood link runs through \(names)."

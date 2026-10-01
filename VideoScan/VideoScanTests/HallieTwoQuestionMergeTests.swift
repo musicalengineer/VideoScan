@@ -65,6 +65,40 @@ struct HallieTwoQuestionMergeTests {
         #expect(HallieTurnExecutor.joinedTwoQuestionAnswer(a, b).subjectLifeStatus == nil)
     }
 
+    /// QA P3-1: b's verdict with NO person of its own must not be attached to
+    /// a's subject — the join names a's person, so a's tense goes with it.
+    @Test func bsLifeStatusWithoutAPersonIsNotPairedWithAsSubject() {
+        let a = result(prose: "a", person: "Sal Quill", life: .deceased)
+        let b = result(prose: "b", person: nil, life: .living)
+        let joined = HallieTurnExecutor.joinedTwoQuestionAnswer(a, b)
+        #expect(joined.catalogPersonName == "Sal Quill")
+        #expect(joined.subjectLifeStatus == .deceased)
+    }
+
+    /// QA P3-1 (trailing-offer hypothesis, pinned): an offer sentence on b
+    /// ("Want to see her photos?") always arrives with a clarification, so
+    /// it is b's open question and a's retry offer does not survive it.
+    @Test func bsTrailingOfferEndsAsRetryOffer() async throws {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME John /Smith/
+        0 @I2@ INDI
+        1 NAME John /Smith/
+        0 TRLR
+        """)
+        let asked = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "tell me about john smith",
+                                ast: .graph(.init(people: ["john smith"], operation: .biography)))),
+            context: .init(profiles: [], graph: graph))
+        let clarification = try #require(asked.clarification)
+        let a = result(prose: "Nothing found — want me to try without the words?", retry: offer)
+        let b = result(prose: "Rick's father was Dick.").offering("Want to see his photos?", clarification: clarification)
+        let joined = HallieTurnExecutor.joinedTwoQuestionAnswer(a, b)
+        #expect(joined.retryOffer == nil)
+        #expect(joined.prose.hasSuffix("Want to see his photos?"))
+    }
+
     @Test func aRetryOfferDoesNotOutliveALaterQuestion() async throws {
         let a = result(prose: "Nothing found — want me to try without the words?", retry: offer)
         let graph = GedcomFamilyGraph(gedcomText: """

@@ -35,9 +35,10 @@ extension HallieLineageAnswer {
                 return r
             case .ok(let s):
                 sides = s
-                query.scope = s.isOurs
-                    ? .ancestorsOfAny(s.people.map(\.id), maxGenerations: depth)
-                    : .ancestors(of: s.people[0].id, maxGenerations: depth)
+                // One population for every ancestor count — the line
+                // population, uncapped, hidden excluded — so "your N
+                // recorded ancestors" matches the ancestor-line route (QA P2-1).
+                query.scope = .ancestorsOfAny(s.people.map(\.id), maxGenerations: depth)
                 notes.append(contentsOf: s.notes)
                 notes.append("Counted over the recorded ancestors of \(s.people.map(\.name).joined(separator: " and ")), not the whole tree.")
             }
@@ -56,7 +57,7 @@ extension HallieLineageAnswer {
             guard let sides, sides.isOurs, case .ancestorsOfAny(_, let depth) = base.scope else { return "" }
             let parts = sides.people.indices.map { i -> String in
                 var q = base
-                q.scope = .ancestors(of: sides.people[i].id, maxGenerations: depth)
+                q.scope = .ancestorsOfAny([sides.people[i].id], maxGenerations: depth)
                 let c = TreeStatistics.count(q, in: graph)
                 return "\(sides.side(i)) \(Self.spoken(c.matched)) of \(Self.spoken(c.considered))"
             }

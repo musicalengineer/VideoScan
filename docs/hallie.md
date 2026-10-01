@@ -471,6 +471,18 @@ says them; no model asserts a fact.
   related to you by blood in the tree, but is your wife Y’s niece” — unless a
   side has no parents, when blood kinship is unknown and the honest decline
   stands with the marriage as its aside.
+- **QA pass on 989d5a5c (2026-10-01).** One population for every ancestor
+  count: `Scope.ancestorsOfAny` IS the line population (no generation cap,
+  hidden records out), so “our N recorded ancestors” is the same N on both
+  routes. Duplicate-looking partner records (same name, birth years within
+  two) never make a relationship “half-”, for cousins or siblings; duplicate
+  spouse records are one spouse, and a spouse who is a home person of the
+  tree wins over an ex. The earliest/deepest readers abstain on qualified
+  asks (“first ancestor to fight / with a will / we have a picture of”), on
+  “in <place>”, on an unresolved “the X line / side / family”, and on kin or
+  sex words (“my mom’s line”, “our female ancestors”) — the whole-tree route
+  abstains on those too. Birthplace answers show per-side coverage; BEF/AFT
+  births read “before/after”; the in-law path takes the closest link.
 - **Router fix found on the way.** `HallieLineageQuestion.detect` peeled a
   year bound (“before 1900”) off the sentence before the statistics
   recognizers saw it, so “how many … were born before 1900” counted everyone
@@ -481,8 +493,9 @@ says them; no model asserts a fact.
 `joinedTwoQuestionAnswer` builds one Result from two. Merge rules: the LATER
 clause wins for `superlative` and `refinableQuery` (like `mode`), so a scope
 correction or “and the newest?” refers to the last thing asked; the
-`subjectLifeStatus` follows the subject the join names (`catalogPersonName` is
-b’s when b names one), so a’s tense is never attached to b’s person; a’s
+`subjectLifeStatus` follows the subject the join names, strictly (b’s when b
+names a person, else a’s — b’s verdict without a person is dropped), so a
+tense is never attached to the other clause’s person; a’s
 `retryOffer` survives only when b asks nothing of its own (a bare “yes” answers
 the last question asked). A deferred second question keeps every field of the
 one answer given. Pinned by `HallieTwoQuestionMergeTests`.
