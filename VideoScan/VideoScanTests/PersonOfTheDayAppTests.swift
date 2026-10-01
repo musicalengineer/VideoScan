@@ -307,10 +307,9 @@ struct RollCallAppTests {
                                                       knowledge: nil, displayNames: ["Home"],
                                                       birthCountries: .empty, assets: nil)
         // Walked: the home person and two ancestors. Oldest first; the
-        // living home person has no year, so comes last, with no details.
-        #expect(playback.entries.map(\.id) == ["@I7@", "@I4@", "@I1@"])
-        let home = try #require(playback.entries.last)
-        #expect(home.isLiving && home.years == nil && home.place == nil)
+        // living home person is NOT in the credits (Rick 2026-10-01: no
+        // living people in Roll Call, not even the inner circle).
+        #expect(playback.entries.map(\.id) == ["@I7@", "@I4@"])
         #expect(playback.entries.first?.place == "Exampletown, Ireland")
         #expect(playback.portraits.isEmpty)
         #expect(playback.duration == 20)
@@ -341,9 +340,32 @@ struct RollCallAppTests {
         let playback = await RollCallPlayback.prepare(result: result, graph: graph, visited: visited,
                                                       knowledge: nil, displayNames: [],
                                                       birthCountries: countries, assets: nil)
-        #expect(playback.entries.contains { $0.id == "@I1@" && $0.isLiving })
+        #expect(!playback.entries.contains { $0.id == "@I1@" })
         #expect(playback.flags["@I1@"] == nil)
         #expect(playback.flags["@I4@"] != nil)
+    }
+
+    // Pin (Rick 2026-10-01): no living person appears in the credits — the
+    // home person, the spouse, the child (inner circle) and the living
+    // cousin alike — whichever living relative the walk starts from.
+    @Test func pinNoLivingPersonAppearsInTheCredits() async throws {
+        let graph = potdGraph()
+        let living = graph.people.values
+            .filter { LifeStatus.privacyVerdict($0, in: graph) == .living }
+            .map(\.id)
+        #expect(Set(living).isSuperset(of: ["@I1@", "@I2@", "@I3@", "@I5@"]), "fixture: four living people")
+        for start in ["@I1@", "@I2@", "@I3@", "@I5@", "@I6@"] where graph.people[start] != nil {
+            let result = try TreeWalk.walk(graph, options: .init(starts: [start]))
+            let visited = result.layers.flatMap { $0 }.map { Int($0.ordinal) }
+            for order in RollCall.Order.allCases {
+                let playback = await RollCallPlayback.prepare(result: result, graph: graph, visited: visited,
+                                                              knowledge: nil, displayNames: ["Home"],
+                                                              birthCountries: .empty, assets: nil, order: order)
+                #expect(playback.entries.allSatisfy { !$0.isLiving }, "walk from \(start): a living row")
+                #expect(Set(playback.entries.map(\.id)).isDisjoint(with: living),
+                        "walk from \(start), \(order): a living person was named")
+            }
+        }
     }
 
     // QA P2-B: a folder pinned to one record never lends its portrait to

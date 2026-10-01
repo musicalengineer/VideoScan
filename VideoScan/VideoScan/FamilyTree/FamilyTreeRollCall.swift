@@ -26,9 +26,12 @@
 // case it is long), fades in, and fades out at the end of the same
 // duration — "a static fading list".
 //
-// PRIVACY: Core already dropped living people outside the inner circle and
-// stripped the inner circle's years and places; this file draws what it is
-// handed.
+// PRIVACY (Rick 2026-10-01: "we should refrain from showing living people
+// such as me and Donna, someday we'll have a roll call but not yet"): Core
+// leaves out EVERY living person by LifeStatus.privacyVerdict — the inner
+// circle included — because `prepare` builds with the default options
+// (`RollCall.Options.includesLivingInnerCircle` off). A future family roll
+// call flips that one switch. This file draws what it is handed.
 //
 // (For Rick: `@Environment(\.accessibilityReduceMotion)` ≈ reading the
 // system's Reduce Motion setting; `.equatable()` ≈ telling SwiftUI "this
@@ -94,6 +97,8 @@ struct RollCallPlayback: Identifiable, @unchecked Sendable {
             if Task.isCancelled { return empty }
             let people = context.rollCallPeople(result: result, visited: visited)
             let thisYear = Calendar.current.component(.year, from: now)
+            // Default options: no living person at all (the family roll
+            // call switch, `includesLivingInnerCircle`, stays off).
             let entries = RollCall.build(people, options: .init(order: order)) { p in
                 let documented = !(p.deathDate?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
                     || (GedcomFamilyGraph.year(in: p.birthDate).map { $0 <= thisYear - 100 } ?? false)
