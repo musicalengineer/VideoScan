@@ -529,6 +529,65 @@ struct RecordFinderFilingTests {
         #expect(try sb.research.loadDossier(key: sb.subject.key) == nil)
     }
 
+    // MARK: Codex review #18 (2026-10-01)
+
+    /// F2: a pane's untouched lore draft went stale when another pane saved
+    /// newer lore, and Tell Hallie auto-committed the stale draft over it.
+    @MainActor
+    @Test func aStaleLoreDraftNeverOverwritesNewerLore() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        var prior = ResearchDossier(subject: sb.subject)
+        let search = ResearchFinding(source: .chroniclingAmerica, title: "p", date: nil, excerpt: "e",
+                                     url: "https://example.invalid/p", retrievedAt: fixedNow)
+        prior.merge(fresh: [search], at: fixedNow)
+        prior.setLore("original", for: search.id)
+        try sb.research.saveDossier(prior)
+        let a = pane(sb), b = pane(sb)
+        a.load()
+        b.load()
+        b.editLore("revised", for: search.id)               // pane B: a real edit, committed
+        b.commitLore(for: search.id)
+        a.setVerdict(.confirmed, for: search.id)            // pane A never touched the lore
+        #expect(a.loreDrafts[search.id] == "revised", "an untouched draft follows the disk")
+        #expect(a.tellHallie() == 1)
+        let onDisk = try #require(try sb.research.loadDossier(key: sb.subject.key))
+        #expect(onDisk.findings.first { $0.id == search.id }?.lore == "revised", "B's newer lore survives A")
+        let told = try CyberBrainLoader(rootURL: sb.brain).load().people.flatMap(\.lifeEvents)
+        #expect(told.map(\.text) == ["revised"], "Hallie is told the current lore")
+    }
+
+    /// F2, the other side: a draft the user DID edit is still committed by
+    /// Tell Hallie (that is what the auto-commit is for).
+    @MainActor
+    @Test func anEditedLoreDraftIsCommittedByTellHallie() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        var prior = ResearchDossier(subject: sb.subject)
+        let search = ResearchFinding(source: .chroniclingAmerica, title: "p", date: nil, excerpt: "e",
+                                     url: "https://example.invalid/p", retrievedAt: fixedNow)
+        prior.merge(fresh: [search], at: fixedNow)
+        prior.setVerdict(.confirmed, for: search.id)
+        try sb.research.saveDossier(prior)
+        let a = pane(sb)
+        a.load()
+        a.editLore("typed but never submitted", for: search.id)
+        #expect(a.tellHallie() == 1)
+        let onDisk = try #require(try sb.research.loadDossier(key: sb.subject.key))
+        #expect(onDisk.findings.first { $0.id == search.id }?.lore == "typed but never submitted")
+    }
+
+    @MainActor
+    private func pane(_ sb: Sandbox) -> ResearchPersonModel {
+        let brain = sb.brain
+        let now = fixedNow
+        return ResearchPersonModel(subject: sb.subject, store: sb.research,
+                                   fetcher: FixtureResearchFetcher(fixtures: [], retrievedAt: now),
+                                   speakerName: "Tester",
+                                   record: { try CyberBrainWriter.record($0, rootURL: brain) },
+                                   now: { now })
+    }
+
     @Test func theFilerNeverReachesForTheGEDCOM() async throws {
         let text = try SourceTree.appSource(named: "RecordFinderFiling.swift")
         for forbidden in ["GedcomWriter", "GEDCOMWriter", "FamilyTreeGedcomWriter", ".ged\"", "PersonFactOverlayStore"] {
