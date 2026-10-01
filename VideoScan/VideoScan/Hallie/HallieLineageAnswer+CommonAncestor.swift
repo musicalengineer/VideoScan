@@ -219,30 +219,22 @@ extension HallieLineageAnswer {
             : affinalAside?.term
         guard let ancestry = graph.commonAncestry(of: x.id, and: y.id),
               let nearest = ancestry.nearest else {
-            let asideSentence = affinalAside.map { " (" + $0.term + ".)" } ?? ""
-            let dA = graph.ancestorDepth(of: pa.id), dB = graph.ancestorDepth(of: pb.id)
-            let missing = [(pa, dA), (pb, dB)].filter { $0.1 == 0 }.map(\.0)
-            if !missing.isEmpty {
-                let sides = HallieNameQualifier.joined(missing.map { HallieLineageQuestion.possessive($0.name) + " side" }, conjunction: "and")
-                let verb = missing.count == 1 ? "isn’t" : "aren’t"
-                let records = HallieNameQualifier.joined(missing.map(\.name), conjunction: "or")
-                return Result(
-                    route: .graph, outcome: .declined,
-                    prose: "\(sides) \(verb) in the tree yet — it records no parents for \(records), so there is no shared ancestor to find.\(asideSentence) Get Family Tree can pull that ancestry from FamilySearch and add it to the current tree by FamilySearch ID.",
-                    basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
-                    offeredActions: chips + [.getFamilyTree])
-            }
-            return Result(
-                route: .graph, outcome: .declined,
-                prose: "\(pa.name) and \(pb.name) share no recorded ancestor: I walked \(dA) generation\(dA == 1 ? "" : "s") above \(pa.name) and \(dB) above \(pb.name) without meeting.\(asideSentence) A deeper pull on either side could still connect them.",
-                basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
-                offeredActions: chips)
+            return noSharedAncestry(pa, pb, x: x, y: y, ownerID: ownerID, affinalAside: affinalAside,
+                                    graph: graph, basis: basis, query: query, chips: chips)
         }
+        // The relationship's NAME, B as seen from A (#218): "so Walter is
+        // your first cousin once removed"; half- only when the meeting is
+        // one ancestor whose two lines run through different recorded
+        // partners.
+        let half = graph.halfBlood(nearest)
+        let named = GedcomFamilyGraph.relationshipName(depthA: nearest.depthA, depthB: nearest.depthB,
+                                                       sexOfB: y.sex, half: half != nil)
         let prose = commonAncestryProse(ancestry, nearest: nearest,
                                         a: x.id == ownerID ? .owner : .named(x.name),
                                         b: y.id == ownerID ? .owner : .named(y.name),
                                         ownerRecordName: [x, y].first { $0.id == ownerID }?.name,
-                                        affinalTerm: asideTerm)
+                                        affinalTerm: asideTerm,
+                                        relationshipName: named, half: half)
         let z = nearest.ancestors[0]
         return Result(
             route: .graph, outcome: .answered,
@@ -252,6 +244,97 @@ extension HallieLineageAnswer {
             queryDescription: query + " → " + nearest.ancestors.map(\.name).joined(separator: " and "),
             citations: [], catalogPersonName: z.name,
             offeredActions: nearest.ancestors.map { .openFamilyTreePerson(personID: $0.id, personName: $0.name) } + chips)
+    }
+
+    /// "Nell isn’t related to you by blood in the tree, but she is your
+    /// wife Sue’s niece." — the in-law path when there is no blood link
+    /// (#218). B as seen from A; the spouse is named and offered as a chip.
+    static func marriageLinkAnswer(_ link: GedcomFamilyGraph.MarriageRelation,
+                                   x: GedcomFamilyGraph.Person, y: GedcomFamilyGraph.Person,
+                                   xIsOwner: Bool, basis: String, query: String,
+                                   chips: [HallieTurnExecutor.OfferedAction]) -> Result {
+        let xName = xIsOwner ? "you" : x.name
+        let tail = marriageLinkClause(link, x: x, y: y, xIsOwner: xIsOwner)
+            .replacingOccurrences(of: y.name + " ", with: "", options: .anchored)
+        // "… but she is your wife Sue’s niece" (QA P3-5): a subject for the
+        // second clause; "they are" when the record carries no sex.
+        let subject: String
+        switch y.sex.uppercased() {
+        case "M": subject = "he " + tail
+        case "F": subject = "she " + tail
+        default: subject = "they " + (tail.hasPrefix("is ") ? "are " + tail.dropFirst(3) : tail)
+        }
+        var prose = "\(y.name) isn’t related to \(xName) by blood in the tree, but \(subject)."
+        if let meeting = link.relation.meeting {
+            let names = meeting.ancestors.map(\.name).joined(separator: " and ")
+            prose += " That blood link runs through \(names)."
+        }
+        return Result(
+            route: .graph, outcome: .answered, prose: prose,
+            basisLine: basis.replacingOccurrences(
+                of: "Ancestor sets of both people intersected; nearest by total generations first.",
+                with: "No shared ancestor in the tree; the connection runs through a recorded marriage (\(link.spouse.name)), named from that side’s nearest common ancestor."),
+            queryDescription: query + " → by marriage via \(link.spouse.name)",
+            citations: [], catalogPersonName: y.name,
+            offeredActions: chips + [.openFamilyTreePerson(personID: link.spouse.id, personName: link.spouse.name)])
+    }
+
+    /// No shared ancestor (split out of `commonAncestor`, #218): a
+    /// marriage link when both sides were walked, otherwise the honest
+    /// decline — a side with no parents, or two walked lines that never meet
+    /// — with any direct in-law term or marriage link as its aside.
+    private static func noSharedAncestry(
+        _ pa: GedcomFamilyGraph.Person, _ pb: GedcomFamilyGraph.Person,
+        x: GedcomFamilyGraph.Person, y: GedcomFamilyGraph.Person, ownerID: String?,
+        affinalAside: GedcomFamilyGraph.DirectRelation?, graph: GedcomFamilyGraph,
+        basis: String, query: String, chips: [HallieTurnExecutor.OfferedAction]
+    ) -> Result {
+        // No blood link — but maybe a marriage one (#218): "your wife's
+        // niece", "married to your second cousin". Only when no direct
+        // in-law term already covers it (that keeps its own aside).
+        let link = affinalAside == nil ? graph.relationThroughMarriage(of: y.id, to: x.id) : nil
+        let dA = graph.ancestorDepth(of: pa.id), dB = graph.ancestorDepth(of: pb.id)
+        let missing = [(pa, dA), (pb, dB)].filter { $0.1 == 0 }.map(\.0)
+        // Both sides walked and nothing shared: the marriage IS the
+        // answer. A side with no parents leaves blood kinship unknown —
+        // the honest decline stands and the marriage is its aside.
+        if missing.isEmpty, let link {
+            return marriageLinkAnswer(link, x: x, y: y, xIsOwner: x.id == ownerID,
+                                      basis: basis, query: query, chips: chips)
+        }
+        let asideSentence = affinalAside.map { " (" + $0.term + ".)" }
+            ?? link.map { " (" + marriageLinkClause($0, x: x, y: y, xIsOwner: x.id == ownerID) + ".)" }
+            ?? ""
+        if !missing.isEmpty {
+            let sides = HallieNameQualifier.joined(missing.map { HallieLineageQuestion.possessive($0.name) + " side" }, conjunction: "and")
+            let verb = missing.count == 1 ? "isn’t" : "aren’t"
+            let records = HallieNameQualifier.joined(missing.map(\.name), conjunction: "or")
+            return Result(
+                route: .graph, outcome: .declined,
+                prose: "\(sides) \(verb) in the tree yet — it records no parents for \(records), so there is no shared ancestor to find.\(asideSentence) Get Family Tree can pull that ancestry from FamilySearch and add it to the current tree by FamilySearch ID.",
+                basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
+                offeredActions: chips + [.getFamilyTree])
+        }
+        return Result(
+            route: .graph, outcome: .declined,
+            prose: "\(pa.name) and \(pb.name) share no recorded ancestor: I walked \(dA) generation\(dA == 1 ? "" : "s") above \(pa.name) and \(dB) above \(pb.name) without meeting.\(asideSentence) A deeper pull on either side could still connect them.",
+            basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
+            offeredActions: chips)
+    }
+
+    /// "Nell Niece is your wife Sue Wed’s niece" / "Seth Spouse is married
+    /// to your niece, Cora Other" — B as seen from A through one marriage.
+    static func marriageLinkClause(_ link: GedcomFamilyGraph.MarriageRelation,
+                                   x: GedcomFamilyGraph.Person, y: GedcomFamilyGraph.Person,
+                                   xIsOwner: Bool) -> String {
+        let xPoss = xIsOwner ? "your" : HallieLineageQuestion.possessive(x.name)
+        let relation = link.relation.name
+        switch link.via {
+        case .spouseOfA:
+            return "\(y.name) is \(xPoss) \(GedcomFamilyGraph.spouseWord(link.spouse.sex)) \(HallieLineageQuestion.possessive(link.spouse.name)) \(relation)"
+        case .spouseOfB:
+            return "\(y.name) is married to \(xPoss) \(relation), \(link.spouse.name)"
+        }
     }
 
     /// Who a side of the answer is: the owner ("you") or someone by name —
@@ -269,7 +352,8 @@ extension HallieLineageAnswer {
         _ ancestry: GedcomFamilyGraph.CommonAncestry,
         nearest: GedcomFamilyGraph.AncestralMeeting,
         a: Speaker, b: Speaker,
-        ownerRecordName: String?, affinalTerm: String?
+        ownerRecordName: String?, affinalTerm: String?,
+        relationshipName: String? = nil, half: GedcomFamilyGraph.HalfBlood? = nil
     ) -> String {
         let aIsOwner = a == .owner, bIsOwner = b == .owner
         func poss(_ s: Speaker) -> String { s.possessive }
@@ -287,7 +371,16 @@ extension HallieLineageAnswer {
                 : GedcomFamilyGraph.generationLabel(generations: generations, sex: nearest.ancestors[0].sex)
         }
         var sentences: [String] = []
-        sentences.append("\(pair) share \(count) recorded ancestor\(n == 1 ? "" : "s")\(through); the nearest \(couple ? "are" : "is") \(who) — \(poss(a)) \(label(nearest.depthA)) and \(poss(b)) \(label(nearest.depthB)), making \(them) \(nearest.kinshipTerm).")
+        let pairTerm = (half != nil ? "half-" : "") + nearest.kinshipTerm
+        sentences.append("\(pair) share \(count) recorded ancestor\(n == 1 ? "" : "s")\(through); the nearest \(couple ? "are" : "is") \(who) — \(poss(a)) \(label(nearest.depthA)) and \(poss(b)) \(label(nearest.depthB)), making \(them) \(pairTerm).")
+        // One phrase, the way a family says it (#218): B as seen from A.
+        if let relationshipName, b != .owner {
+            var so = "So \(b.name) is \(poss(a)) \(relationshipName)"
+            if let half {
+                so += " — the two lines come down from \(half.ancestor.name) through different partners, \(half.partnerOnA.name) and \(half.partnerOnB.name)"
+            }
+            sentences.append(so + ".")
+        }
         if var term = affinalTerm {
             if let ownerRecordName {
                 term = term.replacingOccurrences(of: HallieLineageQuestion.possessive(ownerRecordName), with: "your")
@@ -306,6 +399,12 @@ extension HallieLineageAnswer {
             let next = ancestry.meetings[1]
             sentences.append("The next nearest line is through " + next.ancestors.map(\.name).joined(separator: " and ")
                 + " — \(next.kinshipTerm).")
+            // Pedigree collapse (#218): name the closest two, count the rest.
+            if lines > 2 {
+                let more = lines - 2
+                let verb = more == 1 ? "line connects" : "lines connect"
+                sentences.append("\(more.formatted(.number.grouping(.automatic))) more \(verb) \(them) further back.")
+            }
         }
         // The grain of salt (Rick: "the info must be taken with a grain of
         // salt, but it is fun"). Far lines always; named doubts when any.

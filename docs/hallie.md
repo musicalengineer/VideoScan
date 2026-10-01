@@ -427,6 +427,79 @@ Wikipedia/Wikidata and bounded cached web search; availability/terms are not
 newly verified. Fixture tests, cancellation, verdict isolation and privacy
 guards precede deployment; authenticated hints/images and batch research follow.
 
+### Ancestor-line statistics, “our”, and relationship names (built 2026-10-01)
+
+GH #214, #200, #218, approved by Rick 2026-10-01. Deterministic: the question
+is recognized in Swift, the figures come from VideoScanCore, the prose only
+says them; no model asserts a fact.
+
+- **Route.** `HallieAncestorStatisticsQuestion` (pure text) runs ahead of the
+  whole-tree `HallieTreeStatisticsQuestion` and claims four shapes over an
+  ANCESTOR scope: birthplace counts by walk region or country (“New England vs
+  Old England / Ireland / France”), average age at death, deepest line per
+  side, and the earliest ancestor *without* a birth word (#200 item 1). It
+  abstains on a time filter, continent, “outside”, a maternal/paternal side or
+  a place it cannot name; those go to the whole-tree recognizer or the model.
+- **Whose ancestors.** Said by the owner, “our ancestors” and “my ancestors”
+  mean the owner’s AND the partner’s lines (Rick, #214) — the partner is a
+  spouse who is the merged tree’s other home person, else the one recorded
+  spouse, else the other home person; with none, the owner’s line alone and the
+  basis says why. “My own / my side / my line” = the owner alone; a named
+  person (“Donna’s”, “ancestors of X”) = that person (#200 item 2). The
+  whole-tree route uses the same scope reader (`TreeStatistics.Scope.ancestorsOfAny`).
+  Superlatives (“my oldest ancestor”) keep their owner-only scope and their
+  scope-correction memory; not changed here.
+- **Coverage, always.** `TreeLineStatistics` reports considered / placed /
+  dated / left-out per figure, the union and each side, and the overlap
+  (a person on both lines counts once in the union, once per side). Age at
+  death uses only ages the dates pin within two years; wider brackets and
+  ages over 110 are left out and counted, never averaged in.
+- **Same numbers as the walk.** The population is the Family Tree walk’s edge
+  set and the per-person facts are the walk’s own functions (`TreeWalkDate`,
+  `AgeAtDeath.between`, `BirthplaceClassifier.region`), so the figures equal
+  decorations.json’s; a `decorations:` seam accepts them directly and a test
+  pins the equivalence. Hallie does not read decorations.json at answer time
+  (the walk center is main-actor and may be stale mid-refresh); it computes
+  from the loaded graph — 0.33 s for two starts on a 100k synthetic tree, Debug.
+- **Relationship names.** “How am I related to X” keeps its sentence and adds
+  the name a family uses — “So X is your second cousin once removed.” — from
+  the lowest common ancestor (`GedcomFamilyGraph.relationshipName`). “half-”
+  only when the meeting is one ancestor whose two lines run through
+  *different recorded* partners (named); a line with one parent unrecorded is
+  not called half. Pedigree collapse: the nearest line is named, the next one
+  too, and the rest are counted. No blood link but a marriage → “X isn’t
+  related to you by blood in the tree, but is your wife Y’s niece” — unless a
+  side has no parents, when blood kinship is unknown and the honest decline
+  stands with the marriage as its aside.
+- **QA pass on 989d5a5c (2026-10-01).** One population for every ancestor
+  count: `Scope.ancestorsOfAny` IS the line population (no generation cap,
+  hidden records out), so “our N recorded ancestors” is the same N on both
+  routes. Duplicate-looking partner records (same name, birth years within
+  two) never make a relationship “half-”, for cousins or siblings; duplicate
+  spouse records are one spouse, and a spouse who is a home person of the
+  tree wins over an ex. The earliest/deepest readers abstain on qualified
+  asks (“first ancestor to fight / with a will / we have a picture of”), on
+  “in <place>”, on an unresolved “the X line / side / family”, and on kin or
+  sex words (“my mom’s line”, “our female ancestors”) — the whole-tree route
+  abstains on those too. Birthplace answers show per-side coverage; BEF/AFT
+  births read “before/after”; the in-law path takes the closest link.
+- **Router fix found on the way.** `HallieLineageQuestion.detect` peeled a
+  year bound (“before 1900”) off the sentence before the statistics
+  recognizers saw it, so “how many … were born before 1900” counted everyone
+  and read as complete. A statistics sentence now keeps its year as a filter.
+
+### Two questions in one turn (GH #210, decided 2026-10-01)
+
+`joinedTwoQuestionAnswer` builds one Result from two. Merge rules: the LATER
+clause wins for `superlative` and `refinableQuery` (like `mode`), so a scope
+correction or “and the newest?” refers to the last thing asked; the
+`subjectLifeStatus` follows the subject the join names, strictly (b’s when b
+names a person, else a’s — b’s verdict without a person is dropped), so a
+tense is never attached to the other clause’s person; a’s
+`retryOffer` survives only when b asks nothing of its own (a bare “yes” answers
+the last question asked). A deferred second question keeps every field of the
+one answer given. Pinned by `HallieTwoQuestionMergeTests`.
+
 ### Separate product and family publication
 
 HallieKit/Hallie.app remains a proposal: a versioned read-model/snapshot seam,

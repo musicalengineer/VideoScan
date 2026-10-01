@@ -21,34 +21,47 @@ extension HallieLineageAnswer {
         var query = ask.query
         var notes: [String] = []
 
-        // "my ancestors" needs the owner's record. Resolved through the same
-        // owner chain every other route uses; an owner the tree cannot pin
-        // gets that route's own decline rather than a silent whole-tree count.
-        if case .ancestors(_, let depth) = query.scope {
-            switch resolve(nil, context: context, graph: graph) {
-            case .failure(let r):
-                // `resolve` hands back the decline it composed, or nil when it
-                // simply has no owner to work from — say which, never count
-                // the whole tree as "your ancestors".
-                return r ?? Result(
-                    route: .graph, outcome: .declined,
-                    prose: "I can’t tell whose ancestors to count — set the owner in Settings ▸ Archivist and ask again.",
-                    basisLine: ArchivistBiographyPolicy.gedcomBasis + " No owner record could be pinned; nothing was counted.",
-                    queryDescription: "tree statistics: owner unresolved",
-                    citations: [], catalogPersonName: nil)
-            case .success(let owner, let note):
-                query.scope = .ancestors(of: owner.id, maxGenerations: depth)
-                if let note { notes.append(note) }
-                notes.append("Counted over \(owner.name)'s recorded ancestors, not the whole tree.")
+        // "our / my ancestors" = the owner's AND the partner's lines
+        // (#214); "my side" the owner alone; a typed name that person
+        // (#200). Resolved through the same chain as every lineage route —
+        // an owner or name the tree cannot pin gets that route's own
+        // decline, never a silent whole-tree count.
+        var sides: AncestorSides?
+        if case .ancestors(let typed, let depth) = query.scope {
+            let who: HallieAncestorStatisticsQuestion.Who = typed.isEmpty ? .ours
+                : typed == HallieTreeStatisticsQuestion.ownerOnly ? .owner : .person(typed)
+            switch ancestorSides(who, context: context, graph: graph, ask: "tree statistics") {
+            case .stop(let r):
+                return r
+            case .ok(let s):
+                sides = s
+                // One population for every ancestor count — the line
+                // population, uncapped, hidden excluded — so "your N
+                // recorded ancestors" matches the ancestor-line route (QA P2-1).
+                query.scope = .ancestorsOfAny(s.people.map(\.id), maxGenerations: depth)
+                notes.append(contentsOf: s.notes)
+                notes.append("Counted over the recorded ancestors of \(s.people.map(\.name).joined(separator: " and ")), not the whole tree.")
             }
         }
 
         // The population phrase, built once so every sentence reads the same:
-        // "the 16,383 people in the tree" or "your 13,406 recorded ancestors".
-        // (The first build said "1 of the 6 the people in the tree".)
+        // "the 16,383 people in the tree", "your 13,406 recorded ancestors",
+        // "our 26,100 recorded ancestors". (The first build said "1 of the 6
+        // the people in the tree".)
         func population(_ n: Int) -> String {
-            if case .ancestors = query.scope { return "your \(Self.spoken(n)) recorded ancestors" }
+            if let sides { return "\(sides.whose) \(Self.spoken(n)) recorded ancestor\(n == 1 ? "" : "s")" }
             return "the \(Self.spoken(n)) people in the tree"
+        }
+        /// " (your side 4 of 8, Donna's side 1 of 4)" for a count over ours.
+        func perSide(_ base: TreeStatistics.Query) -> String {
+            guard let sides, sides.isOurs, case .ancestorsOfAny(_, let depth) = base.scope else { return "" }
+            let parts = sides.people.indices.map { i -> String in
+                var q = base
+                q.scope = .ancestorsOfAny([sides.people[i].id], maxGenerations: depth)
+                let c = TreeStatistics.count(q, in: graph)
+                return "\(sides.side(i)) \(Self.spoken(c.matched)) of \(Self.spoken(c.considered))"
+            }
+            return " (" + parts.joined(separator: ", ") + ")"
         }
         let placeWords = Self.placeWords(query.place)
         let timeWords = Self.timeWords(query.time)
@@ -65,7 +78,7 @@ extension HallieLineageAnswer {
                     + Self.gapSentence(c)
             } else {
                 sentence = "\(Self.spoken(c.matched)) of \(population(c.considered)) "
-                    + " were born \(filterWords)."
+                    + " were born \(filterWords)\(perSide(query))."
                     + Self.gapSentence(c)
             }
         case .lifespan:

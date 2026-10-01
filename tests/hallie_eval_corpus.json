@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 762 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected. Service-story items (mil260923-NNN, 2026-09-23) cover family military service: war asks by everyday name (Civil War, WW2, the Revolution, WWI), one person's service, the biography's offer and its 'yes' follow-up, and typo forms.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 774 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected. Service-story items (mil260923-NNN, 2026-09-23) cover family military service: war asks by everyday name (Civil War, WW2, the Revolution, WWI), one person's service, the biography's offer and its 'yes' follow-up, and typo forms.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -6186,7 +6186,11 @@
       "expectedRoutes": [
         "graph"
       ],
-      "notes": "Rick 2026-09-26 16:46 ET. Live: the model's tree SUMMARY ('39249 people, birth years from 780 to 1959 … tell me whose tree you want') — not wrong, but not the person either. 'earliest ancestor' carries no born/birth word, so the superlative reader stays silent and the translator's familyTree summary answers. NOT fixed in fix/hallie-superlative-scope (one bug per dispatch); flagged in docs/hallie_live_failures.md 2026-09-26 as a follow-up candidate ('earliest/first ancestor' → earliestBorn over the owner's ancestors). Expectation unconfirmed."
+      "notes": "Rick 2026-09-26 16:46 ET. Live: the model's tree SUMMARY ('39249 people, birth years from 780 to 1959 … tell me whose tree you want') — not wrong, but not the person either. 'earliest ancestor' carries no born/birth word, so the superlative reader stays silent and the translator's familyTree summary answers. NOT fixed in fix/hallie-superlative-scope (one bug per dispatch); flagged in docs/hallie_live_failures.md 2026-09-26 as a follow-up candidate ('earliest/first ancestor' → earliestBorn over the owner's ancestors). Expectation unconfirmed. 2026-10-01: answered by the ancestor-line route (#200 item 1) — earliest birth over Rick's and Donna's lines with coverage; expectation set with the change, confirm live.",
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "The earliest recorded birth among"
+      ]
     },
     {
       "id": "lv260926-007",
@@ -6309,6 +6313,200 @@
         "Which Gruffudd"
       ],
       "notes": "Rick 2026-09-26 17:03 ET. Worked live: four namesakes, a which-one with years; Rick picked '(b. about 0780)' and got the biography. Not a miss; confirmed 2026-09-26."
+    },
+    {
+      "id": "ts261001-001",
+      "category": "family_tree",
+      "text": "how many of our ancestors were born in New England vs Old England?",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "recorded ancestors",
+        "have a birthplace I can place",
+        "New England:",
+        "Old England:"
+      ],
+      "notes": "#214: both lines, per-side breakdown, coverage stated. GH #214/#200/#218, 2026-10-01 (feature-dev). Expectation written with the change; wording pinned by VideoScanTests/HallieAncestorStatisticsTests on a synthetic tree — confirm live."
+    },
+    {
+      "id": "ts261001-002",
+      "category": "family_tree",
+      "text": "how many of my ancestors were born in new england, england, ireland or france",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "your side",
+        "Ireland:",
+        "France:",
+        "have a birthplace I can place"
+      ],
+      "notes": "#214: Rick's 'my ancestors' = Rick's AND Donna's lines. GH #214/#200/#218, 2026-10-01 (feature-dev). Expectation written with the change; wording pinned by VideoScanTests/HallieAncestorStatisticsTests on a synthetic tree — confirm live."
+    },
+    {
+      "id": "ts261001-003",
+      "category": "family_tree",
+      "text": "how many of my own ancestors were born in ireland",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "of your",
+        "recorded ancestors were born in Ireland"
+      ],
+      "mustNotContain": [
+        "Donna’s side"
+      ],
+      "notes": "'my own' = the owner's line alone. GH #214/#200/#218, 2026-10-01 (feature-dev). Expectation written with the change; wording pinned by VideoScanTests/HallieAncestorStatisticsTests on a synthetic tree — confirm live."
+    },
+    {
+      "id": "ts261001-004",
+      "category": "family_tree",
+      "text": "how many of donna's ancestors were born in ireland",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "recorded ancestors",
+        "Ireland"
+      ],
+      "mustNotContain": [
+        "your side"
+      ],
+      "notes": "#200.2: person-scoped statistics. GH #214/#200/#218, 2026-10-01 (feature-dev). Expectation written with the change; wording pinned by VideoScanTests/HallieAncestorStatisticsTests on a synthetic tree — confirm live."
+    },
+    {
+      "id": "ts261001-005",
+      "category": "family_tree",
+      "text": "what was the average age at death of our ancestors",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "average age at death",
+        "median",
+        "Left out:"
+      ],
+      "notes": "#214: coverage and the left-out reasons stated. GH #214/#200/#218, 2026-10-01 (feature-dev). Expectation written with the change; wording pinned by VideoScanTests/HallieAncestorStatisticsTests on a synthetic tree — confirm live."
+    },
+    {
+      "id": "ts261001-006",
+      "category": "family_tree",
+      "text": "what is our deepest line",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "deepest recorded line goes back",
+        "generations"
+      ],
+      "notes": "#214: per side, with the line shown. GH #214/#200/#218, 2026-10-01 (feature-dev). Expectation written with the change; wording pinned by VideoScanTests/HallieAncestorStatisticsTests on a synthetic tree — confirm live."
+    },
+    {
+      "id": "ts261001-007",
+      "category": "family_tree",
+      "text": "how many generations back does our tree go",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "deepest recorded line goes back"
+      ],
+      "notes": "#214: deepest-line phrasing. GH #214/#200/#218, 2026-10-01 (feature-dev). Expectation written with the change; wording pinned by VideoScanTests/HallieAncestorStatisticsTests on a synthetic tree — confirm live."
+    },
+    {
+      "id": "ts261001-008",
+      "category": "family_tree",
+      "text": "who is the earliest ancestor in my family tree",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "The earliest recorded birth among our",
+        "have a birth year"
+      ],
+      "mustNotContain": [
+        "tell me whose tree"
+      ],
+      "notes": "#200.1: no birth word; was the tree SUMMARY (lv260926-006). GH #214/#200/#218, 2026-10-01 (feature-dev). Expectation written with the change; wording pinned by VideoScanTests/HallieAncestorStatisticsTests on a synthetic tree — confirm live."
+    },
+    {
+      "id": "ts261001-009",
+      "category": "family_tree",
+      "text": "how many of our ancestors were born before 1800",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "of our",
+        "recorded ancestors were born before 1800",
+        "your side"
+      ],
+      "notes": "Router fix: the year stays a filter (it was peeled off and everyone was counted). GH #214/#200/#218, 2026-10-01 (feature-dev). Expectation written with the change; wording pinned by VideoScanTests/HallieAncestorStatisticsTests on a synthetic tree — confirm live."
+    },
+    {
+      "id": "ts261001-010",
+      "category": "family_tree",
+      "text": "how am I related to Donna",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "recorded ancestor",
+        "So Donna"
+      ],
+      "notes": "#218: the relationship named in one phrase from the nearest common ancestor. GH #214/#200/#218, 2026-10-01 (feature-dev). Expectation written with the change; wording pinned by VideoScanTests/HallieAncestorStatisticsTests on a synthetic tree — confirm live."
+    },
+    {
+      "id": "ts261001-011",
+      "category": "family_tree",
+      "text": "what's our common ancestor",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "share",
+        "nearest"
+      ],
+      "notes": "#218: 'our' = owner and spouse; pedigree collapse counts the further lines. GH #214/#200/#218, 2026-10-01 (feature-dev). Expectation written with the change; wording pinned by VideoScanTests/HallieAncestorStatisticsTests on a synthetic tree — confirm live."
+    },
+    {
+      "id": "ts261001-012",
+      "category": "family_tree",
+      "text": "how many of zebulon quackenbush's ancestors were born in ireland",
+      "expect": "graceful_decline",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "declined",
+      "mustNotContain": [
+        "recorded ancestors",
+        "were born in Ireland"
+      ],
+      "notes": "Unknown person: refused, never counted. GH #214/#200/#218, 2026-10-01 (feature-dev). Expectation written with the change; wording pinned by VideoScanTests/HallieAncestorStatisticsTests on a synthetic tree — confirm live."
     }
   ]
 }

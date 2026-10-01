@@ -913,21 +913,7 @@ extension HallieTurnExecutor {
             if case .answer(let b) = secondTurn, b.route != .reset {
                 decision = .answer(joinedTwoQuestionAnswer(a, b))
             } else {
-                let label = second.prefix(1).uppercased() + second.dropFirst()
-                decision = .answer(Result(
-                    route: a.route, outcome: a.outcome,
-                    prose: a.prose + "\n\nYou also asked “\(second)” — tap it and I’ll answer that next.",
-                    basisLine: a.basisLine,
-                    queryDescription: "two questions: \(a.queryDescription ?? "?") + deferred",
-                    citations: a.citations, knowledgeCitations: a.knowledgeCitations,
-                    catalogPersonName: a.catalogPersonName, clarification: nil,
-                    matchCount: a.matchCount, mediaAction: a.mediaAction,
-                    offeredActions: a.offeredActions + [.ask(question: second, label: String(label))],
-                    attachments: a.attachments,
-                    performsFirstOfferedAction: a.immediateOfferedAction != nil,
-                    immediateOfferedAction: a.immediateOfferedAction,
-                    mode: a.mode,
-                    modeForce: a.modeForce))
+                decision = .answer(deferringSecondQuestion(a, second: second))
             }
         } else {
             decision = preTranslationSingle(
@@ -940,6 +926,35 @@ extension HallieTurnExecutor {
                 identity: identity, modeVerdict: verdict, isTreePersonID: isTreePersonID)
         }
         return Classified(decision: decision, verdict: verdict.cached ?? .unknown)
+    }
+
+    /// The first answer, with the second question offered as a chip. Only
+    /// ONE answer was given, so every one of its fields survives (GH #210:
+    /// the inline version dropped superlative, subjectLifeStatus,
+    /// refinableQuery and retryOffer — a scope correction right after lost
+    /// the ranking it would have re-run).
+    static func deferringSecondQuestion(_ a: Result, second: String) -> Result {
+        let label = second.prefix(1).uppercased() + second.dropFirst()
+        return Result(
+            route: a.route, outcome: a.outcome,
+            prose: a.prose + "\n\nYou also asked “\(second)” — tap it and I’ll answer that next.",
+            basisLine: a.basisLine,
+            queryDescription: "two questions: \(a.queryDescription ?? "?") + deferred",
+            citations: a.citations, knowledgeCitations: a.knowledgeCitations,
+            catalogPersonName: a.catalogPersonName, clarification: nil,
+            matchCount: a.matchCount, mediaAction: a.mediaAction,
+            offeredActions: a.offeredActions + [.ask(question: second, label: String(label))],
+            // No answer plan, as before: the prose is a's plus the deferral
+            // line, and a's plan would let a composer drop that line.
+            attachments: a.attachments,
+            performsFirstOfferedAction: a.immediateOfferedAction != nil,
+            immediateOfferedAction: a.immediateOfferedAction,
+            subjectLifeStatus: a.subjectLifeStatus,
+            refinableQuery: a.refinableQuery,
+            retryOffer: a.retryOffer,
+            mode: a.mode,
+            modeForce: a.modeForce,
+            superlative: a.superlative)
     }
 
     /// Both answers' facts survive the join (codex #707 item 5: only b's
@@ -1046,8 +1061,23 @@ extension HallieTurnExecutor {
             attachments: a.attachments + b.attachments,
             performsFirstOfferedAction: immediateAction != nil,
             immediateOfferedAction: immediateAction,
+            // GH #210 — merge semantics (decided 2026-10-01, documented in
+            // docs/hallie.md "Two questions in one turn"):
+            //   • the LATER clause wins, like `mode`: the ranking a scope
+            //     correction re-runs, the list "and the newest?" sorts;
+            //   • the life status follows the SUBJECT the join names
+            //     (`catalogPersonName` is b's when b has one), so a's tense
+            //     is never paired with b's person;
+            //   • a's retry offer survives only when b asks nothing of its
+            //     own — a bare "yes" must answer the last question asked.
+            // Strictly the side whose person the join names (QA P3-1): b's
+            // verdict without a person of its own is not a's subject's.
+            subjectLifeStatus: b.catalogPersonName != nil ? b.subjectLifeStatus : a.subjectLifeStatus,
+            refinableQuery: b.refinableQuery ?? a.refinableQuery,
+            retryOffer: b.retryOffer ?? (b.clarification == nil ? a.retryOffer : nil),
             mode: b.mode ?? a.mode,
-            modeForce: b.modeForce ?? a.modeForce)
+            modeForce: b.modeForce ?? a.modeForce,
+            superlative: b.superlative ?? a.superlative)
     }
 
     /// "c3" → "c7" for offset 4; anything that is not a claim ID is returned
