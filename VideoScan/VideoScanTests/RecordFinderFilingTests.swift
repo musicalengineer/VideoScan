@@ -671,6 +671,95 @@ struct RecordFinderFilingTests {
         #expect(try sb.research.loadDossier(key: sb.subject.key) == nil)
     }
 
+    // MARK: Coverage gaps named by codex review #18
+
+    /// Every file and folder under the archive and the CyberBrain, by path
+    /// → SHA-256 ("dir" for folders).
+    private func snapshot(_ sb: Sandbox) -> [String: String] {
+        var out: [String: String] = [:]
+        let base = sb.base.resolvingSymlinksInPath().path
+        for top in [sb.base.appendingPathComponent("archive", isDirectory: true), sb.brain] {
+            guard let walker = fm.enumerator(at: top, includingPropertiesForKeys: [.isRegularFileKey]) else { continue }
+            for case let url as URL in walker {
+                let path = url.resolvingSymlinksInPath().path.replacingOccurrences(of: base, with: "")
+                if (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true,
+                   let data = try? Data(contentsOf: url) {
+                    out[path] = FamilyAssetStore.sha256Hex(data)
+                } else {
+                    out[path] = "dir"
+                }
+            }
+        }
+        return out
+    }
+
+    @Test func aRefusalChangesNoFileAnywhereInTheArchive() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let file = try write(try pdf(), "r.pdf", in: sb)
+        #expect(await filer(sb).file(submission(file, read: true, words: "Synthetic words.")).isSuccess)
+        let fresh = try write(try pdf(width: 333), "other.pdf", in: sb)
+        let lie = try write(Data("not a pdf".utf8), "lie.pdf", in: sb)
+        let before = snapshot(sb)
+        #expect(before.count > 3, "the snapshot sees the archive: \(before.keys.sorted())")
+        let refusals: [FoundRecordSubmission] = [
+            submission(file),                                   // duplicate bytes
+            submission(fresh, url: "ftp://example.invalid/x"),  // bad address
+            submission(fresh, year: "18x0"),                    // bad year
+            submission(fresh, read: true, words: ""),           // read, but no words
+            submission(lie),                                    // not what it claims
+        ]
+        for s in refusals {
+            let outcome = await filer(sb).file(s)
+            guard case .refused = outcome else { Issue.record("expected refused for \(s.file.lastPathComponent), got \(outcome)"); continue }
+            #expect(snapshot(sb) == before, "a refusal wrote nothing: \(s.file.lastPathComponent)")
+        }
+    }
+
+    @Test func aDuplicateInASecondFolderOfThePersonIsRefused() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let idFolder = try sb.store.folderForPhotoRequest(person: sb.person)
+        // A pointer-keyed twin: read as this person's, not the write folder.
+        let twin = sb.store.peopleDirectory.appendingPathComponent("Honora_Fenlane_I1", isDirectory: true)
+        try fm.createDirectory(at: twin, withIntermediateDirectories: false)
+        try #require(Set(sb.store.personFolders(for: sb.person).map(\.lastPathComponent))
+                     == [idFolder.lastPathComponent, "Honora_Fenlane_I1"])
+        let bytes = try pdf(width: 287)
+        _ = try sb.store.importPersonDocument(from: try write(bytes, "by-hand.pdf", in: sb),
+                                              kind: .birth, note: "", into: twin, for: sb.person)
+        let before = snapshot(sb)
+        let outcome = await filer(sb).file(submission(try write(bytes, "downloaded.pdf", in: sb)))
+        guard case .refused(let why) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
+        #expect(why.contains("already filed"))
+        #expect(snapshot(sb) == before)
+        #expect(sb.store.documents(inPersonFolder: idFolder).isEmpty)
+    }
+
+    /// Undo of a dossier this filing created retires it to research/.trash
+    /// — the exact bytes, moved, never deleted.
+    @Test func aRetiredDossierIsTheExactBytesInResearchTrash() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let dossierURL = try sb.research.dossierURL(key: sb.subject.key)
+        let seen = Lines()
+        let failing: @Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt = { _ in
+            // What is on disk while the CyberBrain is being written.
+            seen.add((try? Data(contentsOf: dossierURL))?.base64EncodedString() ?? "absent")
+            throw BrainDown()
+        }
+        let file = try write(try pdf(), "r.pdf", in: sb)
+        guard case .rolledBack = await filer(sb, record: .some(failing)).file(submission(file, read: true, words: "W.")) else {
+            Issue.record("expected rolledBack"); return
+        }
+        #expect(!fm.fileExists(atPath: dossierURL.path))
+        let trash = dossierURL.deletingLastPathComponent().appendingPathComponent(".trash", isDirectory: true)
+        let retired = try fm.contentsOfDirectory(atPath: trash.path)
+        try #require(retired.count == 1)
+        let bytes = try Data(contentsOf: trash.appendingPathComponent(retired[0]))
+        #expect(seen.all == [bytes.base64EncodedString()], "the retired file is exactly what this filing wrote")
+    }
+
     @MainActor
     private func pane(_ sb: Sandbox) -> ResearchPersonModel {
         let brain = sb.brain
