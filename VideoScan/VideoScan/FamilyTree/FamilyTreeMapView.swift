@@ -47,6 +47,10 @@
 // autolinker already pulls MapKit in even without the project entry — the
 // explicit link is belt-and-braces for the day those uses are refactored away.
 //
+// ROLL CALL (2026-10-01): the "Roll Call" button beside Fit replays the
+// end-credits overlay the sheet owns (FamilyTreeRollCall); this view only
+// forwards the click and the chosen order.
+//
 // (For Rick: `MapReader` ≈ a wrapper that hands you a proxy with a
 // screen-point → lat/lon conversion; `@MapContentBuilder` closures are the
 // DSL the Map draws from, like a ViewBuilder for map layers.)
@@ -127,6 +131,10 @@ struct FamilyTreeMapView: View {
     /// The Highlight checks drive the map's filter; the panel offers Clear.
     @ObservedObject var highlighter: TreeWalkHighlighter
     let onBack: () -> Void
+    /// Replay the Roll Call (2026-10-01) in an order; nil hides the button.
+    var onRollCall: ((RollCall.Order) -> Void)? = nil
+    /// The credits are being prepared (the button shows a spinner).
+    var rollCallBusy = false
 
     /// A camera region in plain degrees — MapKit-free so a test can pin it
     /// without importing MapKit (which would load the framework from the
@@ -281,6 +289,7 @@ struct FamilyTreeMapView: View {
             HStack {
                 Button("Fit") { fitIfPossible(force: true) }
                 Button("Back to the fan") { onBack() }
+                if let onRollCall { rollCallButton(onRollCall) }
             }
             .controlSize(.small)
             Divider()
@@ -297,6 +306,27 @@ struct FamilyTreeMapView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.07)))
             }
+        }
+    }
+
+    /// "Roll Call": click plays the credits oldest → newest; the menu
+    /// offers the other orders (Rick 2026-10-01: "make it a parameter").
+    private func rollCallButton(_ play: @escaping (RollCall.Order) -> Void) -> some View {
+        HStack(spacing: 4) {
+            Menu("Roll Call") {
+                Button("Oldest first") { play(.oldestFirst) }
+                Button("Newest first") { play(.newestFirst) }
+                Button("Generation by generation") { play(.generationOutward) }
+                Button("From the furthest back") { play(.generationInward) }
+            } primaryAction: {
+                play(FamilyTreeWalkSheet.defaultRollCallOrder)
+            }
+            .menuStyle(.button)
+            .fixedSize()
+            .disabled(rollCallBusy)
+            .help("Play the roll call of the family again (click), or pick an order (arrow)")
+            .accessibilityIdentifier("ft.map.rollCall")
+            if rollCallBusy { ProgressView().controlSize(.mini) }
         }
     }
 

@@ -23,6 +23,15 @@
 // was. The map model is built once per walk (off-main) and kept, so the
 // second "Show on map" is instant.
 //
+// ROLL CALL (Rick 2026-10-01): the FIRST "Show on map" of a walk also
+// starts the Roll Call — end credits of the walked family drifting over the
+// content area while the map assembles underneath (FamilyTreeRollCall). It
+// is not a stage and not a sheet: an overlay on top of whatever stage is
+// showing, so the map keeps building behind it and a click or Esc simply
+// removes it. The map's "Roll Call" button replays it (default oldest →
+// newest; its menu offers the other orders). The credits are prepared once
+// per walk and order, off-main, and cached here — a replay is instant.
+//
 // SIZE (Rick 2026-09-27: "it doesn't fit"). A macOS sheet takes its
 // content's size and is NOT clipped to the window it hangs from, so the
 // old fixed 600-pt fan + counters + summary ran off both sides of the
@@ -66,6 +75,14 @@ struct FamilyTreeWalkSheet: View {
     @State private var mapModel: FamilyMapModel?
     @State private var mapTask: Task<Void, Never>?
     @State private var mapProblem: String?
+    /// The Roll Call now showing (nil = none), the prepared credits per
+    /// order for this walk, and the preparation in flight.
+    @State private var rollCall: RollCallPlayback?
+    @State private var rollCallCache: [RollCall.Order: RollCallPlayback] = [:]
+    @State private var rollCallTask: Task<Void, Never>?
+
+    /// The order the Roll Call plays in unless asked otherwise.
+    static let defaultRollCallOrder: RollCall.Order = .oldestFirst
 
     static let minimumWatchingSize = CGSize(width: 640, height: 520)
     static let maximumWatchingSize = CGSize(width: 1_800, height: 1_200)
@@ -106,25 +123,18 @@ struct FamilyTreeWalkSheet: View {
                     .font(.title3.weight(.semibold))
                 Spacer()
             }
-            switch stage {
-            case .setup: setup
-            case .walking(let phase):
-                HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text(phase).foregroundStyle(.secondary)
+            stageContent
+                .overlay {
+                    if let rollCall {
+                        RollCallOverlay(playback: rollCall) {
+                            // Only the showing that finished clears itself
+                            // (a replay started meanwhile has a new id).
+                            if self.rollCall?.id == rollCall.id { self.rollCall = nil }
+                        }
+                        .id(rollCall.id)
+                        .transition(.opacity)
+                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .watching(let animator, let highlighter):
-                TreeWalkAnimationView(animator: animator, highlighter: highlighter,
-                                      onShowMap: { showMap(animator, highlighter) })
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .map(let animator, let highlighter, let map):
-                FamilyTreeMapView(model: map, highlighter: highlighter,
-                                  onBack: { stage = .watching(animator, highlighter) })
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .failed(let why):
-                Text(why).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-            }
             HStack {
                 if let mapProblem {
                     Text(mapProblem).font(.system(size: 11)).foregroundStyle(.orange)
@@ -150,7 +160,31 @@ struct FamilyTreeWalkSheet: View {
         }
         .padding(20)
         .frame(width: isLarge ? size.width : 520, height: isLarge ? size.height : nil)
-        .onDisappear { walkTask?.cancel(); mapTask?.cancel() }
+        .onDisappear { walkTask?.cancel(); mapTask?.cancel(); rollCallTask?.cancel() }
+    }
+
+    @ViewBuilder private var stageContent: some View {
+        switch stage {
+        case .setup: setup
+        case .walking(let phase):
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text(phase).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .watching(let animator, let highlighter):
+            TreeWalkAnimationView(animator: animator, highlighter: highlighter,
+                                  onShowMap: { showMap(animator, highlighter) })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .map(let animator, let highlighter, let map):
+            FamilyTreeMapView(model: map, highlighter: highlighter,
+                              onBack: { stage = .watching(animator, highlighter) },
+                              onRollCall: { order in playRollCall(highlighter, order: order) },
+                              rollCallBusy: rollCallTask != nil)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .failed(let why):
+            Text(why).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var title: String {
@@ -241,6 +275,10 @@ struct FamilyTreeWalkSheet: View {
         walkResult = nil
         mapModel = nil
         mapProblem = nil
+        rollCallTask?.cancel()
+        rollCallTask = nil
+        rollCall = nil
+        rollCallCache = [:]
         walkTask = Task { @MainActor in
             let result = await center.run(graph: graph, options: options, mode: .foreground,
                                           displayNames: names) { event in
@@ -264,7 +302,9 @@ struct FamilyTreeWalkSheet: View {
 
     /// Build the map model once per walk (bundled borders once per process,
     /// the birthplaces resolved once off-main), then switch stages. A
-    /// second call while the first is still building is ignored.
+    /// second call while the first is still building is ignored. The FIRST
+    /// call of a walk also starts the Roll Call over the content while the
+    /// map assembles.
     private func showMap(_ animator: TreeWalkAnimator, _ highlighter: TreeWalkHighlighter) {
         if let mapModel {
             stage = .map(animator, highlighter, mapModel)
@@ -276,6 +316,7 @@ struct FamilyTreeWalkSheet: View {
         // The family's own knowledge fills the tree's gaps (Rick 2026-09-29):
         // the CyberBrain the tree already loaded, read-only; nil = tree only.
         let familyKnowledge = model.walkFamilyKnowledge
+        playRollCall(highlighter, order: Self.defaultRollCallOrder)
         mapTask = Task { @MainActor in
             defer { mapTask = nil }
             do {
@@ -297,9 +338,48 @@ struct FamilyTreeWalkSheet: View {
         }
     }
 
+    // MARK: Roll Call
+
+    /// Show the Roll Call in `order`: from the cache when this walk already
+    /// prepared it, else prepared off-main first (a fraction of a second;
+    /// the overlay appears when it is ready). A request while one is being
+    /// prepared is ignored.
+    private func playRollCall(_ highlighter: TreeWalkHighlighter, order: RollCall.Order) {
+        if let cached = rollCallCache[order] {
+            rollCall = cached.replay()
+            appLog.write("Roll Call: replay (\(cached.entries.count) names, \(order.rawValue))")
+            return
+        }
+        guard rollCallTask == nil, let result = walkResult, let graph else { return }
+        let knowledge = model.walkFamilyKnowledge
+        let flags = model.birthCountries
+        // The WALK's home people (the setup picker may have moved since).
+        let names = FamilyTreeWalkCenter.displayNames(for: result.starts.map(\.id), in: graph, speakers: .fromDefaults())
+        let visited = highlighter.inputs.visited
+        let assets: FamilyAssetConfiguration? = TestEnvironment.isTestHost
+            ? nil : FamilyAssetConfigurationCenter.shared.snapshot()
+        rollCallTask = Task { @MainActor in
+            defer { rollCallTask = nil }
+            let playback = await RollCallPlayback.prepare(result: result, graph: graph, visited: visited,
+                                                          knowledge: knowledge, displayNames: names,
+                                                          birthCountries: flags, assets: assets, order: order)
+            guard !Task.isCancelled else { return }
+            rollCallCache[order] = playback
+            guard !playback.entries.isEmpty else {
+                appLog.write("Roll Call: nobody to show for this walk")
+                return
+            }
+            rollCall = playback
+            appLog.write("Roll Call: \(playback.entries.count) names of \(playback.walked.formatted()) walked, "
+                + "\(playback.portraits.count) portraits, \(Int(playback.duration)) s, \(order.rawValue)")
+        }
+    }
+
     private func close() {
         walkTask?.cancel()
         mapTask?.cancel()
+        rollCallTask?.cancel()
+        rollCall = nil
         switch stage {
         case .watching(let animator, _), .map(let animator, _, _): animator.stop()
         default: break
