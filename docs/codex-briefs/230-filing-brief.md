@@ -23,4 +23,8 @@ Evidence already run (Debug, by suite, counts confirmed): app 119 tests / 15 sui
 
 Also check, per Rick's standing directive: new-code test coverage of each invariant (name gaps vs tests run), and logging — actionable START/OUTCOME with context, no flooding.
 
-Wanted: verdict closed / fix/N, findings with file:line + a concrete reproduction (ideally a Swift Testing red test with synthetic data), and "read, no findings" per clean file. Privacy: public repo — no real family names, addresses or dates in any suggested fixture.
+Output contract (required):
+- First line exactly: Credits spent: <amount> | Finding count: <N>
+- A line: Verdict: <merge | fix | block> — <one-line reason>
+
+Wanted: findings with file:line + a concrete reproduction (ideally a Swift Testing red test with synthetic data), and "read, no findings" per clean file. Privacy: public repo — no real family names, addresses or dates in any suggested fixture.
