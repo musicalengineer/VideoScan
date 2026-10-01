@@ -219,37 +219,8 @@ extension HallieLineageAnswer {
             : affinalAside?.term
         guard let ancestry = graph.commonAncestry(of: x.id, and: y.id),
               let nearest = ancestry.nearest else {
-            // No blood link — but maybe a marriage one (#218): "your wife's
-            // niece", "married to your second cousin". Only when no direct
-            // in-law term already covers it (that keeps its own aside).
-            let link = affinalAside == nil ? graph.relationThroughMarriage(of: y.id, to: x.id) : nil
-            let dA = graph.ancestorDepth(of: pa.id), dB = graph.ancestorDepth(of: pb.id)
-            let missing = [(pa, dA), (pb, dB)].filter { $0.1 == 0 }.map(\.0)
-            // Both sides walked and nothing shared: the marriage IS the
-            // answer. A side with no parents leaves blood kinship unknown —
-            // the honest decline stands and the marriage is its aside.
-            if missing.isEmpty, let link {
-                return marriageLinkAnswer(link, x: x, y: y, xIsOwner: x.id == ownerID,
-                                          basis: basis, query: query, chips: chips)
-            }
-            let asideSentence = affinalAside.map { " (" + $0.term + ".)" }
-                ?? link.map { " (" + marriageLinkClause($0, x: x, y: y, xIsOwner: x.id == ownerID) + ".)" }
-                ?? ""
-            if !missing.isEmpty {
-                let sides = HallieNameQualifier.joined(missing.map { HallieLineageQuestion.possessive($0.name) + " side" }, conjunction: "and")
-                let verb = missing.count == 1 ? "isn’t" : "aren’t"
-                let records = HallieNameQualifier.joined(missing.map(\.name), conjunction: "or")
-                return Result(
-                    route: .graph, outcome: .declined,
-                    prose: "\(sides) \(verb) in the tree yet — it records no parents for \(records), so there is no shared ancestor to find.\(asideSentence) Get Family Tree can pull that ancestry from FamilySearch and add it to the current tree by FamilySearch ID.",
-                    basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
-                    offeredActions: chips + [.getFamilyTree])
-            }
-            return Result(
-                route: .graph, outcome: .declined,
-                prose: "\(pa.name) and \(pb.name) share no recorded ancestor: I walked \(dA) generation\(dA == 1 ? "" : "s") above \(pa.name) and \(dB) above \(pb.name) without meeting.\(asideSentence) A deeper pull on either side could still connect them.",
-                basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
-                offeredActions: chips)
+            return noSharedAncestry(pa, pb, x: x, y: y, ownerID: ownerID, affinalAside: affinalAside,
+                                    graph: graph, basis: basis, query: query, chips: chips)
         }
         // The relationship's NAME, B as seen from A (#218): "so Walter is
         // your first cousin once removed"; half- only when the meeting is
@@ -298,6 +269,49 @@ extension HallieLineageAnswer {
             queryDescription: query + " → by marriage via \(link.spouse.name)",
             citations: [], catalogPersonName: y.name,
             offeredActions: chips + [.openFamilyTreePerson(personID: link.spouse.id, personName: link.spouse.name)])
+    }
+
+    /// No shared ancestor (split out of `commonAncestor`, #218): a
+    /// marriage link when both sides were walked, otherwise the honest
+    /// decline — a side with no parents, or two walked lines that never meet
+    /// — with any direct in-law term or marriage link as its aside.
+    private static func noSharedAncestry(
+        _ pa: GedcomFamilyGraph.Person, _ pb: GedcomFamilyGraph.Person,
+        x: GedcomFamilyGraph.Person, y: GedcomFamilyGraph.Person, ownerID: String?,
+        affinalAside: GedcomFamilyGraph.DirectRelation?, graph: GedcomFamilyGraph,
+        basis: String, query: String, chips: [HallieTurnExecutor.OfferedAction]
+    ) -> Result {
+        // No blood link — but maybe a marriage one (#218): "your wife's
+        // niece", "married to your second cousin". Only when no direct
+        // in-law term already covers it (that keeps its own aside).
+        let link = affinalAside == nil ? graph.relationThroughMarriage(of: y.id, to: x.id) : nil
+        let dA = graph.ancestorDepth(of: pa.id), dB = graph.ancestorDepth(of: pb.id)
+        let missing = [(pa, dA), (pb, dB)].filter { $0.1 == 0 }.map(\.0)
+        // Both sides walked and nothing shared: the marriage IS the
+        // answer. A side with no parents leaves blood kinship unknown —
+        // the honest decline stands and the marriage is its aside.
+        if missing.isEmpty, let link {
+            return marriageLinkAnswer(link, x: x, y: y, xIsOwner: x.id == ownerID,
+                                      basis: basis, query: query, chips: chips)
+        }
+        let asideSentence = affinalAside.map { " (" + $0.term + ".)" }
+            ?? link.map { " (" + marriageLinkClause($0, x: x, y: y, xIsOwner: x.id == ownerID) + ".)" }
+            ?? ""
+        if !missing.isEmpty {
+            let sides = HallieNameQualifier.joined(missing.map { HallieLineageQuestion.possessive($0.name) + " side" }, conjunction: "and")
+            let verb = missing.count == 1 ? "isn’t" : "aren’t"
+            let records = HallieNameQualifier.joined(missing.map(\.name), conjunction: "or")
+            return Result(
+                route: .graph, outcome: .declined,
+                prose: "\(sides) \(verb) in the tree yet — it records no parents for \(records), so there is no shared ancestor to find.\(asideSentence) Get Family Tree can pull that ancestry from FamilySearch and add it to the current tree by FamilySearch ID.",
+                basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
+                offeredActions: chips + [.getFamilyTree])
+        }
+        return Result(
+            route: .graph, outcome: .declined,
+            prose: "\(pa.name) and \(pb.name) share no recorded ancestor: I walked \(dA) generation\(dA == 1 ? "" : "s") above \(pa.name) and \(dB) above \(pb.name) without meeting.\(asideSentence) A deeper pull on either side could still connect them.",
+            basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
+            offeredActions: chips)
     }
 
     /// "Nell Niece is your wife Sue Wed’s niece" / "Seth Spouse is married
