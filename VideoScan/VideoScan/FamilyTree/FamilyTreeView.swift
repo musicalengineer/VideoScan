@@ -784,6 +784,10 @@ struct FamilyTreeView: View {
             HStack {
                 Label("Family Tree", systemImage: "point.3.connected.trianglepath.dotted")
                     .font(.title2.weight(.semibold))
+                // "Show me some memories…" (2026-10-01; GH #236): a quiet
+                // sparkle beside the title. Inert until clicked; the card
+                // gathers off the main actor (FamilyTreeMemoriesButton).
+                FamilyTreeMemoriesButton(model: model)
                 Spacer()
             }
             // The two people who joined the trees, framed under the title
