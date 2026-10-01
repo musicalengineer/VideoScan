@@ -101,29 +101,6 @@ private let chroniclingAmericaJSON = """
  ]}
 """
 
-/// Documented shape of a Find a Grave memorial-search result card.
-private let findAGraveHTML = """
-<html><body>
-<div class="memorial-list">
- <div class="memorial-item">
-  <a href="/memorial/123456789/david-mcgill-latta" class="memorial-item--title">
-   <h2 class="name-grave pt-2"> <i>David McGill</i> Latta Sr</h2>
-  </a>
-  <b class="birthDeathDates">12 Mar 1847 – 3 Jan 1921</b>
-  <p class="addr-cemet">Pine Grove Cemetery</p>
-  <p class="addr-cemet-loc">Dalton, Berkshire County, Massachusetts, USA</p>
- </div>
- <div class="memorial-item">
-  <a href="/memorial/987654321/david-latta?something=1">
-   <h2 class="name-grave"> David Latta</h2>
-  </a>
-  <span>1901–1960</span>
- </div>
- <a href="/memorial/123456789/david-mcgill-latta#photos">photos (duplicate link)</a>
-</div>
-</body></html>
-"""
-
 private let wikipediaJSON = """
 {"batchcomplete":"","query":{"searchinfo":{"totalhits":2},"search":[
  {"ns":0,"title":"Latta, Pennsylvania","pageid":1,"snippet":"<span class=\\"searchmatch\\">Latta</span> is a borough named for David Latta"},
@@ -153,7 +130,6 @@ private let duckDuckGoHTML = """
 private func fetcher(recorder: FixtureResearchFetcher.RequestRecorder? = nil) -> FixtureResearchFetcher {
     FixtureResearchFetcher(fixtures: [
         .init(urlContains: "chroniclingamerica.loc.gov", body: Data(chroniclingAmericaJSON.utf8), statusCode: 200),
-        .init(urlContains: "findagrave.com", body: Data(findAGraveHTML.utf8), statusCode: 200),
         .init(urlContains: "en.wikipedia.org", body: Data(wikipediaJSON.utf8), statusCode: 200),
         .init(urlContains: "wikidata.org", body: Data(wikidataJSON.utf8), statusCode: 200),
         .init(urlContains: "duckduckgo.com", body: Data(duckDuckGoHTML.utf8), statusCode: 200),
@@ -310,32 +286,10 @@ struct ResearchSourceAdapterTests {
         #expect(recorder.urls.last?.contains("date1=1770&date2=1963") == true)
     }
 
-    @Test func findAGraveTolerantParserYieldsMemorialsOnce() async throws {
-        let recorder = FixtureResearchFetcher.RequestRecorder()
-        let source = FindAGraveSource(fetcher: fetcher(recorder: recorder))
-        let findings = try await source.search(plan: ResearchQueryPlan.build(subject: david(), now: now))
-        try #require(findings.count == 2)
-        let memorial = try #require(findings.first)
-        #expect(memorial.title == "David McGill Latta Sr")
-        #expect(memorial.url == "https://www.findagrave.com/memorial/123456789/david-mcgill-latta")
-        #expect(memorial.date == "12 Mar 1847 – 3 Jan 1921")
-        #expect(memorial.excerpt.contains("Pine Grove Cemetery"))
-        let second = findings[1]
-        #expect(second.url == "https://www.findagrave.com/memorial/987654321/david-latta")
-        #expect(second.date == "1901–1960")
-        let url = try #require(recorder.urls.first)
-        #expect(url.contains("firstname=David&lastname=Latta"))
-        #expect(url.contains("birthyear=1847"))
-        #expect(url.contains("location=Massachusetts"))
-    }
-
-    @Test func findAGraveParserSurvivesGarbage() {
-        #expect(FindAGraveSource.parse("<html><body>Checking your browser…</body></html>", retrievedAt: fetched).isEmpty)
-        #expect(FindAGraveSource.parse("", retrievedAt: fetched).isEmpty)
-        // A bare anchor with no card still yields a finding named from the slug.
-        let bare = FindAGraveSource.parse(#"<a href="/memorial/42/jane-doe">x</a>"#, retrievedAt: fetched)
-        #expect(bare.map(\.title) == ["Jane Doe"])
-    }
+    // Find a Grave's two adapter tests were retired 2026-10-01 with the
+    // adapter itself (robots.txt disallows /memorial/search; Rick approved
+    // the demotion to a Record Finder link). RecordFinderAdapterTests pins
+    // that no automated source requests findagrave.com.
 
     @Test func wikipediaAndWikidataKeepOnlySurnameHits() async throws {
         let source = WikipediaSource(fetcher: fetcher())
@@ -364,14 +318,14 @@ struct ResearchSourceAdapterTests {
         let failing = FixtureResearchFetcher(fixtures: [], retrievedAt: fetched)
         let sources: [any ResearchSource] = [
             ChroniclingAmericaSource(fetcher: fetcher()),
-            FindAGraveSource(fetcher: failing),
+            WikipediaSource(fetcher: failing),
         ]
         final class Lines: @unchecked Sendable { var lines: [String] = []; let lock = NSLock() }
         let lines = Lines()
         let outcomes = await ResearchRunner.run(
             plan: ResearchQueryPlan.build(subject: david(), now: now), sources: sources,
             log: { line in lines.lock.lock(); lines.lines.append(line); lines.lock.unlock() })
-        #expect(outcomes.map(\.kind) == [.chroniclingAmerica, .findAGrave])
+        #expect(outcomes.map(\.kind) == [.chroniclingAmerica, .wikipedia])
         #expect(outcomes[0].status == "2 findings")
         #expect(outcomes[1].status == "failed: HTTP 404")
         // Counts only in the log: no name, no excerpt.

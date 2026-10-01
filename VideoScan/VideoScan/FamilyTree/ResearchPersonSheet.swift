@@ -51,7 +51,7 @@ final class ResearchPersonModel: ObservableObject {
          fetcher: any ResearchFetcher,
          speakerName: String,
          record: @escaping (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt,
-         sources: @escaping (any ResearchFetcher) -> [any ResearchSource] = ResearchRunner.sources,
+         sources: ((any ResearchFetcher) -> [any ResearchSource])? = nil,
          log: @escaping @Sendable (String) -> Void = { appLog.write($0) },
          now: @escaping () -> Date = { Date() }) {
         self.subject = subject
@@ -59,7 +59,9 @@ final class ResearchPersonModel: ObservableObject {
         self.fetcher = fetcher
         self.speakerName = speakerName
         self.record = record
-        self.makeSources = sources
+        // Default: every source, including the record adapters that read
+        // this subject's places and years (GH #230 Phase B).
+        self.makeSources = sources ?? { ResearchRunner.sources(fetcher: $0, subject: subject) }
         self.log = log
         self.now = now
         self.plan = ResearchQueryPlan.build(subject: subject, now: now())
@@ -272,8 +274,7 @@ struct ResearchPersonSheet: View {
             planLine("Years", "\(model.plan.yearFrom)–\(model.plan.yearTo)"
                      + (model.plan.stateHint.map { "  (state: \($0))" } ?? ""))
             planLine("Places", model.plan.placeTokens.isEmpty ? "none in the tree" : model.plan.placeTokens.joined(separator: " · "))
-            planLine("Sources", ResearchSourceKind.allCases
-                .filter { $0 != .wikidata }
+            planLine("Sources", ResearchRunner.runKinds
                 .map { kind in
                     let status = model.dossier.sourceStatus[kind.rawValue]
                     return status.map { "\(kind.label): \($0)" } ?? kind.label
@@ -397,6 +398,9 @@ private struct ResearchFindingRow: View {
         case .findAGrave: return .gray
         case .wikipedia, .wikidata: return .blue
         case .web: return .teal
+        case .irishCensus: return .green
+        case .tnaDiscovery: return .brown
+        case .recordFinder: return .purple
         }
     }
 }
