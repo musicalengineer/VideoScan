@@ -577,6 +577,38 @@ struct RecordFinderFilingTests {
         #expect(onDisk.findings.first { $0.id == search.id }?.lore == "typed but never submitted")
     }
 
+    /// F3 (codex's drafted red test): the re-attach rollback restored the
+    /// preparation snapshot's verdict over a verdict saved after filing
+    /// began. It must take back only what THIS transaction wrote.
+    @Test func reattachRollbackPreservesANewerVerdict() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let file = try write(try pdf(), "record.pdf", in: sb)
+
+        guard case .filed(_, let id, _) = await filer(sb).file(submission(file)) else {
+            Issue.record("initial filing failed")
+            return
+        }
+        let firstPath = try #require(try sb.research.loadDossier(key: sb.subject.key)?.findings.first { $0.id == id }?.documentPath)
+        let document = try #require(sb.store.documents(for: sb.person).first)
+        try sb.store.removeDocument(document, for: sb.person)
+
+        let research = sb.research, key = sb.subject.key
+        let failing: @Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt = { _ in
+            try research.update(key: key) { $0?.setVerdict(.wrong, for: id) }
+            throw BrainDown()
+        }
+        let outcome = await filer(sb, record: .some(failing))
+            .file(submission(file, read: true, words: "Synthetic passage."))
+        guard case .rolledBack = outcome else { Issue.record("expected rolledBack, got \(outcome)"); return }
+
+        let back = try #require(try sb.research.loadDossier(key: sb.subject.key))
+        let finding = try #require(back.findings.first { $0.id == id })
+        #expect(finding.verdict == .wrong, "the verdict saved meanwhile is not this filing's to undo")
+        #expect(finding.fullText == nil, "the words this filing wrote are taken back")
+        #expect(finding.documentPath == firstPath, "the document path this filing wrote is taken back")
+    }
+
     @MainActor
     private func pane(_ sb: Sandbox) -> ResearchPersonModel {
         let brain = sb.brain
