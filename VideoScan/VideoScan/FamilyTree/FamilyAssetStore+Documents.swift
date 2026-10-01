@@ -142,6 +142,9 @@ final class PersonDocumentLog: @unchecked Sendable {
 
     private let lock = NSLock()
     private var reportedMissing: Set<String> = []
+    /// Diagnostics already written once (a damaged list, keyed by its path,
+    /// size and modification date — so a list damaged AGAIN is reported).
+    private var reportedOnce: Set<String> = []
     private var extraSink: ((String) -> Void)?
 
     /// Test seam: every line also goes here. Set to nil to detach.
@@ -149,9 +152,12 @@ final class PersonDocumentLog: @unchecked Sendable {
         lock.withLock { extraSink = sink }
     }
 
-    /// Forget which files were already reported (tests).
+    /// Forget which files and diagnostics were already reported (tests).
     func resetMissing() {
-        lock.withLock { reportedMissing.removeAll() }
+        lock.withLock {
+            reportedMissing.removeAll()
+            reportedOnce.removeAll()
+        }
     }
 
     func write(_ line: String, privateName: String? = nil) {
@@ -166,11 +172,25 @@ final class PersonDocumentLog: @unchecked Sendable {
     }
 
     /// Log the first time only. Returns true when the line was written.
+    /// `subject` is the person KEY (`FamilyAssetStore.logSubject`), never a
+    /// folder name — a People/ folder is named after the person (codex
+    /// review #18 F5). The folder goes to os_log only, marked private.
     @discardableResult
-    func missing(_ url: URL, folder: String) -> Bool {
+    func missing(_ url: URL, subject: String, privateFolder: String) -> Bool {
         let fresh = lock.withLock { reportedMissing.insert(url.path).inserted }
         guard fresh else { return false }
-        write("[tree] document \(url.lastPathComponent) listed in \(folder)/Documents/documents.json is missing on disk — dropped from the listing")
+        write("[tree] document \(url.lastPathComponent) listed in Documents/documents.json for \(subject) "
+              + "is missing on disk — dropped from the listing", privateName: privateFolder)
+        return true
+    }
+
+    /// Write `line` the first time `key` is seen in this process (tests:
+    /// `resetMissing`). Returns true when the line was written.
+    @discardableResult
+    func once(_ key: String, _ line: String, privateName: String? = nil) -> Bool {
+        let fresh = lock.withLock { reportedOnce.insert(key).inserted }
+        guard fresh else { return false }
+        write(line, privateName: privateName)
         return true
     }
 }
@@ -217,6 +237,39 @@ extension FamilyAssetStore {
                 return "\(name) is no longer listed for this person."
             case .sidecarUnreadable(let name):
                 return "The document list \(name) is damaged; nothing was changed."
+            }
+        }
+    }
+
+    /// An import that failed AFTER its file was written into `Documents/`
+    /// (codex review #18 F4). Every other import error is thrown before a
+    /// byte of the document exists (validation), or by the O_EXCL writer,
+    /// which unlinks its own partial file. This one says what became of the
+    /// written file, so a caller reports what is on disk rather than
+    /// "nothing was changed". (C++: an exception type carrying the rollback
+    /// result, instead of a bare error code.)
+    struct DocumentImportFailure: LocalizedError {
+        enum Rollback: Equatable {
+            /// Moved to `Documents/.trash/<name>` (the URL is where it went).
+            case movedToTrash(URL)
+            /// Could not be moved; still at `Documents/<filename>`, unlisted.
+            case leftInDocuments(reason: String)
+        }
+        /// The name it was written under, inside `Documents/`.
+        let filename: String
+        let rollback: Rollback
+        /// Why the import failed after the write (read-back mismatch, the
+        /// list could not be read or written).
+        let underlying: any Error
+
+        var errorDescription: String? {
+            let why = underlying.localizedDescription
+            switch rollback {
+            case .movedToTrash(let url):
+                return "\(why) The file was moved to Documents/\(FamilyAssetStore.documentsTrashFolderName)/\(url.lastPathComponent)."
+            case .leftInDocuments(let reason):
+                return "\(why) The file Documents/\(filename) could not be moved to "
+                    + "Documents/\(FamilyAssetStore.documentsTrashFolderName) (\(reason)); it is still there, not listed."
             }
         }
     }
@@ -290,16 +343,9 @@ extension FamilyAssetStore {
         guard let back = Self.regularFileData(at: written),
               back.count == data.count,
               Self.sha256Hex(back) == digest else {
-            do {
-                try Self.moveToTrash(written, in: documentsDir, fileManager: fileManager, at: when)
-            } catch {
-                // Behaviour unchanged (the import still fails with EIO); the
-                // orphan is now named in the log instead of silently left.
-                PersonDocumentLog.shared.write(
-                    "[tree] document \(written.lastPathComponent) failed its read-back check and could not be moved "
-                    + "to .trash (\(error.localizedDescription)); it is left in \(documentsDir.lastPathComponent)/ unlisted")
-            }
-            throw StoreError.createFailed(written.lastPathComponent, errno: EIO)
+            throw rollBackWrittenDocument(written, in: documentsDir, at: when,
+                                          because: StoreError.createFailed(written.lastPathComponent, errno: EIO),
+                                          logWhy: "failed its read-back check")
         }
 
         var document = PersonDocument(
@@ -319,18 +365,9 @@ extension FamilyAssetStore {
             }
         } catch {
             // The file is on disk but unlisted: park it in .trash so the
-            // archive never holds an orphan, then say why.
-            do {
-                try Self.moveToTrash(written, in: documentsDir, fileManager: fileManager, at: when)
-            } catch let trashError {
-                // Behaviour unchanged (the sidecar error is still thrown);
-                // the orphan is now named in the log instead of silently left.
-                PersonDocumentLog.shared.write(
-                    "[tree] document \(written.lastPathComponent) could not be listed (\(error.localizedDescription)) "
-                    + "and could not be moved to .trash (\(trashError.localizedDescription)); it is left in "
-                    + "\(documentsDir.lastPathComponent)/ unlisted")
-            }
-            throw error
+            // archive never holds an orphan, then say why — and where it is.
+            throw rollBackWrittenDocument(written, in: documentsDir, at: when, because: error,
+                                          logWhy: "could not be listed (\(error.localizedDescription))")
         }
         document.fileURL = written
         PersonDocumentLog.shared.write(
@@ -350,7 +387,7 @@ extension FamilyAssetStore {
         var out: [PersonDocument] = []
         var seen: Set<UUID> = []
         for folder in personFolders(for: person) {
-            for document in documents(inPersonFolder: folder) where seen.insert(document.id).inserted {
+            for document in documents(inPersonFolder: folder, for: person) where seen.insert(document.id).inserted {
                 out.append(document)
             }
         }
@@ -361,33 +398,44 @@ extension FamilyAssetStore {
 
     /// The documents listed in ONE person folder's sidecar, each with its
     /// `fileURL` resolved and re-checked (regular file, not a link,
-    /// directly inside `Documents/`).
-    func documents(inPersonFolder folder: URL) -> [PersonDocument] {
+    /// directly inside `Documents/`). `person` names the diagnostics by key;
+    /// without one they carry an opaque folder reference, never its name.
+    func documents(inPersonFolder folder: URL, for person: FamilyAssetPerson? = nil) -> [PersonDocument] {
         guard access != .unavailable else { return [] }
         let fresh = URL(fileURLWithPath: folder.path, isDirectory: true).standardizedFileURL
         guard fresh.deletingLastPathComponent() == peopleDirectory, isSafeDirectory(fresh) else { return [] }
         let documentsDir = Self.documentsFolder(in: fresh)
         guard isSafeDirectory(documentsDir) else { return [] }
+        let subject = Self.logSubject(person, folder: fresh)
         let entries: [PersonDocument]
         do {
             entries = try readDocumentSidecar(in: documentsDir)
         } catch {
-            PersonDocumentLog.shared.write(
-                "[tree] could not read \(fresh.lastPathComponent)/Documents/\(Self.documentsSidecarName) — "
-                + "\(error.localizedDescription); showing no documents for that folder")
+            // Every selection change lists the person: report a damaged
+            // list once per state of the file, not once per listing.
+            let sidecar = documentsDir.appendingPathComponent(Self.documentsSidecarName)
+            let values = try? sidecar.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            let key = "unreadable|\(sidecar.path)|\(values?.fileSize ?? -1)|"
+                + "\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+            PersonDocumentLog.shared.once(
+                key,
+                "[tree] could not read Documents/\(Self.documentsSidecarName) for \(subject) — "
+                + "\(error.localizedDescription); showing no documents from that folder until it is repaired",
+                privateName: fresh.lastPathComponent)
             return []
         }
         return entries.compactMap { entry in
             guard Self.isPlainFilename(entry.filename) else {
                 PersonDocumentLog.shared.missing(
-                    documentsDir.appendingPathComponent(entry.filename), folder: fresh.lastPathComponent)
+                    documentsDir.appendingPathComponent(entry.filename), subject: subject,
+                    privateFolder: fresh.lastPathComponent)
                 return nil
             }
             let url = documentsDir.appendingPathComponent(entry.filename, isDirectory: false).standardizedFileURL
             guard url.deletingLastPathComponent() == documentsDir,
                   let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
                   values.isRegularFile == true, values.isSymbolicLink != true else {
-                PersonDocumentLog.shared.missing(url, folder: fresh.lastPathComponent)
+                PersonDocumentLog.shared.missing(url, subject: subject, privateFolder: fresh.lastPathComponent)
                 return nil
             }
             var resolved = entry
@@ -538,11 +586,32 @@ extension FamilyAssetStore {
 
     // MARK: Helpers
 
+    /// Undo an import's own write: move the file it just wrote to .trash
+    /// and return the failure describing where the file now is. A move that
+    /// fails is logged (file name only) and reported as left in Documents/.
+    private func rollBackWrittenDocument(_ written: URL, in documentsDir: URL, at when: Date,
+                                         because error: any Error, logWhy: String) -> DocumentImportFailure {
+        do {
+            let trashed = try Self.moveToTrash(written, in: documentsDir, fileManager: fileManager, at: when)
+            return DocumentImportFailure(filename: written.lastPathComponent, rollback: .movedToTrash(trashed),
+                                         underlying: error)
+        } catch let trashError {
+            PersonDocumentLog.shared.write(
+                "[tree] document \(written.lastPathComponent) \(logWhy) and could not be moved to .trash "
+                + "(\(trashError.localizedDescription)); it is left in \(documentsDir.lastPathComponent)/ unlisted")
+            return DocumentImportFailure(filename: written.lastPathComponent,
+                                         rollback: .leftInDocuments(reason: trashError.localizedDescription),
+                                         underlying: error)
+        }
+    }
+
     /// `Documents/.trash/<name>` — a same-named file already there gets a
     /// stamp suffix; nothing is ever replaced. `rename(2)` underneath
-    /// (`moveItem`), not `replaceItemAt` (see AtomicFilePublish).
+    /// (`moveItem`), not `replaceItemAt` (see AtomicFilePublish). Returns
+    /// where the file went.
+    @discardableResult
     private static func moveToTrash(_ file: URL, in documentsDir: URL,
-                                    fileManager: FileManager, at when: Date) throws {
+                                    fileManager: FileManager, at when: Date) throws -> URL {
         let trash = documentsDir.appendingPathComponent(documentsTrashFolderName, isDirectory: true)
         var isDirectory: ObjCBool = false
         if fileManager.fileExists(atPath: trash.path, isDirectory: &isDirectory) {
@@ -565,6 +634,7 @@ extension FamilyAssetStore {
             guard suffix < 100 else { throw StoreError.createFailed(name, errno: EEXIST) }
         }
         try fileManager.moveItem(at: file, to: destination)
+        return destination
     }
 
     private static func regularFileData(at url: URL) -> Data? {
@@ -597,9 +667,14 @@ extension FamilyAssetStore {
     /// "LZ7X-ABC" — the person's KEY (FamilySearch ID, else GEDCOM pointer),
     /// never their name: the app log is not the place for family names (QA
     /// 2026-10-01 P3-1; the os_log line still carries the name as private).
-    /// A folder name can contain a name too, so it is not used either.
-    private static func logSubject(_ person: FamilyAssetPerson?, folder: URL) -> String {
+    /// A folder name can contain a name too, so it is never used: without a
+    /// key the subject is an opaque reference to the folder (the first 8
+    /// hex digits of the SHA-256 of its name) — stable across lines, so one
+    /// folder's diagnostics can be told apart, and meaningless on its own.
+    /// The os_log copy of each line carries the folder name as private.
+    static func logSubject(_ person: FamilyAssetPerson?, folder: URL) -> String {
         if let key = person?.familySearchID ?? person?.gedcomID, !key.isEmpty { return key }
-        return "a person with no ID"
+        let ref = sha256Hex(Data(folder.lastPathComponent.utf8)).prefix(8)
+        return "a person with no ID (folder ref \(ref))"
     }
 }

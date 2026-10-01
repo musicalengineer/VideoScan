@@ -378,12 +378,22 @@ struct FamilyDocumentStoreTests {
         #expect(sb.store.documents(for: mary).isEmpty)
         #expect(try Data(contentsOf: sidecar) == Data("{ not json".utf8))
         // And an import refuses to guess: the new file is parked in .trash
-        // rather than listed against a list it cannot read.
-        #expect(throws: FamilyAssetStore.DocumentError.sidecarUnreadable(FamilyAssetStore.documentsSidecarName)) {
+        // rather than listed against a list it cannot read — and the error
+        // says so (codex review #18 F4: it used to be a bare
+        // sidecarUnreadable, indistinguishable from "nothing written").
+        let failure = #expect(throws: FamilyAssetStore.DocumentImportFailure.self) {
             try sb.store.importPersonDocument(from: pdf, kind: .death, note: "", into: folder)
         }
+        #expect((failure?.underlying as? FamilyAssetStore.DocumentError)
+                == .sidecarUnreadable(FamilyAssetStore.documentsSidecarName))
         let trash = documentsDir(folder).appendingPathComponent(FamilyAssetStore.documentsTrashFolderName)
-        #expect((try? fileManager.contentsOfDirectory(atPath: trash.path))?.count == 1)
+        let trashed = (try? fileManager.contentsOfDirectory(atPath: trash.path)) ?? []
+        #expect(trashed.count == 1)
+        if case .movedToTrash(let url) = failure?.rollback {
+            #expect(trashed == [url.lastPathComponent], "the failure names where the file went")
+        } else {
+            Issue.record("expected movedToTrash, got \(String(describing: failure?.rollback))")
+        }
     }
 
     /// Reflection review F3 (2026-09-21): when the rollback's move to
@@ -405,14 +415,60 @@ struct FamilyDocumentStoreTests {
         // A FILE where .trash should be: the rollback's move refuses.
         try Data("x".utf8).write(to: docs.appendingPathComponent(FamilyAssetStore.documentsTrashFolderName))
         let before = Set(try fileManager.contentsOfDirectory(atPath: docs.path))
-        #expect(throws: FamilyAssetStore.DocumentError.sidecarUnreadable(FamilyAssetStore.documentsSidecarName)) {
+        let failure = #expect(throws: FamilyAssetStore.DocumentImportFailure.self) {
             try sb.store.importPersonDocument(from: pdf, kind: .death, note: "", into: folder)
         }
+        #expect((failure?.underlying as? FamilyAssetStore.DocumentError)
+                == .sidecarUnreadable(FamilyAssetStore.documentsSidecarName))
         let orphans = Set(try fileManager.contentsOfDirectory(atPath: docs.path)).subtracting(before)
         #expect(orphans.count == 1, "behaviour unchanged: the orphan stays where it was written")
+        if case .leftInDocuments = failure?.rollback {
+            #expect(orphans == [failure?.filename ?? ""], "the failure names the file left behind")
+        } else {
+            Issue.record("expected leftInDocuments, got \(String(describing: failure?.rollback))")
+        }
         let logged = lock.withLock { lines }.filter { $0.contains("could not be moved to .trash") }
         #expect(logged.count == 1)
         if let orphan = orphans.first { #expect(logged.first?.contains(orphan) == true) }
+    }
+
+    /// Codex review #18 F5: the missing-file and unreadable-list diagnostics
+    /// named the person's FOLDER, and a folder name is a person's name. They
+    /// carry the person key now, and a damaged list is reported once, not on
+    /// every listing (each selection change lists).
+    @Test func diagnosticLogsNeverNameThePersonFolderAndAreNotRepeated() throws {
+        let sb = try sandbox()
+        defer { try? fileManager.removeItem(at: sb.base) }
+        var lines: [String] = []
+        let lock = NSLock()
+        PersonDocumentLog.shared.setExtraSink { line in lock.withLock { lines.append(line) } }
+        defer { PersonDocumentLog.shared.setExtraSink(nil) }
+        PersonDocumentLog.shared.resetMissing()
+        let synthetic = FamilyAssetPerson(gedcomID: "@I77@", name: "Synthetic Test Person")
+        let folder = try sb.store.folderForPhotoRequest(person: synthetic)
+        try #require(folder.lastPathComponent.contains("Synthetic_Test_Person"))
+
+        let pdf = try write(try pdfData(), named: "bc.pdf", in: sb)
+        let doc = try sb.store.importPersonDocument(from: pdf, kind: .birth, note: "", into: folder, for: synthetic)
+        try fileManager.removeItem(at: #require(doc.fileURL))
+        _ = sb.store.documents(for: synthetic)                 // missing file
+        _ = sb.store.documents(inPersonFolder: folder)        // the folder-only entry point too
+
+        let sidecar = documentsDir(folder).appendingPathComponent(FamilyAssetStore.documentsSidecarName)
+        try Data("{ not json".utf8).write(to: sidecar)
+        for _ in 0..<3 { _ = sb.store.documents(for: synthetic) }
+        _ = sb.store.documents(inPersonFolder: folder)
+
+        let captured = lock.withLock { lines }
+        #expect(captured.contains { $0.contains("missing on disk") && $0.contains(doc.filename) })
+        let unreadable = captured.filter { $0.contains("could not read") }
+        #expect(unreadable.count == 1, "a damaged list is reported once: \(unreadable)")
+        for line in captured {
+            #expect(!line.contains("Synthetic_Test_Person") && !line.contains("Synthetic Test Person"),
+                    "a diagnostic named the person: \(line)")
+        }
+        #expect(captured.contains { $0.contains("missing on disk") && $0.contains("@I77@") },
+                "the missing-file line carries the person key")
     }
 
     // MARK: Sensor — sidecar schema frozen

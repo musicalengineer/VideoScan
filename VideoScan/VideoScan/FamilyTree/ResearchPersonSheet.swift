@@ -34,8 +34,15 @@ final class ResearchPersonModel: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var statusLine = ""
     @Published var errorMessage: String?
-    /// Lore drafts by finding id, committed on submit/blur.
-    @Published var loreDrafts: [String: String] = [:]
+    /// Lore drafts by finding id, committed on submit/blur. Changed only
+    /// through `editLore` (the user typing) or by following the disk.
+    @Published private(set) var loreDrafts: [String: String] = [:]
+    /// Findings whose draft the user has typed into since it last matched
+    /// the disk (codex review #18 F2). Only these are ever committed; every
+    /// other draft follows the file, so an untouched field can never write
+    /// a stale copy over lore another pane saved meanwhile.
+    /// (C++: a dirty-bit set beside a cache.)
+    private var editedLore: Set<String> = []
 
     private let store: ResearchStore
     private let fetcher: any ResearchFetcher
@@ -80,6 +87,7 @@ final class ResearchPersonModel: ObservableObject {
                 dossier = saved
                 if let savedPlan = saved.plan { plan = savedPlan }
                 loreDrafts = Dictionary(uniqueKeysWithValues: saved.findings.map { ($0.id, $0.lore) })
+                editedLore.removeAll()
                 statusLine = saved.lastRunAt.map { "Last run \(Self.shortDate($0)) · \(saved.findings.count) findings" }
                     ?? "Not run yet"
             } else {
@@ -146,11 +154,25 @@ final class ResearchPersonModel: ObservableObject {
         mutate { $0.setVerdict(verdict, for: id) }
     }
 
+    /// The user typed in a lore field: the draft is now theirs until it is
+    /// committed, and a refresh from disk leaves it alone.
+    func editLore(_ text: String, for id: String) {
+        loreDrafts[id] = text
+        editedLore.insert(id)
+    }
+
     /// Commit the draft for one finding (Return in the field / focus lost).
+    /// A draft the user never edited is not committed: it is the disk's own
+    /// value, possibly older than what is on disk now.
     func commitLore(for id: String) {
+        guard editedLore.contains(id) else { return }
         let draft = loreDrafts[id] ?? ""
-        guard dossier.findings.first(where: { $0.id == id })?.lore != draft else { return }
-        mutate { $0.setLore(draft, for: id) }
+        if dossier.findings.first(where: { $0.id == id })?.lore != draft {
+            // A failed save keeps the draft marked edited, so the next
+            // commit (or Tell Hallie) tries again instead of dropping it.
+            guard mutate({ $0.setLore(draft, for: id) }) else { return }
+        }
+        editedLore.remove(id)
     }
 
     /// Confirmed, not-yet-told findings → CyberBrain attestations. Each is
@@ -160,7 +182,7 @@ final class ResearchPersonModel: ObservableObject {
     /// the same passage — QA 2026-10-01 P3-5).
     @discardableResult
     func tellHallie() -> Int {
-        for id in dossier.findings.map(\.id) { commitLore(for: id) }
+        for id in editedLore.sorted() { commitLore(for: id) }   // only what the user typed
         mutate { _ in }                                   // pick up other writers' changes
         var told = 0
         var failures: [String] = []
@@ -190,8 +212,11 @@ final class ResearchPersonModel: ObservableObject {
     /// this pane's in-memory copy over someone else's newer file — the
     /// "I found a record" filer or a second window (QA 2026-10-01 P2-1).
     /// On a store error the change is still shown here, with the error.
-    private func mutate(_ change: (inout ResearchDossier) -> Void) {
+    /// Returns whether the change reached the disk.
+    @discardableResult
+    private func mutate(_ change: (inout ResearchDossier) -> Void) -> Bool {
         let subject = self.subject
+        var saved = true
         do {
             let updated = try store.update(key: subject.key) { onDisk in
                 var working = onDisk ?? ResearchDossier(subject: subject)
@@ -203,10 +228,14 @@ final class ResearchPersonModel: ObservableObject {
         } catch {
             change(&dossier)
             errorMessage = error.localizedDescription
+            saved = false
         }
-        for finding in dossier.findings where loreDrafts[finding.id] == nil {
+        // Untouched drafts follow the dossier as it is NOW; the user's own
+        // unsaved typing is left alone (codex review #18 F2).
+        for finding in dossier.findings where !editedLore.contains(finding.id) {
             loreDrafts[finding.id] = finding.lore
         }
+        return saved
     }
 
     static func shortDate(_ date: Date) -> String {
@@ -329,7 +358,7 @@ struct ResearchPersonSheet: View {
                         finding: finding,
                         lore: Binding(
                             get: { model.loreDrafts[finding.id] ?? finding.lore },
-                            set: { model.loreDrafts[finding.id] = $0 }),
+                            set: { model.editLore($0, for: finding.id) }),
                         onVerdict: { model.setVerdict($0, for: finding.id) },
                         onCommitLore: { model.commitLore(for: finding.id) })
                     .listRowSeparator(.visible)

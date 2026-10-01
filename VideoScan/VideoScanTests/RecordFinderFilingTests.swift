@@ -529,6 +529,248 @@ struct RecordFinderFilingTests {
         #expect(try sb.research.loadDossier(key: sb.subject.key) == nil)
     }
 
+    // MARK: Codex review #18 (2026-10-01)
+
+    /// F2: a pane's untouched lore draft went stale when another pane saved
+    /// newer lore, and Tell Hallie auto-committed the stale draft over it.
+    @MainActor
+    @Test func aStaleLoreDraftNeverOverwritesNewerLore() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        var prior = ResearchDossier(subject: sb.subject)
+        let search = ResearchFinding(source: .chroniclingAmerica, title: "p", date: nil, excerpt: "e",
+                                     url: "https://example.invalid/p", retrievedAt: fixedNow)
+        prior.merge(fresh: [search], at: fixedNow)
+        prior.setLore("original", for: search.id)
+        try sb.research.saveDossier(prior)
+        let a = pane(sb), b = pane(sb)
+        a.load()
+        b.load()
+        b.editLore("revised", for: search.id)               // pane B: a real edit, committed
+        b.commitLore(for: search.id)
+        a.setVerdict(.confirmed, for: search.id)            // pane A never touched the lore
+        #expect(a.loreDrafts[search.id] == "revised", "an untouched draft follows the disk")
+        #expect(a.tellHallie() == 1)
+        let onDisk = try #require(try sb.research.loadDossier(key: sb.subject.key))
+        #expect(onDisk.findings.first { $0.id == search.id }?.lore == "revised", "B's newer lore survives A")
+        let told = try CyberBrainLoader(rootURL: sb.brain).load().people.flatMap(\.lifeEvents)
+        #expect(told.map(\.text) == ["revised"], "Hallie is told the current lore")
+    }
+
+    /// F2, the other side: a draft the user DID edit is still committed by
+    /// Tell Hallie (that is what the auto-commit is for).
+    @MainActor
+    @Test func anEditedLoreDraftIsCommittedByTellHallie() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        var prior = ResearchDossier(subject: sb.subject)
+        let search = ResearchFinding(source: .chroniclingAmerica, title: "p", date: nil, excerpt: "e",
+                                     url: "https://example.invalid/p", retrievedAt: fixedNow)
+        prior.merge(fresh: [search], at: fixedNow)
+        prior.setVerdict(.confirmed, for: search.id)
+        try sb.research.saveDossier(prior)
+        let a = pane(sb)
+        a.load()
+        a.editLore("typed but never submitted", for: search.id)
+        #expect(a.tellHallie() == 1)
+        let onDisk = try #require(try sb.research.loadDossier(key: sb.subject.key))
+        #expect(onDisk.findings.first { $0.id == search.id }?.lore == "typed but never submitted")
+    }
+
+    /// F3 (codex's drafted red test): the re-attach rollback restored the
+    /// preparation snapshot's verdict over a verdict saved after filing
+    /// began. It must take back only what THIS transaction wrote.
+    @Test func reattachRollbackPreservesANewerVerdict() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let file = try write(try pdf(), "record.pdf", in: sb)
+
+        guard case .filed(_, let id, _) = await filer(sb).file(submission(file)) else {
+            Issue.record("initial filing failed")
+            return
+        }
+        let firstPath = try #require(try sb.research.loadDossier(key: sb.subject.key)?.findings.first { $0.id == id }?.documentPath)
+        let document = try #require(sb.store.documents(for: sb.person).first)
+        try sb.store.removeDocument(document, for: sb.person)
+
+        let research = sb.research, key = sb.subject.key
+        let failing: @Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt = { _ in
+            try research.update(key: key) { $0?.setVerdict(.wrong, for: id) }
+            throw BrainDown()
+        }
+        let outcome = await filer(sb, record: .some(failing))
+            .file(submission(file, read: true, words: "Synthetic passage."))
+        guard case .rolledBack = outcome else { Issue.record("expected rolledBack, got \(outcome)"); return }
+
+        let back = try #require(try sb.research.loadDossier(key: sb.subject.key))
+        let finding = try #require(back.findings.first { $0.id == id })
+        #expect(finding.verdict == .wrong, "the verdict saved meanwhile is not this filing's to undo")
+        #expect(finding.fullText == nil, "the words this filing wrote are taken back")
+        #expect(finding.documentPath == firstPath, "the document path this filing wrote is taken back")
+    }
+
+    /// A store whose import clock damages documents.json AFTER both filer
+    /// prechecks pass (the import calls it after validating the bytes,
+    /// before writing). Optionally a regular FILE squats on `.trash`.
+    private func damagedListDuringImport(_ sb: Sandbox, blockTrash: Bool) throws -> (Sandbox, URL) {
+        var store = sb.store
+        let folder = try store.folderForPhotoRequest(person: sb.person)
+        let documents = FamilyAssetStore.documentsFolder(in: folder)
+        try fm.createDirectory(at: documents, withIntermediateDirectories: true)
+        if blockTrash {
+            try Data("not a folder".utf8).write(to: documents.appendingPathComponent(FamilyAssetStore.documentsTrashFolderName))
+        }
+        let sidecar = documents.appendingPathComponent(FamilyAssetStore.documentsSidecarName)
+        let fired = Counter()
+        let now = fixedNow
+        store.importClock = {
+            if fired.value == 0 {
+                fired.bump()
+                try? Data("[{ damaged".utf8).write(to: sidecar)
+            }
+            return now
+        }
+        return (Sandbox(base: sb.base, store: store, research: sb.research, brain: sb.brain,
+                        sources: sb.sources, subject: sb.subject, person: sb.person), documents)
+    }
+
+    private func pdfs(in directory: URL) -> [String] {
+        ((try? fm.contentsOfDirectory(atPath: directory.path)) ?? []).filter { $0.hasSuffix(".pdf") }.sorted()
+    }
+
+    /// F4: the import wrote the PDF, found the list damaged, moved the PDF
+    /// to .trash and threw — and the filer said "refused" (nothing written).
+    @Test func aListDamagedDuringImportIsRolledBackWithTheFileInTrash() async throws {
+        let (sb, documents) = try damagedListDuringImport(try sandbox(), blockTrash: false)
+        defer { try? fm.removeItem(at: sb.base) }
+        let lines = Lines()
+        let file = try write(try pdf(), "r.pdf", in: sb)
+        let outcome = await filer(sb, lines: lines).file(submission(file))
+        guard case .rolledBack(let why) = outcome else { Issue.record("expected rolledBack, got \(outcome)"); return }
+        let trashed = pdfs(in: documents.appendingPathComponent(FamilyAssetStore.documentsTrashFolderName))
+        #expect(trashed.count == 1)
+        #expect(pdfs(in: documents).isEmpty, "nothing is left in Documents/")
+        if let name = trashed.first { #expect(why.contains(".trash/\(name)"), "says where the file went: \(why)") }
+        #expect(try Data(contentsOf: documents.appendingPathComponent(FamilyAssetStore.documentsSidecarName))
+                == Data("[{ damaged".utf8), "the damaged list is never rewritten")
+        #expect(try sb.research.loadDossier(key: sb.subject.key) == nil)
+        #expect(lines.all.last?.contains("OUTCOME rolledBack") == true)
+    }
+
+    /// F4: same, but the move to .trash fails — the PDF is left in
+    /// Documents/, unlisted. That is a mixed state, and it says where.
+    @Test func aListDamagedDuringImportWithTrashBlockedIsMixedStateAndNamesTheFile() async throws {
+        let (sb, documents) = try damagedListDuringImport(try sandbox(), blockTrash: true)
+        defer { try? fm.removeItem(at: sb.base) }
+        let file = try write(try pdf(), "r.pdf", in: sb)
+        let outcome = await filer(sb).file(submission(file))
+        guard case .mixedState(let why) = outcome else { Issue.record("expected mixedState, got \(outcome)"); return }
+        let left = pdfs(in: documents)
+        #expect(left.count == 1, "the file really is still in Documents/")
+        if let name = left.first { #expect(why.contains("Documents/\(name)"), "says where the file is: \(why)") }
+        #expect(try sb.research.loadDossier(key: sb.subject.key) == nil)
+    }
+
+    // MARK: Coverage gaps named by codex review #18
+
+    /// Every file and folder under the archive and the CyberBrain, by path
+    /// → SHA-256 ("dir" for folders).
+    private func snapshot(_ sb: Sandbox) -> [String: String] {
+        var out: [String: String] = [:]
+        let base = sb.base.resolvingSymlinksInPath().path
+        for top in [sb.base.appendingPathComponent("archive", isDirectory: true), sb.brain] {
+            guard let walker = fm.enumerator(at: top, includingPropertiesForKeys: [.isRegularFileKey]) else { continue }
+            for case let url as URL in walker {
+                let path = url.resolvingSymlinksInPath().path.replacingOccurrences(of: base, with: "")
+                if (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true,
+                   let data = try? Data(contentsOf: url) {
+                    out[path] = FamilyAssetStore.sha256Hex(data)
+                } else {
+                    out[path] = "dir"
+                }
+            }
+        }
+        return out
+    }
+
+    @Test func aRefusalChangesNoFileAnywhereInTheArchive() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let file = try write(try pdf(), "r.pdf", in: sb)
+        #expect(await filer(sb).file(submission(file, read: true, words: "Synthetic words.")).isSuccess)
+        let fresh = try write(try pdf(width: 333), "other.pdf", in: sb)
+        let lie = try write(Data("not a pdf".utf8), "lie.pdf", in: sb)
+        let before = snapshot(sb)
+        #expect(before.count > 3, "the snapshot sees the archive: \(before.keys.sorted())")
+        let refusals: [FoundRecordSubmission] = [
+            submission(file),                                   // duplicate bytes
+            submission(fresh, url: "ftp://example.invalid/x"),  // bad address
+            submission(fresh, year: "18x0"),                    // bad year
+            submission(fresh, read: true, words: ""),           // read, but no words
+            submission(lie),                                    // not what it claims
+        ]
+        for s in refusals {
+            let outcome = await filer(sb).file(s)
+            guard case .refused = outcome else { Issue.record("expected refused for \(s.file.lastPathComponent), got \(outcome)"); continue }
+            #expect(snapshot(sb) == before, "a refusal wrote nothing: \(s.file.lastPathComponent)")
+        }
+    }
+
+    @Test func aDuplicateInASecondFolderOfThePersonIsRefused() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let idFolder = try sb.store.folderForPhotoRequest(person: sb.person)
+        // A pointer-keyed twin: read as this person's, not the write folder.
+        let twin = sb.store.peopleDirectory.appendingPathComponent("Honora_Fenlane_I1", isDirectory: true)
+        try fm.createDirectory(at: twin, withIntermediateDirectories: false)
+        try #require(Set(sb.store.personFolders(for: sb.person).map(\.lastPathComponent))
+                     == [idFolder.lastPathComponent, "Honora_Fenlane_I1"])
+        let bytes = try pdf(width: 287)
+        _ = try sb.store.importPersonDocument(from: try write(bytes, "by-hand.pdf", in: sb),
+                                              kind: .birth, note: "", into: twin, for: sb.person)
+        let before = snapshot(sb)
+        let outcome = await filer(sb).file(submission(try write(bytes, "downloaded.pdf", in: sb)))
+        guard case .refused(let why) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
+        #expect(why.contains("already filed"))
+        #expect(snapshot(sb) == before)
+        #expect(sb.store.documents(inPersonFolder: idFolder).isEmpty)
+    }
+
+    /// Undo of a dossier this filing created retires it to research/.trash
+    /// — the exact bytes, moved, never deleted.
+    @Test func aRetiredDossierIsTheExactBytesInResearchTrash() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let dossierURL = try sb.research.dossierURL(key: sb.subject.key)
+        let seen = Lines()
+        let failing: @Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt = { _ in
+            // What is on disk while the CyberBrain is being written.
+            seen.add((try? Data(contentsOf: dossierURL))?.base64EncodedString() ?? "absent")
+            throw BrainDown()
+        }
+        let file = try write(try pdf(), "r.pdf", in: sb)
+        guard case .rolledBack = await filer(sb, record: .some(failing)).file(submission(file, read: true, words: "W.")) else {
+            Issue.record("expected rolledBack"); return
+        }
+        #expect(!fm.fileExists(atPath: dossierURL.path))
+        let trash = dossierURL.deletingLastPathComponent().appendingPathComponent(".trash", isDirectory: true)
+        let retired = try fm.contentsOfDirectory(atPath: trash.path)
+        try #require(retired.count == 1)
+        let bytes = try Data(contentsOf: trash.appendingPathComponent(retired[0]))
+        #expect(seen.all == [bytes.base64EncodedString()], "the retired file is exactly what this filing wrote")
+    }
+
+    @MainActor
+    private func pane(_ sb: Sandbox) -> ResearchPersonModel {
+        let brain = sb.brain
+        let now = fixedNow
+        return ResearchPersonModel(subject: sb.subject, store: sb.research,
+                                   fetcher: FixtureResearchFetcher(fixtures: [], retrievedAt: now),
+                                   speakerName: "Tester",
+                                   record: { try CyberBrainWriter.record($0, rootURL: brain) },
+                                   now: { now })
+    }
+
     @Test func theFilerNeverReachesForTheGEDCOM() async throws {
         let text = try SourceTree.appSource(named: "RecordFinderFiling.swift")
         for forbidden in ["GedcomWriter", "GEDCOMWriter", "FamilyTreeGedcomWriter", ".ged\"", "PersonFactOverlayStore"] {

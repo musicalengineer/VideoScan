@@ -2533,8 +2533,10 @@ final class FamilyTreeLiveModel: ObservableObject {
                 return "[tree] refused to remove \(file) — no longer among \(row.ownerID)'s listed "
                     + "documents; nothing was changed"
             case .missingOnDisk(let url):
+                // Folder-relative, never the full path: the person's folder
+                // is named after them (codex review #18 F5 class).
                 return "[tree] refused to remove \(file) for \(row.ownerID) — missing on disk at "
-                    + "\(url.path); dropped from the listing, nothing was moved"
+                    + "Documents/\(url.lastPathComponent); dropped from the listing, nothing was moved"
             }
         }
     }
