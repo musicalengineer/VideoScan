@@ -74,7 +74,10 @@ struct ResearchRecordHints: Sendable, Equatable {
         let suffixes: Set<String> = ["jr", "jr.", "sr", "sr.", "ii", "iii", "iv"]
         var tokens = subject.name.split(whereSeparator: { $0.isWhitespace }).map(String.init)
         while let last = tokens.last, suffixes.contains(last.lowercased()) { tokens.removeLast() }
-        let primary = (subject.surname?.isEmpty == false ? subject.surname : nil) ?? tokens.last
+        // A record that is only a given name ("Bridget") has NO surname to
+        // search: never send the given name as the family name (QA P3-11).
+        let primary = (subject.surname?.isEmpty == false ? subject.surname : nil)
+            ?? (tokens.count >= 2 ? tokens.last : nil)
         let person = RecordFinder.Person(name: subject.name, surname: primary,
                                          birthYear: subject.birthYear, deathYear: subject.deathYear,
                                          birthPlace: subject.birthPlace, deathPlace: subject.deathPlace,

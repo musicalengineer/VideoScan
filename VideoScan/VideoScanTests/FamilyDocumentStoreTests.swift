@@ -183,7 +183,10 @@ struct FamilyDocumentStoreTests {
         let added = lock.withLock { lines }
         #expect(added.count == 1)
         let line = try #require(added.first)
-        #expect(line.hasPrefix("[tree] added Birth certificate for Mary C O'Connor (LZ7X-ABC) — \(doc.filename), "))
+        // QA 2026-10-01 P3-1: the app log names the person by KEY, never by
+        // name (os_log keeps the name private as before).
+        #expect(line.hasPrefix("[tree] added Birth certificate for LZ7X-ABC — \(doc.filename), "), "\(line)")
+        #expect(!line.contains("Mary"), "\(line)")
         #expect(line.hasSuffix("KB") || line.hasSuffix("bytes") || line.hasSuffix("MB"))
     }
 
@@ -344,7 +347,8 @@ struct FamilyDocumentStoreTests {
         #expect(fileManager.fileExists(atPath: trash.appendingPathComponent(doc.filename).path))
         #expect(sb.store.documents(for: mary).isEmpty)
         #expect(try sidecarRows(in: folder).isEmpty)
-        #expect(lock.withLock { lines }.contains { $0.hasPrefix("[tree] removed Birth certificate for Mary C O'Connor (LZ7X-ABC) — \(doc.filename) moved to Documents/.trash/") })
+        #expect(lock.withLock { lines }.contains { $0.hasPrefix("[tree] removed Birth certificate for LZ7X-ABC — \(doc.filename) moved to Documents/.trash/") })
+        #expect(!lock.withLock { lines }.joined().contains("Mary"), "QA P3-1: no names in the app log")
 
         // Gone from the list → a second remove says so, and nothing in
         // .trash is touched.

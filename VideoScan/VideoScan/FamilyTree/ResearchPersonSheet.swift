@@ -127,41 +127,41 @@ final class ResearchPersonModel: ObservableObject {
     }
 
     private func apply(_ outcomes: [ResearchRunner.SourceOutcome]) {
-        var updated = dossier
-        updated.plan = plan
+        let plan = self.plan
         let fresh = outcomes.flatMap(\.findings)
-        updated.merge(fresh: fresh, at: now())
-        for outcome in outcomes { updated.sourceStatus[outcome.kind.rawValue] = outcome.status }
-        dossier = updated
-        for finding in updated.findings where loreDrafts[finding.id] == nil {
-            loreDrafts[finding.id] = finding.lore
+        let at = now()
+        mutate { dossier in
+            dossier.plan = plan
+            dossier.merge(fresh: fresh, at: at)
+            for outcome in outcomes { dossier.sourceStatus[outcome.kind.rawValue] = outcome.status }
         }
         isRunning = false
         runTask = nil
         let failed = outcomes.filter { $0.failure != nil }.count
-        statusLine = "\(updated.findings.count) findings from \(outcomes.count - failed) of \(outcomes.count) sources"
-        log("Research: run finished (\(updated.findings.count) findings, \(failed) sources failed)")
-        save()
+        statusLine = "\(dossier.findings.count) findings from \(outcomes.count - failed) of \(outcomes.count) sources"
+        log("Research: run finished (\(dossier.findings.count) findings, \(failed) sources failed)")
     }
 
     func setVerdict(_ verdict: ResearchVerdict, for id: String) {
-        dossier.setVerdict(verdict, for: id)
-        save()
+        mutate { $0.setVerdict(verdict, for: id) }
     }
 
     /// Commit the draft for one finding (Return in the field / focus lost).
     func commitLore(for id: String) {
         let draft = loreDrafts[id] ?? ""
         guard dossier.findings.first(where: { $0.id == id })?.lore != draft else { return }
-        dossier.setLore(draft, for: id)
-        save()
+        mutate { $0.setLore(draft, for: id) }
     }
 
     /// Confirmed, not-yet-told findings → CyberBrain attestations. Each is
-    /// written on its own so one failure does not lose the others.
+    /// written on its own so one failure does not lose the others. The list
+    /// is read from DISK, so a finding another window already told is not
+    /// told again (and the CyberBrain writer itself refuses to duplicate
+    /// the same passage — QA 2026-10-01 P3-5).
     @discardableResult
     func tellHallie() -> Int {
         for id in dossier.findings.map(\.id) { commitLore(for: id) }
+        mutate { _ in }                                   // pick up other writers' changes
         var told = 0
         var failures: [String] = []
         for finding in dossier.untoldConfirmed {
@@ -169,13 +169,12 @@ final class ResearchPersonModel: ObservableObject {
                 let testimony = try ResearchAttestation.testimony(
                     for: finding, subject: subject, speakerName: speakerName, date: now())
                 let receipt = try record(testimony)
-                dossier.markTold(id: finding.id, itemID: receipt.itemID)
+                mutate { $0.markTold(id: finding.id, itemID: receipt.itemID) }
                 told += 1
             } catch {
                 failures.append(error.localizedDescription)
             }
         }
-        save()
         log("Research: told Hallie \(told) findings (\(failures.count) failed)")
         if failures.isEmpty {
             statusLine = told == 0 ? "Nothing confirmed to tell yet"
@@ -186,11 +185,27 @@ final class ResearchPersonModel: ObservableObject {
         return told
     }
 
-    private func save() {
+    /// Apply one change to the dossier ON DISK (under the store's per-key
+    /// lock: read now → change → write), then show the result. Never saves
+    /// this pane's in-memory copy over someone else's newer file — the
+    /// "I found a record" filer or a second window (QA 2026-10-01 P2-1).
+    /// On a store error the change is still shown here, with the error.
+    private func mutate(_ change: (inout ResearchDossier) -> Void) {
+        let subject = self.subject
         do {
-            try store.saveDossier(dossier)
+            let updated = try store.update(key: subject.key) { onDisk in
+                var working = onDisk ?? ResearchDossier(subject: subject)
+                change(&working)
+                // A pane that has changed nothing never creates a file.
+                if onDisk != nil || working != ResearchDossier(subject: subject) { onDisk = working }
+            }
+            if let updated { dossier = updated }
         } catch {
+            change(&dossier)
             errorMessage = error.localizedDescription
+        }
+        for finding in dossier.findings where loreDrafts[finding.id] == nil {
+            loreDrafts[finding.id] = finding.lore
         }
     }
 

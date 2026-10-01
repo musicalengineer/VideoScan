@@ -75,7 +75,7 @@ final class URLSessionResearchFetcher: ResearchFetcher, @unchecked Sendable {
     static let hostPause: UInt64 = 1_000_000_000 // 1 s in nanoseconds
 
     private let session: URLSession
-    private let pacing = HostPacing()
+    private let pacing = ResearchHostPacing(pause: TimeInterval(URLSessionResearchFetcher.hostPause) / 1e9)
 
     init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -86,11 +86,25 @@ final class URLSessionResearchFetcher: ResearchFetcher, @unchecked Sendable {
         session = URLSession(configuration: configuration)
     }
 
+    /// The JSON APIs are asked for JSON explicitly. Probed 2026-10-01: TNA
+    /// Discovery answers JSON with or without the header, but its terms
+    /// describe JSON *or XML* by Accept, so the app never relies on a default.
+    static let jsonAPIHosts: Set<String> = [TNADiscoverySource.host, IrishCensusSource.host]
+
+    /// The request for one URL (pure, so the headers can be pinned by a test).
+    static func request(for url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        if let host = url.host?.lowercased(), jsonAPIHosts.contains(host) {
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+        }
+        return request
+    }
+
     func fetch(_ url: URL) async throws -> ResearchFetchResult {
         try Task.checkCancellation()
         await pacing.waitTurn(host: url.host ?? "")
         do {
-            let (data, response) = try await session.data(from: url)
+            let (data, response) = try await session.data(for: Self.request(for: url))
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard (200..<300).contains(code) else { throw ResearchFetchError.badStatus(code) }
             guard data.count <= Self.maxBodyBytes else { throw ResearchFetchError.tooLarge(data.count) }
@@ -104,20 +118,28 @@ final class URLSessionResearchFetcher: ResearchFetcher, @unchecked Sendable {
             throw ResearchFetchError.network(error.localizedDescription)
         }
     }
+}
 
-    /// Serialises "last request time" per host so two adapters hitting the
-    /// same host still space their requests.
-    private actor HostPacing {
-        private var lastRequest: [String: Date] = [:]
-        func waitTurn(host: String) async {
-            let pause = TimeInterval(URLSessionResearchFetcher.hostPause) / 1e9
-            if let last = lastRequest[host] {
-                let remaining = pause - Date().timeIntervalSince(last)
-                if remaining > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1e9))
-                }
-            }
-            lastRequest[host] = Date()
+/// Serialises "last request time" per host so two adapters hitting the
+/// same host still space their requests.
+actor ResearchHostPacing {
+    private let pause: TimeInterval
+    private var lastRequest: [String: Date] = [:]
+
+    init(pause: TimeInterval) { self.pause = pause }
+
+    /// RESERVES the caller's slot before sleeping (QA 2026-10-01 P3-8). An
+    /// actor is re-entrant across `await`: with "sleep, then record", two
+    /// callers arriving together both read the same last time, sleep the
+    /// same remainder and fire together. Here each caller claims
+    /// max(now, previous slot + pause) synchronously, then sleeps until it.
+    func waitTurn(host: String) async {
+        let now = Date()
+        let slot = lastRequest[host].map { max(now, $0.addingTimeInterval(pause)) } ?? now
+        lastRequest[host] = slot
+        let wait = slot.timeIntervalSince(now)
+        if wait > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1e9))
         }
     }
 }

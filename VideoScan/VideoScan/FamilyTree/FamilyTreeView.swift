@@ -2113,8 +2113,10 @@ struct FamilyTreeView: View {
     }
 
     /// The "I found a record…" sheet. Any outcome that touched disk (filed,
-    /// rolled back, mixed) re-reads the person's documents; a confirmed
-    /// filing also reloads the notes pane from the CyberBrain.
+    /// rolled back, mixed) re-reads THAT person's documents and the notes
+    /// pane. It never closes the sheet — the sheet shows the outcome and
+    /// Rick closes it with Done — so a late answer cannot dismiss a sheet
+    /// opened for someone else (QA 2026-10-01 P3-6).
     private func foundRecordSheet(_ target: RecordFinderFoundTarget) -> some View {
         RecordFinderFoundSheet(
             target: target,
@@ -2122,13 +2124,8 @@ struct FamilyTreeView: View {
             record: model.cyberBrainRecorder(),
             onFiled: { outcome in
                 model.noteDocumentsChanged(for: target.id)
-                if case .filed(_, _, let told) = outcome {
-                    documentsError = nil
-                    foundRecordTarget = nil
-                    if told != nil { Task { await model.loadCyberBrain() } }
-                } else if case .mixedState = outcome {
-                    Task { await model.loadCyberBrain() }
-                }
+                if outcome.isSuccess { documentsError = nil }
+                Task { await model.loadCyberBrain() }
             },
             onCancel: { foundRecordTarget = nil })
     }

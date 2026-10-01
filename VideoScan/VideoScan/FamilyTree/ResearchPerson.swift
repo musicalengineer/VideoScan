@@ -364,6 +364,11 @@ struct ResearchFinding: Identifiable, Equatable, Sendable, Codable {
     /// (`People/<folder>/Documents/<file>`) — the CyberBrain source locator.
     /// Optional, so dossiers saved before 2026-10-01 still decode.
     var documentPath: String?
+    /// For a `.recordFinder` finding: Rick's WHOLE transcription. The
+    /// excerpt is capped at `maxExcerptLength` for display; what Hallie is
+    /// told must never be cut (QA 2026-10-01 P1-1). Optional, so dossiers
+    /// saved before today still decode.
+    var fullText: String?
 
     static let maxExcerptLength = 600
 
@@ -373,7 +378,7 @@ struct ResearchFinding: Identifiable, Equatable, Sendable, Codable {
     init(source: ResearchSourceKind, title: String, date: String?, excerpt: String,
          url: String, retrievedAt: Date, verdict: ResearchVerdict = .unreviewed,
          lore: String = "", toldItemID: String? = nil, documentPath: String? = nil,
-         idSeed: String? = nil) {
+         idSeed: String? = nil, fullText: String? = nil) {
         self.id = Self.makeID(source: source, url: idSeed ?? url)
         self.source = source
         self.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -386,6 +391,8 @@ struct ResearchFinding: Identifiable, Equatable, Sendable, Codable {
         self.lore = lore
         self.toldItemID = toldItemID
         self.documentPath = documentPath
+        let whole = fullText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.fullText = whole.isEmpty ? nil : whole
     }
 
     static func makeID(source: ResearchSourceKind, url: String) -> String {
@@ -394,10 +401,21 @@ struct ResearchFinding: Identifiable, Equatable, Sendable, Codable {
     }
 
     /// The text that becomes the CyberBrain item: lore when Rick wrote
-    /// some, else the excerpt.
+    /// some, else the whole transcription of a filed record, else the
+    /// excerpt.
     var attestationText: String {
         let trimmedLore = lore.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedLore.isEmpty ? excerpt : trimmedLore
+        if !trimmedLore.isEmpty { return trimmedLore }
+        return fullText ?? excerpt
+    }
+
+    /// A filed record with no words of Rick's — no lore, no transcription.
+    /// Its excerpt is only the "not yet transcribed" placeholder, which must
+    /// never reach Hallie as a fact (QA 2026-10-01 P2-2).
+    var isUntranscribedFiledRecord: Bool {
+        source == .recordFinder
+            && lore.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (fullText ?? "").isEmpty
     }
 }
 
@@ -456,8 +474,9 @@ struct ResearchDossier: Equatable, Sendable, Codable {
     }
 
     /// Add one record Rick filed. Refuses (returns false) when a finding
-    /// with the same id — the same source + URL — is already here: the same
-    /// record is never filed twice.
+    /// with the same id is already here. A filed record's id is derived from
+    /// its FILE's SHA-256 (`idSeed`), not its URL, so the same file is never
+    /// listed twice while two records found on one results page stay two.
     mutating func addFiled(_ finding: ResearchFinding) -> Bool {
         guard !findings.contains(where: { $0.id == finding.id }) else { return false }
         findings.append(finding)

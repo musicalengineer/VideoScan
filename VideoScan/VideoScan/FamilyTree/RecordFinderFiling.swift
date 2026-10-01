@@ -14,21 +14,34 @@
 //      re-reads and re-hashes what landed, and keeps `documents.json`;
 //   2. one `.recordFinder` finding in the person's research dossier
 //      (People/<key>/research/dossier.json) — the record's URL, site,
-//      transcription and Rick's verdict, so an unread record can be
-//      confirmed and told later from the Research pane;
+//      Rick's WHOLE transcription and his verdict, so an unread record can
+//      be confirmed and told later from the Research pane;
 //   3. ONLY when Rick ticks "I've read it and it is this person": one
 //      CyberBrain item with one `.officialRecord` source (URL, retrieval
 //      date, locator = the filed document), confidence `confirmed`.
 //
 // Every check that can say no runs BEFORE the first write (refuse over
 // guess): fields, write access, viewer mode, the file's type/size/magic
-// bytes, its SHA-256 against every document already filed for the person,
-// the dossier being readable, the same record not already filed, and a
-// CyberBrain being configured when one will be written. Then each write is
-// PROVED (re-listed / re-loaded) before the next starts. A failure after a
-// write undoes the earlier writes — the document moves to Documents/.trash
-// (never deleted), the dossier is put back as it was — and the outcome says
-// which. The GEDCOM is never touched.
+// bytes, every documents.json of the person being readable, the file's
+// SHA-256 against every document already filed for them, the dossier being
+// readable, and a CyberBrain being configured when one will be written.
+// Then each write is PROVED (re-listed / re-loaded) before the next starts.
+//
+// The dossier is shared with the Research pane (and any second window), so
+// it is NEVER saved from a copy: every write here is a read-modify-write
+// under ResearchStore's per-key lock (`update(key:)`, QA 2026-10-01 P2-1).
+// Undo works the same way — it takes back only THIS filing's change from
+// what is on disk now, and retires a dossier.json this filing itself
+// created if nothing else was added to it meanwhile.
+//
+// A failure after a write undoes the earlier writes — the document moves to
+// Documents/.trash (never deleted), this finding comes off the dossier —
+// and the outcome says which. The GEDCOM is never touched.
+//
+// Re-attach (QA P2-3): the finding's id is the file's SHA-256, so filing the
+// same file again after its document was removed in the inspector finds the
+// old finding. It is re-attached to the new document (documentPath updated);
+// its verdict, lore and told state are kept, and Hallie is not told twice.
 //
 // Outcomes are named, and only `.filed` is success:
 //   .filed       everything requested landed and was proved
@@ -41,13 +54,18 @@
 // the U- hash), the document's file name, its SHA-256 prefix and the finding
 // id — never the person's name, the URL or the transcription.
 //
+// Concurrency: one filing at a time through an async gate (an actor queue —
+// a waiting filer SUSPENDS instead of blocking a cooperative thread, QA
+// P3-7). The per-key dossier lock is held only for a single small JSON
+// read + write.
+//
 // Memory: the duplicate check streams the file through SHA-256 in 1 MB
 // chunks; the import itself holds one ≤ 48 MB Data while validating (see
 // FamilyAssetStore+Documents). Nothing is cached.
 //
 // C++ readers: `struct` with `let` closures ≈ a small object holding
-// std::function members (dependency injection for tests); `NSLock.withLock`
-// ≈ std::lock_guard around the block; `Result<T, E>` ≈ std::expected.
+// std::function members (dependency injection for tests); `actor` ≈ a class
+// whose methods run one at a time; `Result<T, E>` ≈ std::expected.
 
 import CryptoKit
 import Foundation
@@ -127,11 +145,28 @@ enum RecordFilingOutcome: Equatable, Sendable {
         case .filed(let file, _, let told):
             return told == nil
                 ? "Filed as \(file). When you've read it, mark it Confirmed in Research… and tell Hallie."
-                : "Filed as \(file) and told Hallie (confirmed)."
+                : "Filed as \(file); Hallie knows what it says (confirmed)."
         case .refused(let why): return why
         case .rolledBack(let why): return "Nothing was kept: \(why)"
         case .mixedState(let why): return "Needs attention: \(why)"
         }
+    }
+}
+
+/// One filing at a time without blocking a thread: callers queue on an
+/// actor and are resumed in order. (C++: a mutex whose waiters are
+/// coroutines that suspend rather than threads that block.)
+actor RecordFilingGate {
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func enter() async {
+        guard busy else { busy = true; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func leave() {
+        if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
     }
 }
 
@@ -167,15 +202,17 @@ struct RecordFinderFiler {
     static let maxTranscriptionLength = 8_000
     static let hashChunkBytes = 1 << 20
 
-    /// One filing at a time, process-wide: "one editor, one writer". The
-    /// duplicate check and the import must not interleave with another
-    /// filing of the same file.
-    private static let filingLock = NSLock()
+    /// "One editor, one writer": the duplicate check and the import must not
+    /// interleave with another filing of the same file.
+    static let gate = RecordFilingGate()
 
-    /// File it. Synchronous and blocking (file I/O + PDF parse): call it
-    /// off the main actor.
-    func file(_ submission: FoundRecordSubmission) -> RecordFilingOutcome {
-        Self.filingLock.withLock { fileLocked(submission) }
+    /// File it. The work itself is synchronous file I/O (+ a PDF parse);
+    /// call from a background task (the sheet uses Task.detached).
+    func file(_ submission: FoundRecordSubmission) async -> RecordFilingOutcome {
+        await Self.gate.enter()
+        let outcome = fileLocked(submission)
+        await Self.gate.leave()
+        return outcome
     }
 
     // MARK: The transaction
@@ -199,42 +236,46 @@ struct RecordFinderFiler {
         case .success(let document): filed = document
         }
 
-        // ---- Write 2: the finding in the dossier, proved. ----
-        var finding = ResearchFinding(
+        // ---- Write 2: the finding in the dossier (read-modify-write), proved. ----
+        let fresh = ResearchFinding(
             source: .recordFinder, title: pre.findingTitle, date: pre.year, excerpt: pre.excerpt,
             url: pre.pageURL, retrievedAt: pre.when,
             verdict: s.confirmedRead ? .confirmed : .unreviewed,
-            documentPath: filed.archivePath, idSeed: "sha256:" + pre.sha256)
-        var dossier = pre.priorDossier ?? ResearchDossier(subject: subject)
-        if let stop = writeFinding(finding, into: &dossier, pre: pre, filed: filed) {
-            return finish(stop.outcome, code: stop.code)
+            documentPath: filed.archivePath, idSeed: "sha256:" + pre.sha256,
+            fullText: pre.transcription)
+        let stored: ResearchFinding
+        switch writeFinding(fresh, confirmedRead: s.confirmedRead, pre: pre, filed: filed) {
+        case .failure(let stop): return finish(stop.outcome, code: stop.code)
+        case .success(let finding): stored = finding
         }
-        guard s.confirmedRead else {
-            return finish(.filed(documentFilename: filed.document.filename, findingID: finding.id, toldItemID: nil),
-                          code: "filed", detail: filed.document, sha: pre.sha256)
+        let code = pre.reattach == nil ? "filed" : "re-attached"
+        // Unread, or already told before (a re-attach): nothing more to write.
+        guard s.confirmedRead, stored.toldItemID == nil else {
+            return finish(.filed(documentFilename: filed.document.filename, findingID: stored.id,
+                                 toldItemID: stored.toldItemID),
+                          code: code, detail: filed.document, sha: pre.sha256)
         }
 
         // ---- Write 3: the CyberBrain (only after Rick read it). ----
         let receipt: CyberBrainWriter.Receipt
-        switch tellHallie(finding, pre: pre, filed: filed) {
+        switch tellHallie(stored, pre: pre, filed: filed) {
         case .failure(let stop): return finish(stop.outcome, code: stop.code)
         case .success(let told): receipt = told
         }
 
         // ---- Write 4: remember that Hallie was told. ----
-        finding.toldItemID = receipt.itemID
-        dossier.markTold(id: finding.id, itemID: receipt.itemID)
         do {
-            try researchStore.saveDossier(dossier)
+            try researchStore.update(key: subject.key) { onDisk in onDisk?.markTold(id: stored.id, itemID: receipt.itemID) }
         } catch {
             return finish(.mixedState("Hallie was told (item \(receipt.itemID)) and the document is filed as "
                                       + "\(filed.document.filename), but the research file could not record that "
-                                      + "Hallie was told — do not press Tell Hallie for this record again "
-                                      + "(\(error.localizedDescription))."), code: "told-unrecorded")
+                                      + "Hallie was told (\(error.localizedDescription)). Pressing Tell Hallie again "
+                                      + "is safe: the same words from the same record are not recorded twice."),
+                          code: "told-unrecorded")
         }
-        return finish(.filed(documentFilename: filed.document.filename, findingID: finding.id,
+        return finish(.filed(documentFilename: filed.document.filename, findingID: stored.id,
                              toldItemID: receipt.itemID),
-                      code: "filed", detail: filed.document, sha: pre.sha256)
+                      code: code, detail: filed.document, sha: pre.sha256)
     }
 
     /// Why the transaction stopped after it began, with the log code.
@@ -260,6 +301,11 @@ struct RecordFinderFiler {
             folder = try assetStore.folderForPhotoRequest(person: assetPerson)
         } catch {
             return .failure(Stop(outcome: .refused(error.localizedDescription), code: "folder"))
+        }
+        // The target folder's list too (it may be a folder prepare() did not
+        // see yet): refuse rather than write a file that cannot be listed.
+        guard assetStore.documentSidecarIsReadable(inPersonFolder: folder) else {
+            return .failure(Stop(outcome: .refused(Self.unreadableListMessage), code: "document-list-unreadable"))
         }
         let document: PersonDocument
         do {
@@ -288,26 +334,42 @@ struct RecordFinderFiler {
                                       archivePath: CyberBrainWriter.photoLocator(landedURL.path)))
     }
 
-    /// Write 2. Nil on success (dossier saved and read back).
-    private func writeFinding(_ finding: ResearchFinding, into dossier: inout ResearchDossier,
-                              pre: Prepared, filed: FiledDocument) -> Stop? {
-        guard dossier.addFiled(finding) else {
-            // Checked in prepare(); under the lock this cannot change, so
-            // this is belt and braces.
-            return Stop(outcome: undoDocument(filed.document, folder: filed.folder, why: "this record is already filed"),
-                        code: "duplicate-finding")
-        }
+    /// Write 2, under the per-key lock: add the finding — or, re-attaching,
+    /// point the existing finding at the new document. Proved by reading
+    /// the file back. Returns the finding as stored.
+    private func writeFinding(_ fresh: ResearchFinding, confirmedRead: Bool, pre: Prepared,
+                              filed: FiledDocument) -> Result<ResearchFinding, Stop> {
+        let subject = self.subject
+        let reattaching = pre.reattach != nil
         do {
-            try researchStore.saveDossier(dossier)
+            try researchStore.update(key: subject.key) { onDisk in
+                var dossier = onDisk ?? ResearchDossier(subject: subject)
+                if let index = dossier.findings.firstIndex(where: { $0.id == fresh.id }) {
+                    guard reattaching else { throw Refusal(code: "duplicate-finding", message: "this record is already filed") }
+                    dossier.findings[index].documentPath = fresh.documentPath
+                    if confirmedRead, dossier.findings[index].toldItemID == nil {
+                        dossier.findings[index].verdict = .confirmed
+                        if let words = fresh.fullText { dossier.findings[index].fullText = words }
+                    }
+                } else {
+                    guard dossier.addFiled(fresh) else { throw Refusal(code: "duplicate-finding", message: "this record is already filed") }
+                }
+                onDisk = dossier
+            }
             guard let back = try researchStore.loadDossier(key: subject.key),
-                  back.findings.contains(where: { $0.id == finding.id }) else {
+                  let stored = back.findings.first(where: { $0.id == fresh.id }),
+                  stored.documentPath == fresh.documentPath else {
                 throw ResearchStore.StoreError.ioFailure("the research file did not read back")
             }
-            return nil
+            return .success(stored)
+        } catch let refusal as Refusal {
+            // Nothing was written to the dossier; only the document to undo.
+            return .failure(Stop(outcome: undoDocument(filed.document, folder: filed.folder, why: refusal.message),
+                                 code: refusal.code))
         } catch {
-            return undoAll(pre: pre, filed: filed,
-                           why: "the research file could not be saved (\(error.localizedDescription))",
-                           code: "dossier-failed")
+            return .failure(undoAll(pre: pre, findingID: fresh.id, filed: filed,
+                                    why: "the research file could not be saved (\(error.localizedDescription))",
+                                    code: "dossier-failed"))
         }
     }
 
@@ -317,14 +379,15 @@ struct RecordFinderFiler {
                             filed: FiledDocument) -> Result<CyberBrainWriter.Receipt, Stop> {
         guard let record else {
             // prepare() refused this already; kept so the type system agrees.
-            return .failure(undoAll(pre: pre, filed: filed, why: "no CyberBrain is configured", code: "no-cyberbrain"))
+            return .failure(undoAll(pre: pre, findingID: finding.id, filed: filed,
+                                    why: "no CyberBrain is configured", code: "no-cyberbrain"))
         }
         do {
             let testimony = try ResearchAttestation.testimony(
                 for: finding, subject: subject, speakerName: speakerName, date: pre.when)
             return .success(try record(testimony))
         } catch {
-            return .failure(undoAll(pre: pre, filed: filed,
+            return .failure(undoAll(pre: pre, findingID: finding.id, filed: filed,
                                     why: "Hallie's knowledge file could not be written (\(error.localizedDescription))",
                                     code: "cyberbrain-failed"))
         }
@@ -345,10 +408,16 @@ struct RecordFinderFiler {
         let byteCount: Int
         let pageURL: String
         let year: String?
+        /// Rick's words, whole; empty when he typed none.
+        let transcription: String
         let note: String
         let findingTitle: String
         let excerpt: String
-        let priorDossier: ResearchDossier?
+        /// A dossier.json existed before this filing (undo never retires it).
+        let priorExisted: Bool
+        /// The finding filed earlier for these same bytes whose document has
+        /// since been removed — to be re-attached, not duplicated.
+        let reattach: ResearchFinding?
         let when: Date
     }
 
@@ -365,6 +434,10 @@ struct RecordFinderFiler {
         let sha256: String
         let byteCount: Int
     }
+
+    static let unreadableListMessage =
+        "This person's document list (Documents/documents.json) is damaged, so nothing was filed. "
+        + "Repair or move that file in Finder, then try again."
 
     func prepare(_ s: FoundRecordSubmission) -> Result<Prepared, Refusal> {
         let fields: Fields
@@ -384,6 +457,11 @@ struct RecordFinderFiler {
         case .failure(let refusal): return .failure(refusal)
         case .success(let checked): file = checked
         }
+        // Every list of this person's documents must be readable: a damaged
+        // one would hide a duplicate and make the import write-then-trash.
+        if assetStore.personFolders(for: assetPerson).contains(where: { !assetStore.documentSidecarIsReadable(inPersonFolder: $0) }) {
+            return .failure(Refusal(code: "document-list-unreadable", message: Self.unreadableListMessage))
+        }
         // Already filed for this person? (Same bytes in any of their folders.)
         if let existing = assetStore.documents(for: assetPerson).first(where: { $0.sha256 == file.sha256 }) {
             return .failure(Refusal(
@@ -400,12 +478,11 @@ struct RecordFinderFiler {
                                     message: "The research file for \(assetPerson.name) can't be read "
                                         + "(\(error.localizedDescription)); nothing was changed."))
         }
+        // Same bytes filed before, but no document holds them any more (the
+        // duplicate check above passed): re-attach that finding.
         let findingID = ResearchFinding.makeID(source: .recordFinder, url: "sha256:" + file.sha256)
-        if prior?.findings.contains(where: { $0.id == findingID }) == true {
-            return .failure(Refusal(code: "duplicate-finding",
-                                    message: "This record is already filed for \(assetPerson.name)."))
-        }
-        return .success(describe(s, fields: fields, file: file, prior: prior))
+        let reattach = prior?.findings.first { $0.id == findingID }
+        return .success(describe(s, fields: fields, file: file, priorExisted: prior != nil, reattach: reattach))
     }
 
     /// Site, URL, year and words — pure.
@@ -471,7 +548,7 @@ struct RecordFinderFiler {
 
     /// The words that go with it: document note, finding title and excerpt.
     private func describe(_ s: FoundRecordSubmission, fields: Fields, file: CheckedFile,
-                          prior: ResearchDossier?) -> Prepared {
+                          priorExisted: Bool, reattach: ResearchFinding?) -> Prepared {
         var where_: [String] = []
         let district = s.district.trimmingCharacters(in: .whitespacesAndNewlines)
         let recordID = s.recordID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -481,21 +558,52 @@ struct RecordFinderFiler {
         let place = where_.joined(separator: ", ")
         let findingTitle = "\(what) — \(fields.site)" + (place.isEmpty ? "" : " (\(place))")
         let note = "\(fields.site): \(what)" + (place.isEmpty ? "" : ", \(place)") + ". \(fields.pageURL)"
+        // The excerpt is the capped display text; the WHOLE words travel in
+        // `fullText` (QA P1-1).
         let excerpt = fields.transcription.isEmpty
             ? "Filed \(s.recordType.label.lowercased()) record from \(fields.site); not yet transcribed."
             : fields.transcription
         return Prepared(sha256: file.sha256, byteCount: file.byteCount, pageURL: fields.pageURL,
-                        year: fields.year.isEmpty ? nil : fields.year, note: note,
-                        findingTitle: findingTitle, excerpt: excerpt, priorDossier: prior, when: now())
+                        year: fields.year.isEmpty ? nil : fields.year, transcription: fields.transcription,
+                        note: note, findingTitle: findingTitle, excerpt: excerpt,
+                        priorExisted: priorExisted, reattach: reattach, when: now())
     }
 
     // MARK: Undo
 
-    /// Undo writes 1 and 2: dossier back as it was, document to .trash.
-    private func undoAll(pre: Prepared, filed: FiledDocument, why: String, code: String) -> Stop {
-        let restored = restoreDossier(pre.priorDossier)
+    /// Undo writes 1 and 2: this filing's change comes off the dossier ON
+    /// DISK (not a stale copy written back), the document goes to .trash.
+    private func undoAll(pre: Prepared, findingID: String, filed: FiledDocument, why: String, code: String) -> Stop {
+        let restored = restoreDossier(pre: pre, findingID: findingID)
         let undone = undoDocument(filed.document, folder: filed.folder, why: why)
         return Stop(outcome: combine(undone, dossierRestored: restored), code: code)
+    }
+
+    /// Take back exactly this filing's change, under the per-key lock:
+    /// a new finding is removed; a re-attached one gets its old document
+    /// path, verdict and words back. Whatever else is on disk now (another
+    /// window's verdicts, a run's findings) is kept. A dossier.json this
+    /// filing created is retired if it is otherwise empty (QA P3-4).
+    private func restoreDossier(pre: Prepared, findingID: String) -> Bool {
+        let subject = self.subject
+        do {
+            try researchStore.update(key: subject.key) { onDisk in
+                guard var dossier = onDisk else { return }
+                if let old = pre.reattach {
+                    if let index = dossier.findings.firstIndex(where: { $0.id == findingID }) {
+                        dossier.findings[index].documentPath = old.documentPath
+                        dossier.findings[index].verdict = old.verdict
+                        dossier.findings[index].fullText = old.fullText
+                    }
+                } else {
+                    dossier.findings.removeAll { $0.id == findingID }
+                }
+                onDisk = (!pre.priorExisted && dossier == ResearchDossier(subject: subject)) ? nil : dossier
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Move the just-filed document to Documents/.trash and drop its row.
@@ -504,26 +612,29 @@ struct RecordFinderFiler {
             try assetStore.removeDocument(document, from: folder, for: assetPerson)
             return .rolledBack("\(why). The file was moved to Documents/\(FamilyAssetStore.documentsTrashFolderName)/\(document.filename).")
         } catch {
-            return .mixedState("\(why). The document \(document.filename) could NOT be moved to Documents/.trash "
-                               + "(\(error.localizedDescription)); it is still listed for this person — remove it from the inspector.")
+            let inPlace = FileManager.default.fileExists(
+                atPath: FamilyAssetStore.documentsFolder(in: folder).appendingPathComponent(document.filename).path)
+            return .mixedState(Self.undoFailureMessage(why: why, filename: document.filename,
+                                                       stillInDocuments: inPlace,
+                                                       error: error.localizedDescription))
         }
     }
 
-    /// Put the dossier back as it was before this filing. With no prior
-    /// dossier, the restored file is an empty one (nothing is ever deleted).
-    private func restoreDossier(_ prior: ResearchDossier?) -> Bool {
-        do {
-            try researchStore.saveDossier(prior ?? ResearchDossier(subject: subject))
-            return true
-        } catch {
-            return false
+    /// The words for a document undo that failed, saying where the file IS
+    /// (QA P3-3: the move can succeed while the list rewrite fails).
+    static func undoFailureMessage(why: String, filename: String, stillInDocuments: Bool, error: String) -> String {
+        if stillInDocuments {
+            return "\(why). The document \(filename) could NOT be moved to Documents/.trash (\(error)); "
+                + "it is still filed for this person — remove it from the inspector."
         }
+        return "\(why). The document \(filename) was moved to Documents/.trash, but documents.json could not "
+            + "be rewritten (\(error)); the inspector will report it as missing and drop it from the list."
     }
 
     private func combine(_ outcome: RecordFilingOutcome, dossierRestored: Bool) -> RecordFilingOutcome {
         guard !dossierRestored else { return outcome }
-        let tail = " The research file could not be put back; it lists this record although the document is gone — "
-            + "remove the finding in Research…"
+        let tail = " The research file could not be put back: it still lists this record although its document "
+            + "was removed. Filing the same file again re-attaches it."
         switch outcome {
         case .rolledBack(let why), .mixedState(let why): return .mixedState(why + tail)
         default: return outcome

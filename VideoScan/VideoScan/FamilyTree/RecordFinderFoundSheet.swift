@@ -49,6 +49,8 @@ struct RecordFinderFoundSheet: View {
     @State private var transcription = ""
     @State private var confirmedRead = false
     @State private var isFiling = false
+    /// True once a filing succeeded: the form shows its outcome and Done.
+    @State private var isDone = false
     @State private var outcomeText: String?
     @State private var outcomeIsProblem = false
 
@@ -119,13 +121,23 @@ struct RecordFinderFoundSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { onCancel() }
-                    .keyboardShortcut(.cancelAction)
-                Button(isFiling ? "Filing…" : "File it") { file() }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(fileURL == nil || isFiling)
-                    .masterOnly()
+                if isDone {
+                    // Filed: the outcome stays on screen until Rick closes it.
+                    Button("Done") { onCancel() }
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    // Cancel cannot abandon a filing half-way: disabled
+                    // while one is running (QA 2026-10-01 P3-6).
+                    Button("Cancel") { onCancel() }
+                        .keyboardShortcut(.cancelAction)
+                        .disabled(isFiling)
+                    Button(isFiling ? "Filing…" : "File it") { file() }
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(fileURL == nil || isFiling)
+                        .masterOnly()
+                }
             }
         }
         .padding(20)
@@ -222,18 +234,17 @@ struct RecordFinderFoundSheet: View {
                     assetStore: store, assetPerson: person,
                     researchStore: ResearchStore(peopleRoot: store.peopleDirectory),
                     subject: subject, speakerName: speaker, record: record)
-                return filer.file(submission)
+                return await filer.file(submission)
             }.value
             isFiling = false
-            if outcome.isSuccess {
-                onFiled(outcome)
-            } else {
-                outcomeIsProblem = true
-                outcomeText = outcome.message
-                // A rollback or mixed state still changed files on disk;
-                // let the inspector re-read.
-                if case .refused = outcome {} else { onFiled(outcome) }
-            }
+            // The outcome is shown HERE, in this sheet, for every result.
+            // The parent's onFiled only re-reads the inspector; it never
+            // closes a sheet, so a late answer cannot dismiss a sheet that
+            // was opened for somebody else meanwhile (QA P3-6).
+            outcomeIsProblem = !outcome.isSuccess
+            outcomeText = outcome.message
+            isDone = outcome.isSuccess
+            if case .refused = outcome {} else { onFiled(outcome) }
         }
     }
 }

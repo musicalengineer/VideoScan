@@ -117,6 +117,14 @@ private let soldierGedcom = """
 1 DEAT
 2 DATE 1960
 1 _MILT World War I Draft Registration
+0 @I3@ INDI
+1 NAME Bridget
+1 SEX F
+1 BIRT
+2 DATE 1870
+2 PLAC Bandon, Co. Cork, Ireland
+1 DEAT
+2 DATE 1940
 0 TRLR
 """
 
@@ -249,6 +257,17 @@ struct IrishCensusAdapterTests {
         let drafted = ResearchRecordHints(subject: try subject("@I2@"))
         #expect(!drafted.servedInMilitary, "a US draft registration is not service")
         #expect(!drafted.isIrish)
+    }
+
+    /// QA P3-11: a record with only a given name has no surname to search —
+    /// "Bridget" must never be sent to the census as a family name.
+    @Test func aGivenNameIsNeverUsedAsTheSurname() async throws {
+        let given = ResearchRecordHints(subject: try subject("@I3@"))
+        #expect(given.surnames.isEmpty, "\(given.surnames)")
+        let recorder = FixtureResearchFetcher.RequestRecorder()
+        let f = fixture([("api-census", censusSmallJSON)], recorder: recorder)
+        _ = try await IrishCensusSource(fetcher: f, hints: given).search(plan: plan)
+        #expect(recorder.urls.isEmpty)
     }
 }
 
@@ -398,20 +417,61 @@ struct RecordFinderIsolationTests {
          "birthDate":"1880","deathDate":"1950","birthPlace":"Bandon, Co. Cork, Ireland","deathPlace":null},
          "sourceStatus":{},"findings":[{"id":"chroniclingAmerica.0123456789abcdef","source":"chroniclingAmerica",
          "title":"T","date":null,"excerpt":"E","url":"https://example.invalid/p","retrievedAt":"2026-08-29T14:00:00Z",
-         "verdict":"confirmed","lore":"","toldItemID":null}]}
+         "verdict":"confirmed","lore":"","toldItemID":null},
+         {"id":"findAGrave.0123456789abcdef","source":"findAGrave","title":"Memorial","date":"1880–1950",
+          "excerpt":"E","url":"https://example.invalid/memorial/1","retrievedAt":"2026-08-29T14:00:00Z",
+          "verdict":"plausible","lore":"","toldItemID":null}]}
         """
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let dossier = try decoder.decode(ResearchDossier.self, from: Data(old.utf8))
         #expect(dossier.subject.servedInMilitary == nil)
         #expect(dossier.findings.first?.documentPath == nil)
+        // A Find a Grave finding saved before the demotion still loads.
+        #expect(dossier.findings.map(\.source) == [.chroniclingAmerica, .findAGrave])
+    }
+
+    /// QA P3-8: three requests to one host at once must still be spaced by
+    /// the pause — the actor used to let concurrent callers sleep the same
+    /// remainder and fire together.
+    @Test func concurrentCallersToOneHostAreSpacedApart() async {
+        let pacing = ResearchHostPacing(pause: 0.2)
+        let times = await withTaskGroup(of: Date.self) { group -> [Date] in
+            for _ in 0..<3 {
+                group.addTask {
+                    await pacing.waitTurn(host: "example.invalid")
+                    return Date()
+                }
+            }
+            var out: [Date] = []
+            for await t in group { out.append(t) }
+            return out.sorted()
+        }
+        #expect(times.count == 3)
+        for i in 1..<times.count {
+            let gap = times[i].timeIntervalSince(times[i - 1])
+            #expect(gap >= 0.18, "requests \(i - 1) and \(i) were \(gap) s apart")
+        }
+    }
+
+    /// QA P3-9: the JSON APIs are asked for JSON; other hosts are untouched.
+    @Test func jsonAPIRequestsCarryAnAcceptHeader() throws {
+        let discovery = try #require(TNADiscoverySource.queryURL(
+            .init(surname: "Fenlane", series: ["WO 97"], dateFrom: nil, dateTo: nil), givenName: "Honora"))
+        #expect(URLSessionResearchFetcher.request(for: discovery).value(forHTTPHeaderField: "Accept") == "application/json")
+        let census = try #require(IrishCensusSource.queryURL(.init(year: 1911, surname: "Fenlane", age: nil, offset: 0),
+                                                             givenName: nil, county: nil))
+        #expect(URLSessionResearchFetcher.request(for: census).value(forHTTPHeaderField: "Accept") == "application/json")
+        let other = try #require(URL(string: "https://chroniclingamerica.loc.gov/search/pages/results/?format=json"))
+        #expect(URLSessionResearchFetcher.request(for: other).value(forHTTPHeaderField: "Accept") == nil)
     }
 
     @Test func attestationLocatorFollowsTheKind() throws {
         let s = try subject("@I1@")
         var filed = ResearchFinding(source: .recordFinder, title: "t", date: nil, excerpt: "What it says.",
                                     url: "https://example.invalid/r", retrievedAt: fetched,
-                                    verdict: .confirmed, documentPath: "People/F/Documents/BC-1.pdf")
+                                    verdict: .confirmed, documentPath: "People/F/Documents/BC-1.pdf",
+                                    fullText: "What it says.")
         #expect(ResearchAttestation.locator(for: filed, subject: s) == "People/F/Documents/BC-1.pdf")
         filed.verdict = .confirmed
         let testimony = try ResearchAttestation.testimony(for: filed, subject: s, speakerName: "Tester", date: now)

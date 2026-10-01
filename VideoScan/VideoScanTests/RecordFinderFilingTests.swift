@@ -135,12 +135,12 @@ struct RecordFinderFilingTests {
 
     // MARK: filed
 
-    @Test func anUnreadRecordIsFiledButHallieIsNotTold() throws {
+    @Test func anUnreadRecordIsFiledButHallieIsNotTold() async throws {
         let sb = try sandbox()
         defer { try? fm.removeItem(at: sb.base) }
         let lines = Lines(), calls = Counter()
         let file = try write(try pdf(), "downloaded.pdf", in: sb)
-        let outcome = filer(sb, lines: lines, calls: calls).file(submission(file))
+        let outcome = await filer(sb, lines: lines, calls: calls).file(submission(file))
         guard case .filed(let filename, let findingID, let told) = outcome else {
             Issue.record("expected filed, got \(outcome)"); return
         }
@@ -163,13 +163,13 @@ struct RecordFinderFilingTests {
         #expect(lines.all.last?.hasPrefix("[record-finder] OUTCOME filed") == true)
     }
 
-    @Test func aReadRecordIsToldToHallieWithItsCitation() throws {
+    @Test func aReadRecordIsToldToHallieWithItsCitation() async throws {
         let sb = try sandbox()
         defer { try? fm.removeItem(at: sb.base) }
         let calls = Counter()
         let file = try write(try pdf(), "cert.pdf", in: sb)
         let words = "Born 1878 at Skibbereen to a labourer and his wife (synthetic test words)."
-        let outcome = filer(sb, calls: calls).file(submission(file, read: true, words: words))
+        let outcome = await filer(sb, calls: calls).file(submission(file, read: true, words: words))
         guard case .filed(_, let findingID, let told?) = outcome else {
             Issue.record("expected filed and told, got \(outcome)"); return
         }
@@ -193,15 +193,15 @@ struct RecordFinderFilingTests {
 
     // MARK: refused — nothing written
 
-    @Test func theSameFileTwiceIsRefused() throws {
+    @Test func theSameFileTwiceIsRefused() async throws {
         let sb = try sandbox()
         defer { try? fm.removeItem(at: sb.base) }
         let bytes = try pdf()
         let first = try write(bytes, "a.pdf", in: sb)
         let second = try write(bytes, "renamed copy.pdf", in: sb)
-        #expect(filer(sb).file(submission(first)).isSuccess)
+        #expect(await filer(sb).file(submission(first)).isSuccess)
         let before = try sb.research.loadDossier(key: sb.subject.key)
-        let outcome = filer(sb).file(submission(second, url: "https://www.irishgenealogy.ie/view?record_id=OTHER"))
+        let outcome = await filer(sb).file(submission(second, url: "https://www.irishgenealogy.ie/view?record_id=OTHER"))
         guard case .refused(let why) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
         #expect(why.contains("already filed"))
         #expect(sb.store.documents(for: sb.person).count == 1)
@@ -211,7 +211,7 @@ struct RecordFinderFilingTests {
     /// The SHA-256 check covers documents filed by ANY route — here the
     /// plain "Add document…" import, which leaves no research finding, so
     /// only the document-level check can say no.
-    @Test func aFileAlreadyAddedAsADocumentIsRefused() throws {
+    @Test func aFileAlreadyAddedAsADocumentIsRefused() async throws {
         let sb = try sandbox()
         defer { try? fm.removeItem(at: sb.base) }
         let bytes = try pdf(width: 321)
@@ -219,27 +219,27 @@ struct RecordFinderFilingTests {
         let folder = try sb.store.folderForPhotoRequest(person: sb.person)
         _ = try sb.store.importPersonDocument(from: added, kind: .birth, note: "", into: folder, for: sb.person)
         let again = try write(bytes, "downloaded-again.pdf", in: sb)
-        let outcome = filer(sb).file(submission(again))
+        let outcome = await filer(sb).file(submission(again))
         guard case .refused(let why) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
         #expect(why.contains("already filed") && why.contains("BC-"), "names the existing document: \(why)")
         #expect(sb.store.documents(for: sb.person).count == 1)
         #expect(try sb.research.loadDossier(key: sb.subject.key) == nil, "nothing written to the research file")
     }
 
-    @Test func wrongMagicBytesAreRefusedBeforeAnyFolderIsMade() throws {
+    @Test func wrongMagicBytesAreRefusedBeforeAnyFolderIsMade() async throws {
         let sb = try sandbox()
         defer { try? fm.removeItem(at: sb.base) }
         let fake = try write(Data("This is text, not a PDF.".utf8), "record.pdf", in: sb)
         let pngLie = try write(try pdf(), "record.png", in: sb)
         for file in [fake, pngLie] {
-            let outcome = filer(sb).file(submission(file))
+            let outcome = await filer(sb).file(submission(file))
             guard case .refused = outcome else { Issue.record("expected refused for \(file.lastPathComponent), got \(outcome)"); continue }
         }
         let people = (try? fm.contentsOfDirectory(atPath: sb.store.peopleDirectory.path)) ?? []
         #expect(people.isEmpty, "refusals come before the person folder is created: \(people)")
     }
 
-    @Test func anOversizedFileIsRefusedWithoutBeingRead() throws {
+    @Test func anOversizedFileIsRefusedWithoutBeingRead() async throws {
         let sb = try sandbox()
         defer { try? fm.removeItem(at: sb.base) }
         let big = sb.sources.appendingPathComponent("huge.pdf")
@@ -248,14 +248,14 @@ struct RecordFinderFilingTests {
         try handle.truncate(atOffset: UInt64(FamilyAssetStore.maxImportBytes + 1))   // sparse
         try handle.close()
         let start = Date()
-        let outcome = filer(sb).file(submission(big))
+        let outcome = await filer(sb).file(submission(big))
         guard case .refused(let why) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
         #expect(why.contains("MB"))
         #expect(Date().timeIntervalSince(start) < 2, "the size is checked before any byte is read")
         #expect(sb.store.documents(for: sb.person).isEmpty)
     }
 
-    @Test func badFieldsAreRefused() throws {
+    @Test func badFieldsAreRefused() async throws {
         let sb = try sandbox()
         defer { try? fm.removeItem(at: sb.base) }
         let file = try write(try pdf(), "r.pdf", in: sb)
@@ -270,38 +270,38 @@ struct RecordFinderFilingTests {
                                   transcription: "", confirmedRead: false),
         ]
         for s in cases {
-            let outcome = filer(sb).file(s)
+            let outcome = await filer(sb).file(s)
             guard case .refused = outcome else { Issue.record("expected refused for \(s), got \(outcome)"); continue }
         }
         #expect(sb.store.documents(for: sb.person).isEmpty)
         #expect(try sb.research.loadDossier(key: sb.subject.key) == nil)
     }
 
-    @Test func confirmedWithoutACyberBrainIsRefused() throws {
+    @Test func confirmedWithoutACyberBrainIsRefused() async throws {
         let sb = try sandbox()
         defer { try? fm.removeItem(at: sb.base) }
         let file = try write(try pdf(), "r.pdf", in: sb)
         let noBrain: (@Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt)? = nil
-        let outcome = filer(sb, record: .some(noBrain)).file(submission(file, read: true, words: "Words."))
+        let outcome = await filer(sb, record: .some(noBrain)).file(submission(file, read: true, words: "Words."))
         guard case .refused = outcome else { Issue.record("expected refused, got \(outcome)"); return }
         #expect(sb.store.documents(for: sb.person).isEmpty)
         // Unread, the same filing is fine without a CyberBrain.
-        #expect(filer(sb, record: .some(noBrain)).file(submission(file)).isSuccess)
+        #expect(await filer(sb, record: .some(noBrain)).file(submission(file)).isSuccess)
     }
 
-    @Test func aReadOnlyOrUnavailableArchiveIsRefused() throws {
+    @Test func aReadOnlyOrUnavailableArchiveIsRefused() async throws {
         for access in [FamilyAssetStore.Access.readOnly, .unavailable] {
             let sb = try sandbox(access: access)
             defer { try? fm.removeItem(at: sb.base) }
             let file = try write(try pdf(), "r.pdf", in: sb)
-            let outcome = filer(sb).file(submission(file, read: true, words: "Words."))
+            let outcome = await filer(sb).file(submission(file, read: true, words: "Words."))
             guard case .refused = outcome else { Issue.record("expected refused for \(access), got \(outcome)"); continue }
             #expect(!fm.fileExists(atPath: sb.store.peopleDirectory.path), "\(access): nothing created")
             #expect(!fm.fileExists(atPath: brainFile(sb).path))
         }
     }
 
-    @Test func aDamagedDossierIsRefusedAndLeftExactlyAsItWas() throws {
+    @Test func aDamagedDossierIsRefusedAndLeftExactlyAsItWas() async throws {
         let sb = try sandbox()
         defer { try? fm.removeItem(at: sb.base) }
         let dossierURL = try sb.research.dossierURL(key: sb.subject.key)
@@ -309,7 +309,7 @@ struct RecordFinderFilingTests {
         let poison = Data("{ this is not a dossier".utf8)
         try poison.write(to: dossierURL)
         let file = try write(try pdf(), "r.pdf", in: sb)
-        let outcome = filer(sb).file(submission(file))
+        let outcome = await filer(sb).file(submission(file))
         guard case .refused = outcome else { Issue.record("expected refused, got \(outcome)"); return }
         #expect(try Data(contentsOf: dossierURL) == poison, "a damaged research file is never replaced")
         #expect(sb.store.documents(for: sb.person).isEmpty)
@@ -317,7 +317,7 @@ struct RecordFinderFilingTests {
 
     // MARK: never overwrite
 
-    @Test func anExistingFileNameIsNeverOverwritten() throws {
+    @Test func anExistingFileNameIsNeverOverwritten() async throws {
         let sb = try sandbox(clock: fixedNow)
         defer { try? fm.removeItem(at: sb.base) }
         let folder = try sb.store.folderForPhotoRequest(person: sb.person)
@@ -330,7 +330,7 @@ struct RecordFinderFilingTests {
         let original = Data("someone else's bytes".utf8)
         try original.write(to: squatter)
         let file = try write(try pdf(), "r.pdf", in: sb)
-        let outcome = filer(sb).file(submission(file))
+        let outcome = await filer(sb).file(submission(file))
         guard case .filed(let filename, _, _) = outcome else { Issue.record("expected filed, got \(outcome)"); return }
         #expect(filename == "BC-\(f.string(from: fixedNow))-2.pdf")
         #expect(try Data(contentsOf: squatter) == original, "the existing file is untouched")
@@ -338,7 +338,7 @@ struct RecordFinderFilingTests {
 
     // MARK: rolledBack — no half-state
 
-    @Test func aCyberBrainFailureLeavesNoHalfState() throws {
+    @Test func aCyberBrainFailureLeavesNoHalfState() async throws {
         let sb = try sandbox()
         defer { try? fm.removeItem(at: sb.base) }
         // A prior dossier with one search finding must come back exactly.
@@ -349,7 +349,7 @@ struct RecordFinderFilingTests {
         let lines = Lines()
         let failing: @Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt = { _ in throw BrainDown() }
         let file = try write(try pdf(), "r.pdf", in: sb)
-        let outcome = filer(sb, lines: lines, record: .some(failing)).file(submission(file, read: true, words: "Words."))
+        let outcome = await filer(sb, lines: lines, record: .some(failing)).file(submission(file, read: true, words: "Words."))
         guard case .rolledBack(let why) = outcome else { Issue.record("expected rolledBack, got \(outcome)"); return }
         #expect(!outcome.isSuccess)
         #expect(why.contains("disk full"))
@@ -366,30 +366,31 @@ struct RecordFinderFilingTests {
         #expect(!fm.fileExists(atPath: brainFile(sb).path))
         #expect(lines.all.last?.contains("OUTCOME rolledBack (cyberbrain-failed)") == true)
         // And the same file can be filed again once the brain is back.
-        #expect(filer(sb).file(submission(file, read: true, words: "Words.")).isSuccess)
+        #expect(await filer(sb).file(submission(file, read: true, words: "Words.")).isSuccess)
     }
 
-    @Test func aCyberBrainFailureWithNoPriorDossierLeavesAnEmptyOne() throws {
+    /// QA P3-4: with no prior research file, a rollback leaves no
+    /// dossier.json at all (it used to leave an empty one).
+    @Test func aCyberBrainFailureWithNoPriorDossierLeavesNoDossierFile() async throws {
         let sb = try sandbox()
         defer { try? fm.removeItem(at: sb.base) }
         let failing: @Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt = { _ in throw BrainDown() }
         let file = try write(try pdf(), "r.pdf", in: sb)
-        let outcome = filer(sb, record: .some(failing)).file(submission(file, read: true, words: "Words."))
+        let outcome = await filer(sb, record: .some(failing)).file(submission(file, read: true, words: "Words."))
         guard case .rolledBack = outcome else { Issue.record("expected rolledBack, got \(outcome)"); return }
-        let dossier = try sb.research.loadDossier(key: sb.subject.key)
-        #expect(dossier?.findings.isEmpty ?? true, "nothing of this filing is left in the research file")
+        #expect(try sb.research.loadDossier(key: sb.subject.key) == nil, "no research file is left behind")
     }
 
     // MARK: sensors
 
-    @Test func theLogNeverCarriesTheNameTheURLOrTheWords() throws {
+    @Test func theLogNeverCarriesTheNameTheURLOrTheWords() async throws {
         let sb = try sandbox()
         defer { try? fm.removeItem(at: sb.base) }
         let lines = Lines()
         let words = "SECRET-TRANSCRIPTION-WORDS"
         let file = try write(try pdf(), "r.pdf", in: sb)
-        _ = filer(sb, lines: lines).file(submission(file, read: true, words: words))
-        _ = filer(sb, lines: lines).file(submission(file, read: true, words: words))   // refused duplicate
+        _ = await filer(sb, lines: lines).file(submission(file, read: true, words: words))
+        _ = await filer(sb, lines: lines).file(submission(file, read: true, words: words))   // refused duplicate
         let text = lines.all.joined(separator: "\n")
         #expect(lines.all.count == 4, "START + OUTCOME per filing: \(lines.all)")
         for secret in ["Honora", "Fenlane", "irishgenealogy.ie/view", "TEST123", words] {
@@ -408,7 +409,127 @@ struct RecordFinderFilingTests {
         #expect(FoundRecordType.baptism.documentKind == .other, "a baptism entry is not a birth certificate")
     }
 
-    @Test func theFilerNeverReachesForTheGEDCOM() throws {
+    // MARK: QA 2026-10-01
+
+    /// P3-3: a failed document undo says where the file actually is.
+    @Test func aFailedUndoSaysWhereTheFileIs() {
+        let stuck = RecordFinderFiler.undoFailureMessage(why: "W", filename: "BC-1.pdf", stillInDocuments: true, error: "E")
+        #expect(stuck.contains("could NOT be moved") && stuck.contains("still filed"))
+        let moved = RecordFinderFiler.undoFailureMessage(why: "W", filename: "BC-1.pdf", stillInDocuments: false, error: "E")
+        #expect(moved.contains("was moved to Documents/.trash") && moved.contains("documents.json could not"))
+        #expect(!moved.contains("could NOT be moved"))
+    }
+
+    /// P1-1: an 8,000-character limit at the door and a 600-character cut
+    /// inside meant Hallie got a truncated "confirmed" fact.
+    @Test func aLongTranscriptionReachesHallieWhole() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let words = String(repeating: "Synthetic register line, witnesses named. ", count: 50)
+            .trimmingCharacters(in: .whitespaces)
+        #expect(words.count > ResearchFinding.maxExcerptLength)
+        let file = try write(try pdf(), "long.pdf", in: sb)
+        let outcome = await filer(sb).file(submission(file, read: true, words: words))
+        guard case .filed(_, let findingID, let told?) = outcome else { Issue.record("got \(outcome)"); return }
+        let archive = try CyberBrainLoader(rootURL: sb.brain).load()
+        let item = try #require(archive.people.flatMap(\.lifeEvents).first { $0.id == told })
+        #expect(item.text == words, "Hallie must get every word Rick typed")
+        let finding = try #require(try sb.research.loadDossier(key: sb.subject.key)?.findings.first { $0.id == findingID })
+        #expect(finding.attestationText == words)
+    }
+
+    /// P2-1: an open Research pane saved its whole in-memory dossier and
+    /// erased a record filed after it loaded.
+    @MainActor
+    @Test func anOpenResearchPaneDoesNotEraseARecordFiledMeanwhile() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        var prior = ResearchDossier(subject: sb.subject)
+        let search = ResearchFinding(source: .chroniclingAmerica, title: "p", date: nil, excerpt: "e",
+                                     url: "https://example.invalid/p", retrievedAt: fixedNow)
+        prior.merge(fresh: [search], at: fixedNow)
+        try sb.research.saveDossier(prior)
+        let pane = ResearchPersonModel(subject: sb.subject, store: sb.research,
+                                       fetcher: FixtureResearchFetcher(fixtures: [], retrievedAt: fixedNow),
+                                       speakerName: "Tester", record: { _ in throw BrainDown() })
+        pane.load()
+        let file = try write(try pdf(), "r.pdf", in: sb)
+        guard case .filed(_, let findingID, _) = await filer(sb).file(submission(file)) else {
+            Issue.record("filing failed"); return
+        }
+        pane.setVerdict(.plausible, for: search.id)        // the pane saves
+        let onDisk = try #require(try sb.research.loadDossier(key: sb.subject.key))
+        #expect(onDisk.findings.contains { $0.id == findingID }, "the filed record survived the pane's save")
+        #expect(onDisk.findings.first { $0.id == search.id }?.verdict == .plausible)
+        #expect(pane.findings.contains { $0.id == findingID }, "the pane now shows it too")
+    }
+
+    /// P2-2: confirming an untranscribed filed record in Research must not
+    /// send the placeholder to Hallie as a confirmed fact.
+    @Test func confirmingAnUntranscribedFiledRecordInResearchDoesNotTellHallieThePlaceholder() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let file = try write(try pdf(), "r.pdf", in: sb)
+        guard case .filed(_, let findingID, _) = await filer(sb).file(submission(file)) else {
+            Issue.record("filing failed"); return
+        }
+        var finding = try #require(try sb.research.loadDossier(key: sb.subject.key)?.findings.first { $0.id == findingID })
+        finding.verdict = .confirmed
+        #expect(throws: ResearchAttestation.AttestationError.self) {
+            try ResearchAttestation.testimony(for: finding, subject: sb.subject, speakerName: "Tester", date: fixedNow)
+        }
+        finding.lore = "Rick's own words after reading it."
+        let testimony = try ResearchAttestation.testimony(for: finding, subject: sb.subject,
+                                                          speakerName: "Tester", date: fixedNow)
+        #expect(testimony.text == "Rick's own words after reading it.")
+    }
+
+    /// P2-3: a record removed in the inspector could never be filed again.
+    @Test func aRecordRemovedInTheInspectorCanBeFiledAgain() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let calls = Counter()
+        let file = try write(try pdf(), "r.pdf", in: sb)
+        guard case .filed(_, let findingID, let told?) = await filer(sb, calls: calls)
+            .file(submission(file, read: true, words: "Words.")) else { Issue.record("filing failed"); return }
+        let filed = try #require(sb.store.documents(for: sb.person).first)
+        try sb.store.removeDocument(filed, for: sb.person)
+        #expect(sb.store.documents(for: sb.person).isEmpty)
+
+        let again = await filer(sb, calls: calls).file(submission(file, read: true, words: "Words."))
+        guard case .filed(let newName, let againID, let againTold) = again else { Issue.record("got \(again)"); return }
+        #expect(againID == findingID, "the same finding, re-attached")
+        #expect(againTold == told, "Hallie was already told; she is not told twice")
+        #expect(calls.value == 1)
+        let dossier = try #require(try sb.research.loadDossier(key: sb.subject.key))
+        #expect(dossier.findings.filter { $0.source == .recordFinder }.count == 1)
+        let finding = try #require(dossier.findings.first { $0.id == findingID })
+        #expect(finding.documentPath?.hasSuffix("/Documents/\(newName)") == true)
+        #expect(finding.verdict == .confirmed && finding.toldItemID == told)
+        #expect(sb.store.documents(for: sb.person).count == 1)
+    }
+
+    /// P3-2: an unreadable documents.json in the person's folder is refused
+    /// BEFORE anything is written (it used to write, then trash the file).
+    @Test func anUnreadableDocumentListIsRefusedBeforeAnyWrite() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let folder = try sb.store.folderForPhotoRequest(person: sb.person)
+        let documents = FamilyAssetStore.documentsFolder(in: folder)
+        try fm.createDirectory(at: documents, withIntermediateDirectories: true)
+        let sidecar = documents.appendingPathComponent(FamilyAssetStore.documentsSidecarName)
+        let garbage = Data("[{ damaged".utf8)
+        try garbage.write(to: sidecar)
+        let file = try write(try pdf(), "r.pdf", in: sb)
+        let outcome = await filer(sb).file(submission(file))
+        guard case .refused = outcome else { Issue.record("expected refused, got \(outcome)"); return }
+        #expect(try Data(contentsOf: sidecar) == garbage)
+        #expect(!fm.fileExists(atPath: documents.appendingPathComponent(FamilyAssetStore.documentsTrashFolderName).path),
+                "nothing was written, so nothing was trashed")
+        #expect(try sb.research.loadDossier(key: sb.subject.key) == nil)
+    }
+
+    @Test func theFilerNeverReachesForTheGEDCOM() async throws {
         let text = try SourceTree.appSource(named: "RecordFinderFiling.swift")
         for forbidden in ["GedcomWriter", "GEDCOMWriter", "FamilyTreeGedcomWriter", ".ged\"", "PersonFactOverlayStore"] {
             #expect(!text.contains(forbidden), "the bring-back must not touch \(forbidden)")

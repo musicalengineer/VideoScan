@@ -21,11 +21,15 @@ enum ResearchAttestation {
     enum AttestationError: Error, LocalizedError, Equatable {
         case notConfirmed(String)
         case alreadyTold(String)
+        /// A filed record nobody has transcribed: there are no words to tell.
+        case notTranscribed(String)
 
         var errorDescription: String? {
             switch self {
             case .notConfirmed(let title): return "\"\(title)\" is not confirmed"
             case .alreadyTold(let title): return "\"\(title)\" was already told to Hallie"
+            case .notTranscribed(let title):
+                return "\"\(title)\" has no words yet — type what the record says in its lore field, then tell Hallie"
             }
         }
     }
@@ -40,6 +44,9 @@ enum ResearchAttestation {
         }
         guard finding.toldItemID == nil else {
             throw AttestationError.alreadyTold(finding.title)
+        }
+        guard !finding.isUntranscribedFiledRecord else {
+            throw AttestationError.notTranscribed(finding.title)
         }
         return CyberBrainWriter.Testimony(
             subjectName: subject.name,
