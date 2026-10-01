@@ -312,16 +312,22 @@ struct RecordFinderFiler {
         do {
             document = try assetStore.importPersonDocument(
                 from: s.file, kind: s.recordType.documentKind, note: pre.note, into: folder, for: assetPerson)
+        } catch let failure as FamilyAssetStore.DocumentImportFailure {
+            // The document WAS written, then the import failed (codex review
+            // #18 F4). Report what is on disk now, not what was hoped.
+            let outcome = Self.importFailureOutcome(failure, documentsDir: FamilyAssetStore.documentsFolder(in: folder))
+            return .failure(Stop(outcome: outcome, code: "import-failed"))
         } catch let error as FamilyAssetStore.DocumentError {
+            // Validation: thrown before any byte of the document is written.
             return .failure(Stop(outcome: .refused(error.localizedDescription), code: "import-refused"))
         } catch let error as FamilyAssetStore.StoreError where error == .readOnly || error == .sourceUnavailable {
             return .failure(Stop(outcome: .refused(error.localizedDescription), code: "read-only"))
         } catch {
-            // The store's own post-write checks failed; it moved what it
-            // wrote to Documents/.trash (or logged that it could not).
-            return .failure(Stop(outcome: .rolledBack("the archive refused the write after it began "
-                                                      + "(\(error.localizedDescription)); anything written was "
-                                                      + "moved to Documents/.trash"), code: "import-failed"))
+            // Anything else comes from before or inside the O_EXCL write,
+            // which removes its own partial file: no document was kept.
+            return .failure(Stop(outcome: .refused("The archive could not write the document "
+                                                   + "(\(error.localizedDescription)); nothing was filed."),
+                                 code: "import-write-failed"))
         }
         // Prove it: the same bytes we hashed, listed in documents.json.
         let listed = assetStore.documents(inPersonFolder: folder).first { $0.id == document.id }
@@ -656,6 +662,30 @@ struct RecordFinderFiler {
             return .mixedState(Self.undoFailureMessage(why: why, filename: document.filename,
                                                        stillInDocuments: inPlace,
                                                        error: error.localizedDescription))
+        }
+    }
+
+    /// An import that wrote its file and then failed: `.rolledBack` only
+    /// when the file is provably out of Documents/ and in .trash where the
+    /// store said; otherwise `.mixedState`, naming where the file is.
+    static func importFailureOutcome(_ failure: FamilyAssetStore.DocumentImportFailure,
+                                     documentsDir: URL) -> RecordFilingOutcome {
+        let fm = FileManager.default
+        let why = "the archive refused the write after it began (\(failure.underlying.localizedDescription))"
+        let inDocuments = fm.fileExists(atPath: documentsDir.appendingPathComponent(failure.filename).path)
+        let trash = FamilyAssetStore.documentsTrashFolderName
+        switch failure.rollback {
+        case .movedToTrash(let destination) where !inDocuments && fm.fileExists(atPath: destination.path):
+            return .rolledBack("\(why). The file was moved to Documents/\(trash)/\(destination.lastPathComponent).")
+        case .leftInDocuments(let reason) where inDocuments:
+            return .mixedState("\(why). The document Documents/\(failure.filename) could NOT be moved to "
+                               + "Documents/\(trash) (\(reason)); it is still there but NOT listed for this person. "
+                               + "Move it out in Finder before filing again.")
+        default:
+            return .mixedState("\(why). The document \(failure.filename) "
+                               + (inDocuments ? "is still in Documents/ but NOT listed"
+                                              : "is not in Documents/ or where it was expected in Documents/\(trash)")
+                               + "; check that folder in Finder.")
         }
     }
 

@@ -609,6 +609,68 @@ struct RecordFinderFilingTests {
         #expect(finding.documentPath == firstPath, "the document path this filing wrote is taken back")
     }
 
+    /// A store whose import clock damages documents.json AFTER both filer
+    /// prechecks pass (the import calls it after validating the bytes,
+    /// before writing). Optionally a regular FILE squats on `.trash`.
+    private func damagedListDuringImport(_ sb: Sandbox, blockTrash: Bool) throws -> (Sandbox, URL) {
+        var store = sb.store
+        let folder = try store.folderForPhotoRequest(person: sb.person)
+        let documents = FamilyAssetStore.documentsFolder(in: folder)
+        try fm.createDirectory(at: documents, withIntermediateDirectories: true)
+        if blockTrash {
+            try Data("not a folder".utf8).write(to: documents.appendingPathComponent(FamilyAssetStore.documentsTrashFolderName))
+        }
+        let sidecar = documents.appendingPathComponent(FamilyAssetStore.documentsSidecarName)
+        let fired = Counter()
+        let now = fixedNow
+        store.importClock = {
+            if fired.value == 0 {
+                fired.bump()
+                try? Data("[{ damaged".utf8).write(to: sidecar)
+            }
+            return now
+        }
+        return (Sandbox(base: sb.base, store: store, research: sb.research, brain: sb.brain,
+                        sources: sb.sources, subject: sb.subject, person: sb.person), documents)
+    }
+
+    private func pdfs(in directory: URL) -> [String] {
+        ((try? fm.contentsOfDirectory(atPath: directory.path)) ?? []).filter { $0.hasSuffix(".pdf") }.sorted()
+    }
+
+    /// F4: the import wrote the PDF, found the list damaged, moved the PDF
+    /// to .trash and threw — and the filer said "refused" (nothing written).
+    @Test func aListDamagedDuringImportIsRolledBackWithTheFileInTrash() async throws {
+        let (sb, documents) = try damagedListDuringImport(try sandbox(), blockTrash: false)
+        defer { try? fm.removeItem(at: sb.base) }
+        let lines = Lines()
+        let file = try write(try pdf(), "r.pdf", in: sb)
+        let outcome = await filer(sb, lines: lines).file(submission(file))
+        guard case .rolledBack(let why) = outcome else { Issue.record("expected rolledBack, got \(outcome)"); return }
+        let trashed = pdfs(in: documents.appendingPathComponent(FamilyAssetStore.documentsTrashFolderName))
+        #expect(trashed.count == 1)
+        #expect(pdfs(in: documents).isEmpty, "nothing is left in Documents/")
+        if let name = trashed.first { #expect(why.contains(".trash/\(name)"), "says where the file went: \(why)") }
+        #expect(try Data(contentsOf: documents.appendingPathComponent(FamilyAssetStore.documentsSidecarName))
+                == Data("[{ damaged".utf8), "the damaged list is never rewritten")
+        #expect(try sb.research.loadDossier(key: sb.subject.key) == nil)
+        #expect(lines.all.last?.contains("OUTCOME rolledBack") == true)
+    }
+
+    /// F4: same, but the move to .trash fails — the PDF is left in
+    /// Documents/, unlisted. That is a mixed state, and it says where.
+    @Test func aListDamagedDuringImportWithTrashBlockedIsMixedStateAndNamesTheFile() async throws {
+        let (sb, documents) = try damagedListDuringImport(try sandbox(), blockTrash: true)
+        defer { try? fm.removeItem(at: sb.base) }
+        let file = try write(try pdf(), "r.pdf", in: sb)
+        let outcome = await filer(sb).file(submission(file))
+        guard case .mixedState(let why) = outcome else { Issue.record("expected mixedState, got \(outcome)"); return }
+        let left = pdfs(in: documents)
+        #expect(left.count == 1, "the file really is still in Documents/")
+        if let name = left.first { #expect(why.contains("Documents/\(name)"), "says where the file is: \(why)") }
+        #expect(try sb.research.loadDossier(key: sb.subject.key) == nil)
+    }
+
     @MainActor
     private func pane(_ sb: Sandbox) -> ResearchPersonModel {
         let brain = sb.brain

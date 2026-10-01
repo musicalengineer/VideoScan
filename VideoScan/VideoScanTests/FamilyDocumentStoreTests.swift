@@ -378,12 +378,22 @@ struct FamilyDocumentStoreTests {
         #expect(sb.store.documents(for: mary).isEmpty)
         #expect(try Data(contentsOf: sidecar) == Data("{ not json".utf8))
         // And an import refuses to guess: the new file is parked in .trash
-        // rather than listed against a list it cannot read.
-        #expect(throws: FamilyAssetStore.DocumentError.sidecarUnreadable(FamilyAssetStore.documentsSidecarName)) {
+        // rather than listed against a list it cannot read — and the error
+        // says so (codex review #18 F4: it used to be a bare
+        // sidecarUnreadable, indistinguishable from "nothing written").
+        let failure = #expect(throws: FamilyAssetStore.DocumentImportFailure.self) {
             try sb.store.importPersonDocument(from: pdf, kind: .death, note: "", into: folder)
         }
+        #expect((failure?.underlying as? FamilyAssetStore.DocumentError)
+                == .sidecarUnreadable(FamilyAssetStore.documentsSidecarName))
         let trash = documentsDir(folder).appendingPathComponent(FamilyAssetStore.documentsTrashFolderName)
-        #expect((try? fileManager.contentsOfDirectory(atPath: trash.path))?.count == 1)
+        let trashed = (try? fileManager.contentsOfDirectory(atPath: trash.path)) ?? []
+        #expect(trashed.count == 1)
+        if case .movedToTrash(let url) = failure?.rollback {
+            #expect(trashed == [url.lastPathComponent], "the failure names where the file went")
+        } else {
+            Issue.record("expected movedToTrash, got \(String(describing: failure?.rollback))")
+        }
     }
 
     /// Reflection review F3 (2026-09-21): when the rollback's move to
@@ -405,11 +415,18 @@ struct FamilyDocumentStoreTests {
         // A FILE where .trash should be: the rollback's move refuses.
         try Data("x".utf8).write(to: docs.appendingPathComponent(FamilyAssetStore.documentsTrashFolderName))
         let before = Set(try fileManager.contentsOfDirectory(atPath: docs.path))
-        #expect(throws: FamilyAssetStore.DocumentError.sidecarUnreadable(FamilyAssetStore.documentsSidecarName)) {
+        let failure = #expect(throws: FamilyAssetStore.DocumentImportFailure.self) {
             try sb.store.importPersonDocument(from: pdf, kind: .death, note: "", into: folder)
         }
+        #expect((failure?.underlying as? FamilyAssetStore.DocumentError)
+                == .sidecarUnreadable(FamilyAssetStore.documentsSidecarName))
         let orphans = Set(try fileManager.contentsOfDirectory(atPath: docs.path)).subtracting(before)
         #expect(orphans.count == 1, "behaviour unchanged: the orphan stays where it was written")
+        if case .leftInDocuments = failure?.rollback {
+            #expect(orphans == [failure?.filename ?? ""], "the failure names the file left behind")
+        } else {
+            Issue.record("expected leftInDocuments, got \(String(describing: failure?.rollback))")
+        }
         let logged = lock.withLock { lines }.filter { $0.contains("could not be moved to .trash") }
         #expect(logged.count == 1)
         if let orphan = orphans.first { #expect(logged.first?.contains(orphan) == true) }

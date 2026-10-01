@@ -221,6 +221,39 @@ extension FamilyAssetStore {
         }
     }
 
+    /// An import that failed AFTER its file was written into `Documents/`
+    /// (codex review #18 F4). Every other import error is thrown before a
+    /// byte of the document exists (validation), or by the O_EXCL writer,
+    /// which unlinks its own partial file. This one says what became of the
+    /// written file, so a caller reports what is on disk rather than
+    /// "nothing was changed". (C++: an exception type carrying the rollback
+    /// result, instead of a bare error code.)
+    struct DocumentImportFailure: LocalizedError {
+        enum Rollback: Equatable {
+            /// Moved to `Documents/.trash/<name>` (the URL is where it went).
+            case movedToTrash(URL)
+            /// Could not be moved; still at `Documents/<filename>`, unlisted.
+            case leftInDocuments(reason: String)
+        }
+        /// The name it was written under, inside `Documents/`.
+        let filename: String
+        let rollback: Rollback
+        /// Why the import failed after the write (read-back mismatch, the
+        /// list could not be read or written).
+        let underlying: any Error
+
+        var errorDescription: String? {
+            let why = underlying.localizedDescription
+            switch rollback {
+            case .movedToTrash(let url):
+                return "\(why) The file was moved to Documents/\(FamilyAssetStore.documentsTrashFolderName)/\(url.lastPathComponent)."
+            case .leftInDocuments(let reason):
+                return "\(why) The file Documents/\(filename) could not be moved to "
+                    + "Documents/\(FamilyAssetStore.documentsTrashFolderName) (\(reason)); it is still there, not listed."
+            }
+        }
+    }
+
     // MARK: Paths
 
     /// `<person folder>/Documents`.
@@ -290,16 +323,9 @@ extension FamilyAssetStore {
         guard let back = Self.regularFileData(at: written),
               back.count == data.count,
               Self.sha256Hex(back) == digest else {
-            do {
-                try Self.moveToTrash(written, in: documentsDir, fileManager: fileManager, at: when)
-            } catch {
-                // Behaviour unchanged (the import still fails with EIO); the
-                // orphan is now named in the log instead of silently left.
-                PersonDocumentLog.shared.write(
-                    "[tree] document \(written.lastPathComponent) failed its read-back check and could not be moved "
-                    + "to .trash (\(error.localizedDescription)); it is left in \(documentsDir.lastPathComponent)/ unlisted")
-            }
-            throw StoreError.createFailed(written.lastPathComponent, errno: EIO)
+            throw rollBackWrittenDocument(written, in: documentsDir, at: when,
+                                          because: StoreError.createFailed(written.lastPathComponent, errno: EIO),
+                                          logWhy: "failed its read-back check")
         }
 
         var document = PersonDocument(
@@ -319,18 +345,9 @@ extension FamilyAssetStore {
             }
         } catch {
             // The file is on disk but unlisted: park it in .trash so the
-            // archive never holds an orphan, then say why.
-            do {
-                try Self.moveToTrash(written, in: documentsDir, fileManager: fileManager, at: when)
-            } catch let trashError {
-                // Behaviour unchanged (the sidecar error is still thrown);
-                // the orphan is now named in the log instead of silently left.
-                PersonDocumentLog.shared.write(
-                    "[tree] document \(written.lastPathComponent) could not be listed (\(error.localizedDescription)) "
-                    + "and could not be moved to .trash (\(trashError.localizedDescription)); it is left in "
-                    + "\(documentsDir.lastPathComponent)/ unlisted")
-            }
-            throw error
+            // archive never holds an orphan, then say why — and where it is.
+            throw rollBackWrittenDocument(written, in: documentsDir, at: when, because: error,
+                                          logWhy: "could not be listed (\(error.localizedDescription))")
         }
         document.fileURL = written
         PersonDocumentLog.shared.write(
@@ -538,11 +555,32 @@ extension FamilyAssetStore {
 
     // MARK: Helpers
 
+    /// Undo an import's own write: move the file it just wrote to .trash
+    /// and return the failure describing where the file now is. A move that
+    /// fails is logged (file name only) and reported as left in Documents/.
+    private func rollBackWrittenDocument(_ written: URL, in documentsDir: URL, at when: Date,
+                                         because error: any Error, logWhy: String) -> DocumentImportFailure {
+        do {
+            let trashed = try Self.moveToTrash(written, in: documentsDir, fileManager: fileManager, at: when)
+            return DocumentImportFailure(filename: written.lastPathComponent, rollback: .movedToTrash(trashed),
+                                         underlying: error)
+        } catch let trashError {
+            PersonDocumentLog.shared.write(
+                "[tree] document \(written.lastPathComponent) \(logWhy) and could not be moved to .trash "
+                + "(\(trashError.localizedDescription)); it is left in \(documentsDir.lastPathComponent)/ unlisted")
+            return DocumentImportFailure(filename: written.lastPathComponent,
+                                         rollback: .leftInDocuments(reason: trashError.localizedDescription),
+                                         underlying: error)
+        }
+    }
+
     /// `Documents/.trash/<name>` — a same-named file already there gets a
     /// stamp suffix; nothing is ever replaced. `rename(2)` underneath
-    /// (`moveItem`), not `replaceItemAt` (see AtomicFilePublish).
+    /// (`moveItem`), not `replaceItemAt` (see AtomicFilePublish). Returns
+    /// where the file went.
+    @discardableResult
     private static func moveToTrash(_ file: URL, in documentsDir: URL,
-                                    fileManager: FileManager, at when: Date) throws {
+                                    fileManager: FileManager, at when: Date) throws -> URL {
         let trash = documentsDir.appendingPathComponent(documentsTrashFolderName, isDirectory: true)
         var isDirectory: ObjCBool = false
         if fileManager.fileExists(atPath: trash.path, isDirectory: &isDirectory) {
@@ -565,6 +603,7 @@ extension FamilyAssetStore {
             guard suffix < 100 else { throw StoreError.createFailed(name, errno: EEXIST) }
         }
         try fileManager.moveItem(at: file, to: destination)
+        return destination
     }
 
     private static func regularFileData(at url: URL) -> Data? {
