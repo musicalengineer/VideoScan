@@ -2,8 +2,9 @@
 // The app-side facts Person of the Day and Roll Call both need about the
 // installed tree, gathered ONCE off the main actor (2026-10-01):
 //   • who the home people are and the inner circle (the home people, their
-//     spouses and their children — the only living people either feature
-//     may name, and then without private details);
+//     spouses and their children — the only living people Person of the
+//     Day may name, and then without private details; Roll Call names no
+//     living person at all unless its family-roll-call switch is on);
 //   • each person's line / generation from the walk's decorations.json
 //     ("Rick's great-grandmother");
 //   • the portrait hint (one listing of the archive's People/ folder —

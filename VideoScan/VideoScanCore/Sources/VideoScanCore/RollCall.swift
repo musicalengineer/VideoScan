@@ -17,8 +17,13 @@
 //      Privacy is asked lazily in that order (the app's LifeStatus walks
 //      descendants — ask about the 36 shown, not the 39k walked):
 //        deceased          → name, years, birthplace;
-//        livingInnerCircle → name only;
-//        livingPrivate     → left out.
+//        livingInnerCircle → LEFT OUT by default (Rick 2026-10-01: "we
+//                            should refrain from showing living people such
+//                            as me and Donna, someday we'll have a roll call
+//                            but not yet"); name only when a future family
+//                            roll call turns on
+//                            `Options.includesLivingInnerCircle`;
+//        livingPrivate     → left out, always.
 //   3. ORDER for the story (a parameter; default oldest → newest, "feels
 //      like a story"): by birth year, by generation outward (home people
 //      first), or the reverses. Undated people go to the end of a year
@@ -92,10 +97,18 @@ public enum RollCall {
     public struct Options: Sendable, Equatable {
         public var order: Order
         public var limit: Int
+        /// THE switch for a future "family roll call": when true, living
+        /// members of the inner circle (the home people, their spouses and
+        /// children) appear by NAME ONLY — no years, no place. Off by
+        /// default: today's Roll Call shows no living person at all (Rick
+        /// 2026-10-01). Living people outside the inner circle are never
+        /// shown, whatever this says.
+        public var includesLivingInnerCircle: Bool
 
-        public init(order: Order = .oldestFirst, limit: Int = 36) {
+        public init(order: Order = .oldestFirst, limit: Int = 36, includesLivingInnerCircle: Bool = false) {
             self.order = order
             self.limit = max(0, limit)
+            self.includesLivingInnerCircle = includesLivingInnerCircle
         }
     }
 
@@ -142,7 +155,9 @@ public enum RollCall {
             guard cursor[b] < buckets[b].count else { continue }
             let p = buckets[b][cursor[b]]
             cursor[b] += 1
-            if let e = entry(p, life: life(p)) { chosen.append(e) }
+            if let e = entry(p, life: life(p), includesLivingInnerCircle: options.includesLivingInnerCircle) {
+                chosen.append(e)
+            }
         }
         return sort(chosen, by: options.order)
     }
@@ -182,11 +197,16 @@ public enum RollCall {
             .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
-    static func entry(_ p: Person, life: PersonOfTheDay.Life) -> Entry? {
+    /// One credit line, or nil when this person is not shown. A living
+    /// inner-circle member is shown (name only) ONLY with the family roll
+    /// call switch on.
+    static func entry(_ p: Person, life: PersonOfTheDay.Life,
+                      includesLivingInnerCircle: Bool = false) -> Entry? {
         switch life {
         case .livingPrivate:
             return nil
         case .livingInnerCircle:
+            guard includesLivingInnerCircle else { return nil }
             return Entry(id: p.id, name: p.name, years: nil, place: nil, birthYear: nil,
                          generation: p.generation, line: p.line, hasPortrait: p.hasPortrait, isLiving: true)
         case .deceased:

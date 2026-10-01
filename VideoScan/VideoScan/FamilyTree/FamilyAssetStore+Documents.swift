@@ -12,7 +12,9 @@
 //     People/<…>/Documents/documents.json          ← the sidecar (the "database")
 //     People/<…>/Documents/.trash/<file>            ← removed files, never rm'd
 //
-// KIND is the short code Rick used (BC / DC / MC / Other). The sidecar is
+// KIND is the short code Rick used (BC / DC / MC / Other; MIL, CEN and DNA
+// for military, census and DNA records since 2026-10-01 — DNA is private by
+// default, see `PersonDocumentKind.isPrivate`). The sidecar is
 // an array of `PersonDocument`, written atomically through
 // `AtomicFilePublish` like every other sidecar in the app. The person's
 // folder is the same one photos go to — the FamilySearch-ID folder when
@@ -47,11 +49,54 @@ private let documentLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "t
 /// What a paper IS. The raw values are the codes Rick asked for and the
 /// filename prefix on disk; they are also the sidecar's `kind` value, so
 /// they must never be renamed (a rename would orphan every existing entry).
+///
+/// Declaration order is the inspector's group order (Birth, Death,
+/// Marriage, Military, Census, DNA, Other). MIL, CEN and DNA were added
+/// 2026-10-01 and are FORWARD-COMPATIBLE on disk: the sidecar's `kind`
+/// only ever holds a code the pre-2026-10-01 decoder knows (BC/DC/MC/
+/// Other), and the new kinds travel in an extra optional `category` key
+/// that older builds ignore (see `PersonDocument`'s Codable). The FILE NAME
+/// still carries the real code (`DNA-20261001-101500.png`) — a second,
+/// independent record of the kind that survives an older build rewriting
+/// the list without `category`.
 enum PersonDocumentKind: String, Codable, CaseIterable, Sendable {
     case birth = "BC"
     case death = "DC"
     case marriage = "MC"
+    case military = "MIL"
+    case census = "CEN"
+    /// DNA results — usually Ancestry screenshots, which name LIVING
+    /// matches. PRIVATE by default (`isPrivate`).
+    case dna = "DNA"
     case other = "Other"
+
+    /// True for a kind whose contents are private by default (Rick,
+    /// 2026-10-01: DNA screenshots list living matches by name). A private
+    /// document:
+    ///   • is never listed by "Show me some memories…" (FamilyTreeMemories);
+    ///   • is never sent to Hallie / the CyberBrain automatically — any
+    ///     future automatic reader of person documents must skip it;
+    ///   • carries a lock badge in the inspector's Documents panel;
+    ///   • is NEVER publishable — GH #244 (future public web access) must
+    ///     exclude it whatever else is shared.
+    var isPrivate: Bool { self == .dna }
+
+    /// The four codes every build since 2026-09-20 can decode. Only these
+    /// are ever written to the sidecar's `kind` key.
+    static let legacyCodes: Set<String> = ["BC", "DC", "MC", "Other"]
+
+    /// True for a kind an older build can read straight from `kind`.
+    var isLegacy: Bool { Self.legacyCodes.contains(rawValue) }
+
+    /// The kind a generated file name announces ("DNA-20261001-…" → .dna),
+    /// for the NEW kinds only. Older builds never generate those prefixes,
+    /// so this cannot misread a hand-named or legacy file.
+    static func newKind(fromFilename filename: String) -> PersonDocumentKind? {
+        guard let dash = filename.firstIndex(of: "-"),
+              let kind = PersonDocumentKind(rawValue: String(filename[..<dash])),
+              !kind.isLegacy else { return nil }
+        return kind
+    }
 
     /// "Birth certificate" — the log line and the detail panel.
     var displayName: String {
@@ -59,24 +104,53 @@ enum PersonDocumentKind: String, Codable, CaseIterable, Sendable {
         case .birth: return "Birth certificate"
         case .death: return "Death certificate"
         case .marriage: return "Marriage certificate"
+        case .military: return "Military record"
+        case .census: return "Census record"
+        case .dna: return "DNA result"
         case .other: return "Other document"
         }
     }
 
-    /// "Birth" — the segmented picker in the Add sheet.
+    /// "birth certificate", "DNA result" — the display name inside a
+    /// sentence (an acronym keeps its capitals).
+    var inlineName: String {
+        self == .dna ? displayName : displayName.lowercased()
+    }
+
+    /// "Birth" — the segmented picker in the Add sheet and the inspector's
+    /// group headings.
     var shortLabel: String {
         switch self {
         case .birth: return "Birth"
         case .death: return "Death"
         case .marriage: return "Marriage"
+        case .military: return "Military"
+        case .census: return "Census"
+        case .dna: return "DNA"
         case .other: return "Other"
+        }
+    }
+
+    /// SF Symbol for a row whose thumbnail is not ready (or not wanted).
+    var symbolName: String {
+        switch self {
+        case .birth: return "figure.and.child.holdinghands"
+        case .death: return "leaf"
+        case .marriage: return "heart"
+        case .military: return "shield"
+        case .census: return "list.bullet.rectangle"
+        case .dna: return "person.line.dotted.person"
+        case .other: return "doc.text"
         }
     }
 }
 
-/// One row of `documents.json`. The persisted key set is FROZEN by
-/// `FamilyDocumentStoreTests` (the schema sensor): add a key only with a
-/// default so older sidecars still decode, and never rename one.
+/// One row of `documents.json`. The REQUIRED key set is FROZEN by
+/// `FamilyDocumentStoreTests` (the schema sensor): add a key only as an
+/// optional one so older sidecars still decode, and never rename one. The
+/// one optional key so far is `category` (2026-10-01), present only on
+/// rows of a new kind; the frozen legacy reader in the tests proves the
+/// pre-2026-10-01 decoder ignores it.
 ///
 /// `fileURL` is resolved at read time and is deliberately NOT in
 /// `CodingKeys` — the sidecar records the filename relative to its own
@@ -95,19 +169,85 @@ struct PersonDocument: Codable, Identifiable, Equatable, Sendable {
     let byteCount: Int
     /// Where the file is right now; nil on a freshly decoded row.
     var fileURL: URL? = nil
+    /// The sidecar's `kind` code when this build does not know it (a newer
+    /// build wrote something other than a legacy code); `kind` then reads
+    /// `.other`. Kept so that rewriting the list (an import or a removal
+    /// beside it) writes the code back exactly as found.
+    var unrecognizedKindCode: String? = nil
+    /// Likewise for a `category` value this build does not know.
+    var unrecognizedCategory: String? = nil
 
     // Swift's `CodingKeys` ≈ the explicit field list a C++ serializer
-    // would carry: a property missing from it (fileURL) is skipped by the
-    // synthesized encode/decode and must have a default.
+    // would carry. encode/decode are written out below (in an extension, so
+    // the memberwise initializer survives).
     enum CodingKeys: String, CodingKey {
         case id, kind, filename, originalFilename, addedAt, note, sha256, byteCount
+        /// Optional (2026-10-01): the real kind of a MIL/CEN/DNA row whose
+        /// `kind` says "Other" for the benefit of older builds.
+        case category
     }
 
-    /// The persisted keys, for the schema sensor.
+    /// The REQUIRED persisted keys, for the schema sensor (frozen).
     static let sidecarKeys: Set<String> = Set(CodingKeys.allCases.map(\.stringValue))
+        .subtracting(optionalSidecarKeys)
+    /// Keys a row may carry in addition (older builds ignore them).
+    static let optionalSidecarKeys: Set<String> = [CodingKeys.category.stringValue]
 }
 
 extension PersonDocument.CodingKeys: CaseIterable {}
+
+// Hand-written Codable (C++: a deserializer with a versioned fallback).
+// ON DISK `kind` is always a legacy code (BC/DC/MC/Other) so that a build
+// from before 2026-10-01 — whose synthesized decoder ignores unknown keys
+// but rejects an unknown `kind` — reads every row. A new kind is written as
+// kind "Other" + category "MIL"/"CEN"/"DNA". Reading recovers the kind from,
+// in order: `category`; `kind`; and, for a row an older build rewrote
+// without `category`, the generated file name's prefix ("DNA-…"), so a DNA
+// row stays private even then. Unknown values are kept and written back.
+extension PersonDocument {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let code = try c.decode(String.self, forKey: .kind)
+        let category = try c.decodeIfPresent(String.self, forKey: .category)
+        let filename = try c.decode(String.self, forKey: .filename)
+        let fromCode = PersonDocumentKind(rawValue: code)
+        let fromCategory = category.flatMap(PersonDocumentKind.init(rawValue:))
+        let kind = fromCategory
+            ?? (fromCode == .other || fromCode == nil ? PersonDocumentKind.newKind(fromFilename: filename) : nil)
+            ?? fromCode
+            ?? .other
+        self.init(id: try c.decode(UUID.self, forKey: .id),
+                  kind: kind,
+                  filename: filename,
+                  originalFilename: try c.decode(String.self, forKey: .originalFilename),
+                  addedAt: try c.decode(Date.self, forKey: .addedAt),
+                  note: try c.decode(String.self, forKey: .note),
+                  sha256: try c.decode(String.self, forKey: .sha256),
+                  byteCount: try c.decode(Int.self, forKey: .byteCount),
+                  fileURL: nil,
+                  unrecognizedKindCode: fromCode == nil ? code : nil,
+                  unrecognizedCategory: category != nil && fromCategory == nil ? category : nil)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        if let unrecognizedKindCode {
+            try c.encode(unrecognizedKindCode, forKey: .kind)
+        } else {
+            try c.encode(kind.isLegacy ? kind.rawValue : PersonDocumentKind.other.rawValue, forKey: .kind)
+        }
+        if let category = unrecognizedCategory ?? (kind.isLegacy ? nil : kind.rawValue) {
+            try c.encode(category, forKey: .category)
+        }
+        try c.encode(filename, forKey: .filename)
+        try c.encode(originalFilename, forKey: .originalFilename)
+        try c.encode(addedAt, forKey: .addedAt)
+        try c.encode(note, forKey: .note)
+        try c.encode(sha256, forKey: .sha256)
+        try c.encode(byteCount, forKey: .byteCount)
+    }
+}
 
 /// One inspector row: a document PLUS who it was read for. The owner
 /// travels with the row so an action taken on it (Remove) goes to the
