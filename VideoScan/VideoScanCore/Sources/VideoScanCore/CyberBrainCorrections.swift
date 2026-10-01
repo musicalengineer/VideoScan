@@ -288,16 +288,21 @@ extension CyberBrainWriter {
         _ request: NoteCorrection,
         rootURL: URL
     ) throws -> CorrectionReceipt {
-        let file = rootURL.standardizedFileURL
-            .appendingPathComponent(CyberBrainLoader.defaultFilename, isDirectory: false)
-        guard FileManager.default.fileExists(atPath: file.path) else {
-            throw CorrectionRefusal.noArchive
+        // Same per-root lock as every other durable write (codex review #18
+        // finding 1): a correction must not save over a passage recorded
+        // while it was being applied.
+        try withRootLock(rootURL) {
+            let file = rootURL.standardizedFileURL
+                .appendingPathComponent(CyberBrainLoader.defaultFilename, isDirectory: false)
+            guard FileManager.default.fileExists(atPath: file.path) else {
+                throw CorrectionRefusal.noArchive
+            }
+            let (root, existing) = try prepareRoot(rootURL)
+            guard let archive = existing else { throw CorrectionRefusal.noArchive }
+            let receipt = try correcting(request, in: archive)
+            let backup = try save(receipt.archive, root: root, hadExisting: true)
+            return receipt.with(backupURL: backup)
         }
-        let (root, existing) = try prepareRoot(rootURL)
-        guard let archive = existing else { throw CorrectionRefusal.noArchive }
-        let receipt = try correcting(request, in: archive)
-        let backup = try save(receipt.archive, root: root, hadExisting: true)
-        return receipt.with(backupURL: backup)
     }
 
     // MARK: - Helpers
