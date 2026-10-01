@@ -30,6 +30,10 @@ public enum TreeStatistics {
         case wholeTree
         case ancestors(of: String, maxGenerations: Int)
         case descendants(of: String, maxGenerations: Int)
+        /// The UNION of several people's ancestors, each person once — "our
+        /// ancestors" = the owner's line and the partner's line (GH #214).
+        /// A person on both lines is counted once.
+        case ancestorsOfAny([String], maxGenerations: Int)
     }
 
     /// A birthplace test. Every case is decided by `BirthplaceClassifier`
@@ -202,6 +206,17 @@ public enum TreeStatistics {
             guard let root = graph.people[id] else { return [] }
             return graph.ancestorLine(of: root, line: .both, generations: maxGenerations)
                 .flatMap(\.people)
+        case .ancestorsOfAny(let ids, let maxGenerations):
+            var seen = Set<String>()
+            var out: [GedcomFamilyGraph.Person] = []
+            for id in ids {
+                guard let root = graph.people[id] else { continue }
+                for person in graph.ancestorLine(of: root, line: .both, generations: maxGenerations)
+                    .flatMap(\.people) where seen.insert(person.id).inserted {
+                    out.append(person)
+                }
+            }
+            return out
         case .descendants(let id, let maxGenerations):
             guard let root = graph.people[id] else { return [] }
             var seen: Set<String> = [root.id]
