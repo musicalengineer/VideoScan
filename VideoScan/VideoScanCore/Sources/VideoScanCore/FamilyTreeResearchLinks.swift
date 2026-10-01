@@ -185,9 +185,10 @@ public enum FamilyTreeResearchLinks {
         out.append(contentsOf: RecordFinder.britain.compactMap { RecordFinder.link(for: $0, in: context) })
         out.append(contentsOf: RecordFinder.burials.compactMap { RecordFinder.link(for: $0, in: context) })
 
-        if context.regions.contains(.unitedStates) {
+        if context.regions.contains(.unitedStates),
+           let url = URL(string: "https://chroniclingamerica.loc.gov/search/pages/results/") {
             out.append(Link(title: "Chronicling America",
-                            url: URL(string: "https://chroniclingamerica.loc.gov/search/pages/results/")!,   // swiftlint:disable:this force_unwrapping
+                            url: url,
                             reason: "Recorded in the United States — Library of Congress newspaper archive.",
                             isPrefilled: false, group: "United States"))
         }
