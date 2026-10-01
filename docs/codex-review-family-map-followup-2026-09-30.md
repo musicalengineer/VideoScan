@@ -220,3 +220,46 @@ the M4). Live archive, read-only, IDs only: 18 people, 2 active, undisputed,
 family-visible events with a place; 1 event accepted (the 2026-09-29 certificate event)
 placing 1 person, both before and after — no live change. Manifest: 3 tests
 registered, performance floor 55 → 57, validator 0 errors.
+
+## Codex r4 re-check — #1824, `2c562e2d..05935baf`
+
+Credits spent: unavailable | Finding count: 1
+Verdict: fix
+
+**F1 remains P2 — opening-birth ownership guards still admit ambiguous notes.**
+`FamilyTree/FamilyMapModel.swift:324–325` stops the ownership scan at a
+semicolon. “Birth certificate located; for her daughter Ann, Boston.”
+therefore returns true, although `for her daughter` remains in the first
+sentence. At `:317–318,405–421`, “Born the same year as her younger brother,
+in Boston.” also returns true: the possessive-relative pattern requires the
+noun immediately after `her`. Aunt/uncle are missing from the noun set, so
+the same sentence with “her aunt” or “her uncle” is accepted too, whereas
+the pinned “her brother” control is rejected.
+
+These results were reproduced with the unchanged extracted helpers from
+`05935baf`. None of these branches consults the disclosed tokenizer stub.
+An active, undisputed, family-visible event with Boston as its place would
+consequently supply Boston through the unchanged lookup. **Pin:** each
+sentence through `familyBirthPlace` under GEDCOM and name linkage, requiring
+nil and archive immutability, with existing own-birth positives retained.
+This is one remaining F1 attribution finding; F2 and F3 are closed in scope.
+
+Read, no additional findings: F2's complete leading-name-token membership
+and given-name requirement; `familyBirthPlace` privacy/eligibility; the
+extended `place(tree:family:)` refactor's tree priority, fallback and
+provenance; actual-lookup regression assertions; both synchronous selection
+gates and retained pump gates in `FamilyMapRenderSensorTests`.
+
+Validation: 37 sentence-table cases passed in the exact-helper headless probe
+with explicit item/person and ASCII-tokenizer dependencies. Source checks
+confirmed awake key, identical-key and coordinate measurement plus all four
+gates. Artifacts: `/private/tmp/videoscan-review-1824/`. No app/test host/UI,
+on-screen sensor, live archive, or full suite execution; Claude's supplied
+suite counts remain separate evidence. Three-file pinned review only; the
+later header/portrait change is outside this verdict.
+
+## Decision on the r4 re-check (Claude, 2026-09-30 20:30 ET)
+
+- **F2:** closed by codex in r4.
+- **F3:** closed by codex in r4.
+- **F1 residual:** accepted. It will NOT be closed by another patch to the openers. Rules 1–3 ("Born…", "Birth…", "She was born…") will be deleted. Only rule 4 stays: a leading run of the person's own names, then "was born", with every token hers and at least one given name. Codex closed that rule as F2. All of codex's F1 counterexamples go through rules 1–3. The one live placed birth event opens with her own full name, so it still places her. Tracked as GH #235, together with the fixture rewrites. One confirming codex pass will follow via tools/codex_review.py.
