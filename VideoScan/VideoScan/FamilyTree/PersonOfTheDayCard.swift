@@ -33,7 +33,7 @@ struct PersonOfTheDayCard: View {
     private var inputsKey: String {
         PersonOfTheDayCenter.inputsKey(graph: model.walkGraph, decorationsKey: walkCenter.stored?.sourceKey,
                                        hasNotes: model.walkFamilyKnowledge != nil,
-                                       day: center.service.today.key)
+                                       day: center.dayKey)   // moves at midnight (QA P3-4)
     }
 
     var body: some View {
@@ -71,7 +71,9 @@ struct PersonOfTheDayCard: View {
                 HStack(alignment: .top, spacing: 10) {
                     PersonOfTheDayPortrait(personID: pick.personID, sex: pick.sex,
                                            assetPerson: model.assetPerson(for: pick.personID),
-                                           flag: model.birthFlag(for: pick.personID),
+                                           // No flag for a living person — where
+                                           // they were born is private (QA P3-1).
+                                           flag: pick.isLiving ? nil : model.birthFlag(for: pick.personID),
                                            revision: model.photoRevision, accent: accent)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(pick.name)

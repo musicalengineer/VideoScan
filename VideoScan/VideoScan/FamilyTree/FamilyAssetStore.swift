@@ -1967,27 +1967,33 @@ private extension Array where Element == URL {
 /// bytes are NOT opened here (the card's own loader verifies the photo it
 /// shows and falls back to the birth flag). So this is a ranking HINT,
 /// never evidence: it may say yes for a folder whose only image is
-/// damaged, and it follows the folder-name identity rules loosely (pointer
-/// key, FamilySearch ID, or name key) — the same three keys the read side
-/// tries.
+/// damaged. It follows the read side's identity rules (`readFolderNames`):
+/// a folder pinned to a record — a GEDCOM-pointer suffix or a FamilySearch
+/// ID — counts for THAT record only, never for a namesake by name (QA P2-B:
+/// "Mary_Testperson_I12" lent its portrait to every Mary Testperson); an
+/// unpinned name folder counts by name only when its `_bYYYY` year, if it
+/// has one, agrees with the person's birth year.
 ///
 /// Cost: one `contentsOfDirectory` of `People/` plus one per person folder
-/// (Rick's archive: ~80 folders). Memory: three small string sets.
+/// (Rick's archive: ~80 folders). Memory: a few small sets / dictionaries.
 struct FamilyPortraitHints: Sendable, Equatable {
     var gedcomIDKeys: Set<String> = []
     var familySearchIDs: Set<String> = []
-    var nameKeys: Set<String> = []
+    /// Unpinned name folders: name key → the folders' birth years (nil = a
+    /// bare folder with no year).
+    var nameKeyYears: [String: [Int?]] = [:]
 
     static let none = FamilyPortraitHints()
 
-    var isEmpty: Bool { gedcomIDKeys.isEmpty && familySearchIDs.isEmpty && nameKeys.isEmpty }
+    var isEmpty: Bool { gedcomIDKeys.isEmpty && familySearchIDs.isEmpty && nameKeyYears.isEmpty }
 
     /// Might this tree person have a portrait?
     func mayHavePortrait(_ person: GedcomFamilyGraph.Person) -> Bool {
         if isEmpty { return false }
         if gedcomIDKeys.contains(FamilyAssetStore.portraitHintIDKey(person.id)) { return true }
         if let fs = person.familySearchID, familySearchIDs.contains(fs.uppercased()) { return true }
-        return nameKeys.contains(FamilyAssetStore.portraitHintNameKey(person.name))
+        guard let years = nameKeyYears[FamilyAssetStore.portraitHintNameKey(person.name)] else { return false }
+        return years.contains { year in year == nil || year == person.birthYear }
     }
 }
 
@@ -2002,14 +2008,25 @@ extension FamilyAssetStore {
             }
             guard hasImage else { continue }
             let name = folder.lastPathComponent
-            if let fs = Self.familySearchID(inFolderComponent: name) { hints.familySearchIDs.insert(fs.uppercased()) }
+            var pinned = false
+            if let fs = Self.familySearchID(inFolderComponent: name) {
+                hints.familySearchIDs.insert(fs.uppercased())
+                pinned = true
+            }
             let identity = Self.folderIdentity(name)
-            if let id = identity.gedcomIDKey { hints.gedcomIDKeys.insert(id) }
+            if let id = identity.gedcomIDKey {
+                hints.gedcomIDKeys.insert(id)
+                pinned = true
+            }
             let direct = Self.gedcomIDKey(name)
             if direct.hasPrefix("I"), direct.count > 1, direct.dropFirst().allSatisfy(\.isNumber) {
                 hints.gedcomIDKeys.insert(direct)
+                pinned = true
             }
-            if !identity.nameKey.isEmpty { hints.nameKeys.insert(identity.nameKey) }
+            // A pinned folder is that record's alone — never a namesake's.
+            if !pinned, !identity.nameKey.isEmpty {
+                hints.nameKeyYears[identity.nameKey, default: []].append(identity.birthYear)
+            }
         }
         return hints
     }

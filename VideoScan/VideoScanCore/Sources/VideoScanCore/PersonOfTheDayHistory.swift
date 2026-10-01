@@ -169,18 +169,21 @@ public struct PersonOfTheDayFileStore: PersonOfTheDayHistoryStore {
 public final class PersonOfTheDayMemoryStore: PersonOfTheDayHistoryStore, @unchecked Sendable {
     private let lock = NSLock()
     private var history: PersonOfTheDay.History
-    public private(set) var saveCount = 0
+    private var saves = 0
 
     public init(_ history: PersonOfTheDay.History = .empty) {
         self.history = history
     }
+
+    /// How many saves landed — read under the same lock as the writes.
+    public var saveCount: Int { lock.withLock { saves } }
 
     public func load() -> PersonOfTheDay.History { lock.withLock { history } }
 
     public func save(_ history: PersonOfTheDay.History) throws {
         lock.withLock {
             self.history = history
-            saveCount += 1
+            saves += 1
         }
     }
 }
@@ -196,7 +199,9 @@ public struct PersonOfTheDayService: Sendable {
     public let now: @Sendable () -> Date
     public let options: PersonOfTheDay.Options
 
-    public init(store: any PersonOfTheDayHistoryStore, calendar: Calendar = .current,
+    /// `calendar` defaults to `.autoupdatingCurrent` so a time-zone or
+    /// locale change while the app runs moves "today" with it.
+    public init(store: any PersonOfTheDayHistoryStore, calendar: Calendar = .autoupdatingCurrent,
                 now: @escaping @Sendable () -> Date = { Date() },
                 options: PersonOfTheDay.Options = PersonOfTheDay.Options()) {
         self.store = store
@@ -209,15 +214,20 @@ public struct PersonOfTheDayService: Sendable {
 
     /// Today's person (recorded so a relaunch shows the same one), or nil
     /// when nobody may be featured. A save failure is reported in `saved`
-    /// and never loses the pick.
+    /// and never loses the pick. `isCancelled` is polled before the pick
+    /// and again before the save: a superseded computation records nothing
+    /// and returns no pick (QA P3-3).
     public func todaysPick(from candidates: [PersonOfTheDay.Candidate],
+                           isCancelled: () -> Bool = { false },
                            life: (PersonOfTheDay.Candidate) -> PersonOfTheDay.Life)
         -> (pick: PersonOfTheDay.Pick?, saved: Bool) {
         let day = today
         var history = store.load()
+        if isCancelled() { return (nil, true) }
         guard let pick = PersonOfTheDay.pick(from: candidates, on: day, history: history,
                                              options: options, life: life) else { return (nil, true) }
         guard history.entry(on: day)?.personID != pick.personID else { return (pick, true) }
+        if isCancelled() { return (nil, true) }
         history.record(pick.personID, on: day, limit: options.historyLimit)
         do { try store.save(history); return (pick, true) } catch { return (pick, false) }
     }

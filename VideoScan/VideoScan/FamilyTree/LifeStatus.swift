@@ -102,6 +102,32 @@ enum LifeStatus: String, Sendable, Equatable {
         return .living
     }
 
+    // MARK: - Privacy verdict (family-facing features)
+
+    /// May a family-facing feature (Person of the Day, Roll Call) treat this
+    /// person as passed on? STRICTER than `of(_:in:)`, which decides
+    /// Hallie's TENSE and may presume (QA P1-A, 2026-10-01: rule 3 called a
+    /// living aunt born 1948 "presumed deceased" because her infant's death
+    /// is recorded — fine for grammar, wrong for showing her birthplace):
+    ///   1. a recorded death                       → deceased
+    ///   2. a known birth year ≤ now − 100         → presumedDeceased
+    ///   3. a known birth year after that          → living, WHATEVER the
+    ///      family around them suggests
+    ///   4. no birth year at all                   → the full rule (`of`),
+    ///      since presumption is the only evidence there is.
+    /// Hallie's tense logic is unchanged.
+    static func privacyVerdict(_ person: GedcomFamilyGraph.Person,
+                               in graph: GedcomFamilyGraph?,
+                               now: Date = Date(),
+                               calendar: Calendar = .current) -> LifeStatus {
+        if hasRecordedDeath(person) { return .deceased }
+        if let birth = GedcomFamilyGraph.year(in: person.birthDate) {
+            let currentYear = calendar.component(.year, from: now)
+            return birth <= currentYear - presumedLivingYears ? .presumedDeceased : .living
+        }
+        return of(person, in: graph, now: now, calendar: calendar)
+    }
+
     // MARK: - People-tab profile
 
     /// The verdict for a People-tab profile: a recorded death wins; a pinned

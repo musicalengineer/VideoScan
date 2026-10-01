@@ -59,6 +59,9 @@ struct PersonOfTheDayTests {
         #expect(POTD.stableHash(Array("2026-10-01|".utf8), "@I1@") == POTD.stableHash(Array("2026-10-01|".utf8), "@I1@"))
         #expect(POTD.stableHash(Array("2026-10-01|".utf8), "@I1@") != POTD.stableHash(Array("2026-10-02|".utf8), "@I1@"))
         #expect(POTD.stableHash(Array("2026-10-01|".utf8), "@I1@") != POTD.stableHash(Array("2026-10-01|".utf8), "@I2@"))
+        // QA P3-5: the exact value, computed independently (Python FNV-1a +
+        // splitmix64 finaliser) — any change to the hash moves every pick.
+        #expect(POTD.stableHash(Array("2026-10-01|".utf8), "@I1@") == 0x6e1c_394d_b975_2589)
     }
 
     // MARK: Anniversaries
@@ -161,6 +164,17 @@ struct PersonOfTheDayTests {
         let tomorrow = day("2026-10-02")
         let next = try #require(POTD.pick(from: people, on: tomorrow, history: h, life: datesOnly(tomorrow)))
         #expect(next.personID != morning.personID)
+    }
+
+    // QA P3-3: a cancelled computation picks nothing and records nothing.
+    @Test func cancelledServiceCallRecordsNothing() {
+        let store = PersonOfTheDayMemoryStore()
+        let service = PersonOfTheDayService(store: store)
+        let people = (1...30).map { ancestor($0) }
+        let r = service.todaysPick(from: people, isCancelled: { true }, life: datesOnly(service.today))
+        #expect(r.pick == nil)
+        #expect(store.saveCount == 0)
+        #expect(store.load() == .empty)
     }
 
     @Test func serviceRecordsOncePerDayAndUsesTheInjectedClock() throws {
@@ -337,6 +351,11 @@ struct PersonOfTheDayScaleTests {
 @Suite("PersonOfTheDayIsolation")
 struct PersonOfTheDayIsolationTests {
 
+    /// Remove a scratch file's potd-<UUID> directory (QA nit).
+    private func removeScratch(_ url: URL) {
+        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+    }
+
     private func scratch() throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("potd-\(UUID().uuidString)", isDirectory: true)
@@ -349,6 +368,7 @@ struct PersonOfTheDayIsolationTests {
 
     @Test func garbageFileLoadsEmptyAndThePickStillWorks() throws {
         let url = try scratch()
+        defer { removeScratch(url) }
         try Data([0xFF, 0x00, 0x7B, 0x22]).write(to: url)
         let store = PersonOfTheDayFileStore(url: url)
         #expect(store.load() == .empty)
@@ -359,18 +379,21 @@ struct PersonOfTheDayIsolationTests {
 
     @Test func wrongShapeAndOversizedFilesLoadEmpty() throws {
         let url = try scratch()
+        defer { removeScratch(url) }
         try Data(#"{"version": "x", "entries": {"a": 1}}"#.utf8).write(to: url)
         #expect(PersonOfTheDayFileStore(url: url).load() == .empty)
         try Data(repeating: 0x20, count: PersonOfTheDayFileStore.maximumBytes + 1).write(to: url)
         #expect(PersonOfTheDayFileStore(url: url).load() == .empty)
         // A directory where the file should be.
         let dirURL = try scratch()
+        defer { removeScratch(dirURL) }
         try FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
         #expect(PersonOfTheDayFileStore(url: dirURL).load() == .empty)
     }
 
     @Test func badRowsAreDroppedGoodRowsSurvive() throws {
         let url = try scratch()
+        defer { removeScratch(url) }
         let json = """
         {"version": 1, "entries": [
           {"day": "2026-09-30", "personID": "@I3@"},
@@ -423,6 +446,7 @@ struct PersonOfTheDayIsolationTests {
         #expect(h.entries.count == POTD.Options().historyLimit)
         #expect(h.entries.first?.day == raw.last?.day, "newest kept first")
         let url = try scratch()
+        defer { removeScratch(url) }
         let store = PersonOfTheDayFileStore(url: url)
         try store.save(h)
         let reloaded = store.load()
@@ -433,6 +457,7 @@ struct PersonOfTheDayIsolationTests {
 
     @Test func serviceWritesOnlyToTheInjectedStore() throws {
         let url = try scratch()
+        defer { removeScratch(url) }
         let service = PersonOfTheDayService(store: PersonOfTheDayFileStore(url: url), now: { Date(timeIntervalSince1970: 1_790_000_000) })
         let r = service.todaysPick(from: people, life: datesOnly(service.today))
         #expect(r.pick != nil)

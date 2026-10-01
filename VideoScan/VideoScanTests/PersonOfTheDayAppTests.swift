@@ -96,6 +96,62 @@ private let potdGedcom = """
 
 private func potdGraph() -> GedcomFamilyGraph { GedcomFamilyGraph(gedcomText: potdGedcom) }
 
+/// QA P1-A: a LIVING aunt (b. 3 Mar 1948, no death) whose infant's death
+/// is recorded. LifeStatus rule 3 presumes her deceased (Hallie's tense
+/// rule); a family-facing feature must not.
+private let auntRecords = """
+0 @I20@ INDI
+1 NAME Aunt /Testperson/
+1 SEX F
+1 BIRT
+2 DATE 3 MAR 1948
+2 PLAC Sampleville, Middlecounty, Massachusetts, United States
+1 FAMS @F20@
+0 @I21@ INDI
+1 NAME Infant /Testperson/
+1 SEX M
+1 BIRT
+2 DATE 1972
+1 DEAT
+2 DATE 1972
+1 FAMC @F20@
+0 @F20@ FAM
+1 WIFE @I20@
+1 CHIL @I21@
+0 TRLR
+"""
+
+private func auntGraph() -> GedcomFamilyGraph {
+    GedcomFamilyGraph(gedcomText: potdGedcom.replacingOccurrences(of: "0 TRLR", with: auntRecords))
+}
+
+/// Two Mary Testpersons 148 years apart (QA P2-B).
+private let namesakesGedcom = """
+0 HEAD
+0 @I12@ INDI
+1 NAME Mary /Testperson/
+1 BIRT
+2 DATE 1850
+0 @I99@ INDI
+1 NAME Mary /Testperson/
+1 BIRT
+2 DATE 1702
+0 TRLR
+"""
+
+/// A one-person tree whose pick differs from potdGraph's.
+private let otherGedcom = """
+0 HEAD
+0 @I50@ INDI
+1 NAME Other /Testperson/
+1 SEX M
+1 BIRT
+2 DATE 1801
+1 DEAT
+2 DATE 1870
+0 TRLR
+"""
+
 private func utc() -> Calendar {
     var c = Calendar(identifier: .gregorian)
     c.timeZone = TimeZone(identifier: "UTC")!
@@ -178,6 +234,60 @@ struct PersonOfTheDayAppTests {
         #expect(center.pick == nil)
     }
 
+    // QA P1-A (privacy): a living person with a deceased descendant.
+    @Test func livingPersonWithADeceasedChildIsNeverFeatured() async throws {
+        let graph = auntGraph()
+        let c = context(graph, now: noon(2027, 3, 3))
+        #expect(c.life(id: "@I20@", quick: .livingPrivate) == .livingPrivate)
+        let service = PersonOfTheDayService(store: PersonOfTheDayMemoryStore(), calendar: utc(),
+                                            now: { noon(2027, 3, 3) })
+        let center = PersonOfTheDayCenter(service: service)
+        center.debounce = .zero
+        center.assetConfiguration = { nil }
+        center.refresh(graph: graph, decorations: nil, knowledge: nil, displayNames: [], ownerFamilySearchID: nil)
+        await center.waitForPick()
+        #expect(center.pick?.personID != "@I20@")
+        #expect(center.pick.map { !$0.isLiving } ?? true)
+    }
+
+    // QA P3-2: going back to the inputs already computed cancels the
+    // pending recompute for the other inputs.
+    @Test func revertingToComputedInputsCancelsThePendingRecompute() async throws {
+        let service = PersonOfTheDayService(store: PersonOfTheDayMemoryStore(), calendar: utc(),
+                                            now: { noon(2026, 10, 2) })
+        let center = PersonOfTheDayCenter(service: service)
+        center.assetConfiguration = { nil }
+        center.debounce = .zero
+        center.refresh(graph: potdGraph(), decorations: nil, knowledge: nil, displayNames: [], ownerFamilySearchID: nil)
+        await center.waitForPick()
+        let first = try #require(center.pick)
+        let keyA = center.computedKey
+        center.debounce = .milliseconds(200)
+        center.refresh(graph: GedcomFamilyGraph(gedcomText: otherGedcom), decorations: nil, knowledge: nil,
+                       displayNames: [], ownerFamilySearchID: nil)
+        center.refresh(graph: potdGraph(), decorations: nil, knowledge: nil, displayNames: [], ownerFamilySearchID: nil)
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(center.pick == first, "the superseded recompute must not land")
+        #expect(center.computedKey == keyA)
+    }
+
+    // QA P3-4: the backstop timer is armed for the next day boundary, and
+    // the card keys its refresh on the published day.
+    @Test func midnightTimerAimsAtTheNextDayBoundary() throws {
+        let late = utc().date(from: DateComponents(year: 2026, month: 10, day: 1, hour: 23, minute: 59, second: 30))!
+        #expect(PersonOfTheDayCenter.secondsUntilNextDay(after: late, calendar: utc()) == 31)
+        let center = PersonOfTheDayCenter(service: PersonOfTheDayService(store: PersonOfTheDayMemoryStore(),
+                                                                         calendar: utc(), now: { late }))
+        #expect(center.dayKey == "2026-10-01")
+        center.service = PersonOfTheDayService(store: PersonOfTheDayMemoryStore(), calendar: utc(),
+                                               now: { noon(2026, 10, 2) })
+        center.dayMayHaveChanged()
+        #expect(center.dayKey == "2026-10-02")
+        let card = try SourceTree.appSource(named: "PersonOfTheDayCard.swift")
+        #expect(card.contains("day: center.dayKey"))
+        #expect(card.contains("pick.isLiving ? nil"), "no birth flag for a living pick (QA P3-1)")
+    }
+
     @Test func testHostCenterNeverUsesTheRealFile() {
         // The default initialiser in the test host is the in-memory store.
         let center = PersonOfTheDayCenter()
@@ -205,6 +315,50 @@ struct RollCallAppTests {
         #expect(playback.portraits.isEmpty)
         #expect(playback.duration == 20)
         #expect(playback.replay().id != playback.id)
+    }
+
+    // QA P2-A: a walk from a selected LIVING relative must not name them
+    // (the inner circle is the home people's, not the walk's starts).
+    @Test func rollCallFromASelectedLivingRelativeDoesNotNameThem() async throws {
+        let graph = potdGraph()
+        let result = try TreeWalk.walk(graph, options: .init(starts: ["@I6@"]))
+        let visited = result.layers.flatMap { $0 }.map { Int($0.ordinal) }
+        let playback = await RollCallPlayback.prepare(result: result, graph: graph, visited: visited,
+                                                      knowledge: nil, displayNames: [],
+                                                      birthCountries: .empty, assets: nil)
+        #expect(!playback.entries.map(\.id).contains("@I6@"))
+        #expect(playback.entries.map(\.id).contains("@I4@"))
+    }
+
+    // QA P3-1: no birth flag for a living person in the credits.
+    @Test func rollCallCarriesNoFlagForALivingPerson() async throws {
+        let graph = potdGraph()
+        let result = try TreeWalk.walk(graph, options: .init(starts: ["@I1@"]))
+        let visited = result.layers.flatMap { $0 }.map { Int($0.ordinal) }
+        let ids = ["@I1@", "@I4@", "@I7@"]
+        let countries = FamilyTreeBirthCountries.build(ids: ids, treePlaces: ids.map { graph.people[$0]?.birthPlace })
+        #expect(countries["@I1@"] != nil, "fixture: the living home person HAS a resolvable birthplace")
+        let playback = await RollCallPlayback.prepare(result: result, graph: graph, visited: visited,
+                                                      knowledge: nil, displayNames: [],
+                                                      birthCountries: countries, assets: nil)
+        #expect(playback.entries.contains { $0.id == "@I1@" && $0.isLiving })
+        #expect(playback.flags["@I1@"] == nil)
+        #expect(playback.flags["@I4@"] != nil)
+    }
+
+    // QA P2-B: a folder pinned to one record never lends its portrait to
+    // a namesake by name.
+    @Test func portraitHintNeverLendsAPinnedFolderToANamesake() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("potd-hints-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("People/Mary_Testperson_I12", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data([0xFF, 0xD8, 0xFF]).write(to: folder.appendingPathComponent("portrait.jpg"))
+        let store = FamilyAssetStore(root: root, cacheRoot: root.appendingPathComponent("thumbs"))
+        let hints = store.portraitHints()
+        let graph = GedcomFamilyGraph(gedcomText: namesakesGedcom)
+        #expect(hints.mayHavePortrait(try #require(graph.people["@I12@"])))
+        #expect(!hints.mayHavePortrait(try #require(graph.people["@I99@"])))
     }
 
     @Test func viewsNeverBuildCandidatesOrTheRollList() throws {

@@ -10,8 +10,10 @@
 //     FamilyPortraitHints) and the family-notes count (CyberBrain items
 //     visible to the FAMILY — the same `.family` ceiling as the map,
 //     because the card and the credits are family-facing);
-//   • the life rule: Core's cheap date rule first, then the app's full
-//     LifeStatus (which walks descendants) only for the people Core asks
+//   • the life rule: Core's cheap date rule first, then the app's
+//     LifeStatus.privacyVerdict (a known recent birth stays LIVING; only an
+//     undated person falls through to the descendant-walking presumption)
+//     only for the people Core asks
 //     about — Core asks lazily, best-ranked first.
 //
 // NOTHING HERE WRITES: not the tree, not CyberBrain, not the archive.
@@ -93,7 +95,9 @@ struct FamilyTreeFeatureContext: Sendable {
     func life(id: String, quick: PersonOfTheDay.Life) -> PersonOfTheDay.Life {
         if quick == .deceased { return .deceased }
         guard let person = graph.people[id] else { return .livingPrivate }
-        if LifeStatus.of(person, in: graph, now: now) != .living { return .deceased }
+        // The PRIVACY verdict, not the tense rule: a known recent birth
+        // stays living whatever relatives suggest (QA P1-A).
+        if LifeStatus.privacyVerdict(person, in: graph, now: now) != .living { return .deceased }
         return innerCircle.contains(id) ? .livingInnerCircle : .livingPrivate
     }
 

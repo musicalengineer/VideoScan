@@ -356,13 +356,17 @@ struct FamilyTreeWalkSheet: View {
         // The WALK's home people (the setup picker may have moved since).
         let names = FamilyTreeWalkCenter.displayNames(for: result.starts.map(\.id), in: graph, speakers: .fromDefaults())
         let visited = highlighter.inputs.visited
+        // The inner circle is the TREE's home people, whoever this walk
+        // started from (QA P2-A).
+        let owner = HallieTurnExecutor.Speakers.fromDefaults().ownerFamilySearchID
         let assets: FamilyAssetConfiguration? = TestEnvironment.isTestHost
             ? nil : FamilyAssetConfigurationCenter.shared.snapshot()
         rollCallTask = Task { @MainActor in
             defer { rollCallTask = nil }
             let playback = await RollCallPlayback.prepare(result: result, graph: graph, visited: visited,
                                                           knowledge: knowledge, displayNames: names,
-                                                          birthCountries: flags, assets: assets, order: order)
+                                                          birthCountries: flags, assets: assets,
+                                                          ownerFamilySearchID: owner, order: order)
             guard !Task.isCancelled else { return }
             rollCallCache[order] = playback
             guard !playback.entries.isEmpty else {

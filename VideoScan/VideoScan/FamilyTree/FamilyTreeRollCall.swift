@@ -65,18 +65,33 @@ struct RollCallPlayback: Identifiable, @unchecked Sendable {
 
     /// Build the credits for one walk, OFF the main actor. `visited` are
     /// the walk's visited ordinals (the Highlight inputs' list).
+    ///
+    /// The inner circle is ALWAYS the tree's home people's (owner first,
+    /// `defaultStarts`), never the walk's starts (QA P2-A: a walk from a
+    /// selected living relative named them; a walk from a son hid Rick
+    /// and Donna).
+    ///
+    /// Cancelling the caller cancels the detached work too (a `Task
+    /// .detached` does not inherit cancellation on its own — QA P3-3); the
+    /// work stops before the list and before each thumbnail decode, and a
+    /// cancelled preparation returns an empty playback.
     nonisolated static func prepare(result: TreeWalk.Result, graph: GedcomFamilyGraph, visited: [Int],
                                     knowledge: FamilyTreeNotesResolver?, displayNames: [String],
                                     birthCountries: FamilyTreeBirthCountries,
                                     assets: FamilyAssetConfiguration?,
+                                    ownerFamilySearchID: String? = nil,
                                     order: RollCall.Order = .oldestFirst) async -> RollCallPlayback {
-        await Task.detached(priority: .userInitiated) {
+        let work = Task.detached(priority: .userInitiated) { () -> RollCallPlayback in
+            let empty = RollCallPlayback(id: UUID(), entries: [], portraits: [:], flags: [:],
+                                         duration: RollCall.duration(entries: 0), order: order,
+                                         walked: visited.count)
             let store = assets?.makeStore()
             let hints = store?.portraitHints() ?? .none
             let now = Date()
+            let home = FamilyTreeWalkCenter.defaultStarts(in: graph, ownerFamilySearchID: ownerFamilySearchID)
             let context = FamilyTreeFeatureContext(graph: graph, decorations: [:], displayNames: displayNames,
-                                                   knowledge: knowledge, hints: hints,
-                                                   starts: result.starts.map(\.id), now: now)
+                                                   knowledge: knowledge, hints: hints, starts: home, now: now)
+            if Task.isCancelled { return empty }
             let people = context.rollCallPeople(result: result, visited: visited)
             let thisYear = Calendar.current.component(.year, from: now)
             let entries = RollCall.build(people, options: .init(order: order)) { p in
@@ -88,7 +103,10 @@ struct RollCallPlayback: Identifiable, @unchecked Sendable {
             var portraits: [String: NSImage] = [:]
             var flags: [String: FamilyTreeBirthFlag] = [:]
             for e in entries {
-                if let flag = birthCountries[e.id] { flags[e.id] = flag }
+                if Task.isCancelled { return empty }
+                // No flag for a living person: where they were born is a
+                // private detail too (QA P3-1).
+                if !e.isLiving, let flag = birthCountries[e.id] { flags[e.id] = flag }
                 guard e.hasPortrait, let store, let person = graph.people[e.id] else { continue }
                 if let url = PersonPhotoResolver(store: store).treePhoto(for: FamilyAssetPerson(person),
                                                                        bridgedProfile: nil)?.url,
@@ -99,7 +117,9 @@ struct RollCallPlayback: Identifiable, @unchecked Sendable {
             return RollCallPlayback(id: UUID(), entries: entries, portraits: portraits, flags: flags,
                                     duration: RollCall.duration(entries: entries.count), order: order,
                                     walked: visited.count)
-        }.value
+        }
+        // ≈ registering a cancel callback: the caller's cancel reaches the worker.
+        return await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
     }
 
     var title: String {
