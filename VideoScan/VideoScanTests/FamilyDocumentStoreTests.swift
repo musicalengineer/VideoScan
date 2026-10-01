@@ -432,6 +432,45 @@ struct FamilyDocumentStoreTests {
         if let orphan = orphans.first { #expect(logged.first?.contains(orphan) == true) }
     }
 
+    /// Codex review #18 F5: the missing-file and unreadable-list diagnostics
+    /// named the person's FOLDER, and a folder name is a person's name. They
+    /// carry the person key now, and a damaged list is reported once, not on
+    /// every listing (each selection change lists).
+    @Test func diagnosticLogsNeverNameThePersonFolderAndAreNotRepeated() throws {
+        let sb = try sandbox()
+        defer { try? fileManager.removeItem(at: sb.base) }
+        var lines: [String] = []
+        let lock = NSLock()
+        PersonDocumentLog.shared.setExtraSink { line in lock.withLock { lines.append(line) } }
+        defer { PersonDocumentLog.shared.setExtraSink(nil) }
+        PersonDocumentLog.shared.resetMissing()
+        let synthetic = FamilyAssetPerson(gedcomID: "@I77@", name: "Synthetic Test Person")
+        let folder = try sb.store.folderForPhotoRequest(person: synthetic)
+        try #require(folder.lastPathComponent.contains("Synthetic_Test_Person"))
+
+        let pdf = try write(try pdfData(), named: "bc.pdf", in: sb)
+        let doc = try sb.store.importPersonDocument(from: pdf, kind: .birth, note: "", into: folder, for: synthetic)
+        try fileManager.removeItem(at: #require(doc.fileURL))
+        _ = sb.store.documents(for: synthetic)                 // missing file
+        _ = sb.store.documents(inPersonFolder: folder)        // the folder-only entry point too
+
+        let sidecar = documentsDir(folder).appendingPathComponent(FamilyAssetStore.documentsSidecarName)
+        try Data("{ not json".utf8).write(to: sidecar)
+        for _ in 0..<3 { _ = sb.store.documents(for: synthetic) }
+        _ = sb.store.documents(inPersonFolder: folder)
+
+        let captured = lock.withLock { lines }
+        #expect(captured.contains { $0.contains("missing on disk") && $0.contains(doc.filename) })
+        let unreadable = captured.filter { $0.contains("could not read") }
+        #expect(unreadable.count == 1, "a damaged list is reported once: \(unreadable)")
+        for line in captured {
+            #expect(!line.contains("Synthetic_Test_Person") && !line.contains("Synthetic Test Person"),
+                    "a diagnostic named the person: \(line)")
+        }
+        #expect(captured.contains { $0.contains("missing on disk") && $0.contains("@I77@") },
+                "the missing-file line carries the person key")
+    }
+
     // MARK: Sensor — sidecar schema frozen
 
     @Test func sidecarSchemaIsFrozen() throws {

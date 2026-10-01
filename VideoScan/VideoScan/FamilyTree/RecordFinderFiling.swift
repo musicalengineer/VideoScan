@@ -330,7 +330,7 @@ struct RecordFinderFiler {
                                  code: "import-write-failed"))
         }
         // Prove it: the same bytes we hashed, listed in documents.json.
-        let listed = assetStore.documents(inPersonFolder: folder).first { $0.id == document.id }
+        let listed = assetStore.documents(inPersonFolder: folder, for: assetPerson).first { $0.id == document.id }
         guard document.sha256 == pre.sha256, document.byteCount == pre.byteCount,
               let landedURL = listed?.fileURL, FileManager.default.fileExists(atPath: landedURL.path) else {
             return .failure(Stop(outcome: undoDocument(document, folder: folder,

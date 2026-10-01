@@ -142,6 +142,9 @@ final class PersonDocumentLog: @unchecked Sendable {
 
     private let lock = NSLock()
     private var reportedMissing: Set<String> = []
+    /// Diagnostics already written once (a damaged list, keyed by its path,
+    /// size and modification date — so a list damaged AGAIN is reported).
+    private var reportedOnce: Set<String> = []
     private var extraSink: ((String) -> Void)?
 
     /// Test seam: every line also goes here. Set to nil to detach.
@@ -149,9 +152,12 @@ final class PersonDocumentLog: @unchecked Sendable {
         lock.withLock { extraSink = sink }
     }
 
-    /// Forget which files were already reported (tests).
+    /// Forget which files and diagnostics were already reported (tests).
     func resetMissing() {
-        lock.withLock { reportedMissing.removeAll() }
+        lock.withLock {
+            reportedMissing.removeAll()
+            reportedOnce.removeAll()
+        }
     }
 
     func write(_ line: String, privateName: String? = nil) {
@@ -166,11 +172,25 @@ final class PersonDocumentLog: @unchecked Sendable {
     }
 
     /// Log the first time only. Returns true when the line was written.
+    /// `subject` is the person KEY (`FamilyAssetStore.logSubject`), never a
+    /// folder name — a People/ folder is named after the person (codex
+    /// review #18 F5). The folder goes to os_log only, marked private.
     @discardableResult
-    func missing(_ url: URL, folder: String) -> Bool {
+    func missing(_ url: URL, subject: String, privateFolder: String) -> Bool {
         let fresh = lock.withLock { reportedMissing.insert(url.path).inserted }
         guard fresh else { return false }
-        write("[tree] document \(url.lastPathComponent) listed in \(folder)/Documents/documents.json is missing on disk — dropped from the listing")
+        write("[tree] document \(url.lastPathComponent) listed in Documents/documents.json for \(subject) "
+              + "is missing on disk — dropped from the listing", privateName: privateFolder)
+        return true
+    }
+
+    /// Write `line` the first time `key` is seen in this process (tests:
+    /// `resetMissing`). Returns true when the line was written.
+    @discardableResult
+    func once(_ key: String, _ line: String, privateName: String? = nil) -> Bool {
+        let fresh = lock.withLock { reportedOnce.insert(key).inserted }
+        guard fresh else { return false }
+        write(line, privateName: privateName)
         return true
     }
 }
@@ -367,7 +387,7 @@ extension FamilyAssetStore {
         var out: [PersonDocument] = []
         var seen: Set<UUID> = []
         for folder in personFolders(for: person) {
-            for document in documents(inPersonFolder: folder) where seen.insert(document.id).inserted {
+            for document in documents(inPersonFolder: folder, for: person) where seen.insert(document.id).inserted {
                 out.append(document)
             }
         }
@@ -378,33 +398,44 @@ extension FamilyAssetStore {
 
     /// The documents listed in ONE person folder's sidecar, each with its
     /// `fileURL` resolved and re-checked (regular file, not a link,
-    /// directly inside `Documents/`).
-    func documents(inPersonFolder folder: URL) -> [PersonDocument] {
+    /// directly inside `Documents/`). `person` names the diagnostics by key;
+    /// without one they carry an opaque folder reference, never its name.
+    func documents(inPersonFolder folder: URL, for person: FamilyAssetPerson? = nil) -> [PersonDocument] {
         guard access != .unavailable else { return [] }
         let fresh = URL(fileURLWithPath: folder.path, isDirectory: true).standardizedFileURL
         guard fresh.deletingLastPathComponent() == peopleDirectory, isSafeDirectory(fresh) else { return [] }
         let documentsDir = Self.documentsFolder(in: fresh)
         guard isSafeDirectory(documentsDir) else { return [] }
+        let subject = Self.logSubject(person, folder: fresh)
         let entries: [PersonDocument]
         do {
             entries = try readDocumentSidecar(in: documentsDir)
         } catch {
-            PersonDocumentLog.shared.write(
-                "[tree] could not read \(fresh.lastPathComponent)/Documents/\(Self.documentsSidecarName) — "
-                + "\(error.localizedDescription); showing no documents for that folder")
+            // Every selection change lists the person: report a damaged
+            // list once per state of the file, not once per listing.
+            let sidecar = documentsDir.appendingPathComponent(Self.documentsSidecarName)
+            let values = try? sidecar.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            let key = "unreadable|\(sidecar.path)|\(values?.fileSize ?? -1)|"
+                + "\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+            PersonDocumentLog.shared.once(
+                key,
+                "[tree] could not read Documents/\(Self.documentsSidecarName) for \(subject) — "
+                + "\(error.localizedDescription); showing no documents from that folder until it is repaired",
+                privateName: fresh.lastPathComponent)
             return []
         }
         return entries.compactMap { entry in
             guard Self.isPlainFilename(entry.filename) else {
                 PersonDocumentLog.shared.missing(
-                    documentsDir.appendingPathComponent(entry.filename), folder: fresh.lastPathComponent)
+                    documentsDir.appendingPathComponent(entry.filename), subject: subject,
+                    privateFolder: fresh.lastPathComponent)
                 return nil
             }
             let url = documentsDir.appendingPathComponent(entry.filename, isDirectory: false).standardizedFileURL
             guard url.deletingLastPathComponent() == documentsDir,
                   let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
                   values.isRegularFile == true, values.isSymbolicLink != true else {
-                PersonDocumentLog.shared.missing(url, folder: fresh.lastPathComponent)
+                PersonDocumentLog.shared.missing(url, subject: subject, privateFolder: fresh.lastPathComponent)
                 return nil
             }
             var resolved = entry
@@ -636,9 +667,14 @@ extension FamilyAssetStore {
     /// "LZ7X-ABC" — the person's KEY (FamilySearch ID, else GEDCOM pointer),
     /// never their name: the app log is not the place for family names (QA
     /// 2026-10-01 P3-1; the os_log line still carries the name as private).
-    /// A folder name can contain a name too, so it is not used either.
-    private static func logSubject(_ person: FamilyAssetPerson?, folder: URL) -> String {
+    /// A folder name can contain a name too, so it is never used: without a
+    /// key the subject is an opaque reference to the folder (the first 8
+    /// hex digits of the SHA-256 of its name) — stable across lines, so one
+    /// folder's diagnostics can be told apart, and meaningless on its own.
+    /// The os_log copy of each line carries the folder name as private.
+    static func logSubject(_ person: FamilyAssetPerson?, folder: URL) -> String {
         if let key = person?.familySearchID ?? person?.gedcomID, !key.isEmpty { return key }
-        return "a person with no ID"
+        let ref = sha256Hex(Data(folder.lastPathComponent.utf8)).prefix(8)
+        return "a person with no ID (folder ref \(ref))"
     }
 }
