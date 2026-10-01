@@ -349,7 +349,8 @@ struct TreeLineStatisticsScaleTests {
         let graph = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 100_000))
         _ = graph.index   // prebuilt in production
         let root = try #require(graph.rootPersonID)
-        let other = try #require(graph.relatives(.siblings, of: graph.people[root]!).first?.id
+        let rootPerson = try #require(graph.people[root])
+        let other = try #require(graph.relatives(.siblings, of: rootPerson).first?.id
                                  ?? graph.people.keys.sorted().dropFirst(7).first)
         let clock = ContinuousClock()
         let start = clock.now

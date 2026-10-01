@@ -112,12 +112,12 @@ extension GedcomFamilyGraph {
     /// recorded links, everything else from the nearest common ancestor.
     /// Nil = no recorded blood link (or the same person / unknown ids).
     public func bloodRelation(of bID: String, to aID: String) -> BloodRelation? {
-        guard aID != bID, let b = people[bID], people[aID] != nil else { return nil }
+        guard aID != bID, let a = people[aID], let b = people[bID] else { return nil }
         if let direct = directRelation(between: aID, and: bID) {
             let depth = direct.path.count - 1
             switch direct.kind {
             case .parentChild:
-                let bIsParent = relatives(.parents, of: people[aID]!).contains { $0.id == bID }
+                let bIsParent = relatives(.parents, of: a).contains { $0.id == bID }
                 let name = bIsParent ? Self.generationLabel(generations: 1, sex: b.sex)
                                      : Self.descendantLabel(generations: 1, sex: b.sex)
                 return BloodRelation(name: name, meeting: nil, half: nil, separateLines: 1)
@@ -129,10 +129,10 @@ extension GedcomFamilyGraph {
                                        : Self.descendantLabel(generations: depth, sex: b.sex)
                 return BloodRelation(name: name, meeting: nil, half: nil, separateLines: 1)
             case .siblings:
-                return BloodRelation(name: Self.relationshipName(depthA: 1, depthB: 1, sexOfB: b.sex)!,
+                return BloodRelation(name: Self.relationshipName(depthA: 1, depthB: 1, sexOfB: b.sex) ?? "sibling",
                                      meeting: nil, half: nil, separateLines: 1)
             case .halfSiblings:
-                return BloodRelation(name: Self.relationshipName(depthA: 1, depthB: 1, sexOfB: b.sex, half: true)!,
+                return BloodRelation(name: Self.relationshipName(depthA: 1, depthB: 1, sexOfB: b.sex, half: true) ?? "half-sibling",
                                      meeting: nil, half: nil, separateLines: 1)
             case .samePerson:
                 return nil

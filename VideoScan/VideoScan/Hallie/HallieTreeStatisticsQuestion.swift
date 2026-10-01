@@ -34,6 +34,10 @@ enum HallieTreeStatisticsQuestion: Equatable, Sendable {
         }
     }
 
+    /// The `.ancestors(of:)` marker for "my side" / "my line" / "my own
+    /// ancestors" — the owner alone. Never a typed name (no letters).
+    static let ownerOnly = "@@owner"
+
     // MARK: - Vocabulary
 
     private static let countAsk = /\bhow\s+many\b|\bhow\s+much\b|\bnumber\s+of\b|\bcount\s+(the|how|people)\b|\btotal\s+number\b/
@@ -76,9 +80,20 @@ enum HallieTreeStatisticsQuestion: Equatable, Sendable {
         // "my maternal ancestors" names a side the scope cannot hold: abstain
         // rather than silently answer for the whole tree (codex #1180).
         guard q.firstMatch(of: sidedScope) == nil else { return nil }
-        let scope: TreeStatistics.Scope = q.firstMatch(of: ancestorScope) != nil
-            ? .ancestors(of: "", maxGenerations: LineageTrail.generationCap)
-            : .wholeTree
+        // Whose ancestors (#214, #200): one scope reader shared with the
+        // ancestor-line route. `.ancestors(of:)` carries a TYPED marker
+        // here, resolved to a record by the answer: "" = ours (the owner's
+        // and the partner's lines), `ownerOnly` = the owner alone, anything
+        // else = a typed name ("how many of donna's ancestors …").
+        let cap = LineageTrail.generationCap
+        let scope: TreeStatistics.Scope
+        switch HallieAncestorStatisticsQuestion.who(in: q, allowTree: false) {
+        case .ours?: scope = .ancestors(of: "", maxGenerations: cap)
+        case .owner?: scope = .ancestors(of: ownerOnly, maxGenerations: cap)
+        case .person(let name)?: scope = .ancestors(of: name, maxGenerations: cap)
+        case nil:
+            scope = q.firstMatch(of: ancestorScope) != nil ? .ancestors(of: "", maxGenerations: cap) : .wholeTree
+        }
         let time = timeFilter(in: q)
         let place = placeFilter(in: q)
 

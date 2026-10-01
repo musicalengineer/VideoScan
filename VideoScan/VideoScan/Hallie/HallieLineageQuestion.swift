@@ -33,6 +33,13 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// (Rick, 2026-09-07). Recognised by HallieTreeStatisticsQuestion, which
     /// abstains on any constraint the engine cannot honour.
     case treeStatistics(HallieTreeStatisticsQuestion)
+    /// "how many of our ancestors were born in New England vs Old England",
+    /// "average age at death of Donna's ancestors", "our deepest line",
+    /// "our earliest ancestor" (GH #214 / #200, 2026-10-01). "Our" = the
+    /// owner's AND the partner's lines, per side. Recognised by
+    /// HallieAncestorStatisticsQuestion (abstains on anything it can't
+    /// hold); answered from TreeLineStatistics.
+    case ancestorStatistics(HallieAncestorStatisticsQuestion)
     case gedcomAwareness
     /// "get more of the family tree" / "download the tree from FamilySearch"
     /// — points at the Family Tree tab's Get Family Tree sheet (Rick
@@ -183,6 +190,15 @@ enum HallieLineageQuestion: Equatable, Sendable {
             return .ancestorLine(person: person, line: line, generations: gens, untilYear: year)
         case .originTrail(let person, nil, let line)?:
             return .ancestorLine(person: person, line: line, generations: yearBoundGenerations, untilYear: year)
+        case .treeStatistics?, .ancestorStatistics?:
+            // A statistics sentence keeps its year as a FILTER, read from
+            // the WHOLE sentence. Peeling "before 1900" off first turned
+            // "how many of our ancestors were born before 1900" into a count
+            // of everyone that read as complete ("11 of our 11 … were
+            // born") — the dropped-constraint failure (codex #1180) through
+            // the router rather than the recognizer (found 2026-10-01).
+            if let lines = HallieAncestorStatisticsQuestion.detect(lower) { return .ancestorStatistics(lines) }
+            return HallieTreeStatisticsQuestion.detect(lower).map { .treeStatistics($0) }
         case nil:
             // "rick's ancestors before 1800" — no generation count, no
             // trace verb; the year is the whole ask. Ancestry words only
@@ -220,6 +236,11 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // answering with a read-out list. The recognizer abstains on any
         // sentence carrying "generation(s)", so it can never take the trail's
         // own counting shape ("how many generations back …").
+        // Ancestor-LINE statistics first (#214): "our ancestors" is two
+        // lines with a per-side breakdown, and New England / Old England
+        // are regions the whole-tree recognizer can't name. It abstains on
+        // a time filter, continent or side, which the next one handles.
+        if let lines = HallieAncestorStatisticsQuestion.detect(lower) { return .ancestorStatistics(lines) }
         if let stats = HallieTreeStatisticsQuestion.detect(lower) { return .treeStatistics(stats) }
         if let trail = birthplaceTrailQuestion(in: lower) { return trail }
 
@@ -1501,6 +1522,8 @@ enum HallieLineageAnswer {
             return birthplaceTrail(person: person, line: line, stop: stop, ask: ask, context: context)
         case .treeStatistics(let ask):
             return treeStatistics(ask, context: context)
+        case .ancestorStatistics(let ask):
+            return ancestorStatistics(ask, context: context)
         case .birthplaceTrailPage(let personID, let personName, let treeToken, let line, let stop, let from):
             return birthplaceTrailPage(personID: personID, personName: personName, treeToken: treeToken,
                                        line: line, stop: stop, from: from, context: context)

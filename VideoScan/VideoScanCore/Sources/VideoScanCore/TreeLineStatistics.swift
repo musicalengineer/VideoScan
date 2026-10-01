@@ -297,17 +297,17 @@ public enum TreeLineStatistics {
         var values: [Double] = []
         var sideSum = [Double](repeating: 0, count: n), sideCount = [Int](repeating: 0, count: n)
         var vague = 0, implausible = 0
-        var usableMembers: [Member] = []
+        var usableMembers: [(member: Member, minYears: Int)] = []
         for m in population.members {
             guard let age = m.ageAtDeath else { continue }
             if age.minYears < 0 || age.maxYears > maxPlausibleAge { implausible += 1; continue }
             if age.maxYears - age.minYears > maxAgeSpread { vague += 1; continue }
             let v = Double(age.minYears + age.maxYears) / 2
             values.append(v)
-            usableMembers.append(m)
+            usableMembers.append((m, age.minYears))
             for s in 0..<n where m.isOn(side: s) { sideSum[s] += v; sideCount[s] += 1 }
         }
-        guard !values.isEmpty else {
+        guard !values.isEmpty, let best = usableMembers.map(\.minYears).max() else {
             return population.members.isEmpty ? nil : AgeReport(
                 considered: population.members.count, usable: 0, mean: 0, median: 0,
                 perSide: (0..<n).map { _ in SideAge(usable: 0, mean: 0) },
@@ -316,13 +316,18 @@ public enum TreeLineStatistics {
         let sorted = values.sorted()
         let mid = sorted.count / 2
         let median = sorted.count.isMultiple(of: 2) ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
-        let best = usableMembers.map { $0.ageAtDeath!.minYears }.max()!
-        let ties = usableMembers.filter { $0.ageAtDeath!.minYears == best }
-            .sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
+        // Split into typed steps: one chained expression timed out the type
+        // checker (Swift 6.2, same failure as CommonAncestry's sort).
+        let atBest: [Member] = usableMembers.filter { $0.minYears == best }.map { $0.member }
+        let ties: [Member] = atBest.sorted(by: Self.nameThenID)
+        let perSide: [SideAge] = (0..<n).map { s -> SideAge in
+            let count = sideCount[s]
+            return SideAge(usable: count, mean: count == 0 ? 0 : sideSum[s] / Double(count))
+        }
         return AgeReport(
             considered: population.members.count, usable: values.count,
             mean: values.reduce(0, +) / Double(values.count), median: median,
-            perSide: (0..<n).map { SideAge(usable: sideCount[$0], mean: sideCount[$0] == 0 ? 0 : sideSum[$0] / Double(sideCount[$0])) },
+            perSide: perSide,
             tooVague: vague, implausible: implausible,
             oldest: Array(ties.prefix(3)), oldestTies: ties.count)
     }
@@ -352,15 +357,14 @@ public enum TreeLineStatistics {
                 guard let g = m.generations[s] else { continue }
                 if g > best { best = g; at = [m] } else if g == best { at.append(m) }
             }
-            guard best > 0 else { return nil }
-            let pick = at.min { a, b in
+            guard best > 0, let pick = at.min(by: { a, b in
                 switch (a.birthYear, b.birthYear) {
                 case let (x?, y?) where x != y: return x < y
                 case (_?, nil): return true
                 case (nil, _?): return false
                 default: return a.name == b.name ? a.id < b.id : a.name < b.name
                 }
-            }!
+            }) else { return nil }
             return DeepestLine(side: s, generations: best, atDepth: at.count, ancestor: pick,
                                line: population.line(from: pick.id, side: s))
         }
@@ -384,12 +388,16 @@ public enum TreeLineStatistics {
     public static func earliest(_ population: Population, side: Int? = nil) -> Earliest {
         let pool = side.map { s in population.members.filter { $0.isOn(side: s) } } ?? population.members
         let dated = pool.filter { $0.birthYear != nil }
-        guard let year = dated.map({ $0.birthYear! }).min() else {
+        guard let year = dated.compactMap(\.birthYear).min() else {
             return Earliest(considered: pool.count, dated: 0, year: nil, people: [], ties: 0)
         }
-        let ties = dated.filter { $0.birthYear == year }
-            .sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
+        let ties: [Member] = dated.filter { $0.birthYear == year }.sorted(by: Self.nameThenID)
         return Earliest(considered: pool.count, dated: dated.count, year: year,
                         people: Array(ties.prefix(3)), ties: ties.count)
+    }
+
+    /// Name order, then pointer — the tie-break every list here uses.
+    static func nameThenID(_ a: Member, _ b: Member) -> Bool {
+        a.name == b.name ? a.id < b.id : a.name < b.name
     }
 }
