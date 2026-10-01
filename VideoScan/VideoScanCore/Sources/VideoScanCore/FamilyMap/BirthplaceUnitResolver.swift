@@ -425,11 +425,12 @@ public enum BirthplaceUnitResolver {
             if range.count <= 6 {
                 let recorded = text(range)
                 let usAllowed = searches?.contains(.unitedStates) ?? true
-                if usAllowed, BirthplaceClassifier.usAbbreviation(recorded) {
-                    let letters = recorded.filter { $0.isLetter }.uppercased()
-                    if let name = USStateCodes.names[letters] {
-                        return .unit(.unitedStates, name: name, key: FamilyMapKey.unitKey(country: .unitedStates, name: name))
-                    }
+                // The shared US reader's case rule: postal codes and the
+                // word-like short forms ("Del.", "Mont.") only upper-case or
+                // Capitalised with the period. The case-free written forms
+                // are table aliases (below), so they never reach here.
+                if usAllowed, let name = USPlaceNames.stateName(recorded: recorded) {
+                    return .unit(.unitedStates, name: name, key: FamilyMapKey.unitKey(country: .unitedStates, name: name))
                 }
                 let canadaKnown = searches == [.canada]
                 if canadaKnown || searches == nil, let name = canadianCode(recorded, countryKnown: canadaKnown) {
@@ -738,22 +739,11 @@ public enum BirthplaceUnitResolver {
         // Postal codes are NOT aliases: "in", "or", "co", "me" are words.
         // They match only through `usAbbreviation`'s case rule in `classify`.
         for name in USStateCodes.names.values { unit(.unitedStates, name) }
-        let shortForms: [String: String] = [
-            "mass": "Massachusetts", "conn": "Connecticut", "penn": "Pennsylvania", "penna": "Pennsylvania",
-            "calif": "California", "wash": "Washington", "tenn": "Tennessee", "minn": "Minnesota",
-            "wisc": "Wisconsin", "okla": "Oklahoma", "nebr": "Nebraska", "colo": "Colorado", "ariz": "Arizona",
-            "ind": "Indiana", "ill": "Illinois", "mich": "Michigan", "kans": "Kansas", "tex": "Texas",
-            "fla": "Florida", "ala": "Alabama", "miss": "Mississippi", "ore": "Oregon", "oreg": "Oregon",
-            "n carolina": "North Carolina", "s carolina": "South Carolina", "n dakota": "North Dakota",
-            "s dakota": "South Dakota", "w virginia": "West Virginia", "washington dc": "District of Columbia",
-            "washington d c": "District of Columbia", "d c": "District of Columbia",
-            // Dotted two-letter forms after `normalize` ("N.H." → "n h").
-            "n h": "New Hampshire", "r i": "Rhode Island", "n y": "New York", "n j": "New Jersey",
-            "n c": "North Carolina", "s c": "South Carolina", "n d": "North Dakota", "s d": "South Dakota",
-            "w va": "West Virginia", "n m": "New Mexico",
-            "massachusets": "Massachusetts", "massachusettes": "Massachusetts", "massachussets": "Massachusetts",
-        ]
-        for (alias, name) in shortForms { unit(.unitedStates, name, [alias]) }
+        // The old written forms ("Conn.", "Penna.", "N. H.", "Wis.") are
+        // the shared table every place reader uses (USPlaceNames); the
+        // word-like ones ("Del.", "Mont.") are NOT aliases — they match
+        // only through the case rule in `classify`.
+        for (alias, name) in USPlaceNames.writtenForms { unit(.unitedStates, name, [alias]) }
         unit(.unitedStates, "Massachusetts", ["Massachusetts Bay Colony", "Massachusetts Bay", "Province of Massachusetts Bay",
                                               "Colony of Massachusetts Bay", "Plymouth Colony", "Plimoth Colony",
                                               "Plymouth Plantation", "New Plymouth", "Colony of New Plymouth",

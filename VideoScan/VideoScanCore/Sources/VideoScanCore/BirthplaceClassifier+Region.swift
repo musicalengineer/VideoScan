@@ -89,20 +89,32 @@ extension BirthplaceClassifier {
         case none
     }
 
-    /// One component, whole first; failing that its whitespace tokens from
-    /// the right ("Mass. U.S.A." → "U.S.A." coarse, then "Mass." fine).
+    /// One component, whole first; failing that its whitespace PHRASES
+    /// from the right, longest first at each position ("Mass. U.S.A." →
+    /// "U.S.A." coarse, then "Mass." fine). Phrases, not single tokens, so
+    /// "Sydney New South Wales" is New South Wales — never its last word
+    /// "Wales" (generated-input F3) — and "Derry New Hampshire" is New
+    /// Hampshire. The same scan as BirthplaceUnitResolver's.
     private static func regionOfComponent(_ component: String) -> ComponentRegion {
         let whole = regionOfToken(component)
         if case .none = whole {} else { return whole }
         let tokens = component.split(whereSeparator: { $0.isWhitespace }).map(String.init)
         guard tokens.count > 1 else { return .none }
         var coarse: ComponentRegion = .none
-        for token in tokens.reversed() {
-            switch regionOfToken(token) {
-            case .fine(let r): return .fine(r)
-            case .coarse(let r): if case .none = coarse { coarse = .coarse(r) }
-            case .none: continue
+        var end = tokens.count
+        while end > 0 {
+            var consumed = 1
+            // The whole component (length == tokens.count) was tried above.
+            for length in stride(from: min(4, end), through: 1, by: -1) where length < tokens.count {
+                let phrase = regionOfToken(tokens[(end - length)..<end].joined(separator: " "))
+                if case .fine(let r) = phrase { return .fine(r) }
+                if case .coarse(let r) = phrase {
+                    if case .none = coarse { coarse = .coarse(r) }
+                    consumed = length
+                    break
+                }
             }
+            end -= consumed
         }
         return coarse
     }
@@ -116,13 +128,12 @@ extension BirthplaceClassifier {
         if coarseUS.contains(key) { return .coarse(.unitedStatesUnspecified) }
         if coarseOther.contains(key) { return .coarse(.other) }
         if elsewhere.contains(key) { return .fine(.other) }
-        // Two-letter postal forms: upper-case, or Capitalised with a period
-        // ("Ma." is not a word here; "me" in lower case is) — the
-        // classifier's own rule, reused.
-        let trimmed = recorded.trimmingCharacters(in: .whitespaces)
-        if usAbbreviation(trimmed) {
-            let letters = trimmed.filter { $0.isLetter }.uppercased()
-            return .fine(newEnglandPostal.contains(letters) ? .newEngland : .restOfUS)
+        // A state in any spelling the shared reader knows: full names,
+        // the old written forms ("Penn.", "Ind.", "N. H."), and the postal
+        // codes under the case rule ("Ma." yes; "me" in lower case is a
+        // word) — generated-input F1/F4.
+        if let state = USPlaceNames.stateName(recorded: recorded) {
+            return .fine(USPlaceNames.newEnglandStates.contains(state) ? .newEngland : .restOfUS)
         }
         if usStates.contains(key) { return .fine(.restOfUS) }
         if canadianProvinces.contains(key) { return .fine(.canada) }
@@ -134,8 +145,6 @@ extension BirthplaceClassifier {
         }
         return .none
     }
-
-    static let newEnglandPostal: Set<String> = ["CT", "MA", "ME", "NH", "RI", "VT"]
 
     /// Normalized key → a FINE region. Colonial spellings included.
     static let regionTable: [String: BirthRegion] = {
@@ -162,7 +171,7 @@ extension BirthplaceClassifier {
         // "Inglaterra", "Angleterre", "Schotland" …).
         add(["england", "old england", "kingdom of england", "eng", "engl",
              "inglaterra", "angleterre", "engeland", "england uk", "inghilterra"], .england)
-        add(["ireland", "eire", "republic of ireland", "irish free state", "northern ireland",
+        add(["ireland", "eire", "republic of ireland", "irish free state", "northern ireland", "ire",
              "kingdom of ireland", "irlanda", "irlande", "ierland", "irland"], .ireland)
         add(["scotland", "kingdom of scotland", "scot", "schotland", "escocia", "ecosse", "schottland", "scozia"], .scotland)
         add(["wales", "cymru", "gales", "pays de galles"], .wales)
