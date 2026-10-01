@@ -7,8 +7,10 @@ fingerprint, and keeps exactly one GitHub issue per fingerprint.
 
 Inputs: the actions/download-artifact layout, one directory per artifact.
   codeql-results/*.sarif                    CodeQL (security-and-quality)
-  strict-concurrency-log/all-warnings.txt   swiftc strict concurrency and
-                                            strict memory safety warnings
+  strict-concurrency-log/all-warnings.txt   swiftc strict concurrency warnings
+  strict-concurrency-log/memory-safety-findings.txt
+                                            swiftc -strict-memory-safety
+                                            (SE-0458), its own build
   tsan-log/*.log                            Thread Sanitizer
   sanitizer-address/*.log                   Address Sanitizer
   sanitizer-undefined/*.log                 Undefined Behavior Sanitizer
@@ -80,13 +82,14 @@ DEFAULT_CAP = 10
 MARKER_RE = re.compile(r"<!--\s*nightly-finding\s+(\{.*?\})\s*-->", re.S)
 DIGEST_MARKER_RE = re.compile(r"<!--\s*nightly-findings-digest\s+(\{.*?\})\s*-->", re.S)
 
-TOOLS = ("codeql", "strict-concurrency", "tsan", "asan", "ubsan", "periphery")
+TOOLS = ("codeql", "strict-concurrency", "memory-safety", "tsan", "asan", "ubsan", "periphery")
 SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
 LABEL_COLORS = {
     BASE_LABEL: ("5319e7", "Filed by the nightly static analysis (tools/nightly_findings_to_issues.py)"),
     DIGEST_LABEL: ("bfd4f2", "Nightly overflow digest: findings waiting for their own issue"),
     "codeql": ("1d76db", "CodeQL finding"),
-    "strict-concurrency": ("0e8a16", "Swift strict concurrency / memory safety warning"),
+    "strict-concurrency": ("0e8a16", "Swift strict concurrency warning"),
+    "memory-safety": ("fbca04", "Swift strict memory safety (SE-0458) warning"),
     "tsan": ("b60205", "Thread Sanitizer report"),
     "asan": ("b60205", "Address Sanitizer report"),
     "ubsan": ("d93f0b", "Undefined Behavior Sanitizer report"),
@@ -294,13 +297,21 @@ def classify_compiler_warning(msg: str) -> tuple[str, str] | None:
     if _PERF.search(msg):
         return None
     if _MEMSAFE.search(msg):
-        return "memory-safety", "medium"
+        # Low: SE-0458 flags every unsafe construct not ACKNOWLEDGED with
+        # `unsafe` (1,590 sites on 2026-10-01). That is annotation debt, the
+        # same class as lint, not a demonstrated memory error. ASan is the
+        # tool that finds real ones, and it is high.
+        return "memory-safety", "low"
     if _CONCURRENCY.search(msg):
         return "concurrency", ("high" if "data race" in msg.lower() else "medium")
     return "upcoming-feature-or-other", "low"
 
 
-def parse_compiler_warnings(path: Path, workspace: str | None) -> list[Finding]:
+def parse_compiler_warnings(path: Path, workspace: str | None,
+                            tool: str = "strict-concurrency") -> list[Finding]:
+    """`tool` = "memory-safety" keeps only SE-0458 lines, from the separate
+    -strict-memory-safety build. "strict-concurrency" drops them, so a
+    memory-safety line never lives under two tools."""
     out: list[Finding] = []
     seen: set[str] = set()
     for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -312,7 +323,9 @@ def parse_compiler_warnings(path: Path, workspace: str | None) -> list[Finding]:
         if cls is None:
             continue
         rule, sev = cls
-        out.append(Finding("strict-concurrency", rule, relativise(m.group("path"), workspace),
+        if (rule == "memory-safety") != (tool == "memory-safety"):
+            continue
+        out.append(Finding(tool, rule, relativise(m.group("path"), workspace),
                            int(m.group("line")), m.group("msg"), sev))
     return out
 
@@ -428,6 +441,8 @@ def collect(artifacts: Path, job_results: dict[str, str], workspace: str | None)
         "codeql": (files("codeql-results", "*.sarif"), parse_sarif),
         "strict-concurrency": (files("strict-concurrency-log", "all-warnings.txt"),
                                lambda p: parse_compiler_warnings(p, workspace)),
+        "memory-safety": (files("strict-concurrency-log", "memory-safety-findings.txt"),
+                          lambda p: parse_compiler_warnings(p, workspace, "memory-safety")),
         "tsan": (files("tsan-log", "*.log"), lambda p: parse_sanitizer_log(p, "tsan", workspace)),
         "asan": (files("sanitizer-address", "*.log"), lambda p: parse_sanitizer_log(p, "asan", workspace)),
         "ubsan": (files("sanitizer-undefined", "*.log"), lambda p: parse_sanitizer_log(p, "ubsan", workspace)),

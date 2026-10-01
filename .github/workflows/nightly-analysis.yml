@@ -94,6 +94,7 @@ jobs:
       # not the job: the type-check ratchet below can fail the job on a slow
       # new function while the warning list is still whole.
       build_outcome: ${{ steps.build.outcome }}
+      memsafe_outcome: ${{ steps.memsafe_build.outcome }}
       typecheck_identities: ${{ steps.typecheck.outputs.typecheck_identities }}
       typecheck_new_slow: ${{ steps.typecheck.outputs.typecheck_new_over_threshold }}
       typecheck_saturated: ${{ steps.typecheck.outputs.typecheck_saturated }}
@@ -156,8 +157,6 @@ jobs:
 
       - name: Build with strict concurrency + all upcoming features + perf warnings
         id: build
-        env:
-          MEMSAFE_FLAG: ${{ steps.memsafe.outputs.flag }}
         run: |
           set -o pipefail
           # Every Swift "upcoming feature" we can flip on as a warning.
@@ -188,9 +187,7 @@ jobs:
           PERF_FLAGS=" -Xfrontend -warn-long-function-bodies=100 -Xfrontend -warn-long-expression-type-checking=100"
           # Concurrency reporting flags.
           CONCUR_FLAGS=" -Xfrontend -warn-concurrency -Xfrontend -enable-actor-data-race-checks"
-          # Strict memory safety, only when the probe above accepted it.
-          MEMSAFE_FLAGS=""
-          if [ -n "$MEMSAFE_FLAG" ]; then MEMSAFE_FLAGS=" $MEMSAFE_FLAG"; fi
+          # -strict-memory-safety is deliberately NOT here; see the next step.
 
           xcodebuild build \
             -project VideoScan/VideoScan.xcodeproj \
@@ -202,29 +199,65 @@ jobs:
             EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
             ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
             SWIFT_STRICT_CONCURRENCY=complete \
-            OTHER_SWIFT_FLAGS="\$(inherited)$CONCUR_FLAGS$UPCOMING_FLAGS$PERF_FLAGS$MEMSAFE_FLAGS" \
+            OTHER_SWIFT_FLAGS="\$(inherited)$CONCUR_FLAGS$UPCOMING_FLAGS$PERF_FLAGS" \
             2>&1 | tee strict-concurrency.log
           if grep -q "BUILD FAILED" strict-concurrency.log; then
             echo "::error::Build itself failed (not a warning issue) — see log"
             exit 1
           fi
 
+      # Strict memory safety gets its OWN build (2026-10-01, validation run
+      # 36934781080). Folded into the build above, it added 1,590 warnings
+      # and moved the type-check timings the ratchet below gates on: median
+      # +12% over 126 shared functions, 148 → 168 slow identities, and one
+      # function (personCardEntry, 340 → 505 ms) tripped the 500 ms gate.
+      # The timing baseline was measured without the flag; keeping that
+      # build unchanged keeps the trend honest. Costs ~8 extra runner
+      # minutes. Reporting only: continue-on-error, and its outcome is
+      # passed to the findings job as the memory-safety tool's completeness.
+      - name: Build with strict memory safety (SE-0458), warnings only
+        id: memsafe_build
+        if: steps.build.outcome == 'success' && steps.memsafe.outputs.flag != ''
+        continue-on-error: true
+        run: |
+          # Outcome = whether the build finished (grep on the last line),
+          # not xcodebuild's exit code, which `|| true` absorbs.
+          xcodebuild build \
+            -project VideoScan/VideoScan.xcodeproj \
+            -scheme VideoScan \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath memsafe-dd \
+            CODE_SIGNING_ALLOWED=NO \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
+            EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            OTHER_SWIFT_FLAGS="\$(inherited) -strict-memory-safety" \
+            > memsafe-build.log 2>&1 || true
+          tail -5 memsafe-build.log
+          grep -q "BUILD SUCCEEDED" memsafe-build.log
+
       - name: Count + summarise findings
         id: count
         if: always()
         env:
           MEMSAFE_SUPPORTED: ${{ steps.memsafe.outputs.supported }}
+          MEMSAFE_BUILD: ${{ steps.memsafe_build.outcome }}
         run: |
           # SE-0458 diagnostics carry the [#StrictMemorySafety] group tag in
-          # Swift 6.2; the phrase alternatives are a fallback in case a
-          # toolchain prints them without the tag. Memory-safety lines are
-          # pulled out FIRST, so they never inflate the concurrency or other
-          # buckets.
+          # Swift 6.2.4 (seen on the runner 2026-10-01); the phrase
+          # alternatives are a fallback for a toolchain that omits the tag.
+          # They come from the separate memory-safety build, and are also
+          # excluded from this build's buckets in case they ever appear here.
           MS_RE="\[#StrictMemorySafety\]|unsafe constructs|involves unsafe|not marked with 'unsafe'|@unsafe"
           CONC_RE='(sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable)'
+          if [ -f memsafe-build.log ]; then
+            grep -E ': warning: ' memsafe-build.log | grep -E "$MS_RE" | sort -u > memory-safety-findings.txt || true
+          else
+            : > memory-safety-findings.txt
+          fi
           if [ -f strict-concurrency.log ]; then
             grep -E ': warning: ' strict-concurrency.log | sort -u > all-warnings.txt || true
-            grep -E "$MS_RE" all-warnings.txt > memory-safety-findings.txt || true
             grep -E "$CONC_RE" all-warnings.txt | grep -Ev "$MS_RE" > concurrency-findings.txt || true
             # Match the WARNING TEXT, not the flag name. The old pattern
             # ('warn-long-function-bodies') never appears in compiler output,
@@ -237,7 +270,7 @@ jobs:
             # not on the runner), so pull it out of the raw log separately.
             grep -E 'unable to type-check this expression in reasonable time' strict-concurrency.log | sort -u > typecheck-saturated.txt || true
           else
-            : > all-warnings.txt; : > concurrency-findings.txt; : > perf-findings.txt; : > other-findings.txt; : > typecheck-saturated.txt; : > memory-safety-findings.txt
+            : > all-warnings.txt; : > concurrency-findings.txt; : > perf-findings.txt; : > other-findings.txt; : > typecheck-saturated.txt
           fi
 
           C_COUNT=$(wc -l < concurrency-findings.txt | tr -d ' ')
@@ -247,13 +280,13 @@ jobs:
           TOTAL=$(wc -l < all-warnings.txt | tr -d ' ')
           echo "warnings=$TOTAL" >> "$GITHUB_OUTPUT"
           echo "concurrency=$C_COUNT" >> "$GITHUB_OUTPUT"
-          # Not a number when the flag was not in effect: a 0 would claim
-          # "no unsafe code", which nobody measured.
-          if [ "$MEMSAFE_SUPPORTED" = "yes" ]; then
+          # Not a number unless the flag was live AND its build finished: a 0
+          # would claim "no unsafe code", which nobody measured.
+          if [ "$MEMSAFE_SUPPORTED" = "yes" ] && [ "$MEMSAFE_BUILD" = "success" ]; then
             echo "memory_safety=$M_COUNT" >> "$GITHUB_OUTPUT"
             M_CELL="$M_COUNT"
           else
-            M_CELL="n/a (flag ${MEMSAFE_SUPPORTED:-not probed})"
+            M_CELL="n/a (flag ${MEMSAFE_SUPPORTED:-not probed}, build ${MEMSAFE_BUILD:-skipped})"
           fi
 
           {
@@ -1166,6 +1199,7 @@ jobs:
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             --job-result "codeql=${{ needs.codeql.result }}" \
             --job-result "strict-concurrency=${{ needs.strict-concurrency.outputs.build_outcome || 'skipped' }}" \
+            --job-result "memory-safety=${{ needs.strict-concurrency.outputs.memsafe_outcome || 'skipped' }}" \
             --job-result "tsan=${{ needs.thread-sanitizer.result }}" \
             --job-result "asan=${{ needs.sanitizers.result }}" \
             --job-result "ubsan=${{ needs.sanitizers.result }}" \

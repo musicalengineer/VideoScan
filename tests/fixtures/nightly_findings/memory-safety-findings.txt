@@ -1,0 +1,4 @@
+/Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/Media/FrameDecoder.swift:57:13: warning: expression uses unsafe constructs but is not marked with 'unsafe' [#StrictMemorySafety]
+/Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/Media/FrameDecoder.swift:91:13: warning: expression uses unsafe constructs but is not marked with 'unsafe' [#StrictMemorySafety]
+/Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScanCore/Sources/VideoScanCore/ArchiveFixity.swift:77:13: warning: expression uses unsafe constructs but is not marked with 'unsafe' [#StrictMemorySafety]
+@__swiftmacro_9VideoScan16ExclusivePublishO11linkSyscall9TaskLocalfMp_.swift:2:9: warning: expression uses unsafe constructs but is not marked with 'unsafe' [#StrictMemorySafety]

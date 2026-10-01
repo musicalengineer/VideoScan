@@ -177,11 +177,23 @@ class TestParsersAndSeverity:
         assert sev[("ArchiveAngelJob.swift", "concurrency")] == "high"          # "data race"
         assert sev[("ContentView.swift", "concurrency")] == "medium"           # actor isolation
         assert sev[("BundleModels.swift", "upcoming-feature-or-other")] == "low"
-        assert sev[("ArchiveFixity.swift", "memory-safety")] == "medium"
         assert sev[("Globals.swift", "concurrency")] == "medium"
         # Type-check timing lines are owned by typecheck_timing_ratchet.py.
         assert not any("type-check" in f.message for f in fs)
-        assert len(fs) == 6 and len(groups) == 5
+        # A memory-safety line belongs to the memory-safety tool, never here.
+        assert not any(g.rule == "memory-safety" for g in groups.values())
+        assert len(fs) == 5 and len(groups) == 4
+
+    def test_memory_safety_is_its_own_low_severity_tool(self):
+        fs = nf.parse_compiler_warnings(FIX / "memory-safety-findings.txt", None, "memory-safety")
+        groups = nf.group_findings(fs)
+        assert {g.tool for g in groups.values()} == {"memory-safety"}
+        assert {g.severity for g in groups.values()} == {"low"}
+        # Two FrameDecoder lines -> one fingerprint; the macro-expansion
+        # buffer (no real path) is skipped.
+        assert len(fs) == 3 and len(groups) == 2
+        # The same file through the strict-concurrency parser yields nothing.
+        assert nf.parse_compiler_warnings(FIX / "memory-safety-findings.txt", None) == []
 
     def test_tsan_and_asan_are_high_ubsan_medium(self):
         tsan = nf.group_findings(nf.parse_sanitizer_log(FIX / "tsan.log", "tsan", None))
@@ -393,6 +405,8 @@ def make_artifacts(tmp: Path, *, codeql_status: bool | None = None) -> Path:
     shutil.copy(FIX / "codeql.sarif", art / "codeql-results" / "swift.sarif")
     (art / "strict-concurrency-log").mkdir()
     shutil.copy(FIX / "all-warnings.txt", art / "strict-concurrency-log" / "all-warnings.txt")
+    shutil.copy(FIX / "memory-safety-findings.txt",
+                art / "strict-concurrency-log" / "memory-safety-findings.txt")
     (art / "tsan-log").mkdir()
     shutil.copy(FIX / "tsan.log", art / "tsan-log" / "tsan.log")
     (art / "sanitizer-address").mkdir()
@@ -422,12 +436,12 @@ class TestEndToEnd:
         assert rc == 0
         s = json.loads(out.read_text())
         fps = {t: v["fingerprints"] for t, v in s["tools"].items()}
-        assert fps == {"codeql": 3, "strict-concurrency": 5, "tsan": 2, "asan": 1,
-                       "ubsan": 2, "periphery": 3}
-        assert s["fingerprints"] == 16
+        assert fps == {"codeql": 3, "strict-concurrency": 4, "memory-safety": 2, "tsan": 2,
+                       "asan": 1, "ubsan": 2, "periphery": 3}
+        assert s["fingerprints"] == 17
         # high: codeql cleartext, strict data race, 2x tsan, asan
         assert s["by_severity"]["high"] == 5 and len(s["new_high"]) == 5
-        assert s["opened_or_reopened"] == 10 and s["overflow"] == 6
+        assert s["opened_or_reopened"] == 10 and s["overflow"] == 7
         assert all(it["issue"] for it in s["new_high"])            # highs go first
         assert "nightly-finding" in gh.labels and "asan" in gh.labels
 
