@@ -103,8 +103,9 @@ extension PersonOfTheDay {
 
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            let rows = (try? c.decodeIfPresent([LossyEntry].self, forKey: .entries)) ?? nil
-            version = ((try? c.decodeIfPresent(Int.self, forKey: .version)) ?? nil) ?? Self.currentVersion
+            // `try?` flattens Optional<Optional<T>> to Optional<T> (Swift 5).
+            let rows = try? c.decodeIfPresent([LossyEntry].self, forKey: .entries)
+            version = (try? c.decodeIfPresent(Int.self, forKey: .version)) ?? Self.currentVersion
             entries = Self.sanitize((rows ?? []).compactMap(\.entry), limit: Options().historyLimit)
         }
     }

@@ -376,7 +376,7 @@ public enum PersonOfTheDay {
     static func anniversary(of c: Candidate, on today: Day) -> Event? {
         var best: Event?
         for e in c.events where e.year < today.year && today.isAnniversary(month: e.month, day: e.day) {
-            if best == nil || rank(e.kind) < rank(best!.kind) { best = e }
+            if rank(e.kind) < (best.map { rank($0.kind) } ?? Int.max) { best = e }
         }
         return best
     }

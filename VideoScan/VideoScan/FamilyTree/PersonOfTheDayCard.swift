@@ -145,7 +145,7 @@ struct PersonOfTheDayPortrait: View {
                     .help(flag.tooltip)
                     .accessibilityLabel(flag.accessibilityLabel)
             } else {
-                Image(systemName: sex.uppercased() == "" ? "person.crop.circle.dashed" : "person.fill")
+                Image(systemName: sex.isEmpty ? "person.crop.circle.dashed" : "person.fill")
                     .font(.system(size: side * 0.45, weight: .medium))
                     .foregroundStyle(accent)
             }

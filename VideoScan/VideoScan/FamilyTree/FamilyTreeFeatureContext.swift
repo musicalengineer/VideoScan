@@ -80,7 +80,7 @@ struct FamilyTreeFeatureContext: Sendable {
         guard let d = decorations[id] else { return nil }
         var best: (gen: Int, who: Int)?
         if let g = d.generationFromFirst, g > 0 { best = (g, 0) }
-        if let g = d.generationFromSecond, g > 0, best == nil || g < best!.gen { best = (g, 1) }
+        if let g = d.generationFromSecond, g > 0, g < (best?.gen ?? Int.max) { best = (g, 1) }
         guard let best, let label = d.relationLabel(generations: best.gen) else { return nil }
         let who = displayNames.indices.contains(best.who) ? displayNames[best.who] : nil
         return who.map { "\($0)'s \(label)" } ?? label
