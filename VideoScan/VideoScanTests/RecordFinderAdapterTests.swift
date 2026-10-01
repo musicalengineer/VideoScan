@@ -24,8 +24,9 @@ import VideoScanCore
 //
 // No live network anywhere in this file.
 
-private let fetched = ISO8601DateFormatter().date(from: "2026-10-01T14:00:00Z")!
-private let now = ISO8601DateFormatter().date(from: "2026-10-01T15:00:00Z")!
+/// 2026-10-01 14:00 / 15:00 UTC.
+private let fetched = Date(timeIntervalSince1970: 1_790_863_200)
+private let now = Date(timeIntervalSince1970: 1_790_866_800)
 
 private func hints(surnames: [String] = ["Fenlane", "Fenlayne", "Fenlaine"],
                    born: Int? = 1878, died: Int? = 1935, irish: Bool = true,
@@ -210,7 +211,7 @@ struct IrishCensusAdapterTests {
         #expect(try await IrishCensusSource(fetcher: f, hints: hints(irish: false)).search(plan: plan).isEmpty)
         #expect(try await IrishCensusSource(fetcher: f, hints: hints(born: 1820, died: 1890)).search(plan: plan).isEmpty)
         #expect(try await IrishCensusSource(fetcher: f, hints: hints(surnames: [])).search(plan: plan).isEmpty)
-        #expect(recorder.count == 0)
+        #expect(recorder.urls.isEmpty)
         #expect(IrishCensusSource.plausibleYears(birth: 1905, death: nil) == [1911])
         #expect(IrishCensusSource.plausibleYears(birth: nil, death: 1905) == [1901])
     }
@@ -355,7 +356,7 @@ struct RecordFinderIsolationTests {
         let soldier = try subject("@I1@")
         let sources = ResearchRunner.sources(fetcher: anything, subject: soldier)
         _ = await ResearchRunner.run(plan: ResearchQueryPlan.build(subject: soldier, now: now), sources: sources)
-        #expect(recorder.count > 0)
+        #expect(!recorder.urls.isEmpty)
         #expect(!recorder.urls.contains { $0.lowercased().contains("findagrave") })
         #expect(!sources.contains { $0.kind == .findAGrave })
         // Every request goes to a host this feature is allowed to ask.

@@ -284,22 +284,6 @@ struct IrishCensusSource: ResearchSource {
         var title = "Census \(year) — " + [first, surname].compactMap { $0 }.joined(separator: " ")
         if let age { title += ", age \(age)" }
 
-        var parts: [String] = []
-        if let relation = text("relation_to_head") { parts.append(relation) }
-        if let age { parts.append("age \(age)") }
-        if let birthplace = text("birthplace") { parts.append("born \(birthplace)") }
-        if let occupation = text("occupation") { parts.append(occupation) }
-        if let religion = text("religion") { parts.append(religion) }
-        if let status = text("marriage_status") { parts.append(status) }
-        let address = [[text("house_number"), townland].compactMap { $0 }.joined(separator: " "),
-                       ded ?? "", county.map { "Co. \($0)" } ?? ""]
-            .filter { !$0.isEmpty }.joined(separator: ", ")
-        if !address.isEmpty { parts.append(address) }
-        if let images = row["images"] as? [[String: Any]],
-           let firstImage = images.first, let path = firstImage["url"] as? String, path.hasPrefix("/") {
-            parts.append("household form: \(imageBase)\(path)")
-        }
-
         // The finding opens the public results page narrowed to this
         // household; the fragment keeps two people of one name in one
         // townland (father and son) as two findings.
@@ -312,8 +296,29 @@ struct IrishCensusSource: ResearchSource {
             + "#nai-\(RecordFinder.encode(id))"
 
         return ResearchFinding(source: .irishCensus, title: title, date: String(year),
-                               excerpt: parts.joined(separator: " · "), url: url,
+                               excerpt: excerpt(row: row, age: age), url: url,
                                retrievedAt: retrievedAt)
+    }
+
+    /// "Wife · age 33 · born Co Cork · Seamstress · … · 4 Main St, DED, Co.
+    /// Cork · household form: <pdf>" — whatever fields the row has.
+    static func excerpt(row: [String: Any], age: Int?) -> String {
+        func text(_ key: String) -> String? {
+            let value = (row[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return value.isEmpty ? nil : value
+        }
+        var parts: [String] = [text("relation_to_head"), age.map { "age \($0)" },
+                               text("birthplace").map { "born \($0)" }, text("occupation"),
+                               text("religion"), text("marriage_status")].compactMap { $0 }
+        let address = [[text("house_number"), text("townland")].compactMap { $0 }.joined(separator: " "),
+                       text("ded") ?? "", text("county").map { "Co. \($0)" } ?? ""]
+            .filter { !$0.isEmpty }.joined(separator: ", ")
+        if !address.isEmpty { parts.append(address) }
+        if let images = row["images"] as? [[String: Any]],
+           let firstImage = images.first, let path = firstImage["url"] as? String, path.hasPrefix("/") {
+            parts.append("household form: \(imageBase)\(path)")
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
