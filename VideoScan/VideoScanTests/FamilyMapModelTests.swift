@@ -560,22 +560,22 @@ struct FamilyMapModelTests {
             CyberBrainPerson(id: "person.mary", gedcomPersonID: "@I7@", canonicalName: "Mary Christina O'Connor",
                              anecdotes: [item("anec.mary", .anecdote, "She was born a storyteller, they said in Boston.", person: "person.mary", place: "Boston, Massachusetts")],
                              lifeEvents: [
-                                item("event.mary.wrong", .event, "Born in Dublin.", person: "person.mary", place: "Dublin, Ireland",
+                                item("event.mary.wrong", .event, "Mary Christina O'Connor was born in Dublin.", person: "person.mary", place: "Dublin, Ireland",
                                      status: .retracted,
                                      correction: .init(action: .removed, reason: .wrongInformation, at: now, by: "Rick")),
-                                item("event.mary.birth", .event, "Born 1 January 1900 at 1 Example Lane, Cork; birth certificate in the archive.",
+                                item("event.mary.birth", .event, "Mary Christina O'Connor was born 1 January 1900 at 1 Example Lane, Cork; birth certificate in the archive.",
                                      person: "person.mary", place: "Cork, Ireland"),
                              ]),
             // Richard Sr: the tree says Fife; the family's note says Cork. The tree wins.
             CyberBrainPerson(id: "person.richard", gedcomPersonID: "@I3@", canonicalName: "Richard Harding Breen Sr",
-                             lifeEvents: [item("event.richard.birth", .event, "Born in Cork, the family says.", person: "person.richard", place: "Cork, Ireland")]),
+                             lifeEvents: [item("event.richard.birth", .event, "Richard Harding Breen Sr was born in Cork, the family says.", person: "person.richard", place: "Cork, Ireland")]),
             // Eileen: the tree's Berlin is off the map; the family's note places her.
             CyberBrainPerson(id: "person.eileen", gedcomPersonID: "@I4@", canonicalName: "Eileen Latta",
-                             lifeEvents: [item("event.eileen.birth", .event, "Her birth was registered in Yorkshire.", person: "person.eileen", place: "Leeds, Yorkshire, England")]),
+                             lifeEvents: [item("event.eileen.birth", .event, "Eileen Latta was born in Yorkshire; her birth was registered there.", person: "person.eileen", place: "Leeds, Yorkshire, England")]),
             // Patrick: matched by NAME (no GEDCOM link); a disputed birthplace
             // never places anyone (its counter-claim is a note with no place).
             CyberBrainPerson(id: "person.patrick", canonicalName: "Patrick O'Connor",
-                             lifeEvents: [item("event.patrick.birth", .event, "Born in Kerry — or Cork; the family disagrees.",
+                             lifeEvents: [item("event.patrick.birth", .event, "Patrick O'Connor was born in Kerry — or Cork; the family disagrees.",
                                                person: "person.patrick", place: "Kerry, Ireland", confidence: .disputed,
                                                disputes: ["note.patrick.counter"])],
                              notes: [item("note.patrick.counter", .note, "Uncle Dan always said Cork, not Kerry.", person: "person.patrick", place: nil)]),
@@ -595,7 +595,10 @@ struct FamilyMapModelTests {
         #expect(FamilyMapModel.familyBirthPlace(gedcomID: "@I1@", in: knowledge) == nil, "no notes at all")
         let anyone = CyberBrainPerson(id: "p", canonicalName: "Test Person")
         #expect(FamilyMapModel.isOwnBirthEvent(item("x", .event, "Married Jane Osborne at Birthdale.", person: "p", place: nil), of: anyone) == false, "whole words only")
-        #expect(FamilyMapModel.isOwnBirthEvent(item("x", .event, "BIRTH registered late.", person: "p", place: nil), of: anyone))
+        #expect(FamilyMapModel.isOwnBirthEvent(item("x", .event, "BIRTH registered late.", person: "p", place: nil), of: anyone) == false,
+                "#235: an opener does not say whose birth it is")
+        #expect(FamilyMapModel.isOwnBirthEvent(item("x", .event, "Test Person was born late.", person: "p", place: nil), of: anyone),
+                "her own name, then 'was born'")
 
         // Through the real pipeline with the knowledge injected.
         let r = try TreeWalk.walk(g, options: .init(starts: ["@I1@"]))
@@ -660,7 +663,7 @@ struct FamilyMapModelTests {
         let now = Date(timeIntervalSince1970: 1_790_000_000)
         func knowledge(privacy: CyberBrainItem.Privacy) throws -> FamilyTreeNotesResolver {
             let item = CyberBrainItem(id: "event.mary.birth", kind: .event,
-                                      text: "Born 1 January 1900 at 1 Example Lane, Cork.", subjectPersonIDs: ["person.mary"],
+                                      text: "Mary Christina O'Connor was born 1 January 1900 at 1 Example Lane, Cork.", subjectPersonIDs: ["person.mary"],
                                       place: "Cork, Ireland", sourceIDs: ["source.bc"], confidence: .confirmed, privacy: privacy,
                                       status: .active, disputesItemIDs: [], createdAt: now, updatedAt: now, correction: nil)
             let archive = CyberBrainArchive(archiveID: "test.map.privacy", displayName: "Test", people: [
@@ -708,7 +711,7 @@ struct FamilyMapModelTests {
         let now = Date(timeIntervalSince1970: 1_790_000_000)
         func knowledge(privacy: CyberBrainItem.Privacy) throws -> FamilyTreeNotesResolver {
             let item = CyberBrainItem(id: "event.mary.birth", kind: .event,
-                                      text: "Born 1 January 1900 at 1 Example Lane, Cork.", subjectPersonIDs: ["person.mary"],
+                                      text: "Mary Christina O'Connor was born 1 January 1900 at 1 Example Lane, Cork.", subjectPersonIDs: ["person.mary"],
                                       place: "Cork, Ireland", sourceIDs: ["source.bc"], confidence: .confirmed, privacy: privacy,
                                       status: .active, disputesItemIDs: [], createdAt: now, updatedAt: now, correction: nil)
             let archive = CyberBrainArchive(archiveID: "test.map.privacy", displayName: "Test", people: [
