@@ -21,12 +21,19 @@ ATTRIBUTION = RESOURCES / "ATTRIBUTION.txt"
 SCRIPT = ROOT / "scripts" / "build_family_map_units.py"
 
 MAX_BYTES = 1_500_000
-COUNTRIES = {"ENG", "SCT", "WLS", "NIR", "IRL", "USA", "CAN"}
-KINDS = {"county", "state", "province", "country"}
+# Size sensor for the Western Europe stage (2026-09-30): 754 KB before,
+# 916 KB after (937,746 bytes).  A rebuild that grows the file by more than
+# ~10% without a decision trips this, well before the 1.5 MB design ceiling.
+EXPECTED_BYTES_CEILING = 1_030_000
+EXPECTED_FEATURES = 254
+EUROPE = {"FRA", "DEU", "NLD", "BEL", "LUX", "CHE", "AUT", "DNK", "NOR", "SWE", "ITA", "ESP", "PRT"}
+COUNTRIES = {"ENG", "SCT", "WLS", "NIR", "IRL", "USA", "CAN"} | EUROPE
+KINDS = {"county", "state", "province", "region", "country"}
 # Sane per-country longitude/latitude windows (lon_min, lon_max, lat_min, lat_max).
 # The USA outline's far-Aleutian pieces sit east of the antimeridian
 # (lon 165..180 in the source) and are kept as separate pieces, so the USA
-# window is the union of two lon ranges.
+# window is the union of two lon ranges.  Spain keeps the Canaries and
+# Portugal the Azores and Madeira (Atlantic), so their windows reach west.
 BBOX = {
     "USA": (-180.0, -50.0, 15.0, 75.0),
     "CAN": (-145.0, -50.0, 40.0, 84.0),
@@ -35,6 +42,19 @@ BBOX = {
     "WLS": (-11.0, 2.0, 49.0, 61.0),
     "NIR": (-11.0, 2.0, 49.0, 61.0),
     "IRL": (-11.0, 2.0, 49.0, 61.0),
+    "FRA": (-6.0, 10.0, 41.0, 51.5),     # metropolitan France + Corsica, no overseas départements
+    "DEU": (5.5, 15.5, 47.0, 55.5),
+    "NLD": (3.0, 7.5, 50.5, 54.0),       # the European Netherlands only
+    "BEL": (2.4, 6.5, 49.4, 51.6),
+    "LUX": (5.6, 6.6, 49.4, 50.3),
+    "CHE": (5.9, 10.6, 45.7, 47.9),
+    "AUT": (9.4, 17.2, 46.3, 49.1),
+    "DNK": (8.0, 15.3, 54.5, 57.9),
+    "NOR": (4.0, 31.5, 57.8, 71.5),      # no Svalbard / Jan Mayen
+    "SWE": (10.9, 24.3, 55.2, 69.2),
+    "ITA": (6.5, 18.6, 35.4, 47.2),
+    "ESP": (-18.5, 4.4, 27.5, 44.0),
+    "PRT": (-31.5, -6.1, 32.5, 42.2),
 }
 
 # Design doc §1 spellings (synthetic list, no personal data).  Each must slug
@@ -92,6 +112,37 @@ PROBES = [
     # 1:50m Nova Scotia polygon even before simplification (the harbour
     # peninsula is below 1:50m resolution) — see the dedicated test below.
     ("Halifax NS airport, 10 km inland", 44.8808, -63.5086, "can-nova-scotia"),
+    # Western Europe (2026-09-30).
+    ("Paris", 48.8566, 2.3522, "fra-ile-de-france"),
+    ("Lyon", 45.7640, 4.8357, "fra-auvergne-rhone-alpes"),
+    ("Rouen", 49.4432, 1.0999, "fra-normandy"),
+    ("Bordeaux", 44.8378, -0.5792, "fra-nouvelle-aquitaine"),
+    ("Strasbourg", 48.5734, 7.7521, "fra-grand-est"),
+    ("Corte (inland Corsica)", 42.3061, 9.1497, "fra-corsica"),
+    ("Munich", 48.1351, 11.5820, "deu-bavaria"),
+    ("Stuttgart", 48.7758, 9.1829, "deu-baden-wurttemberg"),
+    ("Berlin (a hole in Brandenburg)", 52.5200, 13.4050, "deu-berlin"),
+    ("Potsdam", 52.3906, 13.0645, "deu-brandenburg"),
+    ("Mainz", 49.9929, 8.2473, "deu-rhineland-palatinate"),
+    ("Eindhoven", 51.4416, 5.4697, "nld-north-brabant"),
+    ("Haarlem", 52.3874, 4.6462, "nld-north-holland"),
+    ("Maastricht", 50.8514, 5.6910, "nld-limburg"),
+    ("Mons", 50.4542, 3.9567, "bel-hainaut"),
+    ("Ghent", 51.0543, 3.7174, "bel-east-flanders"),
+    ("Brussels", 50.8467, 4.3525, "bel-brussels"),
+    ("Hasselt", 50.9307, 5.3325, "bel-limburg"),
+]
+# Probes inside a country-only outline (no finer unit there).
+EUROPE_OUTLINE_PROBES = [
+    ("Luxembourg city", 49.6116, 6.1319, "lux"),
+    ("Zurich", 47.3769, 8.5417, "che"),
+    ("Vienna", 48.2082, 16.3738, "aut"),
+    ("Silkeborg (inland Jutland)", 56.1697, 9.5451, "dnk"),
+    ("Oslo", 59.9139, 10.7522, "nor"),
+    ("Örebro (inland)", 59.2753, 15.2134, "swe"),
+    ("Florence", 43.7696, 11.2558, "ita"),
+    ("Madrid", 40.4168, -3.7038, "esp"),
+    ("Lisbon-ish (inland)", 38.80, -9.10, "prt"),
 ]
 HALIFAX_WATERFRONT = (44.6488, -63.5752)
 
@@ -159,6 +210,15 @@ def test_files_exist_and_size_ceiling():
     assert GEOJSON.stat().st_size <= MAX_BYTES, f"{GEOJSON.stat().st_size:,} bytes > {MAX_BYTES:,}"
 
 
+def test_size_and_feature_count_sensor(features):
+    """Sensor (Western Europe stage): the asset's size and unit count are
+    pinned so a rebuild that changes either is a decision, not a drift.
+    Swift's FamilyMapBundledDataTests pins the same count."""
+    size = GEOJSON.stat().st_size
+    assert size <= EXPECTED_BYTES_CEILING, f"{size:,} bytes > sensor ceiling {EXPECTED_BYTES_CEILING:,}"
+    assert len(features) == EXPECTED_FEATURES
+
+
 def test_attribution_carries_required_acknowledgement():
     text = ATTRIBUTION.read_text(encoding="utf-8")
     assert "This mapping made use of data provided by the Historic County Borders Project." in text
@@ -211,7 +271,8 @@ def test_every_country_has_exactly_one_outline(features):
 
 def test_kind_matches_country(features):
     expected = {"ENG": "county", "SCT": "county", "WLS": "county", "NIR": "county",
-                "IRL": "county", "USA": "state", "CAN": "province"}
+                "IRL": "county", "USA": "state", "CAN": "province",
+                "FRA": "region", "DEU": "state", "NLD": "province", "BEL": "province"}
     for f in features:
         p = f["properties"]
         if p["kind"] != "country":
@@ -230,6 +291,38 @@ def test_layer_counts(features):
     assert counts[("IRL", "county")] == 26
     assert counts[("USA", "state")] == 51   # 50 states + District of Columbia
     assert counts[("CAN", "province")] == 13  # 10 provinces + 3 territories
+    assert counts[("FRA", "region")] == 13   # the 2016 metropolitan régions
+    assert counts[("DEU", "state")] == 16    # the Länder
+    assert counts[("NLD", "province")] == 12
+    assert counts[("BEL", "province")] == 11  # 10 provinces + Brussels-Capital
+    # Country-only: an outline and nothing finer.
+    for country in ("LUX", "CHE", "AUT", "DNK", "NOR", "SWE", "ITA", "ESP", "PRT"):
+        assert [k for (c, k) in counts if c == country] == ["country"], country
+
+
+def test_france_is_the_thirteen_current_regions_never_the_old_twenty_two(by_key):
+    """Sensor: the map draws the 2016 régions; the old ones (Rhône-Alpes,
+    Poitou-Charentes, Basse-Normandie …) exist only as resolver aliases that
+    fold into these keys.  If an old-région key ever appears, the rollup has
+    been bypassed."""
+    france = sorted(k for k in by_key if k.startswith("fra-"))
+    assert france == [
+        "fra-auvergne-rhone-alpes", "fra-bourgogne-franche-comte", "fra-brittany",
+        "fra-centre-val-de-loire", "fra-corsica", "fra-grand-est", "fra-hauts-de-france",
+        "fra-ile-de-france", "fra-normandy", "fra-nouvelle-aquitaine", "fra-occitania",
+        "fra-pays-de-la-loire", "fra-provence-alpes-cote-d-azur",
+    ]
+    for old in ("fra-rhone-alpes", "fra-auvergne", "fra-poitou-charentes", "fra-basse-normandie",
+                "fra-haute-normandie", "fra-centre", "fra-picardie", "fra-nord-pas-de-calais",
+                "fra-aquitaine", "fra-limousin", "fra-languedoc-roussillon", "fra-midi-pyrenees",
+                "fra-alsace", "fra-lorraine", "fra-champagne-ardenne", "fra-bourgogne", "fra-franche-comte"):
+        assert old not in by_key, old
+
+
+@pytest.mark.parametrize("label,lat,lon,expected", EUROPE_OUTLINE_PROBES, ids=[p[0] for p in EUROPE_OUTLINE_PROBES])
+def test_country_only_outline_probes(by_key, label, lat, lon, expected):
+    hits = sorted(key for key, f in by_key.items() if _unit_contains(f, lon, lat))
+    assert hits == [expected], f"{label}: expected [{expected}], got {hits}"
 
 
 # --------------------------------------------------------------------------
@@ -370,6 +463,11 @@ def test_slug_rules(script):
     assert script.slug("Dún Laoghaire–Rathdown") == "dun-laoghaire-rathdown"
     assert script.unit_key("ENG", "country", "England") == "eng"
     assert script.unit_key("IRL", "county", script.strip_county_prefix("County Cork")) == "irl-cork"
+    assert script.unit_key("FRA", "region", "Provence-Alpes-Côte d'Azur") == "fra-provence-alpes-cote-d-azur"
+    assert script.unit_key("DEU", "state", "Baden-Württemberg") == "deu-baden-wurttemberg"
+    assert script.unit_key("NLD", "province", "North Brabant") == "nld-north-brabant"
+    assert script.unit_key("BEL", "province", "Hainaut") == "bel-hainaut"
+    assert script.unit_key("LUX", "country", "Luxembourg") == "lux"
 
 
 def test_slug_parity_with_swift_on_undecomposable_letters(script):

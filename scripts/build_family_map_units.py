@@ -13,12 +13,16 @@ Sources (cached under --cache, never committed):
     ATTRIBUTION.txt).
   * Natural Earth (public domain) — 1:50m admin-1 for US states + DC and
     Canadian provinces/territories; 1:10m admin-1 for the counties of
-    Ireland; 1:50m admin-0 map subunits for the country outlines.
+    Ireland and for Western Europe's second level (the 13 French régions,
+    dissolved from the metropolitan départements; the 16 German Länder;
+    the 12 Dutch and the 10 Belgian provinces + Brussels); 1:50m admin-0
+    map subunits for the country outlines.
 
 Output contract (VideoScanCore MapUnits decodes exactly this):
   * FeatureCollection, WGS84, [lon, lat], Polygon or MultiPolygon, 6 dp.
-  * properties: key, name, country (ENG SCT WLS NIR IRL USA CAN),
-    kind (county state province country).
+  * properties: key, name, country (ENG SCT WLS NIR IRL USA CAN, and the
+    Western Europe stage FRA DEU NLD BEL LUX CHE AUT DNK NOR SWE ITA ESP
+    PRT), kind (county state province region country).
   * key = "<country lower>-<slug(name)>", or "<country lower>" for countries.
   * Features sorted by key; byte-stable across runs on the same downloads.
 
@@ -62,11 +66,13 @@ NE_50M_SUBUNITS = "ne_50m_admin_0_map_subunits.geojson"
 TOL_HISTORIC = 0.01   # degrees; Historic County Borders (1:5,000 source)
 TOL_IRELAND = 0.005   # degrees; NE 1:10m Ireland — 0.01 lost Galway city centre
 TOL_NE50 = 0.02       # degrees; Natural Earth 1:50m layers
+TOL_EUROPE = 0.02     # degrees; NE 1:10m Western Europe second level (≈ 2 km)
 DECIMALS = 6
 MIN_RING_POINTS = 4   # closed ring: 3 distinct + closing point
 
-COUNTRIES = ("ENG", "SCT", "WLS", "NIR", "IRL", "USA", "CAN")
-KINDS = ("county", "state", "province", "country")
+COUNTRIES = ("ENG", "SCT", "WLS", "NIR", "IRL", "USA", "CAN",
+             "FRA", "DEU", "NLD", "BEL", "LUX", "CHE", "AUT", "DNK", "NOR", "SWE", "ITA", "ESP", "PRT")
+KINDS = ("county", "state", "province", "region", "country")
 
 # Historic County Borders shapefile has NAME but no nation column.  The 92
 # historic counties (Historic Counties Standard) by nation; the build fails
@@ -113,15 +119,84 @@ IRELAND_EXPECTED_COUNTIES = 26
 
 US_CANADA_NAME_FIX = {"Québec": "Quebec"}
 
-# NE admin-0 map subunits: the USA outline is three subunits.
+# ---- Western Europe (GH #227, Rick 2026-09-30: "Countries + regions") -------
+# NE 1:10m admin-1 draws France by its 101 départements, each carrying the
+# CURRENT (2016) région in `region`.  The 96 metropolitan départements are
+# dissolved into the 13 metropolitan régions; the five overseas départements
+# are left out (they would put a pin in the Caribbean and the Indian Ocean —
+# a birth there still resolves to France, shading the country outline).
+# The old 22 régions (Rhône-Alpes, Poitou-Charentes, Basse-Normandie …) are
+# NOT drawn: the resolver folds them into the 2016 région that contains them.
+# Display names are the English ones a US family reads; the key is
+# slug(display name), the one key rule.
+FRANCE_REGION_NAMES = {
+    "Auvergne-Rhône-Alpes": "Auvergne-Rhône-Alpes",
+    "Bourgogne-Franche-Comté": "Bourgogne-Franche-Comté",
+    "Bretagne": "Brittany",
+    "Centre-Val de Loire": "Centre-Val de Loire",
+    "Corse": "Corsica",
+    "Grand Est": "Grand Est",
+    "Hauts-de-France": "Hauts-de-France",
+    "Île-de-France": "Île-de-France",
+    "Normandie": "Normandy",
+    "Nouvelle-Aquitaine": "Nouvelle-Aquitaine",
+    "Occitanie": "Occitania",
+    "Pays de la Loire": "Pays de la Loire",
+    "Provence-Alpes-Côte-d'Azur": "Provence-Alpes-Côte d'Azur",
+}
+FRANCE_METROPOLITAN_TYPE = "Metropolitan department"
+FRANCE_EXPECTED_DEPARTEMENTS = 96
+# Germany, the Netherlands, Belgium: one NE unit per Land / province, keyed by
+# ISO 3166-2 so a renamed NE `name_en` cannot silently re-key a unit.
+GERMANY_STATES = {
+    "DE-BW": "Baden-Württemberg", "DE-BY": "Bavaria", "DE-BE": "Berlin", "DE-BB": "Brandenburg",
+    "DE-HB": "Bremen", "DE-HH": "Hamburg", "DE-HE": "Hesse", "DE-NI": "Lower Saxony",
+    "DE-MV": "Mecklenburg-Vorpommern", "DE-NW": "North Rhine-Westphalia",
+    "DE-RP": "Rhineland-Palatinate", "DE-SL": "Saarland", "DE-SN": "Saxony",
+    "DE-ST": "Saxony-Anhalt", "DE-SH": "Schleswig-Holstein", "DE-TH": "Thuringia",
+}
+NETHERLANDS_PROVINCES = {
+    "NL-DR": "Drenthe", "NL-FL": "Flevoland", "NL-FR": "Friesland", "NL-GE": "Gelderland",
+    "NL-GR": "Groningen", "NL-LI": "Limburg", "NL-NB": "North Brabant", "NL-NH": "North Holland",
+    "NL-OV": "Overijssel", "NL-UT": "Utrecht", "NL-ZE": "Zeeland", "NL-ZH": "South Holland",
+}
+BELGIUM_PROVINCES = {
+    "BE-VAN": "Antwerp", "BE-VOV": "East Flanders", "BE-VWV": "West Flanders",
+    "BE-VBR": "Flemish Brabant", "BE-VLI": "Limburg", "BE-WBR": "Walloon Brabant",
+    "BE-WHT": "Hainaut", "BE-WLG": "Liège", "BE-WLX": "Luxembourg", "BE-WNA": "Namur",
+    "BE-BRU": "Brussels",
+}
+# country code -> (NE iso_a2, kind, ISO 3166-2 -> display name)
+EUROPE_ADMIN1 = {
+    "DEU": ("DE", "state", GERMANY_STATES),
+    "NLD": ("NL", "province", NETHERLANDS_PROVINCES),
+    "BEL": ("BE", "province", BELGIUM_PROVINCES),
+}
+
+# NE admin-0 map subunits: the USA outline is three subunits.  The European
+# outlines are the home territory only: metropolitan France + Corsica (no
+# overseas départements), Norway without Svalbard / Jan Mayen, the European
+# Netherlands without the Caribbean islands; Spain and Portugal keep their
+# Atlantic islands (the camera frames the principal piece, the mainland).
 SUBUNIT_COUNTRIES = {
     "ENG": ["ENG"], "SCT": ["SCT"], "WLS": ["WLS"], "NIR": ["NIR"],
     "IRL": ["IRL"], "CAN": ["CAN"], "USA": ["USB", "USK", "USH"],
+    "FRA": ["FXX", "FXC"], "DEU": ["DEU"], "NLD": ["NLD"], "BEL": ["BFR", "BWR", "BCR"],
+    "LUX": ["LUX"], "CHE": ["CHE"], "AUT": ["AUT"], "DNK": ["DNK", "DNB"], "NOR": ["NOR"],
+    "SWE": ["SWE"], "ITA": ["ITX", "ITY", "ITD", "ITP"], "ESP": ["ESX", "ESI", "ESC"],
+    "PRT": ["PRX", "PMD", "PAZ"],
 }
 SUBUNIT_NAMES = {
     "ENG": "England", "SCT": "Scotland", "WLS": "Wales", "NIR": "Northern Ireland",
     "IRL": "Ireland", "USA": "United States", "CAN": "Canada",
+    "FRA": "France", "DEU": "Germany", "NLD": "Netherlands", "BEL": "Belgium",
+    "LUX": "Luxembourg", "CHE": "Switzerland", "AUT": "Austria", "DNK": "Denmark",
+    "NOR": "Norway", "SWE": "Sweden", "ITA": "Italy", "ESP": "Spain", "PRT": "Portugal",
 }
+# Outlines whose subunits share land borders (Belgium's three regions) are
+# dissolved into one shape so the outline does not draw internal lines.  The
+# others are separate islands / territories and are concatenated as before.
+SUBUNIT_DISSOLVE = {"BEL"}
 
 ATTRIBUTION_TEXT = """Family Map border data — sources and licences
 
@@ -142,20 +217,26 @@ Made with Natural Earth. Free vector and raster map data @ naturalearthdata.com
 
   US states + District of Columbia, Canadian provinces and territories:
   {ne_base}{ne_50m_admin1}
-  Counties of Ireland (folded to the 26 traditional counties):
+  Counties of Ireland (folded to the 26 traditional counties); the regions
+  of France (the 13 metropolitan régions of 2016, dissolved from the
+  départements), the German Länder, and the provinces of the Netherlands and
+  Belgium (with Brussels):
   {ne_base}{ne_10m_admin1}
   Country outlines (England, Scotland, Wales, Northern Ireland, Ireland,
-  United States, Canada):
+  United States, Canada; France, Germany, Netherlands, Belgium, Luxembourg,
+  Switzerland, Austria, Denmark, Norway, Sweden, Italy, Spain, Portugal):
   {ne_base}{ne_50m_subunits}
 
 All layers were simplified (Douglas–Peucker, {tol_hist}° for the historic
-counties, {tol_irl}° for Ireland, {tol_ne50}° for the Natural Earth 1:50m layers)
-and rounded to {decimals} decimal places by scripts/build_family_map_units.py.
+counties, {tol_irl}° for Ireland, {tol_eu}° for the Western Europe regions,
+{tol_ne50}° for the Natural Earth 1:50m layers) and rounded to {decimals} decimal
+places by scripts/build_family_map_units.py.
 Borders are approximate and for family-history illustration only.
 """.format(
     hcb_url=HCB_URL, ne_base=NE_BASE, ne_50m_admin1=NE_50M_ADMIN1,
     ne_10m_admin1=NE_10M_ADMIN1, ne_50m_subunits=NE_50M_SUBUNITS,
-    tol_hist=TOL_HISTORIC, tol_irl=TOL_IRELAND, tol_ne50=TOL_NE50, decimals=DECIMALS,
+    tol_hist=TOL_HISTORIC, tol_irl=TOL_IRELAND, tol_eu=TOL_EUROPE, tol_ne50=TOL_NE50,
+    decimals=DECIMALS,
 )
 
 
@@ -728,6 +809,47 @@ def load_ireland(cache: pathlib.Path) -> tuple:
     return units, notes
 
 
+def load_europe(cache: pathlib.Path) -> tuple:
+    """Western Europe's second level from NE 1:10m admin-1 (the same file as
+    Ireland): France by the 13 metropolitan régions (départements dissolved
+    by their `region`), Germany by Land, the Netherlands and Belgium by
+    province.  Fails loudly when a table above and the source disagree."""
+    path = download(NE_BASE + NE_10M_ADMIN1, cache / NE_10M_ADMIN1)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    france = collections.OrderedDict()
+    departements = 0
+    by_iso = {}
+    for feature in data["features"]:
+        p = feature["properties"]
+        iso = p.get("iso_a2")
+        if iso == "FR":
+            if p.get("type_en") != FRANCE_METROPOLITAN_TYPE:
+                continue  # overseas département: the country outline covers it
+            region = p.get("region")
+            if region not in FRANCE_REGION_NAMES:
+                raise ValueError(f"French département {p.get('name')!r} has an unknown région {region!r}")
+            france.setdefault(region, []).append(polygons_of(feature["geometry"]))
+            departements += 1
+        elif iso in ("DE", "NL", "BE"):
+            by_iso[(p.get("iso_3166_2") or "").strip()] = feature
+    if departements != FRANCE_EXPECTED_DEPARTEMENTS or set(france) != set(FRANCE_REGION_NAMES):
+        raise ValueError(f"expected {FRANCE_EXPECTED_DEPARTEMENTS} metropolitan départements in "
+                         f"{len(FRANCE_REGION_NAMES)} régions, got {departements} in {sorted(france)}")
+    units, notes = [], []
+    for region in sorted(france):
+        polygons, ok = dissolve(france[region])
+        notes.append(f"  France: {FRANCE_REGION_NAMES[region]} = {len(france[region])} départements "
+                     f"{'dissolved' if ok else 'CONCATENATED (dissolve failed)'} -> {len(polygons)} polygon(s)")
+        units.append(("region", "FRA", FRANCE_REGION_NAMES[region], polygons, TOL_EUROPE))
+    for country, (iso_a2, kind, table) in EUROPE_ADMIN1.items():
+        missing = [code for code in table if code not in by_iso]
+        if missing:
+            raise ValueError(f"{country}: NE admin-1 has no unit for {missing}")
+        for code, name in table.items():
+            units.append((kind, country, name, polygons_of(by_iso[code]["geometry"]), TOL_EUROPE))
+    return units, notes
+
+
 def load_country_outlines(cache: pathlib.Path) -> list:
     path = download(NE_BASE + NE_50M_SUBUNITS, cache / NE_50M_SUBUNITS)
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -738,11 +860,17 @@ def load_country_outlines(cache: pathlib.Path) -> list:
             by_code[code] = feature
     units = []
     for country, codes in SUBUNIT_COUNTRIES.items():
-        polygons = []
+        pieces = []
         for code in codes:
             if code not in by_code:
                 raise ValueError(f"map subunit {code} not found for {country}")
-            polygons.extend(polygons_of(by_code[code]["geometry"]))
+            pieces.append(polygons_of(by_code[code]["geometry"]))
+        if country in SUBUNIT_DISSOLVE:
+            polygons, ok = dissolve(pieces)
+            if not ok:
+                print(f"  note: {country} outline subunits CONCATENATED (dissolve failed)")
+        else:
+            polygons = [rings for piece in pieces for rings in piece]
         units.append(("country", country, SUBUNIT_NAMES[country], polygons, TOL_NE50))
     return units
 
@@ -792,6 +920,9 @@ def build(cache: pathlib.Path, out_dir: pathlib.Path) -> int:
     units += load_us_canada(cache)
     ireland, notes = load_ireland(cache)
     units += ireland
+    europe, europe_notes = load_europe(cache)
+    units += europe
+    notes += europe_notes
     units += load_country_outlines(cache)
     features, stats = build_features(units)
     for feature in features:
@@ -897,6 +1028,11 @@ def self_test() -> int:
     assert slug("Québec") == "quebec"
     assert slug("County Cork") == "county-cork"
     assert unit_key("ENG", "country", "England") == "eng"
+    # Western Europe: accents fold, apostrophes break words.
+    assert unit_key("FRA", "region", "Provence-Alpes-Côte d'Azur") == "fra-provence-alpes-cote-d-azur"
+    assert unit_key("FRA", "region", "Île-de-France") == "fra-ile-de-france"
+    assert unit_key("DEU", "state", "Baden-Württemberg") == "deu-baden-wurttemberg"
+    assert unit_key("BEL", "province", "Liège") == "bel-liege"
     print("self-test OK")
     return 0
 

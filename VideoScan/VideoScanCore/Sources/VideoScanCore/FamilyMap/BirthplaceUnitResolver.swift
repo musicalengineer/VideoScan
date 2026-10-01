@@ -6,15 +6,20 @@
 //
 // THE RULE, right to left like `BirthplaceClassifier.region` (largest place
 // first):
-//   1. Find the COUNTRY. A fine country (England, Ireland, Canada, USA …)
-//      fixes which unit table the rest of the string may hit. A coarse
-//      one ("United Kingdom", "Great Britain") only narrows it to the
-//      four home nations. A recognised country OUTSIDE the map (Australia,
-//      Germany, "Russia") ends the search with nil — "Perth, WA, Australia"
-//      must never land on Washington State. The RIGHTMOST recognised
-//      supported country wins: a foreign token to its LEFT cannot be a
-//      unit of it and is skipped ("France, England" → England, country
-//      only; "Quebec, France, Canada" → Quebec). Codex #1782 (2).
+//   0. A place that offers ALTERNATIVES ("England or Wales or France",
+//      "Paris or Lyon, France") is refused outright: nil, counted as
+//      recorded-but-unresolved. A guess between two countries is worse
+//      than an honest blank (`offersAlternatives`).
+//   1. Find the COUNTRY. A fine country (England, Ireland, Canada, USA,
+//      France, Germany …) fixes which unit table the rest of the string
+//      may hit. A coarse one ("United Kingdom", "Great Britain") only
+//      narrows it to the four home nations. A recognised country OUTSIDE
+//      the map (Australia, Poland, "Russia") ends the search with nil —
+//      "Perth, WA, Australia" must never land on Washington State. The
+//      RIGHTMOST recognised supported country wins: a country token to its
+//      LEFT cannot be a unit of it and is skipped ("France, England" →
+//      England, country only; "Quebec, France, Canada" → Quebec). Codex
+//      #1782 (2).
 //   2. Keep scanning left for the finest recognised UNIT of that country.
 //      The first unit hit wins: units are written coarse-to-fine going
 //      left, so the rightmost unit is the county / state, and the riding /
@@ -72,6 +77,12 @@
 //     (Cumbria → Cumberland, Greater Manchester / Merseyside → Lancashire,
 //     Gwent → Monmouthshire); modern names that span several are not
 //     mapped (Avon, Powys, Dyfed) and fall through to the country.
+//   • Western Europe (2026-09-30): France by its 13 current régions (the
+//     old 22 régions, the old provinces and the départements fold in),
+//     Germany by Land, the Netherlands and Belgium by province, nine more
+//     countries as outlines — tables and judgment calls (Prussia →
+//     Germany, Rhineland → Germany country-only, Limburg / Luxembourg
+//     shared) in BirthplaceUnitResolver+Europe.swift.
 //
 // COST. ~2 µs per place in a Debug build (UTF-8 byte work, one dictionary
 // probe per component on a hit, five on a miss; no Foundation call on the
@@ -108,7 +119,8 @@ public enum BirthplaceUnitResolver {
     // MARK: - Resolve
 
     /// The unit a recorded place shades, or nil when nothing on the map
-    /// was recognised (blank, a town alone, Germany, "Europe").
+    /// was recognised (blank, a town alone, Poland, "Europe") or the place
+    /// offers alternatives ("England or Wales").
     public static func resolve(_ raw: String?) -> Hit? {
         // Blank is `FamilyMapTally.hasText`'s blank (Unicode White_Space),
         // the same test the tally applies — one definition, not two.
@@ -119,6 +131,7 @@ public enum BirthplaceUnitResolver {
         var text = raw
         if !text.isContiguousUTF8 { text.makeContiguousUTF8() }
         let result: Hit?? = text.utf8.withContiguousStorageIfAvailable { bytes -> Hit? in
+            if offersAlternatives(bytes) { return nil }
             var scan = Scan(bytes: bytes)
             var hasComma = false
             var i = 0
@@ -137,11 +150,69 @@ public enum BirthplaceUnitResolver {
     /// each one (a pytest on the data build and a Swift sensor check it).
     public static let allUnitKeys: Set<String> = {
         var keys = Set(FamilyMap.Country.allCases.map(\.key))
-        for token in tables.values {
-            if case .unit(_, _, let key) = token { keys.insert(key) }
+        func collect(_ token: Token) {
+            switch token {
+            case .unit(_, _, let key): keys.insert(key)
+            case .alternatives(let options): options.forEach(collect)
+            default: break
+            }
         }
+        tables.values.forEach(collect)
         return keys
     }()
+
+    // MARK: - Alternatives ("England or Wales")
+
+    /// True when some comma part has the word "or" (any case) BETWEEN two
+    /// words: "ENGLAND OR Wales or France", "Paris or Lyon, France". Not an
+    /// alternative: "Portland, OR" (the state code alone in its part),
+    /// "Portland OR USA" (upper-case OR followed only by the US), "Côte d
+    /// Or" (the "d" before it). One pass over the bytes; the word walk runs
+    /// only for a part that contains an "or" at all.
+    static func offersAlternatives(_ bytes: UnsafeBufferPointer<UInt8>) -> Bool {
+        var start = 0
+        var i = 0
+        let n = bytes.count
+        while i <= n {
+            if i == n || bytes[i] == 0x2C {
+                if partOffersAlternatives(bytes, start..<i) { return true }
+                start = i + 1
+            }
+            i += 1
+        }
+        return false
+    }
+
+    static func partOffersAlternatives(_ bytes: UnsafeBufferPointer<UInt8>, _ r: Range<Int>) -> Bool {
+        // Words = runs of non-space bytes.
+        var words: [Range<Int>] = []
+        var s: Int? = nil
+        var i = r.lowerBound
+        while i < r.upperBound {
+            let space = isSpace(bytes[i])
+            if space, let b = s { words.append(b..<i); s = nil }
+            if !space, s == nil { s = i }
+            i += 1
+        }
+        if let b = s { words.append(b..<r.upperBound) }
+        guard words.count >= 3 else { return false }   // "x or y" needs a word each side
+        for k in 1..<(words.count - 1) {
+            let w = words[k]
+            guard w.count == 2, bytes[w.lowerBound] | 0x20 == 0x6F, bytes[w.lowerBound + 1] | 0x20 == 0x72 else { continue }
+            let previous = words[k - 1]
+            if previous.count == 1, bytes[previous.lowerBound] | 0x20 == 0x64 { continue }   // "Côte d Or"
+            if bytes[w.lowerBound] == 0x4F, bytes[w.lowerBound + 1] == 0x52 {                  // upper-case "OR"
+                let rest = (words[k + 1].lowerBound..<r.upperBound)
+                let tail = asciiKey(rest, in: bytes)
+                if usCountryTails.contains(tail) { continue }                                   // "Portland OR USA"
+            }
+            return true
+        }
+        return false
+    }
+
+    /// What may follow the Oregon code in the same comma part.
+    static let usCountryTails: Set<String> = ["usa", "us", "u s a", "u s", "united states", "united states of america"]
 
     // MARK: - The scan (one place string)
 
@@ -156,8 +227,14 @@ public enum BirthplaceUnitResolver {
         /// A country-level name that is not itself a unit ("United
         /// Kingdom"): narrows the search, shades nothing by itself.
         case coarse(Set<FamilyMap.Country>)
-        /// A recognised country off the map (Germany, Australia): stop.
+        /// A recognised country off the map (Poland, Australia): stop.
         case foreign
+        /// One name, several meanings (2026-09-30): "Limburg" is a Dutch
+        /// AND a Belgian province; "Luxembourg" a country AND a Belgian
+        /// province. A `.unit` option is taken only when its country is
+        /// the one established to the right; without one the units are
+        /// ambiguous and only the non-unit options (a country) apply.
+        indirect case alternatives([Token])
     }
 
     /// The state of one right-to-left pass over a place's bytes. Lives
@@ -230,7 +307,7 @@ public enum BirthplaceUnitResolver {
             let r = trimmedWhitespace(range, in: bytes)
             guard !r.isEmpty else { return nil }
             let whole = key(r)
-            if let token = classify(key: whole, range: r) {
+            if let token = classify(key: whole, range: r, wholeComponent: true) {
                 return apply(token, key: whole, range: r)
             }
             // Token ranges, by whitespace bytes.
@@ -252,7 +329,7 @@ public enum BirthplaceUnitResolver {
                 while length >= 1 {
                     let phrase = tokens[end - length].lowerBound..<tokens[end - 1].upperBound
                     let k = key(phrase)
-                    if let token = classify(key: k, range: phrase) {
+                    if let token = classify(key: k, range: phrase, wholeComponent: phrase == r) {
                         if let hit = apply(token, key: k, range: phrase) { return hit }
                         if stopped { return nil }
                         end -= length
@@ -285,6 +362,13 @@ public enum BirthplaceUnitResolver {
                 }
                 return Hit(unitKey: unitKey, country: unitCountry, kind: unitCountry.unitKind, matchedComponent: text(range))
             case .country(let c, let set):
+                // "France, United Kingdom": a European country that the
+                // coarse name to its right rules out is a contradiction,
+                // refused exactly as it was while France was off the map.
+                if country == nil, c.isWesternEurope, let searches, searches.isDisjoint(with: set) {
+                    stopped = true
+                    return nil
+                }
                 if country == nil {
                     country = c
                     countryRange = range
@@ -298,14 +382,30 @@ public enum BirthplaceUnitResolver {
                 // A foreign country ends the search ONLY while no supported
                 // country stands to its right. Once one is established the
                 // token cannot be a unit of it and is skipped: "Quebec,
-                // France, Canada" is still Quebec (codex #1782 (2)).
+                // Poland, Canada" is still Quebec (codex #1782 (2)).
                 if country == nil { stopped = true }
+                return nil
+            case .alternatives(let options):
+                // A unit only for the country already established; a
+                // shared name never stands alone ("Limburg" is nil).
+                if let searches {
+                    for option in options {
+                        if case .unit(let c, _, _) = option, searches.contains(c) {
+                            return apply(option, key: key, range: range)
+                        }
+                    }
+                }
+                for option in options {
+                    if case .unit = option { continue }
+                    if let hit = apply(option, key: key, range: range) { return hit }
+                    if stopped { return nil }
+                }
                 return nil
             }
         }
 
         /// One phrase → what it means, or nil.
-        func classify(key: String, range: Range<Int>) -> Token? {
+        func classify(key: String, range: Range<Int>, wholeComponent: Bool) -> Token? {
             guard !key.isEmpty else { return nil }
             if let token = tables[key] { return token }
             // "County Durham", "Co. Cork", "Suffolk County".
@@ -318,7 +418,12 @@ public enum BirthplaceUnitResolver {
             if key.hasSuffix("-shire"), let token = tables[String(key.dropLast(6))], case .unit = token { return token }
             // Two-letter postal codes ("MA", "N.Y.", "Ma." — never "ma"):
             // the classifier's case rule, then Canada's. Only short text
-            // can be one, so the Character walk is skipped otherwise.
+            // can be one, so the Character walk is skipped otherwise. With
+            // no country known, a Canadian code counts only as a WHOLE
+            // comma part ("Saint John, Nb"): inside a longer part it is as
+            // likely another country's code — "Bergen Op Zoom
+            // (Noord-Brabant) Nl" is the Netherlands, not Newfoundland
+            // (2026-09-30, a real tree string).
             if range.count <= 6 {
                 let recorded = text(range)
                 let usAllowed = searches?.contains(.unitedStates) ?? true
@@ -329,7 +434,7 @@ public enum BirthplaceUnitResolver {
                     }
                 }
                 let canadaKnown = searches == [.canada]
-                if canadaKnown || searches == nil, let name = canadianCode(recorded, countryKnown: canadaKnown) {
+                if canadaKnown || (searches == nil && wholeComponent), let name = canadianCode(recorded, countryKnown: canadaKnown) {
                     return .unit(.canada, name: name, key: FamilyMapKey.unitKey(country: .canada, name: name))
                 }
             }
@@ -455,9 +560,12 @@ public enum BirthplaceUnitResolver {
     // MARK: - Tables
 
     /// Unit names that are also counties, towns or provinces elsewhere in
-    /// the English-speaking world. Accepted only with a country to their
-    /// right. Normalised keys.
-    static let ambiguousWithoutCountry: Set<String> = [
+    /// the English-speaking world, plus the European names that need their
+    /// country (`europeNeedsCountry`: départements, "Berlin", "Paris" …).
+    /// Accepted only with a country to their right. Normalised keys.
+    static let ambiguousWithoutCountry: Set<String> = britishIslesAmbiguous.union(europeNeedsCountry)
+
+    static let britishIslesAmbiguous: Set<String> = [
         // England ↔ New England / US counties and towns.
         "middlesex", "suffolk", "essex", "norfolk", "plymouth", "bristol", "worcester", "hampshire",
         "berkshire", "kent", "somerset", "cumberland", "lancaster", "york", "durham", "northumberland",
@@ -483,15 +591,19 @@ public enum BirthplaceUnitResolver {
     /// Germany, "Russia") is merged in LAST, so a place is one dictionary
     /// probe: the map's entries win where the two overlap ("Northern
     /// Ireland", "Upper Canada").
+    /// The normalised keys one alias is entered under: as written, and with
+    /// each hyphen as a space and removed ("inverness-shire", "inverness
+    /// shire", "invernessshire").
+    static func aliasKeys(_ alias: String) -> [String] {
+        let key = BirthplaceClassifier.normalize(alias)
+        guard key.contains("-") else { return [key] }
+        return [key, key.replacingOccurrences(of: "-", with: " "), key.replacingOccurrences(of: "-", with: "")]
+    }
+
     static let tables: [String: Token] = {
         var t: [String: Token] = [:]
         func put(_ alias: String, _ token: Token) {
-            let key = BirthplaceClassifier.normalize(alias)
-            t[key] = token
-            if key.contains("-") {
-                t[key.replacingOccurrences(of: "-", with: " ")] = token
-                t[key.replacingOccurrences(of: "-", with: "")] = token
-            }
+            for key in aliasKeys(alias) { t[key] = token }
         }
         func unit(_ country: FamilyMap.Country, _ name: String, _ aliases: [String] = []) {
             let token = Token.unit(country, name: name, key: FamilyMapKey.unitKey(country: country, name: name))
@@ -682,6 +794,13 @@ public enum BirthplaceUnitResolver {
         country(.canada, ["New France", "Nouvelle-France", "Nouvelle France", "Acadia", "Acadie",
                           "Province of Canada", "Dominion of Canada"])
 
+        // ---- Western Europe (BirthplaceUnitResolver+Europe.swift) ---------
+        for u in europeUnits { unit(u.country, u.name, u.aliases + u.needsCountry) }
+        for (region, departements) in franceDepartements { unit(.france, region, departements) }
+        for (c, aliases) in europeCountries { country(c, aliases) }
+        for alias in europeForeign { put(alias, .foreign) }
+        for (alias, token) in europeSharedTokens() { put(alias, token) }
+
         // ---- The classifier's vocabulary, where the map has no entry ------
         func merge(_ key: String, _ token: Token) { if t[key] == nil { t[key] = token } }
         for (key, region) in BirthplaceClassifier.regionTable {
@@ -701,7 +820,16 @@ public enum BirthplaceUnitResolver {
             case BirthplaceClassifier.unitedStates?: merge(key, .country(.unitedStates, searches: [.unitedStates]))
             case BirthplaceClassifier.canada?: merge(key, .country(.canada, searches: [.canada]))
             case "Ireland"?: merge(key, .country(.ireland, searches: [.ireland, .northernIreland]))
-            default: merge(key, .foreign)   // Germany, Isle of Man, Prussia …
+            default:
+                // "sicily" → Italy, "flanders" → Belgium: the classifier's
+                // historical names of ground that is one mapped country
+                // today. Anything else is off the map (Poland, Isle of Man,
+                // the Holy Roman Empire …).
+                if let name = entry.country, let c = classifierEuropeanCountries[name] {
+                    merge(key, .country(c, searches: [c]))
+                } else {
+                    merge(key, .foreign)
+                }
             }
         }
         return t

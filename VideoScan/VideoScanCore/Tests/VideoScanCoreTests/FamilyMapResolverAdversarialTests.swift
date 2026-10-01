@@ -59,8 +59,8 @@ struct FamilyMapResolverAdversarialTests {
     }
 
     @Test(arguments: [
-        "Yorkshire, England, France",
-        "Quebec, Canada, France",
+        "Yorkshire, England, Poland",
+        "Quebec, Canada, Poland",
         "Perth County, Scotland, Australia",
     ])
     func rightmostUnsupportedCountryStopsEarlierMapNames(_ place: String) {

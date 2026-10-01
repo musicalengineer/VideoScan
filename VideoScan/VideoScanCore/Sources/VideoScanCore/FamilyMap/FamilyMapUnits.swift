@@ -6,8 +6,9 @@
 //
 // THE FILE. A GeoJSON FeatureCollection, WGS84, positions [lon, lat];
 // geometry Polygon or MultiPolygon (outer ring first, holes after);
-// properties `key`, `name`, `country` ∈ {ENG,SCT,WLS,NIR,IRL,USA,CAN},
-// `kind` ∈ {county,state,province,country}. The decoder REFUSES a
+// properties `key`, `name`, `country` ∈ {ENG,SCT,WLS,NIR,IRL,USA,CAN} plus
+// the Western Europe stage {FRA,DEU,NLD,BEL,LUX,CHE,AUT,DNK,NOR,SWE,ITA,
+// ESP,PRT}, `kind` ∈ {county,state,province,region,country}. The decoder REFUSES a
 // malformed key (wrong country prefix, not slug-shaped, a country unit
 // whose key is not the bare country) — that is the join with the
 // resolver, and a drift there would otherwise show as a silently empty
@@ -453,25 +454,51 @@ public struct FamilyMapUnits: Sendable {
         return keys.contains(units[i].key)
     }
 
-    /// The camera box around the listed units that exist: the union of the
+    /// The camera box around the listed units that exist.
+    ///
+    /// THE ORIGINAL SEVEN (British Isles, US, Canada): the union of the
     /// FINE units' camera boxes (county / state / province) whenever any
-    /// is listed; the country outlines' (principal-piece) boxes only when
+    /// is listed; their country outlines' (principal-piece) boxes only when
     /// nothing finer is. On a real walk ~800 "New England" births are
     /// country-only `usa`; the counties are the map that matters, and the
     /// outline around them must not widen the frame to a hemisphere (QA
-    /// round 2, 2026-09-29). Nil when none of the keys is a unit.
+    /// round 2, 2026-09-29).
+    ///
+    /// WESTERN EUROPE (2026-09-30), added to that box: per country, its
+    /// fine units when any is listed, else its outline — so 8 births in
+    /// "Italy" (an outline-only country) bring Italy into the frame next to
+    /// Yorkshire, while "France" country-only beside a counted Normandy
+    /// frames Normandy. The European outlines are compact (mainland
+    /// principal piece), so including them never opens a hemisphere. A
+    /// tree with no European key gets exactly the box it got before.
+    ///
+    /// Nil when none of the keys is a unit.
     public func coverage(for keys: some Sequence<String>) -> FamilyMap.BoundingBox? {
         var fine: FamilyMap.BoundingBox?
         var countries: FamilyMap.BoundingBox?
+        var europeFine: [FamilyMap.Country: FamilyMap.BoundingBox] = [:]
+        var europeOutline: [FamilyMap.Country: FamilyMap.BoundingBox] = [:]
+        func grow(_ box: inout FamilyMap.BoundingBox?, _ add: FamilyMap.BoundingBox) {
+            box = box.map { $0.union(add) } ?? add
+        }
         for key in keys {
             guard let u = unit(forKey: key) else { continue }
-            if u.kind == .country {
-                countries = countries.map { $0.union(u.cameraBox) } ?? u.cameraBox
+            if u.country.isWesternEurope {
+                if u.kind == .country {
+                    europeOutline[u.country] = u.cameraBox
+                } else {
+                    europeFine[u.country] = europeFine[u.country].map { $0.union(u.cameraBox) } ?? u.cameraBox
+                }
+            } else if u.kind == .country {
+                grow(&countries, u.cameraBox)
             } else {
-                fine = fine.map { $0.union(u.cameraBox) } ?? u.cameraBox
+                grow(&fine, u.cameraBox)
             }
         }
-        return fine ?? countries
+        var box = fine ?? countries
+        for (country, outline) in europeOutline where europeFine[country] == nil { grow(&box, outline) }
+        for (_, f) in europeFine { grow(&box, f) }
+        return box
     }
 
     // MARK: - Geometry

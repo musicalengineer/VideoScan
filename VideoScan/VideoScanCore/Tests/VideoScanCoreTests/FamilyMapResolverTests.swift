@@ -236,7 +236,7 @@ struct FamilyMapResolverTests {
     @Test func unrecognisedAndOffMapPlacesAreNil() {
         let nils: [String?] = [
             nil, "", "   ", "\n",
-            "Europe", "Somewhere", "Berlin, Germany", "Minsk, Russia", "Isle of Man",
+            "Europe", "Somewhere", "Warsaw, Poland", "Minsk, Russia", "Isle of Man",
             "United Kingdom", "Great Britain", "U.K.",
             "Perth, WA, Australia", "Perth, Australia", "Sydney, New South Wales, Australia",
             // Ambiguous without a country: honest nil, never a guess.
@@ -303,8 +303,8 @@ struct FamilyMapResolverTests {
         // With no supported country to its right a foreign country still
         // ends the search: "Perth, WA, Australia" is never Washington.
         #expect(R.resolve("Perth, WA, Australia") == nil)
-        #expect(R.resolve("Yorkshire, Germany") == nil)
-        #expect(R.resolve("England, Germany") == nil, "the rightmost recognised country is Germany")
+        #expect(R.resolve("Yorkshire, Poland") == nil)
+        #expect(R.resolve("England, Poland") == nil, "the rightmost recognised country is Poland")
         #expect(R.resolve("France, United Kingdom") == nil, "a coarse name is not a country")
     }
 
@@ -362,8 +362,10 @@ struct FamilyMapResolverTests {
         ]
         for key in required { #expect(keys.contains(key), "\(key)") }
         // 39 ENG (Yorkshire whole), 34 SCT (Ross-shire and Cromartyshire apart),
-        // 13 WLS, 6 NIR, 26 IRL, 51 USA (+DC), 13 CAN, 7 countries.
-        #expect(keys.count == 39 + 34 + 13 + 6 + 26 + 51 + 13 + 7, "\(keys.count) keys")
+        // 13 WLS, 6 NIR, 26 IRL, 51 USA (+DC), 13 CAN, 7 countries; Western
+        // Europe (2026-09-30): 13 FRA régions, 16 DEU Länder, 12 NLD and 11
+        // BEL provinces, 13 more countries.
+        #expect(keys.count == 39 + 34 + 13 + 6 + 26 + 51 + 13 + 7 + (13 + 16 + 12 + 11 + 13), "\(keys.count) keys")
         #expect(keys.contains("sct-argyllshire") && !keys.contains("sct-argyll"))
         #expect(keys.contains("sct-ross-shire") && keys.contains("sct-cromartyshire"))
         #expect(!keys.contains("eng-london"))
@@ -374,7 +376,7 @@ struct FamilyMapResolverTests {
     /// 40k places from the table, cycled, with the raw string varied so
     /// nothing is memoised. Budget 150 ms (Debug, load-aware).
     @Test func fortyThousandPlacesUnderBudget() {
-        let places = Self.table.map(\.place) + ["Berlin, Germany", "Ipswich, Suffolk", "", "Somewhere"]
+        let places = Self.table.map(\.place) + ["Warsaw, Poland", "Ipswich, Suffolk", "", "Somewhere"]
         let n = 40_000
         let inputs: [String] = (0..<n).map { i in
             let p = places[i % places.count]

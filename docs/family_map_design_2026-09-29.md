@@ -132,6 +132,37 @@ Media matrix (n/a) · Isolation (no network in tests; bundled file read from
 the test bundle, never App Support) · Sensor (MapKit link sensor; a resolve-
 rate floor on the synthetic county list; the GeoJSON size ceiling).
 
+## 6a. Western Europe stage (Rick 2026-09-30: "Countries + regions")
+
+- **Units.** France by its 13 current (2016) metropolitan régions, dissolved
+  from Natural Earth 1:10m départements (overseas départements left out);
+  Germany by Land (16); the Netherlands (12) and Belgium (10 + Brussels) by
+  province; Luxembourg, Switzerland, Austria, Denmark, Norway, Sweden, Italy,
+  Spain, Portugal as outlines only. Natural Earth again (already credited).
+  254 units, 916 KB (was 189 / 754 KB).
+- **Keys** follow the one rule, `<iso3>-<slug(display name)>`:
+  `fra-normandy`, `deu-baden-wurttemberg`, `nld-north-brabant`,
+  `bel-hainaut`, `ita`. No abbreviation scheme (`fra-ara`) — two key rules
+  would be two chances to disagree.
+- **France rollup.** The old 22 régions, the pre-1790 provinces whose
+  ground is in one région today, and the 96 départements fold into the 13.
+  Gascony, Guyenne and the old province of Maine are not mapped.
+- **Judgment calls.** Prussia / German Empire → Germany, country-only
+  unless a Land resolves (today's flag, like colonial births under 🇺🇸; the
+  tooltip keeps "Prussia"). Rhineland → Germany country-only (it spans
+  three Länder). Holland → Netherlands country-only. Flanders / Wallonia →
+  Belgium country-only. Limburg and Luxembourg are decided by the country
+  to their right. Holy Roman Empire, East/West Prussia, Pomerania, Silesia
+  stay off the map.
+- **Refusals.** "England or Wales or France" (any "x or y") is refused;
+  départements and town-like names ("Paris", "Berlin", "Hanover", "Lot")
+  need their country to the right.
+- **Camera.** Trees without Europe frame exactly as before; a European
+  country adds its fine units, or its outline when nothing finer is
+  counted.
+- **Click.** The coastal-tolerance step no longer crosses into a counted
+  outline of another country (a land border is not a coastline).
+
 ## 7. Open decisions (Rick)
 
 1. MapKit real map (recommended) or our own offline canvas?

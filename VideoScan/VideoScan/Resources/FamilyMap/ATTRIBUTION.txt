@@ -17,13 +17,18 @@ Made with Natural Earth. Free vector and raster map data @ naturalearthdata.com
 
   US states + District of Columbia, Canadian provinces and territories:
   https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_1_states_provinces.geojson
-  Counties of Ireland (folded to the 26 traditional counties):
+  Counties of Ireland (folded to the 26 traditional counties); the regions
+  of France (the 13 metropolitan régions of 2016, dissolved from the
+  départements), the German Länder, and the provinces of the Netherlands and
+  Belgium (with Brussels):
   https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces.geojson
   Country outlines (England, Scotland, Wales, Northern Ireland, Ireland,
-  United States, Canada):
+  United States, Canada; France, Germany, Netherlands, Belgium, Luxembourg,
+  Switzerland, Austria, Denmark, Norway, Sweden, Italy, Spain, Portugal):
   https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_map_subunits.geojson
 
 All layers were simplified (Douglas–Peucker, 0.01° for the historic
-counties, 0.005° for Ireland, 0.02° for the Natural Earth 1:50m layers)
-and rounded to 6 decimal places by scripts/build_family_map_units.py.
+counties, 0.005° for Ireland, 0.02° for the Western Europe regions,
+0.02° for the Natural Earth 1:50m layers) and rounded to 6 decimal
+places by scripts/build_family_map_units.py.
 Borders are approximate and for family-history illustration only.

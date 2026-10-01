@@ -14,7 +14,7 @@
 // visible at the map's family privacy ceiling), the first that resolves
 // wins; a country-only resolution ("Ireland") still has a country. The
 // unit key's country prefix is the flag. Nothing unresolved or off the map
-// ("Berlin, Germany") gets a flag — an honest blank beats a guess.
+// ("Warsaw, Poland") gets a flag — an honest blank beats a guess.
 //
 // WHEN IT IS BUILT — once per (tree, family notes) pair, OFF the main
 // actor, by FamilyTreeLiveModel (`scheduleBirthCountriesBuild`): after a

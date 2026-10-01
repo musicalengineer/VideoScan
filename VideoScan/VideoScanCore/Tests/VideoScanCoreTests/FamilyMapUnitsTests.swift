@@ -88,8 +88,8 @@ struct FamilyMapUnitsTests {
             try decode([["type": "Feature", "properties": ["key": "eng-x", "country": "ENG", "kind": "county"],
                          "geometry": ["type": "Polygon", "coordinates": [ok]]]])
         }
-        #expect(throws: FamilyMapUnits.DecodeError.unknownCountry(feature: 0, value: "FRA")) {
-            try decode([Self.feature(key: "fra-x", name: "X", country: "FRA", kind: "county", geometry: ["type": "Polygon", "coordinates": [ok]])])
+        #expect(throws: FamilyMapUnits.DecodeError.unknownCountry(feature: 0, value: "POL")) {
+            try decode([Self.feature(key: "pol-x", name: "X", country: "POL", kind: "county", geometry: ["type": "Polygon", "coordinates": [ok]])])
         }
         #expect(throws: FamilyMapUnits.DecodeError.unknownKind(feature: 0, value: "parish")) {
             try decode([Self.feature(key: "eng-x", name: "X", country: "ENG", kind: "parish", geometry: ["type": "Polygon", "coordinates": [ok]])])

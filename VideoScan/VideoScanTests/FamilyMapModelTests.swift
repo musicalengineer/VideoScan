@@ -34,7 +34,7 @@ import VideoScanCore
 
 /// Rick and Donna with a few ancestors whose birthplaces cover every case:
 /// a county (Yorkshire), a country alone (England), a Scottish county, a
-/// US state, no place at all (Donna), and a place off the map (Germany).
+/// US state, no place at all (Donna), and a place off the map (Poland).
 private let placedRoots = """
 0 HEAD
 1 _VS_MERGED Y
@@ -79,7 +79,7 @@ private let placedRoots = """
 1 SEX M
 1 BIRT
 2 DATE 1900
-2 PLAC Berlin, Germany
+2 PLAC Warsaw, Poland
 1 FAMS @F3@
 0 @F0@ FAM
 1 HUSB @I1@
@@ -163,7 +163,7 @@ struct FamilyMapModelTests {
         #expect(key("@I4@") == "eng", "a country alone shades the outline")
         #expect(key("@I7@") == "sct-fife")
         #expect(key("@I2@") == nil, "no recorded place")
-        #expect(key("@I8@") == nil, "Germany is off the map")
+        #expect(key("@I8@") == nil, "Poland is off the map")
 
         m.apply(selection: .init(), yearCeiling: nil)
         try await waitUntil { m.computed.totals.considered == 6 }
@@ -179,12 +179,12 @@ struct FamilyMapModelTests {
         #expect(m.computed.counts["eng"]?.members.map(\.name) == ["Eileen Latta"])
         #expect(m.computed.counts["eng-yorkshire"]?.byLine == [.first: 1])
         #expect(m.computed.counts["sct-fife"]?.byLine == [.second: 1])
-        #expect(t.unsupported == 1, "Karl's Berlin was recorded; Donna recorded nothing")
+        #expect(t.unsupported == 1, "Karl's Warsaw was recorded; Donna recorded nothing")
         #expect(FamilyMapModel.totalsLine(t) == "4 of 6 people placed; 1 country-only; 1 with no recorded place; 1 recorded but off the map")
         // Not on the map, nearest generation first: Donna (a start, gen 0)
         // before Karl (gen 2), each with what was recorded.
         #expect(m.computed.unplaced.map(\.name) == ["Donna Hudson", "Karl Latta"])
-        #expect(m.computed.unplaced.map(\.recordedPlace) == [nil, "Berlin, Germany"])
+        #expect(m.computed.unplaced.map(\.recordedPlace) == [nil, "Warsaw, Poland"])
         #expect(m.computed.unplaced.map(\.generation) == [0, 2])
         #expect(FamilyMapModel.notOnTheMapLine(t) == "1 with no recorded place · 1 recorded but off the map")
         // Every placed person carries the recorded text (the colonial tooltip).
@@ -516,7 +516,7 @@ struct FamilyMapModelTests {
         1 NAME Eileen /Latta/
         1 SEX F
         1 BIRT
-        2 PLAC Berlin, Germany
+        2 PLAC Warsaw, Poland
         1 FAMS @F1@
         0 @I7@ INDI
         1 NAME Mary Christina /O'Connor/
@@ -569,7 +569,7 @@ struct FamilyMapModelTests {
             // Richard Sr: the tree says Fife; the family's note says Cork. The tree wins.
             CyberBrainPerson(id: "person.richard", gedcomPersonID: "@I3@", canonicalName: "Richard Harding Breen Sr",
                              lifeEvents: [item("event.richard.birth", .event, "Richard Harding Breen Sr was born in Cork, the family says.", person: "person.richard", place: "Cork, Ireland")]),
-            // Eileen: the tree's Berlin is off the map; the family's note places her.
+            // Eileen: the tree's Warsaw is off the map; the family's note places her.
             CyberBrainPerson(id: "person.eileen", gedcomPersonID: "@I4@", canonicalName: "Eileen Latta",
                              lifeEvents: [item("event.eileen.birth", .event, "Eileen Latta was born in Yorkshire; her birth was registered there.", person: "person.eileen", place: "Leeds, Yorkshire, England")]),
             // Patrick: matched by NAME (no GEDCOM link); a disputed birthplace
@@ -610,7 +610,7 @@ struct FamilyMapModelTests {
         func recorded(_ id: String) -> String? { r.ordinal(of: id).flatMap { inputs.people.recordedPlaces[$0] } }
         #expect(key("@I7@") == "irl-cork" && source("@I7@") == .family && recorded("@I7@") == "Cork, Ireland", "Mary: the family's note fills the gap")
         #expect(key("@I3@") == "sct-fife" && source("@I3@") == .tree && recorded("@I3@") == "Fife, Scotland", "the tree wins when it resolves")
-        #expect(key("@I4@") == "eng-yorkshire" && source("@I4@") == .family, "Berlin is off the map; the family's note places her")
+        #expect(key("@I4@") == "eng-yorkshire" && source("@I4@") == .family, "Warsaw is off the map; the family's note places her")
         #expect(recorded("@I4@") == "Leeds, Yorkshire, England", "the text that placed her")
         #expect(key("@I1@") == "usa-massachusetts" && source("@I1@") == .tree)
         #expect(key("@I9@") == nil && source("@I9@") == FamilyMapModel.PlaceSource.none && recorded("@I9@") == nil, "disputed: not placed, nothing recorded")
@@ -629,7 +629,7 @@ struct FamilyMapModelTests {
         // Without the knowledge the same walk leaves Mary and Eileen off the map.
         let bare = await FamilyMapModel.prepare(result: r, graph: g, highlight: highlight, familyKnowledge: nil)
         #expect(r.ordinal(of: "@I7@").flatMap { bare.people.unitKeys[$0] } == nil)
-        #expect(r.ordinal(of: "@I4@").flatMap { bare.people.recordedPlaces[$0] } == "Berlin, Germany", "recorded but off the map")
+        #expect(r.ordinal(of: "@I4@").flatMap { bare.people.recordedPlaces[$0] } == "Warsaw, Poland", "recorded but off the map")
         #expect(bare.familyPlacedIDs.isEmpty)
         // Read-only: the archive the index was built from is untouched.
         #expect(index.archive == archive)
@@ -726,7 +726,7 @@ struct FamilyMapModelTests {
 
     /// "Not on the map" says WHOSE text failed to resolve (QA round 2): a
     /// family note the map could not read is "from the family's notes:
-    /// Berlin, Germany", never "recorded as Berlin" when the TREE recorded
+    /// Warsaw, Poland", never "recorded as Warsaw" when the TREE recorded
     /// nothing. The tree's own text stays "recorded as …".
     @Test func anUnplacedFamilyNoteIsToldApartFromTheTreesText() throws {
         // 0: tree blank, family note off the map → the family's text, unplaced.
@@ -737,13 +737,13 @@ struct FamilyMapModelTests {
         let ids = ["@A@", "@B@", "@C@", "@D@", "@E@"]
         let inputs = FamilyMapModel.inputs(
             ids: ids, names: ["A", "B", "C", "D", "E"], surnames: ["", "", "", "", ""], surnameKeys: ["", "", "", "", ""],
-            birthPlaces: [nil, "Berlin, Germany", "Paris, France", "   ", "Fife, Scotland"],
-            familyPlaces: ["Berlin, Germany", nil, "Rome, Italy", "Cork, Ireland", "Cork, Ireland"],
+            birthPlaces: [nil, "Warsaw, Poland", "Gdansk, Poland", "   ", "Fife, Scotland"],
+            familyPlaces: ["Warsaw, Poland", nil, "Minsk, Belarus", "Cork, Ireland", "Cork, Ireland"],
             birthYears: [nil, nil, nil, nil, nil], generations: [1, 1, 1, 1, 1],
             lines: [.first, .first, .first, .first, .first], visited: [0, 1, 2, 3, 4],
             regions: [.unknown, .unknown, .unknown, .unknown, .unknown])
         #expect(inputs.people.unitKeys == [nil, nil, nil, "irl-cork", "sct-fife"])
-        #expect(inputs.people.recordedPlaces == ["Berlin, Germany", "Berlin, Germany", "Paris, France", "Cork, Ireland", "Fife, Scotland"])
+        #expect(inputs.people.recordedPlaces == ["Warsaw, Poland", "Warsaw, Poland", "Gdansk, Poland", "Cork, Ireland", "Fife, Scotland"])
         #expect(inputs.familyRecordedIDs == ["@A@", "@D@"], "whose recorded text came from the family's notes")
         #expect(inputs.familyPlacedIDs == ["@D@"], "…and who was actually placed by them")
         let m = FamilyMapModel(inputs: inputs, units: syntheticUnits, displayNames: ["Rick"])
@@ -756,9 +756,9 @@ struct FamilyMapModelTests {
             let o = ids.firstIndex(of: id)!
             return FamilyMapModel.placeNote(recordedPlace: inputs.people.recordedPlaces[o], fromFamilyNotes: m.isRecordedFromFamilyNotes(id))
         }
-        #expect(note("@A@") == "from the family's notes: Berlin, Germany")
-        #expect(note("@B@") == "recorded as Berlin, Germany")
-        #expect(note("@C@") == "recorded as Paris, France")
+        #expect(note("@A@") == "from the family's notes: Warsaw, Poland")
+        #expect(note("@B@") == "recorded as Warsaw, Poland")
+        #expect(note("@C@") == "recorded as Gdansk, Poland")
         // And the view asks the model, not a constant `false`, for the unplaced rows.
         let view = try SourceTree.appSource(named: "FamilyTreeMapView.swift")
         #expect(view.contains("fromFamilyNotes: model.isRecordedFromFamilyNotes(m.id)"), "the unplaced row names its source")
@@ -770,7 +770,7 @@ struct FamilyMapModelTests {
     @Test func buildingTheInputsFor40kPeopleStaysUnderBudget() throws {
         let n = 40_000
         let places: [String?] = ["Sheffield, Yorkshire, England", "Boston, Suffolk, Massachusetts Bay Colony, British Colonial America",
-                                 "England", "Fife, Scotland", "Cardiff, Glamorgan, Wales", nil, "Berlin, Germany",
+                                 "England", "Fife, Scotland", "Cardiff, Glamorgan, Wales", nil, "Warsaw, Poland",
                                  "Halifax, Nova Scotia, Canada", "Cork, Ireland", "Providence, Rhode Island", "Lowell Mass. U.S.A.",
                                  "Perth, WA, Australia"]
         let family = ["Breen", "Lamb", "Latta", "McGill", "Hudson", "Stone", "Hill", "Adams", "Alden", "Bradford",
@@ -797,7 +797,7 @@ struct FamilyMapModelTests {
         #expect(took < ceiling, "40k inputs took \(took) (\(PerformanceLane.loadDescription()))")
         #expect(inputs.people.count == n)
         let resolved = inputs.people.unitKeys.compactMap { $0 }.count
-        // 9 of the 12 spellings resolve (nil, Germany and Australia do not);
+        // 9 of the 12 spellings resolve (nil, Poland and Australia do not);
         // 40,000 is not a multiple of 12, so count the cycle exactly.
         let resolving: Set<Int> = [0, 1, 2, 3, 4, 7, 8, 9, 10]
         let expected = (0..<n).reduce(0) { $0 + (resolving.contains($1 % places.count) ? 1 : 0) }
@@ -830,7 +830,7 @@ struct FamilyMapModelTests {
     @Test func buildingAndTallying100kPeopleStaysUnderBudget() throws {
         let n = 100_000
         let places: [String?] = ["Sheffield, Yorkshire, England", "Boston, Suffolk, Massachusetts Bay Colony, British Colonial America",
-                                 "England", "Fife, Scotland", "Cardiff, Glamorgan, Wales", nil, "Berlin, Germany",
+                                 "England", "Fife, Scotland", "Cardiff, Glamorgan, Wales", nil, "Warsaw, Poland",
                                  "Halifax, Nova Scotia, Canada", "Cork, Ireland", "Providence, Rhode Island", "Lowell Mass. U.S.A.",
                                  "Perth, WA, Australia", "United States", "Co. Antrim, Northern Ireland", "Toronto, Ontario, Canada"]
         let family = ["Breen", "Lamb", "Latta", "McGill", "Hudson", "Stone", "Hill", "Adams", "Alden", "Bradford",
@@ -869,7 +869,7 @@ struct FamilyMapModelTests {
         #expect(tallyCPU < PerformanceLane.loadAwareDebugCeiling(.milliseconds(150)),
                 "100k tally took \(tallyCPU) cpu (\(PerformanceLane.loadDescription()))")
 
-        // Correctness at scale: 12 of the 15 spellings resolve (nil, Germany
+        // Correctness at scale: 12 of the 15 spellings resolve (nil, Poland
         // and Australia do not), 100,000 is not a multiple of 15.
         let resolving: Set<Int> = [0, 1, 2, 3, 4, 7, 8, 9, 10, 12, 13, 14]
         let expected = (0..<n).reduce(0) { $0 + (resolving.contains($1 % places.count) ? 1 : 0) }
@@ -947,7 +947,7 @@ struct FamilyMapModelTests {
         let url = try #require(FamilyMapUnitsCache.bundledURL, "family-map-units.geojson is not in \(Bundle.main.bundleURL.path)/Contents/Resources")
         #expect(url.lastPathComponent == "family-map-units.geojson")
         let units = try await FamilyMapUnitsCache.shared.units()
-        #expect(units.count == 189, "the bundled unit set (FamilyMapBundledDataTests pins the same number)")
+        #expect(units.count == 254, "the bundled unit set (FamilyMapBundledDataTests pins the same number)")
         #expect(units.unit(forKey: "eng-yorkshire") != nil)
         // Loaded once per process: the second call is the same decoded set.
         let again = try await FamilyMapUnitsCache.shared.units()
