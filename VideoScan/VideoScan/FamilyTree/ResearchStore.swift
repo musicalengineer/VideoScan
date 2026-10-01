@@ -112,6 +112,73 @@ struct ResearchStore: Sendable {
         }
     }
 
+    // MARK: Read-modify-write (QA 2026-10-01 P2-1)
+
+    /// Every dossier writer goes through here: the Research pane (verdict,
+    /// lore, Tell Hallie, run results) and the "I found a record" filer. It
+    /// takes the ONE lock for this key, reads what is on disk NOW, applies
+    /// `change`, and writes the result back. Two writers can no longer save
+    /// stale copies over each other (a pane opened before a filing used to
+    /// erase the filed record on its next save).
+    ///
+    /// `change` gets nil when no dossier exists. Setting it to nil when one
+    /// DID exist retires the file to `research/.trash/` (moved, never
+    /// deleted) — used only to undo a dossier this same transaction created.
+    /// Unchanged → nothing is written. Returns what is on disk afterwards.
+    ///
+    /// The lock is held only for one small JSON read + write; `change` must
+    /// not block or await. (C++: a std::mutex per key, taken with a
+    /// lock_guard around load → mutate → save.)
+    @discardableResult
+    func update(key: String, _ change: (inout ResearchDossier?) throws -> Void) throws -> ResearchDossier? {
+        let lock = Self.keyLocks.lock(for: key)
+        lock.lock()
+        defer { lock.unlock() }
+        let before = try loadDossier(key: key)
+        var after = before
+        try change(&after)
+        if after == before { return after }
+        if let after {
+            try saveDossier(after)
+        } else {
+            try retireDossierFile(key: key)
+        }
+        return after
+    }
+
+    /// Move dossier.json to research/.trash/dossier-<stamp>-<uuid>.json.
+    private func retireDossierFile(key: String) throws {
+        try ViewerWriteGuard.check("ResearchStore.retireDossierFile")
+        let url = try dossierURL(key: key)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let trash = try researchDirectory(key: key).appendingPathComponent(".trash", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+            let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+            try FileManager.default.moveItem(
+                at: url, to: trash.appendingPathComponent("dossier-\(stamp)-\(UUID().uuidString.prefix(8)).json"))
+        } catch {
+            throw StoreError.ioFailure(error.localizedDescription)
+        }
+    }
+
+    /// One NSLock per research key, process-wide. `@unchecked Sendable` +
+    /// a lock around the table ≈ a C++ class guarding its map with a mutex.
+    private final class KeyLocks: @unchecked Sendable {
+        private let guardLock = NSLock()
+        private var locks: [String: NSLock] = [:]
+        func lock(for key: String) -> NSLock {
+            guardLock.withLock {
+                if let existing = locks[key] { return existing }
+                let made = NSLock()
+                locks[key] = made
+                return made
+            }
+        }
+    }
+
+    private static let keyLocks = KeyLocks()
+
     // MARK: Page cache
 
     func cachedPage(key: String, pageURL: String) -> CachedPage? {

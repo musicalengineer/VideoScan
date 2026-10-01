@@ -5,9 +5,9 @@
 //
 //   Chronicling America (Library of Congress) — JSON search API, full-text
 //     newspapers 1770–1963, constrained by name + year window (+ state).
-//   Find a Grave — the public memorial search page (HTML); the parser is
-//     deliberately tolerant of markup drift and yields nothing rather than
-//     nonsense when the page changes.
+//   (Find a Grave was an adapter here until 2026-10-01; its robots.txt
+//     disallows the search path, so it is now a pre-filled link — see the
+//     note where the adapter used to be.)
 //   Wikipedia / Wikidata — JSON search APIs.
 //   Web (DuckDuckGo HTML) — best effort; TODO(fragile): the HTML endpoint
 //     rate-limits and reshapes without notice. When the parser finds no
@@ -20,8 +20,13 @@
 // date (ResearchStore) and re-used until Rick presses Run again with
 // "refresh". Logging is counts only — never a name or an excerpt.
 //
-// Memory worst case: ≤ 5 sources × ≤ 4 requests × 2 MB bodies, one at a
-// time per source ≈ 10 MB transient.
+// Memory worst case: ≤ 5 sources running at once, each holding ONE body of
+// ≤ 2 MB at a time ≈ 10 MB transient. (The Irish census adapter makes up to
+// 8 requests, the Discovery adapter up to 3 — sequentially, one body each.)
+//
+// 2026-10-01 (GH #230 Phase B): two record adapters live in
+// ResearchRecordSources.swift — Census of Ireland 1901/1911 and TNA
+// Discovery. Discovery responses bypass the page cache (their terms).
 //
 // C++ readers: `protocol` ≈ abstract interface; `actor` ≈ a class with an
 // implicit mutex around all members; `async throws` ≈ a coroutine that
@@ -70,7 +75,7 @@ final class URLSessionResearchFetcher: ResearchFetcher, @unchecked Sendable {
     static let hostPause: UInt64 = 1_000_000_000 // 1 s in nanoseconds
 
     private let session: URLSession
-    private let pacing = HostPacing()
+    private let pacing = ResearchHostPacing(pause: TimeInterval(URLSessionResearchFetcher.hostPause) / 1e9)
 
     init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -81,11 +86,25 @@ final class URLSessionResearchFetcher: ResearchFetcher, @unchecked Sendable {
         session = URLSession(configuration: configuration)
     }
 
+    /// The JSON APIs are asked for JSON explicitly. Probed 2026-10-01: TNA
+    /// Discovery answers JSON with or without the header, but its terms
+    /// describe JSON *or XML* by Accept, so the app never relies on a default.
+    static let jsonAPIHosts: Set<String> = [TNADiscoverySource.host, IrishCensusSource.host]
+
+    /// The request for one URL (pure, so the headers can be pinned by a test).
+    static func request(for url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        if let host = url.host?.lowercased(), jsonAPIHosts.contains(host) {
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+        }
+        return request
+    }
+
     func fetch(_ url: URL) async throws -> ResearchFetchResult {
         try Task.checkCancellation()
         await pacing.waitTurn(host: url.host ?? "")
         do {
-            let (data, response) = try await session.data(from: url)
+            let (data, response) = try await session.data(for: Self.request(for: url))
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard (200..<300).contains(code) else { throw ResearchFetchError.badStatus(code) }
             guard data.count <= Self.maxBodyBytes else { throw ResearchFetchError.tooLarge(data.count) }
@@ -99,20 +118,28 @@ final class URLSessionResearchFetcher: ResearchFetcher, @unchecked Sendable {
             throw ResearchFetchError.network(error.localizedDescription)
         }
     }
+}
 
-    /// Serialises "last request time" per host so two adapters hitting the
-    /// same host still space their requests.
-    private actor HostPacing {
-        private var lastRequest: [String: Date] = [:]
-        func waitTurn(host: String) async {
-            let pause = TimeInterval(URLSessionResearchFetcher.hostPause) / 1e9
-            if let last = lastRequest[host] {
-                let remaining = pause - Date().timeIntervalSince(last)
-                if remaining > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1e9))
-                }
-            }
-            lastRequest[host] = Date()
+/// Serialises "last request time" per host so two adapters hitting the
+/// same host still space their requests.
+actor ResearchHostPacing {
+    private let pause: TimeInterval
+    private var lastRequest: [String: Date] = [:]
+
+    init(pause: TimeInterval) { self.pause = pause }
+
+    /// RESERVES the caller's slot before sleeping (QA 2026-10-01 P3-8). An
+    /// actor is re-entrant across `await`: with "sleep, then record", two
+    /// callers arriving together both read the same last time, sleep the
+    /// same remainder and fire together. Here each caller claims
+    /// max(now, previous slot + pause) synchronously, then sleeps until it.
+    func waitTurn(host: String) async {
+        let now = Date()
+        let slot = lastRequest[host].map { max(now, $0.addingTimeInterval(pause)) } ?? now
+        lastRequest[host] = slot
+        let wait = slot.timeIntervalSince(now)
+        if wait > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1e9))
         }
     }
 }
@@ -125,8 +152,17 @@ struct CachingResearchFetcher: ResearchFetcher {
     /// When true, cached pages are ignored (Run with refresh).
     let bypassCache: Bool
 
+    /// Hosts whose responses are NEVER written to (or read from) the page
+    /// cache. TNA's API terms say "do not cache" (GH #230): what we keep
+    /// from Discovery is our own finding — a catalogue reference, id and
+    /// title — in the dossier, never their response body.
+    static let uncachedHosts: Set<String> = [TNADiscoverySource.host]
+
     func fetch(_ url: URL) async throws -> ResearchFetchResult {
         let key = url.absoluteString
+        if let host = url.host?.lowercased(), Self.uncachedHosts.contains(host) {
+            return try await inner.fetch(url)
+        }
         if !bypassCache, let cached = store.cachedPage(key: subjectKey, pageURL: key) {
             return ResearchFetchResult(url: cached.url, statusCode: cached.statusCode,
                                        body: cached.body, retrievedAt: cached.retrievedAt,
@@ -316,118 +352,18 @@ struct ChroniclingAmericaSource: ResearchSource {
     }
 }
 
-// MARK: - Find a Grave
-
-struct FindAGraveSource: ResearchSource {
-    let fetcher: any ResearchFetcher
-    let kind: ResearchSourceKind = .findAGrave
-
-    static let base = "https://www.findagrave.com"
-    static let maxVariants = 2
-
-    func search(plan: ResearchQueryPlan) async throws -> [ResearchFinding] {
-        var findings: [ResearchFinding] = []
-        var seen: Set<String> = []
-        for variant in plan.nameVariants.prefix(Self.maxVariants) {
-            try Task.checkCancellation()
-            guard let url = Self.searchURL(name: variant, plan: plan) else { continue }
-            let result = try await fetcher.fetch(url)
-            let html = String(data: result.body, encoding: .utf8) ?? ""
-            for finding in Self.parse(html, retrievedAt: result.retrievedAt)
-            where seen.insert(finding.id).inserted {
-                findings.append(finding)
-            }
-        }
-        return findings
-    }
-
-    /// `/memorial/search?firstname=David&lastname=Latta&birthyear=1847&
-    /// birthyearfilter=5&deathyear=1921&deathyearfilter=5&location=…`.
-    /// The window's edges come from the plan's tolerance already, so the
-    /// filters are the plan's own span.
-    static func searchURL(name: String, plan: ResearchQueryPlan) -> URL? {
-        // "David McGill Latta Sr" → first "David", last "Latta" (suffix dropped).
-        let suffixes: Set<String> = ["jr", "jr.", "sr", "sr.", "ii", "iii", "iv"]
-        var parts = name.split(separator: " ").map(String.init)
-        while let tail = parts.last, suffixes.contains(tail.lowercased()) { parts.removeLast() }
-        guard let last = parts.last else { return nil }
-        let first = parts.count > 1 ? parts[0] : ""
-        var query = "firstname=\(ResearchText.percentEncoded(first))"
-            + "&lastname=\(ResearchText.percentEncoded(last))"
-        // Find a Grave takes a centre year and ± filter (1, 5, 10 …).
-        let span = plan.yearTo - plan.yearFrom
-        if span < 200 {
-            let centre = plan.yearFrom + ResearchQueryPlan.defaultTolerance
-            query += "&birthyear=\(centre)&birthyearfilter=10"
-        }
-        if let state = plan.stateHint {
-            query += "&location=\(ResearchText.percentEncoded(state))"
-        }
-        query += "&orderby=r"
-        return URL(string: base + "/memorial/search?" + query)
-    }
-
-    /// Anchors of the form `href="/memorial/<id>/<slug>"` are the only
-    /// structure relied on. Around each, a bounded window of text yields
-    /// the display name, a "YYYY–YYYY" dates run, and a cemetery line when
-    /// present. Any of those may be missing; the memorial link never is.
-    static func parse(_ html: String, retrievedAt: Date) -> [ResearchFinding] {
-        guard let regex = try? NSRegularExpression(
-            pattern: #"href="(/memorial/(\d+)/([^"?#]*))[^"]*""#, options: [.caseInsensitive])
-        else { return [] }
-        let nsRange = NSRange(html.startIndex..., in: html)
-        let matches = regex.matches(in: html, options: [], range: nsRange)
-        var findings: [ResearchFinding] = []
-        var seen: Set<String> = []
-        for (offset, match) in matches.enumerated() {
-            guard let pathRange = Range(match.range(at: 1), in: html),
-                  let idRange = Range(match.range(at: 2), in: html),
-                  let slugRange = Range(match.range(at: 3), in: html)
-            else { continue }
-            let memorialID = String(html[idRange])
-            guard seen.insert(memorialID).inserted else { continue }
-            let path = String(html[pathRange])
-            let slug = String(html[slugRange])
-            // Window: from this anchor to the next DIFFERENT memorial's
-            // anchor (or ~1500 chars) — one result card, never its neighbour.
-            var windowEnd = html.index(pathRange.upperBound, offsetBy: 1500, limitedBy: html.endIndex) ?? html.endIndex
-            for next in matches[(offset + 1)...] {
-                guard let nextID = Range(next.range(at: 2), in: html), html[nextID] != memorialID,
-                      let nextStart = Range(next.range(at: 0), in: html)?.lowerBound
-                else { continue }
-                if nextStart < windowEnd { windowEnd = nextStart }
-                break
-            }
-            let window = String(html[pathRange.upperBound..<windowEnd])
-            let name = ResearchText.firstCapture(#"<h2[^>]*class="[^"]*name-grave[^"]*"[^>]*>(.*?)</h2>"#,
-                                                 in: window, options: [.dotMatchesLineSeparators])
-                .map(ResearchText.stripHTML)
-                ?? Self.nameFromSlug(slug)
-            let dates = ResearchText.firstCapture(#"((?:c\.\s*)?(?:\d{1,2}\s+[A-Za-z]{3,9}\.?\s+)?\d{4}\s*[–\-]\s*(?:c\.\s*)?(?:\d{1,2}\s+[A-Za-z]{3,9}\.?\s+)?\d{4}|\d{4}\s*[–\-]\s*unknown|unknown\s*[–\-]\s*\d{4})"#,
-                                                  in: ResearchText.stripHTML(window))
-            let cemetery = ResearchText.firstCapture(#"class="[^"]*addr-cemet[^"]*"[^>]*>(.*?)</"#,
-                                                     in: window, options: [.dotMatchesLineSeparators])
-                .map(ResearchText.stripHTML)
-            var excerptParts: [String] = []
-            if let dates { excerptParts.append(dates) }
-            if let cemetery, !cemetery.isEmpty { excerptParts.append(cemetery) }
-            let excerpt = excerptParts.isEmpty ? "Find a Grave memorial \(memorialID)" : excerptParts.joined(separator: " · ")
-            findings.append(ResearchFinding(
-                source: .findAGrave,
-                title: name.isEmpty ? "Memorial \(memorialID)" : name,
-                date: dates,
-                excerpt: excerpt,
-                url: base + path,
-                retrievedAt: retrievedAt))
-        }
-        return findings
-    }
-
-    static func nameFromSlug(_ slug: String) -> String {
-        slug.split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }
-            .joined(separator: " ")
-    }
-}
+// MARK: - Find a Grave (demoted to a link, 2026-10-01)
+//
+// There is deliberately NO Find a Grave adapter. Find a Grave's robots.txt
+// has disallowed /memorial/search since 2024-11-25; the app fetched it
+// anyway until Rick approved the demotion (2026-10-01, GH #230, survey
+// docs/uk_scotland_records_survey_2026-10-01.md §6.1). The search is now a
+// pre-filled Record Finder link ("us.findagrave" in VideoScanCore's
+// RecordFinder registry) that opens in the reader's browser, and what they
+// find comes back through "I found a record…". Findings already saved with
+// source `.findAGrave` still load, show and can be told to Hallie.
+// RecordFinderAdapterTests pins that no automated source requests
+// findagrave.com.
 
 // MARK: - Wikipedia / Wikidata
 
@@ -596,12 +532,27 @@ enum ResearchRunner {
         }
     }
 
-    /// Production source list for one subject.
+    /// The general-web sources (no subject hints needed). Find a Grave is
+    /// not one of them any more (robots.txt; it is a Record Finder link).
     static func sources(fetcher: any ResearchFetcher) -> [any ResearchSource] {
         [ChroniclingAmericaSource(fetcher: fetcher),
-         FindAGraveSource(fetcher: fetcher),
          WikipediaSource(fetcher: fetcher),
          WebSearchSource(fetcher: fetcher)]
+    }
+
+    /// The kinds a Run can produce, in display order (the pane's "Sources"
+    /// line). Wikidata rides with Wikipedia.
+    static let runKinds: [ResearchSourceKind] = [.chroniclingAmerica, .wikipedia, .web,
+                                                 .irishCensus, .tnaDiscovery]
+
+    /// Production source list for one subject: the general sources plus the
+    /// record adapters (GH #230 Phase B), which read the subject's places,
+    /// years and military flag and make NO request when they do not apply.
+    static func sources(fetcher: any ResearchFetcher, subject: ResearchSubject) -> [any ResearchSource] {
+        let hints = ResearchRecordHints(subject: subject)
+        return sources(fetcher: fetcher)
+            + [IrishCensusSource(fetcher: fetcher, hints: hints),
+               TNADiscoverySource(fetcher: fetcher, hints: hints)]
     }
 
     static func run(plan: ResearchQueryPlan,

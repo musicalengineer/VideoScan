@@ -129,6 +129,21 @@ Blocked twice: production keys require a registered business (docs/familysearch_
 - **Griffith's (1847–64) and Tithe (1823–37)** name occupiers, not families; they place a surname in a townland, which is the pre-1864 bridge.
 - So for a Cork line the tooling ceiling is roughly the 1790s–1820s, and beyond that only estate papers or the Virtual Record Treasury's reconstructions. Donna's line benefits from New England town records kept from the 1630s; the gap is history first, connection second. Tooling makes reaching the ceiling faster; nothing gets past it for free.
 
+## 6a. Implementation notes (2026-10-01, Phase A + B built)
+
+- **Downgrade compatibility (no code; QA P3-10).** New dossiers (`People/<key>/research/dossier.json`)
+  can hold findings whose `source` is `irishCensus`, `tnaDiscovery` or `recordFinder`, plus the
+  optional fields `servedInMilitary`, `documentPath` and `fullText`. Builds from BEFORE 2026-10-01
+  decode the optional fields fine but **cannot decode the new source names**: their Research pane
+  shows a "could not read" error for that person. The file itself stays intact — every writer now
+  does read-modify-write under a per-key lock and an unreadable dossier is never overwritten —
+  but do not run an older build's Research pane against an archive this build has written. The
+  new build reads every older dossier (pinned by `dossiersSavedBeforeTodayStillDecode`).
+- Find a Grave is a pre-filled link, not a fetcher (robots.txt; Rick 2026-10-01).
+- Region detection classifies each place on its own by whole words; a place with a US marker is
+  the United States unless a later comma-part names a British-Isles country (New England's
+  Suffolk/Essex/Norfolk/Kent/Wales/Derry/Antrim stay American).
+
 ## 7. Sources (fetched 2026-09-30)
 
 [1] https://irishheritagenews.ie/irish-civil-records-whats-online-and-whats-not/ · [2] https://irishgenealogy.ie/en/news/98-church-records-available-online-www-irishgenealogy-ie · [3] https://irishheritagenews.ie/?p=23468 (Feb 2025 makeover) · [4] https://irishgenealogy.ie/site-usage-policy · [5] https://nationalarchives.ie/collections/search-the-census/ · [6] https://nationalarchives.ie/site-usage-policy/ · [7] https://nationalarchives.ie/?p=8233 (Permission to reuse Census 1926, CC BY 4.0) · [8] https://nationalarchives.ie/article/our-genealogy-website · [9] https://registers.nli.ie/ · [10] https://www.findmypast.co.uk/irish-parish-records · [11] https://angloboerwar.com/forum/11-research/38-wo97-british-army-service-records · [12] https://www.rootsireland.ie/terms-and-conditions/ · [13] https://www.familysearch.org/en/search/collection/1408347 · [14] https://developers.familysearch.org/main/docs/integrating-hints · [15] https://developers.familysearch.org/main/docs/family-tree-matching-and-hinting · [16] docs/familysearch_api_notes.md (certification guide, 2026-08-25) · [17] http://www.nationalarchives.gov.uk/terms-and-conditions/discovery-for-developers-about-the-application-programming-interface-api/ · [18] https://www.nationalarchives.gov.uk/terms-and-conditions/policy-on-use-of-website-and-catalogue-data/ · [19] https://www.nidirect.gov.uk/articles/public-record-office-northern-ireland · [20] https://www.igp-web.com/IGPArchives/ · [21] https://data.gov.ie/dataset?q=census+1911 · [22] https://www.findmypast.com/articles/irish-records-office-destruction/four-courts-destruction-what-was-lost

@@ -97,6 +97,8 @@ struct FamilyTreeView: View {
     /// last add/remove failure shown under the inspector's Documents list.
     @State private var documentAddTarget: FamilyDocumentAddTarget?
     @State private var documentsError: String?
+    /// "I found a record…" (GH #230): the person the bring-back sheet is for.
+    @State private var foundRecordTarget: RecordFinderFoundTarget?
     /// Refresh from FamilySearch… (2026-09-21). The center owns the refresh
     /// in flight (so closing the tab never kills the watcher); the review
     /// sheet is shown while `refreshReview` is non-nil — `.sheet(item:)`.
@@ -462,6 +464,7 @@ struct FamilyTreeView: View {
                 Text(researchRefusal ?? "")
             }
             .sheet(item: $documentAddTarget) { target in documentAddSheet(target) }
+            .sheet(item: $foundRecordTarget) { target in foundRecordSheet(target) }
             .sheet(item: $noteCorrectionTarget) { target in
                 FamilyTreeNoteCorrectionSheet(model: model, target: target) {
                     noteCorrectionTarget = nil
@@ -1159,6 +1162,7 @@ struct FamilyTreeView: View {
                 onResearch: { presentResearch(for: card.person.id) },
                 documentCount: model.documentCount(for: card.person.id),
                 onAddDocument: { presentAddDocument(for: card.person.id) },
+                onFoundRecord: { presentFoundRecord(for: card.person.id) },
                 canRefreshFromFamilySearch: model.isLive && card.person.familySearchID != nil,
                 onRefreshFromFamilySearch: { startPersonRefresh(for: card.person.id) },
                 hasFamilySearchRefresh: refreshCenter.hasRefresh(for: card.person.familySearchID),
@@ -1893,6 +1897,8 @@ struct FamilyTreeView: View {
             Divider()
             Button("Add document…") { presentAddDocument(for: person.id) }
                 .disabled(!model.isLive)
+            Button("I found a record…") { presentFoundRecord(for: person.id) }
+                .disabled(!model.isLive)
             Button("Refresh from FamilySearch…") { startPersonRefresh(for: person.id) }
                 .disabled(!model.isLive || person.familySearchID == nil)
             if refreshCenter.hasRefresh(for: person.familySearchID) {
@@ -2109,6 +2115,39 @@ struct FamilyTreeView: View {
                 documentAddTarget = nil
             },
             onCancel: { documentAddTarget = nil })
+    }
+
+    /// The "I found a record…" sheet. Any outcome that touched disk (filed,
+    /// rolled back, mixed) re-reads THAT person's documents and the notes
+    /// pane. It never closes the sheet — the sheet shows the outcome and
+    /// Rick closes it with Done — so a late answer cannot dismiss a sheet
+    /// opened for someone else (QA 2026-10-01 P3-6).
+    private func foundRecordSheet(_ target: RecordFinderFoundTarget) -> some View {
+        RecordFinderFoundSheet(
+            target: target,
+            speakerName: model.noteAuthor,
+            record: model.cyberBrainRecorder(),
+            onFiled: { outcome in
+                model.noteDocumentsChanged(for: target.id)
+                if outcome.isSuccess { documentsError = nil }
+                Task { await model.loadCyberBrain() }
+            },
+            onCancel: { foundRecordTarget = nil })
+    }
+
+    private func presentFoundRecord(for personID: String) {
+        model.select(personID)
+        guard let person = model.treePerson(id: personID),
+              let assetPerson = model.assetPerson(for: personID) else {
+            documentsError = "Records can be filed for people from your GEDCOM."
+            return
+        }
+        documentsError = nil
+        foundRecordTarget = RecordFinderFoundTarget(
+            id: personID,
+            subject: ResearchSubject(person: person),
+            assetPerson: assetPerson,
+            links: model.researchLinks(for: personID, logMenuOpen: false))
     }
 
     private func presentAddDocument(for personID: String) {

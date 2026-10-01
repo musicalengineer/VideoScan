@@ -43,6 +43,10 @@ struct ResearchSubject: Equatable, Sendable, Codable {
     let deathDate: String?
     let birthPlace: String?
     let deathPlace: String?
+    /// The tree records military service (GH #230: the TNA Discovery
+    /// adapter runs only for these). Optional so dossiers saved before
+    /// 2026-10-01 still decode; nil reads as "no".
+    let servedInMilitary: Bool?
 
     var birthYear: Int? { GedcomFamilyGraph.year(in: birthDate) }
     var deathYear: Int? { GedcomFamilyGraph.year(in: deathDate) }
@@ -77,6 +81,9 @@ struct ResearchSubject: Equatable, Sendable, Codable {
         deathDate = person.deathDate
         birthPlace = person.birthPlace
         deathPlace = person.deathPlace
+        // A US draft registration is not service (most registrants never
+        // served), so it does not send anyone to the British Army records.
+        servedInMilitary = person.militaryFacts.contains { !$0.isDraftRegistration }
     }
 
     /// Stable across re-pulls as long as the name and the raw dates are the
@@ -286,6 +293,14 @@ enum ResearchSourceKind: String, Codable, Sendable, CaseIterable, Equatable {
     case wikipedia
     case wikidata
     case web
+    /// GH #230 Phase B: the 1901/1911 Census of Ireland JSON index.
+    case irishCensus
+    /// GH #230 Phase B: The National Archives (UK) Discovery catalogue —
+    /// references only (their "do not cache" line).
+    case tnaDiscovery
+    /// GH #230 Phase A: a record Rick found himself and filed with
+    /// "I found a record…" — not the output of any search.
+    case recordFinder
 
     var label: String {
         switch self {
@@ -294,13 +309,20 @@ enum ResearchSourceKind: String, Codable, Sendable, CaseIterable, Equatable {
         case .wikipedia: return "Wikipedia"
         case .wikidata: return "Wikidata"
         case .web: return "Web"
+        case .irishCensus: return "Census of Ireland"
+        case .tnaDiscovery: return "TNA Discovery"
+        case .recordFinder: return "Filed record"
         }
     }
+
+    /// True for the kinds a Run produces; false for records Rick filed.
+    var isSearchSource: Bool { self != .recordFinder }
 
     /// How the CyberBrain classifies a confirmed finding from here.
     var cyberBrainSourceKind: CyberBrainSource.Kind {
         switch self {
-        case .chroniclingAmerica, .findAGrave: return .officialRecord
+        case .chroniclingAmerica, .findAGrave, .irishCensus, .tnaDiscovery, .recordFinder:
+            return .officialRecord
         case .wikipedia, .wikidata, .web: return .curatedBiography
         }
     }
@@ -338,13 +360,26 @@ struct ResearchFinding: Identifiable, Equatable, Sendable, Codable {
     var lore: String
     /// Set once the finding has been told to Hallie (the CyberBrain item).
     var toldItemID: String?
+    /// For a `.recordFinder` finding: the filed document, archive-relative
+    /// (`People/<folder>/Documents/<file>`) — the CyberBrain source locator.
+    /// Optional, so dossiers saved before 2026-10-01 still decode.
+    var documentPath: String?
+    /// For a `.recordFinder` finding: Rick's WHOLE transcription. The
+    /// excerpt is capped at `maxExcerptLength` for display; what Hallie is
+    /// told must never be cut (QA 2026-10-01 P1-1). Optional, so dossiers
+    /// saved before today still decode.
+    var fullText: String?
 
     static let maxExcerptLength = 600
 
+    /// `idSeed` replaces the URL as the identity material when one URL can
+    /// carry several records — a filed record is identified by its file's
+    /// SHA-256, so two certificates found on one results page stay two.
     init(source: ResearchSourceKind, title: String, date: String?, excerpt: String,
          url: String, retrievedAt: Date, verdict: ResearchVerdict = .unreviewed,
-         lore: String = "", toldItemID: String? = nil) {
-        self.id = Self.makeID(source: source, url: url)
+         lore: String = "", toldItemID: String? = nil, documentPath: String? = nil,
+         idSeed: String? = nil, fullText: String? = nil) {
+        self.id = Self.makeID(source: source, url: idSeed ?? url)
         self.source = source
         self.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         self.date = date
@@ -355,6 +390,9 @@ struct ResearchFinding: Identifiable, Equatable, Sendable, Codable {
         self.verdict = verdict
         self.lore = lore
         self.toldItemID = toldItemID
+        self.documentPath = documentPath
+        let whole = fullText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.fullText = whole.isEmpty ? nil : whole
     }
 
     static func makeID(source: ResearchSourceKind, url: String) -> String {
@@ -363,10 +401,21 @@ struct ResearchFinding: Identifiable, Equatable, Sendable, Codable {
     }
 
     /// The text that becomes the CyberBrain item: lore when Rick wrote
-    /// some, else the excerpt.
+    /// some, else the whole transcription of a filed record, else the
+    /// excerpt.
     var attestationText: String {
         let trimmedLore = lore.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedLore.isEmpty ? excerpt : trimmedLore
+        if !trimmedLore.isEmpty { return trimmedLore }
+        return fullText ?? excerpt
+    }
+
+    /// A filed record with no words of Rick's — no lore, no transcription.
+    /// Its excerpt is only the "not yet transcribed" placeholder, which must
+    /// never reach Hallie as a fact (QA 2026-10-01 P2-2).
+    var isUntranscribedFiledRecord: Bool {
+        source == .recordFinder
+            && lore.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (fullText ?? "").isEmpty
     }
 }
 
@@ -395,7 +444,8 @@ struct ResearchDossier: Equatable, Sendable, Codable {
     /// survive for findings whose id is already here; new ones are
     /// appended unreviewed; findings no longer returned stay if reviewed
     /// (Rick's work is never discarded by a source's whim) and are dropped
-    /// if unreviewed.
+    /// if unreviewed. Records Rick FILED (`.recordFinder`) are never a
+    /// source's output, so a run never drops or trims them, reviewed or not.
     mutating func merge(fresh: [ResearchFinding], at date: Date) {
         var byID: [String: ResearchFinding] = [:]
         for finding in findings { byID[finding.id] = finding }
@@ -406,19 +456,31 @@ struct ResearchDossier: Equatable, Sendable, Codable {
                 finding.verdict = prior.verdict
                 finding.lore = prior.lore
                 finding.toldItemID = prior.toldItemID
+                finding.documentPath = prior.documentPath
             }
             merged.append(finding)
         }
-        for finding in findings where !seen.contains(finding.id) && finding.verdict != .unreviewed {
+        for finding in findings where !seen.contains(finding.id)
+            && (finding.verdict != .unreviewed || !finding.source.isSearchSource) {
             merged.append(finding)
         }
         if merged.count > Self.maxFindings {
-            let reviewed = merged.filter { $0.verdict != .unreviewed }
-            let unreviewed = merged.filter { $0.verdict == .unreviewed }
-            merged = reviewed + unreviewed.prefix(max(0, Self.maxFindings - reviewed.count))
+            let kept = merged.filter { $0.verdict != .unreviewed || !$0.source.isSearchSource }
+            let trimmable = merged.filter { $0.verdict == .unreviewed && $0.source.isSearchSource }
+            merged = kept + trimmable.prefix(max(0, Self.maxFindings - kept.count))
         }
         findings = merged
         lastRunAt = date
+    }
+
+    /// Add one record Rick filed. Refuses (returns false) when a finding
+    /// with the same id is already here. A filed record's id is derived from
+    /// its FILE's SHA-256 (`idSeed`), not its URL, so the same file is never
+    /// listed twice while two records found on one results page stay two.
+    mutating func addFiled(_ finding: ResearchFinding) -> Bool {
+        guard !findings.contains(where: { $0.id == finding.id }) else { return false }
+        findings.append(finding)
+        return true
     }
 
     mutating func setVerdict(_ verdict: ResearchVerdict, for id: String) {

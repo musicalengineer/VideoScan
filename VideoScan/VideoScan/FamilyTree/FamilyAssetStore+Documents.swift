@@ -396,6 +396,17 @@ extension FamilyAssetStore {
         }
     }
 
+    /// False when the person folder HAS a `Documents/documents.json` that
+    /// cannot be read (damaged, oversized, a link). A missing list is fine.
+    /// The "I found a record" filer asks this before writing anything, so a
+    /// damaged list is a refusal rather than a write-then-trash.
+    func documentSidecarIsReadable(inPersonFolder folder: URL) -> Bool {
+        let documentsDir = Self.documentsFolder(in: folder)
+        let sidecar = documentsDir.appendingPathComponent(Self.documentsSidecarName)
+        guard fileManager.fileExists(atPath: sidecar.path) else { return true }
+        return (try? readDocumentSidecar(in: documentsDir)) != nil
+    }
+
     // MARK: Removal
 
     /// Take a document off the person's list and move its file to
@@ -583,10 +594,12 @@ extension FamilyAssetStore {
         return f.string(fromByteCount: Int64(count))
     }
 
-    /// "Mary C O'Connor (LZ7X-ABC)" / the folder name when no person is known.
+    /// "LZ7X-ABC" — the person's KEY (FamilySearch ID, else GEDCOM pointer),
+    /// never their name: the app log is not the place for family names (QA
+    /// 2026-10-01 P3-1; the os_log line still carries the name as private).
+    /// A folder name can contain a name too, so it is not used either.
     private static func logSubject(_ person: FamilyAssetPerson?, folder: URL) -> String {
-        guard let person else { return folder.lastPathComponent }
-        let key = person.familySearchID ?? person.gedcomID
-        return key.map { "\(person.name) (\($0))" } ?? person.name
+        if let key = person?.familySearchID ?? person?.gedcomID, !key.isEmpty { return key }
+        return "a person with no ID"
     }
 }

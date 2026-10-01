@@ -93,6 +93,9 @@ struct FamilyTreePersonCard: View {
     /// drawn only when ≥ 1, like the bookmark.
     var documentCount: Int = 0
     var onAddDocument: () -> Void = {}
+    /// "I found a record for X…" (GH #230): file a downloaded record and,
+    /// once read, tell Hallie.
+    var onFoundRecord: () -> Void = {}
     /// Refresh from FamilySearch… (2026-09-21): fetch this one person and
     /// review what changed. Disabled (with a tooltip saying why) when the
     /// record has no FamilySearch ID — the refresh is keyed on it.
@@ -129,17 +132,38 @@ struct FamilyTreePersonCard: View {
     /// scripts while serving browsers happily — the site saying a human may
     /// read this and a robot may not. Opening the reader's browser respects
     /// that and cannot break when they redesign a page.
+    ///
+    /// 2026-10-01 (GH #230, Record Finder): links are grouped by archive
+    /// region; a link that only opens the archive's blank form says
+    /// "(search form)". "I found a record…" files what the reader downloads.
     @ViewBuilder private var researchElsewhereMenu: some View {
         let links = researchLinksFor()
         if !links.isEmpty {
             Menu("Research \(person.name) elsewhere") {
-                ForEach(links) { item in
-                    Link(destination: item.url) {
-                        Text(item.isPrefilled ? item.title : "\(item.title) (search)")
+                ForEach(Self.groups(of: links), id: \.self) { group in
+                    Section(group.isEmpty ? "Other" : group) {
+                        ForEach(links.filter { $0.group == group }) { item in
+                            Link(destination: item.url) {
+                                Text(item.isPrefilled ? item.title : "\(item.title) (search form)")
+                            }
+                            .help(item.reason)
+                        }
                     }
                 }
             }
         }
+        Button("I found a record for \(person.name)…", systemImage: "tray.and.arrow.down") {
+            onSelect()
+            onFoundRecord()
+        }
+        .accessibilityIdentifier("tree.person.foundRecord")
+    }
+
+    /// Group names in first-seen order (the registry's order).
+    static func groups(of links: [FamilyTreeResearchLinks.Link]) -> [String] {
+        var out: [String] = []
+        for link in links where !out.contains(link.group) { out.append(link.group) }
+        return out
     }
 
     @ViewBuilder private var childrenMenu: some View {
