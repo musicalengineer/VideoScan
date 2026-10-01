@@ -517,7 +517,16 @@ public struct GedcomFamilyGraph: Sendable {
             }
 
             let tag = String(parts[1])
-            let value = parts.count == 3 ? String(parts[2]) : ""
+            let trimmedValue = parts.count == 3 ? String(parts[2]) : ""
+            // NOTE text keeps its edge spaces: everything after "level TAG "
+            // exactly as written (GedcomLifeDetails' rule). A CONC continues
+            // the SAME line, so "worked as a " + "compositor" needs the
+            // trailing space (Ancestry splits there), and a CONC chunk's own
+            // leading space is data too. Trimming glued the words together
+            // and lost a note line's edge spaces through the writer
+            // (generated-input F11). Every other tag reads trimmed, as before.
+            let value = (tag == "NOTE" || tag == "CONT" || tag == "CONC")
+                ? Self.verbatimValue(rawLine) : trimmedValue
 
             if inHead {
                 // VideoScan provenance (written by the merge, ignored by
@@ -1114,6 +1123,14 @@ public struct GedcomFamilyGraph: Sendable {
         default: return false
         }
         return true
+    }
+
+    /// The value of one GEDCOM line exactly as written: line-leading
+    /// whitespace and a stray CR off, then everything after "level TAG ".
+    static func verbatimValue(_ rawLine: Substring) -> String {
+        let parts = GedcomLifeDetails.trimLine(rawLine)
+            .split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+        return parts.count == 3 ? String(parts[2]) : ""
     }
 
     /// Display and surname are the normalized spellings ("Mc Gill" →
