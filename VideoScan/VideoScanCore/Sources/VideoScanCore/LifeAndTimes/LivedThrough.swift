@@ -360,17 +360,8 @@ extension LifeAndTimes {
         var diedDuring = false
         if let d = lifespan.death, let dl = d.lower, let du = d.upper { diedDuring = dl >= s && du <= e }
 
-        var certainty: Certainty = .possible
-        if let dLo = lifespan.deathLow, lifespan.birth.upper != nil {
-            if max(s, bHi + 1) <= min(e, dLo - 1) { certainty = .certain }
-            else if bornDuring || diedDuring { certainty = .likely }
-        } else if lifespan.birth.upper != nil {
-            // No proven death year (presumed deceased, "Deceased", or
-            // "BEF 1900"): alive past birth is not proven, but an event
-            // early in life is likely (and never past a recorded bound).
-            if bornDuring { certainty = .likely }
-            else if bHi < s, s - bHi <= 60, s <= dHi { certainty = .likely }
-        }
+        let certainty = Self.certainty(event: event, lifespan: lifespan,
+                                       bornDuring: bornDuring, diedDuring: diedDuring)
 
         let moment: LifeMoment
         if bornDuring { moment = .bornDuring }
@@ -395,6 +386,22 @@ extension LifeAndTimes {
                                 ageAtEnd: ageAtEnd, placeReason: reason, score: score)
     }
 
+    static func certainty(event: HistoricalEvent, lifespan: Lifespan,
+                          bornDuring: Bool, diedDuring: Bool) -> Certainty {
+        let s = event.startYear, e = event.endYear, bHi = lifespan.birthHigh
+        guard lifespan.birth.upper != nil else { return .possible }
+        if let dLo = lifespan.deathLow {
+            if max(s, bHi + 1) <= min(e, dLo - 1) { return .certain }
+            return bornDuring || diedDuring ? .likely : .possible
+        }
+        // No proven death year (presumed deceased, "Deceased", or
+        // "BEF 1900"): alive past birth is not proven, but an event early
+        // in life is likely (and never past a recorded bound).
+        if bornDuring { return .likely }
+        if bHi < s, s - bHi <= 60, s <= lifespan.deathHigh { return .likely }
+        return .possible
+    }
+
     /// Nil when a regional event touched none of the person's places.
     static func placeRelevance(of event: HistoricalEvent, presences: [Presence], anchors: PresenceAnchors,
                                lifespan: Lifespan, ageAtStart: QualifiedAge?) -> (PlaceRelevance, String?)? {
@@ -403,7 +410,8 @@ extension LifeAndTimes {
         if event.isWorldwide { return (.world, nil) }
         var best: (PlaceRelevance, String?)?
         func consider(_ r: PlaceRelevance, _ why: String?) {
-            if best == nil || r > best!.0 { best = (r, why) }
+            if let b = best, b.0 >= r { return }
+            best = (r, why)
         }
         let birthRegion = anchors.birth
         let deathRegion = anchors.death

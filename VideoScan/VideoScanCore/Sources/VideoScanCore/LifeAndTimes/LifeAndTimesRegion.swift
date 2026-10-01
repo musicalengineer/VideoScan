@@ -98,24 +98,29 @@ extension LifeAndTimes {
         case .canada: return .canada
         case .unknown: return nil
         case .other:
-            let place = BirthplaceClassifier.classify(raw)
-            switch place.country {
-            case "France"?: return .france
-            case "Germany"?: return .germany
-            case "Italy"?: return .italy
-            case "Netherlands"?: return .netherlands
-            case BirthplaceClassifier.unitedKingdom?: return .britain   // UK, constituent country not recorded
-            default:
-                if place.continent == .europe { return .otherEurope }
-                // "Europe" / native spellings the region table calls elsewhere.
-                let key = BirthplaceClassifier.normalize(raw)
-                if key.hasSuffix("france") { return .france }
-                if key.hasSuffix("deutschland") { return .germany }
-                if key.hasSuffix("italia") { return .italy }
-                if key.hasSuffix("nederland") { return .netherlands }
-                if key.hasSuffix("europe") { return .otherEurope }
-                return place.isUnknown ? nil : .elsewhere
-            }
+            return europeanRegion(of: raw)
+        }
+    }
+
+    /// "Elsewhere" places, refined by the country classifier.
+    static func europeanRegion(of raw: String) -> Region? {
+        let place = BirthplaceClassifier.classify(raw)
+        switch place.country {
+        case "France"?: return .france
+        case "Germany"?: return .germany
+        case "Italy"?: return .italy
+        case "Netherlands"?: return .netherlands
+        case BirthplaceClassifier.unitedKingdom?: return .britain   // UK, constituent country not recorded
+        default:
+            if place.continent == .europe { return .otherEurope }
+            // "Europe" / native spellings the region table calls elsewhere.
+            let key = BirthplaceClassifier.normalize(raw)
+            if key.hasSuffix("france") { return .france }
+            if key.hasSuffix("deutschland") { return .germany }
+            if key.hasSuffix("italia") { return .italy }
+            if key.hasSuffix("nederland") { return .netherlands }
+            if key.hasSuffix("europe") { return .otherEurope }
+            return place.isUnknown ? nil : .elsewhere
         }
     }
 }

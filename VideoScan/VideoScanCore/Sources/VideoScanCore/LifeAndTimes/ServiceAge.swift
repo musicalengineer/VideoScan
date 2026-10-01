@@ -223,72 +223,37 @@ extension LifeAndTimes {
 
     // MARK: - Computation
 
+    /// One theatre the person matches: age-possible and a place inside it.
+    struct TheatreMatch {
+        var theatre: Theatre
+        var strongAge: Bool
+        var strongPlace: Bool
+        var basis: String
+    }
+
     /// The candidacy of one person for one war, or the reason it fails.
     static func candidate(subject: Subject, lifespan: Lifespan, presences: [Presence],
                           war: ServiceWar) -> Result<ServiceCandidate, ServiceExclusionBox> {
         let sex = subject.sex.uppercased()
-        if sex.isEmpty || (sex != "M" && sex != "F") { return .failure(.init(.unknownSex)) }
-        if !war.band.sexes.contains(sex) { return .failure(.init(.sex)) }
+        guard sex == "M" || sex == "F" else { return .failure(.init(.unknownSex)) }
+        guard war.band.sexes.contains(sex) else { return .failure(.init(.sex)) }
 
-        let bLo = lifespan.birthLow, bHi = lifespan.birthHigh, dHi = lifespan.deathHigh
-        let provenAliveUntil: Int? = lifespan.deathLow.map { $0 - 1 } ?? (lifespan.birth.upper.map { $0 + 60 })
-        let band = war.band
-
-        struct Match { var theatre: Theatre; var strongAge: Bool; var strongPlace: Bool; var basis: String }
-        var matches: [Match] = []
+        var matches: [TheatreMatch] = []
         var anyAge = false
         for theatre in war.theatres {
-            let ts = theatre.startYear, te = theatre.endYear
-            // Possible window.
-            let pLo = max(band.minAge + bLo, bLo, ts)
-            let pHi = min(band.maxAge + bHi, dHi, te)
-            guard pLo <= pHi else { continue }
+            guard let strongAge = ageWindow(lifespan: lifespan, band: war.band, theatre: theatre) else { continue }
             anyAge = true
-            // Strong window.
-            var strongAge = false
-            if lifespan.birth.lower != nil, lifespan.birth.upper != nil, let alive = provenAliveUntil {
-                let sLo = max(band.minAge + bHi, bHi + 1, ts)
-                let sHi = min(band.maxAge + bLo, alive, te)
-                strongAge = sLo <= sHi
-            }
             guard let (strongPlace, basis) = placeBasis(presences: presences, theatre: theatre) else { continue }
-            matches.append(Match(theatre: theatre, strongAge: strongAge, strongPlace: strongPlace, basis: basis))
+            matches.append(TheatreMatch(theatre: theatre, strongAge: strongAge, strongPlace: strongPlace, basis: basis))
         }
-        if matches.isEmpty { return .failure(.init(anyAge ? .place : .age)) }
+        guard let first = matches.min(by: { $0.theatre.startYear < $1.theatre.startYear }) else {
+            return .failure(.init(anyAge ? .place : .age))
+        }
 
-        // Tree evidence: military facts dated in the war years (or undated
-        // but naming the war).
-        let warStart = war.theatres.map(\.startYear).min() ?? 0
-        let warEnd = war.theatres.map(\.endYear).max() ?? 0
-        let military = subject.militaryFacts.filter { f in
-            if let y = f.year { return y >= warStart - 1 && y <= warEnd + 1 }
-            return false
-        }.map { f in [f.summary, f.year.map(String.init)].compactMap { $0 }.joined(separator: " ") }
-
-        let first = matches.min { $0.theatre.startYear < $1.theatre.startYear }!
+        let military = recordedMilitary(subject, during: war)
         let ageAtStart = QualifiedAge.at(first.theatre.startYear, birth: lifespan.birth)
-        let ageAtEnd = QualifiedAge.at(min(first.theatre.endYear, dHi), birth: lifespan.birth)
+        let ageAtEnd = QualifiedAge.at(min(first.theatre.endYear, lifespan.deathHigh), birth: lifespan.birth)
         let strong = !military.isEmpty || matches.contains { $0.strongAge && $0.strongPlace }
-
-        var reasons: [String] = []
-        reasons.append(sex == "M" ? "male, as recorded" : "female, as recorded")
-        var ageLine = "born \(lifespan.birth.spoken)"
-        if let a = ageAtStart { ageLine += " → \(a.spoken) when \(war.name) began (\(first.theatre.startYear))" }
-        if let a = ageAtEnd, first.theatre.endYear != first.theatre.startYear {
-            ageLine += ", \(a.spoken) at its end (\(min(first.theatre.endYear, dHi)))"
-        }
-        ageLine += "; band \(band.label)"
-        reasons.append(ageLine)
-        if let d = lifespan.death { reasons.append("died \(d.spoken)") }
-        for m in matches {
-            var line = "\(m.basis) — \(m.theatre.label)"
-            if let note = m.theatre.note { line += " (\(note))" }
-            reasons.append(line)
-        }
-        for f in military { reasons.append("the tree records: \(f)") }
-        if !strong {
-            reasons.append("possible only: \(matches.contains { $0.strongAge } ? "where they lived in those years is not recorded" : "the dates do not prove the age")")
-        }
 
         // The PERSON's places that put them in a matching theatre (not the
         // theatre's whole list: "ties to Ireland and the United States").
@@ -298,22 +263,71 @@ extension LifeAndTimes {
             for p in presences where m.theatre.covers(p.region) && !regions.contains(p.region) { regions.append(p.region) }
             for t in m.theatre.targets where !targets.contains(t) { targets.append(t) }
         }
+        let reasons = serviceReasons(sex: sex, lifespan: lifespan, war: war, first: first, matches: matches,
+                                     ageAtStart: ageAtStart, ageAtEnd: ageAtEnd, military: military, strong: strong)
         return .success(ServiceCandidate(
             personID: subject.id, name: subject.name, warID: war.id, warName: war.name,
             strength: strong ? .strong : .possible, ageAtStart: ageAtStart, ageAtEnd: ageAtEnd,
             regions: regions, targets: targets, reasons: reasons, recordedMilitary: military))
     }
 
+    /// Nil when no year of the theatre can put them in the band while
+    /// possibly alive; otherwise whether some year PROVES it (see header).
+    static func ageWindow(lifespan: Lifespan, band: ServiceBand, theatre: Theatre) -> Bool? {
+        let bLo = lifespan.birthLow, bHi = lifespan.birthHigh
+        let ts = theatre.startYear, te = theatre.endYear
+        let pLo = max(band.minAge + bLo, bLo, ts)
+        let pHi = min(band.maxAge + bHi, lifespan.deathHigh, te)
+        guard pLo <= pHi else { return nil }
+        let provenAliveUntil = lifespan.deathLow.map { $0 - 1 } ?? lifespan.birth.upper.map { $0 + 60 }
+        guard lifespan.birth.lower != nil, lifespan.birth.upper != nil, let alive = provenAliveUntil else { return false }
+        let sLo = max(band.minAge + bHi, bHi + 1, ts)
+        let sHi = min(band.maxAge + bLo, alive, te)
+        return sLo <= sHi
+    }
+
+    /// Military facts the tree records in (or within a year of) the war.
+    static func recordedMilitary(_ subject: Subject, during war: ServiceWar) -> [String] {
+        let warStart = war.theatres.map(\.startYear).min() ?? 0
+        let warEnd = war.theatres.map(\.endYear).max() ?? 0
+        return subject.militaryFacts.filter { f in
+            guard let y = f.year else { return false }
+            return y >= warStart - 1 && y <= warEnd + 1
+        }.map { f in [f.summary, f.year.map(String.init)].compactMap { $0 }.joined(separator: " ") }
+    }
+
+    /// The plain reasoning lines, in order: sex, age, death, place, tree.
+    static func serviceReasons(sex: String, lifespan: Lifespan, war: ServiceWar, first: TheatreMatch,
+                               matches: [TheatreMatch], ageAtStart: QualifiedAge?, ageAtEnd: QualifiedAge?,
+                               military: [String], strong: Bool) -> [String] {
+        var reasons = [sex == "M" ? "male, as recorded" : "female, as recorded"]
+        var ageLine = "born \(lifespan.birth.spoken)"
+        if let a = ageAtStart { ageLine += " → \(a.spoken) when \(war.name) began (\(first.theatre.startYear))" }
+        if let a = ageAtEnd, first.theatre.endYear != first.theatre.startYear {
+            ageLine += ", \(a.spoken) at its end (\(min(first.theatre.endYear, lifespan.deathHigh)))"
+        }
+        reasons.append(ageLine + "; band \(war.band.label)")
+        if let d = lifespan.death { reasons.append("died \(d.spoken)") }
+        for m in matches {
+            reasons.append("\(m.basis) — \(m.theatre.label)" + (m.theatre.note.map { " (\($0))" } ?? ""))
+        }
+        reasons += military.map { "the tree records: \($0)" }
+        if !strong {
+            let why = matches.contains { $0.strongAge }
+                ? "where they lived in those years is not recorded" : "the dates do not prove the age"
+            reasons.append("possible only: \(why)")
+        }
+        return reasons
+    }
+
     /// (strong place?, the basis sentence), or nil when no place is in the theatre.
     static func placeBasis(presences: [Presence], theatre: Theatre) -> (Bool, String)? {
         let inside = presences.filter { theatre.covers($0.region) }
         guard !inside.isEmpty else { return nil }
-        if let dated = inside.first(where: {
-            ($0.source == .residence || $0.source == .military) && ($0.year.map {
-                $0 >= theatre.startYear - 10 && $0 <= theatre.endYear + 10 } ?? false)
-        }) {
-            let verb = dated.source == .military ? "military record in" : "lived in"
-            return (true, "\(verb) \(dated.region.label) in \(dated.year!)")
+        for p in inside where p.source == .residence || p.source == .military {
+            guard let y = p.year, y >= theatre.startYear - 10, y <= theatre.endYear + 10 else { continue }
+            let verb = p.source == .military ? "military record in" : "lived in"
+            return (true, "\(verb) \(p.region.label) in \(y)")
         }
         let birth = presences.first { $0.source == .birth }
         let death = presences.first { $0.source == .death }
