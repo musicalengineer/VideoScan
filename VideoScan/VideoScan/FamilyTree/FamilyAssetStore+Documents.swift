@@ -12,7 +12,8 @@
 //     People/<…>/Documents/documents.json          ← the sidecar (the "database")
 //     People/<…>/Documents/.trash/<file>            ← removed files, never rm'd
 //
-// KIND is the short code Rick used (BC / DC / MC / Other). The sidecar is
+// KIND is the short code Rick used (BC / DC / MC / Other; MIL and CEN for
+// military and census records since 2026-10-01). The sidecar is
 // an array of `PersonDocument`, written atomically through
 // `AtomicFilePublish` like every other sidecar in the app. The person's
 // folder is the same one photos go to — the FamilySearch-ID folder when
@@ -47,10 +48,19 @@ private let documentLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "t
 /// What a paper IS. The raw values are the codes Rick asked for and the
 /// filename prefix on disk; they are also the sidecar's `kind` value, so
 /// they must never be renamed (a rename would orphan every existing entry).
+///
+/// Declaration order is the inspector's group order (Birth, Death,
+/// Marriage, Military, Census, Other). MIL and CEN were added 2026-10-01
+/// (additive: every sidecar written before still decodes). A code this
+/// build does not know — written by a NEWER build — is read as `.other`
+/// and written back unchanged (`PersonDocument.unrecognizedKindCode`), so
+/// an older build never damages a newer list.
 enum PersonDocumentKind: String, Codable, CaseIterable, Sendable {
     case birth = "BC"
     case death = "DC"
     case marriage = "MC"
+    case military = "MIL"
+    case census = "CEN"
     case other = "Other"
 
     /// "Birth certificate" — the log line and the detail panel.
@@ -59,17 +69,34 @@ enum PersonDocumentKind: String, Codable, CaseIterable, Sendable {
         case .birth: return "Birth certificate"
         case .death: return "Death certificate"
         case .marriage: return "Marriage certificate"
+        case .military: return "Military record"
+        case .census: return "Census record"
         case .other: return "Other document"
         }
     }
 
-    /// "Birth" — the segmented picker in the Add sheet.
+    /// "Birth" — the segmented picker in the Add sheet and the inspector's
+    /// group headings.
     var shortLabel: String {
         switch self {
         case .birth: return "Birth"
         case .death: return "Death"
         case .marriage: return "Marriage"
+        case .military: return "Military"
+        case .census: return "Census"
         case .other: return "Other"
+        }
+    }
+
+    /// SF Symbol for a row whose thumbnail is not ready (or not wanted).
+    var symbolName: String {
+        switch self {
+        case .birth: return "figure.and.child.holdinghands"
+        case .death: return "leaf"
+        case .marriage: return "heart"
+        case .military: return "shield"
+        case .census: return "list.bullet.rectangle"
+        case .other: return "doc.text"
         }
     }
 }
@@ -95,10 +122,15 @@ struct PersonDocument: Codable, Identifiable, Equatable, Sendable {
     let byteCount: Int
     /// Where the file is right now; nil on a freshly decoded row.
     var fileURL: URL? = nil
+    /// The sidecar's `kind` code when this build does not know it (a newer
+    /// build wrote it); `kind` then reads `.other`. Kept so that rewriting
+    /// the list (an import or a removal beside it) writes the code back
+    /// exactly as found. Not a key of its own — it IS the `kind` value.
+    var unrecognizedKindCode: String? = nil
 
     // Swift's `CodingKeys` ≈ the explicit field list a C++ serializer
-    // would carry: a property missing from it (fileURL) is skipped by the
-    // synthesized encode/decode and must have a default.
+    // would carry. encode/decode are written out below (in an extension, so
+    // the memberwise initializer survives) only to keep an unknown `kind`.
     enum CodingKeys: String, CodingKey {
         case id, kind, filename, originalFilename, addedAt, note, sha256, byteCount
     }
@@ -108,6 +140,40 @@ struct PersonDocument: Codable, Identifiable, Equatable, Sendable {
 }
 
 extension PersonDocument.CodingKeys: CaseIterable {}
+
+// Hand-written Codable, same keys and strictness as the synthesized one,
+// except `kind`: an unknown code decodes as `.other` instead of failing the
+// whole list (C++: a deserializer that maps an unknown enum tag to a
+// fallback and remembers the original tag for re-serialization).
+extension PersonDocument {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let code = try c.decode(String.self, forKey: .kind)
+        let known = PersonDocumentKind(rawValue: code)
+        self.init(id: try c.decode(UUID.self, forKey: .id),
+                  kind: known ?? .other,
+                  filename: try c.decode(String.self, forKey: .filename),
+                  originalFilename: try c.decode(String.self, forKey: .originalFilename),
+                  addedAt: try c.decode(Date.self, forKey: .addedAt),
+                  note: try c.decode(String.self, forKey: .note),
+                  sha256: try c.decode(String.self, forKey: .sha256),
+                  byteCount: try c.decode(Int.self, forKey: .byteCount),
+                  fileURL: nil,
+                  unrecognizedKindCode: known == nil ? code : nil)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(unrecognizedKindCode ?? kind.rawValue, forKey: .kind)
+        try c.encode(filename, forKey: .filename)
+        try c.encode(originalFilename, forKey: .originalFilename)
+        try c.encode(addedAt, forKey: .addedAt)
+        try c.encode(note, forKey: .note)
+        try c.encode(sha256, forKey: .sha256)
+        try c.encode(byteCount, forKey: .byteCount)
+    }
+}
 
 /// One inspector row: a document PLUS who it was read for. The owner
 /// travels with the row so an action taken on it (Remove) goes to the

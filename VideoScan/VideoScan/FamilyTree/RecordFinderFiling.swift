@@ -95,13 +95,17 @@ enum FoundRecordType: String, CaseIterable, Sendable, Codable {
 
     /// Only certificates get the certificate codes; a baptism register
     /// entry is not a birth certificate, so it is filed as Other with its
-    /// label in the note.
+    /// label in the note. Census returns and military service records
+    /// have their own codes (CEN / MIL) since 2026-10-01, so the inspector
+    /// can group them.
     var documentKind: PersonDocumentKind {
         switch self {
         case .birth: return .birth
         case .marriage: return .marriage
         case .death: return .death
-        case .baptism, .burial, .census, .military, .will, .valuation, .other: return .other
+        case .census: return .census
+        case .military: return .military
+        case .baptism, .burial, .will, .valuation, .other: return .other
         }
     }
 }

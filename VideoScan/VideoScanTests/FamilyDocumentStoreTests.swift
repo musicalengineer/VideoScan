@@ -488,7 +488,11 @@ struct FamilyDocumentStoreTests {
         #expect(rows[0]["kind"] as? String == "BC")
         #expect(rows[0]["id"] as? String == doc.id.uuidString)
         #expect((rows[0]["addedAt"] as? String)?.contains("T") == true) // ISO-8601
-        #expect(Set(PersonDocumentKind.allCases.map(\.rawValue)) == ["BC", "DC", "MC", "Other"])
+        // MIL and CEN added 2026-10-01 (additive); the four original codes
+        // never change.
+        #expect(Set(PersonDocumentKind.allCases.map(\.rawValue)) == ["BC", "DC", "MC", "MIL", "CEN", "Other"])
+        #expect(PersonDocumentKind.allCases == [.birth, .death, .marriage, .military, .census, .other],
+                "declaration order is the inspector's group order")
 
         // Round trip through the app's decoder: identical row.
         let decoded = try FamilyAssetStore.sidecarDecoder.decode(
@@ -500,6 +504,73 @@ struct FamilyDocumentStoreTests {
         #expect(decoded[0].id == expected.id)
         #expect(decoded[0].sha256 == expected.sha256)
         #expect(abs(decoded[0].addedAt.timeIntervalSince(expected.addedAt)) < 1)
+    }
+
+    // MARK: Compatibility — the kind codes (2026-10-01)
+
+    /// A sidecar exactly as the 2026-09-20 build wrote it (only BC/DC/MC/
+    /// Other, no extra keys) still lists every row.
+    @Test func aSidecarWrittenBeforeMilitaryAndCensusStillLoads() throws {
+        let sb = try sandbox()
+        defer { try? fileManager.removeItem(at: sb.base) }
+        let folder = try sb.store.folderForPhotoRequest(person: mary)
+        let dir = documentsDir(folder)
+        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        let bytes = try pdfData()
+        let sha = FamilyAssetStore.sha256Hex(bytes)
+        var json: [String] = []
+        for (i, code) in ["BC", "DC", "MC", "Other"].enumerated() {
+            let name = "\(code)-20260920-10150\(i).pdf"
+            try bytes.write(to: dir.appendingPathComponent(name))
+            json.append("""
+            {"addedAt":"2026-09-20T10:15:0\(i)Z","byteCount":\(bytes.count),"filename":"\(name)",\
+            "id":"\(UUID().uuidString)","kind":"\(code)","note":"","originalFilename":"\(i).pdf","sha256":"\(sha)"}
+            """)
+        }
+        try Data("[\(json.joined(separator: ","))]".utf8)
+            .write(to: dir.appendingPathComponent(FamilyAssetStore.documentsSidecarName))
+
+        let listed = sb.store.documents(for: mary)
+        #expect(listed.count == 4)
+        #expect(Set(listed.map(\.kind)) == [.birth, .death, .marriage, .other])
+        #expect(listed.allSatisfy { $0.unrecognizedKindCode == nil })
+    }
+
+    /// A code this build does not know (written by a newer one) reads as
+    /// Other — the rest of the list is NOT lost — and survives a rewrite of
+    /// the list (an import beside it) unchanged.
+    @Test func anUnknownKindCodeReadsAsOtherAndIsWrittenBackUnchanged() throws {
+        let sb = try sandbox(clock: fixedClock)
+        defer { try? fileManager.removeItem(at: sb.base) }
+        let folder = try sb.store.folderForPhotoRequest(person: mary)
+        let dir = documentsDir(folder)
+        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        let bytes = try pdfData()
+        let name = "WILL-20300101-000000.pdf"
+        try bytes.write(to: dir.appendingPathComponent(name))
+        let futureID = UUID()
+        let row = """
+        [{"addedAt":"2030-01-01T00:00:00Z","byteCount":\(bytes.count),"filename":"\(name)",\
+        "id":"\(futureID.uuidString)","kind":"WILL","note":"from a newer build","originalFilename":"w.pdf",\
+        "sha256":"\(FamilyAssetStore.sha256Hex(bytes))"}]
+        """
+        try Data(row.utf8).write(to: dir.appendingPathComponent(FamilyAssetStore.documentsSidecarName))
+
+        let listed = sb.store.documents(for: mary)
+        let future = try #require(listed.first { $0.id == futureID })
+        #expect(future.kind == .other)
+        #expect(future.unrecognizedKindCode == "WILL")
+
+        // Rewrite the list: import a military record beside it.
+        let pdf = try write(bytes, named: "mil.pdf", in: sb)
+        let added = try sb.store.importPersonDocument(from: pdf, kind: .military, note: "", into: folder)
+        #expect(added.filename.hasPrefix("MIL-"))
+        let rows = try sidecarRows(in: folder)
+        #expect(rows.count == 2)
+        #expect(rows.first { $0["id"] as? String == futureID.uuidString }?["kind"] as? String == "WILL",
+                "the newer build's code was written back unchanged")
+        #expect(rows.first { $0["id"] as? String == added.id.uuidString }?["kind"] as? String == "MIL")
+        #expect(Set(rows.flatMap { $0.keys }) == PersonDocument.sidecarKeys, "no new keys in the sidecar")
     }
 
     // MARK: Scale

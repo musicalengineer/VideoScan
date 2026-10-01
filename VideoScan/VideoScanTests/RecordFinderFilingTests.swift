@@ -404,7 +404,8 @@ struct RecordFinderFilingTests {
         #expect(!RecordFilingOutcome.refused("x").isSuccess)
         #expect(!RecordFilingOutcome.rolledBack("x").isSuccess)
         #expect(!RecordFilingOutcome.mixedState("x").isSuccess)
-        #expect(FoundRecordType.census.documentKind == .other)
+        #expect(FoundRecordType.census.documentKind == .census)
+        #expect(FoundRecordType.military.documentKind == .military)
         #expect(FoundRecordType.marriage.documentKind == .marriage)
         #expect(FoundRecordType.baptism.documentKind == .other, "a baptism entry is not a birth certificate")
     }
