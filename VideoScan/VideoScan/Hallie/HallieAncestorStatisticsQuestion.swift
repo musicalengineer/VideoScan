@@ -71,9 +71,22 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
     /// statistics recognizers abstain rather than count "My Mom" or the
     /// whole tree. Shared with HallieTreeStatisticsQuestion.
     static let kinOrSexScope = /\b(?:female|male|women|men|woman|man)\b|\b(?:mom|mum|mommy|mother|dad|daddy|father|grand\w+|wife|husband|aunt|uncle|cousin|brother|sister|nephew|niece|son|daughter)(?:'s|s'|s)\b/
-    /// "the quill line", "on the lark side", "the quill family": a scope
-    /// this reader cannot resolve to a person (QA P2-4) — never "ours".
-    private static let unreadFamilyScope = /\bthe\s+[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*)?\s+(?:family|line|side|clan|branch|lineage)\b/
+    /// "the quill line", "on the lark side", "the quill family", "of the
+    /// polwenna branch": a scope this reader cannot resolve to a person
+    /// (QA P2-4) — never "ours", and never a PERSON named "Polwenna Branch"
+    /// (generated-input AF3). Not a scope: "the other side" (the lineage
+    /// reader's own phrase), "the deepest line", "the family line".
+    private static let unreadFamilyScope = /\bthe\s+(?!(?:other|same|whole|direct|deepest|longest|oldest|earliest|first|family|two|both)\b)[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*)?\s+(?:family|line|side|clan|branch|lineage)\b/
+    /// "… ancestors WHO VOTED", "… THAT fought in a war": a relative clause
+    /// narrowing the ancestors, which none of these shapes can hold
+    /// (generated-input AF3). The shapes' own predicates are not
+    /// constraints: "ancestors who were born in …" (birthplaces), "who
+    /// died …" (age at death).
+    private static let relativeClause = /\b(?:ancestors?|ancestry|forebears?|forefathers?|relatives|people|lines?|sides?|branch(?:es)?|family|families)\s+(?:who|that|which|whom|whose)\b(?!\s+(?:(?:were|was|are|is)\s+)?born\b)(?!\s+died\b)/
+    /// Any constraint the age-at-death and birthplace shapes cannot hold.
+    private static func hasUnreadConstraint(_ q: String) -> Bool {
+        q.firstMatch(of: unreadFamilyScope) != nil || q.firstMatch(of: relativeClause) != nil
+    }
     /// "in Ireland", "in the civil war" … — a place or event filter the
     /// earliest / deepest shapes cannot hold. "in my/our/the family tree"
     /// and "in donna's tree" are scope, not filters.
@@ -122,8 +135,10 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
     /// family line this reader could not resolve ("the quill line", "on the
     /// lark side"), which must never be answered as ours (QA P2-4).
     private static func scopeOrOurs(_ q: String) -> Who? {
-        if let w = who(in: q, allowTree: true) { return w }
-        return q.firstMatch(of: unreadFamilyScope) == nil ? .ours : nil
+        // Checked FIRST: the person reader would take "of the polwenna
+        // branch" for someone named Polwenna Branch (generated-input AF3).
+        if q.firstMatch(of: unreadFamilyScope) != nil { return nil }
+        return who(in: q, allowTree: true) ?? .ours
     }
 
     /// "how deep is our deepest line" / "how many generations back does our
@@ -151,6 +166,8 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
         guard measured, wantsAverage || ageAtDeathPhrase,
               q.firstMatch(of: /\bborn\b/) == nil, q.firstMatch(of: anyYear) == nil,
               q.firstMatch(of: ancestorNoun) != nil,
+              // "… on the marrowby line", "… who fought in a war" (AF3).
+              !hasUnreadConstraint(q),
               let who = who(in: q, allowTree: false) else { return nil }
         return .ageAtDeath(who: who)
     }
@@ -161,6 +178,9 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
         guard q.firstMatch(of: countAsk) != nil,
               q.firstMatch(of: ancestorNoun) != nil,
               q.firstMatch(of: anyYear) == nil,
+              // "… on the fenlane side were born …", "… who voted were
+              // born …" (AF3).
+              !hasUnreadConstraint(q),
               let who = who(in: q, allowTree: false),
               let m = q.firstMatch(of: /\b(?:born|birth\s*places?|places?\s+of\s+birth)\s+(?:in|at)\s+(.+)$/) else { return nil }
         var tail = String(m.1)

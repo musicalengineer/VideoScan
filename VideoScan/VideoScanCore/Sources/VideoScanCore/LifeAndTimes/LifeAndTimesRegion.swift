@@ -129,9 +129,15 @@ extension LifeAndTimes {
         return base
     }
 
+    /// Whole comma parts. The bare county names (Antrim, Armagh, DOWN,
+    /// Fermanagh, Londonderry / Derry, Tyrone) count only because
+    /// `region(ofPlace:)` consults this list when the place is otherwise
+    /// Irish, British or unplaced — "Antrim, N. H." and "Derry, NH" are
+    /// American first (the shared US reader) and never reach it.
+    /// Generated-input F5: "Down, Ireland" (County Down) was Ireland.
     static let northernIrishMarkers: Set<String> = [
         "northern ireland", "ni", "belfast", "antrim", "co antrim", "county antrim", "armagh", "co armagh",
-        "county armagh", "co down", "county down", "fermanagh", "co fermanagh", "county fermanagh",
+        "county armagh", "down", "co down", "county down", "fermanagh", "co fermanagh", "county fermanagh",
         "londonderry", "co londonderry", "county londonderry", "derry", "co derry", "county derry",
         "tyrone", "co tyrone", "county tyrone", "ulster northern ireland",
     ]

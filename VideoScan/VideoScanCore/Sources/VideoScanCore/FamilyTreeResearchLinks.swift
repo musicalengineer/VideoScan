@@ -104,32 +104,11 @@ public enum FamilyTreeResearchLinks {
         "anglesey", "merioneth", "cardiganshire", "brecon", "montgomeryshire",
     ]
 
-    /// US words matched anywhere in a place (whole words): the country,
-    /// the old colonial name, two cities the tree uses bare.
-    private static let usMarkers = [
-        "united states", "usa", "u s a", "new england", "boston", "albany",
-    ]
-
-    /// The 50 states and DC, matched as whole words.
-    static let usStateNames: [String] = [
-        "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut",
-        "delaware", "florida", "georgia", "hawaii", "idaho", "illinois", "indiana", "iowa",
-        "kansas", "kentucky", "louisiana", "maine", "maryland", "massachusetts", "michigan",
-        "minnesota", "mississippi", "missouri", "montana", "nebraska", "nevada", "new hampshire",
-        "new jersey", "new mexico", "new york", "north carolina", "north dakota", "ohio",
-        "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina", "south dakota",
-        "tennessee", "texas", "utah", "vermont", "virginia", "washington", "west virginia",
-        "wisconsin", "wyoming", "district of columbia",
-    ]
-
-    /// Postal abbreviations — matched only as a WHOLE comma-part ("Salem,
-    /// Essex, MA"), never inside text, because "co", "me", "in" are words.
-    static let usStateAbbreviations: Set<String> = [
-        "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "hi", "id", "il", "in", "ia",
-        "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj",
-        "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt",
-        "va", "wa", "wv", "wi", "wy", "dc", "us",
-    ]
+    // The US vocabulary (country words, full state names, the old written
+    // forms "Conn." / "Penna." / "N. H.", postal codes under their case
+    // rule) is USPlaceNames — shared with every other place reader. The
+    // bare towns "Boston" and "Albany" are NOT US markers any more:
+    // Boston, Lincolnshire is the original (generated-input F2).
 
     /// Regions suggested by anywhere the record places this person.
     /// Deliberately returns a SET: someone born in Cork and dying in Boston
@@ -143,6 +122,13 @@ public enum FamilyTreeResearchLinks {
     /// place that carries a US marker is the United States; only an
     /// explicit country name in that SAME place ("…, Ireland") adds a
     /// British-Isles region to it.
+    ///
+    /// Generated-input sweep 2026-10-01 (F1/F2): the US test is the shared
+    /// one (USPlaceNames), so the old written forms count — "Kent, Conn",
+    /// "Ireland, Ind.", "Antrim, N. H.", "Somerset, Penna.", "Scotland CT".
+    /// And an explicit country wins: when the classifier reads the place's
+    /// last part as a country other than the United States ("…, England",
+    /// "…, Australia"), no US marker inside it makes the place American.
     public static func regions(birthPlace: String?, deathPlace: String?) -> Set<Region> {
         var out: Set<Region> = []
         for place in [birthPlace, deathPlace].compactMap({ $0 }) {
@@ -159,8 +145,9 @@ public enum FamilyTreeResearchLinks {
         let parts = place.lowercased().split(separator: ",")
             .map { $0.replacingOccurrences(of: ".", with: "").trimmingCharacters(in: .whitespaces) }
 
-        let isUS = usMarkers.contains(where: has) || usStateNames.contains(where: has)
-            || parts.contains(where: { usStateAbbreviations.contains($0) })
+        let explicitCountry = BirthplaceClassifier.classify(place).country
+        let isUS = explicitCountry == BirthplaceClassifier.unitedStates
+            || (explicitCountry == nil && USPlaceNames.mentionsUnitedStates(place))
         // "New England" names the US, and "New South Wales" Australia —
         // neither is the country of the same name.
         let withoutNewWorld = words.replacingOccurrences(of: " new england ", with: " ")

@@ -248,22 +248,12 @@ struct ResearchQueryPlan: Equatable, Sendable, Codable {
         return out
     }
 
-    static let usStates: [String] = [
-        "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut",
-        "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa",
-        "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan",
-        "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire",
-        "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio",
-        "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota",
-        "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "West Virginia",
-        "Wisconsin", "Wyoming", "District of Columbia",
-    ]
-
+    /// The first comma part that names a US state, as its full name. The
+    /// shared reader (USPlaceNames), so "Mass.", "Conn", "N. H." and "MA"
+    /// count as they do everywhere else — not only the full spelling.
     static func stateHint(in tokens: [String]) -> String? {
         for token in tokens {
-            if let state = usStates.first(where: { $0.caseInsensitiveCompare(token) == .orderedSame }) {
-                return state
-            }
+            if let state = USPlaceNames.stateName(recorded: token) { return state }
         }
         return nil
     }

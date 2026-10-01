@@ -133,7 +133,9 @@ extension GedcomFamilyGraph {
             case "PLAC" where pending.fact.place == nil && !text.isEmpty:
                 pending.fact.place = text
             case "NOTE" where pending.fact.note == nil && !text.isEmpty && !text.hasPrefix("@"):
-                pending.fact.note = text
+                // As written: a trailing space before a CONC is data (the
+                // parser passes NOTE / CONT / CONC values verbatim).
+                pending.fact.note = value
             default:
                 pending.openSubTag = ""
                 return false

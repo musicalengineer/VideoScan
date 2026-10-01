@@ -69,15 +69,16 @@ struct ResearchRecordHints: Sendable, Equatable {
     }
 
     init(subject: ResearchSubject) {
-        // The surname: the GEDCOM one, else the last name token once a
-        // Jr/Sr suffix is dropped.
-        let suffixes: Set<String> = ["jr", "jr.", "sr", "sr.", "ii", "iii", "iv"]
-        var tokens = subject.name.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-        while let last = tokens.last, suffixes.contains(last.lowercased()) { tokens.removeLast() }
-        // A record that is only a given name ("Bridget") has NO surname to
-        // search: never send the given name as the family name (QA P3-11).
-        let primary = (subject.surname?.isEmpty == false ? subject.surname : nil)
-            ?? (tokens.count >= 2 ? tokens.last : nil)
+        // The surname is the one the TREE marks, and only that one. A
+        // subject only ever comes from a tree record (ResearchEligibility),
+        // where the GEDCOM parser has already read the "/surname/" slashes.
+        // No surname there means none to search: a lone given name
+        // ("Bridget", QA P3-11), GEDCOM's EXPLICIT empty surname ("Ann
+        // Thomasina //" — generated-input AF2), or an unmarked name ("Mary
+        // Ellen"). The old last-token fallback could only ever fire in
+        // those cases, and in each it sent a GIVEN name ("Thomasina",
+        // "Ellen") and its clerk variants to the census as a family name.
+        let primary = subject.surname?.isEmpty == false ? subject.surname : nil
         let person = RecordFinder.Person(name: subject.name, surname: primary,
                                          birthYear: subject.birthYear, deathYear: subject.deathYear,
                                          birthPlace: subject.birthPlace, deathPlace: subject.deathPlace,
