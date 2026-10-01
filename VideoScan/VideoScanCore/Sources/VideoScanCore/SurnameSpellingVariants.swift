@@ -30,6 +30,10 @@ public enum SurnameSpellingVariants {
     public static func variants(of surname: String, limit: Int = 4) -> [String] {
         let trimmed = surname.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, limit > 0 else { return [] }
+        // Irish-form names (Ó / Ní / Nic / Mac … with lenition, síneadh
+        // fada) follow other rules; the English clerk rules would mangle
+        // them. They are searched exactly as written (QA 2026-10-01 P3-11).
+        guard !isIrishForm(trimmed) else { return [trimmed] }
         var ordered: [String] = [trimmed]
         var seen: Set<String> = [trimmed.lowercased()]
         let oneRule = applyEachRule(to: trimmed)
@@ -45,13 +49,25 @@ public enum SurnameSpellingVariants {
     /// Every candidate one rule away from `name`.
     static func applyEachRule(to name: String) -> [String] {
         var out: [String] = []
-        out.append(contentsOf: endingVariants(name))
-        if let v = vowelVariant(name) { out.append(v) }
+        let endings = endingVariants(name)
+        out.append(contentsOf: endings)
+        // The o ↔ oy change only travels with the -an family it was seen
+        // in; on any other name it makes a different name (Doyle → Dole).
+        if !endings.isEmpty, let v = vowelVariant(name) { out.append(v) }
         if let p = macVariant(name) { out.append(p) }
         if let o = apostropheOVariant(name) { out.append(o) }
         if let y = eyVariant(name) { out.append(y) }
         if let d = doubledVariant(name) { out.append(d) }
         return out.filter { $0.count >= 2 && $0 != name }
+    }
+
+    /// "Ó Súilleabháin", "Ní Bhriain", "Mac Giolla Phádraig": a
+    /// space-separated Irish prefix, or any vowel with a síneadh fada.
+    static func isIrishForm(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        let prefixes = ["ó ", "ní ", "nic ", "ua ", "uí ", "mac ", "mhic ", "mag "]
+        if prefixes.contains(where: { lower.hasPrefix($0) }) { return true }
+        return lower.contains { "áéíóú".contains($0) }
     }
 
     // MARK: Rules

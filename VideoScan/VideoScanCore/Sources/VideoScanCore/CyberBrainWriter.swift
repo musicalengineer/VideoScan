@@ -333,6 +333,18 @@ public enum CyberBrainWriter {
             }
         }
 
+        // Idempotent research attestations (QA 2026-10-01 P3-5): the SAME
+        // passage from the SAME research source about the SAME person is
+        // already recorded → hand back that item and the archive unchanged.
+        // A "told Hallie, but the dossier didn't record it" retry can then
+        // never write a duplicate item.
+        if testimony.origin == .researchFinding, !createdPerson,
+           let person = people.first(where: { $0.id == personID }),
+           let existing = person.items.first(where: { $0.sourceIDs.contains(sourceID) && $0.text == text }) {
+            return Receipt(archive: archive, personID: personID, canonicalName: person.canonicalName,
+                           itemID: existing.id, sourceID: sourceID, createdPerson: false)
+        }
+
         let takenItemIDs = Set(people.flatMap(\.items).map(\.id))
         let itemID = uniqueID(
             base: "\(itemPrefix).\(slug(personID.replacingOccurrences(of: "person.", with: ""))).\(dayStamp)",
@@ -821,6 +833,8 @@ public enum CyberBrainWriter {
         // never be silently replaced by a fresh one with a single passage.
 
         let receipt = try appending(testimony, to: existing)
+        // An idempotent repeat changes nothing — no rewrite, no backup churn.
+        if let existing, receipt.archive == existing { return receipt }
         try save(receipt.archive, root: root, hadExisting: existing != nil)
         return receipt
     }

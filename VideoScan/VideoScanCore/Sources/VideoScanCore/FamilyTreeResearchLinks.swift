@@ -104,29 +104,103 @@ public enum FamilyTreeResearchLinks {
         "anglesey", "merioneth", "cardiganshire", "brecon", "montgomeryshire",
     ]
 
+    /// US words matched anywhere in a place (whole words): the country,
+    /// the old colonial name, two cities the tree uses bare.
     private static let usMarkers = [
-        "united states", "usa", "u.s.a", "massachusetts", "new york",
-        "connecticut", "rhode island", "new hampshire", "vermont", "maine",
-        "new jersey", "pennsylvania", "boston", "albany",
+        "united states", "usa", "u s a", "new england", "boston", "albany",
+    ]
+
+    /// The 50 states and DC, matched as whole words.
+    static let usStateNames: [String] = [
+        "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut",
+        "delaware", "florida", "georgia", "hawaii", "idaho", "illinois", "indiana", "iowa",
+        "kansas", "kentucky", "louisiana", "maine", "maryland", "massachusetts", "michigan",
+        "minnesota", "mississippi", "missouri", "montana", "nebraska", "nevada", "new hampshire",
+        "new jersey", "new mexico", "new york", "north carolina", "north dakota", "ohio",
+        "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina", "south dakota",
+        "tennessee", "texas", "utah", "vermont", "virginia", "washington", "west virginia",
+        "wisconsin", "wyoming", "district of columbia",
+    ]
+
+    /// Postal abbreviations — matched only as a WHOLE comma-part ("Salem,
+    /// Essex, MA"), never inside text, because "co", "me", "in" are words.
+    static let usStateAbbreviations: Set<String> = [
+        "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "hi", "id", "il", "in", "ia",
+        "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj",
+        "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt",
+        "va", "wa", "wv", "wi", "wy", "dc", "us",
     ]
 
     /// Regions suggested by anywhere the record places this person.
     /// Deliberately returns a SET: someone born in Cork and dying in Boston
     /// is worth looking for on both sides of the water.
+    ///
+    /// QA 2026-10-01 (P2-4): each place is classified ON ITS OWN, by whole
+    /// words. New England reused British and Irish names — Suffolk, Essex
+    /// and Norfolk counties in Massachusetts, Wales MA, Derry and Antrim NH,
+    /// Kent CT ("Kent" also hid inside "Kentucky") — and a substring rule
+    /// sent those people to PRONI, PROB 11 and the Londonderry census. A
+    /// place that carries a US marker is the United States; only an
+    /// explicit country name in that SAME place ("…, Ireland") adds a
+    /// British-Isles region to it.
     public static func regions(birthPlace: String?, deathPlace: String?) -> Set<Region> {
-        let haystack = [birthPlace, deathPlace]
-            .compactMap { $0?.lowercased() }
-            .joined(separator: " | ")
-        guard !haystack.isEmpty else { return [] }
         var out: Set<Region> = []
-        if haystack.contains("ireland") || irishCounties.contains(where: { haystack.contains($0) }) {
-            out.insert(.ireland)
+        for place in [birthPlace, deathPlace].compactMap({ $0 }) {
+            out.formUnion(regions(ofPlace: place))
         }
-        if englishMarkers.contains(where: { haystack.contains($0) }) { out.insert(.england) }
-        if scottishMarkers.contains(where: { haystack.contains($0) }) { out.insert(.scotland) }
-        let walesless = haystack.replacingOccurrences(of: "new south wales", with: "")
-        if welshMarkers.contains(where: { walesless.contains($0) }) { out.insert(.wales) }
-        if usMarkers.contains(where: { haystack.contains($0) }) { out.insert(.unitedStates) }
+        return out
+    }
+
+    /// One place string → its regions (see `regions(birthPlace:deathPlace:)`).
+    public static func regions(ofPlace place: String) -> Set<Region> {
+        let words = " " + normalisedWords(place) + " "
+        guard words.trimmingCharacters(in: .whitespaces).isEmpty == false else { return [] }
+        func has(_ phrase: String) -> Bool { words.contains(" " + phrase + " ") }
+        let parts = place.lowercased().split(separator: ",")
+            .map { $0.replacingOccurrences(of: ".", with: "").trimmingCharacters(in: .whitespaces) }
+
+        let isUS = usMarkers.contains(where: has) || usStateNames.contains(where: has)
+            || parts.contains(where: { usStateAbbreviations.contains($0) })
+        // "New England" names the US, and "New South Wales" Australia —
+        // neither is the country of the same name.
+        let withoutNewWorld = words.replacingOccurrences(of: " new england ", with: " ")
+            .replacingOccurrences(of: " new south wales ", with: " ")
+        func hasCountry(_ name: String) -> Bool { withoutNewWorld.contains(" " + name + " ") }
+
+        var out: Set<Region> = []
+        if isUS {
+            out.insert(.unitedStates)
+            // Only a whole comma-part in COUNTRY position counts — never the
+            // first part, which is the town ("Wales, Hampden, Massachusetts").
+            let countryParts = Set(parts.dropFirst())
+            for (name, region) in [("ireland", Region.ireland), ("england", .england),
+                                   ("scotland", .scotland), ("wales", .wales)]
+            where countryParts.contains(name) {
+                out.insert(region)
+            }
+            return out
+        }
+        if hasCountry("ireland") || irishCounties.contains(where: has) { out.insert(.ireland) }
+        if englishMarkers.contains(where: { hasCountry($0) }) { out.insert(.england) }
+        if scottishMarkers.contains(where: has) { out.insert(.scotland) }
+        if welshMarkers.contains(where: { hasCountry($0) }) { out.insert(.wales) }
+        return out
+    }
+
+    /// Lower-case words separated by single spaces; letters, digits and
+    /// apostrophes only ("Queen's Co." → "queen's co").
+    static func normalisedWords(_ text: String) -> String {
+        var out = ""
+        var pendingSpace = false
+        for ch in text.lowercased() {
+            if ch.isLetter || ch.isNumber || ch == "'" || ch == "’" {
+                if pendingSpace, !out.isEmpty { out.append(" ") }
+                pendingSpace = false
+                out.append(ch == "’" ? "'" : ch)
+            } else {
+                pendingSpace = true
+            }
+        }
         return out
     }
 

@@ -323,3 +323,80 @@ struct RecordFinderScaleTests {
         #expect(elapsed < 60, "100k people took \(elapsed) s")
     }
 }
+
+// MARK: - QA 2026-10-01 (P2-4, P3-11, P3-5)
+
+@Suite("Record Finder — QA findings")
+struct RecordFinderQAFindingTests {
+
+    /// P2-4: New England reused British and Irish place names. A place that
+    /// carries a US marker is the United States unless it ALSO names a
+    /// British-Isles country outright.
+    @Test func newEnglandCountyAndTownNamesAreNotTheBritishIsles() {
+        let us: [String] = [
+            "Boston, Suffolk, Massachusetts",
+            "Ipswich, Essex, Massachusetts, United States",
+            "Norfolk, Virginia",
+            "Louisville, Jefferson, Kentucky",
+            "Wales, Hampden, Massachusetts",
+            "Derry, Rockingham, New Hampshire, United States",
+            "Antrim, Hillsborough, NH",
+            "Salem, Essex, MA, USA",
+            "Kent, Litchfield, Connecticut",
+        ]
+        for place in us {
+            #expect(FamilyTreeResearchLinks.regions(birthPlace: place, deathPlace: nil) == [.unitedStates],
+                    "\(place) → \(FamilyTreeResearchLinks.regions(birthPlace: place, deathPlace: nil))")
+        }
+        // The real ones still resolve.
+        #expect(FamilyTreeResearchLinks.regions(birthPlace: "Ipswich, Suffolk, England", deathPlace: nil) == [.england])
+        #expect(FamilyTreeResearchLinks.regions(birthPlace: "Derry, Ireland", deathPlace: nil) == [.ireland])
+        #expect(FamilyTreeResearchLinks.regions(birthPlace: "Canterbury, Kent", deathPlace: nil) == [.england])
+        // Born in Kent, England; died in Kent, Connecticut: both sides.
+        #expect(FamilyTreeResearchLinks.regions(birthPlace: "Maidstone, Kent, England",
+                                                deathPlace: "Kent, Litchfield, Connecticut") == [.england, .unitedStates])
+        // What it drove: no PRONI, no Londonderry census, no British links.
+        let nh = RecordFinder.Person(givenName: "Abner", surname: "Testerly", birthYear: 1800, deathYear: 1850,
+                                     birthPlace: "Derry, Rockingham, New Hampshire, United States",
+                                     deathPlace: "Boston, Suffolk, Massachusetts")
+        let ids = Set(RecordFinder.links(for: nh).compactMap(\.siteID))
+        #expect(!ids.contains("ie.proni.wills") && !ids.contains("ie.nai.census-1901-1911"))
+        #expect(!ids.contains { $0.hasPrefix("gb.") }, "\(ids)")
+        #expect(RecordFinder.Context(nh).deathRegions == [.unitedStates])
+    }
+
+    /// P3-11: a vowel change inside an ordinary name is a different name.
+    @Test func spellingVariantsStayConservative() {
+        let doyle = SurnameSpellingVariants.variants(of: "Doyle", limit: 10)
+        #expect(!doyle.contains("Dole"), "\(doyle)")
+        #expect(!SurnameSpellingVariants.variants(of: "Boland", limit: 10).contains("Boyland"))
+        // The -an family still gets its vowel forms (the clerk pattern).
+        #expect(SurnameSpellingVariants.variants(of: "Doran", limit: 10).contains("Doyran"))
+        #expect(SurnameSpellingVariants.variants(of: "Doyrane", limit: 10).contains("Dorane"))
+        // Irish-form names are left alone.
+        for name in ["Ó Súilleabháin", "Ní Bhriain", "Mac Giolla Phádraig", "Nic Dhonnchadha"] {
+            #expect(SurnameSpellingVariants.variants(of: name, limit: 10) == [name], "\(name)")
+        }
+    }
+
+    /// P3-5: telling the same confirmed research passage twice records it
+    /// once — a told-but-unrecorded retry cannot duplicate Hallie's item.
+    @Test func tellingTheSameResearchPassageTwiceIsIdempotent() throws {
+        let when = Date(timeIntervalSince1970: 1_790_866_800)
+        let citation = CyberBrainWriter.Testimony.Citation(
+            title: "t", url: "https://example.invalid/r", locator: "People/A/Documents/BC-1.pdf",
+            sourceKind: .officialRecord, retrievedAt: when)
+        let testimony = CyberBrainWriter.Testimony(
+            subjectName: "Abner Testerly", speakerName: "Tester", text: "Born 1800 (synthetic).",
+            kind: .event, date: when, origin: .researchFinding, gedcomPersonID: "@I1@", citation: citation)
+        let first = try CyberBrainWriter.appending(testimony, to: nil)
+        let second = try CyberBrainWriter.appending(testimony, to: first.archive)
+        #expect(second.itemID == first.itemID)
+        #expect(second.archive == first.archive)
+        // A different passage from the same page is still a new item.
+        let other = CyberBrainWriter.Testimony(
+            subjectName: "Abner Testerly", speakerName: "Tester", text: "A second fact.",
+            kind: .event, date: when, origin: .researchFinding, gedcomPersonID: "@I1@", citation: citation)
+        #expect(try CyberBrainWriter.appending(other, to: first.archive).itemID != first.itemID)
+    }
+}
