@@ -71,7 +71,7 @@ struct FamilyMapAdversarialAppTests {
     }
 
     @Test func unsupportedRecordedPlacesAreNotDescribedAsMissingRecords() async throws {
-        let model = try await Self.model(places: ["Berlin, Germany"])
+        let model = try await Self.model(places: ["Warsaw, Poland"])
         #expect(model.computed.totals.unresolved == 1)
         let text = FamilyMapModel.totalsLine(model.computed.totals)
         #expect(!text.contains("no recorded place"), "the birthplace was recorded; only its map placement is unresolved")

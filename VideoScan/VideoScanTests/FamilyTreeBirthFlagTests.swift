@@ -29,7 +29,7 @@ import VideoScanCore
 
 /// Eleven people: one per country in scope (England by county, Scotland,
 /// Wales, Northern Ireland, Ireland country-only, colonial Massachusetts,
-/// Nova Scotia), one off the map (Berlin), one unrecorded, one whose place
+/// Nova Scotia), one off the map (Warsaw), one unrecorded, one whose place
 /// only the family's notes know (Mary, Cork), and one off-map trap (Perth,
 /// WA — must never fly 🇺🇸).
 private let flagsGedcom = """
@@ -77,7 +77,7 @@ private let flagsGedcom = """
 1 NAME Karl /Berlin/
 1 SEX M
 1 BIRT
-2 PLAC Berlin, Germany
+2 PLAC Warsaw, Poland
 0 @I9@ INDI
 1 NAME Nobody /Knows/
 1 SEX U
@@ -174,7 +174,7 @@ struct FamilyTreeBirthFlagTests {
                 == "Born in Boston, Suffolk, Massachusetts Bay Colony, British Colonial America · shown under today's flag")
         #expect(built["@I1@"]?.tooltip == "Born in Sheffield, Yorkshire, England · shown under today's flag")
         #expect(built["@I4@"]?.recordedPlace == "Belfast, County Antrim, Northern Ireland")
-        // The Perth, WA trap and Berlin: recorded, off the map, no flag.
+        // The Perth, WA trap and Warsaw: recorded, off the map, no flag.
         #expect(built["@I11@"] == nil && built["@I8@"] == nil)
     }
 
@@ -210,7 +210,7 @@ struct FamilyTreeBirthFlagTests {
     @Test func theTreeWinsWhenBothResolveAndTheNoteOnlyFillsAGap() throws {
         let graph = flagsGraph()
         // John (@I1@, Yorkshire in the tree) has a note claiming Cork; Karl
-        // (@I8@, Berlin in the tree — off the map) has a note saying Cork.
+        // (@I8@, Warsaw in the tree — off the map) has a note saying Cork.
         let johnNote = CyberBrainItem(id: "event.john.birth", kind: .event, text: "John Yorke was born in Cork, they say.",
                                       subjectPersonIDs: ["person.john"], place: "Cork, Ireland", sourceIDs: ["source.bc"],
                                       confidence: .probable, privacy: .family, status: .active, disputesItemIDs: [],
@@ -332,13 +332,13 @@ struct FamilyTreeBirthFlagTests {
         if let task = model.birthCountriesTask { await task.value }
         #expect(model.birthFlag(for: "@I1@")?.country == .england)
         var second = GedcomFamilyGraph(gedcomText:
-            "0 HEAD\n1 _VS_MERGED Y\n1 _VS_ROOT @I1@\n0 @I1@ INDI\n1 NAME Hans /Other/\n1 SEX M\n1 BIRT\n2 PLAC Berlin, Germany\n0 TRLR")
+            "0 HEAD\n1 _VS_MERGED Y\n1 _VS_ROOT @I1@\n0 @I1@ INDI\n1 NAME Hans /Other/\n1 SEX M\n1 BIRT\n2 PLAC Warsaw, Poland\n0 TRLR")
         second.sourceDirectory = "/nonexistent/trees"
         second.sourceFileName = "second.ged"
         model.install(graph: second)
         #expect(model.birthFlag(for: "@I1@") == nil, "the old tree's England flag on the new tree's @I1@")
         if let task = model.birthCountriesTask { await task.value }
-        #expect(model.birthFlag(for: "@I1@") == nil, "Berlin is off the map")
+        #expect(model.birthFlag(for: "@I1@") == nil, "Warsaw is off the map")
     }
 
     /// Public repo: no real street address in these fixtures (policy of
@@ -379,7 +379,7 @@ struct FamilyTreeBirthFlagTests {
     @Test func building100kPeopleStaysUnderBudget() throws {
         let n = 100_000
         let places: [String?] = ["Sheffield, Yorkshire, England", "Boston, Suffolk, Massachusetts Bay Colony, British Colonial America",
-                                 "England", "Fife, Scotland", "Cardiff, Glamorgan, Wales", nil, "Berlin, Germany",
+                                 "England", "Fife, Scotland", "Cardiff, Glamorgan, Wales", nil, "Warsaw, Poland",
                                  "Halifax, Nova Scotia, Canada", "Cork, Ireland", "Providence, Rhode Island", "Lowell Mass. U.S.A.",
                                  "Perth, WA, Australia", "United States", "Co. Antrim, Northern Ireland", "Toronto, Ontario, Canada"]
         // Built with plain loops: Xcode 26.3 (CI) cannot type-check the
@@ -413,7 +413,7 @@ struct FamilyTreeBirthFlagTests {
         #expect(cpu < PerformanceLane.loadAwareDebugCeiling(.milliseconds(600)),
                 "100k flags took \(cpu) cpu / \(wall) wall (\(PerformanceLane.loadDescription()))")
 
-        // Correctness at scale: 12 of 15 spellings resolve (nil, Germany,
+        // Correctness at scale: 12 of 15 spellings resolve (nil, Poland,
         // Australia do not); the notes add the Cork people.
         let resolving: Set<Int> = [0, 1, 2, 3, 4, 7, 8, 9, 10, 12, 13, 14]
         var fromTree = 0

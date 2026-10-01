@@ -2,9 +2,13 @@
 // The Family Map (GH #227 stage 2; Rick 2026-09-29 approved MapKit:
 // "professional, impress Donna and other family"). A real map — coastlines,
 // towns, pan and zoom — with the historic counties of England, Scotland and
-// Wales, the counties of Ireland, the US states and the Canadian provinces
+// Wales, the counties of Ireland, the US states and the Canadian provinces,
+// and (2026-09-30) Western Europe — France by région, Germany by Land, the
+// Netherlands and Belgium by province, nine more countries as outlines —
 // drawn over it and SHADED by how many of the walked ancestors were born
-// there. Click a region and the side panel names them.
+// there. Click a region and the side panel names them. The camera opens on
+// the shaded units, Europe included when anyone was born there
+// (`FamilyMapUnits.coverage`).
 //
 // WHAT YOU SEE. Every bundled unit has a thin outline, so the counties read
 // as a map even before the tiles arrive (or with no network at all — the
@@ -23,16 +27,16 @@
 // selected: the totals, the busiest regions, and "Not on the map" — the
 // people the map could not place, nearest generation first, split
 // honestly into "no recorded place" and "recorded but off the map"
-// (Berlin, Germany). A country outline's count line says "county
+// (Warsaw, Poland). A country outline's count line says "county
 // unresolved", never "not recorded": "Lothian, Scotland" WAS recorded.
 //
 // COST (no O(people) work in any view body): the counts, shades, labels,
 // camera box and the unplaced list are computed off-main by
 // `FamilyMapModel` and published together; this body reads dictionaries by
 // key and lists that are already capped. The MKPolygons for the bundled
-// units are built once per process (`FamilyMapShapes`, ~1 MB for ~60k
+// units are built once per process (`FamilyMapShapes`, ~1 MB for ~40k
 // vertices) and reused by every walk. A click is a few point-in-polygon
-// lookups over ≤ 189 bounding boxes.
+// lookups over ≤ 254 bounding boxes.
 //
 // LINKING. `Map` lives in the `_MapKit_SwiftUI` overlay; on macOS 27 an
 // `import AVKit` alone did not link AVKit itself and `VideoPlayer` aborted
@@ -428,15 +432,19 @@ struct FamilyTreeMapView: View {
     /// Scotland", "New England"), the map just cannot pin one county /
     /// state to it, so the outline is never read as the whole country's
     /// total (people with a county shade the county only). The member rows
-    /// say what was recorded.
+    /// say what was recorded. A country the map draws only as an outline
+    /// (Italy, Denmark …) has nothing finer to resolve to: "8 people born
+    /// in Italy", no "unresolved".
     static func countLine(unit: FamilyMapUnits.Unit, count: Int) -> String {
         let people = "\(count.formatted()) \(count == 1 ? "person" : "people")"
         if unit.kind == .country {
+            guard unit.country.hasSubdivisions else { return "\(people) born in \(unit.name)" }
             let finer: String
             switch unit.country.unitKind {
             case .state: finer = "state"
             case .province: finer = "province"
-            default: finer = "county"
+            case .region: finer = "region"
+            case .county, .country: finer = "county"
             }
             return "\(people) born in \(unit.name), \(finer) unresolved"
         }

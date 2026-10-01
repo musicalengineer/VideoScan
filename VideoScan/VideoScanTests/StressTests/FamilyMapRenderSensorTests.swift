@@ -1,7 +1,7 @@
 // FamilyMapRenderSensorTests.swift
 // The Family Map at the REAL tree's size (GH #227 perf pass, 2026-09-29):
-// 39,249 people over the BUNDLED border file (189 units, 907 polygon
-// pieces, 32.6k vertices), the view mounted in a real window so MapKit
+// 39,249 people over the BUNDLED border file (254 units since the Western Europe stage, 1,083 polygon
+// pieces, 39.9k vertices; 189 / 907 / 32.6k before it), the view mounted in a real window so MapKit
 // builds its overlays. Numbers are logged every run; the assertions are
 // coarse "not catastrophic" ceilings, load-aware in Debug.
 //
@@ -112,7 +112,7 @@ struct FamilyMapRenderSensorTests {
             let r = i % 1000
             if r < 517 { return countries[i % countries.count] }            // 51.7% country-only
             if r < 624 { return fine[i % fine.count] }                       // 10.7% county / state
-            if r < 645 { return "Berlin, Germany" }                          //  2.1% recorded, off the map
+            if r < 645 { return "Warsaw, Poland" }                          //  2.1% recorded, off the map
             return nil                                                       // 35.5% nothing recorded
         }
     }

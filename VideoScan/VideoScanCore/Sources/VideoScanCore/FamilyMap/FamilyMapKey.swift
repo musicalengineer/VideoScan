@@ -1,9 +1,9 @@
 // FamilyMapKey.swift (VideoScanCore/FamilyMap)
 // The family map (GH #227, docs/family_map_design_2026-09-29.md): regions
 // of the world shaded by how many ancestors were born there. This file is
-// the VOCABULARY the whole feature shares — the seven countries in scope,
-// the kinds of unit, a coordinate, a bounding box — and the ONE rule that
-// turns a unit's name into its key.
+// the VOCABULARY the whole feature shares — the countries in scope, the
+// kinds of unit, a coordinate, a bounding box — and the ONE rule that turns
+// a unit's name into its key.
 //
 // Why the key rule lives here and nowhere else: the bundled border file
 // (`family-map-units.geojson`, built by scripts/build_family_map_units.py)
@@ -14,6 +14,13 @@
 // written out in full in the doc comment, and pinned by a sensor test the
 // script's own test repeats.
 //
+// WESTERN EUROPE (Rick 2026-09-30, "Countries + regions"): France by its 13
+// current régions, Germany by Land, the Netherlands and Belgium by province;
+// Luxembourg, Switzerland, Austria, Denmark, Norway, Sweden, Italy, Spain
+// and Portugal as country outlines only (`hasSubdivisions == false`). Keys
+// follow the same rule — "fra-normandy", "deu-bavaria", "nld-north-brabant",
+// "bel-hainaut", "ita" — never a second, abbreviation-based scheme.
+//
 // (C++ readers: `enum FamilyMap` / `enum FamilyMapKey` with no cases are
 // namespaces; the structs are plain values.)
 
@@ -21,10 +28,11 @@ import Foundation
 
 public enum FamilyMap {
 
-    /// The countries the map shades, by ISO-3166-2-style code. England,
+    /// The countries the map shades, by ISO-3166-style code. England,
     /// Scotland, Wales and Northern Ireland are separate because the map
     /// goes one level below them (historic counties) and because that is
-    /// how a New England family's story is told.
+    /// how a New England family's story is told. The Western Europe stage
+    /// uses ISO 3166-1 alpha-3 codes (FRA, DEU …).
     public enum Country: String, Sendable, Codable, CaseIterable, Equatable, Hashable {
         case england = "ENG"
         case scotland = "SCT"
@@ -33,6 +41,20 @@ public enum FamilyMap {
         case ireland = "IRL"
         case unitedStates = "USA"
         case canada = "CAN"
+        // Western Europe (2026-09-30).
+        case france = "FRA"
+        case germany = "DEU"
+        case netherlands = "NLD"
+        case belgium = "BEL"
+        case luxembourg = "LUX"
+        case switzerland = "CHE"
+        case austria = "AUT"
+        case denmark = "DNK"
+        case norway = "NOR"
+        case sweden = "SWE"
+        case italy = "ITA"
+        case spain = "ESP"
+        case portugal = "PRT"
 
         /// The country's own unit key ("eng") — what a birth shades when
         /// the country is known but the county / state is not.
@@ -47,21 +69,62 @@ public enum FamilyMap {
             case .ireland: return "Ireland"
             case .unitedStates: return "United States"
             case .canada: return "Canada"
+            case .france: return "France"
+            case .germany: return "Germany"
+            case .netherlands: return "Netherlands"
+            case .belgium: return "Belgium"
+            case .luxembourg: return "Luxembourg"
+            case .switzerland: return "Switzerland"
+            case .austria: return "Austria"
+            case .denmark: return "Denmark"
+            case .norway: return "Norway"
+            case .sweden: return "Sweden"
+            case .italy: return "Italy"
+            case .spain: return "Spain"
+            case .portugal: return "Portugal"
             }
         }
 
-        /// What the country's second-level units are called.
+        /// What the country's second-level units are called. For a country
+        /// drawn only as an outline the answer is `.region` and is never
+        /// shown (see `hasSubdivisions`).
         public var unitKind: UnitKind {
             switch self {
-            case .unitedStates: return .state
-            case .canada: return .province
-            default: return .county
+            case .unitedStates, .germany: return .state
+            case .canada, .netherlands, .belgium: return .province
+            case .england, .scotland, .wales, .northernIreland, .ireland: return .county
+            case .france, .luxembourg, .switzerland, .austria, .denmark, .norway, .sweden,
+                 .italy, .spain, .portugal: return .region
+            }
+        }
+
+        /// False for the countries the map draws as an outline only
+        /// (Italy, Denmark …): a count there is the whole count, and the
+        /// panel must not say "region unresolved" about a map that has no
+        /// regions to resolve to.
+        public var hasSubdivisions: Bool {
+            switch self {
+            case .luxembourg, .switzerland, .austria, .denmark, .norway, .sweden, .italy, .spain, .portugal:
+                return false
+            default:
+                return true
+            }
+        }
+
+        /// The Western Europe stage (2026-09-30). The camera rule treats
+        /// these outlines differently from the original seven — see
+        /// `FamilyMapUnits.coverage(for:)`.
+        public var isWesternEurope: Bool {
+            switch self {
+            case .england, .scotland, .wales, .northernIreland, .ireland, .unitedStates, .canada: return false
+            default: return true
             }
         }
     }
 
     public enum UnitKind: String, Sendable, Codable, CaseIterable, Equatable {
-        case county, state, province, country
+        /// `region` = a French région (2026-09-30).
+        case county, state, province, region, country
     }
 
     /// WGS84 degrees. GeoJSON writes positions as [lon, lat]; this struct
@@ -76,9 +139,9 @@ public enum FamilyMap {
     }
 
     /// An axis-aligned box in degrees. Antimeridian-crossing boxes are not
-    /// handled — nothing in scope (the British Isles, the US mainland and
-    /// Canada) crosses ±180°, and Alaska's Aleutians are simplified away
-    /// at 1:50m.
+    /// handled — nothing in scope (the British Isles, Western Europe, the
+    /// US mainland and Canada) crosses ±180°, and Alaska's Aleutians are
+    /// simplified away at 1:50m.
     public struct BoundingBox: Sendable, Equatable {
         public var minLatitude: Double
         public var maxLatitude: Double
@@ -150,8 +213,9 @@ public enum FamilyMapKey {
     ///   5. no leading or trailing "-".
     /// "East Lothian" → "east-lothian"; "Inverness-shire" → "inverness-shire";
     /// "St. John's" → "st-john-s"; "Ross and Cromarty" → "ross-and-cromarty";
-    /// "Straße" → "stra-e"; "Ørsted" → "rsted". FamilyMapKeyTests and the
-    /// script's pytest pin the same examples. (Until 2026-09-29 this used
+    /// "Straße" → "stra-e"; "Ørsted" → "rsted"; "Provence-Alpes-Côte d'Azur"
+    /// → "provence-alpes-cote-d-azur". FamilyMapKeyTests and the script's
+    /// pytest pin the same examples. (Until 2026-09-29 this used
     /// Foundation's diacritic-insensitive folding, which expands ß to "ss"
     /// and strips ø to "o" — a key the builder never writes.)
     public static func slug(_ name: String) -> String {
@@ -194,7 +258,7 @@ public enum FamilyMapKey {
     }
 
     /// The country a key belongs to ("eng-yorkshire" → England, "eng" →
-    /// England); nil for a malformed key.
+    /// England, "fra-normandy" → France); nil for a malformed key.
     public static func country(of key: String) -> FamilyMap.Country? {
         let prefix = key.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? key
         return FamilyMap.Country(rawValue: prefix.uppercased())

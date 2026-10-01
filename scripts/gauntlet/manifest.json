@@ -511,8 +511,62 @@
       ],
       "tests": [
         "countryOutlinesFrameTheirPrincipalPiece",
+        "europeanOutlinesFrameTheirMainland",
         "everyResolverKeyIsABundledUnitAndViceVersa",
         "realPlacesLandInTheRightBundledUnit"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapEuropeQAFindingsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapEuropeQAFindingsTests"
+      ],
+      "tests": [
+        "aBareNameSharedWithNorthAmericaNeedsItsCountry",
+        "aHistoricSubregionIsPlacedWhereItIsToday",
+        "aNewWorldNamesakeIsNeverEuropean",
+        "canadianCodeAtTheEndOfAPartStillPlaces",
+        "groundOutsideTodaysCountryIsNotPlacedInIt",
+        "theDutchNlCaseStillResolvesToTheNetherlands",
+        "theNamesThatNeedACountryStillResolveWithOne",
+        "theNewWorldColoniesAreNamedExplicitly",
+        "theRulingKeepsTheSimpleCases"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapEuropeRealTreeReport.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapEuropeRealTreeReport"
+      ],
+      "tests": [
+        "reportOnTheRealTree"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapEuropeTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapEuropeTests"
+      ],
+      "tests": [
+        "americanPlacesWithEuropeanNamesAndHarmlessOrs",
+        "europeanKeysFollowTheOneKeyRule",
+        "everyEuropeanSpellingResolvesToItsUnit",
+        "oldFrenchRegionsRollUpToTheCurrentThirteen",
+        "oneHundredThousandEuropeanPlacesUnderBudget",
+        "refusedPlacesAreNil",
+        "sharedNamesAreDecidedByTheirCountry",
+        "theAlternativesRefusalIsPinned",
+        "theCameraIncludesEuropeOnlyWhenEuropeHasPeople",
+        "theResolverReadsNoGlobalState"
       ]
     },
     {
@@ -8569,6 +8623,23 @@
         "aRecordedCoarseRegionIsNotDescribedAsUnrecorded",
         "clickingAnUncountedCountySelectsTheShadedCountryBelowIt",
         "unsupportedRecordedPlacesAreNotDescribedAsMissingRecords"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyMapEuropeAppTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyMapEuropeAppTests"
+      ],
+      "tests": [
+        "aClickInsideCountedBelgiumIsBelgiumNotTheFrenchRegionNextDoor",
+        "aWalkWithEuropeanBirthsFramesEuropeAndOneWithoutIsUnchanged",
+        "historicNamesFlyTodaysFlagWithAnHonestTooltip",
+        "oneHundredThousandEuropeanPeopleThroughTheMapAndTheFlags",
+        "theCardFlagAndTheMapAgreeForEveryEuropeanPlace",
+        "theCountLineIsHonestForEachKindOfCountry"
       ]
     },
     {
@@ -21166,10 +21237,12 @@
       "tests": [
         "test_attribution_carries_required_acknowledgement",
         "test_coordinates_in_range_six_decimals_and_sane_bbox",
+        "test_country_only_outline_probes",
         "test_documented_source_spellings_are_still_the_source_spellings",
         "test_douglas_peucker_reference_polyline",
         "test_every_country_has_exactly_one_outline",
         "test_files_exist_and_size_ceiling",
+        "test_france_is_the_thirteen_current_regions_never_the_old_twenty_two",
         "test_halifax_waterfront_is_a_known_source_gap",
         "test_ireland_names_have_no_county_prefix",
         "test_keys_unique_sorted_and_follow_the_rule",
@@ -21182,6 +21255,7 @@
         "test_script_self_test_passes",
         "test_simplify_ring_keeps_closure_and_drops_islets",
         "test_single_unit_counties_are_not_split",
+        "test_size_and_feature_count_sensor",
         "test_slug_parity_with_swift_on_undecomposable_letters",
         "test_slug_rules",
         "test_synthetic_county_spellings_resolve_to_keys",
@@ -22314,6 +22388,18 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapEuropeQAFindingsTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapEuropeRealTreeReport.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapEuropeTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyMapFlagTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -23243,6 +23329,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/FamilyMapAdversarialAppTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/FamilyMapEuropeAppTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

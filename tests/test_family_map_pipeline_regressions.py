@@ -206,6 +206,7 @@ def test_build_pipeline_is_offline_isolated_and_reproducible(script, monkeypatch
     historical = [("county", "ENG", "Alpha", [[rectangle(-2, 52, 1, 1)]], 0.01)]
     north_america = [("state", "USA", "Beta", [[rectangle(-80, 40, 1, 1)]], 0.02)]
     ireland = [("county", "IRL", "Gamma", [[rectangle(-9, 53, 1, 1)]], 0.005)]
+    europe = [("region", "FRA", "Delta", [[rectangle(2, 46, 1, 1)]], 0.02)]
     countries = [("country", "ENG", "England", [[rectangle(-3, 51, 4, 4)]], 0.02)]
 
     def no_network(*args, **kwargs):
@@ -215,6 +216,7 @@ def test_build_pipeline_is_offline_isolated_and_reproducible(script, monkeypatch
     monkeypatch.setattr(script, "load_historic_counties", lambda cache: copy.deepcopy(historical))
     monkeypatch.setattr(script, "load_us_canada", lambda cache: copy.deepcopy(north_america))
     monkeypatch.setattr(script, "load_ireland", lambda cache: (copy.deepcopy(ireland), []))
+    monkeypatch.setattr(script, "load_europe", lambda cache: (copy.deepcopy(europe), []))
     monkeypatch.setattr(script, "load_country_outlines", lambda cache: copy.deepcopy(countries))
     monkeypatch.setattr(script, "DEFAULT_CACHE", tmp_path / "poisoned-default-cache")
     monkeypatch.setattr(script, "DEFAULT_OUT", tmp_path / "poisoned-default-output")
@@ -228,7 +230,7 @@ def test_build_pipeline_is_offline_isolated_and_reproducible(script, monkeypatch
     assert not script.DEFAULT_CACHE.exists() and not script.DEFAULT_OUT.exists()
     data = json.loads((first / script.OUTPUT_NAME).read_text())
     assert [f["properties"]["key"] for f in data["features"]] == [
-        "eng", "eng-alpha", "irl-gamma", "usa-beta"
+        "eng", "eng-alpha", "fra-delta", "irl-gamma", "usa-beta"
     ]
 
 

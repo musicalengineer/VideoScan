@@ -39,6 +39,7 @@ def test_an_unrepairable_source_ring_cannot_overwrite_existing_assets(script, mo
     monkeypatch.setattr(script, "load_historic_counties", lambda cache: [unit])
     monkeypatch.setattr(script, "load_us_canada", lambda cache: [])
     monkeypatch.setattr(script, "load_ireland", lambda cache: ([], []))
+    monkeypatch.setattr(script, "load_europe", lambda cache: ([], []))
     monkeypatch.setattr(script, "load_country_outlines", lambda cache: [])
     output = tmp_path / "existing"
     output.mkdir()

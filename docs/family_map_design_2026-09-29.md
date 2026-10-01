@@ -132,6 +132,60 @@ Media matrix (n/a) · Isolation (no network in tests; bundled file read from
 the test bundle, never App Support) · Sensor (MapKit link sensor; a resolve-
 rate floor on the synthetic county list; the GeoJSON size ceiling).
 
+## 6a. Western Europe stage (Rick 2026-09-30: "Countries + regions")
+
+- **Units.** France by its 13 current (2016) metropolitan régions, dissolved
+  from Natural Earth 1:10m départements (overseas départements left out);
+  Germany by Land (16); the Netherlands (12) and Belgium (10 + Brussels) by
+  province; Luxembourg, Switzerland, Austria, Denmark, Norway, Sweden, Italy,
+  Spain, Portugal as outlines only. Natural Earth again (already credited).
+  254 units, 916 KB (was 189 / 754 KB).
+- **Keys** follow the one rule, `<iso3>-<slug(display name)>`:
+  `fra-normandy`, `deu-baden-wurttemberg`, `nld-north-brabant`,
+  `bel-hainaut`, `ita`. No abbreviation scheme (`fra-ara`) — two key rules
+  would be two chances to disagree.
+- **France rollup.** The old 22 régions, the pre-1790 provinces whose
+  ground is in one région today, and the 96 départements fold into the 13.
+  Gascony, Guyenne and the old province of Maine are not mapped.
+- **Judgment calls.** Prussia / German Empire → Germany, country-only
+  unless a Land resolves (today's flag, like colonial births under 🇺🇸; the
+  tooltip keeps "Prussia"). Rhineland → Germany country-only (it spans
+  three Länder). "Holland, Netherlands" → Netherlands country-only.
+  Vlaanderen / Wallonia → Belgium country-only. Limburg and Luxembourg are
+  decided by the country to their right. Holy Roman Empire and
+  Austria-Hungary stay off the map.
+- **Today's ground wins (Manager ruling after QA, 2026-09-30).** A historic
+  subregion is placed where it is TODAY, whatever country is written to
+  its right: "Strasbourg, Alsace, Germany" → Grand Est; "Trieste, Austria",
+  "Bozen, South Tyrol, Austria" → Italy; "Nice, Sardinia" → Provence-Alpes-
+  Côte d'Azur. Ground in no mapped country today (East/West Prussia,
+  Danzig, Königsberg, Posen, Silesia, Pomerania/Stettin, Bohemia/Prague,
+  Moravia, Galicia/Lemberg) is unplaced even with Germany / Prussia /
+  Austria to its right. The card tooltip and map row still say what was
+  recorded.
+- **New-World namesakes** are never European: "New Bavaria", "New Holland,
+  Lancaster", "Nueva España" are not Bavaria / the Netherlands / Spain; New
+  Netherland and New Sweden are country-only USA, New Amsterdam is New
+  York.
+- **Refusals.** "England or Wales or France" (any "x or y") is refused;
+  départements and town-like names ("Paris", "Berlin", "Hanover", "Lot",
+  "Nice", "Zeeland", "Antwerp", "Friesland") need their country to the
+  right; bare "Holland", "Flanders", "Piedmont" are unplaced (Michigan,
+  New Jersey, the Carolinas).
+- **Camera — for Rick to confirm.** Trees without Europe frame exactly as
+  before. A European country adds its counted fine units, or its OUTLINE
+  when nothing finer is counted — so one "Italy" birth beside Yorkshire
+  widens the opening frame to include Italy. (The original seven never let
+  an outline widen the frame once a county was counted; Europe is treated
+  differently because its outlines are compact.)
+- **Click — for Rick to confirm.** The coastal-tolerance step (pick the
+  nearest counted county within 0.15° when a click lands on a coarse
+  coastline) no longer crosses into a counted outline of ANOTHER country:
+  a click just inside counted Belgium picks Belgium, not the French région
+  5 km away. This also applies to the original seven, but only where
+  another country's outline has a count (e.g. a click inside a counted
+  Scotland outline near the English border).
+
 ## 7. Open decisions (Rick)
 
 1. MapKit real map (recommended) or our own offline canvas?

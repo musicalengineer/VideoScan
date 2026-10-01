@@ -28,12 +28,12 @@
 //      item that says born / birth and carries a non-empty `place`,
 //      resolved through the same resolver;
 //   3. else nothing — the person is listed under "Not on the map" with
-//      whatever text WAS recorded (tree first), so "Berlin, Germany" reads
+//      whatever text WAS recorded (tree first), so "Warsaw, Poland" reads
 //      as "recorded but off the map", not as "no recorded place".
 // Each person carries a `PlaceSource` (tree / family / none) so the panel
 // can say "place from the family's notes" — and `familyRecordedIDs` says
 // whose RECORDED text (placed or not) was the family's, so "Not on the map"
-// never prints "recorded as Berlin" when the tree recorded nothing. The
+// never prints "recorded as Warsaw" when the tree recorded nothing. The
 // CyberBrain index is read through the tree's own `FamilyTreeNotesResolver`
 // (the object FamilyTreeLiveModel already built — linked people first,
 // then name matches), injected by the sheet; nil in tests → tree only.
@@ -547,7 +547,10 @@ final class FamilyMapModel: ObservableObject {
     ///   (b) else the nearest counted fine unit within the coastal tolerance
     ///       (Natural Earth's outlines are coarser than the counties, so a
     ///       waterfront click is often "inside the country, outside every
-    ///       county" — Halifax; the probe (45.774, -63.102));
+    ///       county" — Halifax; the probe (45.774, -63.102)) — UNLESS the
+    ///       point lies inside a counted outline of ANOTHER country: Europe
+    ///       has land borders, and a click just inside counted Belgium must
+    ///       not pick the French région 5 km away (2026-09-30);
     ///   (c) else the counted country outline containing the point;
     ///   (d) else the selection is left as it was.
     func select(coordinate: FamilyMap.Coordinate) {
@@ -555,11 +558,17 @@ final class FamilyMapModel: ObservableObject {
         for key in computed.counts.keys {
             if FamilyMapKey.isCountryKey(key) { countries.insert(key) } else { fine.insert(key) }
         }
-        let hit = units.unit(containing: coordinate, among: fine)
-            ?? units.unit(nearest: coordinate, among: fine)
-            ?? units.unit(containing: coordinate, among: countries)
-        guard let hit else { return }
-        select(unitKey: hit.key)
+        if let inside = units.unit(containing: coordinate, among: fine) {
+            select(unitKey: inside.key)
+            return
+        }
+        let outline = units.unit(containing: coordinate, among: countries)
+        if let near = units.unit(nearest: coordinate, among: fine), outline == nil || outline?.country == near.country {
+            select(unitKey: near.key)
+            return
+        }
+        guard let outline else { return }
+        select(unitKey: outline.key)
     }
 
     func select(unitKey: String?) {
@@ -574,7 +583,7 @@ final class FamilyMapModel: ObservableObject {
 
     /// "412 of 1,024 people placed; 37 country-only; 58 with no recorded
     /// place; 12 recorded but off the map" — a zero part is left out, so a
-    /// Berlin birth is never described as unrecorded (codex #1782, F2).
+    /// Warsaw birth is never described as unrecorded (codex #1782, F2).
     nonisolated static func totalsLine(_ t: FamilyMapTally.Totals) -> String {
         totalsLine(considered: t.considered, resolved: t.resolved, countryOnly: t.countryOnly,
                    unresolved: t.unresolved, unsupported: t.unsupported)
