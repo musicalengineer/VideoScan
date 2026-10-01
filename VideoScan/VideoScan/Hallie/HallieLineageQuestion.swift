@@ -197,8 +197,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
             // of everyone that read as complete ("11 of our 11 … were
             // born") — the dropped-constraint failure (codex #1180) through
             // the router rather than the recognizer (found 2026-10-01).
-            if let lines = HallieAncestorStatisticsQuestion.detect(lower) { return .ancestorStatistics(lines) }
-            return HallieTreeStatisticsQuestion.detect(lower).map { .treeStatistics($0) }
+            return statisticsQuestion(in: lower)
         case nil:
             // "rick's ancestors before 1800" — no generation count, no
             // trace verb; the year is the whole ask. Ancestry words only
@@ -214,6 +213,16 @@ enum HallieLineageQuestion: Equatable, Sendable {
         case let other:
             return other
         }
+    }
+
+    /// The two statistics recognizers, ancestor LINES first (#214): "our
+    /// ancestors" is two lines with a per-side breakdown, and New England /
+    /// Old England are regions the whole-tree recognizer can't name. The
+    /// first abstains on a time filter, continent or side; the second takes
+    /// those. Nil = neither claims the sentence.
+    static func statisticsQuestion(in lower: String) -> HallieLineageQuestion? {
+        if let lines = HallieAncestorStatisticsQuestion.detect(lower) { return .ancestorStatistics(lines) }
+        return HallieTreeStatisticsQuestion.detect(lower).map { .treeStatistics($0) }
     }
 
     private static func detectShape(_ lower: String) -> HallieLineageQuestion? {
@@ -236,12 +245,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // answering with a read-out list. The recognizer abstains on any
         // sentence carrying "generation(s)", so it can never take the trail's
         // own counting shape ("how many generations back …").
-        // Ancestor-LINE statistics first (#214): "our ancestors" is two
-        // lines with a per-side breakdown, and New England / Old England
-        // are regions the whole-tree recognizer can't name. It abstains on
-        // a time filter, continent or side, which the next one handles.
-        if let lines = HallieAncestorStatisticsQuestion.detect(lower) { return .ancestorStatistics(lines) }
-        if let stats = HallieTreeStatisticsQuestion.detect(lower) { return .treeStatistics(stats) }
+        if let stats = statisticsQuestion(in: lower) { return stats }
         if let trail = birthplaceTrailQuestion(in: lower) { return trail }
 
         // Superlatives BEFORE the photo shape: "photo of the oldest person

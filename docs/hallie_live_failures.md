@@ -872,3 +872,16 @@ in 260 suites + 7 XCTest, 0 failures, 1 pre-existing known issue, 286 s**
 `test_hallie_eval.py` 66 passed, 17 subtests. Harvest: `lv260926-005…010` by
 `hallie_harvest_queries.py --since 2026-09-26 --append`; `011` and `012` by
 hand (a mid-sentence "not" and a bare statement), placed in conversation order.
+
+**Follow-ups closed 2026-10-01 (GH #200, #214; branch on the feature-dev
+worktree).** Row 1 ("who is the earliest ancestor in my family tree") is now
+answered by the ancestor-line route — the earliest recorded birth over the
+owner's AND the partner's lines, with how many could be ranked, and the other
+side's own earliest; corpus row `lv260926-006` carries the expectation
+(confirm live). The person-scoped gap is closed: "how many of rick's / donna's
+ancestors …" counts that person's line through the shared scope reader, in
+both statistics routes. Found on the way: the router's year-bound peel
+(`HallieLineageQuestion.detect`) removed "before 1900" before the statistics
+recognizers saw it, so "how many … were born before 1900" counted everyone and
+read as complete — fixed, regression test in `HallieAncestorStatisticsTests`.
+New corpus rows `ts261001-001…012`.
