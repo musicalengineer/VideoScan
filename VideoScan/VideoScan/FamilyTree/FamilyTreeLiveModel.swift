@@ -1944,6 +1944,19 @@ final class FamilyTreeLiveModel: ObservableObject {
         return receipt
     }
 
+    /// "I found a record" (GH #230): the same writer as `recordTestimony`,
+    /// as a `@Sendable` closure the filer can call OFF the main actor (it
+    /// runs inside the filing transaction, after the document is proved).
+    /// Nil when no CyberBrain directory is configured. The caller reloads
+    /// the notes pane afterwards with `loadCyberBrain()`.
+    func cyberBrainRecorder() -> (@Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt)? {
+        guard let root = cyberBrainRootURL else { return nil }
+        return { testimony in
+            try ViewerWriteGuard.check("RecordFinderFiler.recordTestimony")
+            return try CyberBrainWriter.record(testimony, rootURL: root)
+        }
+    }
+
     private func applyBrain(index: CyberBrainIndex?, status: String?) {
         brainIndex = index
         notesStatus = status
@@ -2158,19 +2171,28 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// for this, ie, right click, bookmark, research etc."): this is only
     /// ever called while the card's context menu is being built, so a line
     /// here is also proof that the right-click reached the card at all.
-    func researchLinks(for personID: String) -> [FamilyTreeResearchLinks.Link] {
+    func researchLinks(for personID: String, logMenuOpen: Bool = true) -> [FamilyTreeResearchLinks.Link] {
         guard let graph, let person = graph.people[personID] else {
-            appLog.write("Family Tree: context menu opened on \(personID) but the tree has no such person")
+            if logMenuOpen {
+                appLog.write("Family Tree: context menu opened on \(personID) but the tree has no such person")
+            }
             return []
         }
-        appLog.write("Family Tree: context menu opened on \(person.name) (\(personID))")
+        if logMenuOpen {
+            appLog.write("Family Tree: context menu opened on \(person.name) (\(personID))")
+        }
+        // GH #230: the death year narrows the Record Finder's year windows;
+        // recorded service (not a US draft registration) adds the UK
+        // military record searches.
         return FamilyTreeResearchLinks.links(
             name: person.name,
             surname: person.surname,
             birthYear: person.birthYear,
             birthPlace: person.birthPlace,
             deathPlace: person.deathPlace,
-            familySearchID: person.familySearchID)
+            familySearchID: person.familySearchID,
+            deathYear: person.deathYear,
+            servedInMilitary: person.militaryFacts.contains { !$0.isDraftRegistration })
     }
 
     // MARK: - Walk Tree (2026-09-27)
