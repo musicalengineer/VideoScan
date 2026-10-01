@@ -47,7 +47,7 @@
 //
 // C++ readers: `struct` with `let` closures ≈ a small object holding
 // std::function members (dependency injection for tests); `NSLock.withLock`
-// ≈ std::lock_guard around the block.
+// ≈ std::lock_guard around the block; `Result<T, E>` ≈ std::expected.
 
 import CryptoKit
 import Foundation
@@ -178,108 +178,47 @@ struct RecordFinderFiler {
         Self.filingLock.withLock { fileLocked(submission) }
     }
 
-    // MARK: Steps
+    // MARK: The transaction
 
     private func fileLocked(_ s: FoundRecordSubmission) -> RecordFilingOutcome {
-        let ext = s.file.pathExtension.lowercased()
         log("[record-finder] START file \(s.recordType.rawValue) record for \(subject.key) — "
-            + ".\(ext), site \(s.siteID ?? "other"), tell Hallie \(s.confirmedRead ? "yes" : "no")")
+            + ".\(s.file.pathExtension.lowercased()), site \(s.siteID ?? "other"), "
+            + "tell Hallie \(s.confirmedRead ? "yes" : "no")")
 
         // ---- Refusals: nothing has been written yet. ----
         let pre: Prepared
         switch prepare(s) {
-        case .failure(let refusal):
-            return finish(.refused(refusal.message), code: refusal.code)
-        case .success(let prepared):
-            pre = prepared
+        case .failure(let refusal): return finish(.refused(refusal.message), code: refusal.code)
+        case .success(let prepared): pre = prepared
         }
 
-        // The person's folder (may create an empty People/<…>/ directory —
-        // the only side effect before the document write, and harmless).
-        let folder: URL
-        do {
-            folder = try assetStore.folderForPhotoRequest(person: assetPerson)
-        } catch {
-            return finish(.refused(error.localizedDescription), code: "folder")
+        // ---- Write 1: the document, proved. ----
+        let filed: FiledDocument
+        switch writeDocument(s, pre) {
+        case .failure(let stop): return finish(stop.outcome, code: stop.code)
+        case .success(let document): filed = document
         }
 
-        // ---- Write 1: the document. ----
-        let document: PersonDocument
-        do {
-            document = try assetStore.importPersonDocument(
-                from: s.file, kind: s.recordType.documentKind, note: pre.note,
-                into: folder, for: assetPerson)
-        } catch let error as FamilyAssetStore.DocumentError {
-            return finish(.refused(error.localizedDescription), code: "import-refused")
-        } catch FamilyAssetStore.StoreError.readOnly {
-            return finish(.refused(FamilyAssetStore.StoreError.readOnly.localizedDescription), code: "read-only")
-        } catch FamilyAssetStore.StoreError.sourceUnavailable {
-            return finish(.refused(FamilyAssetStore.StoreError.sourceUnavailable.localizedDescription), code: "unavailable")
-        } catch {
-            // The store's own post-write checks failed; it moved what it
-            // wrote to Documents/.trash (or logged that it could not).
-            return finish(.rolledBack("the archive refused the write after it began (\(error.localizedDescription)); "
-                                      + "anything written was moved to Documents/.trash"), code: "import-failed")
-        }
-        // Prove it: the same bytes we hashed, listed in documents.json.
-        let listed = assetStore.documents(inPersonFolder: folder).first { $0.id == document.id }
-        guard document.sha256 == pre.sha256, document.byteCount == pre.byteCount,
-              let landed = listed, let landedURL = landed.fileURL,
-              FileManager.default.fileExists(atPath: landedURL.path) else {
-            return finish(undoDocument(document, folder: folder,
-                                       why: "the file changed while it was being filed, or could not be found after writing"),
-                          code: "document-unproved")
-        }
-
-        // ---- Write 2: the finding in the dossier. ----
-        let documentPath = CyberBrainWriter.photoLocator(landedURL.path)
+        // ---- Write 2: the finding in the dossier, proved. ----
         var finding = ResearchFinding(
             source: .recordFinder, title: pre.findingTitle, date: pre.year, excerpt: pre.excerpt,
             url: pre.pageURL, retrievedAt: pre.when,
             verdict: s.confirmedRead ? .confirmed : .unreviewed,
-            documentPath: documentPath, idSeed: "sha256:" + pre.sha256)
+            documentPath: filed.archivePath, idSeed: "sha256:" + pre.sha256)
         var dossier = pre.priorDossier ?? ResearchDossier(subject: subject)
-        guard dossier.addFiled(finding) else {
-            // Checked in prepare(); a second filer between then and now is
-            // impossible under the lock, so this is belt and braces.
-            return finish(undoDocument(document, folder: folder, why: "this record is already filed"),
-                          code: "duplicate-finding")
+        if let stop = writeFinding(finding, into: &dossier, pre: pre, filed: filed) {
+            return finish(stop.outcome, code: stop.code)
         }
-        do {
-            try researchStore.saveDossier(dossier)
-            guard let back = try researchStore.loadDossier(key: subject.key),
-                  back.findings.contains(where: { $0.id == finding.id }) else {
-                throw ResearchStore.StoreError.ioFailure("the research file did not read back")
-            }
-        } catch {
-            let restored = restoreDossier(pre.priorDossier)
-            let undone = undoDocument(document, folder: folder,
-                                      why: "the research file could not be saved (\(error.localizedDescription))")
-            return finish(combine(undone, dossierRestored: restored), code: "dossier-failed")
-        }
-
         guard s.confirmedRead else {
-            return finish(.filed(documentFilename: document.filename, findingID: finding.id, toldItemID: nil),
-                          code: "filed", detail: document, sha: pre.sha256)
+            return finish(.filed(documentFilename: filed.document.filename, findingID: finding.id, toldItemID: nil),
+                          code: "filed", detail: filed.document, sha: pre.sha256)
         }
 
         // ---- Write 3: the CyberBrain (only after Rick read it). ----
-        guard let record else {
-            // prepare() refused this already; kept so the type system agrees.
-            let restored = restoreDossier(pre.priorDossier)
-            return finish(combine(undoDocument(document, folder: folder, why: "no CyberBrain is configured"),
-                                  dossierRestored: restored), code: "no-cyberbrain")
-        }
         let receipt: CyberBrainWriter.Receipt
-        do {
-            let testimony = try ResearchAttestation.testimony(
-                for: finding, subject: subject, speakerName: speakerName, date: pre.when)
-            receipt = try record(testimony)
-        } catch {
-            let restored = restoreDossier(pre.priorDossier)
-            let undone = undoDocument(document, folder: folder,
-                                      why: "Hallie's knowledge file could not be written (\(error.localizedDescription))")
-            return finish(combine(undone, dossierRestored: restored), code: "cyberbrain-failed")
+        switch tellHallie(finding, pre: pre, filed: filed) {
+        case .failure(let stop): return finish(stop.outcome, code: stop.code)
+        case .success(let told): receipt = told
         }
 
         // ---- Write 4: remember that Hallie was told. ----
@@ -289,12 +228,106 @@ struct RecordFinderFiler {
             try researchStore.saveDossier(dossier)
         } catch {
             return finish(.mixedState("Hallie was told (item \(receipt.itemID)) and the document is filed as "
-                                      + "\(document.filename), but the research file could not record that Hallie "
-                                      + "was told — do not press Tell Hallie for this record again "
+                                      + "\(filed.document.filename), but the research file could not record that "
+                                      + "Hallie was told — do not press Tell Hallie for this record again "
                                       + "(\(error.localizedDescription))."), code: "told-unrecorded")
         }
-        return finish(.filed(documentFilename: document.filename, findingID: finding.id, toldItemID: receipt.itemID),
-                      code: "filed", detail: document, sha: pre.sha256)
+        return finish(.filed(documentFilename: filed.document.filename, findingID: finding.id,
+                             toldItemID: receipt.itemID),
+                      code: "filed", detail: filed.document, sha: pre.sha256)
+    }
+
+    /// Why the transaction stopped after it began, with the log code.
+    struct Stop: Error {
+        let outcome: RecordFilingOutcome
+        let code: String
+    }
+
+    /// The document as filed and proved.
+    struct FiledDocument {
+        let document: PersonDocument
+        let folder: URL
+        /// `People/<folder>/Documents/<file>` — the CyberBrain locator.
+        let archivePath: String
+    }
+
+    /// Write 1. The person's folder may be created here (an empty
+    /// People/<…>/ directory — harmless, and the only side effect before the
+    /// document itself).
+    private func writeDocument(_ s: FoundRecordSubmission, _ pre: Prepared) -> Result<FiledDocument, Stop> {
+        let folder: URL
+        do {
+            folder = try assetStore.folderForPhotoRequest(person: assetPerson)
+        } catch {
+            return .failure(Stop(outcome: .refused(error.localizedDescription), code: "folder"))
+        }
+        let document: PersonDocument
+        do {
+            document = try assetStore.importPersonDocument(
+                from: s.file, kind: s.recordType.documentKind, note: pre.note, into: folder, for: assetPerson)
+        } catch let error as FamilyAssetStore.DocumentError {
+            return .failure(Stop(outcome: .refused(error.localizedDescription), code: "import-refused"))
+        } catch let error as FamilyAssetStore.StoreError where error == .readOnly || error == .sourceUnavailable {
+            return .failure(Stop(outcome: .refused(error.localizedDescription), code: "read-only"))
+        } catch {
+            // The store's own post-write checks failed; it moved what it
+            // wrote to Documents/.trash (or logged that it could not).
+            return .failure(Stop(outcome: .rolledBack("the archive refused the write after it began "
+                                                      + "(\(error.localizedDescription)); anything written was "
+                                                      + "moved to Documents/.trash"), code: "import-failed"))
+        }
+        // Prove it: the same bytes we hashed, listed in documents.json.
+        let listed = assetStore.documents(inPersonFolder: folder).first { $0.id == document.id }
+        guard document.sha256 == pre.sha256, document.byteCount == pre.byteCount,
+              let landedURL = listed?.fileURL, FileManager.default.fileExists(atPath: landedURL.path) else {
+            return .failure(Stop(outcome: undoDocument(document, folder: folder,
+                                                       why: "the file changed while it was being filed, or could not be found after writing"),
+                                 code: "document-unproved"))
+        }
+        return .success(FiledDocument(document: document, folder: folder,
+                                      archivePath: CyberBrainWriter.photoLocator(landedURL.path)))
+    }
+
+    /// Write 2. Nil on success (dossier saved and read back).
+    private func writeFinding(_ finding: ResearchFinding, into dossier: inout ResearchDossier,
+                              pre: Prepared, filed: FiledDocument) -> Stop? {
+        guard dossier.addFiled(finding) else {
+            // Checked in prepare(); under the lock this cannot change, so
+            // this is belt and braces.
+            return Stop(outcome: undoDocument(filed.document, folder: filed.folder, why: "this record is already filed"),
+                        code: "duplicate-finding")
+        }
+        do {
+            try researchStore.saveDossier(dossier)
+            guard let back = try researchStore.loadDossier(key: subject.key),
+                  back.findings.contains(where: { $0.id == finding.id }) else {
+                throw ResearchStore.StoreError.ioFailure("the research file did not read back")
+            }
+            return nil
+        } catch {
+            return undoAll(pre: pre, filed: filed,
+                           why: "the research file could not be saved (\(error.localizedDescription))",
+                           code: "dossier-failed")
+        }
+    }
+
+    /// Write 3. The testimony for a CONFIRMED finding through the injected
+    /// CyberBrain writer; any failure undoes writes 1 and 2.
+    private func tellHallie(_ finding: ResearchFinding, pre: Prepared,
+                            filed: FiledDocument) -> Result<CyberBrainWriter.Receipt, Stop> {
+        guard let record else {
+            // prepare() refused this already; kept so the type system agrees.
+            return .failure(undoAll(pre: pre, filed: filed, why: "no CyberBrain is configured", code: "no-cyberbrain"))
+        }
+        do {
+            let testimony = try ResearchAttestation.testimony(
+                for: finding, subject: subject, speakerName: speakerName, date: pre.when)
+            return .success(try record(testimony))
+        } catch {
+            return .failure(undoAll(pre: pre, filed: filed,
+                                    why: "Hallie's knowledge file could not be written (\(error.localizedDescription))",
+                                    code: "cyberbrain-failed"))
+        }
     }
 
     // MARK: Refusal checks
@@ -319,11 +352,67 @@ struct RecordFinderFiler {
         let when: Date
     }
 
+    /// The checked, trimmed fields of a submission.
+    struct Fields {
+        let site: String
+        let pageURL: String
+        let year: String
+        let transcription: String
+    }
+
+    /// The checked file: its streamed SHA-256 and size.
+    struct CheckedFile {
+        let sha256: String
+        let byteCount: Int
+    }
+
     func prepare(_ s: FoundRecordSubmission) -> Result<Prepared, Refusal> {
-        func no(_ code: String, _ message: String) -> Result<Prepared, Refusal> {
+        let fields: Fields
+        switch checkFields(s) {
+        case .failure(let refusal): return .failure(refusal)
+        case .success(let checked): fields = checked
+        }
+        // Where it may be written.
+        do {
+            try assetStore.requireWriteAccess()
+            try ViewerWriteGuard.check("RecordFinderFiler.file")
+        } catch {
+            return .failure(Refusal(code: "read-only", message: error.localizedDescription))
+        }
+        let file: CheckedFile
+        switch checkFile(s.file) {
+        case .failure(let refusal): return .failure(refusal)
+        case .success(let checked): file = checked
+        }
+        // Already filed for this person? (Same bytes in any of their folders.)
+        if let existing = assetStore.documents(for: assetPerson).first(where: { $0.sha256 == file.sha256 }) {
+            return .failure(Refusal(
+                code: "duplicate-document",
+                message: "This exact file is already filed for \(assetPerson.name) as \(existing.filename) "
+                    + "(\(existing.kind.displayName.lowercased()), added \(FamilyTreeNote.shortDate(existing.addedAt)))."))
+        }
+        // The dossier must be readable — a damaged one is never replaced.
+        let prior: ResearchDossier?
+        do {
+            prior = try researchStore.loadDossier(key: subject.key)
+        } catch {
+            return .failure(Refusal(code: "dossier-unreadable",
+                                    message: "The research file for \(assetPerson.name) can't be read "
+                                        + "(\(error.localizedDescription)); nothing was changed."))
+        }
+        let findingID = ResearchFinding.makeID(source: .recordFinder, url: "sha256:" + file.sha256)
+        if prior?.findings.contains(where: { $0.id == findingID }) == true {
+            return .failure(Refusal(code: "duplicate-finding",
+                                    message: "This record is already filed for \(assetPerson.name)."))
+        }
+        return .success(describe(s, fields: fields, file: file, prior: prior))
+    }
+
+    /// Site, URL, year and words — pure.
+    func checkFields(_ s: FoundRecordSubmission) -> Result<Fields, Refusal> {
+        func no(_ code: String, _ message: String) -> Result<Fields, Refusal> {
             .failure(Refusal(code: code, message: message))
         }
-        // Fields.
         let site = s.siteTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !site.isEmpty else { return no("site", "Say which site the record came from.") }
         let pageURL = s.pageURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -340,87 +429,74 @@ struct RecordFinderFiler {
         }
         let transcription = s.transcription.trimmingCharacters(in: .whitespacesAndNewlines)
         guard transcription.count <= Self.maxTranscriptionLength else {
-            return no("transcription-long", "The transcription is longer than \(Self.maxTranscriptionLength) characters — keep it to what the record says.")
+            return no("transcription-long",
+                      "The transcription is longer than \(Self.maxTranscriptionLength) characters — keep it to what the record says.")
         }
         if s.confirmedRead {
             guard !transcription.isEmpty else {
-                return no("transcription-empty", "Type what the record says before telling Hallie — she only repeats what you wrote.")
+                return no("transcription-empty",
+                          "Type what the record says before telling Hallie — she only repeats what you wrote.")
             }
             guard record != nil else {
-                return no("no-cyberbrain", "Hallie's knowledge file isn't set up on this Mac, so she can't be told. Untick \"I've read it\" to file the record only.")
+                return no("no-cyberbrain",
+                          "Hallie's knowledge file isn't set up on this Mac, so she can't be told. Untick \"I've read it\" to file the record only.")
             }
         }
+        return .success(Fields(site: site, pageURL: pageURL, year: year, transcription: transcription))
+    }
 
-        // Where it may be written.
-        do {
-            try assetStore.requireWriteAccess()
-            try ViewerWriteGuard.check("RecordFinderFiler.file")
-        } catch {
-            return no("read-only", error.localizedDescription)
-        }
-
-        // The file: a regular file of an allowed type, within the size cap,
-        // whose first bytes are what its extension claims.
-        let source = URL(fileURLWithPath: s.file.path, isDirectory: false)
+    /// A regular file of an allowed type, within the size cap (checked
+    /// before any byte is read), whose first bytes are what its extension
+    /// claims; then its SHA-256, streamed.
+    func checkFile(_ file: URL) -> Result<CheckedFile, Refusal> {
+        let source = URL(fileURLWithPath: file.path, isDirectory: false)
         let ext = source.pathExtension.lowercased()
         guard FamilyAssetStore.allowedPersonDocumentExtensions.contains(ext) else {
-            return no("type", FamilyAssetStore.DocumentError.unsupportedType(ext).localizedDescription)
+            return .failure(Refusal(code: "type", message: FamilyAssetStore.DocumentError.unsupportedType(ext).localizedDescription))
         }
         guard let values = try? source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
               values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize else {
-            return no("unreadable", FamilyAssetStore.DocumentError.sourceUnreadable(source.lastPathComponent).localizedDescription)
+            return .failure(Refusal(code: "unreadable",
+                                    message: FamilyAssetStore.DocumentError.sourceUnreadable(source.lastPathComponent).localizedDescription))
         }
         guard size <= FamilyAssetStore.maxImportBytes else {
-            return no("too-large", FamilyAssetStore.DocumentError.tooLarge(bytes: size).localizedDescription)
+            return .failure(Refusal(code: "too-large", message: FamilyAssetStore.DocumentError.tooLarge(bytes: size).localizedDescription))
         }
-        guard size > 0 else {
-            return no("empty", FamilyAssetStore.DocumentError.notTheClaimedType(ext).localizedDescription)
+        guard size > 0, Self.hasPlausibleMagic(source, fileExtension: ext),
+              let digest = Self.streamedSHA256(of: source) else {
+            return .failure(Refusal(code: "magic", message: FamilyAssetStore.DocumentError.notTheClaimedType(ext).localizedDescription))
         }
-        guard let digest = Self.streamedSHA256(of: source),
-              Self.hasPlausibleMagic(source, fileExtension: ext) else {
-            return no("magic", FamilyAssetStore.DocumentError.notTheClaimedType(ext).localizedDescription)
-        }
+        return .success(CheckedFile(sha256: digest, byteCount: size))
+    }
 
-        // Already filed for this person? (Same bytes anywhere in any of
-        // their folders.)
-        if let existing = assetStore.documents(for: assetPerson).first(where: { $0.sha256 == digest }) {
-            return no("duplicate-document",
-                      "This exact file is already filed for \(assetPerson.name) as \(existing.filename) "
-                      + "(\(existing.kind.displayName.lowercased()), added \(FamilyTreeNote.shortDate(existing.addedAt))).")
-        }
-
-        // The dossier must be readable — a damaged one is never replaced.
-        let prior: ResearchDossier?
-        do {
-            prior = try researchStore.loadDossier(key: subject.key)
-        } catch {
-            return no("dossier-unreadable", "The research file for \(assetPerson.name) can't be read (\(error.localizedDescription)); nothing was changed.")
-        }
-        let findingID = ResearchFinding.makeID(source: .recordFinder, url: "sha256:" + digest)
-        if prior?.findings.contains(where: { $0.id == findingID }) == true {
-            return no("duplicate-finding", "This record is already filed for \(assetPerson.name).")
-        }
-
-        // The words that go with it.
-        let when = now()
+    /// The words that go with it: document note, finding title and excerpt.
+    private func describe(_ s: FoundRecordSubmission, fields: Fields, file: CheckedFile,
+                          prior: ResearchDossier?) -> Prepared {
         var where_: [String] = []
         let district = s.district.trimmingCharacters(in: .whitespacesAndNewlines)
         let recordID = s.recordID.trimmingCharacters(in: .whitespacesAndNewlines)
         if !district.isEmpty { where_.append(district) }
         if !recordID.isEmpty { where_.append("record \(recordID)") }
-        let what = s.recordType.label + (year.isEmpty ? "" : " \(year)")
-        let findingTitle = "\(what) — \(site)" + (where_.isEmpty ? "" : " (\(where_.joined(separator: ", ")))")
-        let note = "\(site): \(what)" + (where_.isEmpty ? "" : ", " + where_.joined(separator: ", ")) + ". \(pageURL)"
-        let excerpt = transcription.isEmpty
-            ? "Filed \(s.recordType.label.lowercased()) record from \(site); not yet transcribed."
-            : transcription
-        return .success(Prepared(sha256: digest, byteCount: size, pageURL: pageURL,
-                                 year: year.isEmpty ? nil : year, note: note,
-                                 findingTitle: findingTitle, excerpt: excerpt,
-                                 priorDossier: prior, when: when))
+        let what = s.recordType.label + (fields.year.isEmpty ? "" : " \(fields.year)")
+        let place = where_.joined(separator: ", ")
+        let findingTitle = "\(what) — \(fields.site)" + (place.isEmpty ? "" : " (\(place))")
+        let note = "\(fields.site): \(what)" + (place.isEmpty ? "" : ", \(place)") + ". \(fields.pageURL)"
+        let excerpt = fields.transcription.isEmpty
+            ? "Filed \(s.recordType.label.lowercased()) record from \(fields.site); not yet transcribed."
+            : fields.transcription
+        return Prepared(sha256: file.sha256, byteCount: file.byteCount, pageURL: fields.pageURL,
+                        year: fields.year.isEmpty ? nil : fields.year, note: note,
+                        findingTitle: findingTitle, excerpt: excerpt, priorDossier: prior, when: now())
     }
 
     // MARK: Undo
+
+    /// Undo writes 1 and 2: dossier back as it was, document to .trash.
+    private func undoAll(pre: Prepared, filed: FiledDocument, why: String, code: String) -> Stop {
+        let restored = restoreDossier(pre.priorDossier)
+        let undone = undoDocument(filed.document, folder: filed.folder, why: why)
+        return Stop(outcome: combine(undone, dossierRestored: restored), code: code)
+    }
 
     /// Move the just-filed document to Documents/.trash and drop its row.
     private func undoDocument(_ document: PersonDocument, folder: URL, why: String) -> RecordFilingOutcome {
