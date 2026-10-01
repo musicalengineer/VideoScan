@@ -23,10 +23,13 @@ struct FamilyMapNotesAdversarialTests {
                  place: "Boston, Massachusetts", privacy: .family, expectedBirthplace: nil),
         NoteCase(text: "Married in Boston after her daughter was born.",
                  place: "Boston, Massachusetts", privacy: .family, expectedBirthplace: nil),
-        NoteCase(text: "Born in Cork.",
+        NoteCase(text: "Mary Christina O'Connor was born in Cork.",
                  place: "Cork, Ireland", privacy: .private, expectedBirthplace: nil),
-        NoteCase(text: "Born in Cork.",
+        NoteCase(text: "Mary Christina O'Connor was born in Cork.",
                  place: "Cork, Ireland", privacy: .family, expectedBirthplace: "Cork, Ireland"),
+        // #235: an opener that does not name her places nobody, even when visible.
+        NoteCase(text: "Born in Cork.",
+                 place: "Cork, Ireland", privacy: .family, expectedBirthplace: nil),
     ], [true, false])
     func onlyThePersonsOwnVisibleBirthPlacesThem(_ row: NoteCase, linkedByGEDCOM: Bool) throws {
         let graph = GedcomFamilyGraph(gedcomText: """
@@ -73,33 +76,28 @@ struct FamilyMapNotesAdversarialTests {
     }
 
     /// The fix for codex's P2 rows, pinned sentence by sentence (Claude,
-    /// closing codex P2 in r3 and its re-check F1/F2 in r4). The positive
-    /// rows are the shapes the archive actually holds — the 2026-09-29
-    /// certificate event for Mary, the older "Born …" form, a pronoun
-    /// opening, her canonical name and her listed aliases; the negative rows
-    /// are other people's births mentioned in an event about her (a
-    /// daughter, twins, her father Daniel who shares her surname, a woman
-    /// who shares only her first name) and a death event that mentions her
-    /// birth in passing. Ambiguous forms ("Grandma was born", an unlisted
-    /// nickname, a pronoun after another clause) are documented false
+    /// closing codex P2 in r3, its re-check F1/F2 in r4, and F1 for good in
+    /// #235). Only ONE shape is a birth now: the note opens with names that
+    /// are all hers (canonical or a listed alias, at least one a given
+    /// name), then "was born" / ", born" — the 2026-09-29 certificate event
+    /// has that shape. The negative rows are other people's births
+    /// mentioned in an event about her (a daughter, twins, her father
+    /// Daniel who shares her surname, a woman who shares only her first
+    /// name), a death event that mentions her birth in passing, and — since
+    /// #235 — every "Born …" / "Birth …" / "She was born …" opener, which
+    /// no longer says WHOSE birth it is. Those are documented false
     /// negatives, pinned so a change is deliberate.
     static let ownBirthSentences: [SentenceCase] = [
         // Positives kept from r3.
         SentenceCase(text: "Mary Christina O'Connor was born on 1 January 1900 at 1 Example Lane, Cork, County Cork, Ireland — recorded in the civil birth register (district and entry on the certificate).", isOwnBirth: true),
         SentenceCase(text: "Mary was born in Cork.", isOwnBirth: true),
         SentenceCase(text: "Mamie O'Connor, born 1904, Cork.", isOwnBirth: true),        // listed alias + surname, comma form
-        SentenceCase(text: "Born 1 January 1900 at 1 Example Lane, Cork; birth certificate in the archive.", isOwnBirth: true),
-        SentenceCase(text: "BIRTH registered late.", isOwnBirth: true),
-        SentenceCase(text: "Her birth was registered in Yorkshire.", isOwnBirth: true),
-        SentenceCase(text: "Daughter of Daniel and Ellen, she was born in Cork.", isOwnBirth: true),
+        SentenceCase(text: "Mary Christina O'Connor was born 1 January 1900 at 1 Example Lane, Cork; birth certificate in the archive.", isOwnBirth: true),
         // Positives added in r4 (codex re-check: canonical and listed-alias controls).
         SentenceCase(text: "Mary Christina O'Connor was born in Boston.", isOwnBirth: true),
         SentenceCase(text: "Mary C. O'Connor was born in Cork.", isOwnBirth: true),      // listed alias, with its initial
         SentenceCase(text: "Mary O'Connor was born in Cork.", isOwnBirth: true),         // every token is hers
         SentenceCase(text: "Mamie was born in Cork.", isOwnBirth: true),                 // one-word listed alias
-        SentenceCase(text: "She was born in Cork.", isOwnBirth: true),
-        SentenceCase(text: "Birth: Cork.", isOwnBirth: true),
-        SentenceCase(text: "Birth registered in Cork.", isOwnBirth: true),
         // Negatives kept from r3.
         SentenceCase(text: "Ellen Ronan was born in 1882, confirmed by her birth certificate, which the family holds.", isOwnBirth: false),
         SentenceCase(text: "Moved to Boston after the birth of her daughter.", isOwnBirth: false),
@@ -126,6 +124,20 @@ struct FamilyMapNotesAdversarialTests {
         SentenceCase(text: "Mary Christina Ronan was born in Boston.", isOwnBirth: false), // conflicting surname only
         SentenceCase(text: "Mary E. O'Connor was born in Boston.", isOwnBirth: false),    // conflicting initial
         SentenceCase(text: "Mrs Mary O'Connor was born in Cork.", isOwnBirth: false),     // documented FN: honorific not in her names
+        // #235: the openers were OWN in r3/r4; they no longer say whose birth it is.
+        SentenceCase(text: "Born 1 January 1900 at 1 Example Lane, Cork; birth certificate in the archive.", isOwnBirth: false),
+        SentenceCase(text: "Born in Cork.", isOwnBirth: false),
+        SentenceCase(text: "BIRTH registered late.", isOwnBirth: false),
+        SentenceCase(text: "Her birth was registered in Yorkshire.", isOwnBirth: false),
+        SentenceCase(text: "Daughter of Daniel and Ellen, she was born in Cork.", isOwnBirth: false),
+        SentenceCase(text: "She was born in Cork.", isOwnBirth: false),
+        SentenceCase(text: "Birth: Cork.", isOwnBirth: false),
+        SentenceCase(text: "Birth registered in Cork.", isOwnBirth: false),
+        // #235: codex r4 F1 residuals (each slipped past an opener rule).
+        SentenceCase(text: "Birth certificate located; for her daughter Ann, Boston.", isOwnBirth: false),
+        SentenceCase(text: "Born the same year as her younger brother, in Boston.", isOwnBirth: false),
+        SentenceCase(text: "Born the same year as her aunt, in Boston.", isOwnBirth: false),
+        SentenceCase(text: "Born the same year as her uncle, in Boston.", isOwnBirth: false),
     ]
 
     @Test(arguments: FamilyMapNotesAdversarialTests.ownBirthSentences)
@@ -155,6 +167,15 @@ struct FamilyMapNotesAdversarialTests {
         LookupCase(text: "Mary Ellen Ronan was born in Boston.", expectedBirthplace: nil),
         LookupCase(text: "Mary Christina O'Connor was born in Boston.", expectedBirthplace: "Boston, Massachusetts"),
         LookupCase(text: "Mamie O'Connor, born 1904 in Boston.", expectedBirthplace: "Boston, Massachusetts"),
+        // #235: codex r4 F1 residuals — each slipped past a deleted opener rule.
+        LookupCase(text: "Birth certificate located; for her daughter Ann, Boston.", expectedBirthplace: nil),
+        LookupCase(text: "Born the same year as her younger brother, in Boston.", expectedBirthplace: nil),
+        LookupCase(text: "Born the same year as her aunt, in Boston.", expectedBirthplace: nil),
+        LookupCase(text: "Born the same year as her uncle, in Boston.", expectedBirthplace: nil),
+        // #235: the openers place nobody now.
+        LookupCase(text: "Born in Boston.", expectedBirthplace: nil),
+        LookupCase(text: "She was born in Boston.", expectedBirthplace: nil),
+        LookupCase(text: "Birth certificate for Ann, Boston.", expectedBirthplace: nil),
     ]
 
     /// codex re-check F1/F2 through the real lookup, under both link forms:

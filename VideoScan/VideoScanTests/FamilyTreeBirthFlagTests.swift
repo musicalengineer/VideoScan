@@ -107,11 +107,11 @@ private func brainArchive(maryPrivacy: CyberBrainItem.Privacy = .family,
     // a counter-claim with NO place, so the disputed case has nothing
     // else to fall back on.
     let counterClaim = CyberBrainItem(id: "event.mary.birth.elsewhere", kind: .event,
-                                      text: "Born, some say, somewhere else entirely.", subjectPersonIDs: ["person.mary"],
+                                      text: "Mary Christina O'Connor was born, some say, somewhere else entirely.", subjectPersonIDs: ["person.mary"],
                                       place: nil, sourceIDs: ["source.bc"], confidence: .uncertain, privacy: .family,
                                       status: .active, disputesItemIDs: [], createdAt: now, updatedAt: now, correction: nil)
     let birth = CyberBrainItem(id: "event.mary.birth", kind: .event,
-                               text: "Born 1 January 1900 at 1 Example Lane, Cork.", subjectPersonIDs: ["person.mary"],
+                               text: "Mary Christina O'Connor was born 1 January 1900 at 1 Example Lane, Cork.", subjectPersonIDs: ["person.mary"],
                                place: "Cork, Ireland", sourceIDs: ["source.bc"], confidence: maryConfidence,
                                privacy: maryPrivacy, status: .active,
                                disputesItemIDs: maryConfidence == .disputed ? [counterClaim.id] : [],
@@ -211,11 +211,11 @@ struct FamilyTreeBirthFlagTests {
         let graph = flagsGraph()
         // John (@I1@, Yorkshire in the tree) has a note claiming Cork; Karl
         // (@I8@, Berlin in the tree — off the map) has a note saying Cork.
-        let johnNote = CyberBrainItem(id: "event.john.birth", kind: .event, text: "Born in Cork, they say.",
+        let johnNote = CyberBrainItem(id: "event.john.birth", kind: .event, text: "John Yorke was born in Cork, they say.",
                                       subjectPersonIDs: ["person.john"], place: "Cork, Ireland", sourceIDs: ["source.bc"],
                                       confidence: .probable, privacy: .family, status: .active, disputesItemIDs: [],
                                       createdAt: now, updatedAt: now, correction: nil)
-        let karlNote = CyberBrainItem(id: "event.karl.birth", kind: .event, text: "Birth registered in Cork.",
+        let karlNote = CyberBrainItem(id: "event.karl.birth", kind: .event, text: "Karl Berlin was born in Cork; the birth was registered there.",
                                       subjectPersonIDs: ["person.karl"], place: "Cork, Ireland", sourceIDs: ["source.bc"],
                                       confidence: .probable, privacy: .family, status: .active, disputesItemIDs: [],
                                       createdAt: now, updatedAt: now, correction: nil)

@@ -263,3 +263,12 @@ later header/portrait change is outside this verdict.
 - **F2:** closed by codex in r4.
 - **F3:** closed by codex in r4.
 - **F1 residual:** accepted. It will NOT be closed by another patch to the openers. Rules 1–3 ("Born…", "Birth…", "She was born…") will be deleted. Only rule 4 stays: a leading run of the person's own names, then "was born", with every token hers and at least one given name. Codex closed that rule as F2. All of codex's F1 counterexamples go through rules 1–3. The one live placed birth event opens with her own full name, so it still places her. Tracked as GH #235, together with the fixture rewrites. One confirming codex pass will follow via tools/codex_review.py.
+
+## r4 F1 closed by #235 (Claude, 2026-09-30)
+
+- **Commit:** `4a08f8ff` on `fix/235-own-name-rule-only` (base `16fcfe04`).
+- **Change:** `FamilyMapModel.isOwnBirthEvent` loses rules 1–3 (the "Born…", "Birth…" / "Her birth…" and "She / He was born…" openers) and their patterns (`possessiveRelativePattern`, `birthHandedOnPattern`, `leadingPronounBornPattern`). The only accept left is the own-name rule (r4 F2), unchanged. The rejects for someone else's birth ("birth of / to", "gave birth", "relative … was born") still run before it.
+- **Pins:** codex's four r4 sentences, plus "Born in Boston.", "She was born in Boston." and "Birth certificate for Ann, Boston.", now return nil through `familyBirthPlace` under both GEDCOM and name linkage. The opener positives in the sentence table are now negatives. Opener fixtures in FamilyMapModelTests and FamilyTreeBirthFlagTests were rewritten to the "<Name> was born…" form.
+- **Counts (Debug, filtered by suite):** RED (tests only) was 36 tests in 3 suites with 27 issues. GREEN is 44 tests in 5 suites with 0 issues: FamilyMapModel, Family Tree birth-country flags (#229), FamilyMap note birthplace adversarial regressions, FamilyMap adversarial app integration, and FamilyMapRenderSensor.
+- **Accepted false negatives:** any note that does not open with the person's own names ("Born in Cork.", "She was born in Cork."). A structured birth fact on CyberBrain events would remove the guesswork. That is a schema change and Rick's call.
+- **Live archive:** not re-run in this change. By text shape, the one placed birth event opens with her own full name and is still accepted.

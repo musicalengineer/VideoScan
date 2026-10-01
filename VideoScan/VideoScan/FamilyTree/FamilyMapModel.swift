@@ -265,46 +265,36 @@ final class FamilyMapModel: ObservableObject {
     /// THE RULE: a note places a person only when it asserts THEIR OWN
     /// birth; anything ambiguous stays unplaced. A false negative leaves a
     /// person off the map; a false positive files them under the wrong
-    /// place — so every branch below is a narrow ACCEPT.
+    /// place — so the one branch below is a narrow ACCEPT.
     ///
     /// Rejected first, whatever else the text says:
     ///   - "birth of …", "gave birth", "birth to …" — a birth that belongs
     ///     to someone else;
     ///   - a relative noun (daughter, son, child, twins, brother, …),
     ///     optionally followed by a Name, then "was / were born".
-    /// Accepted (any one):
-    ///   1. the text BEGINS "Born …" ("Born in Cork.") and names no
-    ///      relative after her / his / their ("Born the same year as her
-    ///      brother" is ambiguous);
-    ///   2. it BEGINS "Birth …" or "His / Her birth …" and the rest of that
-    ///      first sentence has no of / to / for, no her / his / their and
-    ///      no possessive 's ("BIRTH registered late.", "Birth: Cork.",
-    ///      "Her birth was registered in Yorkshire." — not "Birth
-    ///      certificate for her daughter records Boston.", codex re-check
-    ///      F1);
-    ///   3. it BEGINS "She / He was born", or opens with ONE appositive
-    ///      "(The eldest) daughter / son / child of …," and then "she / he
-    ///      was born" ("Daughter of Daniel and Ellen, she was born in
-    ///      Cork."). A pronoun anywhere else may point at someone the
-    ///      sentence has just named: "Ellen O'Connor moved to Boston,
-    ///      where she was born" is Ellen's birth (codex re-check F1);
-    ///   4. it BEGINS with a run of capitalised Names then "was / is
-    ///      born" (or ", born"), EVERY token of the run is one of the
-    ///      person's own name tokens (canonical name or any alias, surname
-    ///      and initials included) and at least one is a GIVEN name:
-    ///      "Mary Christina O'Connor was born on 1 January 1900 at 1
-    ///      Example Lane, Cork …" (the 2026-09-29 certificate shape),
-    ///      "Mamie O'Connor, born 1904". One name that is not hers makes
-    ///      it someone else: "Mary Ellen Ronan was born" (codex re-check
-    ///      F2), "Daniel O'Connor was born" (her father, same surname).
-    /// Anything else — "Married Jane Osborne at Birthdale", "(The tree
-    /// gives her birth as August 1903)" inside a death event — is not her
-    /// birth. Known false negatives, by design: a nickname the archive
-    /// does not list ("Grandma was born in Cork"), an honorific or a
-    /// surname-only form ("Mrs Mary O'Connor was born"), a lower-case
-    /// particle in the name run ("Mary de Burgh was born"), a pronoun
-    /// after any other opening ("Mary moved to Cork, where she was born"),
-    /// a "Born …" note that mentions "her father" or similar.
+    /// Accepted ONLY when the text BEGINS with a run of capitalised Names
+    /// then "was / is born" (or ", born"), EVERY token of the run is one of
+    /// the person's own name tokens (canonical name or any alias, surname
+    /// and initials included) and at least one is a GIVEN name:
+    /// "Mary Christina O'Connor was born on 1 January 1900 at 1 Example
+    /// Lane, Cork …" (the 2026-09-29 certificate shape), "Mamie O'Connor,
+    /// born 1904". One name that is not hers makes it someone else: "Mary
+    /// Ellen Ronan was born" (codex re-check F2), "Daniel O'Connor was
+    /// born" (her father, same surname). Anything else — "Married Jane
+    /// Osborne at Birthdale", "(The tree gives her birth as August 1903)"
+    /// inside a death event — is not her birth.
+    ///
+    /// GH #235 (closing codex r4 F1): the "Born …", "Birth …" / "Her birth
+    /// …" and "She / He was born" opener rules were DELETED. None of them
+    /// says whose birth it is, and each patch let another shape through
+    /// ("Birth certificate located; for her daughter Ann, Boston.", "Born
+    /// the same year as her aunt, in Boston."). Known false negatives, by
+    /// design: every such opener ("Born in Cork.", "She was born in
+    /// Cork."), a nickname the archive does not list ("Grandma was born in
+    /// Cork"), an honorific or a surname-only form ("Mrs Mary O'Connor was
+    /// born"), a lower-case particle in the name run ("Mary de Burgh was
+    /// born"). A structured birth fact on CyberBrain events would remove
+    /// the guesswork; that is a schema change and Rick's call.
     nonisolated static func isOwnBirthEvent(_ item: CyberBrainItem, of person: CyberBrainPerson) -> Bool {
         let text = item.text
         let ci: String.CompareOptions = [.regularExpression, .caseInsensitive]
@@ -313,27 +303,13 @@ final class FamilyMapModel: ObservableObject {
         if text.range(of: #"\bbirths?\s+(?:of|to)\b|\bgave\s+birth\b"#, options: ci) != nil { return false }
         if text.range(of: Self.relativeBornPattern, options: cs) != nil { return false }
 
-        // 1. "Born …": the subject is implied; a named relative makes it ambiguous.
-        if text.range(of: #"^\W*born\b"#, options: ci) != nil {
-            return text.range(of: Self.possessiveRelativePattern, options: ci) == nil
-        }
-        // 2. "Birth …" / "Her birth …": only when nothing in the first
-        //    sentence hands the birth to someone else.
-        if let opener = text.range(of: #"^\W*(?:(?:his|her)\s+)?birth\b"#, options: ci) {
-            let rest: Substring = text[opener.upperBound...]
-            let firstSentence = String(rest.prefix { !".;!?".contains($0) })
-            return firstSentence.range(of: Self.birthHandedOnPattern, options: ci) == nil
-        }
-        // 3. "She was born …" at the start, or after one "Daughter of …," appositive.
-        if text.range(of: Self.leadingPronounBornPattern, options: ci) != nil { return true }
-
-        // 4. A leading run of Names, ALL of them hers, then "born".
+        // The only accept: a leading run of Names, ALL of them hers, then "born".
         let namesThenBorn = #"^\W*(?:\p{Lu}\S*\s+){1,6}?(?=(?:was\s+|is\s+)?born\b)"#
         guard let run = text.range(of: namesThenBorn, options: cs) else { return false }
         return nameRunIsOnly(person, run: String(text[run]))
     }
 
-    /// Rule 4's identity test: EVERY token of the leading name run is one
+    /// The own-name rule's identity test: EVERY token of the leading name run is one
     /// of the person's own name tokens (`ownNameTokens`), and at least one
     /// is a given name (`givenNameTokens`) — a surname alone is shared
     /// with the whole family. In C++ terms: `std::includes(own, run)` plus
@@ -394,13 +370,13 @@ final class FamilyMapModel: ObservableObject {
 
     /// Every token of every name the person goes by (canonical + aliases),
     /// surname and initials included: "Mary C. O'Connor" gives mary, c,
-    /// o, connor. Rule 4 of `isOwnBirthEvent` requires a name run to use
+    /// o, connor. `isOwnBirthEvent` requires a name run to use
     /// only these.
     nonisolated static func ownNameTokens(_ person: CyberBrainPerson) -> [String] {
         ([person.canonicalName] + person.aliases).flatMap { FamilyIdentityText.tokens($0) }
     }
 
-    /// The relative nouns the rules below share. Written for a
+    /// The relative nouns `relativeBornPattern` refuses. Written for a
     /// case-insensitive group, `(?i:…)`.
     nonisolated private static let relativeNouns =
         "daughters?|sons?|child|children|baby|babies|twins?|grandsons?|granddaughters?|grandchild|grandchildren|" +
@@ -409,31 +385,9 @@ final class FamilyMapModel: ObservableObject {
     /// "her daughter was born", "his son John Patrick was born", "the
     /// twins were born" — a relative, at most three capitalised name
     /// tokens, then was / were born. Case-sensitive so the optional Names
-    /// are real Names: "Daughter of Daniel, she was born in Cork" does not
-    /// match ("of" is no Name), and rule 3 then accepts it.
+    /// are real Names.
     nonisolated private static let relativeBornPattern =
         #"\b(?i:"# + relativeNouns + #")\s+(?:\p{Lu}\S*\s+){0,3}(?:was|were|is|are)\s+born\b"#
-
-    /// "her brother", "his mother", "their twins" — a relative named by a
-    /// possessive. Rule 1 ("Born …") refuses the note when it has one:
-    /// "Born the same year as her brother" might be his birth year.
-    nonisolated private static let possessiveRelativePattern =
-        #"\b(?:her|his|their)\s+(?:"# + relativeNouns + #")\b"#
-
-    /// Rule 2: after "Birth" / "Her birth", any of these in the first
-    /// sentence hands the birth to someone or something else — "Birth
-    /// certificate for her daughter", "Birth record of Ann", "Birth
-    /// register: Ann's".
-    nonisolated private static let birthHandedOnPattern =
-        #"\b(?:of|to|for|her|his|their)\b|['’]s\b"#
-
-    /// Rule 3: "She / He was born" at the very start, or after ONE leading
-    /// appositive "(the eldest) daughter / son / child of …," with no other
-    /// clause punctuation inside it. Any other opening may name someone
-    /// else the pronoun then points at.
-    nonisolated private static let leadingPronounBornPattern =
-        #"^\W*(?:(?:the\s+)?(?:(?:eldest|oldest|youngest|only|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+)?"# +
-        #"(?:daughter|son|child)\s+of\s+[^,.;:!?()]{1,80},\s*)?(?:she|he)\s+was\s+born\b"#
 
     /// The pure form: resolves every VISITED person's place once and packs
     /// the columns. Columns are parallel to `ids`; `visited` lists
