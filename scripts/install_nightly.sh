@@ -73,8 +73,12 @@ cat > "$PLIST" <<PLIST
     <key>Nice</key>
     <integer>10</integer>
 
+    <!-- Standard, not Background (2026-10-01): Background pins the build to
+         the M4's efficiency cores and throttles I/O; the first Release
+         nightly timed out at 5400 s with VideoScanTests unbuilt. The job runs
+         at 2 AM in the M4's batch window, so it competes with no one. -->
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Standard</string>
 </dict>
 </plist>
 PLIST
