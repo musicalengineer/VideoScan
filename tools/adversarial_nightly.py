@@ -426,10 +426,17 @@ def changed_symbols(diff_text: str) -> list[str]:
     return [n for n, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))][:MAX_SYMBOLS_PER_FILE]
 
 
+COMMON_NAME_HITS = 30
+
+
 def callers(symbol: str, head: str, own_path: str) -> list[str]:
-    out = git("grep", "-n", "-w", "-I", symbol, head, "--", "*.swift", check=False)
+    out = git("grep", "-n", "-w", "-I", symbol, head, "--", "VideoScan/*.swift", check=False)
+    lines = out.splitlines()
+    if len(lines) > COMMON_NAME_HITS:
+        # `file`, `save`, `row`: a list of 8 unrelated hits is noise, not context.
+        return [f"(common name — {len(lines)} references; callers omitted, Grep for the type instead)"]
     hits = []
-    for line in out.splitlines():
+    for line in lines:
         # "<rev>:<path>:<line>:<text>"
         parts = line.split(":", 3)
         if len(parts) < 4:
