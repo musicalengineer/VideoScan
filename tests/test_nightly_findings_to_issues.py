@@ -63,11 +63,17 @@ class FakeGh:
         if self.fail_on == kind:
             raise RuntimeError(f"simulated gh failure on {kind}")
 
-    def list_issues(self, label, with_comments=False):
-        self.calls.append(("list_issues", label))
+    def list_issues(self, label=None, with_comments=False, *, search=None, state="all", limit=5000):
+        """Same contract as GhCli.list_issues: by label and/or a phrase in the
+        body, state filter, newest first, at most `limit`."""
+        self.calls.append(("list_issues", label or f"search:{search}"))
+        hits = [i for i in sorted(self.issues.values(), key=lambda i: -i.number)
+                if (label is None or label in i.labels)
+                and (search is None or search in (i.body or ""))
+                and (state == "all" or i.state.lower() == state)]
         return [nf.Issue(i.number, i.title, i.state, i.state_reason, list(i.labels), i.body,
-                         [dict(c) for c in i.comments] if with_comments else [])
-                for i in self.issues.values() if label in i.labels]
+                         [dict(c) for c in i.comments] if with_comments else [], list(i.assignees))
+                for i in hits[:limit]]
 
     def list_labels(self):
         return set(self.labels)
@@ -356,17 +362,20 @@ class TestTrackingLifecycle:
         (iss,) = gh.tracking()
         assert "High Priority" in iss.labels
 
-    def test_issue_whose_only_instance_dropped_to_medium_closes(self):
-        """Tracking issues hold HIGH instances only; the medium one stays in
-        the ticket and the empty issue counts clean nights."""
+    def test_issue_whose_only_instance_dropped_to_medium_closes_as_not_fixed(self):
+        """Coordinator ruling 2026-10-02: a high -> medium drop closes at once
+        with "no longer high severity", not "fixed"; the ticket still lists it."""
         gh = FakeGh([seeded_issue(5, F(sev="medium"), state="OPEN", reason=None,
                                   labels=["nightly-finding", "codeql"])])
-        night(gh, [F(sev="medium")], "2026-10-02")               # gone from the issue: CHANGED
-        assert len(gh.kinds("comment")) == 1
-        assert f"`{fp_of(F(sev='medium'))}`" in section(ticket_for(gh, "2026-10-02").body, "Still open")
-        for d in ("2026-10-03", "2026-10-04", "2026-10-05"):
-            night(gh, [], d)
+        res = night(gh, [F(sev="medium")], "2026-10-02")
         assert not gh.issues[5].is_open
+        (close,) = gh.kinds("close")
+        assert "No longer high severity (now medium) — still reported in the nightly ticket" in close[2]
+        assert "fixed" not in close[2].lower()
+        assert res.tracking.demoted and res.tracking.closed == []
+        assert f"`{fp_of(F(sev='medium'))}`" in section(ticket_for(gh, "2026-10-02").body, "Still open")
+        night(gh, [F(sev="high")], "2026-10-03")                 # high again -> reopened
+        assert gh.issues[5].is_open and len(gh.kinds("reopen")) == 1
 
     def test_changed_finding_gets_exactly_one_comment(self):
         gh = FakeGh()
@@ -741,7 +750,7 @@ class TestTicket:
         gh = FakeGh()
         A, B, M = F(file="a.swift"), F(file="b.swift"), F(file="m.swift", sev="medium")
         night(gh, [A, B, M], "2026-10-02")
-        C = F(file="c.swift")
+        C = F(file="c.swift", msg="a different finding")    # same message as B would read as B moving
         res = night(gh, [A, F(file="a.swift", line=9), C, M], "2026-10-03")   # A count 1 -> 2
         fp = lambda f: nf.fingerprint(f.tool, f.rule, f.file, f.message)  # noqa: E731
         tk = res.ticket
@@ -1069,3 +1078,336 @@ class TestMorningAlert:
         lines = alert.alert_lines(json.loads(out.read_text()), self.NOW)
         assert lines[0].startswith("🔴 Nightly findings 2026-10-02: 6 NEW high, 1 NEW medium")
         assert "https://github.com/o/r/issues/" in lines[0]
+
+
+# --------------------------------------------------------------------------
+# QA review 2026-10-02 (2 P1, 6 P2, P3s). Each test was drafted by QA and
+# verified RED on 98a3baaa before the fix; adapted only where noted.
+# --------------------------------------------------------------------------
+
+import re  # noqa: E402
+
+RUNNER = "/Users/runner/work/VideoScan/VideoScan/"
+
+
+def _rendered_text(md):
+    md = re.sub(r"<!--.*?-->", "", md, flags=re.S)       # markers are not rendered
+    return re.sub(r"`[^`]*`", "", md)                     # code spans do not autolink
+
+
+class TestQAScope:
+    """P1-1 / P1-2: a clean night only counts where the tool actually looked."""
+
+    @staticmethod
+    def _asan_night(tmp, n, *, app_ran, hit):
+        art = tmp / f"night{n}"
+        d = art / "sanitizer-address"
+        d.mkdir(parents=True)
+        line = ("SUMMARY: AddressSanitizer: heap-use-after-free " + RUNNER +
+                "VideoScan/VideoScan/Media/FrameDecoder.swift:57 in FrameDecoder.copyPlane(_:)\n")
+        (d / "sanitizer-address.log").write_text(line if hit else "")
+        # Exactly what the workflow's Count step wrote before this fix (no
+        # "scope" key): the scope is derived from test_step / core_step.
+        (d / "nightly-status-asan.json").write_text(json.dumps({
+            "tool": "asan", "complete": not hit, "reports": int(hit),
+            "test_step": "success" if app_ran else "skipped", "core_step": "success"}))
+        return art
+
+    def test_asan_app_finding_is_not_closed_by_nights_that_never_ran_the_app_tests(self, tmp_path):
+        gh = FakeGh()
+        nights = [("2026-10-02", True, True), ("2026-10-03", False, False),
+                  ("2026-10-04", False, False), ("2026-10-05", False, False)]
+        for i, (day, app_ran, hit) in enumerate(nights):
+            art = self._asan_night(tmp_path, i, app_ran=app_ran, hit=hit)
+            rc = nf.run(["--artifacts", str(art), "--repo", "o/r", "--today", day,
+                         "--now", f"{day}T06:00:00Z", "--job-result", "asan=success",
+                         "--summary-out", str(tmp_path / f"s{i}.json")], gh_factory=lambda r: gh)
+            assert rc == 0
+        (iss,) = gh.tracking()
+        assert iss.is_open, "closed 'as fixed' by nights in which the app tests never ran under ASan"
+        assert iss.marker["missing_dates"] == []
+
+    def test_core_only_night_still_closes_a_core_finding(self, tmp_path):
+        """The scope is not a blanket hold: a VideoScanCore finding IS examined
+        by the Core-only nights and closes after three of them."""
+        gh = FakeGh()
+        core = F(tool="asan", rule="heap-use-after-free",
+                 file="VideoScan/VideoScanCore/Sources/VideoScanCore/Ledger.swift")
+        night(gh, [core], "2026-10-02")
+        core_only = nf.Scope(prefixes=(nf.CORE_PREFIX,))
+        for d in ("2026-10-03", "2026-10-04", "2026-10-05"):
+            runs = runs_from([])
+            runs["asan"].scope = core_only
+            gh.calls.clear()
+            assert nf.run_night(gh, runs, d, at(d), "u", 3).errors == []
+        assert not gh.tracking()[0].is_open
+
+    def test_status_scope_declared_and_derived(self):
+        assert nf.status_scope("asan", {"scope": ["*"]}).is_total
+        s = nf.status_scope("asan", {"scope": ["VideoScan/VideoScanCore/"]})
+        assert s.covers("VideoScan/VideoScanCore/Sources/A.swift") and not s.covers("VideoScan/VideoScan/A.swift")
+        d = nf.status_scope("asan", {"test_step": "skipped", "core_step": "success"})
+        assert not d.covers("VideoScan/VideoScan/Media/FrameDecoder.swift")
+        assert nf.status_scope("asan", {"test_step": "success", "core_step": "success"}).is_total
+        assert nf.status_scope("periphery", None).is_total
+
+    @staticmethod
+    def _sarif(results, extracted):
+        notes = [{"descriptor": {"id": "swift/diagnostics/successfully-extracted-files"},
+                  "locations": [{"physicalLocation": {"artifactLocation": {"uri": u}}}]} for u in extracted]
+        return {"version": "2.1.0", "runs": [{
+            "tool": {"driver": {"name": "CodeQL", "rules": [{"id": "swift/cleartext-logging",
+                     "defaultConfiguration": {"level": "error"}, "properties": {"tags": ["security"]}}]}},
+            "invocations": [{"toolExecutionNotifications": notes}],
+            "results": results}]}
+
+    def test_codeql_finding_in_a_file_not_extracted_tonight_is_not_fixed(self, tmp_path):
+        target = "VideoScan/VideoScan/Model/VideoScanModel.swift"
+        others = [f"VideoScan/VideoScan/App/F{i}.swift" for i in range(9)]
+        hit = {"ruleId": "swift/cleartext-logging", "level": "error",
+               "message": {"text": "This operation writes 'path' to a log file."},
+               "locations": [{"physicalLocation": {"artifactLocation": {"uri": target},
+                                                   "region": {"startLine": 10}}}]}
+        gh = FakeGh()
+        for i, day in enumerate(("2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05")):
+            art = tmp_path / f"n{i}" / "codeql-results"
+            art.mkdir(parents=True)
+            first = i == 0
+            (art / "swift.sarif").write_text(json.dumps(self._sarif([hit] if first else [],
+                                                                    others + ([target] if first else []))))
+            (art / "nightly-status-codeql.json").write_text(json.dumps({"tool": "codeql", "complete": True}))
+            rc = nf.run(["--artifacts", str(art.parent), "--repo", "o/r", "--today", day,
+                         "--now", f"{day}T06:00:00Z", "--job-result", "codeql=success",
+                         "--summary-out", str(tmp_path / f"s{i}.json")], gh_factory=lambda r: gh)
+            assert rc == 0
+        (iss,) = gh.tracking()
+        assert iss.is_open, "closed as fixed although CodeQL never extracted the file on the clean nights"
+
+    def test_codeql_scope_falls_back_to_coverage_missed(self, tmp_path):
+        d = tmp_path / "codeql-results"
+        d.mkdir()
+        (d / "swift.sarif").write_text(json.dumps({"runs": [{"results": []}]}))
+        (d / "codeql-coverage.json").write_text(json.dumps({"missed": ["VideoScan/VideoScan/X.swift"]}))
+        s = nf.codeql_scope([d / "swift.sarif"], tmp_path, None)
+        assert not s.covers("VideoScan/VideoScan/X.swift") and s.covers("VideoScan/VideoScan/Y.swift")
+
+
+class TestQAMarkdownSafety:
+    """P2-1: finding text never mentions a user or back-links an issue."""
+
+    def test_finding_text_cannot_mention_users_or_backlink_issues(self):
+        race = F(tool="strict-concurrency", rule="concurrency", file="VideoScan/VideoScan/A.swift",
+                 msg="converting non-sendable function value to '@MainActor @Sendable () -> Void' "
+                     "may introduce data races")
+        asan = F(tool="asan", rule="heap-use-after-free", file="VideoScan/VideoScan/B.swift",
+                 msg="heap-use-after-free in closure #1 in Loader.run()")
+        gh = FakeGh()
+        night(gh, [race], "2026-10-02")
+        night(gh, [race, asan, F(tool="strict-concurrency", rule="concurrency",
+                                 file="VideoScan/VideoScan/A.swift",
+                                 msg="sending '@MainActor x' risks causing data races")], "2026-10-03")
+        texts = [i.body for i in gh.issues.values()] + \
+                [c["body"] for i in gh.issues.values() for c in i.comments]
+        for t in texts:
+            visible = _rendered_text(t)
+            assert "@MainActor" not in visible and "@Sendable" not in visible
+            assert "closure #1" not in visible
+
+    def test_autolink_half_alone(self):
+        asan = F(tool="asan", rule="heap-use-after-free", file="VideoScan/VideoScan/B.swift",
+                 msg="heap-use-after-free in closure #1 in Loader.run()")
+        gh = FakeGh()
+        night(gh, [asan], "2026-10-02")
+        for i in gh.issues.values():
+            assert "closure #1" not in _rendered_text(i.body)
+
+    def test_backticks_in_finding_text_are_fenced(self):
+        assert nf.code("a `b` c") == "`` a `b` c ``"
+        assert nf.code("x``y") == "``` x``y ```"
+        assert nf.cell("a|b") == "`a\\|b`"
+        assert nf.code("") == "–"
+
+
+class TestQALifecycle:
+    def test_file_move_is_not_closed_as_fixed_and_refiled(self):
+        """P2-2: the 9/29 source-folder reorg moved every file."""
+        old = CL("token", file="VideoScan/VideoScan/Model/Store.swift")
+        new = CL("token", file="VideoScan/VideoScan/Catalog/Store.swift")
+        gh = FakeGh()
+        night(gh, [old], "2026-10-02")
+        res = None
+        for d in ("2026-10-03", "2026-10-04", "2026-10-05"):
+            res = night(gh, [new], d)
+            if d == "2026-10-03":
+                (c,) = gh.kinds("comment")
+                assert "Moved in the nightly of 2026-10-03" in c[2]
+                assert fp_of(old) not in section(ticket_for(gh, d).body, "FIXED")
+        assert len(gh.tracking()) == 1 and gh.tracking()[0].is_open
+        assert gh.tracking()[0].marker["file"] == new.file
+        assert res.ticket.new_high == []
+
+    def test_wontfix_silences_the_judged_instance_not_a_new_one_in_the_same_file(self):
+        """P2-3."""
+        a, b = CL("lastPathComponent"), CL("password")
+        gh = FakeGh([seeded_issue(7, a, state="CLOSED", reason="NOT_PLANNED",
+                                  labels=["nightly-finding", "codeql"])])
+        res = night(gh, [a, b], "2026-10-02")
+        assert [g.fp for g in res.ticket.new_high] == [fp_of(b)]
+        # b is filed under a related key, pointing at #7; a stays silenced.
+        (new,) = [i for i in gh.tracking() if i.number != 7]
+        assert "Related to #7" in new.body and list(new.marker["instances"]) == [fp_of(b)]
+        assert gh.issues[7].comments == [] and not gh.issues[7].is_open
+        night(gh, [a, b], "2026-10-03")
+        assert len(gh.tracking()) == 2                          # stable: no third issue
+
+    def test_a_failed_marker_edit_does_not_repeat_the_changed_comment(self):
+        """P2-4: state edit first; a failed edit stops that issue's actions."""
+        class FailFirstEdit(FakeGh):
+            fail_next_tracking_edit = False
+
+            def edit_body(self, number, body):
+                if self.fail_next_tracking_edit and nf.TICKET_LABEL not in self.issues[number].labels:
+                    self.fail_next_tracking_edit = False
+                    raise RuntimeError("HTTP 502")
+                super().edit_body(number, body)
+
+        gh = FailFirstEdit()
+        night(gh, [CL("a"), CL("b")], "2026-10-02")
+        gh.fail_next_tracking_edit = True
+        res = nf.run_night(gh, runs_from([CL("a"), CL("b"), CL("c")]), "2026-10-03",
+                           at("2026-10-03"), "u", 3)
+        assert res.errors
+        night(gh, [CL("a"), CL("b"), CL("c")], "2026-10-04")
+        (iss,) = gh.tracking()
+        posted = [c for c in iss.comments if "New instance(s)" in c["body"]]
+        assert len(posted) == 1, f"CHANGED comment posted {len(posted)} times"
+
+    def test_removing_the_label_does_not_make_the_tool_file_a_duplicate(self):
+        """P2-5: found by body marker, not only by label."""
+        f = CL("a")
+        seeded = seeded_issue(5, f, state="OPEN", reason=None, labels=["codeql", "High Priority"])
+        gh = FakeGh([seeded])
+        night(gh, [f], "2026-10-02")
+        assert [c for c in gh.kinds("create") if nf.BASE_LABEL in c[3]] == []
+
+    def test_duplicate_tracking_issues_for_one_group_are_all_closed(self):
+        """P2-6."""
+        f = CL("a")
+        gh = FakeGh([seeded_issue(5, f, state="OPEN", reason=None, labels=["nightly-finding", "codeql"]),
+                     seeded_issue(6, f, state="OPEN", reason=None, labels=["nightly-finding", "codeql"])])
+        for d in ("2026-10-02", "2026-10-03", "2026-10-04"):
+            night(gh, [], d)
+            if d == "2026-10-02":
+                assert any("Duplicate of #5" in c["body"] for c in gh.issues[6].comments)
+        assert not gh.issues[5].is_open
+        assert not gh.issues[6].is_open, "duplicate stays open forever"
+
+    def test_human_notes_in_a_tracking_body_survive_a_changed_event(self):
+        """P3."""
+        gh = FakeGh()
+        night(gh, [CL("a")], "2026-10-02")
+        (iss,) = gh.tracking()
+        iss.body += "\n\nRick: root cause is the logger in Store.save; fix on branch x."
+        night(gh, [CL("a"), CL("b")], "2026-10-03")
+        body = gh.tracking()[0].body
+        assert "root cause is the logger" in body and "### Instances (2)" in body
+
+    def test_legacy_close_needs_a_legacy_marker_not_just_the_label(self):
+        """P3."""
+        human = nf.Issue(4, "Rick: periphery digest idea", "OPEN", None,
+                         ["nightly-finding", "nightly-digest"], "Notes I am working on.")
+        gh = FakeGh([human])
+        night(gh, [], "2026-10-02")
+        assert gh.issues[4].is_open
+
+    def test_derived_data_inside_the_workspace_is_not_our_source(self):
+        """P3."""
+        assert nf.is_vendored("memsafe-dd/Build/Intermediates.noindex/VideoScan.build/Debug/"
+                              "VideoScan.build/DerivedSources/GeneratedAssetSymbols.swift")
+        assert nf.is_vendored("DerivedData/Build/Intermediates.noindex/VideoScan.build/Debug/"
+                              "VideoScan.build/DerivedSources/GeneratedAssetSymbols.swift")
+        assert not nf.is_vendored("VideoScan/VideoScan/App/Odd-dd/Name.swift")
+
+    def test_change_comment_is_capped(self):
+        """P3: a 300-instance change names 20 and counts the rest."""
+        gh = FakeGh()
+        night(gh, [CL("seed")], "2026-10-02")
+        # Letters, not digits: fingerprints normalise digits away.
+        night(gh, [CL("seed")] + [CL("v" + "".join(chr(97 + int(d)) for d in str(i)))
+                                  for i in range(300)], "2026-10-03")
+        (c,) = gh.kinds("comment")
+        assert c[2].count("\n- `") == nf.COMMENT_LIST_MAX and "and 280 more" in c[2]
+        assert len(gh.tracking()[0].body) < nf.GITHUB_BODY_LIMIT
+
+
+class TestQARotation:
+    """Coordinator rulings on P3-7: a human reopen or an assignee also keeps
+    an older ticket open."""
+
+    def test_assigned_ticket_is_not_rotated_away(self):
+        gh = FakeGh()
+        night(gh, [F()], "2026-10-02")
+        old = ticket_for(gh, "2026-10-02")
+        old.assignees = ["musicalengineer"]
+        night(gh, [F()], "2026-10-03")
+        assert old.is_open
+        body = ticket_for(gh, "2026-10-03").body
+        assert f"#{old.number} (assigned to `musicalengineer`)" in body
+        assert "@musicalengineer" not in body                    # never pings the assignee
+
+    def test_ticket_reopened_by_a_person_stays_open(self):
+        gh = FakeGh()
+        night(gh, [F()], "2026-10-02")
+        night(gh, [F()], "2026-10-03")                           # rotation closes 10-02
+        old = ticket_for(gh, "2026-10-02")
+        assert not old.is_open
+        old.state, old.state_reason = "OPEN", "REOPENED"         # Rick reopens it
+        night(gh, [F()], "2026-10-04")
+        assert old.is_open
+        assert "reopened by a person" in ticket_for(gh, "2026-10-04").body
+
+    def test_only_open_and_recent_closed_tickets_are_fetched(self):
+        """P3: old tickets are never listed again."""
+        gh = FakeGh()
+        for d in range(2, 14):
+            night(gh, [F()], f"2026-10-{d:02d}")
+        listed = {i.number for i in nf.list_all_issues(gh)}
+        tickets = [t.number for t in gh.tickets()]
+        assert set(tickets[:-1 - nf.RECENT_CLOSED_TICKETS]).isdisjoint(listed)
+        assert tickets[-1] in listed
+
+
+class TestQAWorkflow:
+    Y = (REPO / ".github" / "workflows" / "nightly-analysis.yml").read_text()
+
+    def job(self, name, nxt):
+        return self.Y[self.Y.index(f"  {name}:"): self.Y.index(f"  {nxt}:")]
+
+    def test_workflow_serialises_findings_runs(self):
+        # Adapted from QA's draft: the group is on the findings JOB (the
+        # 5-hour analysis jobs need not wait for each other), never cancelled.
+        job = self.job("findings-to-issues", "aggregate")
+        assert re.search(r"(?m)^    concurrency:\s*$", job)
+        assert "group: nightly-findings-to-issues" in job and "cancel-in-progress: false" in job
+
+    def test_workflow_pins_the_night_date_to_the_run_not_the_wall_clock(self):
+        job = self.job("findings-to-issues", "aggregate")
+        assert '--today "$NIGHT"' in job and "created_at" in job and "America/New_York" in job
+
+    def test_write_gate_reaches_the_shell_through_env(self):
+        job = self.job("findings-to-issues", "aggregate")
+        run_lines = [ln for ln in job.splitlines() if "${{" in ln and "vars." in ln]
+        assert run_lines == ["          WRITE_VAR: ${{ vars.NIGHTLY_FINDINGS_WRITE }}"]
+        assert "workflow_dispatch" in self.Y and "dry_run:" in self.Y
+
+    def test_permissions_are_least_privilege(self):
+        import yaml
+        d = yaml.safe_load(self.Y)
+        assert d["permissions"] == {"contents": "read"}
+        perms = {k: v.get("permissions") or {} for k, v in d["jobs"].items()}
+        writers = {k: sorted(p for p, v in ps.items() if v == "write") for k, ps in perms.items()}
+        assert {k: v for k, v in writers.items() if v} == {
+            "codeql": ["security-events"], "aggregate": ["contents"], "findings-to-issues": ["issues"]}
+
+    def test_sanitizer_status_declares_its_scope(self):
+        assert "'scope':['*'] if app else" in self.Y

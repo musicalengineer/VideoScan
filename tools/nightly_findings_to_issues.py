@@ -68,8 +68,31 @@ the issues" -- a mix, biased to one ticket):
      an issue with no high instance left counts clean nights and closes.
 
   3. Vendored / third-party code (SwiftPM checkouts, mlx-swift, Pods,
-     anything outside the repo) is counted in ONE line of the ticket and
-     never filed.
+     build output such as DerivedData/ or *-dd/, anything outside the repo)
+     is counted in ONE line of the ticket and never filed.
+
+  QA hardening (2026-10-02):
+  * SCOPE. A tool's status file declares which sources it examined
+    ("scope": prefixes, "*" = all; for the sanitizers it is derived from
+    test_step / core_step; for CodeQL it is the SARIF's extracted-file set,
+    else codeql-coverage.json "missed"). A finding gets a clean night, or
+    reads as FIXED, only if its file was in scope; otherwise it is held.
+  * FILE MOVES. An issue whose group vanished, matched by a new group with
+    the same tool, rule and instance messages, follows the file (one
+    "Moved" comment); nothing closes, nothing new is filed.
+  * WONTFIX silences only the fingerprints recorded in that issue; new
+    instances in the same file are NEW and filed under "<key>~r<N>" with a
+    "Related to #N" note.
+  * Writes per issue: state edit first, then the comment; a failure stops
+    that issue's remaining actions for the night.
+  * Issues are found by body marker as well as by label; duplicates of one
+    group key are closed pointing at the kept issue.
+  * Bodies keep human text outside the managed section; all finding text is
+    in code spans (no @mentions, no #N links); lists in bodies and comments
+    are capped.
+  * A high -> medium drop closes with "no longer high severity", not "fixed".
+  * Rotation also keeps an older ticket that is assigned or was reopened by
+    a person.
 
   4. The morning brief (scripts/nightly_findings_alert.py) prints a 🔴 line
      for any NEW high or medium finding and a ⚠️ line for any high tracking
@@ -203,6 +226,7 @@ class Issue:
     labels: list[str]
     body: str
     comments: list[dict] = dataclasses.field(default_factory=list)   # gh --json comments
+    assignees: list[str] = dataclasses.field(default_factory=list)   # logins
 
     @property
     def marker(self) -> dict | None:
@@ -311,7 +335,10 @@ def group_findings(findings: Iterable[Finding]) -> dict[str, FindingGroup]:
 _VENDORED = re.compile(
     r"(^|/)(SourcePackages/checkouts|\.build/checkouts|checkouts|Carthage|Pods|node_modules"
     r"|third[_-]?party|ThirdParty|[Vv]endor(ed)?)/"
-    r"|(^|/)mlx-swift(/|$)|(^|/)Cmlx(/|$)")
+    r"|(^|/)mlx-swift(/|$)|(^|/)Cmlx(/|$)"
+    # Build output inside the workspace (-derivedDataPath DerivedData,
+    # memsafe-dd, .build): generated sources, not our source (QA P3, 2026-10-02).
+    r"|^(DerivedData|\.build|[^/]+-dd)/|/(DerivedData|\.build)/")
 # Module-only sanitizer frames, e.g. "<libmlx.dylib>". System frames such as
 # <libswiftCore.dylib> are NOT vendored: a race that surfaces in swift_retain
 # is almost always our own code racing on a reference.
@@ -529,6 +556,40 @@ def parse_sanitizer_log(path: Path, tool: str, workspace: str | None) -> list[Fi
 
 
 @dataclasses.dataclass
+class Scope:
+    """Which source files a COMPLETE run of a tool actually examined (QA P1,
+    2026-10-02). A finding only gets a clean night, or reads as FIXED, when
+    its file was in tonight's scope; otherwise its state is carried.
+
+      files     exact set (CodeQL: the successfully-extracted files)
+      prefixes  path prefixes ("" = everything)
+      exclude   files known NOT examined (CodeQL coverage `missed`)
+    All None = everything (the default for a tool with no status scope)."""
+    files: frozenset[str] | None = None
+    prefixes: tuple[str, ...] | None = None
+    exclude: frozenset[str] = frozenset()
+    label: str = "everything"
+
+    def covers(self, path: str) -> bool:
+        if path in self.exclude:
+            return False
+        if self.files is not None:
+            return path in self.files
+        if self.prefixes is not None:
+            return any(path.startswith(p) for p in self.prefixes)
+        return True
+
+    @property
+    def is_total(self) -> bool:
+        return self.files is None and self.exclude == frozenset() and (
+            self.prefixes is None or "" in self.prefixes)
+
+
+EVERYTHING = Scope()
+CORE_PREFIX = "VideoScan/VideoScanCore/"
+
+
+@dataclasses.dataclass
 class ToolRun:
     tool: str
     input_found: bool = False
@@ -536,6 +597,7 @@ class ToolRun:
     findings: list[Finding] = dataclasses.field(default_factory=list)
     notes: list[str] = dataclasses.field(default_factory=list)
     job: str | None = None         # the job result passed with --job-result, if any
+    scope: Scope = dataclasses.field(default_factory=Scope)
 
     @property
     def is_disabled(self) -> bool:
@@ -543,14 +605,77 @@ class ToolRun:
         artifact and no failure. Still incomplete, just not alarming."""
         return not self.input_found and self.job in (None, "skipped")
 
+    def covers(self, path: str) -> bool:
+        """Complete tonight AND this file was examined."""
+        return self.complete and self.scope.covers(path)
 
-def _status_complete(artifacts: Path, tool: str) -> bool | None:
+
+def covered(runs: dict[str, ToolRun] | dict[str, bool], tool: str, path: str) -> bool:
+    """`runs` may be plain {tool: complete} (scope = everything)."""
+    r = runs.get(tool)
+    if isinstance(r, ToolRun):
+        return r.covers(path)
+    return bool(r)
+
+
+def _read_status(artifacts: Path, tool: str) -> dict | None:
     for p in artifacts.rglob(f"nightly-status-{tool}.json"):
         try:
-            return bool(json.loads(p.read_text()).get("complete"))
+            doc = json.loads(p.read_text())
+            return doc if isinstance(doc, dict) else {"complete": False}
         except (OSError, json.JSONDecodeError):
-            return False
+            return {"complete": False}
     return None
+
+
+def status_scope(tool: str, status: dict | None) -> Scope:
+    """The scope a status file declares: an explicit "scope" list of path
+    prefixes ("*" = everything), else for the sanitizers what ran: the app
+    test step covers everything the app links (app + VideoScanCore), the
+    `swift test` Core step covers VideoScanCore only."""
+    if not status:
+        return EVERYTHING
+    declared = status.get("scope")
+    if isinstance(declared, list):
+        if "*" in declared:
+            return EVERYTHING
+        return Scope(prefixes=tuple(str(p) for p in declared), label=", ".join(map(str, declared)) or "nothing")
+    if tool in ("asan", "ubsan", "tsan") and ("test_step" in status or "core_step" in status):
+        if status.get("test_step", "skipped") != "skipped":
+            return EVERYTHING
+        if status.get("core_step", "skipped") != "skipped":
+            return Scope(prefixes=(CORE_PREFIX,), label="VideoScanCore only (app tests did not run)")
+        return Scope(prefixes=(), label="nothing ran")
+    return EVERYTHING
+
+
+def codeql_scope(sarifs: list[Path], artifacts: Path, workspace: str | None) -> Scope:
+    """CodeQL examined only the files it extracted. Exact set from the SARIF's
+    successfully-extracted-files notifications; else the coverage report's
+    `missed` list; else everything (an older SARIF without either)."""
+    files: set[str] = set()
+    seen_notes = False
+    for path in sarifs:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        for run in doc.get("runs") or []:
+            for inv in run.get("invocations") or []:
+                for note in inv.get("toolExecutionNotifications") or []:
+                    if (note.get("descriptor") or {}).get("id") != "swift/diagnostics/successfully-extracted-files":
+                        continue
+                    seen_notes = True
+                    for loc in note.get("locations") or []:
+                        uri = ((loc.get("physicalLocation") or {}).get("artifactLocation") or {}).get("uri")
+                        if uri:
+                            files.add(relativise(uri, workspace))
+    if seen_notes:
+        return Scope(files=frozenset(files), label=f"{len(files)} extracted file(s)")
+    for p in artifacts.rglob("codeql-coverage.json"):
+        try:
+            missed = json.loads(p.read_text()).get("missed") or []
+        except (OSError, json.JSONDecodeError, AttributeError):
+            continue
+        return Scope(exclude=frozenset(map(str, missed)), label=f"all but {len(missed)} unextracted file(s)")
+    return EVERYTHING
 
 
 def collect(artifacts: Path, job_results: dict[str, str], workspace: str | None) -> dict[str, ToolRun]:
@@ -584,13 +709,18 @@ def collect(artifacts: Path, job_results: dict[str, str], workspace: str | None)
         tr.input_found = True
         for p in paths:
             tr.findings.extend(parser(p))   # a parse error propagates: broken pipeline
-        status = _status_complete(artifacts, tool)
+        status_doc = _read_status(artifacts, tool)
+        status = None if status_doc is None else bool(status_doc.get("complete"))
         job = job_results.get(tool)
         tr.complete = (status is not False) and (job in (None, "success"))
         if status is False:
             tr.notes.append("status file says incomplete")
         if job not in (None, "success"):
             tr.notes.append(f"job result {job}")
+        tr.scope = (codeql_scope(paths, artifacts, workspace) if tool == "codeql"
+                    else status_scope(tool, status_doc))
+        if not tr.scope.is_total:
+            tr.notes.append(f"scope: {tr.scope.label}")
     return runs
 
 
@@ -613,13 +743,22 @@ class GhCli:
             raise RuntimeError(f"gh {' '.join(args[:3])} failed: {proc.stderr.strip()[:500]}")
         return proc.stdout
 
-    def list_issues(self, label: str, with_comments: bool = False) -> list[Issue]:
-        fields = "number,title,state,stateReason,labels,body" + (",comments" if with_comments else "")
-        out = self._gh(["issue", "list", "--label", label, "--state", "all", "--limit", "5000",
-                        "--json", fields])
+    def list_issues(self, label: str | None = None, with_comments: bool = False, *,
+                    search: str | None = None, state: str = "all", limit: int = 5000) -> list[Issue]:
+        """By label, or by a phrase in the BODY (`search`): a tool-managed issue
+        is still found after a human removes its label (QA P2-5). gh lists
+        newest first, so a small `limit` means "the most recent N"."""
+        fields = "number,title,state,stateReason,labels,body,assignees" + (",comments" if with_comments else "")
+        args = ["issue", "list", "--state", state, "--limit", str(limit), "--json", fields]
+        if label:
+            args += ["--label", label]
+        if search:
+            args += ["--search", f'"{search}" in:body']
+        out = self._gh(args)
         return [Issue(i["number"], i.get("title", ""), i.get("state", "OPEN"),
                       i.get("stateReason"), [lb["name"] for lb in i.get("labels") or []],
-                      i.get("body") or "", list(i.get("comments") or []))
+                      i.get("body") or "", list(i.get("comments") or []),
+                      [a.get("login", "") for a in i.get("assignees") or []])
                 for i in json.loads(out or "[]")]
 
     def list_labels(self) -> set[str]:
@@ -663,8 +802,8 @@ class DryRunGh:
         self.writes: list[tuple] = []
         self._next = 900000
 
-    def list_issues(self, label, with_comments=False):
-        return self.inner.list_issues(label, with_comments=with_comments)
+    def list_issues(self, label=None, with_comments=False, **kw):
+        return self.inner.list_issues(label, with_comments=with_comments, **kw)
 
     def list_labels(self):
         return self.inner.list_labels()
@@ -696,14 +835,31 @@ class DryRunGh:
         self._record("reopen", number)
 
 
+RECENT_CLOSED_TICKETS = 5     # enough to find the latest EARLIER ticket on a rerun
+
+
 def list_all_issues(gh) -> list[Issue]:
-    """Tracking issues + legacy digests (nightly-finding) and tickets
-    (nightly-findings, with comments for the human-comment guard)."""
+    """Every tool-managed issue, found by label AND by body marker (a human
+    may remove the label). Tracking issues: all states (lifecycle needs the
+    closed ones). Tickets: the open ones (with comments, for the guard) plus
+    the few most recent closed ones, which hold the comparison baseline;
+    older tickets are never needed (QA P3)."""
     seen: dict[int, Issue] = {}
-    for iss in gh.list_issues(BASE_LABEL):
-        seen[iss.number] = iss
-    for iss in gh.list_issues(TICKET_LABEL, with_comments=True):
-        seen[iss.number] = iss
+    batches = [
+        gh.list_issues(BASE_LABEL),
+        gh.list_issues(search="nightly-finding"),
+        gh.list_issues(TICKET_LABEL, with_comments=True, state="open"),
+        gh.list_issues(search="nightly-findings-ticket", with_comments=True, state="open"),
+        gh.list_issues(TICKET_LABEL, state="closed", limit=RECENT_CLOSED_TICKETS),
+        gh.list_issues(search="nightly-findings-ticket", state="closed", limit=RECENT_CLOSED_TICKETS),
+    ]
+    for i, batch in enumerate(batches):
+        for iss in batch:
+            if i < 2 and TICKET_MARKER_RE.search(iss.body or ""):
+                continue                  # tickets come only from the bounded queries below
+            cur = seen.get(iss.number)
+            if cur is None or (iss.comments and not cur.comments):
+                seen[iss.number] = iss
     return [seen[n] for n in sorted(seen)]
 
 
@@ -741,6 +897,7 @@ class TrackGroup:
     rule: str
     file: str
     instances: list[FindingGroup]
+    related: int | None = None     # a wontfix issue for the same (tool, rule, file)
 
     @property
     def severity(self) -> str:
@@ -782,19 +939,63 @@ def render_marker(state: dict) -> str:
     return f"<!-- nightly-finding {json.dumps(state, sort_keys=True)} -->"
 
 
+def code(s, n: int | None = None) -> str:
+    """Finding text as a Markdown code span (QA P2-1). Outside a code span,
+    "@MainActor" pings a GitHub user and "closure #1" cross-references issue
+    #1, from a public repo, every night. A backtick inside the text is fenced
+    with a longer backtick run (Markdown has no backslash escape in spans)."""
+    s = re.sub(r"[\r\n]+", " ", str(s if s is not None else ""))
+    if n is not None and len(s) > n:
+        s = s[:n - 1] + "…"
+    if not s.strip():
+        return "–"
+    runs = re.findall(r"`+", s)
+    if not runs:
+        return f"`{s}`"
+    fence = "`" * (max(len(r) for r in runs) + 1)
+    return f"{fence} {s} {fence}"
+
+
+def cell(s, n: int | None = None) -> str:
+    """code() for a table cell: GFM splits cells on '|', even inside a span."""
+    return code(str(s if s is not None else "").replace("|", "\\|"), n)
+
+
+MANAGED_START = "<!-- nightly-finding:managed -->"
+MANAGED_END = "<!-- /nightly-finding:managed -->"
+COMMENT_LIST_MAX = 20       # instances named per category in a CHANGED comment
+
+
+def update_body(old: str, new: str) -> str:
+    """Rewrite only the tool-managed section (and the state marker) of an
+    existing body. Anything a human wrote outside it survives (QA P3)."""
+    if old and MANAGED_START in old and MANAGED_END in old and MANAGED_START in new:
+        before, rest = old.split(MANAGED_START, 1)
+        _, after = rest.split(MANAGED_END, 1)
+        managed = new[new.index(MANAGED_START): new.index(MANAGED_END) + len(MANAGED_END)]
+        m = MARKER_RE.search(new)
+        before = MARKER_RE.sub(lambda _m: m.group(0), before, count=1) if m else before
+        return before + managed + after
+    return new
+
+
 def render_body(tg: TrackGroup, state: dict, run_url: str) -> str:
     rows = []
     for g in sorted(tg.instances, key=lambda g: (SEVERITY_RANK[g.severity], g.fp))[:MAX_INSTANCES_SHOWN]:
         lines = sorted({o.line for o in g.occurrences if o.line is not None})
         shown = ", ".join(str(n) for n in lines[:10]) + (" …" if len(lines) > 10 else "")
         rows.append(f"| `{g.fp}` | {g.severity} | {g.count} | {shown or '–'} | "
-                    f"{_short(normalise_detail(g.message), 140)} |")
+                    f"{cell(normalise_detail(g.message), 140)} |")
     more = len(tg.instances) - len(rows)
     carried = [fp for fp in (state.get("instances") or {}) if fp not in set(tg.fps)]
+    related = state.get("related")
     return "\n".join([
         render_marker(state),
-        f"**Tool:** `{tg.tool}` · **Rule:** `{tg.rule}` · **Severity:** **{tg.severity}**",
-        f"**File:** `{tg.file}` · **Group key:** `{tg.gk}`",
+        MANAGED_START,
+        f"**Tool:** {code(tg.tool)} · **Rule:** {code(tg.rule)} · **Severity:** **{tg.severity}**",
+        f"**File:** {code(tg.file)} · **Group key:** `{tg.gk}`",
+        *([f"Related to #{related} (closed as not planned): the instances listed there stay "
+           "silenced; these are new ones in the same file."] if related else []),
         "",
         f"### Instances ({len(tg.instances)})",
         "",
@@ -815,7 +1016,8 @@ def render_body(tg: TrackGroup, state: dict, run_url: str) -> str:
         "`tools/nightly_findings_to_issues.py`; the nightly `nightly-findings` ticket lists every "
         f"instance every night. It closes itself after {CLOSE_AFTER_NIGHTS} consecutive complete "
         "nightly runs with zero instances. To silence it for good, add the `wontfix` label (or "
-        "close it as not planned)._",
+        "close it as not planned). Notes you add below this section are kept._",
+        MANAGED_END,
     ])
 
 
@@ -871,9 +1073,13 @@ class TrackingPlan:
     skipped_wontfix: list[str]     # instance fingerprints silenced by a wontfix issue
     commented: list[str]           # group keys whose open issue got a CHANGED comment
     missing_counted: list[str]
-    closed: list[str]              # group keys auto-closed tonight
-    held_incomplete: list[str]     # open issues left alone because their tool was incomplete
+    closed: list[str]              # group keys auto-closed tonight (zero instances, 3 nights)
+    held_incomplete: list[str]     # issues left alone: file outside tonight's scope
     budget_used_before: int = 0    # tracking issues already opened earlier today (reruns)
+    moved: dict[str, str] = dataclasses.field(default_factory=dict)        # new fp -> old fp
+    rekeyed: dict[str, Issue] = dataclasses.field(default_factory=dict)    # new gk -> moved issue
+    demoted: list[str] = dataclasses.field(default_factory=list)           # closed: no longer high
+    duplicates_closed: list[int] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -881,6 +1087,7 @@ class IssueIndex:
     by_gk: dict[str, Issue]
     tickets: list[Issue]
     legacy_digests: list[Issue]
+    duplicates: list[tuple[Issue, Issue]] = dataclasses.field(default_factory=list)  # (dup, kept)
 
     def tracking_for(self, g: FindingGroup) -> Issue | None:
         return self.by_gk.get(group_key(g.tool, g.rule, g.file))
@@ -889,40 +1096,64 @@ class IssueIndex:
 def index_issues(issues: list[Issue]) -> IssueIndex:
     """Tracking issues are found by the group key in their marker. (The
     per-fingerprint v1 markers of 2026-10-01 never reached GitHub: writes were
-    off until this design, so there is nothing to migrate.)"""
+    off until this design, so there is nothing to migrate.) A second issue
+    with the same key is a DUPLICATE (two overlapping runs, or a hand-copied
+    marker); it is closed pointing at the kept one (QA P2-6)."""
     by_gk: dict[str, Issue] = {}
     tickets: list[Issue] = []
     legacy: list[Issue] = []
+    dups: list[tuple[Issue, Issue]] = []
 
-    def better(new: Issue, cur: Issue | None) -> bool:
+    def better(new: Issue, cur: Issue) -> bool:
         # Prefer a wontfix issue (Rick's ruling wins), then an open one, then the oldest.
-        return cur is None or (new.is_wontfix and not cur.is_wontfix) or (
+        return (new.is_wontfix and not cur.is_wontfix) or (
             new.is_open and not cur.is_open and not cur.is_wontfix)
 
     for iss in sorted(issues, key=lambda i: i.number):
         if iss.ticket_marker is not None:
             tickets.append(iss)
             continue
-        if (LOW_DIGEST_MARKER_RE.search(iss.body or "") or DIGEST_MARKER_RE.search(iss.body or "")
-                or DIGEST_LABEL in iss.labels):
+        # A legacy digest is known by its MARKER; a label alone may be a
+        # human's issue (QA P3).
+        if LOW_DIGEST_MARKER_RE.search(iss.body or "") or DIGEST_MARKER_RE.search(iss.body or ""):
             legacy.append(iss)
             continue
         mk = iss.marker
         if not mk or "gk" not in mk:
             continue
-        if better(iss, by_gk.get(mk["gk"])):
+        cur = by_gk.get(mk["gk"])
+        if cur is None:
             by_gk[mk["gk"]] = iss
-    return IssueIndex(by_gk, tickets, legacy)
+        elif better(iss, cur):
+            by_gk[mk["gk"]] = iss
+            dups.append((cur, iss))
+        else:
+            dups.append((iss, cur))
+    return IssueIndex(by_gk, tickets, legacy, dups)
 
 
 def _instances_state(tg: TrackGroup) -> dict[str, list]:
-    return {g.fp: [g.detail_digest, g.count, g.severity] for g in tg.instances}
+    """fp -> [detail digest, occurrences, severity, message key]. The message
+    key (no digits, no file) is what recognises a moved file."""
+    return {g.fp: [g.detail_digest, g.count, g.severity, normalise_key(g.message)]
+            for g in tg.instances}
+
+
+def _fp_list(fps: list[str], by_fp: dict[str, FindingGroup] | None = None) -> str:
+    shown = []
+    for fp in fps[:COMMENT_LIST_MAX]:
+        g = (by_fp or {}).get(fp)
+        shown.append(f"- `{fp}`" + (f" {code(normalise_detail(g.message), 120)}" if g else ""))
+    if len(fps) > COMMENT_LIST_MAX:
+        shown.append(f"- … and {len(fps) - COMMENT_LIST_MAX} more (see the issue body)")
+    return "\n".join(shown)
 
 
 def _change_note(tg: TrackGroup, old: dict[str, list], new: dict[str, list],
                  old_sev: str | None, today: str, run_url: str) -> str | None:
     """None when nothing changed. Otherwise the CHANGED comment: instances
-    that appeared, disappeared, or changed (count / detail / severity)."""
+    that appeared, disappeared, or changed (count / detail / severity).
+    Finding text only inside code spans; each list capped."""
     appeared = sorted(set(new) - set(old))
     gone = sorted(set(old) - set(new))
     changed = sorted(fp for fp in set(new) & set(old) if list(old[fp])[:1] != list(new[fp])[:1])
@@ -933,11 +1164,10 @@ def _change_note(tg: TrackGroup, old: dict[str, list], new: dict[str, list],
     if old_sev != tg.severity:
         note.append(f"Severity: {old_sev} → {tg.severity}")
     if appeared:
-        note.append("New instance(s):\n" + "\n".join(
-            f"- `{fp}` {_short(normalise_detail(by_fp[fp].message), 120)}" for fp in appeared))
+        note.append("New instance(s):\n" + _fp_list(appeared, by_fp))
     if gone:
-        note.append("Gone instance(s):\n" + "\n".join(f"- `{fp}`" for fp in gone))
-    for fp in changed:
+        note.append("Gone instance(s):\n" + _fp_list(gone))
+    for fp in changed[:COMMENT_LIST_MAX]:
         o, n = old[fp], new[fp]
         what = []
         if len(o) > 1 and o[1] != n[1]:
@@ -945,38 +1175,124 @@ def _change_note(tg: TrackGroup, old: dict[str, list], new: dict[str, list],
         if len(o) > 2 and o[2] != n[2]:
             what.append(f"severity {o[2]} → {n[2]}")
         note.append(f"`{fp}`: " + ("; ".join(what) if what else "detail text changed"))
+    if len(changed) > COMMENT_LIST_MAX:
+        note.append(f"… and {len(changed) - COMMENT_LIST_MAX} more changed instance(s)")
     note.append(f"Instances now: {len(new)}. Run: {run_url or 'n/a'}")
     return "\n\n".join(note)
 
 
-def plan_tracking(groups: dict[str, FindingGroup], idx: IssueIndex, complete: dict[str, bool],
+def _split_wontfix(tg: TrackGroup, by_gk: dict[str, Issue], skipped: list[str]) -> TrackGroup | None:
+    """QA P2-3: a wontfix issue silences only the fingerprints recorded in its
+    marker. Other (new) instances of the same (tool, rule, file) go on under
+    a related key, "<gk>~r<N>", so they can be filed with a note pointing at
+    #N. None when every instance is silenced."""
+    seen = set()
+    while True:
+        iss = by_gk.get(tg.gk)
+        if iss is None or not iss.is_wontfix or tg.gk in seen:
+            return tg
+        seen.add(tg.gk)
+        silenced = set((iss.marker or {}).get("instances") or {})
+        skipped += [fp for fp in tg.fps if fp in silenced]
+        rest = [g for g in tg.instances if g.fp not in silenced]
+        if not rest:
+            return None
+        tg = TrackGroup(f"{group_key(tg.tool, tg.rule, tg.file)}~r{iss.number}", tg.tool, tg.rule,
+                        tg.file, rest, related=iss.number)
+
+
+def plan_tracking(groups: dict[str, FindingGroup], idx: IssueIndex, complete,
                   today: str, run_url: str, cap: int = DEFAULT_CAP) -> TrackingPlan:
     """High-severity tracking issues, one per (tool, rule, file). `groups`
-    must already exclude vendored code."""
+    must already exclude vendored code. `complete` is the ToolRun map (scope
+    aware) or a plain {tool: bool}.
+
+    Order of writes per issue: the STATE edit first, then the comment (QA
+    P2-4). apply() skips an issue's later actions once one fails, so a
+    failed edit never leaves a comment that would be posted again tomorrow."""
     by_gk = idx.by_gk
-    tgs = track_groups(groups)
     actions: list[Action] = []
     opened: list[str] = []
     pending: list[TrackGroup] = []
     skipped, commented, missing_counted, closed, held = [], [], [], [], []
+    moved: dict[str, str] = {}
+    rekeyed: dict[str, Issue] = {}
+    demoted: list[str] = []
+    dup_closed: list[int] = []
+
+    for dup, kept in idx.duplicates:
+        if dup.is_open and not dup.is_wontfix:
+            actions.append(Action("close", dup.number, title=dup.title, fp=(dup.marker or {}).get("gk", ""),
+                                  comment=f"Duplicate of #{kept.number} (same tool, rule and file); "
+                                          f"that issue carries on.\n\n{BOT_COMMENT_TAG}"))
+            dup_closed.append(dup.number)
+
     # A rerun the same night must not open another `cap` issues.
     already = sum(1 for iss in by_gk.values()
                   if (iss.marker or {}).get("opened_on") == today and not iss.is_wontfix)
     budget = max(0, cap - already)
 
-    for tg in sorted(tgs.values(), key=lambda t: (SEVERITY_RANK[t.severity], t.tool, t.file, t.rule)):
+    eff: dict[str, TrackGroup] = {}
+    for tg in track_groups(groups).values():
+        tg2 = _split_wontfix(tg, by_gk, skipped)
+        if tg2 is not None:
+            eff[tg2.gk] = tg2
+
+    # --- File moves (QA P2-2): an open issue whose group vanished, and a
+    # brand-new group with the same tool, rule and instance messages. The
+    # issue follows the file; nothing closes, nothing new is filed.
+    def sig(tool, rule, keys) -> tuple:
+        return (tool, rule, tuple(sorted(keys)))
+
+    vanished: dict[tuple, list[tuple[str, Issue]]] = {}
+    for gk, iss in sorted(by_gk.items(), key=lambda kv: kv[1].number):
+        st = iss.marker or {}
+        inst = st.get("instances") or {}
+        if gk in eff or not iss.is_open or iss.is_wontfix or not inst:
+            continue
+        keys = [v[3] for v in inst.values() if isinstance(v, list) and len(v) > 3]
+        if len(keys) == len(inst):
+            vanished.setdefault(sig(st.get("tool"), st.get("rule"), keys), []).append((gk, iss))
+    for gk, tg in sorted(eff.items(), key=lambda kv: (kv[1].file, kv[0])):
+        if gk in by_gk:
+            continue
+        cands = vanished.get(sig(tg.tool, tg.rule, [normalise_key(g.message) for g in tg.instances]))
+        if not cands:
+            continue
+        old_gk, iss = cands.pop(0)
+        st = dict(iss.marker or {})
+        old_file = st.get("file", "?")
+        by_key_old: dict[str, list[str]] = {}
+        for fp, v in (st.get("instances") or {}).items():
+            by_key_old.setdefault(v[3], []).append(fp)
+        for g in tg.instances:
+            olds = by_key_old.get(normalise_key(g.message)) or []
+            if olds:
+                moved[g.fp] = olds.pop(0)
+        st.update({"gk": gk, "file": tg.file, "instances": _instances_state(tg),
+                   "severity": tg.severity, "missing_dates": [],
+                   "moved_from": list(st.get("moved_from") or []) + [old_file]})
+        actions.append(Action("edit", iss.number, fp=gk, body=update_body(iss.body, render_body(tg, st, run_url))))
+        actions.append(Action("comment", iss.number, fp=gk, title=iss.title, comment=(
+            f"**Moved in the nightly of {today}:** {code(old_file)} → {code(tg.file)} (same tool, rule "
+            f"and findings). This issue follows the file. Run: {run_url or 'n/a'}")))
+        rekeyed[gk] = iss
+        commented.append(gk)
+    moved_old_gks = {(iss.marker or {}).get("gk") for iss in rekeyed.values()}
+
+    for tg in sorted(eff.values(), key=lambda t: (SEVERITY_RANK[t.severity], t.tool, t.file, t.rule, t.gk)):
+        if tg.gk in rekeyed:
+            continue
         iss = by_gk.get(tg.gk)
         if iss is not None and iss.is_wontfix:
-            skipped += tg.fps
+            skipped += tg.fps              # a related-key issue marked wontfix by hand
             continue
         if iss is not None and iss.is_open:
-            # The issue exists: record instance changes (an empty group is
-            # handled below as a clean night).
             st = dict(iss.marker or {})
             old = dict(st.get("instances") or {})
             new = _instances_state(tg)
-            if not complete.get(tg.tool, False):
-                # Incomplete tool: an instance missing tonight is unknown, not gone.
+            if not covered(complete, tg.tool, tg.file):
+                # File outside tonight's scope: a missing instance is unknown, not gone.
                 for fp, v in old.items():
                     new.setdefault(fp, v)
             note = _change_note(tg, old, new, st.get("severity"), today, run_url)
@@ -985,16 +1301,15 @@ def plan_tracking(groups: dict[str, FindingGroup], idx: IssueIndex, complete: di
                 continue
             st.update({"instances": new, "severity": tg.severity, "missing_dates": []})
             if note is not None:
+                actions.append(Action("edit", iss.number, fp=tg.gk,
+                                      body=update_body(iss.body, render_body(tg, st, run_url))))
                 actions.append(Action("comment", iss.number, comment=note, fp=tg.gk, title=iss.title))
-                actions.append(Action("edit", iss.number, body=render_body(tg, st, run_url), fp=tg.gk))
                 if tg.severity == "high" and HIGH_LABEL not in iss.labels:
                     actions.append(Action("add_label", iss.number, labels=[HIGH_LABEL], fp=tg.gk))
                 commented.append(tg.gk)
             else:
                 actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=tg.gk))
             continue
-        if tg.severity not in TRACKED_SEVERITIES:
-            continue                       # medium and low live in the nightly ticket only
         if budget <= 0:
             pending.append(tg)
             continue
@@ -1005,25 +1320,43 @@ def plan_tracking(groups: dict[str, FindingGroup], idx: IssueIndex, complete: di
             st = {"v": 2, "gk": tg.gk, "tool": tg.tool, "rule": tg.rule, "file": tg.file,
                   "first_seen": today, "opened_on": today, "severity": tg.severity,
                   "instances": _instances_state(tg), "missing_dates": []}
+            if tg.related:
+                st["related"] = tg.related
             actions.append(Action("create", title=track_title(tg), body=render_body(tg, st, run_url),
                                   labels=labels_for(tg), fp=tg.gk, meta=meta))
         else:
             st = dict(iss.marker or {})
             st.update({"instances": _instances_state(tg), "severity": tg.severity,
                        "missing_dates": [], "opened_on": today})
+            actions.append(Action("edit", iss.number, fp=tg.gk,
+                                  body=update_body(iss.body, render_body(tg, st, run_url))))
             actions.append(Action("reopen", iss.number, title=iss.title, fp=tg.gk, meta=meta,
                                   comment=f"**Reappeared in the nightly of {today}** after being closed "
                                           f"({len(tg.instances)} instance(s)). Run: {run_url or 'n/a'}"))
-            actions.append(Action("edit", iss.number, body=render_body(tg, st, run_url), fp=tg.gk))
 
-    # Open tracking issues with ZERO instances tonight: a clean night.
+    # Open tracking issues with ZERO high instances tonight.
     for gk, iss in sorted(by_gk.items(), key=lambda kv: kv[1].number):
-        if gk in tgs or not iss.is_open or iss.is_wontfix:
+        if gk in eff or gk in moved_old_gks or not iss.is_open or iss.is_wontfix:
+            continue
+        if iss.number in dup_closed:
             continue
         st = dict(iss.marker or {})
-        tool = st.get("tool", "?")
-        if not complete.get(tool, False):
-            held.append(gk)
+        tool, file = st.get("tool", "?"), st.get("file", "?")
+        if not covered(complete, tool, file):
+            held.append(gk)                # tool incomplete, or file outside tonight's scope
+            continue
+        prev_inst = st.get("instances") or {}
+        lower = sorted({groups[fp].severity for fp in prev_inst if fp in groups
+                        and groups[fp].severity not in TRACKED_SEVERITIES}, key=lambda s: SEVERITY_RANK[s])
+        if lower:
+            # Coordinator ruling 2026-10-02: a high -> medium drop is not a fix.
+            st.update({"instances": {}, "severity": lower[0]})
+            actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=gk))
+            actions.append(Action("close", iss.number, fp=gk, title=iss.title, comment=(
+                f"No longer high severity (now {lower[0]}) — still reported in the nightly ticket. "
+                f"Closing this tracking issue; it reopens if the finding becomes high again. "
+                f"Run: {run_url or 'n/a'}")))
+            demoted.append(gk)
             continue
         dates = list(st.get("missing_dates") or [])
         if today in dates:
@@ -1031,29 +1364,27 @@ def plan_tracking(groups: dict[str, FindingGroup], idx: IssueIndex, complete: di
         first_clean = not dates
         dates.append(today)
         st["missing_dates"] = dates
-        gone = sorted(st.get("instances") or {})
-        if first_clean and gone:
+        st["instances"] = {}
+        actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=gk))
+        if first_clean and prev_inst:
             # The last instances disappearing is itself a change.
             actions.append(Action("comment", iss.number, fp=gk, title=iss.title, comment=(
                 f"**Changed in the nightly of {today}.**\n\nGone instance(s):\n"
-                + "\n".join(f"- `{fp}`" for fp in gone)
+                + _fp_list(sorted(prev_inst))
                 + f"\n\nInstances now: 0. Closes after {CLOSE_AFTER_NIGHTS} clean nights. "
                   f"Run: {run_url or 'n/a'}")))
             commented.append(gk)
-        st["instances"] = {}
         if len(dates) >= CLOSE_AFTER_NIGHTS:
-            actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=gk))
             actions.append(Action("close", iss.number, fp=gk, title=iss.title, comment=(
                 f"Zero instances reported by `{tool}` in {CLOSE_AFTER_NIGHTS} consecutive complete "
                 f"nightly runs ({', '.join(dates[-CLOSE_AFTER_NIGHTS:])}). Closing as fixed. It will "
                 f"reopen if an instance comes back. Run: {run_url or 'n/a'}")))
             closed.append(gk)
         else:
-            actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=gk))
             missing_counted.append(gk)
 
     return TrackingPlan(actions, opened, pending, skipped, commented, missing_counted,
-                        closed, held, min(already, cap))
+                        closed, held, min(already, cap), moved, rekeyed, demoted, dup_closed)
 
 
 def ensure_labels(gh, needed: Iterable[str]) -> None:
@@ -1065,11 +1396,17 @@ def ensure_labels(gh, needed: Iterable[str]) -> None:
 
 def apply(actions: list[Action], gh) -> tuple[dict[str, int], list[str]]:
     """Executes tracking actions. Returns (group key -> issue number for
-    creates and reopens, errors). One failed call does not stop the rest; the caller
-    exits non-zero."""
+    creates and reopens, errors). One failed call does not stop the rest, but
+    it DOES stop that issue's remaining actions tonight: the state edit comes
+    first, so a failed edit means no comment and no close (QA P2-4). The
+    caller exits non-zero."""
     numbers: dict[str, int] = {}
     errors: list[str] = []
+    failed: set[int] = set()
     for a in actions:
+        if a.number is not None and a.number in failed:
+            errors.append(f"{a.kind} #{a.number} {a.fp}: skipped after an earlier failure on this issue")
+            continue
         try:
             if a.kind == "create":
                 numbers[a.fp] = gh.create_issue(a.title, a.body, a.labels)
@@ -1086,6 +1423,8 @@ def apply(actions: list[Action], gh) -> tuple[dict[str, int], list[str]]:
                 gh.close(a.number, a.comment)
         except Exception as exc:          # noqa: BLE001 - report every failure, keep going
             errors.append(f"{a.kind} #{a.number or '-'} {a.fp}: {exc}")
+            if a.number is not None:
+                failed.add(a.number)
     return numbers, errors
 
 
@@ -1126,6 +1465,21 @@ def recent_human_comment(iss: Issue, now: _dt.datetime, hours: float = HUMAN_GUA
         if ts is None or (now - ts) <= _dt.timedelta(hours=hours):
             return True
     return False
+
+
+def human_hold_reason(iss: Issue, now: _dt.datetime) -> str | None:
+    """Why a person is still using an older ticket, or None. Rotation leaves
+    such a ticket open and links it from tonight's."""
+    if recent_human_comment(iss, now):
+        return f"someone commented in the last {HUMAN_GUARD_HOURS} h"
+    if iss.assignees:
+        return "assigned to " + ", ".join(code(a) for a in iss.assignees)   # no @: no nightly ping
+    # Open, yet the tool's own "Superseded" close comment is on it: a person
+    # reopened it after rotation closed it.
+    if any(BOT_COMMENT_TAG in (c.get("body") or "") and "Superseded by" in (c.get("body") or "")
+           for c in iss.comments or []):
+        return "reopened by a person"
+    return None
 
 
 def ticket_title(today: str) -> str:
@@ -1234,14 +1588,10 @@ class TicketPlan:
     tracked_refs: dict[str, str]
 
 
-def _short(s: str, n: int) -> str:
-    s = (s or "").replace("|", "\\|").replace("\n", " ")
-    return s if len(s) <= n else s[:n - 1] + "…"
-
-
 def _item_line(fp: str, file: str, rule: str, msg: str, count: int | None,
                ref: str, run_url: str) -> str:
-    s = f"- `{fp}` · `{file}` · `{_short(rule, 60)}` · {_short(msg, 110)}"
+    # Every piece of finding text in a code span: no @mentions, no #N links (QA P2-1).
+    s = f"- `{fp}` · {code(file)} · {code(rule, 60)} · {code(msg, 110)}"
     if count and count > 1:
         s += f" (×{count})"
     if ref:
@@ -1283,8 +1633,13 @@ def plan_ticket(groups: dict[str, FindingGroup], vendored: list[FindingGroup], i
         if g.severity not in TRACKED_SEVERITIES or fp in wontfix:
             continue
         gk = group_key(g.tool, g.rule, g.file)
-        n = numbers.get(gk)
         iss = idx.by_gk.get(gk)
+        if iss is not None and iss.is_wontfix:
+            # A new instance beside a wontfix one is filed under the related key.
+            gk = f"{gk}~r{iss.number}"
+            iss = idx.by_gk.get(gk)
+        iss = iss or tp.rekeyed.get(gk)
+        n = numbers.get(gk)
         if n is not None:
             verb = "reopened" if iss is not None else "opened"
             refs[fp] = f"tracking: would be {verb}" if dry_run else f"tracking #{n} ({verb} tonight)"
@@ -1295,6 +1650,8 @@ def plan_ticket(groups: dict[str, FindingGroup], vendored: list[FindingGroup], i
 
     def known_before(g: FindingGroup) -> bool:
         if g.fp in prev_hm or g.fp[:DIGEST_FP_CHARS] in prev_hm8_all:
+            return True
+        if g.fp in tp.moved:               # the same finding, in a moved file (QA P2-2)
             return True
         iss = idx.tracking_for(g)
         # An instance already listed on a tracking issue open before tonight also counts.
@@ -1307,14 +1664,15 @@ def plan_ticket(groups: dict[str, FindingGroup], vendored: list[FindingGroup], i
     for g in sorted(groups.values(), key=lambda g: (SEVERITY_RANK[g.severity], g.tool, g.file, g.fp)):
         if g.severity not in ("high", "medium") or g.fp in wontfix:
             continue
-        rec = prev_hm.get(g.fp)
+        rec = prev_hm.get(g.fp) or prev_hm.get(tp.moved.get(g.fp, ""))
         if not known_before(g):
             (new_high if g.severity == "high" else new_medium).append(g)
             first_seen = today
         else:
-            tiss = idx.tracking_for(g)
-            tracked_first = (tiss.marker or {}).get("first_seen") if tiss is not None and \
-                g.fp in ((tiss.marker or {}).get("instances") or {}) else None
+            tiss = idx.tracking_for(g) or tp.rekeyed.get(group_key(g.tool, g.rule, g.file))
+            tinst = ((tiss.marker or {}).get("instances") or {}) if tiss is not None else {}
+            tracked_first = (tiss.marker or {}).get("first_seen") if tiss is not None and (
+                g.fp in tinst or tp.moved.get(g.fp) in tinst) else None
             candidates = [d for d in (rec[2] if rec else None, tracked_first,
                                       None if rec else prev.get("date")) if d]
             first_seen = min(candidates) if candidates else today
@@ -1323,7 +1681,8 @@ def plan_ticket(groups: dict[str, FindingGroup], vendored: list[FindingGroup], i
             still.append((g, first_seen))
         hm_now[g.fp] = _record(g, first_seen)
 
-    # FIXED: on the previous ticket, absent tonight, and its tool ran completely.
+    # FIXED: on the previous ticket, absent tonight, its tool ran completely
+    # AND its file was in tonight's scope (QA P1). A moved finding is not fixed.
     fixed: list[tuple[str, list | None]] = []
     hm8_now: dict[str, set[str]] = {}
     held_tools = sorted(t for t in TOOLS if not complete.get(t, False)
@@ -1331,16 +1690,18 @@ def plan_ticket(groups: dict[str, FindingGroup], vendored: list[FindingGroup], i
                              or t in prev_low or runs[t].input_found))
     current_fps = set(groups)
     current_fp8 = {fp[:DIGEST_FP_CHARS] for fp in groups}
+    moved_from = set(tp.moved.values())
     for fp, rec in sorted(prev_hm.items(), key=lambda kv: (SEVERITY_RANK.get(kv[1][1], 9), kv[1][0], kv[1][4])):
-        if fp in current_fps:
+        if fp in current_fps or fp in moved_from:
             continue
-        if complete.get(rec[0], False):
+        if covered(runs, rec[0], rec[4]):
             fixed.append((fp, rec))
         else:
-            hm_now.setdefault(fp, rec)        # carried: the tool did not run completely
+            hm_now.setdefault(fp, rec)        # carried: not examined tonight
     for tool, prefixes in sorted(prev_hm8.items()):
-        gone = prefixes - current_fp8
-        if complete.get(tool, False):
+        gone = prefixes - current_fp8 - {fp[:DIGEST_FP_CHARS] for fp in moved_from}
+        # Prefix-only records have no file: only a whole-repo scope can call them fixed.
+        if complete.get(tool, False) and runs[tool].scope.is_total:
             fixed += [(p, None) for p in sorted(gone)]
         elif gone:
             hm8_now.setdefault(tool, set()).update(gone)
@@ -1353,7 +1714,9 @@ def plan_ticket(groups: dict[str, FindingGroup], vendored: list[FindingGroup], i
         iss = idx.by_gk.get(gk)
         if iss is None or iss.is_wontfix:
             continue
-        if gk in tp.closed:
+        if gk in tp.demoted:
+            refs[fp] = f"tracking #{iss.number} closed: no longer high"
+        elif gk in tp.closed:
             refs[fp] = f"tracking #{iss.number} auto-closed tonight"
         elif iss.is_open and gk in live_gks:
             refs[fp] = f"instance gone from tracking #{iss.number} (other instances remain)"
@@ -1399,20 +1762,25 @@ def plan_ticket(groups: dict[str, FindingGroup], vendored: list[FindingGroup], i
                        "hm8": {t: "".join(sorted(s)) for t, s in hm8_now.items()},
                        "low": low_state})
 
-    # Rotation: every other open ticket is closed, unless a human is talking in it.
+    # Rotation: every other open ticket is closed, unless a person is using
+    # it: a comment in the last 48 h, an assignee, or a reopen after the tool
+    # closed it (coordinator ruling 2026-10-02).
     left_open: list[int] = []
+    left_reasons: dict[int, str] = {}
     closing: list[int] = []
     for t in tickets:
         if t is tonight or not t.is_open:
             continue
-        if recent_human_comment(t, now):
+        reason = human_hold_reason(t, now)
+        if reason:
             left_open.append(t.number)
+            left_reasons[t.number] = reason
         else:
             closing.append(t.number)
 
     body = render_ticket(state, today, run_url, previous, groups, new_high, new_medium, changed,
                          fixed, fixed_closed, still, low_view, held_tools, runs, vendored,
-                         refs, left_open, tp, cap, dry_run)
+                         refs, left_reasons, tp, cap, dry_run)
 
     actions: list[Action] = []
     if tonight is None:
@@ -1437,7 +1805,7 @@ def plan_ticket(groups: dict[str, FindingGroup], vendored: list[FindingGroup], i
 def render_ticket(state: dict, today: str, run_url: str, previous: Issue | None,
                   groups: dict[str, FindingGroup], new_high, new_medium, changed, fixed,
                   fixed_closed, still, low_view, held_tools, runs, vendored, refs,
-                  left_open, tp: TrackingPlan, cap: int, dry_run: bool) -> str:
+                  left_open: dict[int, str], tp: TrackingPlan, cap: int, dry_run: bool) -> str:
     run = run_url or ""
     marker = render_ticket_marker(state)
     prev_txt = (f"#{previous.number} ({previous.ticket_marker['date']})" if previous
@@ -1452,8 +1820,8 @@ def render_ticket(state: dict, today: str, run_url: str, previous: Issue | None,
         f"Run: {run or 'n/a'} · Compared with: {prev_txt}",
     ]
     if left_open:
-        out.append("Earlier ticket(s) left open because someone commented in the last "
-                   f"{HUMAN_GUARD_HOURS} h: " + ", ".join(f"#{n}" for n in left_open))
+        out.append("Earlier ticket(s) left open because a person is using them: "
+                   + ", ".join(f"#{n} ({why})" for n, why in sorted(left_open.items())))
     out.append("")
 
     def group_lines(gs: list[FindingGroup]) -> list[str]:
@@ -1550,7 +1918,7 @@ def render_ticket(state: dict, today: str, run_url: str, previous: Issue | None,
             roots[vendored_root(g.file)] = roots.get(vendored_root(g.file), 0) + 1
         notes.append(f"Vendored / third-party (not filed): {len(vendored)} finding(s) — "
                      + ", ".join(f"{t} {n}" for t, n in sorted(by_tool.items())) + " in "
-                     + ", ".join(r for r, _ in sorted(roots.items(), key=lambda kv: -kv[1])[:5]) + ".")
+                     + ", ".join(code(r) for r, _ in sorted(roots.items(), key=lambda kv: -kv[1])[:5]) + ".")
     # A job that did not run at all (e.g. TSan, `if: false` since 2026-05-12)
     # is reported as disabled, not as a failure.
     disabled = [t for t in TOOLS if not runs[t].complete and runs[t].is_disabled]
@@ -1615,7 +1983,9 @@ def build_summary(runs: dict[str, ToolRun], groups: dict[str, FindingGroup], tp:
     def tracking_no(gk: str) -> int | None:
         if gk in numbers:
             return numbers[gk]
-        iss = idx.by_gk.get(gk)
+        iss = idx.by_gk.get(gk) or tp.rekeyed.get(gk)
+        if iss is not None and iss.is_wontfix:
+            iss = idx.by_gk.get(f"{gk}~r{iss.number}")
         return iss.number if iss is not None and iss.is_open and not iss.is_wontfix else None
 
     def item(g: FindingGroup) -> dict:
@@ -1692,6 +2062,8 @@ def build_summary(runs: dict[str, ToolRun], groups: dict[str, FindingGroup], tp:
                      "missing_counted": len(tp.missing_counted),
                      "closed": [idx.by_gk[gk].number for gk in tp.closed if gk in idx.by_gk],
                      "held_incomplete": len(tp.held_incomplete),
+                     "moved": len(tp.rekeyed), "demoted": len(tp.demoted),
+                     "duplicates_closed": tp.duplicates_closed,
                      "skipped_wontfix": len(tp.skipped_wontfix),
                      "open_high": open_high},
         "vendored": {"count": len(tk.vendored), "by_tool": vend_by_tool},
@@ -1812,10 +2184,9 @@ def run_night(gh, runs: dict[str, ToolRun], today: str, now: _dt.datetime, run_u
               cap: int = DEFAULT_CAP, dry_run: bool = False) -> NightResult:
     all_groups = group_findings(f for r in runs.values() for f in r.findings)
     groups, vendored = split_vendored(all_groups)
-    complete = {t: r.complete for t, r in runs.items()}
     idx = index_issues(list_all_issues(gh))
     errors: list[str] = []
-    tp = plan_tracking(groups, idx, complete, today, run_url, cap)
+    tp = plan_tracking(groups, idx, runs, today, run_url, cap)
     needed = {lb for a in tp.actions for lb in a.labels} | {TICKET_LABEL}
     try:
         ensure_labels(gh, needed)

@@ -72,9 +72,12 @@ on:
         type: boolean
         default: false
 
+# Least privilege (QA P3, 2026-10-02): read-only by default. Only `codeql`
+# gets security-events: write (SARIF upload), only `aggregate` gets
+# contents: write (metrics-branch push), only `findings-to-issues` gets
+# issues: write. Every other job only checks out and uploads artifacts.
 permissions:
-  contents: write          # needed for the metrics push step
-  security-events: write   # needed for CodeQL SARIF upload
+  contents: read
 
 jobs:
 
@@ -381,6 +384,10 @@ jobs:
     name: CodeQL (Swift, security-and-quality)
     if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',codeql,') }}
     runs-on: macos-15
+    permissions:
+      contents: read
+      security-events: write   # SARIF upload to Code Scanning
+      actions: read            # codeql-action reads the workflow run
     # 120, not 60. On 2026-10-01 (run 36854243185) the extraction build
     # alone took 49.6 minutes and the job 56.7 — three minutes from a
     # timeout that would have read as "CodeQL broke".
@@ -510,7 +517,10 @@ jobs:
             --floor 0.80 --json-out codeql-results/codeql-coverage.json
           RC=$?
           set -e
-          python3 -c "import json,sys; json.dump({'tool':'codeql','complete':sys.argv[1]=='0'}, open('codeql-results/nightly-status-codeql.json','w'))" "$RC"
+          # Scope = the files CodeQL extracted (the SARIF's successfully-extracted
+          # diagnostics, else codeql-coverage.json "missed"); the findings job
+          # holds any CodeQL finding in a file outside it (QA P1).
+          python3 -c "import json,sys; json.dump({'tool':'codeql','complete':sys.argv[1]=='0','scope_source':'sarif-extracted-files'}, open('codeql-results/nightly-status-codeql.json','w'))" "$RC"
           exit $RC
 
       - name: Upload CodeQL SARIF
@@ -827,7 +837,10 @@ jobs:
           if [ "$APP_OK" = "true" ] && [ "$CORE_OK" = "true" ]; then
             if [ "$TOOL" != "asan" ] || [ "$COUNT" = "0" ]; then COMPLETE=true; fi
           fi
-          python3 -c "import json,sys; json.dump({'tool':sys.argv[1],'complete':sys.argv[2]=='true','suites_started':int(sys.argv[3]),'core_ran':sys.argv[8]=='1','reports':int(sys.argv[4]),'failed_tests':int(sys.argv[5]),'test_step':sys.argv[6],'core_step':sys.argv[7]}, open(f'nightly-status-{sys.argv[1]}.json','w'))" \
+          # scope: which sources this run examined (QA P1). The app test step
+          # covers everything the app links; the Core step covers only
+          # VideoScanCore. A finding outside the scope never gets a clean night.
+          python3 -c "import json,sys; app=sys.argv[6]!='skipped'; core=sys.argv[7]!='skipped'; json.dump({'tool':sys.argv[1],'complete':sys.argv[2]=='true','suites_started':int(sys.argv[3]),'core_ran':sys.argv[8]=='1','reports':int(sys.argv[4]),'failed_tests':int(sys.argv[5]),'test_step':sys.argv[6],'core_step':sys.argv[7],'scope':['*'] if app else (['VideoScan/VideoScanCore/'] if core else [])}, open(f'nightly-status-{sys.argv[1]}.json','w'))" \
             "$TOOL" "$COMPLETE" "$SUITES" "$COUNT" "$FAILED" "${TEST_OUTCOME:-skipped}" "${CORE_OUTCOME:-skipped}" "$CORE_RAN"
           cat "nightly-status-$TOOL.json"; echo
 
@@ -964,7 +977,7 @@ jobs:
           RC=$?
           set -e
           echo "periphery exit $RC"
-          python3 -c "import json,sys; json.dump({'tool':'periphery','complete':sys.argv[1]=='0'}, open('nightly-status-periphery.json','w'))" "$RC"
+          python3 -c "import json,sys; json.dump({'tool':'periphery','complete':sys.argv[1]=='0','scope':['*']}, open('nightly-status-periphery.json','w'))" "$RC"
           if [ "$RC" != "0" ]; then
             head -20 periphery-strict.txt
             echo "::warning::periphery exited $RC; its findings are not counted as complete tonight"
@@ -1210,6 +1223,12 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Two overlapping runs (a manual dispatch during the nightly, or a
+    # re-run) would both list, then both create, tickets and tracking
+    # issues. Serialise them; never cancel one mid-write (QA P2-6).
+    concurrency:
+      group: nightly-findings-to-issues
+      cancel-in-progress: false
     permissions:
       contents: read
       issues: write
@@ -1237,19 +1256,39 @@ jobs:
           done
           find artifacts -maxdepth 2 -type f | sort
 
+      # The night is the RUN's date, not the wall clock (QA P3): a "Re-run
+      # failed jobs" after 00:00 UTC must file under the same night, or one
+      # observation counts twice toward the 3-clean-nights close. The run's
+      # created_at survives re-runs; America/New_York matches Rick's night
+      # (the 05:00 UTC schedule is 01:00 EDT / 00:00 EST, the same date).
+      - name: Night date of this run
+        id: night
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CREATED="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
+          NIGHT="$(python3 -c "import sys,datetime,zoneinfo; t=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')); print(t.astimezone(zoneinfo.ZoneInfo('America/New_York')).date().isoformat())" "$CREATED")"
+          echo "run created $CREATED -> night $NIGHT"
+          echo "date=$NIGHT" >> "$GITHUB_OUTPUT"
+
       - name: File / update / close issues
         id: file
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WRITE: ${{ (vars.NIGHTLY_FINDINGS_WRITE == 'true' && github.ref == 'refs/heads/main' && !inputs.dry_run) && 'true' || 'false' }}
+          # Inputs and variables reach the shell through env, never by
+          # expression interpolation into the script (QA P3).
+          WRITE_VAR: ${{ vars.NIGHTLY_FINDINGS_WRITE }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          NIGHT: ${{ steps.night.outputs.date }}
         run: |
           ARGS=()
-          if [ "$WRITE" != "true" ]; then
+          if [ "$WRITE_VAR" != "true" ] || [ "$GITHUB_REF" != "refs/heads/main" ] || [ "$DRY_RUN_INPUT" = "true" ]; then
             ARGS+=(--dry-run)
-            echo "DRY RUN: no issue will be written (NIGHTLY_FINDINGS_WRITE='${{ vars.NIGHTLY_FINDINGS_WRITE }}', ref=$GITHUB_REF)"
+            echo "DRY RUN: no issue will be written (NIGHTLY_FINDINGS_WRITE='$WRITE_VAR', ref=$GITHUB_REF, dry_run input='$DRY_RUN_INPUT')"
           fi
           python3 tools/nightly_findings_to_issues.py \
             --artifacts artifacts \
+            --today "$NIGHT" \
             --repo "$GITHUB_REPOSITORY" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             --job-result "codeql=${{ needs.codeql.result }}" \
@@ -1287,6 +1326,9 @@ jobs:
     if: always()
     runs-on: macos-15
     timeout-minutes: 10
+    permissions:
+      contents: write          # the metrics-branch push
+      actions: read            # download-artifact of the findings summary
 
     steps:
       - name: Checkout (full history — need metrics branch)
