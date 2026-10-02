@@ -299,6 +299,24 @@ def test_skips_after_the_deadline(cenv, monkeypatch):
     assert "deadline" in confirm_results(cenv)["skipped"]
 
 
+def test_xcodebuild_disables_the_nested_sandboxes():
+    common = conf.xcode_common(Path("/wt"), Path("/dd"))
+    assert "-IDEPackageSupportDisableManifestSandbox=YES" in common
+    assert "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox" in common
+    assert "-disableAutomaticPackageResolution" in common and "-derivedDataPath" in common
+
+
+def test_helper_script_patch_targets_the_real_script(tmp_path):
+    """embed-preview-helper.sh must keep two `swift build` calls the patch can find."""
+    real = ROOT / conf.HELPER_SCRIPT
+    target = tmp_path / conf.HELPER_SCRIPT
+    target.parent.mkdir(parents=True)
+    target.write_text(real.read_text())
+    assert conf.patch_helper_script(tmp_path)
+    assert target.read_text().count("swift build --disable-sandbox") == 2
+    assert "--disable-sandbox" not in real.read_text()               # the repo copy is untouched
+
+
 def test_deadline_is_the_next_0930(monkeypatch):
     from datetime import datetime
     monkeypatch.delenv("VIDEOSCAN_ADV_DEADLINE", raising=False)

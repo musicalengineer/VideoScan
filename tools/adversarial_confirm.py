@@ -41,6 +41,13 @@ SANDBOX FINDINGS (measured 2026-10-01 on the M4, macOS 27 / Xcode 27):
     swift runs with --disable-sandbox and xcodebuild with
     -IDEPackageSupportDisableManifestSandbox=YES (a process-local default;
     Rick's Xcode prefs are untouched). Manifests are this repo's own.
+  - Macro expansion (@TaskLocal, @Observable) runs in swift-plugin-server's
+    own sandbox: under the profile it fails with "malformed response". Fixed
+    with OTHER_SWIFT_FLAGS="$(inherited) -disable-sandbox".
+  - The app target's last Run Script phase (embed-preview-helper.sh) runs a
+    plain `swift build`; patched to --disable-sandbox in the SCRATCH
+    worktree only (patch_helper_script). With all three, a sandboxed
+    `build-for-testing` of the app + 6 drafted tests SUCCEEDED (10-01 dry run).
   - Xcode's default DerivedData is the RAM disk under /Volumes, which the
     profile denies — hence an explicit -derivedDataPath in the cache dir.
   - App packages need the network, which the profile denies — hence the
@@ -269,6 +276,10 @@ def xcode_common(worktree: Path, derived: Path) -> list[str]:
             "-disableAutomaticPackageResolution", "-onlyUsePackageVersionsFromResolvedFile",
             "-IDEPackageSupportDisableManifestSandbox=YES", "-skipMacroValidation",
             "-skipPackagePluginValidation", "-skip-testing:VideoScanUITests",
+            # swift-plugin-server sandboxes macro expansion (@TaskLocal, @Observable);
+            # nested inside redtest.sb that is EPERM ("malformed response"), measured
+            # 2026-10-01. swift build --disable-sandbox does the same for SwiftPM.
+            "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox",
             # Same signing settings as the 2 AM nightly (scripts/nightly_local_tests.sh).
             "ENABLE_TESTABILITY=YES", "ONLY_ACTIVE_ARCH=YES",
             "CODE_SIGN_IDENTITY=-", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_ENTITLEMENTS="]
@@ -399,10 +410,32 @@ def run_core(runner: Runner, worktree: Path, drafts: list[dict], results: dict, 
         results[d["f"]["fp"]] = {"label": label, "reason": reason, "sandboxed": runner.sandbox}
 
 
+HELPER_SCRIPT = "VideoScan/scripts/embed-preview-helper.sh"
+
+
+def patch_helper_script(worktree: Path) -> bool:
+    """The app target's last Run Script phase calls `swift build` for the
+    preview-sweep helper, and SwiftPM's manifest sandbox cannot nest inside
+    redtest.sb (measured 2026-10-01: 'sandbox_apply: Operation not
+    permitted'). Add --disable-sandbox IN THE SCRATCH WORKTREE ONLY — the
+    repo's script is untouched. False = the script changed shape; the build
+    then fails and every app draft says so."""
+    path = worktree / HELPER_SCRIPT
+    if not path.exists():
+        return True
+    text = path.read_text()
+    patched = text.replace("swift build \\", "swift build --disable-sandbox \\").replace(
+        "$(swift build -c", "$(swift build --disable-sandbox -c")
+    path.write_text(patched)
+    return patched.count("--disable-sandbox") >= 2
+
+
 def run_app(runner: Runner, worktree: Path, drafts: list[dict], results: dict, budget: list[int],
             logs: Path, app_run: bool) -> None:
     xcodebuild = tool("VIDEOSCAN_ADV_XCODEBUILD", "/usr/bin/xcodebuild")
     derived = adv.cache_dir() / "DerivedData"
+    if runner.sandbox and not patch_helper_script(worktree):
+        adv.log_line("PROGRESS", f"confirm: could not add --disable-sandbox to {HELPER_SCRIPT}; app build may fail")
     rc, _ = resolve_app_packages(worktree, derived, logs)
     if rc != 0:
         for d in drafts:
